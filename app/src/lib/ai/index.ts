@@ -1,0 +1,29 @@
+/**
+ * Public surface of the AI layer. Anything outside `lib/ai/` should import
+ * from here, never reach into a provider file directly.
+ */
+export type {
+  LLMRole,
+  LLMMessage,
+  LLMRequest,
+  LLMResponse,
+  LLMStreamChunk,
+  LLMProvider,
+  TokenUsage,
+  CostRates,
+} from './types';
+export { COST_RATES, ratesFor, estimateCost, estimateInputTokens } from './types';
+
+export { runAgent } from './router';
+export {
+  startRuntimeListener,
+  type RuntimeBindings,
+  type SendDetail,
+  type CancelDetail,
+  type RuntimeOptions,
+} from './runtime';
+
+export { mockProvider } from './providers/mock';
+export { anthropicProvider, ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
+export { openaiProvider, OPENAI_DEFAULT_MODEL } from './providers/openai';
+export { googleProvider, GOOGLE_DEFAULT_MODEL } from './providers/google';
