@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Jarvis">
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Jarvis">
   <defs>
     <linearGradient id="jarvis-bg" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#22d3ee" />
-      <stop offset="55%" stop-color="#3b82f6" />
-      <stop offset="100%" stop-color="#8b5cf6" />
+      <stop offset="0%" stop-color="#D97757" />
+      <stop offset="55%" stop-color="#D9824D" />
+      <stop offset="100%" stop-color="#E5A35F" />
     </linearGradient>
     <linearGradient id="jarvis-sheen" x1="32" y1="2" x2="32" y2="62" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#ffffff" stop-opacity="0.22" />

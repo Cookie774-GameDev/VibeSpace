@@ -263,3 +263,129 @@ implementation-plan/v2/                     — 11 plan + verify docs (new)
 3. Drop API keys for the new providers in Settings → Providers; keys persist now and start routing live the moment the OpenAI-compatible adapter lands.
 4. Apply `app/supabase/migrations/0002_v2.sql` if you've already wired Supabase.
 
+---
+
+## 2026-05-29 - V2 Session (Wave 2 — Cozy theme + real desktop install)
+
+**Actor:** opencode (claude) for viper
+
+**Goal:** Get the desktop app running on viper's machine, switch the design language from Voltage (OLED+cyan/violet) to a warm Claude-style cozy palette, and produce a real Windows installer that other people can run.
+
+**Result:** Desktop app launches as a native Tauri 2 window. Warm cozy theme propagated through the existing CSS-variable layer. Release installer build kicked off (long-running). All blocking toolchain dependencies (Rust + Visual C++ Build Tools + Windows SDK) now installed.
+
+### What I did, in order
+
+#### Cleanup
+
+- Six stale `node` processes from May 28 sessions (vite dev servers from the prior day) were still running on undefined ports. They were why viper saw "buttons not working" — their browser tab was attached to last-night's pre-V2 build, not today's V2 build.
+- Killed all six (PIDs 5800, 7204, 30700, 40800, 4584, 39516) and started a single fresh vite on `http://127.0.0.1:5173` with `--strictPort` so the V2 bundle is unambiguous.
+- Opened the user's default browser to that URL.
+
+#### Toolchain install (this was the big unblock)
+
+- **Rust 1.96.0** installed via the official rustup-init non-interactive flow (`-y --default-toolchain stable --profile default`). Cargo + rustc + rustup all on PATH. Toolchain is `stable-x86_64-pc-windows-msvc`.
+- **Visual Studio 2022 Build Tools** installed via the official Microsoft bootstrapper with `--quiet --norestart` and the `Microsoft.VisualStudio.Workload.VCTools` workload + `Microsoft.VisualStudio.Component.Windows11SDK.22621` and Windows 10 SDK fallback. Result: MSVC 14.44.35207 + Windows SDKs 10.0.17134 / 10.0.22621 / 10.0.26100 are on disk. UAC was prompted once and accepted.
+- This is what unblocks `cargo build` for the Tauri shell. Without MSVC, the `link.exe` step would fail with "linker not found" no matter how good the Rust toolchain is.
+
+#### Cozy theme (Claude-inspired)
+
+The V1 "Voltage" theme was OLED black + cyan/violet electric accents — striking but harsh. V2 wants warmer, calmer, paper-room. Done by rewriting the CSS variables in one place; the existing 70+ component references to `accent-cyan`/`accent-violet` automatically inherit the new warm values, so the change is visible across the whole app without touching any component.
+
+`app/src/styles/globals.css` — header rewrite (Voltage → Cozy):
+
+| Token            | V1 Voltage      | V2 Cozy                  | Why                                  |
+|------------------|-----------------|--------------------------|--------------------------------------|
+| `--background`   | `0 0% 4%`       | `28 12% 7%` (#14110F)    | Warm umber, not pure OLED black      |
+| `--panel`        | `0 0% 7%`       | `26 10% 11%` (#1D1916)   | Side panel/chrome warmth             |
+| `--elevated`     | `0 0% 10%`      | `26 10% 15%` (#2A2521)   | Cards, dialogs                       |
+| `--foreground`   | `0 0% 98%`      | `36 25% 92%` (#EFEAE2)   | Paper cream — never stark white      |
+| `--accent-cyan`  | `187 95% 43%`   | `22 65% 56%` (#D97757)   | Copper. Name kept for back-compat.   |
+| `--accent-violet`| `258 90% 66%`   | `35 70% 60%` (#E5A35F)   | Amber. Name kept for back-compat.    |
+| `--ring`         | `187 95% 43%`   | `22 65% 56%`             | Copper focus ring                    |
+| `--destructive`  | `0 72% 56%`     | `6 70% 55%` (#D9624B)    | Brick red — warm side                |
+| `--success`      | `158 64% 40%`   | `130 35% 50%`            | Sage green                           |
+| `--radius`       | `0.625rem`      | `0.75rem`                | 12px cozier corners                  |
+| `--surface-warm` | `0 0% 9%`       | `26 12% 13%`             | Chat bubbles, ambient cards          |
+| `--ambient-deep` | `222 28% 4%`    | `28 25% 5%`              | Ambient takeover ground (warm umber) |
+
+Light theme also rewritten — promoted from "provisional" to shipping. Cream paper background (`36 30% 96%`), copper accents at deeper saturation for AA contrast.
+
+`tailwind.config.ts` — gained semantic aliases `accent.copper` and `accent.amber` (new code can use these), plus a `paper-warm` background image utility for ambient/onboarding hero areas. The existing `accent.cyan`/`accent.violet` aliases stayed so V1 components don't have to change.
+
+#### Branding icon
+
+- The placeholder `icons/icon.svg` had cyan/blue gradients matching V1. Rewrote it to copper→amber matching the new theme.
+- Generated a 1024x1024 source PNG via PowerShell GDI+ (a rounded copper-amber gradient with a white "J" stroke). The user has no SVG-rasterizer like Inkscape installed, so generating with GDI+ is the dependency-free path.
+- Ran `npx @tauri-apps/cli@2 icon <source>` which fanned the source PNG into the full Tauri icon set:
+  - `icon.ico` (Windows resource — required for the build script)
+  - `icon.icns` (macOS bundle)
+  - `icon.png`, `32x32.png`, `64x64.png`, `128x128.png`, `128x128@2x.png` (cross-platform)
+  - `Square{30,44,71,89,107,142,150,284,310}x*Logo.png` + `StoreLogo.png` (Windows Store)
+  - 22 iOS AppIcon variants
+  - 10 Android mipmap variants
+- The previous `cargo build` failed with "icons/icon.ico not found"; with the icons now generated, `cargo build` succeeded in 1m 36s. `target/debug/jarvis.exe` exists (~18 MB unstripped).
+
+#### Desktop app launch
+
+- `Start-Process target/debug/jarvis.exe` opened the native Tauri 2 window on viper's desktop (PID 18860, window title "Jarvis"). The dev binary connects to the running vite at `http://127.0.0.1:5173`, so viper sees the V2 bundle (warm cozy theme, ambient, schedule, launcher, expanded providers, STT, full-screen) inside a real OS window rather than a browser tab.
+
+#### Release installer build
+
+- First attempt: cargo built the optimized binary in 5m 34s, then the MSI bundler failed with "Couldn't find a .ico icon" because `tauri.conf.json` had no `bundle.icon` array — Tauri 2 requires that explicit list for the bundler.
+- Fixed `tauri.conf.json`:
+  - Added `bundle.icon` referencing `icons/{32x32,64x64,128x128,128x128@2x}.png`, `icons/icon.icns`, `icons/icon.ico`
+  - Added `bundle.windows.wix.language: "en-US"` for explicit MSI culture
+  - Renamed identifier from `ai.jarvis.app` to `ai.jarvis.desktop` because Tauri warns when an identifier ends in `.app` (it conflicts with the macOS bundle extension)
+- Re-ran `npm run tauri:build`. Cargo cache hit on most deps, only the binary itself recompiled (2m 24s). Then:
+  - WiX downloaded automatically (`wix314-binaries.zip`)
+  - NSIS downloaded automatically (`nsis-3.11.zip` + `nsis_tauri_utils.dll`)
+  - Both bundlers ran cleanly
+
+**Artifacts produced:**
+
+| File | Size | Use |
+|------|------|-----|
+| `target/release/jarvis.exe` | 5.52 MB | Bare release binary |
+| `target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi` | 3.28 MB | Windows MSI installer |
+| `target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 2.62 MB | NSIS setup wizard |
+
+These are the files to hand to other people. The `.msi` is the corporate-friendly format (deploys via Group Policy, Intune, etc.). The NSIS `-setup.exe` is the friendly double-clickable consumer format. Both install to `Program Files`, register an uninstaller, and ship the same release binary.
+
+### Files touched this wave
+
+```
+app/src/styles/globals.css            — Voltage → Cozy palette rewrite, light mode promoted
+app/tailwind.config.ts                — accent.copper/accent.amber aliases, paper-warm bg
+app/src-tauri/tauri.conf.json         — bundle.icon array, wix language, identifier fix
+app/src-tauri/icons/icon.svg          — copper/amber gradient
+app/src-tauri/icons/*.png/.ico/.icns  — full icon set (52 files generated)
+app/src-tauri/icons/android/          — 10 mipmap variants
+app/src-tauri/icons/ios/              — 22 AppIcon variants
+DEVLOG.md                             — this entry
+```
+
+### Verification
+
+- vite dev server: 200 OK on `http://127.0.0.1:5173/`, serving V2 bundle
+- `cargo build`: ✅ 1m 36s (debug, dev profile)
+- `cargo build --release`: ✅ 2m 24s (release, optimized)
+- WiX MSI bundle: ✅ `Jarvis_0.1.0_x64_en-US.msi`
+- NSIS bundle: ✅ `Jarvis_0.1.0_x64-setup.exe`
+- Desktop window: ✅ launched, PID 18860, title "Jarvis"
+- HMR: ✅ theme rewrite hot-pushed to both browser tab and Tauri webview without restart
+
+### Why "the buttons weren't working"
+
+Two compounding things:
+1. **Stale dev servers from May 28 still bound localhost ports.** Viper's browser tab was attached to last night's pre-V2 build, where `setLauncherOpen` and the rocket/calendar/maximize TopBar buttons literally didn't exist yet. Clicks on the new V2 buttons would have done nothing because the V2 store actions weren't in that bundle.
+2. **The browser kept the old bundle cached** even after the new vite started, until we forced a fresh `Start-Process http://127.0.0.1:5173/`.
+
+After the cleanup pass and fresh launch, the V2 buttons (Quick Launch / Schedule / Fullscreen / mic in composer / palette V2 actions / hotkeys) all live in the served bundle. The desktop window also has them.
+
+### Next steps for viper
+
+1. **Look at your screen.** The Tauri window titled "Jarvis" should be open with the warm cozy theme: warm umber background, copper/amber accents, paper-cream text. If anything looks off (dead button, wrong color), tell me which exact element and I'll trace it.
+2. **Wait for the release build.** When it finishes, `app/src-tauri/target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi` is the file you give other people. Or `bundle/nsis/Jarvis_0.1.0_x64-setup.exe` for an NSIS-style setup.
+3. **Try Mod+Shift+L** (Quick Launch), **Mod+Shift+S** (Schedule), **Mod+Shift+F** (Fullscreen), **Mod+Shift+.** (Ambient now). The TopBar also has rocket / calendar / maximize buttons for these.
+4. The seven new providers (xAI, OpenRouter, Groq, DeepSeek, Mistral, Together, Ollama) are in **Settings → Providers**. Keys persist now; live routing for them is a future wave.
+

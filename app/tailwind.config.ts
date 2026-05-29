@@ -39,8 +39,13 @@ const config: Config = {
         accent: {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
+          // Names kept for back-compat with V1 components.
+          // V2 cozy theme: cyan -> copper, violet -> amber.
           cyan: 'hsl(var(--accent-cyan))',
           violet: 'hsl(var(--accent-violet))',
+          // V2 semantic aliases — new code should use these.
+          copper: 'hsl(var(--accent-copper))',
+          amber: 'hsl(var(--accent-amber))',
         },
         destructive: {
           DEFAULT: 'hsl(var(--destructive))',
@@ -126,9 +131,15 @@ const config: Config = {
         'scale-in': 'scale-in 150ms cubic-bezier(0.16, 1, 0.3, 1)',
       },
       backgroundImage: {
+        // V2 cozy gradient: copper -> amber. CSS variable values shifted in
+        // globals.css so this gradient now reads warm. The class name kept
+        // intentionally so existing components don't have to change.
         'accent-gradient': 'linear-gradient(135deg, hsl(var(--accent-cyan)) 0%, hsl(var(--accent-violet)) 100%)',
         'aurora-gradient':
           'radial-gradient(ellipse 80% 50% at 50% 0%, hsl(var(--accent-cyan) / 0.15), transparent 70%), radial-gradient(ellipse 80% 50% at 80% 100%, hsl(var(--accent-violet) / 0.12), transparent 70%)',
+        // V2 cozy paper texture for ambient + onboarding hero.
+        'paper-warm':
+          'radial-gradient(ellipse 90% 60% at 50% 0%, hsl(var(--accent-amber) / 0.08), transparent 60%), radial-gradient(ellipse 70% 50% at 30% 100%, hsl(var(--accent-copper) / 0.06), transparent 70%)',
       },
     },
   },
