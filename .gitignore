@@ -73,6 +73,21 @@ coverage/
 ~/.jarvis/
 .jarvis/
 
+# Python (phone-jarvis cloud)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# phone-jarvis cloud audit logs (local dev)
+phone-jarvis/cloud/audit/
+
 # Secrets
 *.pem
 *.key

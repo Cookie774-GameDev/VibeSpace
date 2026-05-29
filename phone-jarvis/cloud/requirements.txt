@@ -1,0 +1,23 @@
+# Pipecat + voice providers
+pipecat-ai[anthropic,deepgram,cartesia,groq,silero,livekit,twilio]==0.0.50
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Twilio
+twilio==9.4.1
+
+# LiveKit (Pipecat brings the SDK but we also need the server SDK for room/token mgmt)
+livekit-api==0.8.2
+
+# Supabase (for per-user auth, settings, audit)
+supabase==2.10.0
+
+# Misc
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.7.0
+httpx==0.28.1
+websockets==14.1
+loguru==0.7.3

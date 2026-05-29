@@ -4,6 +4,7 @@ import {
   KeyRound,
   Palette,
   Mic,
+  Phone,
   Keyboard,
   Info,
   Moon,
@@ -22,6 +23,7 @@ import { Account } from './sections/Account';
 import { Providers } from './sections/Providers';
 import { Appearance } from './sections/Appearance';
 import { Voice } from './sections/Voice';
+import { PhoneVoice } from './sections/PhoneVoice';
 import { Hotkeys } from './sections/Hotkeys';
 import { About } from './sections/About';
 import { Ambient } from './sections/Ambient';
@@ -32,6 +34,7 @@ type SettingsTab =
   | 'providers'
   | 'appearance'
   | 'voice'
+  | 'phone'
   | 'ambient'
   | 'accessibility'
   | 'hotkeys'
@@ -48,6 +51,7 @@ const TABS: TabDef[] = [
   { id: 'providers', label: 'Providers', icon: KeyRound },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'voice', label: 'Voice', icon: Mic },
+  { id: 'phone', label: 'Phone & Voice', icon: Phone },
   { id: 'ambient', label: 'Ambient', icon: Moon },
   { id: 'accessibility', label: 'Accessibility', icon: AccessibilityIcon },
   { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
@@ -129,6 +133,7 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
           {tab === 'providers' && <Providers />}
           {tab === 'appearance' && <Appearance />}
           {tab === 'voice' && <Voice />}
+          {tab === 'phone' && <PhoneVoice />}
           {tab === 'ambient' && <Ambient />}
           {tab === 'accessibility' && <Accessibility />}
           {tab === 'hotkeys' && <Hotkeys />}

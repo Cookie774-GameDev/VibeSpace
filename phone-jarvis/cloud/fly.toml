@@ -1,0 +1,33 @@
+# fly.toml — deploy with: fly launch --copy-config && fly deploy
+#
+# This is a starter config. Run `fly launch --no-deploy` first to register the
+# app under your Fly account; it'll merge your app name and primary region in.
+
+app = "phone-jarvis-cloud"
+primary_region = "iad"  # change to closest to you (sea, lhr, fra, syd, etc.)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  LOG_LEVEL = "INFO"
+  AUDIT_RETENTION_DAYS = "30"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # phone-jarvis must be always-on for inbound calls
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 50
+    soft_limit = 30
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

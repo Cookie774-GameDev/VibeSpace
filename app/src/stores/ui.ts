@@ -69,6 +69,8 @@ interface UIState {
   // V3 — pages router
   /** The page the workspace canvas is showing. Default 'chat'. Transient. */
   route: Route;
+  /** True while the in-app phone call modal (Path C) is open. Transient. */
+  callModalOpen: boolean;
 
   // Actions
   toggleNav: () => void;
@@ -99,6 +101,7 @@ interface UIState {
 
   // V3 actions
   setRoute: (r: Route) => void;
+  setCallModalOpen: (v: boolean) => void;
 }
 
 const defaults: Pick<
@@ -125,6 +128,7 @@ const defaults: Pick<
   | 'assistantOpen'
   | 'composerStt'
   | 'route'
+  | 'callModalOpen'
 > = {
   navOpen: true,
   inspectorOpen: false,
@@ -148,6 +152,7 @@ const defaults: Pick<
   assistantOpen: false,
   composerStt: true,
   route: 'chat',
+  callModalOpen: false,
 };
 
 export const useUIStore = create<UIState>()(
@@ -198,6 +203,7 @@ export const useUIStore = create<UIState>()(
 
       // V3
       setRoute: (r) => set({ route: r }),
+      setCallModalOpen: (v) => set({ callModalOpen: v }),
     }),
     {
       name: 'jarvis-ui',

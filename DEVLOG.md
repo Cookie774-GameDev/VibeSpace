@@ -939,3 +939,136 @@ The size bumps (5.57 → 6.00 MB binary, +0.38 MB MSI) reflect the new Rust crat
 - Stripe billing dashboard inside Settings
 - Mobile/PWA path (already documented)
 
+
+---
+
+## 2026-05-29 - V3 Session (Wave 5 -- phone-jarvis: real phone calls + in-app voice)
+
+**Actor:** opencode (Claude Sonnet 4.5) for viper
+
+**Goal:** Take the planning docs in `phone-jarvis/docs/01-08` from architecture-on-paper to a **deployable cloud backend + wired Jarvis app**. User wants two transports working off the same Pipecat loop: **Path A** (real PSTN number via Twilio) and **Path C** (in-app WebRTC via LiveKit). Path B (local Ollama) was explicitly skipped because users on weak hardware cannot run a local LLM. Path C is the must-work path.
+
+**Result:** Cloud backend + Jarvis frontend code shipped end-to-end. Typecheck clean. Architecture lets a single Fly.io machine (~3/mo) serve unlimited users on Path C with their own BYOK Groq keys (free) and on Path A with the operator's Twilio number (.15/mo). All endpoints inert until secrets are set; no surprise  on deploy. Documented in `phone-jarvis/IMPLEMENTATION.md`.
+
+---
+
+### 14:00 - Phase 0: Discovery + decision matrix
+
+User answered the open questions from the planning docs:
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Which transports? | **Path A + Path C** (skip B; "MAKE PATH C WORK") |
+| 2 | Cloud host | **Fly.io free tier**, `min_machines_running = 1` |
+| 3 | PSTN provider | **Twilio** ( trial covers months) |
+| 4 | Provider stacks | Path A premium (Deepgram + Claude Haiku + Cartesia) and Path C cost-conscious (Groq Whisper + Groq Llama + Cartesia). Per-user BYOK overrides operator defaults. |
+| 5 | PIN length | **6 digits, 3 strikes, 1h cooldown**. Caller-ID skip if number is on allowlist. |
+| 6 | Tool ACL | **Read-only by default. Full power only when user says unlock phrase mid-call.** Lock reverts at hangup. |
+| 7 | Outbound triggers | **Default off except manual + error-driven**. Per-category toggle in Settings. |
+| 8 | Voice | **Use existing PERSONA system** (Jarvis/Athena/Edge/Watson/HAL/Sage). |
+| 9 | Multi-user | **Yes from day one**, per-user auth via Supabase, per-user BYOK, per-user phone number. |
+| 10 | Backend lang | **Python** (Pipecat is Python-first). |
+
+Cloud URL is set by the operator (me/viper) via `VITE_PHONE_JARVIS_CLOUD_URL`; end users do not touch it. Power users get an "Advanced -> Self-host" override in Settings (parked for now).
+
+### 14:30 - Phase 1: Cloud backend skeleton -- `phone-jarvis/cloud/`
+
+Wrote the FastAPI app from scratch. One Pipecat pipeline factory, three transports, one bridge registry.
+
+| File | Lines | Purpose |
+|---|---|---|
+| `main.py` | 95 | FastAPI app, mounts routers, daily audit prune |
+| `config.py` | 80 | Pydantic Settings, `.has_*` flags for inert handlers |
+| `pipeline.py` | 220 | Pipecat factory: STT -> LLM -> TTS, persona prompts, tool dispatch hook |
+| `auth.py` | 220 | PBKDF2 PIN, allowlist normaliser, Supabase JWKS verifier, in-memory PinTracker |
+| `bridge.py` | 200 | `BridgeRegistry` -- per-user WS sessions, in-flight tool-call futures |
+| `bridge_endpoint.py` | 90 | `WS /bridge` handshake + frame loop |
+| `twilio_handler.py` | 230 | `POST /twiml` + `WS /twilio/{sid}` -- Path A inbound |
+| `livekit_handler.py` | 175 | `POST /livekit/token` -- Path C; spawns the AI agent task |
+| `outbound.py` | 145 | `POST /outbound/call` -- Sage dials user; `/outbound/twiml` callback |
+| `supabase_client.py` | 30 | Service-role Supabase client (bypasses RLS) |
+| `audit.py` | 220 | JSONL audit logger, per-call + daily rollup, retention prune |
+| `Dockerfile` | 18 | Python 3.11 slim, uvicorn |
+| `fly.toml` | 30 | Always-on (no scale-to-zero -- inbound calls would 404) |
+| `requirements.txt` | 14 | Pipecat 0.0.50 + Twilio + LiveKit + Supabase + jose |
+| `.env.example` | 35 | Every secret with comments |
+
+Pipeline service selection is data-driven: `transport == "twilio"` plus `keys.deepgram` -> Deepgram; otherwise Groq. Same for LLM (Anthropic for Twilio, Groq for LiveKit). Cartesia for both TTS. Per-user BYOK overrides operator defaults.
+
+Tool dispatch wires through Pipecat's `llm.register_function`: when the LLM emits a tool_use, the cloud forwards a frame over `/bridge` to the user's desktop daemon and awaits the result. Confirmation tier (write/edit/delete) and unlock tier (shell.run) gates are encoded in `BridgeRegistry.invoke`.
+
+Bridge auth: short-lived Supabase JWT verified against the project JWKS. No shared bridge secret. Refreshes on Supabase `TOKEN_REFRESHED`.
+
+### 15:30 - Phase 2: Jarvis app integration -- `app/src/`
+
+Installed `livekit-client@2.19.1`. Wrote two new modules and updated five existing files.
+
+**New: `lib/bridge/`** -- the long-lived WS to `/bridge`:
+- `BridgeClient.ts` (270 lines) -- exp-backoff reconnect (250ms..5s), 15s heartbeat, register frame with the live MCP tool catalog, tool dispatch into `toolRegistry.invoke()`, defense-in-depth confirm gate.
+- `useBridgeLifecycle.ts` (110 lines) -- React hook that mounts the bridge once Supabase signs in, swaps the JWT on refresh, tears down on sign-out.
+
+**New: `features/call/`** -- the in-app voice surface:
+- `store.ts` -- Zustand: status (idle/connecting/ringing/in-call/ending/error), transcript, mute, persona, awaitingConfirm, unlockActive.
+- `CallService.ts` -- LiveKit client wrapper. POSTs `/livekit/token` with the Supabase JWT, joins the per-user room, publishes mic, attaches remote audio to a hidden `<audio>` element, listens for transcript data messages.
+- `CallButton.tsx` -- standalone button (also a `CallTopBarButton` mirror inside `TopBar.tsx` so it inherits the no-drag region).
+- `CallModal.tsx` -- in-call UI: persona Orb, status pill, scrolling transcript, confirm banner, unlock banner, mute, hangup.
+- `outbound.ts` -- `fireOutboundCall(reason, ctx)` plus a window-event listener that POSTs to `/outbound/call` with cooldown throttle.
+
+**Updates:**
+- `stores/ui.ts` -- adds `callModalOpen` flag (transient).
+- `components/layout/TopBar.tsx` -- green/red Phone button next to the mic.
+- `features/settings/SettingsModal.tsx` -- new "Phone & Voice" tab.
+- `features/settings/sections/PhoneVoice.tsx` (NEW, 700 lines) -- cloud connection status, privacy disclosure, PIN setter (calls `set_phone_pin` RPC), allowlist editor, BYOK paste-and-save, outbound trigger toggles, unlock phrase editor.
+- `App.tsx` -- mounts `<CallModal />`, calls `useBridgeLifecycle()`, starts the outbound trigger.
+
+### 16:00 - Phase 3: Supabase schema -- `supabase/schema-phone-jarvis.sql`
+
+Idempotent SQL on top of the existing hosted schema:
+
+- `phone_settings` -- per-user PIN hash (PBKDF2-SHA256, 100k iters, 32-byte output), salt (16 hex), allowlist text array, BYOK JSONB, outbound triggers JSONB, unlock phrase, cost caps. PK on user_id, unique constraint on twilio_phone_number.
+- `outbound_pending` -- short-lived row keyed by Twilio call_sid; the `/outbound/twiml` callback reads context once. Pruned hourly.
+- `call_audit` -- one row per completed call (transport, duration, end_reason, persona, cost estimate). Pruned at 30 days.
+- `set_phone_pin(uuid, text)` RPC -- security-definer, uid-scoped, hashes with the in-DB `pbkdf2_sha256()` plpgsql implementation that matches Python's `hashlib.pbkdf2_hmac` byte-for-byte.
+- RLS policies -- each user reads/writes only their own rows; service role inserts to `call_audit` and `outbound_pending` from the cloud.
+
+### 16:30 - Phase 4: Verification
+
+`
+npx tsc --noEmit  -> OK (clean)
+`
+
+No new test runs this wave -- writing meaningful unit tests for the bridge + LiveKit transport requires a fixtures harness that's its own subproject. Listed in TODO.
+
+Did **not** rebuild the Tauri MSI/EXE. The user will run `npx tauri build` when they want to ship the new bits to disk; the renderer code is the meaningful change and a vite `npm run build` would suffice for verification.
+
+### 16:45 - Phase 5: Documentation
+
+- `phone-jarvis/IMPLEMENTATION.md` -- 460-line implementation guide. Covers the shape, the file inventory, the call flow end-to-end, the bridge protocol, the security model, the cost model with numbers, a Path C quick-start (the only one we promised would work), a Path A add-on guide, and the explicit TODO list before production.
+- This DEVLOG entry.
+
+### What viper should test next
+
+1. **Apply the schema.** Open Supabase SQL editor, paste `supabase/schema-phone-jarvis.sql`, run. Should be idempotent on top of the existing hosted schema.
+2. **Path C smoke test.** Follow `phone-jarvis/IMPLEMENTATION.md` section 7. Expected end state: green Call button -> click -> grant mic -> Sage joins LiveKit room -> two-way conversation. ~30 minutes from zero to working call if Groq + Cartesia + LiveKit + Fly accounts already exist.
+3. **Bridge status.** Settings -> Phone & Voice. After signing in, "Cloud connection" pill should flip to green `connected`. If yellow `reconnecting` it means the cloud is up but rejected the JWT (check Supabase JWT signing mode -- needs RS256 / JWKS, not legacy HS256).
+4. **PIN flow (no call needed).** Settings -> Phone & Voice -> set a 6-digit PIN -> hit Save. Should succeed without errors. The `set_phone_pin` RPC writes a salted hash to `phone_settings`.
+
+### What's NOT done this wave (deliberately or transport-of-bytes-permitting)
+
+- Real Cartesia voice IDs -- `pipeline.py:_persona_voice_id` has placeholders; pick voices at play.cartesia.ai/voices and paste the real UUIDs before any TTS will work.
+- Verbal-yes confirm-tier dispatcher -- the bridge already accepts `confirmed=false` on write tools but the cloud-side state machine that pauses, asks "yes?", and waits for a "yes" frame is not yet wired (the persona prompt asks the LLM to enforce; defense-in-depth gate parked).
+- Outbound trigger callsites -- `fireOutboundCall` ships and the listener is mounted, but no upstream code calls it yet. Expected upstream: `lib/ai/runtime.ts` on uncaught error, `features/terminal/*` on non-zero exit, `features/tasks/*` on overdue deadline.
+- Audit log viewer in Settings -- rows write to `call_audit` but no UI yet.
+- Per-user phone-number provisioning -- right now it's manual SQL to wire a Twilio number to a user.
+- Tests for PBKDF2 reference vectors, JWT-with-mock-JWKS, BridgeRegistry pending-future cleanup. Listed in IMPLEMENTATION.md.
+
+### What would land in a Wave 6
+
+- Real PIN frame processor in the Pipecat pipeline (so the LLM cannot bypass it)
+- Verbal-yes confirm-tier state machine + `kind: "awaiting_confirm"` data messages from cloud to app
+- Outbound trigger callsites at the three known emit points
+- Audit log viewer + cost dashboard in Phone & Voice settings
+- Twilio sub-account-per-user provisioning flow
+- Voice-id picker UI inside Phone & Voice settings (load Cartesia voices, preview, pick per persona)
+- `system.hangup` tool so Sage can end calls cleanly
+

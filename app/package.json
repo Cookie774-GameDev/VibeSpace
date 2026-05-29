@@ -30,6 +30,7 @@
     "date-fns": "^4.1.0",
     "dexie": "^4.0.10",
     "dexie-react-hooks": "^1.1.7",
+    "livekit-client": "^2.19.1",
     "lucide-react": "^0.469.0",
     "motion": "^11.15.0",
     "nanoid": "^5.0.9",

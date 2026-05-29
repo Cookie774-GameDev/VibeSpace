@@ -12,6 +12,8 @@ import {
   Terminal,
   KanbanSquare,
   BarChart3,
+  Phone,
+  PhoneOff,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
@@ -21,6 +23,9 @@ import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { HOTKEYS } from '@/lib/hotkeys';
 import { cn, isMac } from '@/lib/utils';
+import { useCallStore } from '@/features/call/store';
+import { getCallService } from '@/features/call/CallService';
+import { toast } from '@/components/ui/toast';
 
 /**
  * TopBar - 40px chrome at the very top of the app.
@@ -361,6 +366,8 @@ export function TopBar() {
           </Button>
         </Hint>
 
+        <CallTopBarButton />
+
         <Hint label="Settings" hotkey="Mod+,">
           <Button
             variant="ghost"
@@ -382,5 +389,56 @@ export function TopBar() {
         </div>
       </div>
     </header>
+  );
+}
+
+/**
+ * Call button — small TopBar control. Lives here (not in /features/call)
+ * so the TopBar's no-drag region wraps it consistently with other controls.
+ *
+ * idle:   green Phone icon, click opens the call modal (which auto-starts).
+ * active: red PhoneOff icon, click hangs up immediately.
+ *
+ * Disabled with explanatory toast when the cloud URL is unset.
+ */
+function CallTopBarButton() {
+  const status = useCallStore((s) => s.status);
+  const setCallModalOpen = useUIStore((s) => s.setCallModalOpen);
+
+  const inCall = status !== 'idle';
+  const service = getCallService();
+  const configured = service.isConfigured();
+
+  const handleClick = () => {
+    if (!configured) {
+      toast.info(
+        'Phone & Voice not set up',
+        'Open Settings → Phone & Voice and point Jarvis at your phone-jarvis cloud.',
+      );
+      return;
+    }
+    if (inCall) {
+      void service.stop();
+      return;
+    }
+    setCallModalOpen(true);
+  };
+
+  return (
+    <Hint label={inCall ? 'Hang up' : 'Call Sage'}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={handleClick}
+        aria-label={inCall ? 'Hang up' : 'Call Sage'}
+        className={cn(
+          inCall && 'text-rose-500 hover:text-rose-400',
+          !inCall && configured && 'text-emerald-500 hover:text-emerald-400',
+          !configured && 'text-muted-foreground/50',
+        )}
+      >
+        {inCall ? <PhoneOff className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
+      </Button>
+    </Hint>
   );
 }

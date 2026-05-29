@@ -33,6 +33,8 @@ import { TodoPanel, startNotificationLoop } from '@/features/tasks';
 import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
 import { SettingsModal } from '@/features/settings';
 import { VoiceModal, GlowBorder } from '@/features/voice';
+import { CallModal, startOutboundTrigger } from '@/features/call';
+import { useBridgeLifecycle } from '@/lib/bridge/useBridgeLifecycle';
 import { AmbientHome, useIdleDetection } from '@/features/ambient';
 import { ScheduleModal } from '@/features/schedule';
 import { LauncherDialog, useLinkHotkeys } from '@/features/launcher';
@@ -271,6 +273,26 @@ function AssistantBarHost() {
  */
 function WorkspaceRoot() {
   useBoot();
+  useBridgeLifecycle();
+
+  // Wire outbound-call trigger so any feature can call `fireOutboundCall(...)`.
+  // Default categories (manual + error) are toggled in Settings → Phone & Voice.
+  React.useEffect(() => {
+    const stop = startOutboundTrigger({
+      onResult: (ok, info) => {
+        if (ok) {
+          toast.info('Outbound call queued', `Reason: ${info.reason}`);
+        } else if (info.error && info.error !== 'cooldown' && info.error !== 'cloud_not_configured') {
+          // Quiet failures we don't want to spam the user about
+          // (cooldown is normal during a crash burst; cloud-not-configured
+          // is the user's setup problem already surfaced in Settings).
+          console.warn('[outbound]', info);
+        }
+      },
+    });
+    return stop;
+  }, []);
+
   return (
     <>
       <GlobalHotkeysHost />
@@ -282,6 +304,7 @@ function WorkspaceRoot() {
       <CommandPalette />
       <SettingsModal />
       <VoiceModal />
+      <CallModal />
       <ScheduleModalHost />
       <LauncherDialogHost />
       <AssistantBarHost />
