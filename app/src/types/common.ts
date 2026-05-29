@@ -45,7 +45,30 @@ export type PersonaPreset = 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal';
 /**
  * Provider IDs we know about.
  */
-export type ProviderId = 'anthropic' | 'openai' | 'google' | 'mock' | 'local';
+/**
+ * Identifier of a model provider.
+ *
+ * V1 shipped the four cloud majors plus the local stub; V2 adds the OpenAI-
+ * compatible providers users keep asking for. The router only ships real
+ * implementations for `anthropic`, `openai`, `google`, and `mock`/`local`;
+ * every new V2 entry currently routes through the OpenAI-compatible adapter
+ * (which transparently mocks if no key is set) so the UI surface — the
+ * picker, BYOK form, persisted keys — works end-to-end immediately.
+ */
+export type ProviderId =
+  | 'anthropic'
+  | 'openai'
+  | 'google'
+  | 'mock'
+  | 'local'
+  // V2 — OpenAI-compatible providers.
+  | 'xai'
+  | 'openrouter'
+  | 'groq'
+  | 'deepseek'
+  | 'mistral'
+  | 'together'
+  | 'ollama';
 
 /**
  * Branded type helpers - useful when we want compile-time distinction

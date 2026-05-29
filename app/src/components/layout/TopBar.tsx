@@ -1,17 +1,18 @@
 import * as React from 'react';
-import { Search, Mic, Settings, PanelLeft } from 'lucide-react';
+import { Search, Mic, Settings, PanelLeft, CalendarDays, Maximize2, Minimize2, Rocket } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
 import { Hint } from '@/components/ui/tooltip';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
+import { HOTKEYS } from '@/lib/hotkeys';
 import { cn, isMac } from '@/lib/utils';
 
 /**
  * TopBar - 40px chrome at the very top of the app.
  *
  * Left cluster: collapse-nav button, workspace/project breadcrumb.
- * Right cluster: search/palette, voice mic, settings, avatar.
+ * Right cluster: schedule, fullscreen toggle, search/palette, voice mic, settings, avatar.
  *
  * The header itself is a Tauri drag region so users can drag the window
  * by its background. Interactive elements opt out via `no-drag`.
@@ -23,6 +24,11 @@ export function TopBar() {
   const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
   const toggleVoice = useUIStore((s) => s.toggleVoice);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  // V2 — schedule + launcher + fullscreen
+  const setScheduleOpen = useUIStore((s) => s.setScheduleOpen);
+  const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
+  const chatFullscreen = useUIStore((s) => s.chatFullscreen);
+  const toggleChatFullscreen = useUIStore((s) => s.toggleChatFullscreen);
 
   const workspaceId = useAuthStore((s) => s.workspaceId);
   const projectId = useAuthStore((s) => s.projectId);
@@ -89,6 +95,43 @@ export function TopBar() {
 
       {/* Right cluster */}
       <div className="no-drag flex items-center gap-1">
+        <Hint label="Quick launcher" hotkey={HOTKEYS.LAUNCHER}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setLauncherOpen(true)}
+            aria-label="Open quick launcher"
+          >
+            <Rocket className="h-4 w-4" />
+          </Button>
+        </Hint>
+
+        <Hint label="Schedule" hotkey={HOTKEYS.SCHEDULE}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setScheduleOpen(true)}
+            aria-label="Open schedule"
+          >
+            <CalendarDays className="h-4 w-4" />
+          </Button>
+        </Hint>
+
+        <Hint
+          label={chatFullscreen ? 'Exit fullscreen' : 'Fullscreen workspace'}
+          hotkey={HOTKEYS.TOGGLE_FULLSCREEN}
+        >
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={toggleChatFullscreen}
+            aria-label={chatFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            aria-pressed={chatFullscreen}
+          >
+            {chatFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </Button>
+        </Hint>
+
         <Hint label="Search" hotkey="Mod+K">
           <Button
             variant="ghost"

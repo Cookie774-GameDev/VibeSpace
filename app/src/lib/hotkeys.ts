@@ -83,4 +83,10 @@ export const HOTKEYS = {
   TOGGLE_TODO: 'Mod+Shift+T',
   SETTINGS: 'Mod+,',
   ESCAPE: 'Escape',
+  // V2
+  TOGGLE_FULLSCREEN: 'Mod+Shift+F',
+  AMBIENT_TOGGLE: 'Mod+Shift+.',
+  COMPOSER_STT: 'Mod+Shift+M',
+  SCHEDULE: 'Mod+Shift+S',
+  LAUNCHER: 'Mod+Shift+L',
 } as const;

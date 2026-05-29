@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  CalendarDays,
   CheckSquare,
   Code,
   FileText,
@@ -8,14 +9,17 @@ import {
   ListPlus,
   ListTodo,
   type LucideIcon,
+  Maximize2,
   MessageSquare,
   MessageSquarePlus,
   Mic,
   Monitor,
   Moon,
+  Moon as Ambient,
   PanelLeft,
   PanelRight,
   Palette,
+  Rocket,
   Settings,
   Sun,
   User,
@@ -213,6 +217,68 @@ const STATIC_ACTIONS: Action[] = [
     keywords: ['tasks', 'tray'],
     perform: ({ closePalette }) => {
       useUIStore.getState().toggleTodoDrawer();
+      closePalette();
+    },
+  },
+
+  // V2 — Schedule
+  {
+    id: 'open-schedule',
+    label: 'Schedule',
+    description: 'Upcoming events and add-event form',
+    icon: CalendarDays,
+    hotkey: HOTKEYS.SCHEDULE,
+    page: 'root',
+    keywords: ['calendar', 'events', 'meetings', 'agenda'],
+    perform: ({ closePalette }) => {
+      useUIStore.getState().setScheduleOpen(true);
+      closePalette();
+    },
+  },
+
+  // V2 — Quick Launch
+  {
+    id: 'open-launcher',
+    label: 'Quick Launch',
+    description: 'One-click links, apps, and Jarvis actions',
+    icon: Rocket,
+    hotkey: HOTKEYS.LAUNCHER,
+    page: 'root',
+    keywords: ['links', 'launcher', 'pinned', 'shortcuts'],
+    perform: ({ closePalette }) => {
+      useUIStore.getState().setLauncherOpen(true);
+      closePalette();
+    },
+  },
+
+  // V2 — Fullscreen workspace toggle
+  {
+    id: 'toggle-fullscreen',
+    label: 'Toggle fullscreen workspace',
+    description: 'Hide nav + tasks pane',
+    icon: Maximize2,
+    hotkey: HOTKEYS.TOGGLE_FULLSCREEN,
+    page: 'root',
+    keywords: ['focus', 'distraction-free', 'maximize'],
+    perform: ({ closePalette }) => {
+      useUIStore.getState().toggleChatFullscreen();
+      closePalette();
+    },
+  },
+
+  // V2 — Ambient toggle
+  {
+    id: 'toggle-ambient',
+    label: 'Ambient mode',
+    description: 'Calm idle screen with breathing orb + clock',
+    icon: Ambient,
+    hotkey: HOTKEYS.AMBIENT_TOGGLE,
+    page: 'root',
+    keywords: ['idle', 'screensaver', 'rest'],
+    perform: ({ closePalette }) => {
+      const ui = useUIStore.getState();
+      if (!ui.ambient) ui.setAmbient(true);
+      ui.setAmbientActive(!ui.ambientActive);
       closePalette();
     },
   },

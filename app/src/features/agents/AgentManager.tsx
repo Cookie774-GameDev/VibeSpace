@@ -29,7 +29,20 @@ import { newAgentId } from '@/lib/ids';
 import { AgentBadge } from './AgentBadge';
 import { getDefaultAgents } from './registry';
 
-const PROVIDERS: ProviderId[] = ['mock', 'anthropic', 'openai', 'google', 'local'];
+const PROVIDERS: ProviderId[] = [
+  'mock',
+  'anthropic',
+  'openai',
+  'google',
+  'xai',
+  'openrouter',
+  'groq',
+  'deepseek',
+  'mistral',
+  'together',
+  'ollama',
+  'local',
+];
 
 /** Tracks the editable subset of an agent. */
 interface DraftState {

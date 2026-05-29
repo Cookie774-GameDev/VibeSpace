@@ -137,3 +137,129 @@ d3af46f chore: initialize repo with planning docs and licenses
 3. Apply `app/supabase/migrations/0001_initial.sql` in the Supabase SQL editor.
 4. Optionally drop AI provider keys (Anthropic / OpenAI / Google) into `.env.local` or via Settings -> Providers.
 5. `npm run dev` to launch the web version (works without Rust).
+
+---
+
+## 2026-05-30 - V2 Session (Wave 1)
+
+**Actor:** opencode (claude) for viper
+
+**Goal:** Land the user-visible half of V2 — calendar/schedule, quick-launcher, ambient idle home, expanded provider list, in-composer STT, full-screen toggle. Land the foundation for the second half (terminals subsystem, real installer build, OAuth/Google calendar) without breaking V1.
+
+**Result:** Visible features ship, types/db/repos for the deferred features land too. Typecheck clean. Vite build clean (9.78s, 2496 modules transformed, +15 modules vs V1). Two checkpoints committed.
+
+### What landed
+
+- **E0 — Foundation (committed `ba98c9b`)**
+  - `types/event.ts`, `types/quick-link.ts`, `types/terminal.ts`, `types/integration.ts`
+  - `types/agent.ts` extended with `skills`, `coordinator?`, `consensus_method?`
+  - 5 new branded id types in `lib/ids.ts`
+  - Dexie v2 schema in `lib/db/schema.ts` — added 6 tables (events, quick_links, quick_link_groups, terminal_presets, terminal_sessions, integrations) and bumped agents/chats with V2 columns
+  - Repositories: `eventRepo`, `quickLinkRepo`, `quickLinkGroupRepo`, `terminalPresetRepo`, `terminalSessionRepo`, `integrationRepo`. Each uses the same id-stamping + audit pattern as V1 repos.
+  - `lib/agents/skills.ts` — skill registry seed (browse, calendar, code-edit, etc) ready for the agent capability map
+  - `supabase/migrations/0002_v2.sql` — RLS-aware mirror of the V2 Dexie tables
+  - 11-doc plan suite under `implementation-plan/v2/` (master plan + 8 wave plans + 2 verification plans)
+
+- **Ambient idle home** (`features/ambient/`)
+  - `useIdleDetection` listens at the document level, suppresses takeover when modals/voice/inputs are active, fires on visibility-change
+  - `AmbientHome` renders breathing orb + halo + drifting dots + clock + next-event glance card + open-task glance card + rotating quote (30 curated, swap every 30s) + "Press any key to wake" hint
+  - Single shared `--ambient-phase` CSS variable driven by one RAF loop so every layer pulses on the same 4.4s clock
+  - Wake animation: ambient-exit keyframes (380ms) → app-wake fade (420ms cubic-bezier-out)
+  - Reduced-motion safe — every keyframe gets disabled and falls back to a 200ms opacity fade
+  - Mounted in `App.tsx`. New CSS keyframes + variables in `globals.css`. Mod+Shift+. toggles manually.
+
+- **Schedule** (`features/schedule/`)
+  - `parseEventInput` — pure-TS regex parser for "lunch with Sam tomorrow at 1pm", "Friday 4pm", "Aug 12", "2025-06-12 14:00", weekday+time, ISO/US dates. Always returns a plausible result; user can edit afterwards.
+  - `useEvents`, `useUpcomingEvents` — Dexie live-query hooks
+  - `ScheduleModal` — two tabs (Upcoming + Add event), color-tinted event rows, reminder presets (at time / 5 / 15 / 60 min before), all-day toggle, delete button. Quick-add live-parses while you type.
+  - Hotkey Mod+Shift+S, palette action, TopBar calendar button.
+
+- **Quick Launch** (`features/launcher/`)
+  - `LauncherDialog` — keyboard-first launcher pad. Group filter chips (All / per-group / Ungrouped), search, tile grid (5 cols on lg, responsive), hover edit/delete actions, color-tinted tiles per link's HSL hue, "+ New link" tile.
+  - `LinkEditDialog` — full create/edit form: label, URL with auto-kind inference, kind select, group select, emoji icon, hue slider with live swatch, behavior select, comma-tag input.
+  - `launch.ts` — dispatcher: web/youtube/spotify/etc → window.open; jarvis:// scheme → built-in actions (settings/palette/schedule/ambient/fullscreen/voice) plus a `jarvis:link-action` CustomEvent escape hatch.
+  - Empty state with "Add starter set" (YouTube/Spotify/GitHub/ChatGPT/Claude/Schedule/Ambient).
+  - Hotkey Mod+Shift+L, palette action, TopBar rocket button.
+
+- **STT in composer** (`features/chat/Composer.tsx`)
+  - Mic button next to the model picker. Live partial transcript shown inline (italic, faded). Final utterances append to the draft with a separating space.
+  - Subscribes to the existing `VoiceService` events. Toasts on permission errors.
+  - Hotkey Mod+Shift+M (works inside the textarea). Setting in `Settings → Accessibility`.
+
+- **Full-screen workspace** (`stores/ui.ts`, `globals.css`, `components/layout/`)
+  - `chatFullscreen` flag flips a `data-fullscreen='true'` attr on documentElement; CSS hides NavPane and todo-drawer in that mode.
+  - Hotkey Mod+Shift+F, palette action, TopBar maximize/minimize button. Persisted via the UI store.
+
+- **Expanded providers** (`types/common.ts`, `lib/ai/router.ts`, several UIs)
+  - `ProviderId` union extended with `xai`, `openrouter`, `groq`, `deepseek`, `mistral`, `together`, `ollama`. 12 total.
+  - Router maps every new id to `mockProvider` for now (transparent fallback until the OpenAI-compatible adapter ships) — saved keys persist immediately.
+  - Composer model picker, AgentManager picker, Settings → Providers BYOK form, and Settings → Providers default-provider radio all updated.
+
+- **Settings sections** (`features/settings/`)
+  - New `Ambient` tab: master switch, 1/3/5/10/15/30 min idle-threshold preset chips, drone-audio toggle (V3 placeholder), live "Try ambient mode now" preview button.
+  - New `Accessibility` tab: composer-STT toggle, reduced-motion display (read-only OS preference), full-screen and screen-reader explainers.
+  - SettingsModal sidebar grew from 6 to 8 tabs.
+
+- **Hotkeys + palette + topbar parity**
+  - 5 new hotkeys: TOGGLE_FULLSCREEN, AMBIENT_TOGGLE, COMPOSER_STT, SCHEDULE, LAUNCHER. Hotkeys settings table updated.
+  - 5 new palette actions in the root page.
+  - TopBar gained Quick Launch rocket, Schedule calendar, Fullscreen toggle.
+
+### What's parked behind a Rust install
+
+This machine has no `cargo`/`rustc` in PATH (verified). Three V2 features need them:
+
+1. **Multi-terminal subsystem** (Wave C). Types + repos + plan are in. Implementation needs a Tauri portable-pty sidecar — pure TS can't drive a real shell. The TerminalPanel + xterm.js front-end can be drafted but will dead-end without the IPC layer.
+2. **Native installer build** (Wave B1 §6). Dexie crypto + secrets schema + the V2 Tauri config can be built; producing the actual `.msi`/`.exe`/`.app`/`.dmg` requires `tauri build`, which calls cargo.
+3. **Google OAuth loopback for calendar sync** (Wave B2 §5). The loopback handler must run in the Tauri runtime; the web shell can't bind a localhost port. Plan + token storage schema are in.
+
+To unblock these, install Rust:
+
+```powershell
+# Windows: rustup
+Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+.\rustup-init.exe -y
+# then restart shell so cargo/rustc are on PATH
+```
+
+Then `npm run tauri:dev` from `app/` to verify the shell still launches.
+
+### Verification
+
+- `npm run typecheck` — clean
+- `npm run build` — clean (9.78s, 2496 modules, 47.25 kB CSS gzip 9.24 kB, main bundle 767 kB gzip 243 kB)
+- Bundle grew ~50 kB gzip vs V1 — mostly the launcher dialog + ambient CSS. Code-splitting is the V3 chore.
+
+### Files touched this wave
+
+```
+app/src/types/                — common.ts (extended), event.ts, integration.ts,
+                                 quick-link.ts, terminal.ts (new); agent.ts updated
+app/src/lib/ids.ts            — 5 new id stampers
+app/src/lib/db/               — schema.ts (v2 tables), repositories.ts (6 new repos), index.ts
+app/src/lib/agents/skills.ts  — skill registry seed (new)
+app/src/lib/hotkeys.ts        — 5 new hotkeys
+app/src/lib/ai/router.ts      — 7 new provider entries (mock-aliased)
+app/src/stores/ui.ts          — ambient/scheduleOpen/launcherOpen/composerStt/chatFullscreen
+app/src/styles/globals.css    — ambient keyframes, V2 color tokens, fullscreen rules
+app/src/App.tsx               — mount AmbientHome, Schedule, Launcher; new hotkeys
+app/src/components/layout/    — TopBar (3 new buttons), NavPane (data-nav-pane)
+app/src/features/ambient/     — new feature (4 files)
+app/src/features/schedule/    — new feature (4 files)
+app/src/features/launcher/    — new feature (5 files)
+app/src/features/chat/Composer.tsx          — STT mic + live transcript
+app/src/features/command-palette/actions.ts — 5 new actions
+app/src/features/settings/    — SettingsModal (2 new tabs), Hotkeys.tsx, Providers.tsx,
+                                 sections/Ambient.tsx, sections/Accessibility.tsx (new)
+app/src/features/agents/AgentManager.tsx    — provider list expansion
+app/supabase/migrations/0002_v2.sql         — V2 mirror of Dexie schema (new)
+implementation-plan/v2/                     — 11 plan + verify docs (new)
+```
+
+### Next steps for viper
+
+1. **Install Rust** so the parked Wave C/B1/B2 work can land.
+2. Try the new flows: Mod+Shift+S (Schedule), Mod+Shift+L (Quick Launch), Mod+Shift+. (Ambient now), Mod+Shift+F (Fullscreen), mic icon in composer (STT).
+3. Drop API keys for the new providers in Settings → Providers; keys persist now and start routing live the moment the OpenAI-compatible adapter lands.
+4. Apply `app/supabase/migrations/0002_v2.sql` if you've already wired Supabase.
+

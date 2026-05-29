@@ -6,6 +6,8 @@ import {
   Mic,
   Keyboard,
   Info,
+  Moon,
+  Accessibility as AccessibilityIcon,
   type LucideIcon,
 } from 'lucide-react';
 import { useUIStore } from '@/stores/ui';
@@ -22,12 +24,16 @@ import { Appearance } from './sections/Appearance';
 import { Voice } from './sections/Voice';
 import { Hotkeys } from './sections/Hotkeys';
 import { About } from './sections/About';
+import { Ambient } from './sections/Ambient';
+import { Accessibility } from './sections/Accessibility';
 
 type SettingsTab =
   | 'account'
   | 'providers'
   | 'appearance'
   | 'voice'
+  | 'ambient'
+  | 'accessibility'
   | 'hotkeys'
   | 'about';
 
@@ -42,6 +48,8 @@ const TABS: TabDef[] = [
   { id: 'providers', label: 'Providers', icon: KeyRound },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'voice', label: 'Voice', icon: Mic },
+  { id: 'ambient', label: 'Ambient', icon: Moon },
+  { id: 'accessibility', label: 'Accessibility', icon: AccessibilityIcon },
   { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ];
@@ -121,6 +129,8 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
           {tab === 'providers' && <Providers />}
           {tab === 'appearance' && <Appearance />}
           {tab === 'voice' && <Voice />}
+          {tab === 'ambient' && <Ambient />}
+          {tab === 'accessibility' && <Accessibility />}
           {tab === 'hotkeys' && <Hotkeys />}
           {tab === 'about' && <About />}
         </main>

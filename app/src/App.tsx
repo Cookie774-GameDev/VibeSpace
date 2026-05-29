@@ -10,6 +10,7 @@
  *     <SettingsModal />   - Cmd+, target
  *     <VoiceModal />      - Cmd+Space target
  *     <GlowBorder />      - screen-edge glow during voice listening
+ *     <AmbientHome />     - V2 idle takeover with breathing orb + clock
  *     <Toaster />         - in-app toast outlet
  *   </AuthGate>
  *
@@ -18,6 +19,7 @@
  *   - registerMany default agents into the agent runtime store
  *   - register the chat -> AI runtime listener (jarvis:send / jarvis:cancel)
  *   - useGlobalHotkeys() to wire every HOTKEY -> palette action
+ *   - useIdleDetection() to flip ambient mode on inactivity (V2)
  */
 import * as React from 'react';
 import { useUIStore } from '@/stores/ui';
@@ -30,10 +32,14 @@ import { TodoPanel, startNotificationLoop } from '@/features/tasks';
 import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
 import { SettingsModal } from '@/features/settings';
 import { VoiceModal, GlowBorder } from '@/features/voice';
+import { AmbientHome, useIdleDetection } from '@/features/ambient';
+import { ScheduleModal } from '@/features/schedule';
+import { LauncherDialog } from '@/features/launcher';
 import { Toaster, toast } from '@/components/ui/toast';
 import { startRuntimeListener } from '@/lib/ai/runtime';
 import { messageRepo, agentRepo, chatRepo, openDb } from '@/lib/db';
 import { getDefaultAgents } from '@/features/agents';
+import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import type { Agent, AgentId, Message } from '@/types';
 
 /**
@@ -166,7 +172,63 @@ function useBoot() {
  */
 function GlobalHotkeysHost() {
   useGlobalHotkeys();
+
+  // V2 — idle detection drives ambient takeover.
+  useIdleDetection();
+
+  // V2 — fullscreen chat toggle.
+  const toggleChatFullscreen = useUIStore((s) => s.toggleChatFullscreen);
+  useHotkey(
+    HOTKEYS.TOGGLE_FULLSCREEN,
+    (e) => {
+      e.preventDefault();
+      toggleChatFullscreen();
+    },
+    { whenInputs: true },
+  );
+
+  // V2 — manual ambient toggle (Mod+Shift+.).
+  const setAmbientActive = useUIStore((s) => s.setAmbientActive);
+  const ambientEnabled = useUIStore((s) => s.ambient);
+  useHotkey(HOTKEYS.AMBIENT_TOGGLE, (e) => {
+    e.preventDefault();
+    if (!ambientEnabled) return;
+    setAmbientActive(!useUIStore.getState().ambientActive);
+  });
+
+  // V2 — Schedule (Mod+Shift+S).
+  const setScheduleOpen = useUIStore((s) => s.setScheduleOpen);
+  useHotkey(HOTKEYS.SCHEDULE, (e) => {
+    e.preventDefault();
+    setScheduleOpen(!useUIStore.getState().scheduleOpen);
+  });
+
+  // V2 — Launcher (Mod+Shift+L).
+  const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
+  useHotkey(HOTKEYS.LAUNCHER, (e) => {
+    e.preventDefault();
+    setLauncherOpen(!useUIStore.getState().launcherOpen);
+  });
+
   return null;
+}
+
+/**
+ * Schedule modal mount, listens to ui.scheduleOpen.
+ */
+function ScheduleModalHost() {
+  const open = useUIStore((s) => s.scheduleOpen);
+  const setOpen = useUIStore((s) => s.setScheduleOpen);
+  return <ScheduleModal open={open} onOpenChange={setOpen} />;
+}
+
+/**
+ * Launcher dialog mount, listens to ui.launcherOpen.
+ */
+function LauncherDialogHost() {
+  const open = useUIStore((s) => s.launcherOpen);
+  const setOpen = useUIStore((s) => s.setLauncherOpen);
+  return <LauncherDialog open={open} onOpenChange={setOpen} />;
 }
 
 /**
@@ -185,9 +247,14 @@ function WorkspaceRoot() {
       <CommandPalette />
       <SettingsModal />
       <VoiceModal />
+      <ScheduleModalHost />
+      <LauncherDialogHost />
 
       {/* Visual ambient effects */}
       <GlowBorder />
+
+      {/* V2 — idle takeover. Self-renders only when ambientActive=true. */}
+      <AmbientHome />
 
       {/* The TodoPanel portals into the shell's <aside id="todo-drawer-root" /> */}
       <TodoPanel />

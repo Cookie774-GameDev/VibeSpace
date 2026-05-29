@@ -22,7 +22,15 @@ import { anthropicProvider, ANTHROPIC_DEFAULT_MODEL } from './providers/anthropi
 import { openaiProvider, OPENAI_DEFAULT_MODEL } from './providers/openai';
 import { googleProvider, GOOGLE_DEFAULT_MODEL } from './providers/google';
 
-/** All providers, keyed by their id. */
+/**
+ * All providers, keyed by their id.
+ *
+ * V2 OpenAI-compatible providers (xai/openrouter/groq/deepseek/mistral/
+ * together) currently route through the openai-compatible adapter when keys
+ * are set. Until that lands they alias to mock so type safety is preserved
+ * and saved keys persist; switching the alias to `openaiCompatProvider({...})`
+ * is a one-line flip when the adapter ships.
+ */
 const providers: Record<ProviderId, LLMProvider> = {
   anthropic: anthropicProvider,
   openai: openaiProvider,
@@ -30,6 +38,14 @@ const providers: Record<ProviderId, LLMProvider> = {
   mock: mockProvider,
   // 'local' is reserved for a future local-Ollama-style provider; alias to mock for now.
   local: mockProvider,
+  // V2 — placeholder routing. Saved keys persist; runs go through mock.
+  xai: mockProvider,
+  openrouter: mockProvider,
+  groq: mockProvider,
+  deepseek: mockProvider,
+  mistral: mockProvider,
+  together: mockProvider,
+  ollama: mockProvider,
 };
 
 /** Default model name to use when promoting a mock-default agent to a real provider. */

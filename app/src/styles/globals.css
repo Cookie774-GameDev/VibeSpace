@@ -52,6 +52,23 @@
 
     /* Geometry */
     --radius: 0.625rem; /* 10px - softer than shadcn default 8 */
+
+    /* ---------- V2 cozy palette ---------- */
+    /* Warm amber accent — used in tasks, schedule chips, ambient orb halo. */
+    --accent-amber: 38 92% 56%; /* #F0AB3E */
+    --accent-amber-soft: 38 92% 56% / 0.18;
+    /* Slightly warmer surface for chat bubbles, cards, ambient cards. */
+    --surface-warm: 0 0% 9%; /* #171717 */
+    /* Ambient takeover ground — deeper than --background. */
+    --ambient-deep: 222 28% 4%; /* deep slate */
+    /* Synchronized breathing phase 0..1 written by AmbientHome's RAF loop.
+       Read by AmbientOrb + DriftField + cards so the entire screen breathes
+       on a single clock. Defaults to 0 outside ambient. */
+    --ambient-phase: 0;
+    /* Soft ink for muted-on-warm surfaces. */
+    --ink-soft: 0 0% 88%;
+    /* Cozy shadow that sits under amber-bordered cards. */
+    --shadow-cozy: 0 6px 24px -4px hsl(38 92% 56% / 0.18), 0 2px 8px hsl(0 0% 0% / 0.4);
   }
 
   /* Light theme is provisional - V1 ships dark-only but hooks are here */
@@ -240,4 +257,248 @@
     background-origin: border-box;
     background-clip: padding-box, border-box;
   }
+}
+
+/* ============================================================
+   V2 — AMBIENT IDLE HOME
+   Pulsating background when inactive, cool wake animation.
+   All layers driven by --ambient-phase so the screen breathes on
+   a single clock.
+   ============================================================ */
+
+@keyframes ambient-breath {
+  0%,
+  100% {
+    transform: scale(0.98);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+@keyframes ambient-halo {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.6;
+  }
+}
+
+@keyframes ambient-vignette {
+  0%,
+  100% {
+    background-position: 50% 48%;
+    background-size: 110% 110%;
+  }
+  50% {
+    background-position: 50% 52%;
+    background-size: 118% 118%;
+  }
+}
+
+@keyframes ambient-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(var(--drift-x, 12px), var(--drift-y, -10px), 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ambient-enter {
+  from {
+    opacity: 0;
+    transform: scale(1.04);
+    filter: blur(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes ambient-exit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.06);
+    filter: blur(8px);
+  }
+}
+
+@keyframes app-wake {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.ambient-root {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  overflow: hidden;
+  pointer-events: auto;
+  /* Deep slate ground with two soft radial pools for depth. */
+  background:
+    radial-gradient(circle at 30% 28%, hsl(var(--accent-violet) / 0.08) 0%, transparent 55%),
+    radial-gradient(circle at 72% 75%, hsl(var(--accent-cyan) / 0.06) 0%, transparent 60%),
+    radial-gradient(circle at 50% 50%, hsl(var(--ambient-deep) / 0.95) 0%, hsl(var(--ambient-deep)) 80%);
+  background-size: 100% 100%;
+  animation:
+    ambient-enter 1100ms cubic-bezier(0.16, 1, 0.3, 1) both,
+    ambient-vignette 8000ms ease-in-out infinite 1100ms;
+  color: hsl(var(--foreground));
+}
+
+.ambient-root[data-state='exiting'] {
+  animation: ambient-exit 380ms cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+.ambient-orb-wrap {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.ambient-orb {
+  width: 220px;
+  height: 220px;
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle at 35% 30%, hsl(var(--accent-amber) / 0.95) 0%, transparent 55%),
+    radial-gradient(circle at 65% 70%, hsl(var(--accent-violet) / 0.7) 0%, transparent 65%),
+    radial-gradient(circle at 50% 50%, hsl(var(--accent-cyan) / 0.45) 0%, transparent 70%);
+  filter: blur(2px);
+  animation: ambient-breath 4400ms ease-in-out infinite;
+}
+
+.ambient-halo {
+  position: absolute;
+  inset: -60px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, hsl(var(--accent-amber) / 0.35) 0%, transparent 60%);
+  animation: ambient-halo 4400ms ease-in-out infinite;
+  filter: blur(20px);
+}
+
+.ambient-grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image:
+    repeating-conic-gradient(
+      hsl(var(--foreground) / 0.04) 0deg 1deg,
+      transparent 1deg 2deg
+    );
+  background-size: 3px 3px;
+}
+
+.ambient-dot {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: hsl(var(--foreground) / 0.5);
+  filter: blur(0.5px);
+  animation: ambient-drift var(--drift-dur, 12s) ease-in-out infinite;
+}
+
+.ambient-card {
+  background: hsl(var(--surface-warm) / 0.7);
+  border: 1px solid hsl(var(--border) / 0.6);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: ambient-drift var(--drift-dur, 14s) ease-in-out infinite;
+  box-shadow: 0 8px 32px hsl(0 0% 0% / 0.3);
+}
+
+.ambient-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 96px;
+  font-weight: 200;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: hsl(var(--foreground) / 0.92);
+  animation: ambient-breath 4400ms ease-in-out infinite;
+}
+
+.ambient-quote {
+  font-size: 18px;
+  line-height: 1.5;
+  font-style: italic;
+  color: hsl(var(--foreground) / 0.75);
+  max-width: 520px;
+  text-align: center;
+}
+
+.ambient-hint {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground) / 0.7);
+  animation: ambient-breath 4400ms ease-in-out infinite;
+}
+
+.app-wake {
+  animation: app-wake 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Reduced-motion overrides — gentle fade only. */
+@media (prefers-reduced-motion: reduce) {
+  .ambient-root,
+  .ambient-orb,
+  .ambient-halo,
+  .ambient-clock,
+  .ambient-hint,
+  .ambient-card,
+  .ambient-dot {
+    animation: none !important;
+  }
+  .ambient-root {
+    transition: opacity 200ms linear;
+  }
+}
+
+/* ============================================================
+   V2 — FULLSCREEN canvas mode
+   When useUIStore.chatFullscreen is true, the root sets
+   data-fullscreen='true' on documentElement; NavPane and
+   todo-drawer collapse so chat fills the workspace.
+   ============================================================ */
+
+[data-fullscreen='true'] aside#todo-drawer-root,
+[data-fullscreen='true'] [data-nav-pane='true'] {
+  display: none !important;
+}
+[data-fullscreen='true'] main[aria-label='Workspace'] {
+  background: hsl(var(--background));
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Send, ChevronDown, Sparkles } from 'lucide-react';
+import { Send, ChevronDown, Sparkles, Mic, MicOff } from 'lucide-react';
 import {
   Button,
   Hint,
@@ -10,9 +10,12 @@ import {
 } from '@/components/ui';
 import { messageRepo } from '@/lib/db';
 import { cn, renderHotkey } from '@/lib/utils';
-import { HOTKEYS } from '@/lib/hotkeys';
+import { HOTKEYS, useHotkey } from '@/lib/hotkeys';
 import { useAgentStore } from '@/stores/agents';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
+import { VoiceService } from '@/features/voice/VoiceService';
+import { toast } from '@/components/ui/toast';
 import type { Agent, AgentId, ChatId, ProviderId } from '@/types';
 import { MentionTypeahead } from './MentionTypeahead';
 
@@ -29,11 +32,31 @@ const MAX_LINES = 8;
 const MIN_HEIGHT = MIN_LINES * LINE_HEIGHT + PADDING_Y;
 const MAX_HEIGHT = MAX_LINES * LINE_HEIGHT + PADDING_Y;
 
-const PROVIDERS: ProviderId[] = ['anthropic', 'openai', 'google', 'mock', 'local'];
+const PROVIDERS: ProviderId[] = [
+  'anthropic',
+  'openai',
+  'google',
+  'xai',
+  'openrouter',
+  'groq',
+  'deepseek',
+  'mistral',
+  'together',
+  'ollama',
+  'mock',
+  'local',
+];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   google: 'Google',
+  xai: 'xAI',
+  openrouter: 'OpenRouter',
+  groq: 'Groq',
+  deepseek: 'DeepSeek',
+  mistral: 'Mistral',
+  together: 'Together',
+  ollama: 'Ollama (local)',
   mock: 'Mock',
   local: 'Local',
 };
@@ -86,6 +109,10 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
   const [mentionCtx, setMentionCtx] = useState<MentionContext | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string>('');
   const [sending, setSending] = useState(false);
+  // V2 — speech-to-text in the composer.
+  const [sttListening, setSttListening] = useState(false);
+  const [sttInterim, setSttInterim] = useState('');
+  const composerSttEnabled = useUIStore((s) => s.composerStt);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -225,6 +252,95 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
 
   const canSend = text.trim().length > 0 && !sending;
 
+  // ---------- V2 — speech-to-text wiring ----------
+  // Subscribe to VoiceService events when the user toggles STT on. We keep
+  // partials in a separate state so they show as a faded preview without
+  // mutating the saved draft until they finalize.
+  useEffect(() => {
+    if (!sttListening) return;
+
+    const offStart = VoiceService.on('voice:start', () => {
+      // intentionally empty — UI already reflects sttListening=true
+    });
+    const offPartial = VoiceService.on('voice:partial', ({ text: partial }) => {
+      setSttInterim(partial);
+    });
+    const offFinal = VoiceService.on('voice:final', ({ text: finalText }) => {
+      setSttInterim('');
+      setText((cur) => {
+        // Append with a space if needed so each utterance flows naturally.
+        const sep = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
+        return cur + sep + finalText;
+      });
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    });
+    const offError = VoiceService.on('voice:error', ({ kind, message }) => {
+      setSttListening(false);
+      setSttInterim('');
+      if (kind === 'unsupported') {
+        toast.warning('Voice unsupported', message);
+      } else if (kind === 'service_not_allowed' || kind === 'permission_denied') {
+        toast.error('Microphone blocked', 'Allow mic access in your browser/OS settings.');
+      } else if (kind !== 'no_speech' && kind !== 'aborted') {
+        toast.error('Voice error', message);
+      }
+    });
+    const offEnd = VoiceService.on('voice:end', () => {
+      // Engine ended — sync our flag if the user didn't already turn off.
+      if (!VoiceService.isListening()) setSttListening(false);
+    });
+
+    return () => {
+      offStart();
+      offPartial();
+      offFinal();
+      offError();
+      offEnd();
+    };
+  }, [sttListening]);
+
+  const startStt = () => {
+    if (!VoiceService.isSupported()) {
+      toast.warning(
+        'Voice unsupported',
+        'Web Speech API is not available in this browser/runtime.',
+      );
+      return;
+    }
+    setSttListening(true);
+    setSttInterim('');
+    VoiceService.startListening();
+  };
+
+  const stopStt = () => {
+    setSttListening(false);
+    setSttInterim('');
+    VoiceService.stopListening();
+  };
+
+  const toggleStt = () => {
+    if (sttListening) stopStt();
+    else startStt();
+  };
+
+  // Stop listening when the chat unmounts/changes.
+  useEffect(() => {
+    return () => {
+      if (sttListening) VoiceService.stopListening();
+    };
+  }, [sttListening]);
+
+  // Mod+Shift+M toggles the composer mic when STT is enabled in settings.
+  useHotkey(
+    HOTKEYS.COMPOSER_STT,
+    (e) => {
+      if (!composerSttEnabled) return;
+      e.preventDefault();
+      toggleStt();
+    },
+    { whenInputs: true },
+  );
+
   return (
     <div className="border-t border-border bg-panel">
       <div className="px-3 py-2.5">
@@ -267,8 +383,34 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
                   provider={provider}
                   onChange={setDefaultProvider}
                 />
+                {composerSttEnabled && (
+                  <Hint
+                    label={sttListening ? 'Stop dictation' : 'Voice to text'}
+                    hotkey={HOTKEYS.COMPOSER_STT}
+                  >
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant={sttListening ? 'accent' : 'ghost'}
+                      onClick={toggleStt}
+                      aria-label={sttListening ? 'Stop dictation' : 'Start dictation'}
+                      aria-pressed={sttListening}
+                      className={cn(sttListening && 'animate-pulse')}
+                    >
+                      {sttListening ? <MicOff /> : <Mic />}
+                    </Button>
+                  </Hint>
+                )}
                 <span className="text-metadata text-muted-foreground ml-auto mr-1 hidden sm:inline">
-                  <span className="kbd">{renderHotkey(HOTKEYS.SEND)}</span> to send
+                  {sttListening && sttInterim ? (
+                    <span className="italic text-foreground/70" aria-live="polite">
+                      {sttInterim}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="kbd">{renderHotkey(HOTKEYS.SEND)}</span> to send
+                    </>
+                  )}
                 </span>
                 <Hint label="Send" hotkey={HOTKEYS.SEND}>
                   <Button

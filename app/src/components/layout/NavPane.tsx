@@ -24,6 +24,7 @@ export function NavPane() {
   return (
     <motion.aside
       aria-label="Navigation"
+      data-nav-pane="true"
       className="shrink-0 overflow-hidden bg-panel border-r border-border"
       initial={false}
       animate={{ width: navOpen ? 240 : 56 }}

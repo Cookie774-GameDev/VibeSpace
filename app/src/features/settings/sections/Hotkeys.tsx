@@ -14,6 +14,11 @@ const HOTKEY_LABELS: Record<keyof typeof HOTKEYS, string> = {
   TOGGLE_TODO: 'Toggle todo drawer',
   SETTINGS: 'Open settings',
   ESCAPE: 'Close modal / exit council',
+  TOGGLE_FULLSCREEN: 'Toggle fullscreen workspace',
+  AMBIENT_TOGGLE: 'Toggle ambient mode',
+  COMPOSER_STT: 'Voice-to-text in composer',
+  SCHEDULE: 'Open schedule',
+  LAUNCHER: 'Open quick launcher',
 };
 
 export function Hotkeys() {

@@ -36,6 +36,50 @@ const BYOK_PROVIDERS: ProviderRow[] = [
     hint: 'Gemini Pro / Flash',
     placeholder: 'AIza...',
   },
+  // V2 — OpenAI-compatible providers. Keys persist now; live routing
+  // ships when the openai-compatible adapter lands.
+  {
+    id: 'xai',
+    name: 'xAI',
+    hint: 'Grok family',
+    placeholder: 'xai-...',
+  },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    hint: 'Multi-model gateway',
+    placeholder: 'sk-or-...',
+  },
+  {
+    id: 'groq',
+    name: 'Groq',
+    hint: 'Fast Llama / Mixtral inference',
+    placeholder: 'gsk_...',
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    hint: 'DeepSeek V3 / Coder',
+    placeholder: 'sk-...',
+  },
+  {
+    id: 'mistral',
+    name: 'Mistral',
+    hint: 'Mistral Large / Nemo',
+    placeholder: 'mistral-...',
+  },
+  {
+    id: 'together',
+    name: 'Together AI',
+    hint: 'Llama / Qwen open weights',
+    placeholder: 'tgp_...',
+  },
+  {
+    id: 'ollama',
+    name: 'Ollama (local)',
+    hint: 'Local model server (no key needed)',
+    placeholder: 'http://localhost:11434',
+  },
 ];
 
 /** All providers eligible to be picked as the default in chat. */
@@ -43,6 +87,9 @@ const DEFAULT_PROVIDER_OPTIONS: { id: ProviderId; label: string; description: st
   { id: 'anthropic', label: 'Anthropic', description: 'Best for reasoning and writing.' },
   { id: 'openai', label: 'OpenAI', description: 'Strong generalist with realtime voice.' },
   { id: 'google', label: 'Google', description: 'Long context, fast Flash tier.' },
+  { id: 'xai', label: 'xAI', description: 'Grok models. Live routing in a follow-up.' },
+  { id: 'openrouter', label: 'OpenRouter', description: 'Single key, hundreds of models.' },
+  { id: 'groq', label: 'Groq', description: 'Sub-second open-weights inference.' },
   { id: 'mock', label: 'Mock', description: 'Built-in placeholder. No network calls.' },
 ];
 

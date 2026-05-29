@@ -27,6 +27,27 @@ interface UIState {
   theme: Theme;
   density: 'compact' | 'cozy';
 
+  // V2 — ambient idle home
+  /** User-level master switch. When false, idle never triggers ambient. */
+  ambient: boolean;
+  /** True only while the takeover screen is rendered. */
+  ambientActive: boolean;
+  /** Idle threshold in ms before ambient appears. Default 5 min. */
+  ambientThresholdMs: number;
+  /** Optional drone audio while ambient is active (off by default). */
+  ambientDrone: boolean;
+
+  // V2 — fullscreen canvas
+  chatFullscreen: boolean;
+
+  // V2 — schedule + launcher
+  scheduleOpen: boolean;
+  launcherOpen: boolean;
+
+  // V2 — accessibility
+  /** Show the speech-to-text mic button in the chat composer. */
+  composerStt: boolean;
+
   // Actions
   toggleNav: () => void;
   toggleInspector: () => void;
@@ -42,6 +63,16 @@ interface UIState {
   setTheme: (t: Theme) => void;
   finishOnboarding: () => void;
   resetUI: () => void;
+
+  // V2 actions
+  setAmbient: (v: boolean) => void;
+  setAmbientActive: (v: boolean) => void;
+  setAmbientThresholdMs: (ms: number) => void;
+  toggleChatFullscreen: () => void;
+  setChatFullscreen: (v: boolean) => void;
+  setScheduleOpen: (v: boolean) => void;
+  setLauncherOpen: (v: boolean) => void;
+  setComposerStt: (v: boolean) => void;
 }
 
 const defaults: Pick<
@@ -58,6 +89,14 @@ const defaults: Pick<
   | 'onboardingComplete'
   | 'theme'
   | 'density'
+  | 'ambient'
+  | 'ambientActive'
+  | 'ambientThresholdMs'
+  | 'ambientDrone'
+  | 'chatFullscreen'
+  | 'scheduleOpen'
+  | 'launcherOpen'
+  | 'composerStt'
 > = {
   navOpen: true,
   inspectorOpen: false,
@@ -71,6 +110,14 @@ const defaults: Pick<
   onboardingComplete: false,
   theme: 'dark',
   density: 'cozy',
+  ambient: true,
+  ambientActive: false,
+  ambientThresholdMs: 5 * 60 * 1000,
+  ambientDrone: false,
+  chatFullscreen: false,
+  scheduleOpen: false,
+  launcherOpen: false,
+  composerStt: true,
 };
 
 export const useUIStore = create<UIState>()(
@@ -95,6 +142,28 @@ export const useUIStore = create<UIState>()(
       },
       finishOnboarding: () => set({ onboardingComplete: true }),
       resetUI: () => set(defaults),
+
+      // V2
+      setAmbient: (v) => set({ ambient: v, ambientActive: v ? undefined : false } as Partial<UIState>),
+      setAmbientActive: (v) => set({ ambientActive: v }),
+      setAmbientThresholdMs: (ms) => set({ ambientThresholdMs: Math.max(15_000, ms) }),
+      toggleChatFullscreen: () =>
+        set((s) => {
+          const next = !s.chatFullscreen;
+          if (typeof document !== 'undefined') {
+            document.documentElement.setAttribute('data-fullscreen', next ? 'true' : 'false');
+          }
+          return { chatFullscreen: next };
+        }),
+      setChatFullscreen: (v) => {
+        if (typeof document !== 'undefined') {
+          document.documentElement.setAttribute('data-fullscreen', v ? 'true' : 'false');
+        }
+        set({ chatFullscreen: v });
+      },
+      setScheduleOpen: (v) => set({ scheduleOpen: v }),
+      setLauncherOpen: (v) => set({ launcherOpen: v }),
+      setComposerStt: (v) => set({ composerStt: v }),
     }),
     {
       name: 'jarvis-ui',
@@ -106,6 +175,10 @@ export const useUIStore = create<UIState>()(
         theme: s.theme,
         density: s.density,
         onboardingComplete: s.onboardingComplete,
+        ambient: s.ambient,
+        ambientThresholdMs: s.ambientThresholdMs,
+        ambientDrone: s.ambientDrone,
+        composerStt: s.composerStt,
       }),
     },
   ),
