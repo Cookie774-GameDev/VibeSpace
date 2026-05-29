@@ -1,0 +1,243 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   VOLTAGE DESIGN SYSTEM
+   OLED-grounded, electric-accent, council-of-agents
+   All colors expressed as HSL channels for Tailwind's hsl(var(...))
+   ============================================================ */
+
+@layer base {
+  :root,
+  [data-theme='dark'] {
+    /* Surfaces - pure OLED ground with controlled elevation */
+    --background: 0 0% 4%; /* #0A0A0A */
+    --panel: 0 0% 7%; /* #111111 */
+    --elevated: 0 0% 10%; /* #1A1A1A */
+
+    /* Borders */
+    --border: 0 0% 15%; /* #262626 */
+    --border-mid: 0 0% 20%; /* #333333 */
+    --input: 0 0% 15%; /* #262626 */
+    --ring: 187 95% 43%; /* cyan ring for focus */
+
+    /* Text hierarchy */
+    --foreground: 0 0% 98%; /* #FAFAFA - primary */
+    --muted: 0 0% 15%; /* #262626 - muted bg */
+    --muted-foreground: 0 0% 64%; /* #A3A3A3 - secondary */
+
+    /* Brand accent - cyan to violet diagonal gradient */
+    --accent-cyan: 187 95% 43%; /* #06B6D4 */
+    --accent-violet: 258 90% 66%; /* #8B5CF6 */
+    --accent: 220 90% 56%; /* mid-point for solid use */
+    --accent-foreground: 0 0% 98%;
+
+    /* Primary == accent */
+    --primary: 220 90% 56%;
+    --primary-foreground: 0 0% 98%;
+
+    /* Secondary - subtle elevated surface */
+    --secondary: 0 0% 13%;
+    --secondary-foreground: 0 0% 98%;
+
+    /* Destructive */
+    --destructive: 0 72% 56%; /* #EF4444 */
+    --destructive-foreground: 0 0% 98%;
+
+    /* Status */
+    --success: 158 64% 40%; /* #10B981 */
+    --warning: 38 92% 50%; /* #F59E0B */
+    --info: 187 95% 43%; /* matches accent-cyan */
+
+    /* Geometry */
+    --radius: 0.625rem; /* 10px - softer than shadcn default 8 */
+  }
+
+  /* Light theme is provisional - V1 ships dark-only but hooks are here */
+  [data-theme='light'] {
+    --background: 0 0% 100%;
+    --panel: 0 0% 98%;
+    --elevated: 0 0% 100%;
+    --border: 0 0% 90%;
+    --border-mid: 0 0% 86%;
+    --input: 0 0% 90%;
+    --ring: 187 95% 36%;
+    --foreground: 0 0% 9%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 220 90% 50%;
+    --accent-foreground: 0 0% 100%;
+    --primary: 220 90% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 9%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 100%;
+  }
+
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    @apply h-full;
+    overflow: hidden; /* Jarvis is a desktop app, not a scrolling page */
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01', 'ss03', 'tnum';
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  #root {
+    @apply h-full w-full;
+  }
+
+  /* Scrollbar styling - thin, on-demand, monochrome */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--border-mid));
+  }
+
+  /* Selection color */
+  ::selection {
+    background: hsl(var(--accent-cyan) / 0.3);
+    color: hsl(var(--foreground));
+  }
+
+  /* Focus ring - accent gradient, never harsh */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: var(--radius);
+  }
+
+  /* Honor reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* Reusable accent gradient text */
+  .text-accent-gradient {
+    background: linear-gradient(135deg, hsl(var(--accent-cyan)) 0%, hsl(var(--accent-violet)) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Apple-Intelligence-style conic glow border (for voice listening state) */
+  .glow-border {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 60;
+    border-radius: 0;
+    padding: 2px;
+    background: conic-gradient(
+      from 0deg,
+      transparent 0%,
+      hsl(var(--accent-cyan)) 25%,
+      hsl(var(--accent-violet)) 50%,
+      hsl(var(--accent-cyan)) 75%,
+      transparent 100%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 200ms ease;
+    animation: glow-rotate 8s linear infinite;
+  }
+  .glow-border[data-active='true'] {
+    opacity: 0.8;
+  }
+
+  /* Base panel surface */
+  .surface-panel {
+    @apply bg-panel border border-border;
+  }
+  .surface-elevated {
+    @apply bg-elevated border border-border;
+  }
+
+  /* Skeleton loading */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--border-mid)) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s linear infinite;
+    border-radius: var(--radius);
+  }
+
+  /* Drag region for Tauri title bar (whole top bar) */
+  .drag-region {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+
+  /* Keyboard shortcut chip (e.g., Cmd+K) */
+  .kbd {
+    @apply inline-flex items-center justify-center rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-metadata text-muted-foreground;
+    min-width: 18px;
+    height: 18px;
+    box-shadow: inset 0 -1px 0 hsl(var(--border-mid));
+  }
+}
+
+@layer utilities {
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hidden {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Subtle accent border (cyan-to-violet at 1px) */
+  .border-accent-gradient {
+    border: 1px solid transparent;
+    background-image:
+      linear-gradient(hsl(var(--background)), hsl(var(--background))),
+      linear-gradient(135deg, hsl(var(--accent-cyan)), hsl(var(--accent-violet)));
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+}
