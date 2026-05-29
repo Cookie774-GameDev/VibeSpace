@@ -46,6 +46,14 @@ const providers: Record<ProviderId, LLMProvider> = {
   mistral: mockProvider,
   together: mockProvider,
   ollama: mockProvider,
+  // V3 — placeholder routing. Saved keys persist; runs go through mock.
+  cohere: mockProvider,
+  perplexity: mockProvider,
+  fireworks: mockProvider,
+  replicate: mockProvider,
+  hyperbolic: mockProvider,
+  novita: mockProvider,
+  lambda: mockProvider,
 };
 
 /** Default model name to use when promoting a mock-default agent to a real provider. */

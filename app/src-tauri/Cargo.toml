@@ -24,6 +24,12 @@ tauri-plugin-os = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# PTY terminal backend (slice 1 of Wave 4 — multi-pane terminal grid).
+# `portable-pty` gives us a single API across ConPTY (Windows 10 1809+) and
+# the Unix forkpty path; `nanoid` is used for short opaque session ids.
+portable-pty = "0.8"
+nanoid = "0.4"
+
 # Default development profile – optimise compile times.
 [profile.dev]
 incremental = true

@@ -26,6 +26,7 @@ import { useUIStore } from '@/stores/ui';
 import { useAgentStore } from '@/stores/agents';
 import { AuthGate } from '@/features/auth';
 import { AppShell } from '@/components/layout';
+import { PageRouter } from '@/components/layout/PageRouter';
 import { ChatView } from '@/features/chat';
 import { CouncilView } from '@/features/council';
 import { TodoPanel, startNotificationLoop } from '@/features/tasks';
@@ -36,6 +37,7 @@ import { AmbientHome, useIdleDetection } from '@/features/ambient';
 import { ScheduleModal } from '@/features/schedule';
 import { LauncherDialog, useLinkHotkeys } from '@/features/launcher';
 import { AssistantBar } from '@/features/assistant';
+import { CelebrationHost } from '@/features/celebrate';
 import { Toaster, toast } from '@/components/ui/toast';
 import { startRuntimeListener } from '@/lib/ai/runtime';
 import { messageRepo, agentRepo, chatRepo, openDb } from '@/lib/db';
@@ -44,10 +46,15 @@ import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import type { Agent, AgentId, Message } from '@/types';
 
 /**
- * Renders the right canvas based on `useUIStore.chatMode`. The shell does
- * not pick the canvas; we do, so the shell can stay layout-only.
+ * Renders the right canvas based on `useUIStore.route` (V3) and
+ * `chatMode` (V2). For non-`chat` routes (terminal / kanban / skills /
+ * benchmarks / history / agents) we delegate to `<PageRouter />`.
+ *
+ * For the `chat` route we keep the existing council bootstrap so
+ * council mode still pulls per-chat agent ids and seeds messages.
  */
 function ActiveCanvas() {
+  const route = useUIStore((s) => s.route);
   const chatMode = useUIStore((s) => s.chatMode);
   const activeChatId = useUIStore((s) => s.activeChatId);
   const [councilAgentIds, setCouncilAgentIds] = React.useState<AgentId[]>([]);
@@ -83,6 +90,11 @@ function ActiveCanvas() {
       cancelled = true;
     };
   }, [chatMode, activeChatId, agentMap]);
+
+  // V3 — non-chat routes go through the lazy PageRouter.
+  if (route !== 'chat') {
+    return <PageRouter />;
+  }
 
   if (chatMode === 'council') {
     return <CouncilView agentIds={councilAgentIds} messages={councilMessages} />;
@@ -276,6 +288,9 @@ function WorkspaceRoot() {
 
       {/* Visual ambient effects */}
       <GlowBorder />
+
+      {/* V3 — confetti + serif gradient toast on success milestones. */}
+      <CelebrationHost />
 
       {/* V2 — idle takeover. Self-renders only when ambientActive=true. */}
       <AmbientHome />

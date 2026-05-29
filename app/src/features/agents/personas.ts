@@ -96,6 +96,86 @@ export const PERSONA_LIST: Persona[] = [
   PERSONAS.hal,
 ];
 
+/* --------------------------------------------------------------------------
+ * V3 — Swarm role personas (Scout / Builder / Reviewer)
+ *
+ * These are NOT voice presets like the ones above. They describe an agent's
+ * job slot in a Scout → Builder → Reviewer pipeline. They are kept here so
+ * the AgentManager and the registry can share avatar seeds, hues, and pill
+ * tones from a single source of truth.
+ * --------------------------------------------------------------------------*/
+
+/** Role slot in the swarm pipeline. */
+export type AgentRole = 'scout' | 'builder' | 'reviewer';
+
+export interface RolePersona {
+  /** Stable role id. */
+  role: AgentRole;
+  /** Display name (used as the seeded agent's name). */
+  name: string;
+  /** One-liner shown in pickers and tooltips. */
+  oneLiner: string;
+  /** Avatar seed so the badge stays stable across reseeds. */
+  avatarSeed: string;
+  /** Color hue (HSL 0..359) used by AgentBadge and the pill. */
+  colorHue: number;
+  /** Tone token used by the role-pill in AgentManager. */
+  pillTone: 'sage' | 'terracotta' | 'lavender';
+}
+
+/** Authoritative role-persona table. */
+export const ROLE_PERSONAS: Record<AgentRole, RolePersona> = {
+  scout: {
+    role: 'scout',
+    name: 'Scout',
+    oneLiner: 'Maps the codebase and scopes the work before any code is written.',
+    avatarSeed: 'scout-sage-105',
+    colorHue: 105, // sage
+    pillTone: 'sage',
+  },
+  builder: {
+    role: 'builder',
+    name: 'Builder',
+    oneLiner: 'Implements changes inside the file scope assigned by Scout.',
+    avatarSeed: 'builder-terracotta-14',
+    colorHue: 14, // terracotta
+    pillTone: 'terracotta',
+  },
+  reviewer: {
+    role: 'reviewer',
+    name: 'Reviewer',
+    oneLiner: 'Read-only quality gate; verdict + line-anchored notes before merge.',
+    avatarSeed: 'reviewer-lavender-268',
+    colorHue: 268, // lavender
+    pillTone: 'lavender',
+  },
+};
+
+/** Ordered list (Scout → Builder → Reviewer) for menus. */
+export const ROLE_PERSONA_LIST: RolePersona[] = [
+  ROLE_PERSONAS.scout,
+  ROLE_PERSONAS.builder,
+  ROLE_PERSONAS.reviewer,
+];
+
+/**
+ * The shared `Agent` type has no free-form metadata field, so we encode an
+ * agent's swarm role inside `skills` using the `role:<role>` tag convention.
+ * Built-in skill ids never use a `role:` prefix, so the namespace is safe.
+ *
+ * Storage choice (documented for the integrator):
+ *   agent.skills = ['role:scout' | 'role:builder' | 'role:reviewer']
+ *
+ * Returns `undefined` for non-swarm agents (Jarvis, Researcher, Coder, etc.).
+ */
+export function getAgentRole(agent: Agent): AgentRole | undefined {
+  const tag = (agent.skills ?? []).find((s) => s.startsWith('role:'));
+  if (!tag) return undefined;
+  const role = tag.slice('role:'.length);
+  if (role === 'scout' || role === 'builder' || role === 'reviewer') return role;
+  return undefined;
+}
+
 /**
  * Return a derived agent whose system prompt has the persona prompt prepended.
  * The original agent is not mutated.

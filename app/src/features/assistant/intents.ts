@@ -36,6 +36,21 @@ export type AssistantIntent =
   | { kind: 'open_launcher' }
   /** "open schedule" */
   | { kind: 'open_schedule' }
+  /**
+   * "open terminals" / "show benchmarks" / "switch to kanban" — V3 top-level
+   * route navigation. `route` is one of `useUIStore`'s Route enum values
+   * (defined in the Wave 4 contract; landed via the route-store slice).
+   *
+   * Suggested example hints to add to `AssistantBar.EXAMPLE_HINTS` once the
+   * integrator wires them up:
+   *   - "open terminals"
+   *   - "open kanban"
+   *   - "show benchmarks"
+   */
+  | {
+      kind: 'navigate';
+      route: 'chat' | 'terminal' | 'kanban' | 'agents' | 'skills' | 'benchmarks' | 'history';
+    }
   /** Anything that didn't match. Carries the raw text for the UI hint. */
   | { kind: 'unknown'; raw: string };
 

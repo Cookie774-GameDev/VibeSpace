@@ -80,6 +80,49 @@ const BYOK_PROVIDERS: ProviderRow[] = [
     hint: 'Local model server (no key needed)',
     placeholder: 'http://localhost:11434',
   },
+  // V3 — additional OpenAI-compatible providers.
+  {
+    id: 'cohere',
+    name: 'Cohere',
+    hint: 'Multilingual command-tier models with strong RAG',
+    placeholder: '...',
+  },
+  {
+    id: 'perplexity',
+    name: 'Perplexity',
+    hint: 'Online models with built-in web search',
+    placeholder: 'pplx-...',
+  },
+  {
+    id: 'fireworks',
+    name: 'Fireworks',
+    hint: 'Fast inference for open-source weights',
+    placeholder: 'fw_...',
+  },
+  {
+    id: 'replicate',
+    name: 'Replicate',
+    hint: 'Open-source models on cloud GPU',
+    placeholder: 'r8_...',
+  },
+  {
+    id: 'hyperbolic',
+    name: 'Hyperbolic',
+    hint: 'OpenAI-compatible open-source inference',
+    placeholder: '...',
+  },
+  {
+    id: 'novita',
+    name: 'Novita',
+    hint: 'Cheap Llama / DeepSeek / Qwen inference',
+    placeholder: 'sk_...',
+  },
+  {
+    id: 'lambda',
+    name: 'Lambda',
+    hint: 'Lambda AI Cloud (OpenAI-compatible)',
+    placeholder: 'secret_...',
+  },
 ];
 
 /** All providers eligible to be picked as the default in chat. */

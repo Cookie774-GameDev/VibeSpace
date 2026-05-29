@@ -35,6 +35,8 @@
 //! New commands should be small and pure; heavy logic belongs in the Node
 //! runtime sidecar so we keep the Rust core boring and stable.
 
+mod terminal;
+
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
 #[tauri::command]
@@ -59,7 +61,16 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet, app_version])
+        .manage(terminal::TerminalState::default())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            app_version,
+            terminal::terminal_spawn,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_kill,
+            terminal::terminal_list,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

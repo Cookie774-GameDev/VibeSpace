@@ -9,12 +9,18 @@ import {
   Sparkles,
   FileText,
   Plus,
+  Terminal,
+  KanbanSquare,
+  BarChart3,
+  History,
+  LayoutGrid,
 } from 'lucide-react';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Hint } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
+import type { Route } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { db, projectRepo, chatRepo } from '@/lib/db';
@@ -45,6 +51,8 @@ export function NavPane() {
   const setActiveChat = useUIStore((s) => s.setActiveChat);
   const setChatMode = useUIStore((s) => s.setChatMode);
   const activeChatId = useUIStore((s) => s.activeChatId);
+  const route = useUIStore((s) => s.route);
+  const setRoute = useUIStore((s) => s.setRoute);
 
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const localUserId = useAuthStore((s) => s.localUserId);
@@ -147,6 +155,69 @@ export function NavPane() {
       transition={{ type: 'spring', stiffness: 400, damping: 30 }}
     >
       <div className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden scrollbar-hidden">
+        <NavSection
+          title="Workspace"
+          icon={<LayoutGrid className="h-4 w-4" />}
+          navOpen={navOpen}
+        >
+          <RouteItem
+            navOpen={navOpen}
+            label="Chat"
+            icon={<MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="chat"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="Terminals"
+            icon={<Terminal className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="terminal"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="Kanban"
+            icon={<KanbanSquare className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="kanban"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="Skills"
+            icon={<Sparkles className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="skills"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="Benchmarks"
+            icon={<BarChart3 className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="benchmarks"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="History"
+            icon={<History className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="history"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="Agents"
+            icon={<Bot className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="agents"
+            route={route}
+            setRoute={setRoute}
+          />
+        </NavSection>
+
         <NavSection title="Pinned" icon={<Pin className="h-4 w-4" />} navOpen={navOpen}>
           <EmptyHint navOpen={navOpen} text="Pin chats to keep them close." />
         </NavSection>
@@ -347,4 +418,30 @@ function NavItem({ icon, label, navOpen, active, onClick }: NavItemProps) {
 function EmptyHint({ navOpen, text }: { navOpen: boolean; text: string }) {
   if (!navOpen) return null;
   return <p className="px-2 py-1 text-metadata text-muted-foreground/60">{text}</p>;
+}
+
+interface RouteItemProps {
+  icon: React.ReactNode;
+  label: string;
+  navOpen: boolean;
+  target: Route;
+  route: Route;
+  setRoute: (r: Route) => void;
+}
+
+/**
+ * Workspace-section row: behaves like a NavItem but binds the click to
+ * `setRoute(target)` and reflects the active state from `route === target`.
+ */
+function RouteItem({ icon, label, navOpen, target, route, setRoute }: RouteItemProps) {
+  const active = route === target;
+  return (
+    <NavItem
+      icon={icon}
+      label={label}
+      navOpen={navOpen}
+      active={active}
+      onClick={() => setRoute(target)}
+    />
+  );
 }

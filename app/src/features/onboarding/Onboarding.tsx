@@ -6,14 +6,16 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { Welcome } from './steps/Welcome';
 import { Persona } from './steps/Persona';
+import { WhatsNew } from './steps/WhatsNew';
 import { Providers } from './steps/Providers';
 import { Permissions } from './steps/Permissions';
 import { Demo } from './steps/Demo';
 
-const STEPS = ['welcome', 'persona', 'providers', 'permissions', 'demo'] as const;
+const STEPS = ['welcome', 'persona', 'whats-new', 'providers', 'permissions', 'demo'] as const;
 const STEP_LABELS: Record<(typeof STEPS)[number], string> = {
   welcome: 'Welcome',
   persona: 'Personality',
+  'whats-new': "What's new",
   providers: 'Providers',
   permissions: 'Permissions',
   demo: 'Demo',
@@ -37,7 +39,10 @@ export function Onboarding() {
   const last = STEPS.length - 1;
   const isFirst = step === 0;
   const isLast = step === last;
-  const showChrome = !isFirst && !isLast;
+  // WhatsNew (step 2) renders its own Continue button to match the
+  // Welcome/Demo pattern, so we hide the chrome there too.
+  const isWhatsNew = STEPS[step] === 'whats-new';
+  const showChrome = !isFirst && !isLast && !isWhatsNew;
 
   function goNext() {
     if (isLast) {
@@ -101,9 +106,10 @@ export function Onboarding() {
           >
             {step === 0 && <Welcome onNext={goNext} />}
             {step === 1 && <Persona />}
-            {step === 2 && <Providers onSkip={goNext} />}
-            {step === 3 && <Permissions />}
-            {step === 4 && <Demo onFinish={finishOnboarding} />}
+            {step === 2 && <WhatsNew onNext={goNext} />}
+            {step === 3 && <Providers onSkip={goNext} />}
+            {step === 4 && <Permissions />}
+            {step === 5 && <Demo onFinish={finishOnboarding} />}
           </motion.div>
         </AnimatePresence>
       </div>

@@ -64,6 +64,32 @@ const WEEKDAY_TO_NUM: Record<string, number> = {
   saturday: 6,
 };
 
+/** Route ids accepted by `useUIStore.setRoute` (V3 top-level routes). */
+type NavRoute = 'chat' | 'terminal' | 'kanban' | 'agents' | 'skills' | 'benchmarks' | 'history';
+
+/**
+ * Map the noun the user actually typed to the canonical route id. Plurals
+ * and singulars collapse: "terminals" → "terminal", "agent" → "agents",
+ * "benchmark" → "benchmarks". Unknown inputs default to chat (the patterns
+ * below shouldn't reach here with anything outside this set).
+ */
+const NAV_ROUTE_MAP: Record<string, NavRoute> = {
+  chat: 'chat',
+  terminal: 'terminal',
+  terminals: 'terminal',
+  kanban: 'kanban',
+  agent: 'agents',
+  agents: 'agents',
+  skills: 'skills',
+  benchmark: 'benchmarks',
+  benchmarks: 'benchmarks',
+  history: 'history',
+};
+
+function normalizeRoute(raw: string): NavRoute {
+  return NAV_ROUTE_MAP[raw.trim().toLowerCase()] ?? 'chat';
+}
+
 /**
  * Strip filler prefixes, lowercase, and trim. Idempotent.
  */
@@ -272,6 +298,23 @@ export function parseAssistantInput(raw: string): AssistantIntent {
   }
   if (/^toggle\s+fullscreen$/i.test(s)) {
     return { kind: 'set_fullscreen' };
+  }
+
+  // ---- navigate to a top-level V3 route ----
+  // Placed BEFORE the open settings/palette/launcher/schedule block: those
+  // patterns only match their exact words, so the two sets don't overlap,
+  // but ordering preserves the spec's "navigate-first" intent.
+  // Strict form: any of the four nav verbs, no "my", no trailing "please".
+  const navStrict =
+    /^(?:open|go to|show|switch to)\s+(terminal(?:s)?|kanban|skills|benchmarks?|history|agents?|chat)$/i.exec(s);
+  if (navStrict) {
+    return { kind: 'navigate', route: normalizeRoute(navStrict[1]) };
+  }
+  // Polite form: only "open"/"show", optional "my", optional trailing "please".
+  const navPolite =
+    /^(?:open|show)\s+(?:my\s+)?(terminal(?:s)?|kanban|skills|benchmarks?|history|agents?|chat)\s*(?:please)?$/i.exec(s);
+  if (navPolite) {
+    return { kind: 'navigate', route: normalizeRoute(navPolite[1]) };
   }
 
   // ---- open settings / palette / launcher / schedule ----

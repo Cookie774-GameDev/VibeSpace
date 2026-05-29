@@ -8,6 +8,22 @@ import type { Theme } from '@/types/common';
 
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
 
+/**
+ * V3 — top-level page route the workspace canvas is showing.
+ * Owned by this store; consumed by `PageRouter` and `NavPane`.
+ *
+ * NOTE: `route` is intentionally **transient** — see `partialize` below.
+ * Reloads always land back on `'chat'` unless the user navigates again.
+ */
+export type Route =
+  | 'chat'
+  | 'terminal'
+  | 'kanban'
+  | 'agents'
+  | 'skills'
+  | 'benchmarks'
+  | 'history';
+
 interface UIState {
   // Layout
   navOpen: boolean;
@@ -50,6 +66,10 @@ interface UIState {
   /** Show the speech-to-text mic button in the chat composer. */
   composerStt: boolean;
 
+  // V3 — pages router
+  /** The page the workspace canvas is showing. Default 'chat'. Transient. */
+  route: Route;
+
   // Actions
   toggleNav: () => void;
   toggleInspector: () => void;
@@ -76,6 +96,9 @@ interface UIState {
   setLauncherOpen: (v: boolean) => void;
   setAssistantOpen: (v: boolean) => void;
   setComposerStt: (v: boolean) => void;
+
+  // V3 actions
+  setRoute: (r: Route) => void;
 }
 
 const defaults: Pick<
@@ -101,6 +124,7 @@ const defaults: Pick<
   | 'launcherOpen'
   | 'assistantOpen'
   | 'composerStt'
+  | 'route'
 > = {
   navOpen: true,
   inspectorOpen: false,
@@ -123,6 +147,7 @@ const defaults: Pick<
   launcherOpen: false,
   assistantOpen: false,
   composerStt: true,
+  route: 'chat',
 };
 
 export const useUIStore = create<UIState>()(
@@ -170,6 +195,9 @@ export const useUIStore = create<UIState>()(
       setLauncherOpen: (v) => set({ launcherOpen: v }),
       setAssistantOpen: (v) => set({ assistantOpen: v }),
       setComposerStt: (v) => set({ composerStt: v }),
+
+      // V3
+      setRoute: (r) => set({ route: r }),
     }),
     {
       name: 'jarvis-ui',

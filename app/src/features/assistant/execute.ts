@@ -262,6 +262,16 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
       }
 
       // ----------------------------------------------------------------
+      // V3 top-level route navigation. `setRoute` is added to `useUIStore`
+      // by the route-store slice (Wave 4 cross-slice contract). If that
+      // slice hasn't landed yet this case will tsc-error — the integrator
+      // is expected to reconcile.
+      case 'navigate': {
+        useUIStore.getState().setRoute(intent.route);
+        return ok(`Showing ${intent.route}.`);
+      }
+
+      // ----------------------------------------------------------------
       case 'unknown':
       default: {
         return fail(

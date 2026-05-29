@@ -68,7 +68,15 @@ export type ProviderId =
   | 'deepseek'
   | 'mistral'
   | 'together'
-  | 'ollama';
+  | 'ollama'
+  // V3 — additional OpenAI-compatible providers.
+  | 'cohere'
+  | 'perplexity'
+  | 'fireworks'
+  | 'replicate'
+  | 'hyperbolic'
+  | 'novita'
+  | 'lambda';
 
 /**
  * Branded type helpers - useful when we want compile-time distinction

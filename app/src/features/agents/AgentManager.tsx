@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { newAgentId } from '@/lib/ids';
 import { AgentBadge } from './AgentBadge';
 import { getDefaultAgents } from './registry';
+import { getAgentRole, ROLE_PERSONAS, type AgentRole } from './personas';
 
 const PROVIDERS: ProviderId[] = [
   'mock',
@@ -43,6 +44,31 @@ const PROVIDERS: ProviderId[] = [
   'ollama',
   'local',
 ];
+
+/**
+ * Tiny role-pill for swarm agents (Scout / Builder / Reviewer).
+ *
+ * Inline implementation to avoid a new dependency. Reuses the existing
+ * `.sev-pill` typography/sizing (defined in globals.css) and only overrides
+ * the gradient so each role's hue (sage / terracotta / lavender) matches the
+ * persona table. The role text itself is the label - short, scannable.
+ */
+function RolePill({ role }: { role: AgentRole }) {
+  const persona = ROLE_PERSONAS[role];
+  const hue = persona.colorHue;
+  return (
+    <span
+      className="sev-pill shrink-0"
+      style={{
+        background: `linear-gradient(135deg, hsl(${hue} 45% 52%) 0%, hsl(${hue} 50% 38%) 100%)`,
+      }}
+      title={`${persona.name}: ${persona.oneLiner}`}
+      aria-label={`${persona.name} role`}
+    >
+      {role}
+    </span>
+  );
+}
 
 /** Tracks the editable subset of an agent. */
 interface DraftState {
@@ -162,8 +188,9 @@ export function AgentManager() {
   };
 
   const seedDefaults = () => {
-    registerMany(getDefaultAgents());
-    toast.success('Loaded', '7 default agents added');
+    const defaults = getDefaultAgents();
+    registerMany(defaults);
+    toast.success('Loaded', `${defaults.length} default agents added`);
   };
 
   return (
@@ -189,6 +216,7 @@ export function AgentManager() {
           ) : (
             agentList.map((agent) => {
               const active = selectedId === agent.id;
+              const role = getAgentRole(agent);
               return (
                 <button
                   key={agent.id}
@@ -208,6 +236,7 @@ export function AgentManager() {
                       {agent.description}
                     </div>
                   </div>
+                  {role && <RolePill role={role} />}
                   {agent.builtin && (
                     <Lock
                       className="h-3 w-3 text-muted-foreground shrink-0"
@@ -230,8 +259,14 @@ export function AgentManager() {
               <div className="flex items-center gap-3 min-w-0">
                 <AgentBadge agent={selectedAgent} showName={false} size="lg" />
                 <div className="min-w-0">
-                  <div className="text-page-title text-foreground truncate">
-                    {selectedAgent.name}
+                  <div className="flex items-center gap-2">
+                    <div className="text-page-title text-foreground truncate">
+                      {selectedAgent.name}
+                    </div>
+                    {(() => {
+                      const role = getAgentRole(selectedAgent);
+                      return role ? <RolePill role={role} /> : null;
+                    })()}
                   </div>
                   <div className="text-metadata text-muted-foreground font-mono truncate">
                     {selectedAgent.slug}
