@@ -1,0 +1,8 @@
+# Cargo build artefacts
+/target
+
+# Tauri 2 generated schemas, types, and platform projects (regenerated each build)
+/gen
+
+# Lockfile is regenerated on first build; we do not commit it for V1.
+Cargo.lock

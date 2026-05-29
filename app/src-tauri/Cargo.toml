@@ -1,0 +1,37 @@
+[package]
+name = "jarvis"
+version = "0.1.0"
+description = "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant."
+authors = ["Jarvis"]
+edition = "2021"
+rust-version = "1.78"
+
+# We compile to a library so mobile platforms can link the entry point through
+# their platform frameworks. Desktop binaries also link this lib via main.rs.
+[lib]
+name = "jarvis_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-os = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Default development profile – optimise compile times.
+[profile.dev]
+incremental = true
+
+# Production profile – Tauri's recommended settings for smaller, faster bundles.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
