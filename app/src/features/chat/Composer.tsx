@@ -303,19 +303,35 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
     if (!VoiceService.isSupported()) {
       toast.warning(
         'Voice unsupported',
-        'Web Speech API is not available in this browser/runtime.',
+        'Web Speech API is not available in this runtime. Try Chrome on the web build.',
       );
       return;
     }
-    setSttListening(true);
-    setSttInterim('');
-    VoiceService.startListening();
+    // Defensive: some Tauri WebView2 builds expose the API but throw a
+    // synchronous DOMException on `start()`. Don't flip the visible
+    // listening flag until we know the engine accepted the call — and
+    // never let the click handler propagate an unhandled exception, which
+    // would crash the React tree under StrictMode.
+    try {
+      setSttInterim('');
+      VoiceService.startListening();
+      setSttListening(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Voice could not start.';
+      toast.error('Voice error', msg);
+      setSttListening(false);
+      setSttInterim('');
+    }
   };
 
   const stopStt = () => {
     setSttListening(false);
     setSttInterim('');
-    VoiceService.stopListening();
+    try {
+      VoiceService.stopListening();
+    } catch {
+      // ignore — engine may already be torn down
+    }
   };
 
   const toggleStt = () => {
@@ -469,24 +485,24 @@ function ModelPicker({ provider, onChange }: ModelPickerProps) {
           type="button"
           size="sm"
           variant="ghost"
-          className="gap-1 px-2 text-muted-foreground"
+          className="gap-1 px-2 text-muted-foreground hover:text-foreground"
           aria-label="Choose model"
         >
-          <Sparkles />
+          <Sparkles className="h-3.5 w-3.5 shrink-0" />
           <span className="text-metadata">{PROVIDER_LABELS[provider]}</span>
-          <ChevronDown />
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         side="top"
         align="start"
         sideOffset={6}
-        className="w-[220px] p-1"
+        className="w-[260px] p-1 bg-elevated text-foreground"
       >
         <div className="px-2 py-1 text-metadata text-muted-foreground uppercase tracking-wide">
           Model provider
         </div>
-        <ul className="flex flex-col">
+        <ul className="flex flex-col max-h-[320px] overflow-y-auto scrollbar-hidden">
           {PROVIDERS.map((p) => (
             <li key={p}>
               <button
@@ -497,13 +513,13 @@ function ModelPicker({ provider, onChange }: ModelPickerProps) {
                 }}
                 className={cn(
                   'flex w-full items-center justify-between rounded px-2 py-1.5 text-left',
-                  'hover:bg-muted transition-colors',
-                  p === provider && 'bg-muted text-foreground',
+                  'text-body text-foreground hover:bg-muted transition-colors',
+                  p === provider && 'bg-muted',
                 )}
               >
                 <span className="text-secondary">{PROVIDER_LABELS[p]}</span>
                 {p === provider && (
-                  <span className="text-metadata text-accent-cyan">active</span>
+                  <span className="text-metadata text-accent-copper">active</span>
                 )}
               </button>
             </li>

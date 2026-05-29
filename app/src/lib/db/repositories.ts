@@ -938,6 +938,41 @@ export const quickLinkRepo = {
   async touchLastUsed(id: QuickLinkId): Promise<void> {
     await db.quick_links.update(id, { last_used_at: now() });
   },
+  /**
+   * Re-order `dragId` to land just before `beforeId` (or at the end of the
+   * list when `beforeId` is null). The new order applies to whatever subset
+   * of links the caller passes via `scope`, so the launcher can reorder a
+   * filtered view (single group, "ungrouped", or "all") without us having
+   * to re-derive the visible list inside the repo.
+   *
+   * Implementation: renumber every row in `scope` from 0..n with a step of
+   * 100, leaving room between rows for future float-style inserts.
+   */
+  async reorder(
+    dragId: QuickLinkId,
+    beforeId: QuickLinkId | null,
+    scope: QuickLink[],
+  ): Promise<void> {
+    if (dragId === beforeId) return;
+    const ordered = scope.slice().sort((a, b) => a.position - b.position);
+    const without = ordered.filter((l) => l.id !== dragId);
+    const dragRow = ordered.find((l) => l.id === dragId);
+    if (!dragRow) return;
+
+    const insertAt = beforeId === null ? without.length : without.findIndex((l) => l.id === beforeId);
+    if (beforeId !== null && insertAt === -1) return;
+    without.splice(insertAt, 0, dragRow);
+
+    const ts = now();
+    await db.transaction('rw', db.quick_links, async () => {
+      for (let i = 0; i < without.length; i++) {
+        const newPos = (i + 1) * 100;
+        if (without[i].position !== newPos) {
+          await db.quick_links.update(without[i].id, { position: newPos, updated_at: ts });
+        }
+      }
+    });
+  },
 };
 
 // ===========================================================================

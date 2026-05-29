@@ -30,7 +30,13 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-function matches(e: KeyboardEvent, hotkey: Hotkey): boolean {
+/**
+ * Test whether a KeyboardEvent satisfies a hotkey string like
+ * 'Mod+Shift+1', 'Enter', or 'Mod+\\'. Exported so feature code (e.g. the
+ * launcher's per-link hotkey hook) can reuse the same parsing rules without
+ * going through the hook layer.
+ */
+export function matchesHotkey(e: KeyboardEvent, hotkey: Hotkey): boolean {
   const parts = hotkey.split('+').map((p) => p.trim().toLowerCase());
   const wantMod = parts.includes('mod') || parts.includes('cmd') || parts.includes('ctrl');
   const wantShift = parts.includes('shift');
@@ -58,7 +64,7 @@ export function useHotkey(hotkey: Hotkey, handler: (e: KeyboardEvent) => void, o
     if (opts.disabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (!opts.whenInputs && isEditableTarget(e.target)) return;
-      if (matches(e, hotkey)) {
+      if (matchesHotkey(e, hotkey)) {
         handler(e);
       }
     };
@@ -89,4 +95,6 @@ export const HOTKEYS = {
   COMPOSER_STT: 'Mod+Shift+M',
   SCHEDULE: 'Mod+Shift+S',
   LAUNCHER: 'Mod+Shift+L',
+  /** Jarvis Assistant — natural-language command bar. */
+  ASSISTANT: 'Mod+J',
 } as const;

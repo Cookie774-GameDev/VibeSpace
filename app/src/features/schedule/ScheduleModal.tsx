@@ -13,7 +13,7 @@
  * existing UI store extension; we read it through `subscribeWithSelector`).
  */
 import * as React from 'react';
-import { CalendarDays, Plus, Trash2, Sparkles } from 'lucide-react';
+import { CalendarDays, Plus, Trash2, Sparkles, Repeat } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -65,6 +65,23 @@ function formatRange(ev: EventRow): string {
   const timeOpts: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
   if (ev.all_day) {
     return start.toLocaleDateString(undefined, dayOpts);
+  }
+  return `${start.toLocaleDateString(undefined, dayOpts)} · ${start.toLocaleTimeString(undefined, timeOpts)} – ${end.toLocaleTimeString(undefined, timeOpts)}`;
+}
+
+/**
+ * Same idea as formatRange but for a recurrence-expanded instance.
+ * Uses the instance's own start/end (not the anchor row's) so a daily
+ * standup that recurred 3 days from the anchor reads "Wed, Sep 12 · 9:00am".
+ * "All day" rows render the day label only.
+ */
+function formatInstance(inst: { event: EventRow; instanceStartMs: number; instanceEndMs: number }): string {
+  const start = new Date(inst.instanceStartMs);
+  const end = new Date(inst.instanceEndMs);
+  const dayOpts: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' };
+  const timeOpts: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+  if (inst.event.all_day) {
+    return `${start.toLocaleDateString(undefined, dayOpts)} · All day`;
   }
   return `${start.toLocaleDateString(undefined, dayOpts)} · ${start.toLocaleTimeString(undefined, timeOpts)} – ${end.toLocaleTimeString(undefined, timeOpts)}`;
 }
@@ -171,45 +188,53 @@ export function ScheduleModal({ open, onOpenChange }: ScheduleModalProps) {
           <TabsContent value="upcoming" className="mt-4 max-h-[60vh] overflow-y-auto pr-1">
             {events.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border p-10 text-center text-secondary text-muted-foreground">
-                Nothing scheduled in the next 7 days.
+                Nothing scheduled in the next 14 days.
                 <br />
                 <span className="text-metadata">Switch to "Add event" to schedule one.</span>
               </div>
             ) : (
               <ul className="flex flex-col gap-1.5">
-                {events.map((ev) => (
-                  <li
-                    key={ev.id}
-                    className="group flex items-start gap-3 rounded-md border border-border bg-panel p-3 hover:border-border-mid transition-colors"
-                    style={
-                      ev.color_hue !== undefined
-                        ? { borderLeftColor: `hsl(${ev.color_hue} 70% 55%)`, borderLeftWidth: '3px' }
-                        : undefined
-                    }
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="text-secondary text-foreground truncate">{ev.title}</div>
-                      <div className="text-metadata text-muted-foreground mt-0.5">
-                        {formatRange(ev)}
-                      </div>
-                      {ev.location && (
-                        <div className="text-metadata text-muted-foreground mt-0.5">
-                          @ {ev.location}
-                        </div>
-                      )}
-                    </div>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      onClick={() => void handleDelete(ev)}
-                      aria-label={`Delete ${ev.title}`}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity"
+                {events.map((inst) => {
+                  const ev = inst.event;
+                  return (
+                    <li
+                      key={`${ev.id}-${inst.instanceStartMs}`}
+                      className="group flex items-start gap-3 rounded-md border border-border bg-panel p-3 hover:border-border-mid transition-colors"
+                      style={
+                        ev.color_hue !== undefined
+                          ? { borderLeftColor: `hsl(${ev.color_hue} 70% 55%)`, borderLeftWidth: '3px' }
+                          : undefined
+                      }
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </li>
-                ))}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-secondary text-foreground truncate flex items-center gap-1.5">
+                          <span className="truncate">{ev.title}</span>
+                          {inst.isRecurrence && (
+                            <Repeat className="h-3 w-3 shrink-0 text-muted-foreground" aria-label="Recurring" />
+                          )}
+                        </div>
+                        <div className="text-metadata text-muted-foreground mt-0.5">
+                          {formatInstance(inst)}
+                        </div>
+                        {ev.location && (
+                          <div className="text-metadata text-muted-foreground mt-0.5">
+                            @ {ev.location}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => void handleDelete(ev)}
+                        aria-label={`Delete ${ev.title}`}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </TabsContent>

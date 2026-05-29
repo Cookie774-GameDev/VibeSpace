@@ -7,6 +7,7 @@
  *   - edit link: pass an existing `QuickLink`. The form prefills.
  */
 import * as React from 'react';
+import { formatDistanceToNow } from 'date-fns';
 import {
   Dialog,
   DialogContent,
@@ -22,8 +23,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
 import { quickLinkRepo } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
+import { renderHotkey } from '@/lib/utils';
 import type { LinkBehavior, LinkKind, QuickLink, QuickLinkGroup } from '@/types/quick-link';
 import type { QuickLinkGroupId, WorkspaceId } from '@/types/common';
+import { useQuickLinks } from './hooks';
+import { isValidHotkey } from './useLinkHotkeys';
 
 interface LinkEditDialogProps {
   open: boolean;
@@ -67,6 +71,7 @@ function inferKind(url: string): LinkKind {
 
 export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, groups }: LinkEditDialogProps) {
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
+  const allLinks = useQuickLinks(workspaceId);
   const isEdit = !!link;
 
   // Form state
@@ -77,6 +82,7 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
   const [icon, setIcon] = React.useState('');
   const [colorHue, setColorHue] = React.useState<number>(200);
   const [behavior, setBehavior] = React.useState<LinkBehavior>('external_browser');
+  const [hotkey, setHotkey] = React.useState('');
   const [tagsRaw, setTagsRaw] = React.useState('');
 
   // Reset on open/link change.
@@ -90,6 +96,7 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
       setIcon(link.icon ?? '');
       setColorHue(link.color_hue ?? 200);
       setBehavior(link.behavior);
+      setHotkey(link.hotkey ?? '');
       setTagsRaw((link.tags ?? []).join(', '));
     } else {
       setLabel('');
@@ -99,6 +106,7 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
       setIcon('');
       setColorHue(200);
       setBehavior('external_browser');
+      setHotkey('');
       setTagsRaw('');
     }
   }, [open, link, defaultGroupId]);
@@ -130,6 +138,24 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const trimmedHotkey = hotkey.trim();
+    if (trimmedHotkey && !isValidHotkey(trimmedHotkey)) {
+      toast.warning('Hotkey looks off', 'Try a combo like Mod+Shift+1.');
+      return;
+    }
+    // Best-effort conflict detection — surface a warning, don't block.
+    if (trimmedHotkey) {
+      const conflict = allLinks.find(
+        (l) => l.id !== link?.id && (l.hotkey ?? '').trim().toLowerCase() === trimmedHotkey.toLowerCase(),
+      );
+      if (conflict) {
+        toast.warning(
+          'Hotkey already in use',
+          `“${conflict.label}” also uses ${renderHotkey(trimmedHotkey)}. Yours will win since it was saved last.`,
+        );
+      }
+    }
+
     try {
       if (isEdit && link) {
         await quickLinkRepo.update(link.id, {
@@ -140,6 +166,7 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
           icon: icon.trim() || undefined,
           color_hue: colorHue,
           behavior,
+          hotkey: trimmedHotkey || undefined,
           tags,
         });
         toast.success('Link saved', `“${label.trim()}” updated.`);
@@ -153,6 +180,7 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
           icon: icon.trim() || undefined,
           color_hue: colorHue,
           behavior,
+          hotkey: trimmedHotkey || undefined,
           tags,
           position: Date.now(), // stamp insertion time so newest is last by default
         });
@@ -284,6 +312,32 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
           </div>
 
           <div>
+            <Label htmlFor="link-hotkey">Hotkey</Label>
+            <Input
+              id="link-hotkey"
+              value={hotkey}
+              onChange={(e) => setHotkey(e.target.value)}
+              placeholder="e.g. Mod+Shift+1"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <div className="mt-1 flex min-h-[18px] items-center gap-1.5 text-metadata">
+              {hotkey.trim() ? (
+                isValidHotkey(hotkey) ? (
+                  <>
+                    <span className="text-muted-foreground">Launches with</span>
+                    <span className="kbd">{renderHotkey(hotkey.trim())}</span>
+                  </>
+                ) : (
+                  <span className="text-warning">Use a combo like Mod+Shift+1.</span>
+                )
+              ) : (
+                <span className="text-muted-foreground">Optional. Mod = {`\u2318`} on macOS, Ctrl elsewhere.</span>
+              )}
+            </div>
+          </div>
+
+          <div>
             <Label htmlFor="link-tags">Tags (comma-separated)</Label>
             <Textarea
               id="link-tags"
@@ -293,6 +347,12 @@ export function LinkEditDialog({ open, onOpenChange, link, defaultGroupId, group
               rows={2}
             />
           </div>
+
+          {isEdit && link?.last_used_at ? (
+            <div className="text-metadata text-muted-foreground">
+              Last used {formatDistanceToNow(link.last_used_at, { addSuffix: true })}.
+            </div>
+          ) : null}
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

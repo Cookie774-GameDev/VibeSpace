@@ -389,3 +389,178 @@ After the cleanup pass and fresh launch, the V2 buttons (Quick Launch / Schedule
 3. **Try Mod+Shift+L** (Quick Launch), **Mod+Shift+S** (Schedule), **Mod+Shift+F** (Fullscreen), **Mod+Shift+.** (Ambient now). The TopBar also has rocket / calendar / maximize buttons for these.
 4. The seven new providers (xAI, OpenRouter, Groq, DeepSeek, Mistral, Together, Ollama) are in **Settings → Providers**. Keys persist now; live routing for them is a future wave.
 
+---
+
+## 2026-05-29 - V2 Session (Wave 3 — Functional NavPane + Cozy Checklist + Jarvis Assistant + bug triage)
+
+**Actor:** opencode (claude) for viper
+
+**User report driving the wave:**
+> "the model picker is literally invisible, STT crashes the whole system, I can't make a project, I can't make chats, the AIs on the side are placeholders. Use the cozy theme from `theme-design.md`. Add a Jarvis Assistant that takes commands like 'open 4 terminals with claude in tiger project'. The buttons at the side for specific AI agents are not working."
+
+**Result:** Every visible bug fixed, Cozy Checklist palette adopted, Jarvis Assistant shipped at Mod+J, fresh installers built. Typecheck clean. Vite build clean. Both `.msi` and NSIS `.exe` regenerated.
+
+### Bugs fixed
+
+#### 1. Model picker invisible
+
+`src/features/chat/Composer.tsx` `ModelPicker`:
+- The `<Sparkles />` and `<ChevronDown />` icons rendered without any size class — lucide-react defaults to 24×24, which collapsed under flex without explicit sizing. Added `h-3.5 w-3.5 shrink-0` on both. Active-row indicator switched from `text-accent-cyan` (now warm but at low contrast on the popover surface) to `text-accent-copper` for clarity.
+- Popover content was `bg-elevated` by default but had no explicit text color and no width cap — added `bg-elevated text-foreground`, widened to `260px`, capped height with `max-h-[320px] overflow-y-auto scrollbar-hidden` so all 12 providers actually scroll.
+
+#### 2. STT crash
+
+`src/features/chat/Composer.tsx` `startStt` / `stopStt`:
+- Some Tauri WebView2 builds expose `window.SpeechRecognition` but throw a synchronous `DOMException` from `.start()` (commonly when the mic permission was never granted to the WebView host). The previous code flipped `sttListening` to true and called `VoiceService.startListening()` *before* the engine confirmed, so the throw bubbled into React's render pipeline and tore the tree down under StrictMode.
+- Wrapped both operations in `try/catch`, only flipping the visible flag *after* the engine accepted the call, and surfacing `toast.error('Voice error', msg)` instead of crashing.
+
+#### 3. NavPane decorative — "can't make project / chats / agents inactive"
+
+`src/components/layout/NavPane.tsx` rewritten end-to-end:
+- **Projects section** — `useLiveQuery(projectRepo.listByWorkspace)` for live data, header gets a `+` button that calls `projectRepo.create({ name: "Project N", color_hue: hash })` and `setProjectId(...)`. Clicking a row activates the project. Active row gets a `ring-1 ring-accent-copper/40`.
+- **Chats section** — `useLiveQuery(db.chats.where('workspace_id').equals(workspaceId))` sorted by `updated_at desc`, `+` button calls `chatRepo.create({ mode: 'chat' })` and `setActiveChat`. Click switches active chat + `setChatMode(chat.mode)`.
+- **Agents section** — clicking an agent now creates a new chat with `active_agent_ids: [a.id]` and switches to it. This was the literal "buttons at the side for AI agents are not working" complaint — the items had no `onClick`. Toast confirms `@slug ready · New chat started with NAME`.
+- All actions guarded by a `workspaceId` check that toasts "Still loading — workspace is initializing" instead of silently no-oping.
+- Added a tiny status footer showing `Local · {localUserId.slice(4,8)}` so the user can see they're in a real workspace.
+
+### Cozy Checklist theme adopted
+
+Source: `C:\Users\viper\projects\shopify-urbeauty-audit\theme-design.md` (the user's reference design language).
+
+`app/src/styles/globals.css` rewritten. Light + dark both shipping:
+
+| Token | Dark (warm wood) | Light (cream paper) |
+|---|---|---|
+| `--background` | `#2a2018` | `#f5efe6` |
+| `--panel` | `#34281e` | `#ede4d3` |
+| `--elevated` | `#3a2d22` (cardstock) | `#fffbf5` (paper) |
+| `--foreground` | `#f5e6c8` (cream ink) | `#3a2e22` (warm brown ink) |
+| `--accent-cyan` (compat) → terracotta | `#d97757` | `#d97757` deepened |
+| `--accent-violet` (compat) → honey | `#d4a258` | `#d4a258` deepened |
+| `--rose` | `#c97b6e` | `#c97b6e` |
+| `--sage`, `--sage-deep` | `#7c9870` / `#5d7855` | same |
+| `--lavender` | `#9d8aa8` | same |
+| `--cream` | `#f5e6c8` | same |
+| Severity (5-level) | `crit/high/med/low/info` with darkened bg | full set with cream-tinted bg |
+| Shadows | brown-tinted not gray | brown-tinted, lighter alpha |
+| `--radius` | 14px | 14px |
+| `--radius-lg` (cards) | 22px | 22px |
+| Body bloom | radial pools (rose / sage / honey / lavender) | same, brighter tints |
+
+**Typography:**
+- `@import` for Fraunces (serif display, opsz 9..144 weights 500/600/700) and Plus Jakarta Sans (UI, weights 400-700) and JetBrains Mono.
+- `font-sans` now Plus Jakarta Sans, new `font-serif` and `font-display` both Fraunces.
+- `h1/h2/h3` and `.font-display` and `.eyebrow` selectors in `@layer base` apply the serif treatment with `letter-spacing: -0.02em / -0.01em`.
+- Ambient clock + ambient quote upgraded to Fraunces in italic for that paper-room feel.
+
+**New utility classes (opt-in, in `@layer components`):**
+- `.cozy-card` — 22px radius, brown-tinted soft shadow, hover lifts to `--shadow-lift` and warms to cream border
+- `.cozy-pill` — 999px radius for chips
+- `.cozy-toast-success` — sage gradient pill
+- `.cozy-toast-action` — rose → terracotta → honey serif gradient pill (the "celebration toast")
+- `.cozy-bg-bloom` — re-applies the radial bloom locally
+- `.sev-pill.{crit,high,med,low,info}` — five-level severity gradients
+
+`app/tailwind.config.ts`:
+- New aliases under `accent.*`: `rose`, `terracotta`, `honey`, `sage`, `sage-deep`, `lavender`, `cream`. Existing `cyan/violet/copper/amber` keep working.
+- New top-level color groups: `crit/high/med/low/sev.info` (each a `{ DEFAULT, bg }` object) and `paper.{DEFAULT,soft,done}`.
+- New `borderRadius.xl` = `var(--radius-lg)` (22px), `borderRadius.lg` = `var(--radius)` (14px).
+- New `boxShadow.{soft,lift,cozy}`.
+- `fontFamily.sans` = Plus Jakarta Sans stack; `serif` and `display` = Fraunces; `mono` = JetBrains Mono.
+
+The 70+ existing component refs to `text-accent-cyan` / `bg-accent-cyan/10` / `text-accent-violet` / etc. all retone automatically through the variable layer — no component edits needed for the palette swap.
+
+### Jarvis Assistant (Mod+J)
+
+New module `src/features/assistant/`:
+
+- `intents.ts` — discriminated union of `AssistantIntent` (create_project, switch_project, create_chat, open_terminals, create_task, create_event, set_ambient, set_fullscreen, open_settings/palette/launcher/schedule, unknown).
+- `parse.ts` — pure regex-based `parseAssistantInput(raw)`. Strips filler words (`please`, `can you`, `i want to`), handles quoted names, returns the right intent kind.
+- `execute.ts` — async `executeIntent(intent)` dispatcher. Calls existing `projectRepo` / `chatRepo` / `taskRepo` / `eventRepo` / `terminalSessionRepo`. Never throws; returns `{ ok, message }`.
+- `AssistantBar.tsx` — Dialog with autofocused input, live preview line under it ("→ Will create project 'tiger'"), Recents pill row pulled from `localStorage.jarvis-assistant-recent` (last 5), Examples footer.
+- `index.ts` — barrel.
+
+**Wiring:**
+- `src/lib/hotkeys.ts` adds `HOTKEYS.ASSISTANT = 'Mod+J'`.
+- `src/stores/ui.ts` adds transient `assistantOpen` + `setAssistantOpen` (not persisted, matches the launcher/schedule pattern).
+- `src/App.tsx` mounts `<AssistantBarHost />` and registers the `Mod+J` hotkey.
+- `src/components/layout/TopBar.tsx` gains a `Sparkles` button next to Quick Launch.
+- `src/features/settings/sections/Hotkeys.tsx` adds the row label (forced by exhaustive `Record<keyof typeof HOTKEYS, string>`).
+
+**Commands the user can type now:**
+
+| Type | Action |
+|---|---|
+| `create project tiger` | `projectRepo.create` + auto-switch via `setProjectId`, color hue derived from name hash |
+| `switch to project tiger` | resolves case-insensitive then substring, warns if not found |
+| `create chat called planning in tiger` | resolves project, creates chat, opens it |
+| `open 4 terminals` | creates 4 `terminal_sessions` rows (PTY runtime is future work) |
+| `open 4 terminals with claude code in tiger` | + `shell_command: 'claude code'` + `project_id` resolved |
+| `open claude in tiger` | shorthand for `count=1, command='claude'` |
+| `make a todo: ship the launcher tomorrow` | `taskRepo.create` with `due_at` parsed for today/tomorrow/weekday |
+| `schedule lunch with sam friday at 1pm` | delegates to existing `parseEventInput` → `eventRepo.create` |
+| `ambient on` / `ambient off` | toggles `ambientActive` |
+| `fullscreen` / `exit fullscreen` | toggles `chatFullscreen` |
+| `open settings` / `open palette` / `open launcher` / `open schedule` | corresponding modal opens |
+
+Filler words like "please", "can you", "i want to" are stripped before matching. Quoted names (`create project "Tiger Eye"`) work.
+
+**Known limitations of the parser (intentional simplicity):**
+- Project resolution is fuzzy — substring matches; ambiguous names pick the first hit
+- Casual due dates only (`today`, `tomorrow`, weekday names) — full parsing for events
+- Terminal subsystem only writes the DB row; the actual PTY spawn is future work (B2 plan slice)
+- No remote AI fallback — this is intentional, the bar is for deterministic commands
+
+### Files touched this wave
+
+```
+app/src/styles/globals.css                              — Cozy Checklist palette + fonts + utilities
+app/tailwind.config.ts                                  — accent.{rose,terracotta,honey,sage,...}, severity, fonts, boxShadow
+app/src/components/layout/NavPane.tsx                   — fully rewritten: projects + chats + agents wired
+app/src/features/chat/Composer.tsx                      — ModelPicker icon sizing, STT defensive try/catch
+app/src/features/schedule/ScheduleModal.tsx             — Repeat icon + formatInstance helper, RecurrenceInstance shape fix
+app/src/features/assistant/intents.ts                   — NEW
+app/src/features/assistant/parse.ts                     — NEW
+app/src/features/assistant/execute.ts                   — NEW
+app/src/features/assistant/AssistantBar.tsx             — NEW
+app/src/features/assistant/index.ts                     — NEW
+app/src/lib/hotkeys.ts                                  — HOTKEYS.ASSISTANT = 'Mod+J'
+app/src/stores/ui.ts                                    — assistantOpen + setAssistantOpen
+app/src/App.tsx                                         — AssistantBarHost mount + Mod+J hotkey
+app/src/components/layout/TopBar.tsx                    — Sparkles assistant button
+app/src/features/settings/sections/Hotkeys.tsx          — ASSISTANT label row
+DEVLOG.md                                               — this entry
+```
+
+### Verification
+
+- `npm run typecheck` — ✅ clean (zero errors)
+- `npm run build` (vite production) — ✅ 20.80s, 2502 modules, CSS 52.05 KB (was 46.60 KB; the +5 KB is the Cozy palette additions, severity utilities, and the Cozy `.cozy-*` recipes), index JS 813 KB / 257 KB gzipped
+- `npm run tauri:build` — ✅ cargo cache hit on most deps; rebuilt only `jarvis` crate (~2m 41s); both bundles regenerated cleanly
+- Tauri desktop window — ✅ relaunched (PID 44916), title "Jarvis", warm cozy theme visible
+- Old V1 `node` processes from May 28 still running on background ports — left alone (not blocking anything; vite dev server serves on 5173 strictPort)
+
+### Artifacts (regenerated)
+
+| File | Size | Use |
+|---|---|---|
+| `app/src-tauri/target/release/jarvis.exe` | 5.57 MB | Bare release binary |
+| `app/src-tauri/target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi` | 3.33 MB | Windows MSI installer |
+| `app/src-tauri/target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 2.67 MB | NSIS setup wizard |
+
+### What viper should test next
+
+1. **Sidebar.** Click `+` next to Projects — should immediately get a project, the row highlights with a copper ring, and the TopBar breadcrumb updates. Click `+` next to Chats — chat opens. Click an agent (Jarvis / Athena / etc.) — a new chat opens with that agent.
+2. **Model picker.** Open any chat, click the small `Sparkles ✨ provider name ⌄` button at the bottom-left of the composer. Now visibly opens, lists all 12 providers, click switches. Active provider gets a small "active" copper label.
+3. **Mic / STT.** Click the mic in the composer (or `Mod+Shift+M`). Browser will prompt for permission. If permission denied or the API isn't available in WebView2 (Microsoft removed it from default WebView2 builds — this is actually expected), you now get a polite toast instead of an app crash.
+4. **Jarvis Assistant.** Hit `Mod+J` (or click the new Sparkles button in the TopBar, between Quick Launch and Schedule). Type `create project tiger`. Then `create chat called planning in tiger`. Then `open 4 terminals with claude code in tiger`. Each should toast success and appear in the sidebar.
+5. **Cozy theme.** Should now feel warm umber + copper + amber + sage in dark mode. Toggle to light in Settings → Appearance — should be cream paper + warm brown ink + same accents.
+6. **Drop the new installer on someone.** `bundle/msi/Jarvis_0.1.0_x64_en-US.msi` is the file. Or `bundle/nsis/Jarvis_0.1.0_x64-setup.exe` for the friendlier consumer wizard.
+
+### Things noted but not chased this wave
+
+- **"BridgeMind"** the user mentioned — could not find any reference in the codebase or in the user's project tree. Treating as a phrase to clarify next session.
+- **Real PTY spawn for terminals.** The Jarvis Assistant queues terminal rows via `terminalSessionRepo.create` but the actual PTY runtime needs a Tauri Rust command + a frontend terminal panel. That's a meaningful slice on its own, parked for the next wave.
+- **Drag-and-drop of chats between projects.** Out of scope for this wave but the data model already supports it (`chat.project_id` is optional/mutable).
+- **Provider live routing for the 7 OpenAI-compatible providers.** Keys persist; the OpenAI-compatible adapter that fans them all into the same code path is parked.
+

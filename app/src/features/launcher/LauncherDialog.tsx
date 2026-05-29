@@ -27,9 +27,9 @@ import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/toast';
 import { quickLinkGroupRepo, quickLinkRepo } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
-import { cn } from '@/lib/utils';
+import { cn, renderHotkey } from '@/lib/utils';
 import type { QuickLink, QuickLinkGroup } from '@/types/quick-link';
-import type { QuickLinkGroupId, WorkspaceId } from '@/types/common';
+import type { QuickLinkGroupId, QuickLinkId, WorkspaceId } from '@/types/common';
 import { useQuickLinks, useQuickLinkGroups, filterByGroup } from './hooks';
 import { launchLink, QUICK_PRESETS } from './launch';
 import { LinkEditDialog } from './LinkEditDialog';
@@ -53,11 +53,19 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
   const [editing, setEditing] = React.useState<QuickLink | null>(null);
   const [editorOpen, setEditorOpen] = React.useState(false);
 
+  // Drag state — only one tile can be dragged at a time. We track the row
+  // being moved and the row currently hovered so we can render the dashed
+  // "insert before" outline. Both reset on drop / dragend.
+  const [draggingId, setDraggingId] = React.useState<QuickLinkId | null>(null);
+  const [dragOverId, setDragOverId] = React.useState<QuickLinkId | null>(null);
+
   // Reset on open.
   React.useEffect(() => {
     if (open) {
       setFilter('all');
       setSearch('');
+      setDraggingId(null);
+      setDragOverId(null);
     }
   }, [open]);
 
@@ -139,6 +147,19 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
     setEditorOpen(true);
   };
 
+  const onDrop = async (dragId: QuickLinkId, beforeId: QuickLinkId | null) => {
+    setDraggingId(null);
+    setDragOverId(null);
+    if (dragId === beforeId) return;
+    try {
+      // We pass the currently visible/filtered slice as the scope so the
+      // user only reorders what they can see. The repo renumbers in place.
+      await quickLinkRepo.reorder(dragId, beforeId, filtered);
+    } catch (err) {
+      toast.error('Could not reorder', err instanceof Error ? err.message : 'Try again.');
+    }
+  };
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -214,11 +235,32 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
                     onLaunch={() => void onLaunch(link)}
                     onEdit={() => startEdit(link)}
                     onDelete={() => void onDelete(link)}
+                    isDragging={draggingId === link.id}
+                    isDropTarget={dragOverId === link.id && draggingId !== null && draggingId !== link.id}
+                    onDragStart={() => setDraggingId(link.id)}
+                    onDragEnter={() => {
+                      if (draggingId && draggingId !== link.id) setDragOverId(link.id);
+                    }}
+                    onDragEnd={() => {
+                      setDraggingId(null);
+                      setDragOverId(null);
+                    }}
+                    onDropOnTile={() => {
+                      if (draggingId) void onDrop(draggingId, link.id);
+                    }}
                   />
                 ))}
                 <button
                   type="button"
                   onClick={startNewLink}
+                  onDragOver={(e) => {
+                    if (draggingId) e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    if (!draggingId) return;
+                    e.preventDefault();
+                    void onDrop(draggingId, null);
+                  }}
                   className="flex h-[110px] flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-panel/50 text-muted-foreground hover:bg-panel hover:text-foreground transition-colors"
                   aria-label="Add a new link"
                 >
@@ -274,9 +316,26 @@ interface LinkTileProps {
   onLaunch: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  isDragging: boolean;
+  isDropTarget: boolean;
+  onDragStart: () => void;
+  onDragEnter: () => void;
+  onDragEnd: () => void;
+  onDropOnTile: () => void;
 }
 
-function LinkTile({ link, onLaunch, onEdit, onDelete }: LinkTileProps) {
+function LinkTile({
+  link,
+  onLaunch,
+  onEdit,
+  onDelete,
+  isDragging,
+  isDropTarget,
+  onDragStart,
+  onDragEnter,
+  onDragEnd,
+  onDropOnTile,
+}: LinkTileProps) {
   const hue = link.color_hue ?? 200;
   // Try to read a hostname for the subtitle.
   const hostname = React.useMemo(() => {
@@ -291,7 +350,33 @@ function LinkTile({ link, onLaunch, onEdit, onDelete }: LinkTileProps) {
 
   return (
     <div
-      className="group relative h-[110px] overflow-hidden rounded-md border border-border bg-panel transition-colors hover:border-border-mid"
+      draggable
+      onDragStart={(e) => {
+        // Carry the link id along so cross-component drops could resolve it
+        // even without our React state. We still rely on local state for the
+        // drop, but this keeps the drag visually grounded in HTML5 semantics.
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', link.id);
+        onDragStart();
+      }}
+      onDragEnter={onDragEnter}
+      onDragOver={(e) => {
+        // dragover must preventDefault to enable drop targets.
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDropOnTile();
+      }}
+      onDragEnd={onDragEnd}
+      className={cn(
+        'group relative h-[110px] overflow-hidden rounded-md border border-border bg-panel transition-all',
+        'hover:border-border-mid',
+        !isDragging && 'hover:scale-[1.02]',
+        isDragging && 'opacity-40',
+        isDropTarget && 'ring-1 ring-accent-copper',
+      )}
       style={{ background: `linear-gradient(135deg, hsl(${hue} 70% 14% / 0.85), hsl(${hue + 30} 60% 9% / 0.85))` }}
     >
       <button
@@ -312,6 +397,16 @@ function LinkTile({ link, onLaunch, onEdit, onDelete }: LinkTileProps) {
           <div className="truncate text-metadata text-muted-foreground">{hostname}</div>
         </div>
       </button>
+
+      {link.hotkey ? (
+        <span
+          className="kbd pointer-events-none absolute bottom-1.5 right-1.5"
+          aria-label={`Hotkey ${renderHotkey(link.hotkey)}`}
+          title={`Hotkey ${renderHotkey(link.hotkey)}`}
+        >
+          {renderHotkey(link.hotkey)}
+        </span>
+      ) : null}
 
       <div className="pointer-events-none absolute inset-x-1 top-1 flex justify-end gap-1 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 transition-opacity">
         <button

@@ -34,7 +34,8 @@ import { SettingsModal } from '@/features/settings';
 import { VoiceModal, GlowBorder } from '@/features/voice';
 import { AmbientHome, useIdleDetection } from '@/features/ambient';
 import { ScheduleModal } from '@/features/schedule';
-import { LauncherDialog } from '@/features/launcher';
+import { LauncherDialog, useLinkHotkeys } from '@/features/launcher';
+import { AssistantBar } from '@/features/assistant';
 import { Toaster, toast } from '@/components/ui/toast';
 import { startRuntimeListener } from '@/lib/ai/runtime';
 import { messageRepo, agentRepo, chatRepo, openDb } from '@/lib/db';
@@ -210,6 +211,16 @@ function GlobalHotkeysHost() {
     setLauncherOpen(!useUIStore.getState().launcherOpen);
   });
 
+  // V2 — Jarvis Assistant (Mod+J).
+  const setAssistantOpen = useUIStore((s) => s.setAssistantOpen);
+  useHotkey(HOTKEYS.ASSISTANT, (e) => {
+    e.preventDefault();
+    setAssistantOpen(!useUIStore.getState().assistantOpen);
+  });
+
+  // V2 — per-link launcher hotkeys (e.g. Mod+Shift+1 jumps straight to YouTube).
+  useLinkHotkeys();
+
   return null;
 }
 
@@ -232,6 +243,18 @@ function LauncherDialogHost() {
 }
 
 /**
+ * Jarvis Assistant mount, listens to ui.assistantOpen.
+ *
+ * The bar is the natural-language command surface (Mod+J). It runs a
+ * deterministic local parser — no remote AI calls.
+ */
+function AssistantBarHost() {
+  const open = useUIStore((s) => s.assistantOpen);
+  const setOpen = useUIStore((s) => s.setAssistantOpen);
+  return <AssistantBar open={open} onOpenChange={setOpen} />;
+}
+
+/**
  * Inner shell - rendered after AuthGate has confirmed local user + seeding.
  */
 function WorkspaceRoot() {
@@ -249,6 +272,7 @@ function WorkspaceRoot() {
       <VoiceModal />
       <ScheduleModalHost />
       <LauncherDialogHost />
+      <AssistantBarHost />
 
       {/* Visual ambient effects */}
       <GlowBorder />

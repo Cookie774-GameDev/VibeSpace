@@ -1,116 +1,195 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ============================================================
-   COZY DESIGN SYSTEM (V2)
-   Warm Claude-inspired: dark-roast paper, copper + amber accents.
-   Replaces the V1 OLED+cyan/violet "Voltage" theme with a calmer,
-   reading-room palette. CSS variable names are preserved for back-compat
-   so components don't have to change — only the values shift.
-   All colors expressed as HSL channels for Tailwind's hsl(var(...))
+   COZY CHECKLIST DESIGN SYSTEM (V2)
+   Warm, paper-inspired. Earthy palette: rose, terracotta, honey,
+   sage, lavender. Cream paper light + warm-wood-coffee dark.
+   Brown-tinted shadows. Fraunces serif headings + Plus Jakarta Sans
+   body.
+   CSS variable names preserved for back-compat with the 70+ existing
+   `text-accent-cyan` / `text-accent-violet` references. Their *values*
+   shifted; their semantic intent matches the new copper / amber pair.
    ============================================================ */
 
 @layer base {
   :root,
   [data-theme='dark'] {
-    /* Surfaces - warm dark roast, not pure OLED black */
-    --background: 28 12% 7%;    /* #14110F  base canvas (slight warm umber) */
-    --panel: 26 10% 11%;        /* #1D1916  side panels and chrome */
-    --elevated: 26 10% 15%;     /* #2A2521  cards, dialogs, popovers */
+    /* ---------- Surfaces (warm wood / coffee, not black) ---------- */
+    --background: 28 24% 13%;     /* #2a2018  page background, warm wood */
+    --background-warm: 28 28% 11%; /* #221912  warmer pocket */
+    --panel: 28 22% 17%;           /* #34281e  side panels and chrome */
+    --elevated: 28 22% 18%;        /* #3a2d22  cards, dialogs, popovers */
+    --paper-soft: 28 25% 16%;      /* #34281e  nested action box */
+    --paper-done: 28 26% 14%;      /* #2f241b  completed/done state */
 
-    /* Borders - warm and quiet */
-    --border: 28 10% 19%;       /* #322B26 */
-    --border-mid: 28 10% 26%;   /* #443B33 */
-    --input: 28 10% 19%;
-    --ring: 22 65% 56%;         /* copper focus ring */
+    /* ---------- Borders ---------- */
+    --border: 32 20% 24%;          /* #4a3d2f  default border */
+    --border-mid: 32 22% 31%;      /* #5d4c3c  stronger divider */
+    --line-soft: 32 18% 19%;       /* #3d3225  dashed / subtle */
+    --input: 32 20% 24%;
+    --ring: 14 64% 60%;            /* terracotta focus ring */
 
-    /* Text hierarchy - paper-cream tones, not stark white */
-    --foreground: 36 25% 92%;   /* #EFEAE2  primary — warm cream */
-    --muted: 28 10% 16%;        /* surface for muted backgrounds */
-    --muted-foreground: 30 12% 62%; /* #A89B8E  secondary */
+    /* ---------- Text hierarchy (cream ink, AAA on warm wood) ---------- */
+    --foreground: 41 67% 87%;      /* #f5e6c8  primary cream ink */
+    --muted: 28 20% 16%;
+    --muted-foreground: 36 32% 73%; /* #d4c2a0  secondary cream */
+    --ink-faint: 36 16% 54%;        /* #a08e74  tertiary captions */
 
-    /* Brand accent - copper to amber diagonal gradient
-       (variable names kept for compat; values are now warm) */
-    --accent-cyan: 22 65% 56%;    /* copper  #D97757  (gradient start) */
-    --accent-violet: 35 70% 60%;  /* amber   #E5A35F  (gradient end) */
-    --accent: 22 65% 56%;         /* solid use defaults to copper */
-    --accent-foreground: 36 30% 98%;
+    /* ---------- Brand accents (compat aliases + cozy semantics) ---------- */
+    /* Cyan/violet names kept for existing components — values are the
+       cozy terracotta/honey pair so the whole app reads warm. */
+    --accent-cyan: 14 64% 60%;     /* terracotta #d97757 */
+    --accent-violet: 36 56% 59%;   /* honey      #d4a258 */
+    --accent: 14 64% 60%;
+    --accent-foreground: 41 67% 95%;
 
-    /* Primary == accent */
-    --primary: 22 65% 56%;
-    --primary-foreground: 36 30% 98%;
+    /* ---------- V2 Cozy palette (preferred names for new code) ---------- */
+    --rose: 8 47% 60%;             /* #c97b6e  warm pink */
+    --terracotta: 14 64% 60%;      /* #d97757  primary accent */
+    --honey: 36 56% 59%;           /* #d4a258  gold/amber */
+    --sage: 105 14% 51%;           /* #7c9870  primary success */
+    --sage-deep: 99 17% 41%;       /* #5d7855  deep sage for buttons */
+    --lavender: 280 14% 60%;       /* #9d8aa8  tier 3 accent */
+    --cream: 41 67% 87%;           /* #f5e6c8  highlight cream */
 
-    /* Secondary - subtle elevated warm surface */
-    --secondary: 28 10% 17%;
-    --secondary-foreground: 36 25% 92%;
+    /* Existing copper/amber aliases — keep pointing at the same hues. */
+    --accent-copper: 14 64% 60%;
+    --accent-amber: 36 56% 59%;
+    --accent-amber-soft: 36 56% 59% / 0.18;
 
-    /* Destructive - warm brick red, not lipstick */
-    --destructive: 6 70% 55%;     /* #D9624B */
-    --destructive-foreground: 36 30% 98%;
+    /* ---------- Primary / secondary / status ---------- */
+    --primary: 14 64% 60%;
+    --primary-foreground: 41 67% 95%;
+    --secondary: 28 20% 18%;
+    --secondary-foreground: 41 67% 87%;
 
-    /* Status - all on the warm side */
-    --success: 130 35% 50%;       /* sage green */
-    --warning: 35 80% 58%;        /* matches amber */
-    --info: 22 65% 56%;           /* matches copper */
+    --destructive: 7 47% 46%;       /* clay red, not fire-engine */
+    --destructive-foreground: 41 67% 95%;
 
-    /* Geometry */
-    --radius: 0.75rem; /* 12px - cozier corners */
+    --success: 105 14% 51%;         /* sage */
+    --warning: 37 49% 49%;          /* deep honey */
+    --info: 280 14% 60%;             /* lavender */
 
-    /* ---------- V2 cozy tokens ---------- */
-    --accent-copper: 22 65% 56%;
-    --accent-amber: 35 75% 58%;
-    --accent-amber-soft: 35 75% 58% / 0.18;
-    /* Slightly warmer surface for chat bubbles, cards, ambient cards. */
-    --surface-warm: 26 12% 13%;   /* #25201C */
-    /* Ambient takeover ground — deeper than --background. */
-    --ambient-deep: 28 25% 5%;    /* warm umber ground */
-    /* Synchronized breathing phase 0..1 written by AmbientHome's RAF loop.
-       Read by AmbientOrb + DriftField + cards so the entire screen breathes
-       on a single clock. Defaults to 0 outside ambient. */
+    /* ---------- Severity (5-level system from Cozy Checklist) ---------- */
+    --crit: 7 47% 46%;       --crit-bg: 12 35% 21%;   /* dark mode bg darkens */
+    --high: 19 56% 53%;      --high-bg: 24 30% 22%;
+    --med:  37 49% 49%;      --med-bg:  38 28% 21%;
+    --low:  117 12% 49%;     --low-bg:  117 14% 21%;
+    --info-sev: 268 13% 57%; --info-bg: 268 12% 23%;
+
+    /* ---------- Geometry ---------- */
+    --radius-sm: 10px;             /* small chips, kbd badges */
+    --radius: 14px;                /* inputs, action boxes (Cozy radius-md) */
+    --radius-lg: 22px;             /* cards (Cozy radius-lg) */
+
+    /* ---------- Elevation (warm brown-tinted shadows, not gray) ---------- */
+    --shadow-soft:
+      0 1px 2px hsl(0 0% 0% / 0.30),
+      0 4px 12px hsl(0 0% 0% / 0.20);
+    --shadow-lift:
+      0 4px 8px hsl(0 0% 0% / 0.35),
+      0 12px 28px hsl(0 0% 0% / 0.30);
+    --shadow-cozy:
+      0 8px 28px -6px hsl(14 64% 30% / 0.45),
+      0 2px 6px hsl(0 0% 0% / 0.55);
+
+    /* ---------- Ambient + breathing (preserved) ---------- */
+    --ambient-deep: 28 30% 8%;
     --ambient-phase: 0;
-    /* Soft ink for muted-on-warm surfaces. */
     --ink-soft: 36 25% 88%;
-    /* Warm cozy shadow that sits under copper-bordered cards. */
-    --shadow-cozy: 0 8px 28px -6px hsl(22 65% 30% / 0.4), 0 2px 6px hsl(28 25% 3% / 0.5);
-    --shadow-soft: 0 4px 16px -4px hsl(28 25% 3% / 0.5);
+    --surface-warm: 28 24% 16%;
+
+    /* ---------- Body bloom (radial pools in corners) ---------- */
+    --bloom-image:
+      radial-gradient(at 22% 14%, hsl(14 64% 60% / 0.10) 0px, transparent 48%),
+      radial-gradient(at 82% 78%, hsl(105 14% 51% / 0.08) 0px, transparent 50%),
+      radial-gradient(at 0% 100%, hsl(36 56% 59% / 0.08) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, hsl(280 14% 60% / 0.06) 0px, transparent 50%);
   }
 
-  /* Light theme - cream paper, copper accents.
-     V2 promotes light from "provisional" to "shipping". */
+  /* ============================================================
+     LIGHT THEME — cream paper, warm brown ink. AAA contrast.
+     ============================================================ */
   [data-theme='light'] {
-    --background: 36 30% 96%;     /* #F7F0E2  cream paper */
-    --panel: 36 25% 93%;           /* #EFE7D6  side panels */
-    --elevated: 36 35% 98%;        /* #FBF6EC  raised cards */
-    --border: 30 15% 82%;          /* warm taupe */
-    --border-mid: 30 15% 74%;
-    --input: 30 15% 82%;
-    --ring: 22 65% 48%;
-    --foreground: 25 22% 16%;      /* #2A231C  warm dark */
-    --muted: 36 25% 90%;
-    --muted-foreground: 28 15% 38%;
-    --accent-cyan: 22 65% 48%;     /* copper, slightly deeper for contrast */
-    --accent-violet: 35 70% 50%;   /* amber */
-    --accent: 22 65% 48%;
-    --accent-foreground: 36 30% 98%;
-    --primary: 22 65% 48%;
-    --primary-foreground: 36 30% 98%;
-    --secondary: 36 25% 88%;
-    --secondary-foreground: 25 22% 16%;
-    --destructive: 6 70% 48%;
-    --destructive-foreground: 36 30% 98%;
-    --success: 130 38% 38%;
-    --warning: 35 80% 48%;
-    --info: 22 65% 48%;
-    --accent-copper: 22 65% 48%;
-    --accent-amber: 35 75% 50%;
-    --accent-amber-soft: 35 75% 50% / 0.16;
-    --surface-warm: 36 25% 91%;
+    --background: 36 47% 93%;       /* #f5efe6  warm cream paper */
+    --background-warm: 38 50% 88%;   /* #ede4d3  warmer cream */
+    --panel: 38 50% 88%;             /* #ede4d3  side panels (warmer than bg) */
+    --elevated: 41 100% 98%;         /* #fffbf5  paper card */
+    --paper-soft: 41 67% 95%;        /* #faf3e8  nested action box */
+    --paper-done: 41 50% 92%;        /* #f6efe1  done state */
+
+    --border: 41 41% 85%;            /* #e6dccb  default border */
+    --border-mid: 41 30% 75%;        /* stronger divider */
+    --line-soft: 41 50% 89%;         /* #f0e7d6  dashed / subtle */
+    --input: 41 41% 85%;
+    --ring: 14 64% 50%;              /* terracotta focus, deeper for AA */
+
+    --foreground: 25 27% 18%;        /* #3a2e22  warm brown-black ink */
+    --muted: 41 50% 89%;
+    --muted-foreground: 28 16% 36%;  /* #6b5d4f  secondary */
+    --ink-faint: 32 11% 56%;         /* #9d8f80  tertiary */
+
+    /* Brand accents — same hues, slightly deeper for paper contrast. */
+    --accent-cyan: 14 60% 50%;       /* terracotta deepened */
+    --accent-violet: 36 50% 50%;     /* honey deepened */
+    --accent: 14 60% 50%;
+    --accent-foreground: 41 100% 98%;
+
+    --rose: 8 47% 55%;
+    --terracotta: 14 60% 50%;
+    --honey: 36 50% 50%;
+    --sage: 105 14% 45%;
+    --sage-deep: 99 17% 35%;
+    --lavender: 280 14% 50%;
+    --cream: 41 67% 87%;
+
+    --accent-copper: 14 60% 50%;
+    --accent-amber: 36 50% 50%;
+    --accent-amber-soft: 36 50% 50% / 0.16;
+
+    --primary: 14 60% 50%;
+    --primary-foreground: 41 100% 98%;
+    --secondary: 41 50% 89%;
+    --secondary-foreground: 25 27% 18%;
+
+    --destructive: 7 47% 46%;
+    --destructive-foreground: 41 100% 98%;
+
+    --success: 105 14% 45%;
+    --warning: 37 49% 45%;
+    --info: 280 14% 50%;
+
+    /* Severity backgrounds become tinted creams in light mode. */
+    --crit: 7 47% 46%;       --crit-bg: 12 67% 91%;
+    --high: 19 56% 53%;      --high-bg: 24 67% 90%;
+    --med:  37 49% 49%;      --med-bg:  38 67% 87%;
+    --low:  117 12% 49%;     --low-bg:  111 22% 88%;
+    --info-sev: 268 13% 57%; --info-bg: 290 22% 92%;
+
+    --shadow-soft:
+      0 1px 2px hsl(28 25% 30% / 0.06),
+      0 4px 12px hsl(28 25% 30% / 0.04);
+    --shadow-lift:
+      0 4px 8px hsl(28 25% 30% / 0.08),
+      0 12px 28px hsl(28 25% 30% / 0.08);
+    --shadow-cozy:
+      0 8px 28px -6px hsl(14 60% 40% / 0.18),
+      0 2px 6px hsl(28 25% 30% / 0.10);
+
     --ambient-deep: 36 30% 92%;
     --ambient-phase: 0;
-    --ink-soft: 25 22% 22%;
-    --shadow-cozy: 0 8px 28px -6px hsl(28 25% 30% / 0.18), 0 2px 6px hsl(28 25% 30% / 0.08);
-    --shadow-soft: 0 4px 16px -4px hsl(28 25% 30% / 0.12);
+    --ink-soft: 25 27% 22%;
+    --surface-warm: 41 67% 91%;
+
+    --bloom-image:
+      radial-gradient(at 22% 14%, hsl(14 70% 70% / 0.18) 0px, transparent 48%),
+      radial-gradient(at 82% 78%, hsl(105 25% 60% / 0.14) 0px, transparent 50%),
+      radial-gradient(at 0% 100%, hsl(36 65% 60% / 0.12) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, hsl(280 22% 65% / 0.10) 0px, transparent 50%);
   }
 
   * {
@@ -121,24 +200,44 @@
   html,
   body {
     @apply h-full;
-    overflow: hidden; /* Jarvis is a desktop app, not a scrolling page */
+    overflow: hidden; /* desktop app, not a scrolling page */
   }
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    background-image: var(--bloom-image);
+    background-attachment: fixed;
     font-feature-settings: 'cv11', 'ss01', 'ss03', 'tnum';
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     font-size: 13px;
-    line-height: 20px;
+    line-height: 1.6;
   }
 
   #root {
     @apply h-full w-full;
   }
 
-  /* Scrollbar styling - thin, on-demand, monochrome */
+  /* Display headings get the serif treatment per Cozy Checklist. */
+  h1, h2, h3, .font-display {
+    font-family: 'Fraunces', ui-serif, Georgia, serif;
+    font-feature-settings: 'ss01';
+  }
+  h1 { letter-spacing: -0.02em; line-height: 1.05; }
+  h2, h3 { letter-spacing: -0.01em; line-height: 1.3; }
+
+  /* Eyebrow labels — wide-track uppercase. */
+  .eyebrow {
+    font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 11px;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Scrollbars - thin, warm, on-demand */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -154,24 +253,24 @@
     background: hsl(var(--border-mid));
   }
 
-  /* Selection color - warm copper highlight */
+  /* Selection — copper highlight */
   ::selection {
     background: hsl(var(--accent-copper) / 0.32);
     color: hsl(var(--foreground));
   }
 
-  /* Focus ring - accent gradient, never harsh */
+  /* Focus ring — sage in light, terracotta in dark; never harsh */
   :focus-visible {
     outline: 2px solid hsl(var(--ring));
-    outline-offset: 2px;
+    outline-offset: 4px;
     border-radius: var(--radius);
   }
 
-  /* Honor reduced motion */
+  /* Reduced motion */
   @media (prefers-reduced-motion: reduce) {
     *,
-    ::before,
-    ::after {
+    *::before,
+    *::after {
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
@@ -182,14 +281,14 @@
 @layer components {
   /* Reusable accent gradient text */
   .text-accent-gradient {
-    background: linear-gradient(135deg, hsl(var(--accent-cyan)) 0%, hsl(var(--accent-violet)) 100%);
+    background: linear-gradient(135deg, hsl(var(--terracotta)) 0%, hsl(var(--honey)) 50%, hsl(var(--rose)) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     color: transparent;
   }
 
-  /* Apple-Intelligence-style conic glow border (for voice listening state) */
+  /* Apple-Intelligence-style conic glow border (voice listening state) */
   .glow-border {
     position: fixed;
     inset: 0;
@@ -218,7 +317,7 @@
     opacity: 0.8;
   }
 
-  /* Base panel surface */
+  /* Base panel surfaces */
   .surface-panel {
     @apply bg-panel border border-border;
   }
@@ -239,7 +338,7 @@
     border-radius: var(--radius);
   }
 
-  /* Drag region for Tauri title bar (whole top bar) */
+  /* Drag region for Tauri title bar */
   .drag-region {
     -webkit-app-region: drag;
     app-region: drag;
@@ -249,13 +348,82 @@
     app-region: no-drag;
   }
 
-  /* Keyboard shortcut chip (e.g., Cmd+K) */
+  /* Keyboard shortcut chip */
   .kbd {
     @apply inline-flex items-center justify-center rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-metadata text-muted-foreground;
     min-width: 18px;
     height: 18px;
     box-shadow: inset 0 -1px 0 hsl(var(--border-mid));
   }
+
+  /* ---------- Cozy V2 component recipes ---------- */
+
+  /* Paper card — base of everything in the cozy theme. */
+  .cozy-card {
+    background: hsl(var(--elevated));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-lg);
+    padding: 22px 26px;
+    box-shadow: var(--shadow-soft);
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  }
+  .cozy-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lift);
+    border-color: hsl(var(--cream) / 0.5);
+  }
+
+  /* Pill — 999px radius for chips and segmented buttons. */
+  .cozy-pill {
+    border-radius: 999px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  /* Sage success toast — small confirmation pill. */
+  .cozy-toast-success {
+    background: linear-gradient(135deg, hsl(var(--sage)) 0%, hsl(var(--sage-deep)) 100%);
+    color: hsl(41 100% 98%);
+    border-radius: 999px;
+    padding: 14px 24px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px hsl(28 25% 30% / 0.25);
+  }
+
+  /* Big celebratory toast — rose → terracotta → honey gradient. */
+  .cozy-toast-action {
+    background: linear-gradient(135deg, hsl(var(--rose)) 0%, hsl(var(--terracotta)) 50%, hsl(var(--honey)) 100%);
+    color: hsl(41 100% 98%);
+    font-family: 'Fraunces', ui-serif, Georgia, serif;
+    font-size: 16px;
+    border-radius: 999px;
+    padding: 18px 32px;
+    box-shadow: 0 8px 24px hsl(14 64% 30% / 0.35);
+  }
+
+  /* Local bloom — re-applies the radial pattern to a section. */
+  .cozy-bg-bloom {
+    background-image: var(--bloom-image);
+    background-attachment: scroll;
+  }
+
+  /* Severity badge — pill with gradient by severity level. */
+  .sev-pill {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+    color: hsl(41 100% 98%);
+  }
+  .sev-pill.crit { background: linear-gradient(135deg, hsl(7 47% 46%) 0%, hsl(7 50% 36%) 100%); }
+  .sev-pill.high { background: linear-gradient(135deg, hsl(19 56% 53%) 0%, hsl(19 56% 42%) 100%); }
+  .sev-pill.med  { background: linear-gradient(135deg, hsl(37 49% 49%) 0%, hsl(37 55% 36%) 100%); }
+  .sev-pill.low  { background: linear-gradient(135deg, hsl(105 14% 51%) 0%, hsl(99 17% 41%) 100%); }
+  .sev-pill.info { background: linear-gradient(135deg, hsl(268 13% 57%) 0%, hsl(268 14% 47%) 100%); }
 }
 
 @layer utilities {
@@ -268,7 +436,7 @@
     scrollbar-width: none;
   }
 
-  /* Subtle accent border (cyan-to-violet at 1px) */
+  /* Subtle accent border (terracotta-to-honey at 1px) */
   .border-accent-gradient {
     border: 1px solid transparent;
     background-image:
@@ -282,13 +450,10 @@
 /* ============================================================
    V2 — AMBIENT IDLE HOME
    Pulsating background when inactive, cool wake animation.
-   All layers driven by --ambient-phase so the screen breathes on
-   a single clock.
    ============================================================ */
 
 @keyframes ambient-breath {
-  0%,
-  100% {
+  0%, 100% {
     transform: scale(0.98);
     opacity: 0.7;
   }
@@ -299,8 +464,7 @@
 }
 
 @keyframes ambient-halo {
-  0%,
-  100% {
+  0%, 100% {
     transform: scale(1);
     opacity: 0.35;
   }
@@ -311,8 +475,7 @@
 }
 
 @keyframes ambient-vignette {
-  0%,
-  100% {
+  0%, 100% {
     background-position: 50% 48%;
     background-size: 110% 110%;
   }
@@ -323,52 +486,34 @@
 }
 
 @keyframes ambient-drift {
-  0% {
-    transform: translate3d(0, 0, 0);
-  }
-  50% {
-    transform: translate3d(var(--drift-x, 12px), var(--drift-y, -10px), 0);
-  }
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
+  0% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(var(--drift-x, 12px), var(--drift-y, -10px), 0); }
+  100% { transform: translate3d(0, 0, 0); }
 }
 
 @keyframes ambient-enter {
-  from {
-    opacity: 0;
-    transform: scale(1.04);
-    filter: blur(12px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-    filter: blur(0);
-  }
+  from { opacity: 0; transform: scale(1.04); filter: blur(12px); }
+  to { opacity: 1; transform: scale(1); filter: blur(0); }
 }
 
 @keyframes ambient-exit {
-  from {
-    opacity: 1;
-    transform: scale(1);
-    filter: blur(0);
-  }
-  to {
-    opacity: 0;
-    transform: scale(1.06);
-    filter: blur(8px);
-  }
+  from { opacity: 1; transform: scale(1); filter: blur(0); }
+  to { opacity: 0; transform: scale(1.06); filter: blur(8px); }
 }
 
 @keyframes app-wake {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes glow-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .ambient-root {
@@ -377,10 +522,10 @@
   z-index: 70;
   overflow: hidden;
   pointer-events: auto;
-  /* Deep slate ground with two soft radial pools for depth. */
+  /* Cozy ambient: deep warm umber ground, soft amber + lavender pools. */
   background:
-    radial-gradient(circle at 30% 28%, hsl(var(--accent-violet) / 0.08) 0%, transparent 55%),
-    radial-gradient(circle at 72% 75%, hsl(var(--accent-cyan) / 0.06) 0%, transparent 60%),
+    radial-gradient(circle at 30% 28%, hsl(var(--accent-violet) / 0.10) 0%, transparent 55%),
+    radial-gradient(circle at 72% 75%, hsl(var(--accent-cyan) / 0.08) 0%, transparent 60%),
     radial-gradient(circle at 50% 50%, hsl(var(--ambient-deep) / 0.95) 0%, hsl(var(--ambient-deep)) 80%);
   background-size: 100% 100%;
   animation:
@@ -406,9 +551,9 @@
   height: 220px;
   border-radius: 9999px;
   background:
-    radial-gradient(circle at 35% 30%, hsl(var(--accent-amber) / 0.95) 0%, transparent 55%),
-    radial-gradient(circle at 65% 70%, hsl(var(--accent-violet) / 0.7) 0%, transparent 65%),
-    radial-gradient(circle at 50% 50%, hsl(var(--accent-cyan) / 0.45) 0%, transparent 70%);
+    radial-gradient(circle at 35% 30%, hsl(var(--honey) / 0.95) 0%, transparent 55%),
+    radial-gradient(circle at 65% 70%, hsl(var(--rose) / 0.7) 0%, transparent 65%),
+    radial-gradient(circle at 50% 50%, hsl(var(--terracotta) / 0.45) 0%, transparent 70%);
   filter: blur(2px);
   animation: ambient-breath 4400ms ease-in-out infinite;
 }
@@ -417,7 +562,7 @@
   position: absolute;
   inset: -60px;
   border-radius: 9999px;
-  background: radial-gradient(circle, hsl(var(--accent-amber) / 0.35) 0%, transparent 60%);
+  background: radial-gradient(circle, hsl(var(--honey) / 0.35) 0%, transparent 60%);
   animation: ambient-halo 4400ms ease-in-out infinite;
   filter: blur(20px);
 }
@@ -458,9 +603,10 @@
 }
 
 .ambient-clock {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
   font-variant-numeric: tabular-nums;
   font-size: 96px;
-  font-weight: 200;
+  font-weight: 300;
   letter-spacing: -0.04em;
   line-height: 1;
   color: hsl(var(--foreground) / 0.92);
@@ -468,6 +614,7 @@
 }
 
 .ambient-quote {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
   font-size: 18px;
   line-height: 1.5;
   font-style: italic;
@@ -492,7 +639,6 @@
   animation: app-wake 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Reduced-motion overrides — gentle fade only. */
 @media (prefers-reduced-motion: reduce) {
   .ambient-root,
   .ambient-orb,
@@ -510,9 +656,6 @@
 
 /* ============================================================
    V2 — FULLSCREEN canvas mode
-   When useUIStore.chatFullscreen is true, the root sets
-   data-fullscreen='true' on documentElement; NavPane and
-   todo-drawer collapse so chat fills the workspace.
    ============================================================ */
 
 [data-fullscreen='true'] aside#todo-drawer-root,

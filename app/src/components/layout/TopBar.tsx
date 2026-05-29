@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Search, Mic, Settings, PanelLeft, CalendarDays, Maximize2, Minimize2, Rocket } from 'lucide-react';
+import { Search, Mic, Settings, PanelLeft, CalendarDays, Maximize2, Minimize2, Rocket, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
 import { Hint } from '@/components/ui/tooltip';
@@ -27,6 +27,7 @@ export function TopBar() {
   // V2 — schedule + launcher + fullscreen
   const setScheduleOpen = useUIStore((s) => s.setScheduleOpen);
   const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
+  const setAssistantOpen = useUIStore((s) => s.setAssistantOpen);
   const chatFullscreen = useUIStore((s) => s.chatFullscreen);
   const toggleChatFullscreen = useUIStore((s) => s.toggleChatFullscreen);
 
@@ -103,6 +104,17 @@ export function TopBar() {
             aria-label="Open quick launcher"
           >
             <Rocket className="h-4 w-4" />
+          </Button>
+        </Hint>
+
+        <Hint label="Jarvis Assistant" hotkey={HOTKEYS.ASSISTANT}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setAssistantOpen(true)}
+            aria-label="Open Jarvis Assistant"
+          >
+            <Sparkles className="h-4 w-4" />
           </Button>
         </Hint>
 

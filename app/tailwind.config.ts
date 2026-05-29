@@ -40,12 +40,20 @@ const config: Config = {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
           // Names kept for back-compat with V1 components.
-          // V2 cozy theme: cyan -> copper, violet -> amber.
+          // V2 cozy theme: cyan -> terracotta, violet -> honey.
           cyan: 'hsl(var(--accent-cyan))',
           violet: 'hsl(var(--accent-violet))',
-          // V2 semantic aliases — new code should use these.
+          // V2 semantic aliases — preferred for new code.
           copper: 'hsl(var(--accent-copper))',
           amber: 'hsl(var(--accent-amber))',
+          // V2 Cozy palette aliases — full earthy set.
+          rose: 'hsl(var(--rose))',
+          terracotta: 'hsl(var(--terracotta))',
+          honey: 'hsl(var(--honey))',
+          sage: 'hsl(var(--sage))',
+          'sage-deep': 'hsl(var(--sage-deep))',
+          lavender: 'hsl(var(--lavender))',
+          cream: 'hsl(var(--cream))',
         },
         destructive: {
           DEFAULT: 'hsl(var(--destructive))',
@@ -56,15 +64,41 @@ const config: Config = {
         success: 'hsl(var(--success))',
         warning: 'hsl(var(--warning))',
         info: 'hsl(var(--info))',
+
+        // V2 Cozy severity (5-level system)
+        crit: { DEFAULT: 'hsl(var(--crit))', bg: 'hsl(var(--crit-bg))' },
+        high: { DEFAULT: 'hsl(var(--high))', bg: 'hsl(var(--high-bg))' },
+        med:  { DEFAULT: 'hsl(var(--med))',  bg: 'hsl(var(--med-bg))' },
+        low:  { DEFAULT: 'hsl(var(--low))',  bg: 'hsl(var(--low-bg))' },
+        sev: {
+          info: { DEFAULT: 'hsl(var(--info-sev))', bg: 'hsl(var(--info-bg))' },
+        },
+
+        // Cozy paper surfaces
+        paper: {
+          DEFAULT: 'hsl(var(--elevated))',
+          soft: 'hsl(var(--paper-soft))',
+          done: 'hsl(var(--paper-done))',
+        },
       },
       borderRadius: {
-        lg: 'var(--radius)',
+        // 22px / 14px / 10px ladder from Cozy Checklist.
+        xl: 'var(--radius-lg)',     /* 22px - cards */
+        lg: 'var(--radius)',         /* 14px - inputs, action boxes */
         md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        sm: 'var(--radius-sm)',     /* 10px - chips */
+      },
+      boxShadow: {
+        soft: 'var(--shadow-soft)',
+        lift: 'var(--shadow-lift)',
+        cozy: 'var(--shadow-cozy)',
       },
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        // V2 Cozy: Plus Jakarta Sans body, Fraunces display, JetBrains mono.
+        sans: ['"Plus Jakarta Sans"', 'Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+        serif: ['"Fraunces"', 'ui-serif', 'Georgia', 'serif'],
+        display: ['"Fraunces"', 'ui-serif', 'Georgia', 'serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },
       fontSize: {
         // Voltage type scale (designed for density)

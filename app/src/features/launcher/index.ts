@@ -13,3 +13,4 @@ export { LauncherDialog } from './LauncherDialog';
 export { LinkEditDialog } from './LinkEditDialog';
 export { useQuickLinks, useQuickLinkGroups, useStaleLinks } from './hooks';
 export { launchLink } from './launch';
+export { useLinkHotkeys } from './useLinkHotkeys';

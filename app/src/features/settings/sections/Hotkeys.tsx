@@ -19,6 +19,7 @@ const HOTKEY_LABELS: Record<keyof typeof HOTKEYS, string> = {
   COMPOSER_STT: 'Voice-to-text in composer',
   SCHEDULE: 'Open schedule',
   LAUNCHER: 'Open quick launcher',
+  ASSISTANT: 'Open Jarvis Assistant',
 };
 
 export function Hotkeys() {

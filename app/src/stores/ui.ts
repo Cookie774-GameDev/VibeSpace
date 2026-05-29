@@ -43,6 +43,8 @@ interface UIState {
   // V2 — schedule + launcher
   scheduleOpen: boolean;
   launcherOpen: boolean;
+  /** V2 — Jarvis Assistant natural-language command bar (Mod+J). */
+  assistantOpen: boolean;
 
   // V2 — accessibility
   /** Show the speech-to-text mic button in the chat composer. */
@@ -72,6 +74,7 @@ interface UIState {
   setChatFullscreen: (v: boolean) => void;
   setScheduleOpen: (v: boolean) => void;
   setLauncherOpen: (v: boolean) => void;
+  setAssistantOpen: (v: boolean) => void;
   setComposerStt: (v: boolean) => void;
 }
 
@@ -96,6 +99,7 @@ const defaults: Pick<
   | 'chatFullscreen'
   | 'scheduleOpen'
   | 'launcherOpen'
+  | 'assistantOpen'
   | 'composerStt'
 > = {
   navOpen: true,
@@ -117,6 +121,7 @@ const defaults: Pick<
   chatFullscreen: false,
   scheduleOpen: false,
   launcherOpen: false,
+  assistantOpen: false,
   composerStt: true,
 };
 
@@ -163,6 +168,7 @@ export const useUIStore = create<UIState>()(
       },
       setScheduleOpen: (v) => set({ scheduleOpen: v }),
       setLauncherOpen: (v) => set({ launcherOpen: v }),
+      setAssistantOpen: (v) => set({ assistantOpen: v }),
       setComposerStt: (v) => set({ composerStt: v }),
     }),
     {
