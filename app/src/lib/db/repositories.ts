@@ -22,15 +22,24 @@ import { nanoid } from 'nanoid';
 import type {
   AgentId,
   ChatId,
+  EventId,
+  IntegrationId,
   MessageId,
   ProjectId,
+  QuickLinkGroupId,
+  QuickLinkId,
   ReminderId,
   TaskId,
+  TerminalPresetId,
+  TerminalSessionId,
   WorkspaceId,
 } from '@/types/common';
 import type { Agent } from '@/types/agent';
 import type { Chat, ChatMode, Message } from '@/types/chat';
+import type { EventRow, EventStatus } from '@/types/event';
+import type { Integration, IntegrationKind } from '@/types/integration';
 import type { MemoryItem } from '@/types/memory';
+import type { QuickLink, QuickLinkGroup } from '@/types/quick-link';
 import type {
   EnergyLevel,
   EffortPoints,
@@ -40,13 +49,26 @@ import type {
   TaskPriority,
   TaskStatus,
 } from '@/types/task';
+import type {
+  TerminalLayout,
+  TerminalPreset,
+  TerminalScrollbackChunk,
+  TerminalSession,
+  TerminalSessionStatus,
+} from '@/types/terminal';
 import {
   newAgentId,
   newChatId,
+  newEventId,
+  newIntegrationId,
   newMessageId,
   newProjectId,
+  newQuickLinkGroupId,
+  newQuickLinkId,
   newReminderId,
   newTaskId,
+  newTerminalPresetId,
+  newTerminalSessionId,
   newWorkspaceId,
 } from '@/lib/ids';
 import { db } from './index';
@@ -669,5 +691,547 @@ export const settingsRepo = {
   },
   async delete(key: string): Promise<void> {
     await db.settings.delete(key);
+  },
+};
+
+// ===========================================================================
+// V2 — Events
+// ===========================================================================
+
+export type EventListFilter = {
+  workspace_id?: WorkspaceId;
+  project_id?: ProjectId;
+  status?: EventStatus;
+  /** Inclusive lower bound on start_at (unix ms). */
+  from_ms?: number;
+  /** Exclusive upper bound on start_at (unix ms). */
+  to_ms?: number;
+  limit?: number;
+};
+
+export type EventCreateInput = Pick<EventRow, 'workspace_id' | 'title' | 'start_at' | 'end_at' | 'created_by'> &
+  Partial<Omit<EventRow, 'id' | 'created_at' | 'updated_at'>> & {
+    id?: EventId;
+  };
+
+/**
+ * Helper — read the device IANA timezone safely. Falls back to UTC if the
+ * Intl API isn't available (older runtimes).
+ */
+function deviceTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+/**
+ * CRUD over the `events` table.
+ *
+ * Events have a definite (start, end) window in unix ms. The DayGrid view
+ * uses `listInRange` to fetch events for a visible day; ScheduleView uses
+ * `listByWorkspace` for upcoming feeds. Reminders are stored inline as a
+ * `reminders` jsonb-style column on the row.
+ */
+export const eventRepo = {
+  async getById(id: EventId): Promise<EventRow | undefined> {
+    return db.events.get(id);
+  },
+  async list(filter?: EventListFilter): Promise<EventRow[]> {
+    let rows: EventRow[];
+    if (filter?.workspace_id && filter.from_ms !== undefined && filter.to_ms !== undefined) {
+      rows = await db.events
+        .where('[workspace_id+start_at]')
+        .between([filter.workspace_id, filter.from_ms], [filter.workspace_id, filter.to_ms], true, false)
+        .toArray();
+    } else if (filter?.workspace_id) {
+      rows = await db.events.where('workspace_id').equals(filter.workspace_id).toArray();
+    } else {
+      rows = await db.events.toArray();
+    }
+    if (filter?.project_id !== undefined) {
+      rows = rows.filter((e) => e.project_id === filter.project_id);
+    }
+    if (filter?.status) {
+      rows = rows.filter((e) => e.status === filter.status);
+    }
+    rows.sort((a, b) => a.start_at - b.start_at);
+    if (filter?.limit) rows = rows.slice(0, filter.limit);
+    return rows;
+  },
+  async listByWorkspace(workspaceId: WorkspaceId): Promise<EventRow[]> {
+    return db.events.where('workspace_id').equals(workspaceId).sortBy('start_at');
+  },
+  async listInRange(workspaceId: WorkspaceId, fromMs: number, toMs: number): Promise<EventRow[]> {
+    return db.events
+      .where('[workspace_id+start_at]')
+      .between([workspaceId, fromMs], [workspaceId, toMs], true, false)
+      .sortBy('start_at');
+  },
+  async listUpcoming(workspaceId: WorkspaceId, limit = 5): Promise<EventRow[]> {
+    const ts = now();
+    const rows = await db.events
+      .where('[workspace_id+start_at]')
+      .between([workspaceId, ts], [workspaceId, Number.MAX_SAFE_INTEGER], true, true)
+      .toArray();
+    return rows
+      .filter((e) => e.status === 'scheduled' || e.status === 'tentative')
+      .sort((a, b) => a.start_at - b.start_at)
+      .slice(0, limit);
+  },
+  async create(input: EventCreateInput): Promise<EventRow> {
+    const ts = now();
+    const row: EventRow = {
+      id: input.id ?? newEventId(),
+      workspace_id: input.workspace_id,
+      project_id: input.project_id,
+      title: input.title,
+      description: input.description,
+      start_at: input.start_at,
+      end_at: input.end_at,
+      all_day: input.all_day ?? false,
+      timezone: input.timezone ?? deviceTimezone(),
+      location: input.location,
+      attendees: input.attendees ?? [],
+      source: input.source ?? 'manual',
+      source_ref: input.source_ref,
+      recurrence_rule: input.recurrence_rule,
+      reminders: input.reminders ?? [],
+      status: input.status ?? 'scheduled',
+      color_hue: input.color_hue,
+      created_by: input.created_by,
+      created_at: ts,
+      updated_at: ts,
+    };
+    await db.events.add(row);
+    return row;
+  },
+  async update(id: EventId, patch: Partial<EventRow>): Promise<EventRow> {
+    await db.events.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
+    return requireRow(() => db.events.get(id), 'event', id);
+  },
+  async delete(id: EventId): Promise<void> {
+    await db.events.delete(id);
+  },
+};
+
+// ===========================================================================
+// V2 — Quick Links + Quick Link Groups
+// ===========================================================================
+
+export type QuickLinkCreateInput = Pick<QuickLink, 'workspace_id' | 'label' | 'url' | 'kind'> &
+  Partial<Omit<QuickLink, 'id' | 'created_at' | 'updated_at'>> & {
+    id?: QuickLinkId;
+  };
+
+export type QuickLinkGroupCreateInput = Pick<QuickLinkGroup, 'workspace_id' | 'name'> &
+  Partial<Omit<QuickLinkGroup, 'id' | 'created_at' | 'updated_at'>> & {
+    id?: QuickLinkGroupId;
+  };
+
+/**
+ * CRUD over the `quick_link_groups` table.
+ *
+ * Groups are user-defined containers shown as chips in the launcher. Empty
+ * groups are allowed (so you can build up a "Reading" chip before pasting
+ * links into it). Position drives left-to-right order.
+ */
+export const quickLinkGroupRepo = {
+  async getById(id: QuickLinkGroupId): Promise<QuickLinkGroup | undefined> {
+    return db.quick_link_groups.get(id);
+  },
+  async listByWorkspace(workspaceId: WorkspaceId): Promise<QuickLinkGroup[]> {
+    const rows = await db.quick_link_groups.where('workspace_id').equals(workspaceId).toArray();
+    rows.sort((a, b) => a.position - b.position);
+    return rows;
+  },
+  async create(input: QuickLinkGroupCreateInput): Promise<QuickLinkGroup> {
+    const ts = now();
+    const row: QuickLinkGroup = {
+      id: input.id ?? newQuickLinkGroupId(),
+      workspace_id: input.workspace_id,
+      name: input.name,
+      color_hue: input.color_hue,
+      position: input.position ?? 0,
+      created_at: ts,
+      updated_at: ts,
+    };
+    await db.quick_link_groups.add(row);
+    return row;
+  },
+  async update(id: QuickLinkGroupId, patch: Partial<QuickLinkGroup>): Promise<QuickLinkGroup> {
+    await db.quick_link_groups.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
+    return requireRow(() => db.quick_link_groups.get(id), 'quick_link_group', id);
+  },
+  async delete(id: QuickLinkGroupId): Promise<void> {
+    // Detach links from the group rather than cascading. Keeps user data safe.
+    await db.transaction('rw', db.quick_link_groups, db.quick_links, async () => {
+      await db.quick_links
+        .where('group_id')
+        .equals(id)
+        .modify({ group_id: undefined, updated_at: now() });
+      await db.quick_link_groups.delete(id);
+    });
+  },
+};
+
+/**
+ * CRUD over the `quick_links` table.
+ *
+ * Links represent any launchable URL/app/file/jarvis-action. The launcher
+ * renders by group + position. `last_used_at` is bumped on launch so the
+ * "stale links" hook can surface neglected entries on the ambient screen.
+ */
+export const quickLinkRepo = {
+  async getById(id: QuickLinkId): Promise<QuickLink | undefined> {
+    return db.quick_links.get(id);
+  },
+  async listByWorkspace(workspaceId: WorkspaceId): Promise<QuickLink[]> {
+    const rows = await db.quick_links.where('workspace_id').equals(workspaceId).toArray();
+    rows.sort((a, b) => a.position - b.position);
+    return rows;
+  },
+  async listByGroup(workspaceId: WorkspaceId, groupId: QuickLinkGroupId | undefined): Promise<QuickLink[]> {
+    const rows = await db.quick_links.where('workspace_id').equals(workspaceId).toArray();
+    return rows
+      .filter((l) => (groupId ? l.group_id === groupId : !l.group_id))
+      .sort((a, b) => a.position - b.position);
+  },
+  async listStale(workspaceId: WorkspaceId, sinceMs: number): Promise<QuickLink[]> {
+    const cutoff = now() - sinceMs;
+    const rows = await db.quick_links.where('workspace_id').equals(workspaceId).toArray();
+    return rows
+      .filter((l) => (l.last_used_at ?? 0) < cutoff)
+      .sort((a, b) => (a.last_used_at ?? 0) - (b.last_used_at ?? 0));
+  },
+  async create(input: QuickLinkCreateInput): Promise<QuickLink> {
+    const ts = now();
+    const row: QuickLink = {
+      id: input.id ?? newQuickLinkId(),
+      workspace_id: input.workspace_id,
+      project_id: input.project_id,
+      group_id: input.group_id,
+      label: input.label,
+      url: input.url,
+      kind: input.kind,
+      icon: input.icon,
+      color_hue: input.color_hue,
+      behavior: input.behavior ?? 'external_browser',
+      hotkey: input.hotkey,
+      position: input.position ?? 0,
+      tags: input.tags ?? [],
+      last_used_at: input.last_used_at,
+      created_at: ts,
+      updated_at: ts,
+    };
+    await db.quick_links.add(row);
+    return row;
+  },
+  async update(id: QuickLinkId, patch: Partial<QuickLink>): Promise<QuickLink> {
+    await db.quick_links.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
+    return requireRow(() => db.quick_links.get(id), 'quick_link', id);
+  },
+  async delete(id: QuickLinkId): Promise<void> {
+    await db.quick_links.delete(id);
+  },
+  async touchLastUsed(id: QuickLinkId): Promise<void> {
+    await db.quick_links.update(id, { last_used_at: now() });
+  },
+};
+
+// ===========================================================================
+// V2 — Terminals (presets, sessions, scrollback, layouts)
+// ===========================================================================
+
+export type TerminalPresetCreateInput = Pick<TerminalPreset, 'workspace_id' | 'name' | 'slug' | 'command'> &
+  Partial<Omit<TerminalPreset, 'id' | 'created_at' | 'updated_at'>> & {
+    id?: TerminalPresetId;
+  };
+
+/**
+ * CRUD over the `terminal_presets` table.
+ *
+ * Built-in presets (Claude, OpenCode, Bash, etc) live in code only — see
+ * `features/terminals/presets/builtin.ts`. This table holds user-defined
+ * entries plus user overrides of built-ins (a user-defined row with the
+ * same slug shadows the built-in).
+ *
+ * Uniqueness scoped to (workspace_id, slug) so the same slug can exist in
+ * different workspaces.
+ */
+export const terminalPresetRepo = {
+  async getById(id: TerminalPresetId): Promise<TerminalPreset | undefined> {
+    return db.terminal_presets.get(id);
+  },
+  async getBySlug(workspaceId: WorkspaceId, slug: string): Promise<TerminalPreset | undefined> {
+    return db.terminal_presets.where('[workspace_id+slug]').equals([workspaceId, slug]).first();
+  },
+  async listByWorkspace(workspaceId: WorkspaceId): Promise<TerminalPreset[]> {
+    return db.terminal_presets.where('workspace_id').equals(workspaceId).toArray();
+  },
+  async create(input: TerminalPresetCreateInput): Promise<TerminalPreset> {
+    const ts = now();
+    const row: TerminalPreset = {
+      id: input.id ?? newTerminalPresetId(),
+      workspace_id: input.workspace_id,
+      name: input.name,
+      slug: input.slug,
+      command: input.command,
+      args: input.args ?? [],
+      env: input.env ?? {},
+      cwd: input.cwd,
+      color_hue: input.color_hue,
+      icon: input.icon,
+      one_shot: input.one_shot ?? false,
+      auto_run: input.auto_run ?? false,
+      requires: input.requires,
+      user_defined: input.user_defined ?? true,
+      created_at: ts,
+      updated_at: ts,
+    };
+    await db.terminal_presets.add(row);
+    return row;
+  },
+  async update(id: TerminalPresetId, patch: Partial<TerminalPreset>): Promise<TerminalPreset> {
+    await db.terminal_presets.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
+    return requireRow(() => db.terminal_presets.get(id), 'terminal_preset', id);
+  },
+  async delete(id: TerminalPresetId): Promise<void> {
+    await db.terminal_presets.delete(id);
+  },
+};
+
+export type TerminalSessionCreateInput = Pick<
+  TerminalSession,
+  'workspace_id' | 'title' | 'shell_command'
+> &
+  Partial<Omit<TerminalSession, 'id' | 'created_at' | 'last_active_at'>> & {
+    id?: TerminalSessionId;
+  };
+
+/**
+ * CRUD over the `terminal_sessions` table.
+ *
+ * Each row mirrors a live PTY managed by the Rust backend. Status lifecycle:
+ *   running   — process alive, pty attached
+ *   detached  — process alive, pty detached (UI not subscribed)
+ *   exited    — process gone; row kept until user dismisses
+ *
+ * Denormalized `preset_slug`, `shell_command`, `shell_args` mean a session
+ * is replayable even after the source preset is deleted.
+ */
+export const terminalSessionRepo = {
+  async getById(id: TerminalSessionId): Promise<TerminalSession | undefined> {
+    return db.terminal_sessions.get(id);
+  },
+  async listByProject(projectId: ProjectId): Promise<TerminalSession[]> {
+    return db.terminal_sessions.where('project_id').equals(projectId).toArray();
+  },
+  async listByWorkspace(workspaceId: WorkspaceId): Promise<TerminalSession[]> {
+    return db.terminal_sessions.where('workspace_id').equals(workspaceId).toArray();
+  },
+  async listRunning(projectId: ProjectId): Promise<TerminalSession[]> {
+    return db.terminal_sessions
+      .where('[project_id+status]')
+      .anyOf([
+        [projectId, 'running'] as [ProjectId, TerminalSessionStatus],
+        [projectId, 'detached'] as [ProjectId, TerminalSessionStatus],
+      ])
+      .toArray();
+  },
+  async listRecentByLastActive(limit = 20): Promise<TerminalSession[]> {
+    return db.terminal_sessions.orderBy('last_active_at').reverse().limit(limit).toArray();
+  },
+  async create(input: TerminalSessionCreateInput): Promise<TerminalSession> {
+    const ts = now();
+    const row: TerminalSession = {
+      id: input.id ?? newTerminalSessionId(),
+      workspace_id: input.workspace_id,
+      project_id: input.project_id,
+      title: input.title,
+      preset_id: input.preset_id,
+      preset_slug: input.preset_slug,
+      shell_command: input.shell_command,
+      shell_args: input.shell_args ?? [],
+      status: input.status ?? 'running',
+      pid: input.pid,
+      cols: input.cols ?? 80,
+      rows: input.rows ?? 24,
+      cwd: input.cwd,
+      env: input.env,
+      exit_code: input.exit_code,
+      one_shot: input.one_shot ?? false,
+      created_at: ts,
+      last_active_at: ts,
+    };
+    await db.terminal_sessions.add(row);
+    return row;
+  },
+  async update(id: TerminalSessionId, patch: Partial<TerminalSession>): Promise<TerminalSession> {
+    const sanitized: Partial<TerminalSession> = { ...patch };
+    delete (sanitized as { id?: unknown }).id;
+    delete (sanitized as { created_at?: unknown }).created_at;
+    await db.terminal_sessions.update(id, sanitized);
+    return requireRow(() => db.terminal_sessions.get(id), 'terminal_session', id);
+  },
+  async touchActive(id: TerminalSessionId): Promise<void> {
+    await db.terminal_sessions.update(id, { last_active_at: now() });
+  },
+  async markExited(id: TerminalSessionId, exitCode: number): Promise<TerminalSession> {
+    return terminalSessionRepo.update(id, { status: 'exited', exit_code: exitCode });
+  },
+  async delete(id: TerminalSessionId): Promise<void> {
+    await db.transaction('rw', db.terminal_sessions, db.terminal_scrollback, async () => {
+      await db.terminal_scrollback.where('session_id').equals(id).delete();
+      await db.terminal_sessions.delete(id);
+    });
+  },
+};
+
+/**
+ * Append-only scrollback for terminal output. Chunks are base64-encoded
+ * raw bytes from the PTY (terminal output is binary-safe). The compound
+ * primary key [session_id+chunk_seq] ensures monotonic ordering per session.
+ *
+ * `cap` enforces a per-session retention cap (default 5000 chunks, ~50MB at
+ * 10KB/chunk). Older chunks are pruned on each append past the cap.
+ */
+export const terminalScrollbackRepo = {
+  async append(sessionId: TerminalSessionId, data: string, cap = 5000): Promise<TerminalScrollbackChunk> {
+    const ts = now();
+    const result = await db.transaction('rw', db.terminal_scrollback, async () => {
+      // Find next sequence number for this session.
+      const last = await db.terminal_scrollback
+        .where('session_id')
+        .equals(sessionId)
+        .reverse()
+        .sortBy('chunk_seq');
+      const nextSeq = last.length === 0 ? 0 : last[0].chunk_seq + 1;
+      const chunk: TerminalScrollbackChunk = {
+        session_id: sessionId,
+        chunk_seq: nextSeq,
+        data,
+        created_at: ts,
+      };
+      await db.terminal_scrollback.add(chunk);
+
+      // Prune anything beyond the cap (keep the newest `cap` chunks).
+      if (nextSeq + 1 > cap) {
+        const pruneBefore = nextSeq + 1 - cap;
+        await db.terminal_scrollback
+          .where('[session_id+chunk_seq]')
+          .between([sessionId, 0], [sessionId, pruneBefore], true, false)
+          .delete();
+      }
+      return chunk;
+    });
+    return result;
+  },
+  async listBySession(sessionId: TerminalSessionId, limit?: number): Promise<TerminalScrollbackChunk[]> {
+    const coll = db.terminal_scrollback.where('session_id').equals(sessionId);
+    const rows = await coll.toArray();
+    rows.sort((a, b) => a.chunk_seq - b.chunk_seq);
+    return limit ? rows.slice(-limit) : rows;
+  },
+  async listRecent(sinceMs: number, limit = 50): Promise<TerminalScrollbackChunk[]> {
+    const cutoff = now() - sinceMs;
+    const rows = await db.terminal_scrollback.where('created_at').above(cutoff).toArray();
+    rows.sort((a, b) => b.created_at - a.created_at);
+    return rows.slice(0, limit);
+  },
+  async clearForSession(sessionId: TerminalSessionId): Promise<void> {
+    await db.terminal_scrollback.where('session_id').equals(sessionId).delete();
+  },
+};
+
+/**
+ * One row per project. Captures the user's last-used view mode and pane
+ * assignments so re-opening a project restores its terminal layout.
+ *
+ * V2 view modes: 'single' | 'grid' | 'tabs' | 'fullscreen'. The fullscreen
+ * mode (Mod+Shift+F) records `fullscreen_session_id` so the canvas re-mounts
+ * the right pane on next open.
+ */
+export const terminalLayoutRepo = {
+  async get(projectId: ProjectId): Promise<TerminalLayout | undefined> {
+    return db.terminal_layouts.get(projectId);
+  },
+  async upsert(layout: Omit<TerminalLayout, 'updated_at'>): Promise<TerminalLayout> {
+    const next: TerminalLayout = { ...layout, updated_at: now() };
+    await db.terminal_layouts.put(next);
+    return next;
+  },
+  async update(projectId: ProjectId, patch: Partial<TerminalLayout>): Promise<TerminalLayout> {
+    const sanitized: Partial<TerminalLayout> = { ...patch };
+    delete (sanitized as { project_id?: unknown }).project_id;
+    await db.terminal_layouts.update(projectId, { ...sanitized, updated_at: now() });
+    return requireRow(() => db.terminal_layouts.get(projectId), 'terminal_layout', projectId);
+  },
+  async delete(projectId: ProjectId): Promise<void> {
+    await db.terminal_layouts.delete(projectId);
+  },
+};
+
+// ===========================================================================
+// V2 — Integrations
+// ===========================================================================
+
+export type IntegrationCreateInput = Pick<Integration, 'kind'> &
+  Partial<Omit<Integration, 'id' | 'created_at' | 'updated_at'>> & {
+    id?: IntegrationId;
+  };
+
+/**
+ * CRUD over the `integrations` table.
+ *
+ * One row per (kind) — at most one Supabase, one GitHub, one Google. Secrets
+ * live in Stronghold/keyring; only `secret_ref` (the lookup key) is stored
+ * here. `config_json` carries kind-specific public config (URLs, default
+ * repo, calendar id, etc).
+ */
+export const integrationRepo = {
+  async getById(id: IntegrationId): Promise<Integration | undefined> {
+    return db.integrations.get(id);
+  },
+  async getByKind(kind: IntegrationKind): Promise<Integration | undefined> {
+    return db.integrations.where('kind').equals(kind).first();
+  },
+  async list(): Promise<Integration[]> {
+    return db.integrations.toArray();
+  },
+  async upsert(input: IntegrationCreateInput): Promise<Integration> {
+    const ts = now();
+    const existing = await integrationRepo.getByKind(input.kind);
+    if (existing) {
+      const sanitized: Partial<Integration> = { ...input };
+      delete (sanitized as { id?: unknown }).id;
+      delete (sanitized as { created_at?: unknown }).created_at;
+      delete (sanitized as { kind?: unknown }).kind;
+      await db.integrations.update(existing.id, { ...sanitized, updated_at: ts });
+      return requireRow(() => db.integrations.get(existing.id), 'integration', existing.id);
+    }
+    const row: Integration = {
+      id: input.id ?? newIntegrationId(),
+      kind: input.kind,
+      status: input.status ?? 'disconnected',
+      config_json: input.config_json ?? {},
+      secret_ref: input.secret_ref ?? null,
+      scopes_json: input.scopes_json ?? [],
+      last_synced_at: input.last_synced_at ?? null,
+      expires_at: input.expires_at ?? null,
+      error_message: input.error_message ?? null,
+      created_at: ts,
+      updated_at: ts,
+    };
+    await db.integrations.add(row);
+    return row;
+  },
+  async update(id: IntegrationId, patch: Partial<Integration>): Promise<Integration> {
+    await db.integrations.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
+    return requireRow(() => db.integrations.get(id), 'integration', id);
+  },
+  async delete(id: IntegrationId): Promise<void> {
+    await db.integrations.delete(id);
   },
 };

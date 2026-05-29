@@ -1,8 +1,13 @@
 /**
- * Dexie schema definitions for Jarvis V1.
+ * Dexie schema definitions for Jarvis.
  *
- * The Dexie database is named `jarvis-v1` and pinned at version 1.
- * No migrations are added beyond v1 in this iteration.
+ * The Dexie database is named `jarvis-v1`. The DB name is historical — it
+ * is NOT the schema version. Schema versioning is handled by Dexie's
+ * `version().stores()` chain in `lib/db/index.ts`.
+ *
+ * V1 → V2 migration is purely additive: new tables for events, quick links,
+ * terminal subsystem and integrations. No existing tables are altered or
+ * dropped.
  *
  * All record types come from `@/types/*` where they exist. Workspace, Project,
  * SettingsRow, and SyncQueueRow are db-internal shapes that don't have
@@ -84,7 +89,8 @@ export type SyncQueueRow = {
 };
 
 export const DB_NAME = 'jarvis-v1';
-export const DB_VERSION = 1;
+/** Current schema version — bumped to 2 in V2 (additive new tables). */
+export const DB_VERSION = 2;
 
 /**
  * Dexie store schema strings.
@@ -96,7 +102,12 @@ export const DB_VERSION = 1;
  *
  * Only indexed columns are listed; all other fields are stored without an index.
  */
-export const STORES = {
+
+/**
+ * V1 schema. Pinned for replay so existing users migrate cleanly.
+ * Do not edit retroactively.
+ */
+export const STORES_V1 = {
   workspaces: 'id, name, owner_id, updated_at',
   projects: 'id, workspace_id, name, updated_at',
   chats:
@@ -110,5 +121,42 @@ export const STORES = {
   settings: 'key',
   sync_queue: 'id, status, created_at',
 } as const;
+
+/**
+ * V2 schema = V1 + additive tables for events, quick links, terminals and
+ * integrations. Existing V1 tables are unchanged so this requires no data
+ * migration — Dexie's auto-migration just creates the new object stores.
+ *
+ * Index decisions:
+ *   events:                workspace+start range queries (DayGrid), status filter
+ *   quick_links:           workspace+position for ordered lists, group_id+position
+ *                          for grouped views, last_used_at for "stale links"
+ *   quick_link_groups:     workspace+position for ordered group rendering
+ *   terminal_presets:      compound `&[workspace_id+slug]` per X1 verifier
+ *   terminal_sessions:     project+status for "running PTYs in this project",
+ *                          last_active_at for recency
+ *   terminal_scrollback:   compound pkey [session_id+chunk_seq], session_id
+ *                          for cleanup queries
+ *   terminal_layouts:      project_id is the pkey (single layout per project)
+ *   integrations:          unique kind so at most one per kind per user
+ */
+export const STORES_V2 = {
+  ...STORES_V1,
+  events:
+    'id, workspace_id, project_id, start_at, [workspace_id+start_at], status',
+  quick_links:
+    'id, workspace_id, group_id, [workspace_id+position], [workspace_id+group_id+position], last_used_at',
+  quick_link_groups: 'id, workspace_id, [workspace_id+position]',
+  terminal_presets: 'id, workspace_id, &[workspace_id+slug]',
+  terminal_sessions:
+    'id, project_id, workspace_id, status, [project_id+status], last_active_at',
+  terminal_scrollback:
+    '[session_id+chunk_seq], session_id, created_at',
+  terminal_layouts: 'project_id, updated_at',
+  integrations: 'id, &kind',
+} as const;
+
+/** Active store list — points to the latest version. */
+export const STORES = STORES_V2;
 
 export type StoreName = keyof typeof STORES;

@@ -60,3 +60,11 @@ export type MessageId = Brand<string, 'MessageId'>;
 export type AgentId = Brand<string, 'AgentId'>;
 export type WorkspaceId = Brand<string, 'WorkspaceId'>;
 export type ProjectId = Brand<string, 'ProjectId'>;
+
+// V2 branded ids
+export type EventId = Brand<string, 'EventId'>;
+export type QuickLinkId = Brand<string, 'QuickLinkId'>;
+export type QuickLinkGroupId = Brand<string, 'QuickLinkGroupId'>;
+export type TerminalPresetId = Brand<string, 'TerminalPresetId'>;
+export type TerminalSessionId = Brand<string, 'TerminalSessionId'>;
+export type IntegrationId = Brand<string, 'IntegrationId'>;

@@ -2,10 +2,16 @@ import { nanoid } from 'nanoid';
 import type {
   AgentId,
   ChatId,
+  EventId,
+  IntegrationId,
   MessageId,
   ProjectId,
+  QuickLinkGroupId,
+  QuickLinkId,
   ReminderId,
   TaskId,
+  TerminalPresetId,
+  TerminalSessionId,
   WorkspaceId,
 } from '@/types/common';
 
@@ -24,3 +30,11 @@ export const newProjectId = make('prj') as () => ProjectId;
 export const newWorkspaceId = make('wks') as () => WorkspaceId;
 export const newMemoryId = make('mem');
 export const newCallId = make('call');
+
+// V2 ids
+export const newEventId = make('evt') as () => EventId;
+export const newQuickLinkId = make('qlk') as () => QuickLinkId;
+export const newQuickLinkGroupId = make('qlg') as () => QuickLinkGroupId;
+export const newTerminalPresetId = make('tpr') as () => TerminalPresetId;
+export const newTerminalSessionId = make('tss') as () => TerminalSessionId;
+export const newIntegrationId = make('int') as () => IntegrationId;

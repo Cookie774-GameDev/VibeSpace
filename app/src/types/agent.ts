@@ -74,7 +74,52 @@ export type Agent = {
   capabilities: AgentCapability[];
   /** Built-in agents shipped with the app cannot be deleted */
   builtin?: boolean;
+  /**
+   * V2: Reasoning effort preset. Maps to provider-specific overrides
+   * (temperature, max_tokens, OpenAI reasoning_effort, Anthropic thinking
+   * budget, Google thinking budget). Defaults to 'medium' when omitted.
+   */
+  effort?: AgentEffort;
+  /** When effort='custom', explicit override values. */
+  effort_custom?: AgentEffortCustom;
+  /** V2: Persona preset for voice/tone. Default 'jarvis'. */
+  persona?: AgentPersona;
+  /** V2: Skill ids granted to this agent. Built-ins typically empty. */
+  skills?: string[];
+  /** V2: Where the agent definition came from. Default 'builtin'. */
+  source?: AgentSource;
 } & Timestamped;
+
+/**
+ * V2 — Per-agent reasoning effort preset. Provider-agnostic dial that the
+ * router maps to provider-specific knobs (see lib/ai/effort.ts). 'custom'
+ * means the agent carries explicit `effort_custom` values instead.
+ */
+export type AgentEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'custom';
+
+export interface AgentEffortCustom {
+  temperature: number;
+  max_output_tokens: number;
+  /** OpenAI o-class / gpt-5 only. Ignored on chat-completions models. */
+  reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
+  /** Anthropic / Google extended-thinking budget; 0 means off. */
+  thinking_budget_tokens?: number;
+}
+
+/**
+ * Persona preset for the agent's voice/tone. Built-in agents use 'jarvis';
+ * user agents pick from the catalog. 'custom' means the agent's own
+ * `system_prompt` body fully owns the voice (no addendum applied).
+ */
+export type AgentPersona = 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal' | 'custom';
+
+/**
+ * Where the agent definition came from.
+ *   builtin   — seeded from DEFAULT_AGENT_SEEDS in code
+ *   user-md   — imported from a `.jarvis-agent.md` file
+ *   user-form — created via Settings → Agents form
+ */
+export type AgentSource = 'builtin' | 'user-md' | 'user-form';
 
 /**
  * State an agent is in during a workflow.
