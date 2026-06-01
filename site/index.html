@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jarvis — Vibe Coding AI Workspace</title>
+  <meta name="description" content="Jarvis is the all-in-one vibe coding AI workspace: calling, agents, coding terminals, system prompts, research, memory, tasks, and every model in one cozy desktop app." />
+  <meta property="og:title" content="Jarvis — Vibe Coding AI Workspace" />
+  <meta property="og:description" content="Built for vibe coders by a vibe coder. Call your AI, run agent councils, code in terminal swarms, bring every model, and ship faster." />
+  <meta property="og:type" content="website" />
+  <meta name="theme-color" content="#FAF6EE" />
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' stop-color='%23B5613A'/><stop offset='100%25' stop-color='%23C58A3D'/></linearGradient></defs><rect width='64' height='64' rx='16' fill='url(%23g)'/><path d='M40 15 L40 38 a10 10 0 0 1 -20 0' fill='none' stroke='white' stroke-width='6' stroke-linecap='round'/></svg>" />
+  <style>
+    :root {
+      --paper:#FAF6EE; --paper-warm:#F4ECDD; --panel:#fff; --cream:#F8EFDB;
+      --ink:#2A2520; --ink-soft:#5C544A; --ink-faint:#8B8077;
+      --copper:#B5613A; --copper-deep:#944D2D; --amber:#C58A3D;
+      --sage:#6F8F66; --moss:#4F6E47; --plum:#6E4F6F;
+      --border:#E5DBC9; --border-2:#D7C9AE;
+      --shadow-soft:0 1px 2px rgba(42,37,32,.04),0 12px 34px rgba(42,37,32,.07);
+      --shadow-warm:0 12px 50px rgba(181,97,58,.15);
+      --radius:18px;
+    }
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow-x:hidden}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.42;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.78' numOctaves='3'/><feColorMatrix type='saturate' values='0'/><feComponentTransfer><feFuncA type='table' tableValues='0 .055'/></feComponentTransfer></filter><rect width='160' height='160' filter='url(%23n)'/></svg>")}
+    body:after{content:"";position:fixed;inset:-20%;pointer-events:none;z-index:0;background:radial-gradient(900px 480px at 18% 8%,rgba(181,97,58,.16),transparent 65%),radial-gradient(740px 420px at 84% 24%,rgba(111,143,102,.14),transparent 62%),radial-gradient(640px 360px at 52% 92%,rgba(197,138,61,.12),transparent 70%);filter:blur(12px)}
+    a{color:inherit} code,kbd{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace} ::selection{background:rgba(181,97,58,.28)}
+    .nav,.hero,main,footer{position:relative;z-index:1}.nav{position:sticky;top:0;z-index:50;background:rgba(250,246,238,.86);backdrop-filter:blur(14px) saturate(120%);border-bottom:1px solid var(--border)}
+    .nav-inner{max-width:1200px;margin:auto;padding:14px 22px;display:flex;gap:18px;align-items:center}.brand{display:flex;gap:10px;align-items:center;text-decoration:none;font-weight:700}.mark{width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,var(--copper),var(--amber));box-shadow:0 8px 24px rgba(181,97,58,.28);position:relative}.mark:before{content:"";position:absolute;left:50%;top:6px;width:3px;height:15px;background:#fff;border-radius:2px;transform:translateX(-50%)}.mark:after{content:"";position:absolute;inset:7px;border:3px solid #fff;border-top:0;border-right:0;border-radius:5px;transform:rotate(-45deg)}
+    .nav-links{margin-left:auto;display:flex;gap:4px;align-items:center}.nav-links a{padding:8px 10px;border-radius:999px;text-decoration:none;color:var(--ink-soft);font-size:13px}.nav-links a:hover{background:var(--cream);color:var(--ink)}.nav-cta{background:var(--ink)!important;color:var(--paper)!important;padding:9px 15px!important}@media(max-width:860px){.nav-links a:not(.nav-cta){display:none}}
+    .hero{max-width:1200px;margin:auto;padding:84px 22px 54px;display:grid;grid-template-columns:1.08fr .92fr;gap:42px;align-items:center}.eyebrow{display:inline-flex;align-items:center;gap:9px;padding:7px 12px;border-radius:999px;background:rgba(181,97,58,.09);border:1px solid rgba(181,97,58,.22);color:var(--copper);font-size:12px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.dot{width:7px;height:7px;border-radius:99px;background:var(--sage);box-shadow:0 0 0 6px rgba(111,143,102,.14)}
+    h1,h2,h3{font-family:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;font-weight:500;letter-spacing:-.02em}h1{font-size:clamp(46px,6.3vw,86px);line-height:1.03;margin:22px 0 18px}h2{font-size:clamp(34px,4.2vw,58px);line-height:1.12;margin:0 0 14px}h3{font-size:24px;line-height:1.18;margin:0 0 8px}em{font-family:inherit;color:var(--copper);font-style:italic}.lead{font-size:clamp(18px,1.45vw,21px);color:var(--ink-soft);max-width:650px;margin:0 0 26px}.micro{color:var(--ink-faint);font-family:ui-serif,"Iowan Old Style",Georgia,serif;font-style:italic}
+    .cta-row{display:flex;gap:12px;flex-wrap:wrap;margin:24px 0}.btn{display:inline-flex;gap:8px;align-items:center;justify-content:center;padding:12px 18px;border-radius:999px;border:1px solid var(--border-2);background:var(--panel);text-decoration:none;font-weight:750;box-shadow:var(--shadow-soft);transition:.18s}.btn:hover{transform:translateY(-2px);box-shadow:var(--shadow-warm)}.btn-primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}.btn-copper{background:var(--copper);border-color:var(--copper);color:white}.hero-card{background:var(--panel);border:1px solid var(--border);border-radius:28px;padding:22px;box-shadow:var(--shadow-warm);position:relative;overflow:hidden}.hero-card:before{content:"Built by a vibe coder";position:absolute;right:18px;top:18px;border:2px solid rgba(181,97,58,.42);color:var(--copper);border-radius:999px;padding:8px 13px;font:700 11px/1 ui-serif,Georgia,serif;text-transform:uppercase;letter-spacing:.12em;transform:rotate(5deg)}
+    .window{border:1px solid var(--border);border-radius:18px;background:linear-gradient(180deg,#fff,var(--paper));overflow:hidden}.window-top{height:40px;background:var(--cream);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 14px}.light{width:11px;height:11px;border-radius:50%;background:#E68A65}.light:nth-child(2){background:var(--amber)}.light:nth-child(3){background:var(--sage)}.phone-screen{padding:22px}.call-ring{width:118px;height:118px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff8,transparent 35%),linear-gradient(135deg,var(--amber),var(--copper));margin:10px auto 20px;display:grid;place-items:center;color:white;font:700 38px ui-serif,Georgia,serif;box-shadow:0 18px 60px rgba(181,97,58,.32);animation:breathe 4s ease-in-out infinite}@keyframes breathe{50%{transform:scale(1.045)}}.bubble{padding:12px 14px;border-radius:16px;margin:10px 0;max-width:88%;background:var(--cream);border:1px solid var(--border);font-size:14px}.bubble.ai{margin-left:auto;background:#2A2520;color:var(--paper);border-color:#2A2520}.metric-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.metric{background:var(--paper);border:1px dashed var(--border-2);border-radius:14px;padding:12px;text-align:center}.metric strong{display:block;font-size:18px;color:var(--copper)}
+    .install{max-width:780px;background:var(--ink);color:var(--paper);border-radius:18px;padding:14px;display:flex;gap:12px;align-items:center;margin-top:28px;box-shadow:0 22px 60px rgba(42,37,32,.18);position:relative}.install:before,.install:after{content:"";position:absolute;width:18px;height:18px;border-color:var(--amber)}.install:before{left:-1px;top:-1px;border-left:2px solid;border-top:2px solid;border-radius:18px 0 0 0}.install:after{right:-1px;bottom:-1px;border-right:2px solid;border-bottom:2px solid;border-radius:0 0 18px 0}.prompt{color:var(--amber);font-weight:800}.cmd{flex:1;white-space:nowrap;overflow-x:auto;font-size:13px}.copy{border:1px solid rgba(250,246,238,.18);background:rgba(255,255,255,.08);color:var(--paper);padding:7px 10px;border-radius:10px;cursor:pointer}.tabs{display:flex;gap:8px;max-width:780px;margin-top:12px}.tab{flex:1;border:1px solid var(--border);background:var(--panel);border-radius:999px;padding:8px;color:var(--ink-soft);cursor:pointer}.tab.active{background:var(--copper);border-color:var(--copper);color:white}
+    section{max-width:1200px;margin:auto;padding:82px 22px}.section-head{max-width:780px;margin-bottom:34px}.section-kicker{font:800 11px/1 ui-sans-serif,system-ui;letter-spacing:.18em;text-transform:uppercase;color:var(--copper);margin-bottom:12px}.grid{display:grid;gap:16px}.cards-3{grid-template-columns:repeat(3,minmax(0,1fr))}.cards-2{grid-template-columns:repeat(2,minmax(0,1fr))}.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow-soft);position:relative;overflow:hidden}.card:hover{box-shadow:var(--shadow-warm)}.card .num{font-family:ui-serif,Georgia,serif;font-style:italic;color:var(--border-2);font-size:34px;position:absolute;right:20px;top:16px}.card p{color:var(--ink-soft);margin:0}.chip{display:inline-flex;align-items:center;gap:7px;padding:5px 9px;border-radius:999px;background:var(--cream);border:1px solid var(--border);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--copper);margin:0 6px 8px 0}.chip.live{color:var(--moss);background:rgba(111,143,102,.12)}.warm-band{max-width:none;background:linear-gradient(180deg,var(--paper-warm),var(--paper));border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.mock{background:var(--paper);border:1px solid var(--border);border-radius:16px;padding:14px;margin-top:16px}.agent{display:flex;gap:10px;align-items:flex-start;padding:11px;border:1px solid var(--border);border-radius:12px;background:var(--panel);margin:8px 0;border-top:4px solid var(--sage)}.agent:nth-child(2){border-top-color:var(--plum)}.agent:nth-child(3){border-top-color:var(--amber)}.agent:nth-child(4){border-top-color:var(--copper)}.avatar{width:30px;height:30px;border-radius:9px;background:var(--copper);color:white;display:grid;place-items:center;font-size:12px;font-weight:800;flex:0 0 auto}.agent small{display:block;color:var(--ink-faint)}
+    .provider-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.provider{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;min-height:82px}.provider strong{display:block}.provider span{display:block;color:var(--ink-faint);font-size:12px}.brand-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:7px}.download-card{display:flex;flex-direction:column;gap:14px}.steps{counter-reset:s;list-style:none;padding:0;margin:0}.steps li{counter-increment:s;display:flex;gap:10px;margin:10px 0;color:var(--ink-soft)}.steps li:before{content:counter(s);width:24px;height:24px;border-radius:50%;background:var(--copper);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800;flex:0 0 auto}.codebox{background:var(--ink);color:var(--paper);border-radius:12px;padding:12px;display:flex;gap:8px;align-items:center;font-size:12px;overflow:hidden}.codebox code{flex:1;overflow-x:auto;white-space:nowrap}.mini-table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:16px;overflow:hidden;display:table}.mini-table th,.mini-table td{text-align:left;border-bottom:1px solid var(--border);padding:12px 14px;font-size:14px}.mini-table th{background:var(--cream);font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--copper)}.mini-table tr:last-child td{border-bottom:0}.letter{max-width:850px;margin:auto;background:var(--panel);border:1px solid var(--border);border-radius:22px;padding:46px;box-shadow:var(--shadow-warm);background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='42' height='42'><line x1='0' y1='41' x2='42' y2='41' stroke='%23E5DBC9' stroke-width='1' stroke-dasharray='2 3'/></svg>");background-size:42px 42px}.letter:before{content:"Letter";display:inline-block;margin-top:-70px;background:var(--paper);border:1px solid var(--copper);color:var(--copper);padding:4px 14px;border-radius:999px;font-family:ui-serif,Georgia,serif;font-style:italic}.faq details{background:var(--panel);border:1px solid var(--border);border-radius:14px;margin:10px 0;padding:16px}.faq summary{cursor:pointer;font-weight:800}.faq p{color:var(--ink-soft)}footer{border-top:1px solid var(--border);background:var(--paper-warm);padding:52px 22px}.footer-inner{max-width:1200px;margin:auto;display:grid;grid-template-columns:2fr repeat(3,1fr);gap:30px}.footer-inner a{display:block;color:var(--ink-soft);text-decoration:none;margin:6px 0}.footer-bottom{max-width:1200px;margin:28px auto 0;padding-top:20px;border-top:1px dashed var(--border-2);display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;color:var(--ink-faint);font-size:13px}.reveal{opacity:0;transform:translateY(12px);transition:.6s}.reveal.in{opacity:1;transform:none}@media(max-width:960px){.hero{grid-template-columns:1fr}.cards-3,.cards-2,.provider-grid{grid-template-columns:1fr 1fr}.footer-inner{grid-template-columns:1fr 1fr}}@media(max-width:620px){h1{font-size:43px}.cards-3,.cards-2,.provider-grid{grid-template-columns:1fr}.install{align-items:flex-start}.tabs{flex-wrap:wrap}.hero{padding-top:48px}.letter{padding:30px}.nav-inner{padding:12px}.metric-row{grid-template-columns:1fr}.mini-table{display:block;overflow-x:auto}}
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="#top"><span class="mark"></span><span>Jarvis</span></a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#calling">Calling</a><a href="#features">Features</a><a href="#models">Models</a><a href="#download">Download</a><a href="#community">Community</a><a class="nav-cta" href="#install">Install</a>
+      </nav>
+    </div>
+  </header>
+
+  <section id="top" class="hero">
+    <div>
+      <span class="eyebrow"><span class="dot"></span> v0.1.5 · vibe coding app</span>
+      <h1><em>Vibe coding</em> for vibe coders. By a vibe coder.</h1>
+      <p class="lead">Jarvis is the cozy all-in-one AI workspace for builders who context-switch all day: call your AI, run agent councils, code in terminal swarms, save system prompts, research deeper, remember everything, and keep shipping.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#download">Download Jarvis</a>
+        <a class="btn btn-copper" href="#calling">See calling</a>
+        <a class="btn" data-link="github" href="https://github.com/anomalyco/jarvis">GitHub</a>
+        <a class="btn" data-link="discord" href="#discord-placeholder">Discord</a>
+        <a class="btn" data-link="youtube" href="#youtube-placeholder">YouTube</a>
+      </div>
+      <div id="install" class="install" aria-label="Install command">
+        <span class="prompt" id="install-prompt">PS&gt;</span>
+        <code class="cmd" id="install-cmd">irm https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.ps1 | iex</code>
+        <button class="copy" data-copy-target="install-cmd">COPY</button>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Install command selector">
+        <button class="tab active" data-os="windows">Windows</button>
+        <button class="tab" data-os="macos">macOS</button>
+        <button class="tab" data-os="linux">Linux</button>
+      </div>
+      <p class="micro">One line. The right installer. Your keys. Your machine. Yours forever.</p>
+    </div>
+    <div class="hero-card reveal">
+      <div class="window">
+        <div class="window-top"><span class="light"></span><span class="light"></span><span class="light"></span><strong style="margin-left:8px">Calling Sage...</strong></div>
+        <div class="phone-screen">
+          <div class="call-ring">J</div>
+          <div class="bubble">"Sage, what broke in the build? Just the exact file and next step."</div>
+          <div class="bubble ai">"I found it. Terminal exited non-zero in <code>auth.ts</code>. Want me to read the diff?"</div>
+          <div class="metric-row">
+            <div class="metric"><strong>&lt;800ms</strong><span>phone turn target</span></div>
+            <div class="metric"><strong>$0</strong><span>in-app call path</span></div>
+            <div class="metric"><strong>read-only</strong><span>by default</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="calling" class="warm-band">
+    <div class="section-head reveal"><div class="section-kicker">Main feature · AI calling</div><h2>Phone your AI like a friend. <em>It picks up.</em></h2><p class="lead">Jarvis ships a real calling layer. Dial your Jarvis from any phone through Twilio, or tap the green Call button in the desktop app for a free LiveKit call. It can talk, search, summarize files, create tasks, and call you when something important happens.</p></div>
+    <div class="grid cards-3">
+      <div class="card reveal"><span class="num">i</span><h3>Call from any phone</h3><p>Path A uses Twilio Programmable Voice + Media Streams so a real number can route into Sage, your voice Jarvis.</p></div>
+      <div class="card reveal"><span class="num">ii</span><h3>Tap to call in-app</h3><p>Path C uses LiveKit WebRTC. No telco minutes, lower latency, and the same assistant brain inside your Jarvis window.</p></div>
+      <div class="card reveal"><span class="num">iii</span><h3>Let Sage call you</h3><p>Outbound triggers can ring your phone for build failures, deadline alerts, errors, or manual check-ins.</p></div>
+    </div>
+    <div class="grid cards-3" style="margin-top:16px">
+      <div class="card reveal"><h3>The 9pm dog walk</h3><p>Call Jarvis while walking. Ask what changed in a project, add a task, or summarize the file you forgot to read.</p></div>
+      <div class="card reveal"><h3>The 2am build failure</h3><p>Sage can call when a build fails, read the traceback, name the file, and leave you with a morning fix list.</p></div>
+      <div class="card reveal"><h3>The driving-home TODO</h3><p>Hands stay on the wheel. Tell Jarvis the task, priority, due date, and project. It lands in your list.</p></div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="section-head reveal"><div class="section-kicker">All-in-one workspace</div><h2>Agents, coding, system prompts, research, calls, tasks, memory. <em>One calm place.</em></h2><p class="lead">Jarvis is not another model tab. It is the integration layer: every model, every agent, every voice, and every task under one persistent memory.</p></div>
+    <div class="grid cards-3">
+      <div class="card reveal"><span class="num">1.0</span><h3>Convene the council</h3><p>Run Jarvis, Coder, Researcher, Critic, Memory Keeper, and Action Extractor as visible collaborators.</p></div>
+      <div class="card reveal"><span class="num">2.0</span><h3>Code in a swarm</h3><p>Real PTY terminals, pane grids, Scout / Builder / Reviewer roles, Claude Code, OpenCode, shell commands, and manual tile resizing.</p></div>
+      <div class="card reveal"><span class="num">3.0</span><h3>Save system prompts</h3><p>Bundled agent prompts, persona overlays, role-specific coding prompts, and a skills system designed for a marketplace.</p></div>
+      <div class="card reveal"><span class="num">4.0</span><h3>Research deeper</h3><p>Researcher agents read docs, synthesize, cite evidence, compare competitors, and hand work back to Coder or Critic.</p></div>
+      <div class="card reveal"><span class="num">5.0</span><h3>Remember everything</h3><p>Persistent memory across chats, voice, files, meetings, tasks, projects, and agent output. Local-first by design.</p></div>
+      <div class="card reveal"><span class="num">6.0</span><h3>Approve real actions</h3><p>24 built-in actions render as Approve / Cancel cards. Navigate, open terminals, run commands, toggle themes, and launch tools safely.</p></div>
+    </div>
+  </section>
+
+  <section id="council" class="warm-band">
+    <div class="section-head reveal"><div class="section-kicker">Council mode</div><h2>Four agents, <em>thinking together.</em></h2><p class="lead">Jarvis fans work out to specialists, then a critic synthesizes the best answer. The workspace shows the thinking instead of hiding it behind a spinner.</p></div>
+    <div class="grid cards-2">
+      <div class="card reveal">
+        <h3>Live agent canvas</h3>
+        <div class="mock">
+          <div class="agent"><span class="avatar">J</span><div><strong>Jarvis</strong><small>Routing prompt, checking project context.</small></div></div>
+          <div class="agent"><span class="avatar">R</span><div><strong>Researcher</strong><small>Reading docs and competitor landscape.</small></div></div>
+          <div class="agent"><span class="avatar">C</span><div><strong>Coder</strong><small>Mapping smallest safe implementation diff.</small></div></div>
+          <div class="agent"><span class="avatar">!</span><div><strong>Critic</strong><small>Finding gaps, risks, and missing tests.</small></div></div>
+        </div>
+      </div>
+      <div class="card reveal"><h3>Built for vibe coders</h3><p>Describe intent, let agents explore, build, review, and synthesize. Jarvis is the AI workspace for people who ship by conversation, terminal, and taste.</p><p style="margin-top:14px"><span class="chip live">Mention routing</span><span class="chip live">Synthesis</span><span class="chip live">Agent roles</span><span class="chip live">Traceable work</span></p></div>
+    </div>
+  </section>
+
+  <section id="models">
+    <div class="section-head reveal"><div class="section-kicker">Model support</div><h2>Bring Claude, GPT, Gemini, Groq, Ollama, open-source models, and more.</h2><p class="lead">Jarvis is BYOK first. Five providers are live today; the rest already have key persistence and UI paths wired so new adapters can ship fast.</p></div>
+    <div class="provider-grid">
+      <div class="provider reveal"><strong><span class="brand-dot" style="background:#D97757"></span>Anthropic</strong><span>Claude · live</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#10A37F"></span>OpenAI</strong><span>GPT · live</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#4285F4"></span>Google</strong><span>Gemini · live/free</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#F55036"></span>Groq</strong><span>Llama fast · live/free</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#000"></span>Ollama</strong><span>local · live</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#000"></span>xAI</strong><span>Grok · wired</span></div>
+      <div class="provider reveal"><strong><span class="brand-dot" style="background:#4D6BFE"></span>DeepSeek</strong><span>R1 · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#FA500F"></span>Mistral</strong><span>Codestral · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#39594D"></span>Cohere</strong><span>RAG · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#20B8CD"></span>Perplexity</strong><span>search · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#0F6FFF"></span>Together</strong><span>open models · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#6720FF"></span>Fireworks</strong><span>serving · wired</span></div>
+      <div class="provider reveal"><strong><span class="brand-dot" style="background:#000"></span>Replicate</strong><span>community · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#0866FF"></span>Llama</strong><span>open source</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#6E4F6F"></span>OpenRouter</strong><span>gateway · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#4F6E47"></span>Hyperbolic</strong><span>GPU pricing · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#C58A3D"></span>Novita</strong><span>inference · wired</span></div><div class="provider reveal"><strong><span class="brand-dot" style="background:#8B8077"></span>Lambda</strong><span>cloud · wired</span></div>
+    </div>
+  </section>
+
+  <section id="download" class="warm-band">
+    <div class="section-head reveal"><div class="section-kicker">Download</div><h2>Three steps. <em>Any desktop.</em></h2><p class="lead">Jarvis supports Windows, macOS, and Linux. Use the one-liner, approve the installer, then launch Jarvis and add your first provider key.</p></div>
+    <div class="grid cards-3">
+      <div class="card download-card reveal"><h3>Windows 10/11</h3><div class="codebox"><code id="win-cmd">irm https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.ps1 | iex</code><button class="copy" data-copy-target="win-cmd">copy</button></div><ol class="steps"><li>Open PowerShell.</li><li>Run the one-line installer.</li><li>Launch Jarvis from Start Menu.</li></ol></div>
+      <div class="card download-card reveal"><h3>macOS 12+</h3><div class="codebox"><code id="mac-cmd">curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash</code><button class="copy" data-copy-target="mac-cmd">copy</button></div><ol class="steps"><li>Open Terminal.</li><li>Run the curl installer.</li><li>Open Jarvis from Applications.</li></ol></div>
+      <div class="card download-card reveal"><h3>Linux</h3><div class="codebox"><code id="linux-cmd">curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash</code><button class="copy" data-copy-target="linux-cmd">copy</button></div><ol class="steps"><li>Open your terminal.</li><li>Run the installer; deb/rpm/AppImage auto-detects.</li><li>Launch Jarvis from your app menu.</li></ol></div>
+    </div>
+  </section>
+
+  <section id="hotkeys">
+    <div class="section-head reveal"><div class="section-kicker">Keyboard-first</div><h2>Fast enough for people who live on hotkeys.</h2></div>
+    <table class="mini-table reveal"><thead><tr><th>Hotkey</th><th>Action</th><th>Surface</th></tr></thead><tbody><tr><td><kbd>Mod+K</kbd></td><td>Command palette</td><td>Global</td></tr><tr><td><kbd>Mod+J</kbd></td><td>Jarvis assistant bar</td><td>Global</td></tr><tr><td><kbd>Mod+Space</kbd></td><td>Push-to-talk voice</td><td>Voice</td></tr><tr><td><kbd>Mod+Shift+A</kbd></td><td>Actions palette</td><td>Actions</td></tr><tr><td><kbd>Mod+Shift+L</kbd></td><td>Quick launcher</td><td>Launcher</td></tr><tr><td><kbd>Mod+Shift+T</kbd></td><td>To-do drawer</td><td>Tasks</td></tr><tr><td><kbd>Mod+\</kbd></td><td>Inspector pane</td><td>Context</td></tr><tr><td><kbd>Mod+B</kbd></td><td>Navigation pane</td><td>Layout</td></tr><tr><td><kbd>Mod+Enter</kbd></td><td>Send message</td><td>Chat</td></tr><tr><td><kbd>Mod+Shift+Enter</kbd></td><td>Broadcast to council</td><td>Council</td></tr></tbody></table>
+  </section>
+
+  <section id="stack" class="warm-band"><div class="section-head reveal"><div class="section-kicker">Architecture</div><h2>Local-first. BYOK. Open-source core. <em>Built to last.</em></h2></div><div class="grid cards-3"><div class="card reveal"><h3>Desktop</h3><p>Tauri 2, Rust, React, TypeScript, Vite, Tailwind, tiny native installers.</p></div><div class="card reveal"><h3>Runtime</h3><p>Mastra-style orchestration, Vercel AI SDK streams, MCP-lite tools, PTY terminals.</p></div><div class="card reveal"><h3>Calling</h3><p>Twilio PSTN, LiveKit WebRTC, Pipecat voice pipeline, FastAPI, Supabase RLS.</p></div><div class="card reveal"><h3>Storage</h3><p>Local-first chats, tasks, settings, skills, agents, and memory. Cloud sync optional.</p></div><div class="card reveal"><h3>Privacy</h3><p>BYOK keys, offline Ollama, read-only file bridge by default, telemetry off by default.</p></div><div class="card reveal"><h3>License</h3><p>Apache 2.0 open-source core. Fork it, inspect it, ship your own build.</p></div></div></section>
+
+  <section id="changelog"><div class="section-head reveal"><div class="section-kicker">We keep shipping</div><h2>A live product, not a landing-page promise.</h2><p class="lead">Recent drops include model access gating, real Ollama, local models settings, 24 actions, custom tools, wellness breaks, PTY terminals, call infrastructure, and a slimmer terminal workspace.</p></div><div class="grid cards-2"><div class="card reveal"><h3>v0.1.5</h3><p>Manual tile resizing, compact top bar, fullscreen rail polish, lazy LiveKit/Supabase loading, and release-build memory improvements.</p></div><div class="card reveal"><h3>v0.1.4</h3><p>RequireModelAccess gate, real Ollama adapter, Local Models settings, offline mode, and top-bar cleanup.</p></div><div class="card reveal"><h3>v0.1.3</h3><p>24-action approval system, custom tools, wellness break, actions palette, pricing ladder, and 8 AM auto-open.</p></div><div class="card reveal"><h3>Next</h3><p>Stripe, better MCP transport, live terminal-agent orchestration, phone-call hardening, marketplace, mobile, browser extension.</p></div></div></section>
+
+  <section id="community" class="warm-band"><div class="section-head reveal"><div class="section-kicker">Community</div><h2>Watch it ship. Join the build.</h2><p class="lead">YouTube and Discord links are wired as placeholders in one config block at the bottom of this file. Swap them when ready.</p></div><div class="grid cards-3"><a class="card reveal" data-link="github" href="https://github.com/anomalyco/jarvis" style="text-decoration:none"><h3>GitHub</h3><p>Source, releases, issues, changelog, and everything we keep shipping.</p></a><a class="card reveal" data-link="discord" href="#discord-placeholder" style="text-decoration:none"><h3>Discord</h3><p>Community placeholder. Drop your invite URL into <code>JARVIS_LINKS.discord</code>.</p></a><a class="card reveal" data-link="youtube" href="#youtube-placeholder" style="text-decoration:none"><h3>YouTube</h3><p>Ship logs, demos, calling walkthroughs, and vibe-coding builds.</p></a></div></section>
+
+  <section id="letter"><div class="letter reveal"><h2>A note from the maker.</h2><p>I wanted one place. Not seven. One warm desktop window where every model I pay for could sit at the same table, where my voice could find the right one, and where my to-do list updated itself when I said something out loud.</p><p><strong>Jarvis is that place.</strong> A vibe coding app built for vibe coders by a vibe coder. Agents, code, calls, prompts, research, tasks, memory, and the messy middle of building real software.</p><p>It is unfinished, honest, and shipping. The core is open-source under Apache 2.0. Local-first by default. Bring your own keys. Use Ollama offline. Call it from the app. Fork it if you want. Keep moving.</p><p class="micro">With care,<br><strong>Jarvis Labs</strong><br>Maker · Apache 2.0 · Forever forkable</p></div></section>
+
+  <section id="faq" class="faq warm-band"><div class="section-head reveal"><div class="section-kicker">FAQ</div><h2>Questions before you install.</h2></div><details class="reveal"><summary>Is Jarvis only for coding?</summary><p>No. Coding is the sharpest use-case, but Jarvis also handles research, calls, tasks, memory, skills, agents, notes, actions, and project context.</p></details><details class="reveal"><summary>What models work today?</summary><p>Anthropic, OpenAI, Google Gemini, Groq, and Ollama are live adapters. Other providers already have UI/key persistence and can be promoted as adapters ship.</p></details><details class="reveal"><summary>Is calling fully done?</summary><p>The backend, bridge, settings, in-app LiveKit path, Twilio endpoints, PIN flow, audit logging, and outbound API are in place. Some hardening remains: real Cartesia voice IDs, verbal-confirm enforcement, audit viewer UI, trigger callsites, and provisioning automation.</p></details><details class="reveal"><summary>Can it run offline?</summary><p>Yes. Offline mode routes chat to Ollama. Local model support is live and keyless.</p></details><details class="reveal"><summary>Where should the domain point?</summary><p>The domain search recommendation is <strong>vibejarvis.com</strong>: short, cheap, .com, and aligned with the product positioning.</p></details></section>
+
+  <footer><div class="footer-inner"><div><a class="brand" href="#top"><span class="mark"></span><span>Jarvis</span></a><p style="color:var(--ink-soft);max-width:330px">The cozy all-in-one AI workspace for vibe coders. Built by a vibe coder. Shipped in public.</p></div><div><strong>Product</strong><a href="#calling">Calling</a><a href="#features">Features</a><a href="#models">Models</a><a href="#download">Download</a></div><div><strong>Open source</strong><a data-link="github" href="https://github.com/anomalyco/jarvis">GitHub</a><a data-link="releases" href="https://github.com/anomalyco/jarvis/releases">Releases</a><a data-link="issues" href="https://github.com/anomalyco/jarvis/issues">Issues</a></div><div><strong>Community</strong><a data-link="discord" href="#discord-placeholder">Discord</a><a data-link="youtube" href="#youtube-placeholder">YouTube</a><a href="#letter">Maker letter</a></div></div><div class="footer-bottom"><span>© 2026 Jarvis Labs · Apache 2.0</span><span>Recommended domain: <strong>vibejarvis.com</strong> · Current version: <strong>v0.1.5</strong></span></div></footer>
+
+  <script>
+    const JARVIS_LINKS = {
+      github: 'https://github.com/anomalyco/jarvis',
+      releases: 'https://github.com/anomalyco/jarvis/releases',
+      issues: 'https://github.com/anomalyco/jarvis/issues',
+      discord: '#discord-placeholder',
+      youtube: '#youtube-placeholder'
+    };
+    const COMMANDS = {
+      windows:{prompt:'PS>',cmd:'irm https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.ps1 | iex'},
+      macos:{prompt:'$',cmd:'curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash'},
+      linux:{prompt:'$',cmd:'curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash'}
+    };
+    document.querySelectorAll('[data-link]').forEach(a=>{const v=JARVIS_LINKS[a.dataset.link];if(v)a.href=v});
+    const cmd=document.getElementById('install-cmd'), prompt=document.getElementById('install-prompt');
+    document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active');const c=COMMANDS[tab.dataset.os];prompt.textContent=c.prompt;cmd.textContent=c.cmd;}));
+    document.querySelectorAll('.copy').forEach(btn=>btn.addEventListener('click',async()=>{const el=document.getElementById(btn.dataset.copyTarget);if(!el)return;await navigator.clipboard.writeText(el.textContent.trim());const old=btn.textContent;btn.textContent='copied';setTimeout(()=>btn.textContent=old,1300)}));
+    const io=new IntersectionObserver(entries=>entries.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in')}),{threshold:.12});
+    document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+  </script>
+</body>
+</html>

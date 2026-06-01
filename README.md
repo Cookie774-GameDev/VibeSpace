@@ -1,151 +1,265 @@
 # Jarvis
 
-> **The AI workspace where every model, every agent, every voice, and every task lives under one persistent memory and one always-available assistant.**
+> **Vibe coding for vibe coders. Built by a vibe coder.**
 
-A category-defining clone of (and improvement on) **BridgeMind** - extended into a full multi-modal workspace with a Jarvis-style overarching voice assistant, a live to-do list with smart scheduling and notifications, persistent unified memory across chats / voice / meetings / files, and a multi-agent council mode.
+Jarvis is a cozy, local-first, all-in-one AI workspace for builders who context-switch all day. It brings **AI calling**, agent councils, coding terminals, specific agents and system prompts, research, memory, tasks, actions, tools, and every model provider into one desktop app.
 
-This repository contains **planning, research, and design only**. No application code yet - this is the spec for what we're going to build.
+The goal is simple: stop juggling seven AI apps and ship from one calm workspace.
 
-Working title is "Jarvis." Final product name TBD before public launch.
+## Links
 
----
+| Destination | Link |
+| --- | --- |
+| Website | `https://anomalyco.github.io/jarvis/` |
+| GitHub | `https://github.com/anomalyco/jarvis` |
+| Releases | `https://github.com/anomalyco/jarvis/releases` |
+| Issues | `https://github.com/anomalyco/jarvis/issues` |
+| YouTube | `#youtube-placeholder` |
+| Discord | `#discord-placeholder` |
 
-## Quick links
+Replace the YouTube and Discord placeholders in `site/index.html` when the final links are ready.
 
-### Product docs (read in order)
-1. [`docs/01-product-vision.md`](docs/01-product-vision.md) - thesis, north-star user story, audience, pillars, comparison vs BridgeMind/Cursor/Lindy/Granola/ChatHub
-2. [`docs/02-system-architecture.md`](docs/02-system-architecture.md) - top-level technical blueprint, components, processes, storage, security
-3. [`docs/03-multi-agent-orchestration.md`](docs/03-multi-agent-orchestration.md) - the agent runtime: supervisor + workers, inter-agent messaging, memory access, tool calling, observability
-4. [`docs/04-voice-jarvis-layer.md`](docs/04-voice-jarvis-layer.md) - the voice subsystem: wake word, dual-path cascade + S2S, latency budget, persona, intents, failure modes
-5. [`docs/05-ui-ux-design.md`](docs/05-ui-ux-design.md) - design blueprint: "Voltage" aesthetic, three-pane shell, council mode, voice modal, to-do panel, keyboard alphabet
-6. [`docs/06-todo-scheduler-notifications.md`](docs/06-todo-scheduler-notifications.md) - **the live to-do system**: data model, smart scheduler, action extractor, multi-channel notifications, voice intents, daily briefing
-7. [`docs/07-differentiation-strategy.md`](docs/07-differentiation-strategy.md) - the 13 capabilities Jarvis ships that no competitor combines, the moat, the risks
-8. [`docs/08-tech-stack-decisions.md`](docs/08-tech-stack-decisions.md) - decision log for every major technology choice with alternatives considered
+## Install Jarvis
 
-### Implementation
-- [`implementation-plan/00-phased-plan.md`](implementation-plan/00-phased-plan.md) - 6-phase build plan, ~10-11 months end-to-end to public launch
+### Windows 10/11
 
-### Research (raw subagent reports)
-- [`research/01-bridgemind-analysis.md`](research/01-bridgemind-analysis.md) - exhaustive BridgeMind product breakdown
-- [`research/02-multi-agent-orchestration.md`](research/02-multi-agent-orchestration.md) - 2026 multi-agent frameworks and patterns
-- [`research/03-voice-assistant-tech.md`](research/03-voice-assistant-tech.md) - 2026 voice stack: STT, TTS, S2S, wake word, latency
-- [`research/04-competitive-landscape.md`](research/04-competitive-landscape.md) - every multi-AI / multi-agent app on the market
-- [`research/05-ui-ux-trends.md`](research/05-ui-ux-trends.md) - 2026 AI-app design trends and reference apps
+1. Open PowerShell.
+2. Run:
 
----
-
-## What is Jarvis (one-paragraph)
-
-Jarvis is a desktop-first AI workspace (Win/Mac/Linux, Tauri-based) that unifies what today is fragmented across seven apps. You talk to **Jarvis** - an always-available voice assistant with sub-450ms latency. Jarvis routes your requests to a council of specialized AI agents (Claude, GPT, Gemini, plus local Llama/Qwen) running in parallel with shared memory and structured inter-agent messaging. A live to-do list managed by Jarvis captures everything you commit to (extracted automatically from chats and meetings, or created via voice) and reminds you intelligently across desktop banners, mobile push, watch, voice, and email. Persistent memory threads through chats, voice, meetings, browsing, files, and tasks - searchable, source-referenced, exportable, local-first by default with optional encrypted cloud sync. MCP-native tooling means every existing MCP server works on day one. Open-source core (Apache 2.0) with optional managed cloud.
-
-## What makes it different from BridgeMind
-
-BridgeMind nails the multi-pane terminal grid for coding agents. Jarvis takes that idea, generalizes it past coding, and adds:
-- Voice-first overarching assistant (not just dictation - full conversational with intent routing).
-- Live to-do list + smart scheduling + multi-channel notifications.
-- Persistent memory across all modalities (chats, voice, meetings, browsing, files).
-- Parallel multi-model council with ensemble synthesis (not just one agent at a time).
-- Mobile companion + browser extension + watch.
-- True local-first option with encrypted cloud sync bridge.
-- Open-source core.
-
-Detailed comparison in [`docs/07-differentiation-strategy.md`](docs/07-differentiation-strategy.md).
-
-## Folder layout
-
-```
-projects/Jarvis/
-+- README.md                          this file
-|
-+- docs/                              product, architecture, design
-|   +- 01-product-vision.md
-|   +- 02-system-architecture.md
-|   +- 03-multi-agent-orchestration.md
-|   +- 04-voice-jarvis-layer.md
-|   +- 05-ui-ux-design.md
-|   +- 06-todo-scheduler-notifications.md
-|   +- 07-differentiation-strategy.md
-|   +- 08-tech-stack-decisions.md
-|
-+- research/                          raw research reports
-|   +- 01-bridgemind-analysis.md
-|   +- 02-multi-agent-orchestration.md
-|   +- 03-voice-assistant-tech.md
-|   +- 04-competitive-landscape.md
-|   +- 05-ui-ux-trends.md
-|
-+- implementation-plan/               build plan
-|   +- 00-phased-plan.md
-|
-+- design/                            (empty - reserved for figma exports, mockups)
+```powershell
+irm https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.ps1 | iex
 ```
 
-## Stack at a glance
+3. Launch Jarvis from the Start Menu.
 
-```
-DESKTOP        Tauri 2 (Rust) + Next.js 15 + React 19 + TypeScript 5.6
-                Tailwind v4, shadcn/ui, Magic UI, Aceternity UI, Tremor
-                Motion v12, cmdk, Lucide + Phosphor, Spline (voice orb)
+### macOS 12+
 
-RUNTIME        Mastra orchestrator + Vercel AI SDK 6 streaming
-(Node sidecar) LiteLLM gateway, MCP client manager
-                better-sqlite3 + Drizzle, LanceDB embedded
-                Zustand + TanStack Query + TRPC, mem0 memory
+1. Open Terminal.
+2. Run:
 
-VOICE          Pipecat + Silero VAD + openWakeWord + LiveKit turn-detector
-(Python)       Deepgram Flux / Cartesia Ink / Moonshine STT
-                Cartesia Sonic 3.5 / ElevenLabs Flash TTS
-                OpenAI gpt-realtime / Gemini Live alt path
-
-CLOUD          Clerk auth, Fly.io services, Neon Postgres, Qdrant Cloud
-(optional)     LiveKit Cloud, APNs / FCM / Web Push, Resend, Twilio
-
-MOBILE         React Native + Expo (Phase 5)
-(Phase 5)      Native push, voice via LiveKit Cloud
+```bash
+curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash
 ```
 
-Detailed reasoning for every choice in [`docs/08-tech-stack-decisions.md`](docs/08-tech-stack-decisions.md).
+3. Open Jarvis from `/Applications`.
 
-## Five core pillars
+### Linux
 
-1. **Council of agents** - multiple AI models in parallel, mention-routable, synthesizable.
-2. **Persistent unified memory** - one local-first memory across every modality.
-3. **Jarvis voice layer** - always-available, sub-450ms, can do anything in the app.
-4. **Live to-do list + smart scheduler + notifications** - native task system Jarvis owns.
-5. **MCP-native tool ecosystem** - curated marketplace, sandboxed by default.
+1. Open your terminal.
+2. Run:
 
-## Phased build plan (summary)
+```bash
+curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash
+```
 
-| Phase | Duration | Outcome |
-|---|---|---|
-| 0 - Foundations | 3 weeks | Repo, CI, Tauri shell on all OSes |
-| 1 - MVP single-agent chat | 6 weeks | One agent, memory, basic to-do |
-| 2 - Multi-agent council | 6 weeks | Mastra orchestrator, council UI, tools |
-| 3 - Voice (Jarvis) layer | 8 weeks | Sub-450ms voice, wake word, intents |
-| 4 - Smart scheduler + notifications | 4 weeks | Auto-extract, smart reminders, OS notifs |
-| 5 - Mobile + polish + closed beta | 6 weeks | iOS, polish, 500-user beta |
-| 6 - Public launch + cloud + marketplace | 8 weeks | Stripe, sync, marketplace, watch |
+3. Launch Jarvis from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
 
-Total: ~10-11 months focused build to public launch. Detail in [`implementation-plan/00-phased-plan.md`](implementation-plan/00-phased-plan.md).
+See [`DOWNLOAD.md`](DOWNLOAD.md) for direct release filenames, checksum verification, and troubleshooting.
 
-## What this isn't (yet)
+## The Headline Feature: Calling
 
-- **No code.** Pure planning docs. Implementation starts after these are reviewed.
-- **No name.** "Jarvis" is the working title. Trademark search and naming exercise required before public launch.
-- **No team.** Plan assumes 4-6 person team; if smaller, phases stretch.
-- **No designs.** Figma mockups will live in `design/` once they exist.
+Jarvis is not only a desktop window. It is an AI you can talk to.
 
-## Source material
+**Calling pitch:** a phone number you can call. The AI picks up. It can read your workspace through a local bridge.
 
-This planning effort was produced via 5 parallel research subagents that scraped the public web for:
-1. BridgeMind product and ecosystem (the inspiration).
-2. Multi-agent orchestration frameworks and patterns (2026).
-3. Voice assistant tech stack (STT, TTS, S2S, wake word).
-4. Competitive landscape (every shipping multi-AI app).
-5. UI/UX trends (2026 AI-app design language).
+### Calling paths
 
-Raw reports are preserved in [`research/`](research/) for traceability. The `docs/` folder distills them into actionable design and architecture decisions.
+| Path | What it does | Status |
+| --- | --- | --- |
+| Path A: PSTN inbound | Dial a real Twilio number from any phone and talk to Sage/Jarvis | Backend endpoints exist; Twilio provisioning required |
+| Path A outbound | Sage can call you for build failures, deadline alerts, or manual triggers | API exists; trigger callsites still being wired |
+| Path C: in-app call | Tap the green call button and talk through LiveKit WebRTC | Shipping path |
 
----
+### Calling stack
 
-*Generated: May 28, 2026.*
+- Twilio Programmable Voice and Media Streams for phone calls.
+- LiveKit for in-app WebRTC voice.
+- Pipecat for the voice pipeline.
+- FastAPI backend.
+- Supabase JWT/RLS for auth and per-user settings.
+- Local bridge over WebSocket for file and tool access.
+- BYOK provider keys for Groq, Anthropic, Cartesia, Deepgram, and others.
+
+### Calling privacy
+
+- Read-only tools by default.
+- File reads happen through the local laptop bridge.
+- Write/edit/delete actions require confirmation.
+- PIN and caller allowlist are part of the phone flow.
+- Audit logging is designed for 30-day retention by default.
+
+## Feature Inventory
+
+Jarvis currently includes or is actively wiring these surfaces:
+
+- **AI calling:** in-app voice call, Twilio phone-call backend, outbound call API, bridge lifecycle, phone settings.
+- **Council mode:** multiple agents in parallel with visible panels and synthesis flow.
+- **Agents:** Jarvis supervisor, Coder, Researcher, Writer, Critic, Memory Keeper, Action Extractor, Scout, Builder, Reviewer.
+- **Voice personas:** Jarvis, Athena, Edge, Watson, HAL, Sage-style calling voice.
+- **Coding terminals:** real PTY terminals, tile grids, manual resize handles, terminal swarm presets.
+- **Scout / Builder / Reviewer roles:** scoped research, implementation, and quality-gate workflow.
+- **Chat:** multi-thread chat, composer, message rendering, action approval cards.
+- **Actions:** 24 built-in Approve/Cancel actions across navigation, settings, theme, voice, terminal, chat, wellness, and host actions.
+- **Custom tools:** local tool templates, import/export, run-in-place workflows.
+- **Command palette:** global command center on `Mod+K`.
+- **Actions palette:** `Mod+Shift+A` for actionable commands.
+- **Quick launcher:** pinned apps and links.
+- **Live to-do:** task panel, notifications, scheduler concepts, voice/task integration.
+- **Schedule:** events, reminders, and scheduled surfaces.
+- **Kanban:** drag-and-drop project board.
+- **Benchmarks:** LMArena snapshot/fallback benchmark page.
+- **History:** replayable session history.
+- **Skills:** markdown/system-prompt skill system designed for marketplace expansion.
+- **Settings:** providers, local models, hotkeys, plans, phone/call configuration, privacy controls.
+- **Local models:** Ollama adapter, offline mode, model scanning from `/api/tags`.
+- **Auth/model access gate:** blocks the workspace until a real Gemini key or offline mode is configured.
+- **Wellness:** 20-20-20 break overlay.
+- **Dev console:** debug panel for development and diagnostics.
+- **What's new:** changelog/onboarding surface.
+
+## Model Support
+
+Jarvis is BYOK-first. Five providers are live today, and additional provider keys already persist in settings for future adapters.
+
+### Live Today
+
+| Provider | Why it matters |
+| --- | --- |
+| Anthropic | Claude for deep reasoning, coding, and excellent writing tone |
+| OpenAI | GPT family for general-purpose intelligence |
+| Google Gemini | generous free-tier path; default setup path |
+| Groq | ultra-fast open model inference and Whisper options |
+| Ollama | local/offline open-source models with no key and no internet |
+
+### Wired / Expanding
+
+- xAI / Grok
+- DeepSeek
+- Mistral
+- Cohere
+- Perplexity
+- OpenRouter
+- Together
+- Fireworks
+- Replicate
+- Hyperbolic
+- Novita
+- Lambda
+- Mock provider for deterministic local development
+
+## Hotkeys
+
+| Hotkey | Action |
+| --- | --- |
+| `Mod+K` | Command palette |
+| `Mod+,` | Settings |
+| `Mod+J` | Jarvis assistant bar |
+| `Mod+Space` | Voice push-to-talk |
+| `Mod+Shift+A` | Actions palette |
+| `Mod+Shift+L` | Quick launcher |
+| `Mod+Shift+S` | Schedule modal |
+| `Mod+Shift+T` | To-do drawer |
+| `Mod+Shift+D` / `F12` | Dev Console |
+| `Mod+B` | Toggle nav pane |
+| `Mod+\` | Toggle inspector |
+| `Mod+Enter` | Send message |
+| `Mod+Shift+Enter` | Broadcast to council |
+| `Mod+Shift+M` | Composer mic / STT |
+| `Mod+Shift+F` | Chat fullscreen |
+| `Mod+1..9` | Switch tabs |
+
+## Built-In Actions
+
+Jarvis can propose safe, inspectable actions in chat. You approve or cancel before execution.
+
+- Navigation: chat, terminal, kanban, skills, benchmarks, history, tools.
+- Settings: open settings, providers, plans.
+- Theme: dark, light, toggle.
+- Voice: open voice modal.
+- Terminal: open terminal, open swarm, start Claude Code, start OpenCode, run shell command.
+- Chat: fullscreen.
+- Wellness: start/end 20-20-20 break.
+- Host: open URL, open launcher.
+
+## Tech Stack
+
+| Layer | Stack |
+| --- | --- |
+| Desktop | Tauri 2, Rust, React, TypeScript, Vite |
+| UI | cozy paper theme, warm copper accents, keyboard-first shell |
+| Runtime | AI router, provider adapters, MCP-lite tools, PTY terminal bridge |
+| Calling | Twilio, LiveKit, Pipecat, FastAPI, Supabase |
+| Storage | local-first app state, IndexedDB/Dexie patterns, Supabase optional sync |
+| Local AI | Ollama adapter and offline mode |
+| License | Apache 2.0 core |
+
+## Website
+
+The GitHub Pages site lives in [`site/`](site/). It is a self-contained warm/cozy landing page built for GitHub Pages.
+
+It includes:
+
+- Vibe-coding hero copy.
+- Calling-first product section.
+- Model support wall.
+- Full feature grid.
+- Download instructions for Windows, macOS, and Linux.
+- Hotkeys, stack, changelog, community placeholders, and maker letter.
+- Recommended domain from domain research: `vibejarvis.com`.
+
+Deployment is handled by [`.github/workflows/pages.yml`](.github/workflows/pages.yml), which publishes `site/` to GitHub Pages.
+
+## Local Development
+
+```powershell
+cd C:\Users\viper\projects\Jarvis
+npm install
+npm run dev
+```
+
+For desktop/Tauri development:
+
+```powershell
+npm run tauri:dev
+```
+
+For release builds:
+
+```powershell
+npm run tauri:build
+```
+
+See [`SETUP.md`](SETUP.md) for prerequisites and troubleshooting.
+
+## Status
+
+Jarvis is early access and shipping fast.
+
+Recently shipped:
+
+- `v0.1.5`: manual terminal tile resizing, compact top bar, lazy call/auth bundle loading, release-link memory improvements.
+- `v0.1.4`: model-access gate, real Ollama adapter, Local Models tab, offline mode.
+- `v0.1.3`: 24-action approval system, custom tools, wellness break, actions palette, pricing ladder.
+
+Still being hardened:
+
+- Stripe billing and hosted plans.
+- Full MCP server transport with auth/RBAC.
+- Phone-call confirmation state machine and audit viewer.
+- Provider adapters for every wired provider.
+- Mobile, browser extension, marketplace, watch companion.
+
+## Domain Recommendation
+
+Domain research recommended:
+
+1. `vibejarvis.com` — best fit, short, .com, cheap first year.
+2. `shipjarvis.com` — good shipping/velocity framing.
+3. `jarvkit.com` — short toolkit framing.
+4. `jarvflow.com` — flow-state framing.
+
+Top pick: **`vibejarvis.com`**.
+
+## License
+
+Apache 2.0. See [`LICENSE`](LICENSE).
