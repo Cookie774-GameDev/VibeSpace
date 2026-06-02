@@ -4,6 +4,94 @@ Append-only log of every significant development action. Each entry: timestamp, 
 
 ---
 
+## 2026-06-02 - v0.1.10 Terminal Dragging Silent Update
+
+**Actor:** OpenCode for viper
+
+**Goal:** Package and silently install the terminal right-drag/project-move/chat-context update as a Jarvis One desktop update.
+
+**Result:** Built and silently installed Jarvis One `0.1.10`.
+
+- Reapplied the release metadata bump to `0.1.10` after the temporary revert.
+- Updated `CHANGELOG.md`, Settings -> About current-update copy, and in-app What's New release metadata for the terminal dragging update.
+- Built signed Windows release artifacts through `scripts/release-windows.ps1` with updater signatures enabled.
+- Staged NSIS/MSI installers and signatures in `releases/`, plus `latest.json` for `v0.1.10`.
+- Ran the local NSIS installer with `JARVIS_LOCAL=1`, `JARVIS_SILENT=1`, and `JARVIS_FORMAT=nsis`.
+- Verified the installed executable at `%LOCALAPPDATA%\Jarvis One\jarvis.exe` reports `ProductVersion 0.1.10`.
+
+**Verification:** `npm --prefix app run typecheck`, release pipeline `npm run release:windows`, local silent installer, installed executable version check, `releases/latest.json` check.
+
+**Files touched:** `app/package.json`, `package-lock.json`, `app/src-tauri/tauri.conf.json`, `app/src-tauri/Cargo.toml`, `app/src-tauri/Cargo.lock`, `CHANGELOG.md`, `About.tsx`, `releases.ts`, `DEVLOG.md`, `releases/latest.json`, `releases/SHA256SUMS.txt`, release installers/signatures.
+
+---
+
+## 2026-06-02 - v0.1.9 Stay-on-Page Chat Creation, Terminal Limit & Layout Fixes
+
+**Actor:** Jarvis for viper
+
+**Goal:** Fix the terminal limit error by flagging closed sessions as deleted, ensure creating a new chat from the right-hand Jarvis panel keeps the user on their current page (stay-on-page routing), and fix the Inspector panel layout bug that pushed active panel content to the bottom of the sidebar.
+
+**Result:** Built and silently installed patch update.
+
+- Added `deleted` state flag to backend `TerminalInfo` and `PtyHandle` (Rust).
+- In `terminal_spawn`, excluded deleted sessions from the active project PTY limit calculations.
+- In `terminal_kill`, marked sessions as deleted and inactive before stopping processes.
+- In `terminal_list`, filtered out deleted sessions.
+- Created `handleCreateChatInsideJarvisPanel` in `Inspector.tsx` to handle new chat creation in Dexie DB without modifying UI routing, maintaining the active page (e.g. terminals).
+- Passed the stay-on-page chat creation callback to `<EmptyChat />` in the right-hand panel.
+- Fixed layout styling in `Inspector.tsx` for `<TabsContent value="jarvis">` by applying `data-[state=active]:flex` and `data-[state=inactive]:hidden` classes to prevent inactive tab elements from taking flex space and pushing active panel content to the bottom.
+- Updated Terminals page Reset button behavior to support two modes: click to reset terminal grid layout sizes only (dispatched via `jarvis:reset-terminal-sizes` event to `TileGrid.tsx`), and hold 2s with custom gradient visual fill progress and confirmation alert to clear all terminal panes.
+- Built and silently deployed changes.
+
+**Files touched:** `terminal.rs`, `Inspector.tsx`, `TileGrid.tsx`, `TerminalsPage.tsx`, `CHANGELOG.md`, `DEVLOG.md`.
+
+---
+
+## 2026-06-01 - Terminal Right-Drag, Project Moves, Chat Context Drop
+
+**Actor:** OpenCode for viper
+
+**Goal:** Implement the long-requested terminal dragging workflow without changing the app's visual language: right-drag any terminal, drop into Jarvis chat for context, reorder panes like a puzzle, move live terminals into another project, and make scheduled terminal messages understand phrases like `message this terminal in five hours`.
+
+**Result:** Implemented and verified.
+
+- Added an optimized right-button terminal drag path with an imperatively-rendered preview and DOM-level drop highlighting so pointer movement does not re-render xterm panes.
+- Kept existing left-drag behavior, but upgraded terminal drops to insert/reorder panes instead of only swapping, so occupied cells move out of the way.
+- Added chat-surface and composer-level terminal drop targets. Dropped terminal refs are attached to the active composer and continue through the existing AI terminal transcript context path.
+- Added project-row drop targets. Hovering a terminal over a project opens that project's terminal workspace; dropping moves the live pane into the target project while preserving session id, pane metadata, transcript metadata, and local layout persistence.
+- Added `terminal_move` in the Tauri backend so a moved PTY's project metadata updates without killing or respawning the child process. This keeps the existing 10-active-terminal cap accurate per project.
+- Centralized terminal tree persistence/move helpers and kept project-drop helper loading lazy from the nav to avoid pulling terminal code into the boot path.
+- Expanded terminal schedule parsing to support word numbers (`five hours`, `twenty-five minutes`) and safe no-body check-ins like `message this terminal in five hours`.
+- Added focused scheduler parser tests.
+
+**Verification:** `npm --prefix app run typecheck`, `npm --prefix app run test` (11 files, 106 tests), `npm --prefix app run build`, `cargo check`.
+
+**Files touched:** `TileGrid.tsx`, `TerminalsPage.tsx`, `terminalProjectMove.ts`, `terminalScheduler.ts`, `terminalScheduler.test.ts`, `ChatView.tsx`, `Composer.tsx`, `NavPane.tsx`, `globals.css`, `terminal.rs`, `lib.rs`, `DEVLOG.md`.
+
+---
+
+## 2026-06-01 - v0.1.9 Groq STT Fix, Terminal References, Durable Terminal Scheduling
+
+**Actor:** OpenCode for viper
+
+**Goal:** Fix Groq speech-to-text invalid media uploads, make terminal references in chat work end-to-end, add durable scheduled terminal messages, update About/release docs, and ship via the full silent update flow.
+
+**Result:** Implemented a production patch release.
+
+- Replaced Groq STT `MediaRecorder` WebM upload with Web Audio PCM capture and WAV encoding. Groq now receives `jarvis-dictation.wav` for `whisper-large-v3-turbo`; Web Speech fallback remains unchanged when no Groq key exists.
+- Added stable terminal reference payloads (`paneId`, `sessionId`, `projectId`, `label`, `command`, `agentSlug`) for terminal drag/drop into chat.
+- Updated terminal transcript persistence to store stable `paneId`s, allowing AI context lookup by current session or restored pane.
+- Added durable terminal scheduler persisted in localStorage. Attached-terminal chat requests like `send this terminal hello in 5 hours` schedule terminal writes that re-arm on app startup.
+- Updated the terminal command queue to target specific terminal refs, not only new/all terminals.
+- Updated Settings -> About with current-update details.
+- Bumped Jarvis One to `0.1.9` and updated `CHANGELOG.md` plus in-app What's New notes.
+
+**Architecture note:** True live OS terminal process survival across full app exit still requires a separate long-lived terminal daemon/sidecar. The current Tauri PTY backend is in-process: when the Jarvis process exits, owned PTY child processes and IPC state are torn down by the OS/runtime. This patch makes restore safe and durable by preserving layout, transcripts, pane identity, and scheduled commands, then respawning/rebinding when Jarvis opens again.
+
+**Files touched:** `Composer.tsx`, `TileGrid.tsx`, `TerminalView.tsx`, `TerminalsPage.tsx`, `terminalCommandQueue.ts`, `terminalRefs.ts`, `terminalScheduler.ts`, `transcriptStore.ts`, `context.ts`, `runtime.ts`, `App.tsx`, `About.tsx`, `releases.ts`, version files, changelog/devlog.
+
+---
+
 ## 2026-05-28 - V1 Scaffold Session
 
 **Actor:** opencode (claude) for viper
@@ -136,7 +224,7 @@ d3af46f chore: initialize repo with planning docs and licenses
 2. Drop Supabase URL + anon key into `app/.env.local` (copy from root `.env.example`).
 3. Apply `app/supabase/migrations/0001_initial.sql` in the Supabase SQL editor.
 4. Optionally drop AI provider keys (Anthropic / OpenAI / Google) into `.env.local` or via Settings -> Providers.
-5. `npm run dev` to launch the web version (works without Rust).
+5. `npm run jarvis` to launch the web version (works without Rust).
 
 ---
 
@@ -1071,4 +1159,331 @@ Did **not** rebuild the Tauri MSI/EXE. The user will run `npx tauri build` when 
 - Twilio sub-account-per-user provisioning flow
 - Voice-id picker UI inside Phone & Voice settings (load Cartesia voices, preview, pick per persona)
 - `system.hangup` tool so Sage can end calls cleanly
+
+
+---
+
+## 2026-05-31 — v0.1.5: Terminal layout + bundle deferral
+
+**Actor:** opencode (claude) for viper
+
+**Goal:** Make the Terminals page feel like OpenCode — compact chrome, more terminal real estate, manual resize between tiles. Then optimise the rest of the app per the user's "make the whole Jarvis optimized" ask.
+
+**Result:** Terminals page header collapsed from a 96px hero block to a 32px toolbar. TopBar shrinks to 28px on terminal/fullscreen routes with low-frequency buttons in an overflow menu. Manual resize handles between every tile in Tiles mode (drag + double-click to reset, persisted per layout shape). Side rail stays visible in fullscreen. Bundle: LiveKit (504 kB), Supabase (210 kB), and settings-sections (131 kB) dropped from the boot preload list — about 227 kB gzipped of cold-load deferral. Boot modulepreload list shrunk from 13 chunks to 10. Cargo release profile relaxed (thin LTO + 4 codegen units) so Tauri release can link in roughly a third the peak memory.
+
+Tauri MSI/EXE rebuild attempted but blocked by Windows Application Control on freshly compiled `tauri-plugin-shell` build script (os error 4551, STATUS_VIRUS_INFECTED variant). The user's existing v0.1.4 installer remains the latest shipped binary; renderer changes work immediately under `npm run tauri:dev` and will bake into the next successful Tauri build.
+
+---
+
+### Phase 1: Terminal layout
+
+The user shared a video showing OpenCode running across 4 terminal tiles, then asked Jarvis to "be one of the apps and just have one whole big page where its just the entire terminal split into 4 windows ok and like the heading at the top can be small". Three concrete changes drove that:
+
+1. **Compact TopBar.** `app/src/components/layout/TopBar.tsx` now reads `useUIStore.fullscreen` plus the active route. When on `terminals` (or any route while fullscreen is on), it switches to a 28px-tall variant. The seven low-frequency right-cluster buttons (launcher, assistant, schedule, search, voice, call, what's-new) move into a single `MoreHorizontal` overflow popover so the visible right cluster is just fullscreen / overflow / settings / avatar. No state is duplicated — the popover renders the same `MenuRow` actions that fire the same hotkeys.
+
+2. **Slim TerminalsPage header.** `app/src/features/terminals/TerminalsPage.tsx` lost its eyebrow + Fraunces hero + descriptive paragraph. The mode toggle, pane count, layout label, and Add pane / Reset / Open swarm buttons now share one 32px row with the page title rendered as a compact label. ~80px of vertical space returned to the grid in 1280×820 default window size.
+
+3. **Manual resize handles.** `app/src/features/terminals/TileGrid.tsx` rewritten to use flex columns/rows with `<ResizeHandle>` between adjacent tracks. Drag redistributes fr units between neighbouring tracks (clamped to MIN_FR=0.18 so a track can't disappear). Double-click resets that single boundary to 50/50. Sizes persist to `localStorage["jarvis-tile-grid-sizes-v1"]`, keyed by layout shape (e.g. "2x2", "3x2") so toggling between counts (4→3→4) keeps the 4-tile sizing intact.
+
+   `app/src/styles/globals.css` was also tightened: `[data-fullscreen='true']` now collapses only the to-do drawer, not the NavPane. The user explicitly asked for "side pane in the side okay" — only the right drawer hides; Mod+B remains the manual nav-toggle for true distraction-free.
+
+### Phase 2: Bundle deferral
+
+The user asked to "make the whole Jarvis optimized". I dispatched an `explore` subagent to survey eager imports of the heavy chunks (LiveKit, Supabase, settings-sections) and identify boot-graph leaks.
+
+The agent traced four eager paths into the LiveKit + Supabase chunks from boot. The fixes, in order of impact:
+
+- **TopBar.tsx → CallService**: replaced `import { getCallService } from '@/features/call/CallService'` with `import { isCallConfigured, loadCallService } from '@/features/call'`. Both `CallTopBarButton` and the new `CompactCallRow` now read `isCallConfigured()` (env-only, in `features/call/config.ts`) for button colour, and `loadCallService()` is only awaited inside the click handler when `inCall === true`. By that point the LiveKit chunk is already loaded by the CallModal that started the call, so the dynamic re-resolve is essentially free.
+
+- **outbound.ts → CallService + Supabase**: replaced `getCallService().getCloudUrl()` with `callCloudUrl()` from `./config`, and converted `getSupabaseClient()` to a dynamic `await import('@/lib/supabase/client')` inside the event handler. The handler only fires when an actual outbound event dispatches.
+
+- **useBridgeLifecycle.ts → Supabase**: gated the entire effect on `isSupabaseConfigured()` (an env-only helper that already lived in `lib/supabase/env.ts`) and converted the supabase client load to `await import('@/lib/supabase/client')` inside an IIFE. `cancelled` flag added so the dynamic load can be aborted by an unmount that fires before the import resolves.
+
+- **CallButton.tsx → CallService**: same pattern as TopBar — `isCallConfigured` for button state, `import('./CallService').then(m => m.getCallService().stop())` for the hang-up path.
+
+- **auth/index.ts → SignInDialog**: dropped `export { SignInDialog } from './SignInDialog'` from the auth barrel. SignInDialog statically imports `@/lib/supabase/client`, and the only consumer (`features/settings/sections/Account.tsx`) already imports it by direct path inside the lazy settings chunk.
+
+These four fixes were necessary but not sufficient — the modulepreload list still contained `supabase` and `livekit` after them. A second `explore` subagent traced the remaining edge to the manualChunks rule itself.
+
+**Root cause: `vite.config.ts:41`'s `if (id.includes('/src/features/settings/sections/')) return 'settings-sections';`**
+
+The agent's diagnostic: forcing 11 section files into a named chunk caused Rollup to physically relocate symbols shared by both the eager boot graph and the section files (`useUIStore`, Button, Badge, Switch, Separator, ~22 bindings total) into the named chunk, then back-import them into the boot chunk. That static back-edge from boot → `settings-sections-*.js` triggered a modulepreload, and `settings-sections` itself statically imports `@/lib/supabase/client` (PhoneVoice section) and `@/features/call/CallService` (PhoneVoice section), so supabase + livekit rode along for every cold load.
+
+**Fix:** drop the `settings-sections` rule. With it gone, Rollup naturally packages all 11 sections into the lazy `SettingsModal` chunk (the React.lazy boundary at `App.tsx:73`), shared symbols stay in the boot chunk where they belong, no back-edge gets emitted, and the section's transitive deps stay cold.
+
+Verification: `dist/index.html` modulepreload list dropped from 13 chunks to 10. Removed entries: `supabase`, `livekit`, `settings-sections`. Boot chunk grew from 187 kB / 56 kB gzip to 247 kB / 76 kB gzip (the shared symbols moved back), but cold-load preload total dropped about 227 kB gzipped — a net win of ~145 kB gzipped in actual transfer for any user who never opens Settings or makes a Call.
+
+### Phase 3: Cargo release profile relaxation
+
+A first attempt at the Tauri build hit `rustc-LLVM ERROR: out of memory` while compiling the `tauri` crate at `-C opt-level=s -C codegen-units=1` with full LTO. `app/src-tauri/Cargo.toml` adjusted from `lto = true` + `codegen-units = 1` to `lto = "thin"` + `codegen-units = 4`, with a comment block explaining the tradeoff (binary ~1-3% bigger, peak link memory roughly a third).
+
+### Phase 4: Tauri build — blocked
+
+After cleaning the corrupt target directory left by the first OOM (`Remove-Item -Recurse -Force target`) and bumping versions to 0.1.5 across `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and `features/whats-new/releases.ts`, I retried `npm run tauri:build`.
+
+The compile got past LLVM and into the build-script execution phase, then aborted with:
+
+```
+error: failed to run custom build command for `tauri-plugin-shell v2.3.5`
+  An Application Control policy has blocked this file. (os error 4551)
+```
+
+Error 4551 is `STATUS_VIRUS_INFECTED` — Windows Defender Application Control / Smart App Control rejecting the freshly compiled `target/release/build/tauri-plugin-shell-*/build-script-build.exe`. The previously shipped v0.1.0–v0.1.4 builds presumably whitelisted those build script binaries; nuking the target dir produced new artifacts with new hashes that the policy hasn't approved.
+
+This is a system-level policy issue I cannot work around from inside the build. The user's options are: add the cargo target dir to security software exclusions, run with the policy temporarily relaxed, or sign the build artifacts. The renderer changes themselves are fully shippable — `npm run tauri:dev` picks them up immediately, and the next successful `tauri build` (after the WDAC exclusion is added) will bake them into a new MSI/NSIS pair.
+
+### Files touched
+
+Source changes:
+
+- `app/src/components/layout/TopBar.tsx` — compact mode, overflow menu, swap to env-only `isCallConfigured` + `loadCallService`.
+- `app/src/features/terminals/TerminalsPage.tsx` — slim header.
+- `app/src/features/terminals/TileGrid.tsx` — manual resize handles, persisted sizes, drag math, ResizeHandle component.
+- `app/src/styles/globals.css` — keep NavPane visible in fullscreen, only hide to-do drawer.
+- `app/src/features/call/outbound.ts` — drop static CallService + Supabase imports; use `callCloudUrl()` + dynamic supabase import.
+- `app/src/features/call/CallButton.tsx` — drop static CallService import; use `isCallConfigured()` + dynamic CallService import.
+- `app/src/lib/bridge/useBridgeLifecycle.ts` — drop static Supabase import; gate on `isSupabaseConfigured()`, dynamic supabase load inside IIFE.
+- `app/src/features/auth/index.ts` — stop re-exporting SignInDialog (which would drag supabase to boot via the AuthGate path).
+- `app/vite.config.ts` — drop counterproductive `settings-sections` manualChunks rule.
+- `app/src-tauri/Cargo.toml` — thin LTO + 4 codegen units; bump version to 0.1.5.
+- `app/src-tauri/tauri.conf.json` — bump version to 0.1.5.
+- `app/package.json` — bump version to 0.1.5.
+- `app/src/features/whats-new/releases.ts` — bump CURRENT_VERSION; prepend 0.1.5 release entry.
+- `CHANGELOG.md` — 0.1.5 section above [Unreleased].
+
+Verification:
+
+- `npm run typecheck` — clean.
+- `npm run build` — clean. 2604 modules transformed in ~24-35s. Modulepreload list drops to 10 entries. Settings-sections chunk no longer in boot graph.
+- `npm run tauri:build` — fails on Windows Application Control policy at the build-script execution phase. Source compile is clean.
+
+---
+
+## 2026-06-01 - V3 Session (Wave 5 — Silent Updater, App Rename to Jarvis One & Project-Scoped Terminals)
+
+**Actor:** Jarvis (opencode) for viper
+
+**Goal:** Configure the auto-updater for fully silent background installation (bypassing UAC warnings and manual dialogs), rename the application to **Jarvis One**, and transition the terminal session limit of 10 to be scoped per-project rather than globally.
+
+**Result:** Silent auto-updater settings configured (`installMode: quiet` for updater and `installMode: currentUser` for NSIS) which installs to `%LOCALAPPDATA%` and bypasses admin prompts. App renamed to **Jarvis One** and version bumped to `0.1.6`. Rust PTY terminal limit checks updated to restrict count to 10 per project. Staging scripts compile cleanly and build release installers successfully.
+
+### What was done:
+
+1. **Auto-Updater & Windows Installer Configuration**:
+   - Changed updater `"installMode": "passive"` to `"quiet"` in `tauri.conf.json` to run Windows updates completely silently.
+   - Added `"nsis": { "installMode": "currentUser" }` to `tauri.conf.json` to install the app under `%LOCALAPPDATA%`, letting updates run without admin UAC validation.
+   - Updated file patterns and download targets in `scripts/release-windows.ps1` and `install/install.ps1` to support the renamed build files.
+
+2. **Project-Scoped Terminal Limits**:
+   - Added `project_id: Option<String>` to `TerminalInfo` struct in `terminal.rs`.
+   - Modified `terminal_spawn` IPC endpoint in `terminal.rs` to take `project_id: Option<String>` and verify that active sessions for that specific project do not exceed `MAX_TERMINAL_SESSIONS`.
+   - Propagated the active `projectId` down through React component hierarchy: `types.ts` (`TerminalViewProps`), `TileGrid.tsx` (`Tile` props), and `TerminalView.tsx` (`terminal_spawn` IPC invocation).
+
+3. **Changelog & Startup Updates**:
+   - Bumped version to `0.1.6` across `tauri.conf.json`, `package.json`, and `Cargo.toml`.
+   - Appended v0.1.6 release changelog notes to `releases.ts` to trigger in-app What's New modal automatically on boot.
+
+### Files touched:
+
+- `app/src-tauri/tauri.conf.json` — set product name to "Jarvis One", bumped version to 0.1.6, set updater installMode to quiet, added NSIS currentUser mode.
+- `app/package.json` — bumped version to 0.1.6.
+- `app/src-tauri/Cargo.toml` — bumped version to 0.1.6.
+- `app/src-tauri/src/terminal.rs` — scoped active terminal limit check to matching project IDs.
+- `app/src/features/terminals/types.ts` — added optional `projectId` parameter to `TerminalViewProps`.
+- `app/src/features/terminals/TerminalView.tsx` — forward `projectId` parameter to `terminal_spawn` IPC.
+- `app/src/features/terminals/TileGrid.tsx` — pass `projectId` from grid down to terminal tile.
+- `app/src/features/whats-new/releases.ts` — bumped version to 0.1.6 and prepended release changelog.
+- `scripts/release-windows.ps1` — updated bundle and friendly names to target Jarvis One.
+- `install/install.ps1` — updated local pattern check and download URLs to target Jarvis One.
+- `CHANGELOG.md` — prepended version 0.1.6 release notes.
+- `scripts/build-updater-manifest.mjs` — updated the windows-x86_64 regex pattern to support spaces in 'Jarvis One'.
+
+### Verification:
+
+- `npm run typecheck` — TypeScript compilation compiles with exit code 0.
+- `cargo check` — Rust compilation check succeeds with exit code 0.
+- `npm run release:windows` — stages Jarvis One installers and updates latest.json manifest.
+- `install.ps1` local testing — verified that running with `$env:JARVIS_SILENT="1"` and `$env:JARVIS_LOCAL="1"` performs a 100% silent, UAC-free background installation of Jarvis One to Local AppData, exiting with code 0.
+- Verified that the camelCase parameter casing fix (`projectId` in the `invoke` call inside `TerminalView.tsx`) allows the Rust backend to deserialize the active project ID correctly, resolving the global limit tracking issue and isolating the 10-terminal limit per project.
+
+---
+
+## 2026-06-01 - v0.1.7 Files Workspace + Chat/Terminal File Context
+
+**Actor:** Jarvis (opencode) for viper
+
+**Goal:** Add a production-safe in-app file explorer/editor, attach files to chat requests, and support dragging files into specific terminal panes without disturbing the existing terminal, context, or optimization systems.
+
+**Result:** Files landed as a lazy route (`files`) so editor/browser code stays out of cold start. Tauri gained small scoped file commands for list/read/write/create with absolute-path and size guards. Chat and terminals now accept files dragged from the Files page. App version bumped to `0.1.7`.
+
+### Files touched
+
+- `app/src-tauri/src/fsread.rs` — added `fs_list_dir`, `fs_write_text`, and `fs_create_text_file` beside the existing capped `fs_read_text` command.
+- `app/src-tauri/src/lib.rs` — registered the new file commands.
+- `app/src/lib/fs.ts` — added typed wrappers for list/write/create and expanded file error descriptions.
+- `app/src/features/files/FilesPage.tsx` and `index.ts` — new lazy-loaded Files workspace with project-folder open, tree list, new-file creation, text editor, save, drag source, and Ask Jarvis selection flow.
+- `app/src/stores/ui.ts`, `app/src/components/layout/PageRouter.tsx`, `app/src/components/layout/NavPane.tsx` — added the `files` route and sidebar access.
+- `app/src/features/chat/Composer.tsx` — added drag/drop attachments, `/` slash commands, file chips, and `jarvis:files:ask` intake from the Files editor.
+- `app/src/lib/ai/context.ts` and `app/src/lib/ai/runtime.ts` — attached files are read at request time and inserted as request-scoped AI context alongside project and connected-terminal file context.
+- `app/src/features/terminals/TerminalView.tsx` — file drop target with interactive highlight; dropped file content is pasted into that exact PTY session.
+- `CHANGELOG.md`, `app/src/features/whats-new/releases.ts`, `app/package.json`, `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json` — version/release notes for `0.1.7`.
+
+### Verification
+
+- `npm run typecheck` — clean before version docs, rerun planned after final version lockfile update.
+- `cargo check` — clean after removing one unused import warning.
+
+---
+
+## 2026-06-01 - V4 Session (Wave 5 follow-up - Silent Update Hardening & Terminal Cap Cleanup)
+
+**Actor:** Jarvis (opencode) for viper
+
+**Goal:** Remove the last stale-session edge case in terminal project caps and make the local installer path stay non-elevated when silent mode is requested.
+
+**Result:** Added terminal cleanup for finished PTYs before cap checks and list snapshots, so stale exited sessions stop counting toward the 10-per-project limit. Hardened `install/install.ps1` so `JARVIS_SILENT=1` automatically uses NSIS instead of MSI, preventing UAC prompts during local silent update tests. Documented the change in `CHANGELOG.md`.
+
+### What was done:
+
+1. **Terminal lifecycle hardening**:
+   - Added a small cleanup helper in `app/src-tauri/src/terminal.rs` that prunes finished reader tasks before session counting and listing.
+   - Kept the existing exit-path cleanup that removes naturally exited sessions from the active map.
+
+2. **Silent installer hardening**:
+   - Updated `install/install.ps1` so silent installs force NSIS, which installs under the current user and avoids UAC elevation prompts.
+
+3. **Documentation**:
+   - Appended release-note bullets to `CHANGELOG.md` covering the per-project session cleanup and silent-install behavior.
+
+### Verification:
+
+- `cargo check` — clean.
+
+---
+
+## 2026-06-01 - v0.1.8 Restore Persistence, Groq STT, Recursive Files, Terminal References, Command Catalog
+
+**Actor:** Jarvis (opencode) for viper
+
+**Goal:** Make Jarvis reopen after closes/updates like it never shut down; improve speech-to-text without removing fallback support; make Files project-connected and recursive; fix Send to Jarvis; let terminals be dragged into chat as context; add 50 more Jarvis commands.
+
+**Result:** Active UI state now persists, terminal panes restore layout/transcript and respawn when backend PTYs are gone, Files roots/open files are project-scoped, Ask Jarvis creates/reuses a chat before sending selection context, terminal panes can be dragged into chat, Groq Whisper STT is available when a Groq key is set, and the Jarvis command catalog is exposed through Mod+J examples plus `/commands`.
+
+### Files touched
+
+- `app/src/stores/ui.ts` — persists active route, active chat, and active agent so reopen/update restores the same workspace surface.
+- `app/src/features/files/FilesPage.tsx` — rewritten from flat folder list to recursive project-scoped file tree; stores root/open file per project; supports expandable folders, popular text/code files, and fixed Send to Jarvis.
+- `app/src/features/chat/Composer.tsx` — added terminal attachments, `/commands`, Groq Whisper recording/transcription path, improved file/terminal drag-drop, and terminal/file context dispatch to the runtime.
+- `app/src/lib/ai/context.ts` — added explicit terminal transcript context builder beside explicit file context.
+- `app/src/lib/ai/runtime.ts` — reads `terminalSessionIds` from chat send events and injects request-scoped terminal context into the system prompt.
+- `app/src/features/terminals/TileGrid.tsx` — terminal panes are draggable into chat via `application/x-jarvis-terminal`.
+- `app/src/features/assistant/{commands,intents,parse,execute,AssistantBar}.ts(x)` — added 50-command catalog, provider ask command, and terminal context broadcast command.
+- `CHANGELOG.md`, `app/src/features/whats-new/releases.ts`, `app/package.json`, `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json` — version/release notes for `0.1.8`.
+
+### Verification
+
+- `npm run typecheck` — clean.
+- `cargo check` — clean.
+
+### Notes
+
+- `task.md`, `walkthrough.md`, and `EMPIRE_SOVEREIGN_DIRECTORY.md` were requested in prior context but do not exist in this repo tree, so this session documents the update in the Jarvis devlog, changelog, and in-app release notes instead.
+- True OS-process survival after a full app close is not possible with the current in-process Rust PTY architecture because the PTYs die with the app process. The production-safe behavior implemented here is layout/transcript restoration plus automatic respawn when Jarvis sees a persisted session id that is no longer alive.
+
+---
+
+## 2026-06-02 — Marketing Site, GitHub Pages & Repo Rebrand to jarvis-one
+
+**Actor:** OpenCode for viper
+
+**Goal:** Build a polished GitHub Pages marketing site for the Jarvis One AI workspace, push it to a public repo (`Cookie774-GameDev/jarvis-one`), enable Pages, and update all install URLs from the original `anomalyco/jarvis` to the new repo.
+
+**Result:** Full 18-section landing page shipped live at `https://cookie774-gamedev.github.io/jarvis-one/`. Install commands, README, download docs, and installer shims all updated. ~28 sub-agents used for research and copy generation across the session.
+
+### What was done
+
+**Phase 1 — Discovery & planning (10+ parallel sub-agents)**
+
+Dispatched 28 sub-agents to inventory: existing UI/UX from the app codebase, tech stack, product vision, roadmap, current state via DEVLOG, feature folders, install flow, voice/calling layer, 24 built-in actions, MCP tools, hotkey mappings, provider list, bundled skills/agents, phone calling deep-dive, brand colors, competitive positioning (Cursor, Bolt, Windsurf, Codex CLI, Continue.dev, Claude Code, OpenCode), cozy palette (cream, copper, amber, sage), 2026 landing-page best practices, domain availability (`vibejarvis.com`), and the existing `DOWNLOAD.md` / `README.md`.
+
+**Phase 2 — Site construction**
+
+Built `site/index.html` as a single self-contained HTML file (no external requests, all CSS inlined):
+
+| Section | Content |
+|---|---|
+| Hero | "Vibe coding for vibe coders. By a vibe coder." with install command + OS tabs |
+| Calling (hero card) | Phone-turn illustration with Sage dialog bubble, metrics (<800ms, $0, read-only) |
+| AI Calling (feature) | 3-card deep-dive: call from any phone, tap to call in-app, let Sage call you |
+| All-in-one workspace | 6 cards: council, code swarm, system prompts, research, memory, actions |
+| Council mode | 4-agent live canvas (Jarvis, Researcher, Coder, Critic) |
+| Model support | 18 providers in a 6-col grid (Anthropic, OpenAI, Google, Groq, Ollama, xAI, DeepSeek, Mistral, Cohere, Perplexity, Together, Fireworks, Replicate, Llama, OpenRouter, Hyperbolic, Novita, Lambda) |
+| Download | 3-step cards per OS (Win/Mac/Linux) with copy buttons |
+| Hotkeys table | 10 hotkeys (Mod+K/J/Space/Shift+A/L/T/B/Enter) |
+| Architecture | 6-card stack overview (Desktop, Runtime, Calling, Storage, Privacy, License) |
+| Changelog | v0.1.5, v0.1.4, v0.1.3 highlights + Next |
+| Community | GitHub + Discord + YouTube placeholders |
+| Maker letter | Warm brand story |
+| FAQ | 5 questions (coding, models, calling, offline, domain) |
+
+Design: cozy Claude-inspired palette (cream `#FAF6EE`, copper `#B5613A`, amber `#C58A3D`, sage `#6F8F66`). System serif/sans fonts. Noise texture overlay + radial bloom backgrounds. Scroll-reveal animations. Tab-switching install commands.
+
+**Phase 3 — GitHub infrastructure**
+
+- Installed `winget install GitHub.cli` to get `gh` on PATH.
+- Authenticated with a classic PAT (scoped: all repo, workflow, admin).
+- Created public repo `Cookie774-GameDev/jarvis-one`.
+- Added `.github/workflows/pages.yml` — deploys `site/` to GitHub Pages on every push to `main`.
+- Added `site/.nojekyll` (bypass Jekyll processing) and `site/404.html` (redirect to root).
+- Mirrored `install/install.ps1` → `site/install.ps1` and `install/install.sh` → `site/install.sh` as short-URL shims.
+- Pushed 3 commits across two pushes:
+  1. `docs: add Jarvis marketing site` (initial site + workflow + installers)
+  2. `fix: update repo URLs to Cookie774-GameDev/jarvis-one` (README, DOWNLOAD.md, installer shims)
+  3. `fix: update site/index.html repo URLs to Cookie774-GameDev/jarvis-one` (site itself)
+
+**Phase 4 — Pages enablement**
+
+- First Actions run failed because GitHub Pages was not yet enabled — `actions/configure-pages@v5` returned 404.
+- Enabled Pages via `gh api -X POST /repos/Cookie774-GameDev/jarvis-one/pages` with `build_type: workflow`.
+- Second run succeeded instantly. Site went live at `https://cookie774-gamedev.github.io/jarvis-one/`.
+
+**Phase 5 — URL rebrand**
+
+- All references to `anomalyco/jarvis` in `site/index.html`, `README.md`, `DOWNLOAD.md`, `site/install.ps1`, `site/install.sh` replaced with `Cookie774-GameDev/jarvis-one`.
+- Committed, pushed, verified live site has zero stale URLs.
+
+### Files created
+
+- `site/index.html` — 18-section marketing landing page (~189 lines, 35 KB)
+- `site/install.ps1` — short-URL Windows installer shim
+- `site/install.sh` — short-URL macOS/Linux installer shim
+- `site/.nojekyll` — bypass Jekyll
+- `site/404.html` — custom 404 redirect
+- `.github/workflows/pages.yml` — GitHub Actions deployment
+
+### Files modified
+
+- `README.md` — full overhaul (features, install, calling, hotkeys, provider list, domain recommendation)
+- `DOWNLOAD.md` — all URLs updated to `Cookie774-GameDev/jarvis-one`
+
+### Verification
+
+- `https://cookie774-gamedev.github.io/jarvis-one/` — loads, all URLs point to `Cookie774-GameDev/jarvis-one`
+- `https://github.com/Cookie774-GameDev/jarvis-one` — 3 commits on `main`, Pages configured to `Deploy from a branch: GitHub Actions`
+- `git grep anomalyco` — zero matches in tracked user-facing files
+
+### URLs
+
+| Resource | URL |
+|---|---|
+| Repo | `https://github.com/Cookie774-GameDev/jarvis-one` |
+| GitHub Pages (live) | `https://cookie774-gamedev.github.io/jarvis-one/` |
+| Recommended domain | `vibejarvis.com` |
+
+### Notes
+
+- The `JARVIS_LINKS` config block at the bottom of `site/index.html` has Discord and YouTube as `#placeholder` — swap in real URLs when ready.
+- Domain recommendation `vibejarvis.com` (~$6 first year, ~$10/yr renewal) — short, .com, aligns with product positioning.
+- First Actions run failed predictably because `configure-pages` requires Pages to be enabled first. Not a bug; the fix was enabling Pages then pushing again.
+
 
