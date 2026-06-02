@@ -10,10 +10,10 @@ The goal is simple: stop juggling seven AI apps and ship from one calm workspace
 
 | Destination | Link |
 | --- | --- |
-| Website | `https://anomalyco.github.io/jarvis/` |
-| GitHub | `https://github.com/anomalyco/jarvis` |
-| Releases | `https://github.com/anomalyco/jarvis/releases` |
-| Issues | `https://github.com/anomalyco/jarvis/issues` |
+| Website | `https://Cookie774-GameDev.github.io/jarvis-one/` |
+| GitHub | `https://github.com/Cookie774-GameDev/jarvis` |
+| Releases | `https://github.com/Cookie774-GameDev/jarvis/releases` |
+| Issues | `https://github.com/Cookie774-GameDev/jarvis/issues` |
 | YouTube | `#youtube-placeholder` |
 | Discord | `#discord-placeholder` |
 
@@ -27,7 +27,7 @@ Replace the YouTube and Discord placeholders in `site/index.html` when the final
 2. Run:
 
 ```powershell
-irm https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/install/install.ps1 | iex
 ```
 
 3. Launch Jarvis from the Start Menu.
@@ -38,7 +38,7 @@ irm https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.ps1 
 2. Run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/install/install.sh | bash
 ```
 
 3. Open Jarvis from `/Applications`.
@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/insta
 2. Run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/anomalyco/jarvis/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/install/install.sh | bash
 ```
 
 3. Launch Jarvis from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
@@ -214,7 +214,7 @@ Deployment is handled by [`.github/workflows/pages.yml`](.github/workflows/pages
 ```powershell
 cd C:\Users\viper\projects\Jarvis
 npm install
-npm run dev
+npm run jarvis
 ```
 
 For desktop/Tauri development:
