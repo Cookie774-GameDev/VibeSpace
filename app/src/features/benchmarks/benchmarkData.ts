@@ -60,17 +60,20 @@ export function isSupportedProvider(p: string): p is ProviderId {
   return (SUPPORTED_PROVIDERS as readonly string[]).includes(p);
 }
 
-const LMSYS_URL = 'https://lmarena.ai/api/leaderboard';
+const LMARENA_ENDPOINTS = [
+  'https://lmarena.ai/api/leaderboard',
+  'https://lmarena.ai/leaderboard/text/overall',
+  'https://lmarena.ai/leaderboard',
+] as const;
 const CACHE_KEY = 'jarvis-benchmark-cache';
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const FETCH_TIMEOUT_MS = 5_000;
 
 /**
- * Snapshot timestamp — the moment this hardcoded leaderboard was captured.
- * Roughly mid-October 2024. The header relative-time uses this so the user
- * sees, honestly, that the data is old.
+ * Snapshot timestamp — the last time this fallback table was audited.
+ * The live fetch path is authoritative; this only labels fallback rows.
  */
-const SNAPSHOT_TS = Date.UTC(2024, 9, 15, 12, 0, 0); // 2024-10-15T12:00:00Z
+const SNAPSHOT_TS = Date.UTC(2026, 5, 2, 12, 0, 0); // 2026-06-02T12:00:00Z
 
 /**
  * Frozen Chatbot Arena snapshot (28 rows). Scores and CIs approximate the
@@ -626,21 +629,42 @@ export async function fetchBenchmarks(opts?: { force?: boolean }): Promise<Fetch
 
   const now = Date.now();
   try {
-    const res = await fetch(LMSYS_URL, {
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as unknown;
-    const rows = normalize(data, now);
-    if (rows.length < 5) throw new Error('Schema not recognized');
-    const result: FetchResult = { rows, fromSnapshot: false };
-    writeCache({ rows, fromSnapshot: false, cachedAt: now });
-    return result;
+    const errors: string[] = [];
+    for (const url of LMARENA_ENDPOINTS) {
+      try {
+        const res = await fetch(url, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          headers: { Accept: 'application/json,text/html;q=0.9,*/*;q=0.8' },
+        });
+        if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+        const contentType = res.headers.get('content-type') ?? '';
+        const data = contentType.includes('application/json')
+          ? ((await res.json()) as unknown)
+          : extractLeaderboardJson(await res.text());
+        const rows = normalize(data, now);
+        if (rows.length < 5) throw new Error(`${url}: schema not recognized`);
+        const result: FetchResult = { rows, fromSnapshot: false };
+        writeCache({ rows, fromSnapshot: false, cachedAt: now });
+        return result;
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    throw new Error(errors.join(' | ') || 'Live leaderboard unavailable');
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'Fetch failed';
     writeCache({ rows: SNAPSHOT_ROWS, fromSnapshot: true, cachedAt: now });
     return { rows: SNAPSHOT_ROWS, fromSnapshot: true, reason };
+  }
+}
+
+function extractLeaderboardJson(html: string): unknown {
+  const nextData = /<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i.exec(html);
+  if (!nextData?.[1]) return null;
+  try {
+    return JSON.parse(nextData[1]);
+  } catch {
+    return null;
   }
 }
 

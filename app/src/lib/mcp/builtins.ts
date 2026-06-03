@@ -209,24 +209,32 @@ type Route =
   | 'chat'
   | 'terminal'
   | 'kanban'
+  | 'schedule'
   | 'agents'
+  | 'context'
   | 'skills'
   | 'benchmarks'
-  | 'history';
+  | 'history'
+  | 'tools'
+  | 'files';
 
 const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
   'chat',
   'terminal',
   'kanban',
+  'schedule',
   'agents',
+  'context',
   'skills',
   'benchmarks',
   'history',
+  'tools',
+  'files',
 ]);
 
 toolRegistry.register<{ route: Route }, void>({
   name: 'route.set',
-  description: 'Switch the main UI route (chat, terminal, kanban, ...).',
+  description: 'Switch the main UI route (chat, terminal, kanban, skills, ...).',
   scope: 'workspace',
   tags: ['ui', 'navigation'],
   inputSchema: {

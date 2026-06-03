@@ -1,0 +1,70 @@
+# Run lint, typecheck, and tests on pull requests + every push to main.
+# Catches the kind of stale-tsbuildinfo / drift bugs that bit us during
+# the 0.1.5 release prep.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Cancel previous runs of the same workflow on the same branch/PR so
+  # we don't rack up minutes when a developer pushes 5 commits in a row.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (typecheck + build + test)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (Vite)
+        run: npm run build
+
+      - name: Test (vitest)
+        run: npm --prefix app run test
+
+  rust:
+    name: Rust (cargo check)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: cargo check
+        working-directory: app/src-tauri
+        run: cargo check --release

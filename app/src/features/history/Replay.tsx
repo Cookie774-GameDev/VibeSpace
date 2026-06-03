@@ -519,6 +519,16 @@ function PartView({ part }: { part: Part }) {
           [{part.ref.kind}] {part.ref.excerpt ? truncate(part.ref.excerpt, 60) : part.ref.id}
         </span>
       );
+    case 'action_proposal':
+      // Replay is a read-only retrospective view — show the action +
+      // its terminal status as a chip rather than the live approval
+      // card (which would offer to re-run the action against the
+      // current app, not what we want when scrubbing past chats).
+      return (
+        <span className="inline-flex items-center gap-1 self-start rounded-full border border-border bg-elevated px-2 py-0.5 font-mono text-metadata text-muted-foreground">
+          action · {part.action_id} · {part.status}
+        </span>
+      );
   }
 }
 

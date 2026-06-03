@@ -26,6 +26,7 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { parseAssistantInput } from './parse';
 import { executeIntent } from './execute';
+import { JARVIS_COMMAND_CATALOG } from './commands';
 import type { AssistantIntent } from './intents';
 
 interface AssistantBarProps {
@@ -48,6 +49,10 @@ const EXAMPLE_HINTS = [
   'open claude in tiger',
   'make a todo: ship the launcher tomorrow',
   'schedule lunch friday at 1pm',
+  'call me at 3pm',
+  'message me: build is done',
+  'create context map',
+  'recenter context map',
   'fullscreen',
 ];
 
@@ -89,6 +94,18 @@ function renderPreview(intent: AssistantIntent): React.ReactNode {
           {intent.project ? <> in <span className="text-foreground">'{intent.project}'</span></> : null}.
         </>
       );
+    case 'create_custom_command':
+      return <>→ Will {verb('create command')} <span className="text-foreground">'{intent.name}'</span> to run <span className="text-foreground">{intent.command}</span>.</>;
+    case 'run_custom_command':
+      return <>→ Will {verb('run custom command')} <span className="text-foreground">'{intent.name}'</span>.</>;
+    case 'ask_provider':
+      return <>→ Will {verb(`ask ${intent.provider}`)}: <span className="text-foreground">{intent.prompt}</span>.</>;
+    case 'give_terminals_context':
+      return <>→ Will {verb('send project context')} to all terminal panes.</>;
+    case 'create_context_map':
+      return <>→ Will {verb('create the Context map')} from the saved project folder.</>;
+    case 'recenter_context_map':
+      return <>→ Will {verb('recenter the Context map')}.</>;
     case 'create_task':
       return (
         <>
@@ -106,6 +123,10 @@ function renderPreview(intent: AssistantIntent): React.ReactNode {
           → Will {verb('schedule event')}: <span className="text-foreground">{intent.raw}</span>
         </>
       );
+    case 'schedule_call':
+      return <>→ Will {verb('schedule a Jarvis call')}: <span className="text-foreground">{intent.raw}</span></>;
+    case 'send_phone_message':
+      return <>→ Will {verb('message your phone')}: <span className="text-foreground">{intent.text}</span></>;
     case 'set_ambient':
       return <>→ Will {verb(`turn ambient mode ${intent.on ? 'on' : 'off'}`)}.</>;
     case 'set_fullscreen':
@@ -119,6 +140,17 @@ function renderPreview(intent: AssistantIntent): React.ReactNode {
       return <>→ Will {verb('open quick launcher')}.</>;
     case 'open_schedule':
       return <>→ Will {verb('open schedule')}.</>;
+    case 'navigate':
+      return <>→ Will {verb('show')} <span className="text-foreground">{intent.route}</span>.</>;
+    case 'multi_step':
+      return (
+        <>
+          → Will {verb(`run ${intent.steps.length} steps`)}:{' '}
+          <span className="text-foreground">
+            {intent.steps.map((step) => step.kind.replace(/_/g, ' ')).join(' → ')}
+          </span>
+        </>
+      );
     case 'unknown':
     default:
       return null;
@@ -290,7 +322,7 @@ export function AssistantBar({ open, onOpenChange }: AssistantBarProps) {
           {/* Footer hints */}
           <div className="border-t border-border px-4 py-2 text-metadata text-muted-foreground/80">
             <span className="text-muted-foreground">Examples:</span>{' '}
-            <span className="text-muted-foreground/70">{EXAMPLE_HINTS.join(' · ')}</span>
+            <span className="text-muted-foreground/70">{[...EXAMPLE_HINTS, ...JARVIS_COMMAND_CATALOG.slice(0, 12)].join(' · ')}</span>
           </div>
         </DialogPrimitive.Content>
       </DialogPortal>

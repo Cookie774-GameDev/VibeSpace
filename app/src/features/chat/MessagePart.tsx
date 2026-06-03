@@ -1,6 +1,8 @@
 import { FileText, Image as ImageIcon } from 'lucide-react';
 import { ToolCallCard } from './ToolCallCard';
+import { ActionApprovalCard } from './ActionApprovalCard';
 import type { Part } from '@/types';
+import type { MessageId } from '@/types/common';
 
 export interface MessagePartProps {
   part: Part;
@@ -9,13 +11,27 @@ export interface MessagePartProps {
    * with its matching `tool_result` for inline rendering.
    */
   allParts: Part[];
+  /**
+   * Parent message id. Required for parts whose UI needs to write back
+   * to the message (e.g. an `action_proposal` flipping its status when
+   * the user clicks Approve). Optional so existing renderers without
+   * this context still type-check.
+   */
+  messageId?: MessageId;
+  /** Parent chat id. Same rationale as `messageId`. */
+  chatId?: string;
 }
 
 /**
  * Dispatch on Part.kind. Each part renders as its own block in the bubble body.
  * Pairs tool_call <-> tool_result by call_id.
  */
-export function MessagePart({ part, allParts }: MessagePartProps) {
+export function MessagePart({
+  part,
+  allParts,
+  messageId,
+  chatId,
+}: MessagePartProps) {
   switch (part.kind) {
     case 'text': {
       if (!part.text) {
@@ -23,7 +39,7 @@ export function MessagePart({ part, allParts }: MessagePartProps) {
         return <span className="inline-block h-3 w-3 rounded-full bg-muted-foreground/40 animate-pulse" aria-label="Thinking" />;
       }
       return (
-        <div className="text-body text-foreground whitespace-pre-wrap break-words leading-relaxed">
+        <div className="text-body text-foreground whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
           {part.text}
         </div>
       );
@@ -32,7 +48,7 @@ export function MessagePart({ part, allParts }: MessagePartProps) {
     case 'reasoning': {
       if (!part.text) return null;
       return (
-        <div className="text-secondary text-muted-foreground italic whitespace-pre-wrap break-words border-l-2 border-border pl-2">
+        <div className="text-secondary text-muted-foreground italic whitespace-pre-wrap break-words [overflow-wrap:anywhere] border-l-2 border-border pl-2">
           {part.text}
         </div>
       );
@@ -62,6 +78,30 @@ export function MessagePart({ part, allParts }: MessagePartProps) {
             {part.error ?? JSON.stringify(part.result, null, 2)}
           </pre>
         </div>
+      );
+    }
+
+    case 'action_proposal': {
+      // Without messageId/chatId we can't mutate the proposal's status,
+      // so degrade to a read-only line. Practically every assistant
+      // bubble passes both, but the optional contract keeps any
+      // future renderer (e.g. preview / replay) honest.
+      if (!messageId || !chatId) {
+        return (
+          <div className="rounded-md border border-border bg-elevated px-3 py-2 text-secondary text-muted-foreground">
+            Action proposal:{' '}
+            <span className="font-mono text-foreground">{part.action_id}</span>{' '}
+            <span className="text-metadata uppercase">({part.status})</span>
+          </div>
+        );
+      }
+      return (
+        <ActionApprovalCard
+          part={part}
+          allParts={allParts}
+          messageId={messageId}
+          chatId={chatId}
+        />
       );
     }
 

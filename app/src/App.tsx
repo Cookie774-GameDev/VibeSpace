@@ -26,30 +26,86 @@ import { useUIStore } from '@/stores/ui';
 import { useAgentStore } from '@/stores/agents';
 import { AuthGate } from '@/features/auth';
 import { AppShell } from '@/components/layout';
+import { JarvisContextMenu } from '@/components/layout/JarvisContextMenu';
 import { PageRouter } from '@/components/layout/PageRouter';
-import { ChatView } from '@/features/chat';
-import { CouncilView } from '@/features/council';
-import { TodoPanel, startNotificationLoop } from '@/features/tasks';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { startNotificationLoop } from '@/features/tasks';
 import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
-import { SettingsModal } from '@/features/settings';
-import { VoiceModal, GlowBorder } from '@/features/voice';
+import { GlowBorder } from '@/features/voice/GlowBorder';
+import { WakeWordHost } from '@/features/voice/WakeWordHost';
+import { ApiKeySaveBurst } from '@/features/settings/ApiKeySaveBurst';
 import { CallModal, startOutboundTrigger } from '@/features/call';
 import { useBridgeLifecycle } from '@/lib/bridge/useBridgeLifecycle';
-import { AmbientHome, useIdleDetection } from '@/features/ambient';
-import { ScheduleModal } from '@/features/schedule';
-import { LauncherDialog, useLinkHotkeys } from '@/features/launcher';
-import { AssistantBar } from '@/features/assistant';
-import { CelebrationHost } from '@/features/celebrate';
+import { useIdleDetection, AmbientAudioHost } from '@/features/ambient';
+import { useLinkHotkeys } from '@/features/launcher';
 import { Toaster, toast } from '@/components/ui/toast';
 import { startRuntimeListener } from '@/lib/ai/runtime';
-import { messageRepo, agentRepo, chatRepo, openDb } from '@/lib/db';
+import { messageRepo, agentRepo, chatRepo, openDb, db } from '@/lib/db';
+import { useAuthStore } from '@/stores/auth';
 import { getDefaultAgents } from '@/features/agents';
 import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
+import { DevConsoleHost } from '@/features/dev-console';
+import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
+import { UpdateWarningHost } from '@/features/updates/UpdateWarningHost';
 import type { Agent, AgentId, Message } from '@/types';
 
 /**
+ * Lazy-mounted modals + canvas surfaces.
+ *
+ * Two reasons each component is wrapped here instead of imported eagerly:
+ *
+ *   1. Code-splitting. The chat view, council grid, settings sections,
+ *      schedule editor, launcher tile editor, what's-new modal, actions
+ *      palette, ambient takeover, and wellness break all pull large
+ *      dependency graphs (motion, dexie hooks, big component trees) that
+ *      have no business landing in the boot chunk.
+ *
+ *   2. Runtime cost. Most of these are gated by an `open` boolean in the
+ *      UI store; even when closed they pay rendering + tree-walk cost
+ *      every time the store updates. Lazy-mounting means the React tree
+ *      never sees them until the user actually summons them.
+ *
+ * Suspense fallbacks are deliberately `null` — these are overlays whose
+ * own internal skeletons handle empty/loading states better than a
+ * generic spinner would.
+ */
+const ChatView = React.lazy(() =>
+  import('@/features/chat').then((m) => ({ default: m.ChatView })),
+);
+const CouncilView = React.lazy(() =>
+  import('@/features/council').then((m) => ({ default: m.CouncilView })),
+);
+const SettingsModal = React.lazy(() =>
+  import('@/features/settings').then((m) => ({ default: m.SettingsModal })),
+);
+const VoiceModal = React.lazy(() =>
+  import('@/features/voice/VoiceModal').then((m) => ({ default: m.VoiceModal })),
+);
+const LauncherDialog = React.lazy(() =>
+  import('@/features/launcher').then((m) => ({ default: m.LauncherDialog })),
+);
+const AssistantBar = React.lazy(() =>
+  import('@/features/assistant').then((m) => ({ default: m.AssistantBar })),
+);
+const WhatsNewHost = React.lazy(() =>
+  import('@/features/whats-new').then((m) => ({ default: m.WhatsNewHost })),
+);
+const ActionsPalette = React.lazy(() =>
+  import('@/features/actions').then((m) => ({ default: m.ActionsPalette })),
+);
+const WellnessBreak = React.lazy(() =>
+  import('@/features/wellness').then((m) => ({ default: m.WellnessBreak })),
+);
+const AmbientHome = React.lazy(() =>
+  import('@/features/ambient').then((m) => ({ default: m.AmbientHome })),
+);
+const CelebrationHost = React.lazy(() =>
+  import('@/features/celebrate').then((m) => ({ default: m.CelebrationHost })),
+);
+
+/**
  * Renders the right canvas based on `useUIStore.route` (V3) and
- * `chatMode` (V2). For non-`chat` routes (terminal / kanban / skills /
+  * `chatMode` (V2). For non-`chat` routes (terminal / kanban / context /
  * benchmarks / history / agents) we delegate to `<PageRouter />`.
  *
  * For the `chat` route we keep the existing council bootstrap so
@@ -99,10 +155,18 @@ function ActiveCanvas() {
   }
 
   if (chatMode === 'council') {
-    return <CouncilView agentIds={councilAgentIds} messages={councilMessages} />;
+    return (
+      <React.Suspense fallback={null}>
+        <CouncilView agentIds={councilAgentIds} messages={councilMessages} />
+      </React.Suspense>
+    );
   }
   // doc / code modes are placeholders in V1 - render the chat as a fallback.
-  return <ChatView />;
+  return (
+    <React.Suspense fallback={null}>
+      <ChatView />
+    </React.Suspense>
+  );
 }
 
 /**
@@ -115,6 +179,7 @@ function useBoot() {
   React.useEffect(() => {
     let stopRuntime: (() => void) | undefined;
     let stopNotifications: (() => void) | undefined;
+    let stopTerminalScheduler: (() => void) | undefined;
     let cancelled = false;
 
     (async () => {
@@ -162,20 +227,32 @@ function useBoot() {
         },
       });
 
-      // 4) Start the smart-reminder notification loop. A5's TodoPanel also
-      //    starts it on mount; calling it here too is safe (the loop is idempotent
-      //    because each scheduled reminder has a fired/dismissed status guard).
+      // 4) Start the smart-reminder notification loop. The loop is idempotent
+      //    because each scheduled reminder has a fired/dismissed status guard.
       try {
         stopNotifications = startNotificationLoop();
       } catch (err) {
         console.error('Failed to start notification loop:', err);
       }
+
+      // 5) Re-arm durable scheduled terminal messages. These are stored in
+      //    localStorage so a delayed "send this terminal ..." request survives
+      //    route changes and full app restarts.
+      try {
+        stopTerminalScheduler = initTerminalScheduler();
+      } catch (err) {
+        console.error('Failed to start terminal scheduler:', err);
+      }
+
+      // 6) Desktop auto-update checks are now managed globally via the
+      //    <UpdateWarningHost /> component mounted at the layout level.
     })();
 
     return () => {
       cancelled = true;
       stopRuntime?.();
       stopNotifications?.();
+      stopTerminalScheduler?.();
     };
     // Run once - boot is one-shot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -212,10 +289,10 @@ function GlobalHotkeysHost() {
   });
 
   // V2 — Schedule (Mod+Shift+S).
-  const setScheduleOpen = useUIStore((s) => s.setScheduleOpen);
+  const setRoute = useUIStore((s) => s.setRoute);
   useHotkey(HOTKEYS.SCHEDULE, (e) => {
     e.preventDefault();
-    setScheduleOpen(!useUIStore.getState().scheduleOpen);
+    setRoute('schedule');
   });
 
   // V2 — Launcher (Mod+Shift+L).
@@ -231,20 +308,28 @@ function GlobalHotkeysHost() {
     e.preventDefault();
     setAssistantOpen(!useUIStore.getState().assistantOpen);
   });
+  useHotkey(
+    HOTKEYS.JARVIS_BUBBLE,
+    (e) => {
+      e.preventDefault();
+      setAssistantOpen(true);
+    },
+    { whenInputs: true },
+  );
+
+  // V3 — Actions palette (Mod+Shift+A). Sister to Mod+K (general
+  // command palette) and Mod+Shift+L (launcher tiles); focused on
+  // running registered actions + custom user-authored tools.
+  const toggleActionsPalette = useUIStore((s) => s.toggleActionsPalette);
+  useHotkey(HOTKEYS.ACTIONS, (e) => {
+    e.preventDefault();
+    toggleActionsPalette();
+  });
 
   // V2 — per-link launcher hotkeys (e.g. Mod+Shift+1 jumps straight to YouTube).
   useLinkHotkeys();
 
   return null;
-}
-
-/**
- * Schedule modal mount, listens to ui.scheduleOpen.
- */
-function ScheduleModalHost() {
-  const open = useUIStore((s) => s.scheduleOpen);
-  const setOpen = useUIStore((s) => s.setScheduleOpen);
-  return <ScheduleModal open={open} onOpenChange={setOpen} />;
 }
 
 /**
@@ -293,6 +378,44 @@ function WorkspaceRoot() {
     return stop;
   }, []);
 
+  // Listen for the jarvis:new-chat event to spawn a new chat
+  React.useEffect(() => {
+    const handleNewChat = async () => {
+      const workspaceId = useAuthStore.getState().workspaceId;
+      const projectId = useAuthStore.getState().projectId;
+      if (!workspaceId) {
+        toast.warning('Still loading', 'Workspace is initializing — try again in a sec.');
+        return;
+      }
+      try {
+        const allChats = await db.chats.where('workspace_id').equals(workspaceId).toArray();
+        const filtered = projectId
+          ? allChats.filter((c) => c.project_id === projectId)
+          : allChats.filter((c) => !c.project_id);
+        const existing = filtered.length;
+        const title = `New chat ${existing + 1}`;
+        
+        const chat = await chatRepo.create({
+          workspace_id: workspaceId,
+          project_id: projectId ?? undefined,
+          title,
+          mode: 'chat',
+          active_agent_ids: [],
+        });
+        useUIStore.getState().setActiveChat(chat.id);
+        useUIStore.getState().setChatMode('chat');
+        useUIStore.getState().setRoute('chat');
+      } catch (err) {
+        toast.error('Could not create chat', err instanceof Error ? err.message : 'Try again.');
+      }
+    };
+
+    window.addEventListener('jarvis:new-chat', handleNewChat);
+    return () => {
+      window.removeEventListener('jarvis:new-chat', handleNewChat);
+    };
+  }, []);
+
   return (
     <>
       <GlobalHotkeysHost />
@@ -304,10 +427,14 @@ function WorkspaceRoot() {
       <CommandPalette />
       <SettingsModal />
       <VoiceModal />
-      <CallModal />
-      <ScheduleModalHost />
+      <WakeWordHost />
+      <React.Suspense fallback={null}>
+        <CallModal />
+      </React.Suspense>
       <LauncherDialogHost />
       <AssistantBarHost />
+      <WhatsNewHost />
+      <UpdateWarningHost />
 
       {/* Visual ambient effects */}
       <GlowBorder />
@@ -315,13 +442,25 @@ function WorkspaceRoot() {
       {/* V3 — confetti + serif gradient toast on success milestones. */}
       <CelebrationHost />
 
+      {/* Provider key save success burst. */}
+      <ApiKeySaveBurst />
+
       {/* V2 — idle takeover. Self-renders only when ambientActive=true. */}
       <AmbientHome />
+      <AmbientAudioHost />
 
-      {/* The TodoPanel portals into the shell's <aside id="todo-drawer-root" /> */}
-      <TodoPanel />
+      {/* V3 — wellness break overlay (20-20-20 eye break). Sits at z-80
+          so it covers ambient + every route, but stays below toasts so
+          the completion confirmation can shine through. */}
+      <WellnessBreak />
+
+      {/* V3 — actions palette (Mod+Shift+A). Direct user invocation of
+          built-in actions and saved custom tools. Sibling to the
+          AI-proposed approval cards rendered inline in chat bubbles. */}
+      <ActionsPalette />
 
       {/* Toast outlet */}
+      <JarvisContextMenu />
       <Toaster />
     </>
   );
@@ -330,12 +469,28 @@ function WorkspaceRoot() {
 /**
  * App root: AuthGate decides whether to show Onboarding or the workspace.
  * Onboarding flow is its own component owned by A8.
+ *
+ * Two safety wrappers sit around AuthGate:
+ *
+ *   - <ErrorBoundary>: catches any uncaught render error and shows a
+ *     recoverable error card instead of the React tree blanking out.
+ *     Without it, a crash inside any lazy chunk or boot effect would
+ *     leave the user staring at a dark window.
+ *
+ *   - <DevConsoleHost>: installs the patchers (console / fetch /
+ *     invoke / dispatch / window-error) that pump events into the
+ *     in-app DevConsole panel, plus the Mod+Shift+D and F12 hotkeys
+ *     to summon it. Mounted at the root so it captures onboarding-
+ *     stage logs too.
  */
 export function App() {
   return (
-    <AuthGate>
-      <WorkspaceRoot />
-    </AuthGate>
+    <ErrorBoundary>
+      <AuthGate>
+        <WorkspaceRoot />
+      </AuthGate>
+      <DevConsoleHost />
+    </ErrorBoundary>
   );
 }
 

@@ -29,10 +29,17 @@
  * To trigger from anywhere in the app:
  *   import { fireOutboundCall } from '@/features/call/outbound';
  *   fireOutboundCall('error', { title: 'Build failed', details: '...' });
+ *
+ * Bundle policy:
+ *   `startOutboundTrigger` is mounted at boot from `App.tsx`. To keep
+ *   first-paint cheap, this module imports nothing from `livekit-client`
+ *   or `@supabase/supabase-js` statically. The cloud URL comes from
+ *   `./config` (env-only); the Supabase client is dynamically imported
+ *   inside the handler, so its ~210KB SDK only loads if and when an
+ *   actual outbound event fires.
  */
 
-import { getSupabaseClient } from '@/lib/supabase/client';
-import { getCallService } from './CallService';
+import { callCloudUrl } from './config';
 
 export type OutboundReason = 'manual' | 'error' | 'schedule' | 'todo_due';
 
@@ -66,6 +73,37 @@ export function fireOutboundCall(reason: OutboundReason, context?: OutboundConte
   );
 }
 
+export async function sendOutboundMessage(
+  message: string,
+  reason: OutboundReason = 'manual',
+  context?: OutboundContext,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cloudUrl = callCloudUrl();
+  if (!cloudUrl) return { ok: false, error: 'Phone cloud is not configured.' };
+
+  const { getSupabaseClient } = await import('@/lib/supabase/client');
+  const supa = getSupabaseClient();
+  if (!supa) return { ok: false, error: 'Supabase is not configured.' };
+
+  const { data } = await supa.auth.getSession();
+  const jwt = data.session?.access_token;
+  if (!jwt) return { ok: false, error: 'Sign in before sending phone messages.' };
+
+  const r = await fetch(`${cloudUrl}/outbound/message`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${jwt}`,
+    },
+    body: JSON.stringify({ reason, message, context: context ?? {} }),
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    return { ok: false, error: text || r.statusText };
+  }
+  return { ok: true };
+}
+
 interface OutboundOptions {
   cloudUrl?: string;
   /** Called on every dispatch result (toast / log). */
@@ -87,8 +125,11 @@ interface OutboundOptions {
 export function startOutboundTrigger(opts?: OutboundOptions): () => void {
   if (typeof window === 'undefined') return () => undefined;
 
-  const service = getCallService();
-  const cloudUrl = opts?.cloudUrl ?? service.getCloudUrl();
+  // Read URL from the cheap env-only helper. The previous code instantiated
+  // `CallService` here just to call `.getCloudUrl()`, which dragged the
+  // entire LiveKit SDK (~500KB) into the boot chunk. `callCloudUrl()` reads
+  // the same env var with zero runtime weight.
+  const cloudUrl = opts?.cloudUrl ?? callCloudUrl();
   const lastFiredAt = new Map<OutboundReason, number>();
   const COOLDOWN_MS = 30_000;
 
@@ -107,7 +148,17 @@ export function startOutboundTrigger(opts?: OutboundOptions): () => void {
       opts?.onResult?.(false, { reason: detail.reason, error: 'cooldown' });
       return;
     }
+    // Stamp the cooldown immediately, before any await. The previous
+    // implementation only stamped after `getSession()` resolved, which
+    // left a race window where two events fired in the same microtask
+    // both passed the gate and both placed an outbound call. Tightening
+    // the window to a single event-loop tick eliminates the
+    // double-fire under crash-storm conditions.
+    lastFiredAt.set(detail.reason, now);
 
+    // Dynamic import keeps the Supabase SDK off the boot chunk; it only
+    // loads the first time a real outbound event fires.
+    const { getSupabaseClient } = await import('@/lib/supabase/client');
     const supa = getSupabaseClient();
     if (!supa) {
       opts?.onResult?.(false, { reason: detail.reason, error: 'no_supabase' });
@@ -127,7 +178,6 @@ export function startOutboundTrigger(opts?: OutboundOptions): () => void {
     }
 
     try {
-      lastFiredAt.set(detail.reason, now);
       const r = await fetch(`${cloudUrl}/outbound/call`, {
         method: 'POST',
         headers: {

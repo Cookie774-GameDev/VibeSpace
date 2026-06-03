@@ -18,9 +18,11 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
+import { ChatThread, Composer } from '@/features/chat';
+import { EmptyChat } from '@/features/chat/EmptyChat';
 // `useTodayEvents` exists on the V2 schedule hooks (added by the parallel
 // agent) but isn't re-exported from `@/features/schedule` yet. Import the
 // deep path until it surfaces in the barrel.
@@ -28,7 +30,8 @@ import { useTodayEvents } from '@/features/schedule/hooks';
 import type { RecurrenceInstance } from '@/features/schedule/recurrence';
 import { useQuickLinks, launchLink } from '@/features/launcher';
 import { useTodayTasks } from '@/features/tasks';
-import { chatRepo, taskRepo, terminalSessionRepo } from '@/lib/db';
+import { chatRepo, taskRepo, terminalSessionRepo, db } from '@/lib/db';
+import { toast } from '@/components/ui/toast';
 import { isTauri } from '@/lib/tauri';
 import { cn, formatClock, formatRelative } from '@/lib/utils';
 import type { QuickLink } from '@/types/quick-link';
@@ -36,16 +39,22 @@ import type { Task, TaskPriority, TaskStatus } from '@/types/task';
 import type { Chat } from '@/types/chat';
 import type { TerminalSession } from '@/types/terminal';
 import type { WorkspaceId } from '@/types/common';
+import { flattenContextNodes, loadStoredContextTree } from '@/features/context/tree';
 
 /** V3 top-level routes. Mirrors the contract in `@/stores/ui` (Slice 4). */
 type Route =
   | 'chat'
   | 'terminal'
   | 'kanban'
+  | 'schedule'
   | 'agents'
-  | 'skills'
+  | 'agent-detail'
+  | 'project-detail'
+  | 'context'
   | 'benchmarks'
-  | 'history';
+  | 'history'
+  | 'tools'
+  | 'files';
 
 /**
  * Inspector — 320px right pane, mounted/unmounted via AnimatePresence
@@ -53,7 +62,7 @@ type Route =
  *
  * V3 makes the Inspector route-aware. Above the existing Today tab we
  * insert a route-context strip whose panel switches with the active
- * top-level route (terminal / kanban / skills / benchmarks / history).
+ * top-level route (terminal / kanban / context / benchmarks / history).
  * Chat (the default) keeps the strip empty and lets the Today tab below
  * be the primary surface — preserving V2 behavior.
  *
@@ -64,6 +73,78 @@ type Route =
  */
 export function Inspector() {
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
+  const projectId = useAuthStore((s) => s.projectId);
+  const toggleInspector = useUIStore((s) => s.toggleInspector);
+  const [inspectorChatId, setInspectorChatId] = React.useState<string | null>(null);
+  const [activeTab, setActiveTab] = React.useState('today');
+
+  const setInspectorOpen = (open: boolean) => useUIStore.setState({ inspectorOpen: open });
+
+  React.useEffect(() => {
+    const handleAttach = () => {
+      setInspectorOpen(true);
+      setActiveTab('jarvis');
+    };
+    const handleTabEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ tab: string } | undefined>).detail;
+      if (detail?.tab) {
+        setInspectorOpen(true);
+        setActiveTab(detail.tab);
+      }
+    };
+    window.addEventListener('jarvis:terminal:attach', handleAttach);
+    window.addEventListener('jarvis:inspector:tab', handleTabEvent as EventListener);
+    return () => {
+      window.removeEventListener('jarvis:terminal:attach', handleAttach);
+      window.removeEventListener('jarvis:inspector:tab', handleTabEvent as EventListener);
+    };
+  }, [setInspectorOpen]);
+
+  const inspectorChats =
+    useLiveQuery(
+      async () => {
+        if (!workspaceId) return [] as Chat[];
+        const allChats = await db.chats.where('workspace_id').equals(workspaceId).toArray();
+        return allChats
+          .filter((c) => (projectId ? c.project_id === projectId : !c.project_id))
+          .sort((a, b) => b.updated_at - a.updated_at);
+      },
+      [workspaceId, projectId],
+      [] as Chat[],
+    ) ?? [];
+
+  React.useEffect(() => {
+    setInspectorChatId((current) => {
+      if (current && inspectorChats.some((chat) => chat.id === current)) return current;
+      return inspectorChats[0]?.id ?? null;
+    });
+  }, [inspectorChats, projectId]);
+
+  const handleCreateChatInsideJarvisPanel = React.useCallback(async () => {
+    if (!workspaceId) {
+      toast.warning('Still loading', 'Workspace is initializing — try again in a sec.');
+      return;
+    }
+    try {
+      const allChats = await db.chats.where('workspace_id').equals(workspaceId).toArray();
+      const filtered = projectId
+        ? allChats.filter((c) => c.project_id === projectId)
+        : allChats.filter((c) => !c.project_id);
+      const existing = filtered.length;
+      const title = `New chat ${existing + 1}`;
+      
+      const chat = await chatRepo.create({
+        workspace_id: workspaceId,
+        project_id: projectId ?? undefined,
+        title,
+        mode: 'chat',
+        active_agent_ids: [],
+      });
+      setInspectorChatId(chat.id);
+    } catch (err) {
+      toast.error('Could not create chat', err instanceof Error ? err.message : 'Try again.');
+    }
+  }, [workspaceId, projectId]);
 
   return (
     <motion.aside
@@ -75,14 +156,28 @@ export function Inspector() {
       transition={{ type: 'spring', stiffness: 400, damping: 30 }}
     >
       <div className="flex h-full w-[320px] flex-col">
-        <Tabs defaultValue="today" className="flex h-full min-h-0 flex-col">
+        {/* Header with Title and Close Button */}
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel-soft">
+          <span className="text-metadata font-medium uppercase tracking-wider text-muted-foreground">Inspector</span>
+          <button
+            type="button"
+            onClick={toggleInspector}
+            aria-label="Close inspector"
+            className="rounded text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full min-h-0 flex-col">
           {/* NEW — route-context strip. Renders nothing for chat/agents. */}
           <RouteContextStrip workspaceId={workspaceId} />
 
-          {/* 5-tab strip — Today is the home tab. The trigger override
+          {/* 6-tab strip — Today is the home tab. The trigger override
               tightens padding so labels still fit the 320px pane. */}
           <div className="px-3 pt-3">
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-6">
+              <InspectorTab value="jarvis" icon={Sparkles} label="Jarvis" />
               <InspectorTab value="today" icon={Sun} label="Today" />
               <InspectorTab value="context" icon={Boxes} label="Context" />
               <InspectorTab value="tools" icon={Wrench} label="Tools" />
@@ -90,6 +185,42 @@ export function Inspector() {
               <InspectorTab value="refs" icon={Link2} label="Refs" />
             </TabsList>
           </div>
+          <TabsContent
+            value="jarvis"
+            className="m-0 flex-1 data-[state=active]:flex data-[state=inactive]:hidden flex-col min-h-0 bg-background overflow-hidden border-t border-border"
+          >
+            <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-panel-soft shrink-0">
+              <span className="text-metadata font-medium text-foreground">Jarvis Chat</span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={toggleInspector}
+                aria-label="Close Jarvis panel"
+                className="h-5 w-5 rounded text-muted-foreground hover:text-foreground"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <TooltipProvider delayDuration={400}>
+              <div className="flex-1 min-h-0 flex flex-col bg-background overflow-x-hidden w-full min-w-0">
+                {inspectorChatId ? (
+                  <>
+                    <ChatThread chatId={inspectorChatId} compact />
+                    <Composer
+                      chatId={inspectorChatId}
+                      compact
+                      disableRouteSlashCommands
+                      placeholder="Ask Jarvis about this project..."
+                    />
+                  </>
+                ) : (
+                  <div className="flex-1 overflow-auto">
+                    <EmptyChat onNewChat={handleCreateChatInsideJarvisPanel} />
+                  </div>
+                )}
+              </div>
+            </TooltipProvider>
+          </TabsContent>
           <TabsContent
             value="today"
             className="m-0 flex-1 overflow-auto scrollbar-hidden"
@@ -400,7 +531,7 @@ function useRoute(): Route {
  * Route-aware quick-info strip. Inserts above the existing tabs.
  *
  * Chat / Agents routes render nothing — the Today tab below is the
- * primary surface for those. Every other route gets its own cozy
+  * primary surface for those. Every other route gets its own cozy
  * paper-card. Panels that depend on sibling slices use lazy imports
  * with `.catch` so a missing module gracefully falls back to a
  * `PlaceholderCard` instead of crashing the inspector.
@@ -418,8 +549,8 @@ function RouteContextStrip({ workspaceId }: { workspaceId: WorkspaceId | null })
       case 'kanban':
         panel = <KanbanContextPanel workspaceId={workspaceId} />;
         break;
-      case 'skills':
-        panel = <SkillsContextPanel />;
+      case 'context':
+        panel = <ContextContextPanel />;
         break;
       case 'benchmarks':
         panel = <BenchmarksContextPanel />;
@@ -437,6 +568,7 @@ function RouteContextStrip({ workspaceId }: { workspaceId: WorkspaceId | null })
     );
   }
 
+  if (!panel) return null;
   return <div className="shrink-0 border-b border-border px-3 py-3">{panel}</div>;
 }
 
@@ -625,80 +757,46 @@ function StatusDot({ status }: { status: TaskStatus }) {
   return <CircleDot className={cn('h-3 w-3 shrink-0', cls)} aria-hidden="true" />;
 }
 
-// ----- Skills — count + tag breakdown (lazy-loaded from Slice 5) -----
+// ----- Context — generated project tree summary -----
 
-interface SkillSummary {
-  total: number;
-  tags: Array<{ tag: string; count: number }>;
-}
-
-function SkillsContextPanel() {
-  const [summary, setSummary] = React.useState<SkillSummary | null>(null);
+function ContextContextPanel() {
+  const projectId = useAuthStore((s) => s.projectId);
+  const [tick, setTick] = React.useState(0);
 
   React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        // Slice 5 owns this loader. Until it ships an `index.ts` exporting
-        // `loadAllSkills` the import resolves to undefined and we render
-        // a placeholder — see WAVE4_CONTRACTS.md "Skills loader".
-        const path = '@/features/skills';
-        const mod = await import(/* @vite-ignore */ path).catch(() => null);
-        if (cancelled || !mod) return;
-        const loader = (mod as { loadAllSkills?: () => Promise<unknown> })
-          .loadAllSkills;
-        if (typeof loader !== 'function') return;
-        const result = (await loader()) as Array<{
-          enabled?: boolean;
-          tags?: string[];
-        }>;
-        if (cancelled || !Array.isArray(result)) return;
-        const enabled = result.filter((s) => s.enabled !== false);
-        const counts = new Map<string, number>();
-        for (const s of enabled) {
-          for (const t of s.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
-        }
-        const tags = [...counts.entries()]
-          .map(([tag, count]) => ({ tag, count }))
-          .sort((a, b) => b.count - a.count)
-          .slice(0, 4);
-        setSummary({ total: enabled.length, tags });
-      } catch {
-        /* silent — placeholder remains */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    const onUpdated = () => setTick((cur) => cur + 1);
+    window.addEventListener('jarvis:context-tree-updated', onUpdated);
+    return () => window.removeEventListener('jarvis:context-tree-updated', onUpdated);
   }, []);
 
-  if (!summary) {
+  const tree = React.useMemo(() => loadStoredContextTree(projectId), [projectId, tick]);
+  if (!tree) {
     return (
       <PlaceholderCard
-        title="Enabled skills"
-        body="Skills loader is wiring up — check back after the next build."
+        title="Context tree"
+        body="Open Context and press Make Skill Tree to generate the project map."
       />
     );
   }
 
+  const nodes = flattenContextNodes(tree.nodes);
+  const tags = [...new Set(nodes.flatMap((node) => node.tags ?? []))].slice(0, 4);
   return (
-    <StripCard eyebrow="Enabled skills" hint={String(summary.total)}>
-      {summary.tags.length === 0 ? (
-        <p className="text-secondary text-muted-foreground italic">No tags yet.</p>
-      ) : (
-        <ul className="flex flex-wrap gap-1">
-          {summary.tags.map((t) => (
-            <li
-              key={t.tag}
-              className="inline-flex items-center gap-1 rounded-sm bg-paper-soft px-1.5 py-0.5 text-metadata text-foreground"
-            >
-              <Tag className="h-3 w-3 text-accent-copper" aria-hidden="true" />
-              <span>{t.tag}</span>
-              <span className="text-muted-foreground tabular-nums">{t.count}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+    <StripCard eyebrow="Context tree" hint={`${nodes.length} nodes`}>
+      <p className="mb-2 line-clamp-3 text-secondary text-muted-foreground">{tree.summary}</p>
+      <ul className="flex flex-wrap gap-1">
+        {tags.length === 0 ? (
+          <li className="text-secondary text-muted-foreground italic">No tags yet.</li>
+        ) : tags.map((tag) => (
+          <li
+            key={tag}
+            className="inline-flex items-center gap-1 rounded-sm bg-paper-soft px-1.5 py-0.5 text-metadata text-foreground"
+          >
+            <Tag className="h-3 w-3 text-accent-copper" aria-hidden="true" />
+            <span>{tag}</span>
+          </li>
+        ))}
+      </ul>
     </StripCard>
   );
 }

@@ -80,6 +80,26 @@ const AgentsRoute = React.lazy(() =>
   import('@/features/agents').then((m) => ({ default: m.AgentManager })),
 );
 
+const AgentDetailRoute = React.lazy(() =>
+  import('@/features/agents')
+    .then((m) => ({ default: m.AgentDetail }))
+    .catch(() => ({
+      default: () => (
+        <PlaceholderPage title="Agent details" hint="Module not loaded" />
+      ),
+    })),
+);
+
+const ProjectDetailRoute = React.lazy(() =>
+  import('@/features/projects')
+    .then((m) => ({ default: m.ProjectDetail }))
+    .catch(() => ({
+      default: () => (
+        <PlaceholderPage title="Project details" hint="Module not loaded" />
+      ),
+    })),
+);
+
 const TerminalsPage = React.lazy(() =>
   import('@/features/terminals/TerminalsPage')
     .then((m) => ({ default: m.TerminalsPage }))
@@ -95,6 +115,22 @@ const KanbanPage = React.lazy(() =>
     .then((m) => ({ default: m.KanbanPage }))
     .catch(() => ({
       default: () => <PlaceholderPage title="Kanban" hint="Module not loaded" />,
+    })),
+);
+
+const SchedulePage = React.lazy(() =>
+  import('@/features/schedule')
+    .then((m) => ({ default: m.SchedulePage }))
+    .catch(() => ({
+      default: () => <PlaceholderPage title="Schedule" hint="Module not loaded" />,
+    })),
+);
+
+const ContextPage = React.lazy(() =>
+  import('@/features/context')
+    .then((m) => ({ default: m.ContextPage }))
+    .catch(() => ({
+      default: () => <PlaceholderPage title="Context" hint="Module not loaded" />,
     })),
 );
 
@@ -126,27 +162,72 @@ const HistoryPage = React.lazy(() =>
     })),
 );
 
+const ToolsPage = React.lazy(() =>
+  import('@/features/tools')
+    .then((m) => ({ default: m.ToolsPage }))
+    .catch(() => ({
+      default: () => (
+        <PlaceholderPage title="Custom tools" hint="Module not loaded" />
+      ),
+    })),
+);
+
+const FilesPage = React.lazy(() =>
+  import('@/features/files')
+    .then((m) => ({ default: m.FilesPage }))
+    .catch(() => ({
+      default: () => <PlaceholderPage title="Files" hint="Module not loaded" />,
+    })),
+);
+
+const AccountPage = React.lazy(() =>
+  import('@/features/account')
+    .then((m) => ({ default: m.AccountPage }))
+    .catch(() => ({
+      default: () => <PlaceholderPage title="Account" hint="Module not loaded" />,
+    })),
+);
+
 // Single dispatch table keyed by `Route`. If a new route is added to the
 // `Route` union in `ui.ts`, TypeScript will flag this map as incomplete.
 const routeMap: Record<Route, React.LazyExoticComponent<React.ComponentType>> = {
   chat: ChatRoute,
   terminal: TerminalsPage,
   kanban: KanbanPage,
+  schedule: SchedulePage,
   agents: AgentsRoute,
+  'agent-detail': AgentDetailRoute,
+  'project-detail': ProjectDetailRoute,
+  context: ContextPage,
   skills: SkillsPage,
   benchmarks: BenchmarksPage,
   history: HistoryPage,
+  tools: ToolsPage,
+  files: FilesPage,
+  account: AccountPage,
 };
 
 export function PageRouter() {
   const route = useUIStore((s) => s.route);
   const Page = routeMap[route] ?? ChatRoute;
 
+  React.useEffect(() => {
+    if (route === 'terminal') {
+      window.dispatchEvent(new CustomEvent('jarvis:terminals:visible'));
+    }
+  }, [route]);
+
   return (
     <React.Suspense fallback={<PageLoading />}>
-      {/* `key={route}` forces a fresh mount per route so each page
-          starts clean instead of inheriting prior state. */}
-      <Page key={route} />
+      <div
+        style={{ display: route === 'terminal' ? 'block' : 'none' }}
+        className="w-full h-full"
+      >
+        <TerminalsPage />
+      </div>
+      {route !== 'terminal' && (
+        <Page key={route} />
+      )}
     </React.Suspense>
   );
 }

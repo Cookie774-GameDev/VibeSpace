@@ -55,6 +55,17 @@ class CallResponse(BaseModel):
     status: str
 
 
+class MessageRequest(BaseModel):
+    reason: str = "manual"
+    message: str
+    context: dict = {}
+
+
+class MessageResponse(BaseModel):
+    message_sid: str
+    status: str
+
+
 @router.post("/call", response_model=CallResponse)
 async def outbound_call(
     body: CallRequest,
@@ -120,6 +131,55 @@ async def outbound_call(
         log.warning("could not stash outbound context: %s", e)
 
     return CallResponse(call_sid=call_sid, status="queued")
+
+
+@router.post("/message", response_model=MessageResponse)
+async def outbound_message(
+    body: MessageRequest,
+    authorization: str = Header(...),
+):
+    """Send an SMS to the authenticated user's stored phone number."""
+    s = get_settings()
+    if not s.has_twilio:
+        raise HTTPException(503, "Twilio not configured")
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, "missing bearer token")
+    try:
+        claims = await get_jwt_verifier().verify(authorization[7:])
+    except PermissionError as e:
+        raise HTTPException(401, str(e))
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(401, "no sub claim")
+
+    settings_row = await _phone_settings(user_id)
+    if not settings_row:
+        raise HTTPException(404, "phone_settings not configured for this user")
+
+    user_number = settings_row.get("user_phone_number")
+    if not user_number:
+        raise HTTPException(400, "user has not stored a phone number")
+
+    triggers = settings_row.get("outbound_triggers", {}) or {}
+    category = body.reason or "manual"
+    cat_enabled = triggers.get(category, category == "manual")
+    if not cat_enabled:
+        raise HTTPException(403, f"outbound trigger '{category}' is disabled in settings")
+
+    text = body.message.strip()
+    if not text:
+        raise HTTPException(400, "message is empty")
+    if len(text) > 1200:
+        text = text[:1197] + "..."
+
+    twilio = TwilioClient(s.TWILIO_ACCOUNT_SID, s.TWILIO_AUTH_TOKEN)
+    msg = twilio.messages.create(
+        to=user_number,
+        from_=s.TWILIO_PHONE_NUMBER,
+        body=text,
+    )
+    return MessageResponse(message_sid=msg.sid, status=msg.status or "queued")
 
 
 @router.post("/twiml")

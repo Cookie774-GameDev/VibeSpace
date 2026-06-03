@@ -7,7 +7,6 @@
  */
 
 // Components
-export { TodoPanel } from './TodoPanel';
 export { TaskCard } from './TaskCard';
 export { TaskComposer } from './TaskComposer';
 export { SnoozePopover } from './SnoozePopover';

@@ -21,8 +21,10 @@ import { parseSSE } from './sse';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-/** Default Gemini model used when promoting a mock-default agent. */
-export const GOOGLE_DEFAULT_MODEL = 'gemini-1.5-flash-latest';
+/** Default Gemini model. Flash Lite is the fastest + cheapest in the
+ *  2.5 family and has a generous free tier on AI Studio (no card),
+ *  which is why Jarvis ships pinned to it for the Free plan. */
+export const GOOGLE_DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 
 /** Convert our role -> Gemini role. Gemini doesn't have `system` in messages. */
 function geminiRole(role: LLMMessage['role']): 'user' | 'model' {

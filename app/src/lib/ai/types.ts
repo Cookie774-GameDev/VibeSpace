@@ -146,14 +146,27 @@ export const COST_RATES: Record<string, CostRates> = {
   'openai:default': { input_per_m: 0.15, output_per_m: 0.6 },
 
   // Google
+  'google:gemini-2.5-flash-lite': { input_per_m: 0, output_per_m: 0 },
+  'google:gemini-2.5-flash': { input_per_m: 0, output_per_m: 0 },
+  'google:gemini-2.5-pro': { input_per_m: 0, output_per_m: 0 },
   'google:gemini-1.5-flash': { input_per_m: 0.075, output_per_m: 0.3 },
   'google:gemini-1.5-flash-latest': { input_per_m: 0.075, output_per_m: 0.3 },
   'google:gemini-1.5-pro': { input_per_m: 1.25, output_per_m: 5 },
-  'google:default': { input_per_m: 0.075, output_per_m: 0.3 },
+  // Free tier on AI Studio is generous; we list 2.5 models at 0/0 so the
+  // in-app meter doesn't pretend the user is being charged. The legacy
+  // 1.5 entries keep their published rates for users on the paid tier.
+  'google:default': { input_per_m: 0, output_per_m: 0 },
 
-  // Mock + local cost nothing.
+  // Groq — free tier today (user's own key, no Jarvis billing). Listed at
+  // 0/0 so the in-app meter doesn't pretend the user is being charged.
+  'groq:llama-3.3-70b-versatile': { input_per_m: 0, output_per_m: 0 },
+  'groq:llama-3.1-8b-instant': { input_per_m: 0, output_per_m: 0 },
+  'groq:default': { input_per_m: 0, output_per_m: 0 },
+
+  // Mock + local cost nothing (runs on the user's own machine).
   'mock:default': { input_per_m: 0, output_per_m: 0 },
   'local:default': { input_per_m: 0, output_per_m: 0 },
+  'ollama:default': { input_per_m: 0, output_per_m: 0 },
 };
 
 /** Look up cost rates for a (provider, model) pair, falling back to provider default then 0. */

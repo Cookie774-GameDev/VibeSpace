@@ -12,9 +12,10 @@
  *   - Reminder list is editable but uses preset offsets (none/5/15/60 min)
  *
  * Render path: mounted as a Dialog from anywhere via
- * `useUIStore.scheduleOpen`. Two tabs inside: "Upcoming" and "Add event".
+ * the first-class schedule route. The page shows upcoming calendar events
+ * and time-based tasks together, with the add-event form beside the feed.
  */
 
-export { ScheduleModal } from './ScheduleModal';
+export { SchedulePage } from './SchedulePage';
 export { useEvents, useUpcomingEvents } from './hooks';
 export { parseEventInput } from './parseEventInput';

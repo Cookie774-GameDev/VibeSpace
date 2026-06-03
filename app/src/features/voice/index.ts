@@ -15,6 +15,7 @@ export { VoiceCaption } from './VoiceCaption';
 export { VoiceTrigger } from './VoiceTrigger';
 export type { VoiceTriggerProps } from './VoiceTrigger';
 export { VoiceModal } from './VoiceModal';
+export { WakeWordHost } from './WakeWordHost';
 
 // Services
 export { VoiceService } from './VoiceService';

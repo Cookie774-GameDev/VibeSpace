@@ -33,8 +33,25 @@ export type Workspace = {
 };
 
 /**
- * A project groups chats, tasks and memory under a workspace. The Inbox project
- * is seeded by default and behaves as the catch-all bucket.
+ * A project groups chats, terminals, tasks and memory under a workspace.
+ * The Inbox project is seeded by default and behaves as the catch-all
+ * bucket.
+ *
+ * Projects update fields:
+ *   - `system_prompt_context` is prepended to every AI request that
+ *     fires while this project is active. Holds the project's "house
+ *     rules" — paths, conventions, DB schema, anything the user wants
+ *     every model to know without re-typing.
+ *   - `no_context_mode` short-circuits the prepend so the user can run
+ *     a quick clean-room request without the project leaking in.
+ *   - `allowed_agent_slugs` narrows the agent picker to a curated list
+ *     for this project. `undefined` = "no restriction, all agents
+ *     visible". Empty array = "no agents bound" (degenerate, but
+ *     allowed). Slugs are matched against `Agent.slug`, not id, so the
+ *     binding survives agent re-seeding.
+ *   - `pane_tree_key` lets a project carry an opaque key namespace for
+ *     its terminal pane tree in localStorage; reserved for migration
+ *     work, not consumed today.
  */
 export type Project = {
   id: ProjectId;
@@ -42,6 +59,14 @@ export type Project = {
   name: string;
   /** HSL hue 0..359 used by the UI to colour-code the project. */
   color_hue?: number;
+  /** Optional lucide icon name. */
+  icon?: string;
+  /** Project-level context blob prepended to AI requests. */
+  system_prompt_context?: string;
+  /** When true, the context blob is skipped on every request. */
+  no_context_mode?: boolean;
+  /** Optional curated agent slug allowlist for this project. */
+  allowed_agent_slugs?: string[];
   created_at: number;
   updated_at: number;
 };

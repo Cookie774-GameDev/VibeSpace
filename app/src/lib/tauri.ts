@@ -14,6 +14,12 @@
  */
 
 import { isTauri as isTauriRuntime } from './utils';
+// Static import so Vite can bundle `toast` into the same chunk as the
+// rest of the UI primitives. Earlier this file `await import`-ed it from
+// inside `notify()` to avoid eagerly loading the toast module, but every
+// other call site already imports `toast` statically — the dynamic import
+// just defeated chunk consolidation and produced a build warning.
+import { toast } from '@/components/ui/toast';
 
 /** Runtime detection. Re-exported here so feature modules can import a single thing. */
 export const isTauri: boolean = isTauriRuntime;
@@ -87,9 +93,9 @@ export async function notify(
     }
   }
 
-  // Last resort: in-app toast.
+  // Last resort: in-app toast. Imported statically at the top of the
+  // file so Vite keeps it on the same chunk as every other UI consumer.
   try {
-    const { toast } = await import('@/components/ui/toast');
     toast.info(title, body);
   } catch {
     /* nothing more we can do */

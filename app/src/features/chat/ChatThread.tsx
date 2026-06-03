@@ -7,6 +7,7 @@ import type { ChatId, Message, Part } from '@/types';
 
 export interface ChatThreadProps {
   chatId: ChatId | string;
+  compact?: boolean;
 }
 
 /**
@@ -29,7 +30,7 @@ function streamingSize(message: Message | undefined): number {
  * streaming - but only if the user is already near the bottom. If the user
  * has scrolled up to read history, we do not yank them.
  */
-export function ChatThread({ chatId }: ChatThreadProps) {
+export function ChatThread({ chatId, compact = false }: ChatThreadProps) {
   const messages = useChatMessages(chatId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyRef = useRef(true);
@@ -60,13 +61,13 @@ export function ChatThread({ chatId }: ChatThreadProps) {
       aria-live="polite"
       aria-relevant="additions text"
     >
-      <div className="mx-auto w-full max-w-[860px] px-4 py-6 flex flex-col gap-4">
+      <div className={compact ? 'w-full px-2 py-3 flex flex-col gap-3' : 'mx-auto w-full max-w-[860px] px-4 py-6 flex flex-col gap-4'}>
         {messages.length === 0 ? (
           <ThreadHint />
         ) : (
           <AnimatePresence initial={false}>
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+              <MessageBubble key={m.id} message={m} compact={compact} />
             ))}
           </AnimatePresence>
         )}

@@ -199,7 +199,7 @@ export function PhoneVoice() {
       <header>
         <h2 className="text-page-title text-foreground">Phone & Voice</h2>
         <p className="text-secondary text-muted-foreground mt-1">
-          Real phone calls and in-app voice. Files never leave your machine.
+          Real phone calls, SMS messages, and in-app voice. Files never leave your machine.
         </p>
       </header>
 
@@ -648,7 +648,7 @@ function OutboundCard({
 
   return (
     <section className="flex flex-col gap-3">
-      <Label>Outbound calling — when Sage calls you</Label>
+      <Label>Outbound phone — when Sage calls or messages you</Label>
 
       <div className="grid grid-cols-[120px_1fr] gap-2 items-center max-w-md">
         <Label className="text-xs">Your number</Label>
@@ -664,7 +664,7 @@ function OutboundCard({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Toggle which categories may dial your phone. Default: manual + error only.
+        Toggle which categories may dial or text your phone. Default: manual + error only.
       </p>
 
       <div className="flex flex-col gap-2 max-w-md">

@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,6 +44,8 @@ pub struct PtyHandle {
     master: Arc<AsyncMutex<Box<dyn MasterPty + Send>>>,
     killer: Arc<AsyncMutex<Box<dyn ChildKiller + Send + Sync>>>,
     reader_task: JoinHandle<()>,
+    active: Arc<AtomicBool>,
+    deleted: Arc<AtomicBool>,
 }
 
 /// Metadata returned by `terminal_list`. Serialised as camelCase to match
@@ -56,6 +59,9 @@ pub struct TerminalInfo {
     pub rows: u16,
     pub cols: u16,
     pub started_at: u64,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub deleted: bool,
 }
 
 #[derive(Serialize)]
@@ -77,6 +83,8 @@ struct ExitPayload {
     session_id: String,
     code: Option<i32>,
 }
+
+const MAX_TERMINAL_SESSIONS: usize = 10;
 
 /// Resolve which executable to launch when the caller didn't pick one.
 ///
@@ -125,8 +133,44 @@ pub async fn terminal_spawn(
     rows: u16,
     cols: u16,
     env: Option<HashMap<String, String>>,
+    project_id: Option<String>,
+    project_name: Option<String>,
 ) -> Result<SpawnResponse, String> {
     let cmd_str = pick_default_shell(command);
+    let mut evicted_handles = Vec::new();
+    {
+        let mut map = state.0.lock().await;
+        let mut project_sessions: Vec<(String, u64)> = map.values()
+            .filter(|h| {
+                h.info.project_id == project_id 
+                && h.active.load(Ordering::SeqCst) 
+                && !h.deleted.load(Ordering::SeqCst)
+            })
+            .map(|h| (h.info.session_id.clone(), h.info.started_at))
+            .collect();
+        println!(
+            "[terminal] Spawning PTY. Active sessions for project {:?} (name: {:?}): {}/{}",
+            project_id, project_name, project_sessions.len(), MAX_TERMINAL_SESSIONS
+        );
+        if project_sessions.len() >= MAX_TERMINAL_SESSIONS {
+            // Sort by started_at ascending (oldest first)
+            project_sessions.sort_by_key(|k| k.1);
+            let evict_count = project_sessions.len() - MAX_TERMINAL_SESSIONS + 1;
+            for i in 0..evict_count {
+                if let Some((sid, _)) = project_sessions.get(i) {
+                    println!("[terminal] Evicting oldest session: {}", sid);
+                    if let Some(handle) = map.remove(sid) {
+                        evicted_handles.push(handle);
+                    }
+                }
+            }
+        }
+    }
+    for handle in evicted_handles {
+        let mut killer = handle.killer.lock().await;
+        let _ = killer.kill();
+        handle.reader_task.abort();
+    }
 
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -181,6 +225,9 @@ pub async fn terminal_spawn(
         rows,
         cols,
         started_at: now_unix_ms(),
+        project_id: project_id.clone(),
+        project_name: project_name.clone(),
+        deleted: false,
     };
 
     // Reader task. Owns the child + reader so it can wait() once the master
@@ -188,6 +235,9 @@ pub async fn terminal_spawn(
     // `spawn_blocking` because `Read` is synchronous and waiting on PTY I/O
     // would otherwise stall the runtime.
     let app_emit = app.clone();
+    let state_for_task = state.0.clone();
+    let active_for_task = Arc::new(AtomicBool::new(true));
+    let active_flag_for_task = active_for_task.clone();
     let session_for_task = session_id.clone();
     let reader_task = spawn_blocking(move || {
         let mut child = child;
@@ -214,6 +264,11 @@ pub async fn terminal_spawn(
             }
         }
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
+        active_flag_for_task.store(false, Ordering::SeqCst);
+        // Drop exited sessions from the active map so they no longer count
+        // toward the per-project cap. This keeps natural shell exits from
+        // permanently consuming one of the 10 project slots.
+        state_for_task.blocking_lock().remove(&session_for_task);
         let _ = app_emit.emit(
             "terminal://exit",
             ExitPayload {
@@ -223,12 +278,15 @@ pub async fn terminal_spawn(
         );
     });
 
+    let deleted_flag_for_task = Arc::new(AtomicBool::new(false));
     let handle = PtyHandle {
         info,
         writer: Arc::new(AsyncMutex::new(writer)),
         master: Arc::new(AsyncMutex::new(pair.master)),
         killer: Arc::new(AsyncMutex::new(killer)),
         reader_task,
+        active: active_for_task,
+        deleted: deleted_flag_for_task,
     };
 
     state.0.lock().await.insert(session_id.clone(), handle);
@@ -251,14 +309,18 @@ pub async fn terminal_write(
             .ok_or_else(|| format!("terminal: unknown session {session_id}"))?;
         h.writer.clone()
     };
-    let mut writer = writer_arc.lock().await;
-    writer
-        .write_all(data.as_bytes())
-        .map_err(|e| format!("terminal: write failed: {e}"))?;
-    writer
-        .flush()
-        .map_err(|e| format!("terminal: flush failed: {e}"))?;
-    Ok(())
+    spawn_blocking(move || {
+        let mut writer = writer_arc.blocking_lock();
+        writer
+            .write_all(data.as_bytes())
+            .map_err(|e| format!("terminal: write failed: {e}"))?;
+        writer
+            .flush()
+            .map_err(|e| format!("terminal: flush failed: {e}"))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("terminal: spawn_blocking failed: {e}"))?
 }
 
 /// Tell the PTY about a new viewport size. The shell (and any TUI children)
@@ -279,16 +341,20 @@ pub async fn terminal_resize(
         h.info.cols = cols;
         h.master.clone()
     };
-    let master = master_arc.lock().await;
-    master
-        .resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| format!("terminal: resize failed: {e}"))?;
-    Ok(())
+    spawn_blocking(move || {
+        let master = master_arc.blocking_lock();
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("terminal: resize failed: {e}"))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("terminal: spawn_blocking failed: {e}"))?
 }
 
 /// Kill the child process, drop the writer, abort the reader task, and
@@ -300,17 +366,35 @@ pub async fn terminal_kill(
     state: State<'_, TerminalState>,
     session_id: String,
 ) -> Result<(), String> {
-    let removed = state.0.lock().await.remove(&session_id);
-    let handle = removed.ok_or_else(|| format!("terminal: unknown session {session_id}"))?;
-    {
-        let mut killer = handle.killer.lock().await;
-        // Best effort: if the child is already gone, the killer returns an
-        // error — we don't surface it because the user-visible result is
-        // the same.
-        let _ = killer.kill();
+    let mut map = state.0.lock().await;
+    if let Some(handle) = map.remove(&session_id) {
+        handle.deleted.store(true, Ordering::SeqCst);
+        handle.active.store(false, Ordering::SeqCst);
+        handle.reader_task.abort();
+        let killer_arc = handle.killer;
+        spawn_blocking(move || {
+            let mut killer = killer_arc.blocking_lock();
+            let _ = killer.kill();
+        });
     }
-    handle.reader_task.abort();
-    drop(handle.writer);
+    Ok(())
+}
+
+/// Reassign an active PTY to a different project without restarting the child.
+/// The renderer uses this when a terminal tile is dragged onto another project.
+#[tauri::command]
+pub async fn terminal_move(
+    state: State<'_, TerminalState>,
+    session_id: String,
+    project_id: Option<String>,
+    project_name: Option<String>,
+) -> Result<(), String> {
+    let mut map = state.0.lock().await;
+    let h = map
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("terminal: unknown session {session_id}"))?;
+    h.info.project_id = project_id;
+    h.info.project_name = project_name;
     Ok(())
 }
 
@@ -321,5 +405,42 @@ pub async fn terminal_list(
     state: State<'_, TerminalState>,
 ) -> Result<Vec<TerminalInfo>, String> {
     let map = state.0.lock().await;
-    Ok(map.values().map(|h| h.info.clone()).collect())
+    Ok(map
+        .values()
+        .filter(|h| h.active.load(Ordering::SeqCst) && !h.deleted.load(Ordering::SeqCst))
+        .map(|h| {
+            let mut info = h.info.clone();
+            info.deleted = h.deleted.load(Ordering::SeqCst);
+            info
+        })
+        .collect())
+}
+
+/// Prune terminal sessions that are not listed in active_session_ids
+#[tauri::command]
+pub async fn terminal_reconcile(
+    state: State<'_, TerminalState>,
+    active_session_ids: Vec<String>,
+) -> Result<(), String> {
+    if active_session_ids.is_empty() {
+        println!("[terminal] Skipping reconcile with empty active session list");
+        return Ok(());
+    }
+
+    let mut map = state.0.lock().await;
+    let keys_to_remove: Vec<String> = map
+        .keys()
+        .filter(|k| !active_session_ids.contains(k))
+        .cloned()
+        .collect();
+
+    for key in keys_to_remove {
+        if let Some(handle) = map.remove(&key) {
+            println!("[terminal] Killing orphaned PTY session: {}", key);
+            let mut killer = handle.killer.lock().await;
+            let _ = killer.kill();
+            handle.reader_task.abort();
+        }
+    }
+    Ok(())
 }

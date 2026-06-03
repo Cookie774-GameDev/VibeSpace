@@ -28,7 +28,7 @@ export type TerminalSessionStatus = 'running' | 'detached' | 'exited';
  *   grid       — 2-, 3-, or 4-pane grid (layout_id picks the variant)
  *   tabs       — single visible pane, others as tabs above
  *   fullscreen — focused pane fills the whole workspace area below TopBar
- *                (NavPane + TodoPanel auto-collapse)
+ *                (NavPane auto-collapse)
  */
 export type TerminalViewMode = 'single' | 'grid' | 'tabs' | 'fullscreen';
 

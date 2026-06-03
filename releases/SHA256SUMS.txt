@@ -1,0 +1,12 @@
+﻿# SHA-256 checksums for Jarvis One 0.1.16 (Windows x64)
+# Generated 2026-06-03 12:52:22 -05:00
+
+74d7befb4aebb1664d297ea5e538795a5eb12e6c6654ac4e26a31e08deaff8cc  Jarvis One_0.1.16_x64_en-US.msi
+feea3d06e07b1053030ab356dd380d23b2156091db0e8daca43a944f9c6b1fa1  Jarvis One_0.1.16_x64_en-US.msi.sig
+e4c375bfaa26889a02801a2b2e762c53188ac6bf0ea3b6743a47c85a3bd25e7b  Jarvis One_0.1.16_x64-setup.exe
+34bf461678641f34dce9789198aa102c49d48a7dd684c56448f40c86fff8bc06  Jarvis One_0.1.16_x64-setup.exe.sig
+e4c375bfaa26889a02801a2b2e762c53188ac6bf0ea3b6743a47c85a3bd25e7b  Jarvis-One-0.1.16-Windows-x64.exe
+34bf461678641f34dce9789198aa102c49d48a7dd684c56448f40c86fff8bc06  Jarvis-One-0.1.16-Windows-x64.exe.sig
+74d7befb4aebb1664d297ea5e538795a5eb12e6c6654ac4e26a31e08deaff8cc  Jarvis-One-0.1.16-Windows-x64.msi
+feea3d06e07b1053030ab356dd380d23b2156091db0e8daca43a944f9c6b1fa1  Jarvis-One-0.1.16-Windows-x64.msi.sig
+7e1e443600b451be4d5077dad911da5e44bf3fba28709c30fedc56510a582df0  latest.json

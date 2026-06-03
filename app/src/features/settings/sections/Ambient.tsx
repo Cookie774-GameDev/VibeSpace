@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Moon, Play, Pause } from 'lucide-react';
-import { useUIStore } from '@/stores/ui';
+import { Moon, Play, Pause, Music } from 'lucide-react';
+import { useUIStore, type AmbientTrack } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
@@ -8,13 +8,7 @@ import { Switch } from '@/components/ui/switch';
 
 /**
  * Ambient settings — controls the V2 idle takeover (breathing orb, clock,
- * rotating quote, glance cards).
- *
- * Settings:
- *   - Master switch (`ambient`)
- *   - Idle threshold (`ambientThresholdMs`) — 1, 3, 5, 10, 15, 30 min presets
- *   - Drone audio (`ambientDrone`) — placeholder for V3 ambient soundtrack
- *   - "Try ambient mode now" — sets ambientActive=true so the user can preview
+ * rotating quote, glance cards) and the V3 procedural ambient soundtrack.
  */
 const PRESETS_MIN: { label: string; value: number }[] = [
   { label: '1 min', value: 1 },
@@ -25,12 +19,26 @@ const PRESETS_MIN: { label: string; value: number }[] = [
   { label: '30 min', value: 30 },
 ];
 
+const TRACKS: { id: AmbientTrack; label: string; desc: string }[] = [
+  { id: 'warm-hearth', label: 'Warm Hearth', desc: 'Crackling fireside pad' },
+  { id: 'deep-ocean', label: 'Deep Ocean', desc: 'Low sub swells & waves' },
+  { id: 'starlight', label: 'Starlight', desc: 'Ethereal cosmic shimmer' },
+  { id: 'forest-rain', label: 'Forest Rain', desc: 'Soft rain & distant thunder' },
+];
+
 export function Ambient() {
   const ambient = useUIStore((s) => s.ambient);
   const setAmbient = useUIStore((s) => s.setAmbient);
   const ambientThresholdMs = useUIStore((s) => s.ambientThresholdMs);
   const setAmbientThresholdMs = useUIStore((s) => s.setAmbientThresholdMs);
   const ambientDrone = useUIStore((s) => s.ambientDrone);
+  const setAmbientDrone = useUIStore((s) => s.setAmbientDrone);
+  const ambientTrack = useUIStore((s) => s.ambientTrack);
+  const setAmbientTrack = useUIStore((s) => s.setAmbientTrack);
+  const ambientVolume = useUIStore((s) => s.ambientVolume);
+  const setAmbientVolume = useUIStore((s) => s.setAmbientVolume);
+  const ambientAlwaysPlay = useUIStore((s) => s.ambientAlwaysPlay);
+  const setAmbientAlwaysPlay = useUIStore((s) => s.setAmbientAlwaysPlay);
   const setAmbientActive = useUIStore((s) => s.setAmbientActive);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
 
@@ -48,6 +56,8 @@ export function Ambient() {
       setPreviewing(false);
     }, 220);
   };
+
+  const isDroneControlsDisabled = !ambient || !ambientDrone;
 
   return (
     <div className="flex flex-col gap-6">
@@ -76,7 +86,7 @@ export function Ambient() {
 
       <section className="flex flex-col gap-3">
         <div>
-          <Label>Idle threshold</Label>
+          <Label className={!ambient ? 'opacity-50' : ''}>Idle threshold</Label>
           <p className="text-metadata text-muted-foreground mt-1">
             How long without input before ambient takes over.
           </p>
@@ -102,7 +112,7 @@ export function Ambient() {
             );
           })}
         </div>
-        <div className="text-metadata text-muted-foreground">
+        <div className={`text-metadata text-muted-foreground ${!ambient ? 'opacity-50' : ''}`}>
           Currently: {thresholdMin} minute{thresholdMin === 1 ? '' : 's'} of inactivity.
         </div>
       </section>
@@ -111,17 +121,86 @@ export function Ambient() {
 
       <section className="flex items-start justify-between gap-3 max-w-md">
         <div>
-          <Label htmlFor="ambient-drone">Ambient drone</Label>
+          <Label htmlFor="ambient-drone" className={!ambient ? 'opacity-50' : ''}>Ambient soundscape</Label>
           <p className="text-metadata text-muted-foreground mt-1">
-            Soft generative audio while ambient is active. Coming in V3 — toggle saves your preference now.
+            Soft procedural soundscape while ambient is active.
           </p>
         </div>
         <Switch
           id="ambient-drone"
           checked={ambientDrone}
-          disabled
-          aria-disabled="true"
+          onCheckedChange={setAmbientDrone}
+          disabled={!ambient}
         />
+      </section>
+
+      {/* Dynamic Soundscape Sub-options */}
+      <section className="flex flex-col gap-4 pl-4 border-l border-border/60">
+        <div className="flex flex-col gap-2">
+          <Label className={isDroneControlsDisabled ? 'opacity-50' : ''}>Track selector</Label>
+          <p className="text-metadata text-muted-foreground">
+            Choose a procedurally synthesized soundtrack.
+          </p>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            {TRACKS.map((t) => {
+              const active = ambientTrack === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setAmbientTrack(t.id)}
+                  disabled={isDroneControlsDisabled}
+                  className={
+                    'flex items-center gap-2.5 p-3 rounded-lg border text-left transition-all ' +
+                    (active
+                      ? 'border-accent-copper bg-accent-copper/10 text-foreground shadow-sm'
+                      : 'border-border bg-panel text-muted-foreground hover:border-border-mid disabled:opacity-40')
+                  }
+                >
+                  <Music className={`h-4 w-4 shrink-0 ${active ? 'text-accent-copper' : 'text-muted-foreground/60'}`} />
+                  <div>
+                    <div className="text-xs font-semibold text-foreground">{t.label}</div>
+                    <div className="text-[10px] text-muted-foreground leading-tight mt-0.5">{t.desc}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 max-w-md">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="ambient-volume" className={isDroneControlsDisabled ? 'opacity-50' : ''}>Volume</Label>
+            <span className={`text-metadata text-accent-copper font-medium ${isDroneControlsDisabled ? 'opacity-50' : ''}`}>
+              {ambientVolume}%
+            </span>
+          </div>
+          <input
+            id="ambient-volume"
+            type="range"
+            min="0"
+            max="100"
+            value={ambientVolume}
+            onChange={(e) => setAmbientVolume(Number(e.target.value))}
+            disabled={isDroneControlsDisabled}
+            className="h-1.5 w-full appearance-none rounded-lg bg-border cursor-pointer accent-accent-copper disabled:opacity-50"
+          />
+        </div>
+
+        <div className="flex items-start justify-between gap-3 max-w-md">
+          <div>
+            <Label htmlFor="ambient-always-play" className={isDroneControlsDisabled ? 'opacity-50' : ''}>Always play 24/7</Label>
+            <p className="text-metadata text-muted-foreground mt-1">
+              Keep the ambient soundscape playing continuously, even when not in idle mode.
+            </p>
+          </div>
+          <Switch
+            id="ambient-always-play"
+            checked={ambientAlwaysPlay}
+            onCheckedChange={setAmbientAlwaysPlay}
+            disabled={isDroneControlsDisabled}
+          />
+        </div>
       </section>
 
       <Separator />

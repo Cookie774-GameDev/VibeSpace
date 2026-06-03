@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Send, ChevronDown, Sparkles, Mic, MicOff } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Send, ChevronDown, Sparkles, Mic, MicOff, FileText, X, Network } from 'lucide-react';
 import {
   Button,
   Hint,
@@ -10,19 +10,45 @@ import {
 } from '@/components/ui';
 import { messageRepo } from '@/lib/db';
 import { cn, renderHotkey } from '@/lib/utils';
-import { HOTKEYS, useHotkey } from '@/lib/hotkeys';
+import { HOTKEYS } from '@/lib/hotkeys';
+import { buildUsageSummary } from '@/lib/usage/usageSummary';
 import { useAgentStore } from '@/stores/agents';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { VoiceService } from '@/features/voice/VoiceService';
+import { MicWaveform } from './MicWaveform';
+import { JARVIS_COMMAND_CATALOG } from '@/features/assistant/commands';
 import { toast } from '@/components/ui/toast';
 import type { Agent, AgentId, ChatId, ProviderId } from '@/types';
+import {
+  parseTerminalRef,
+  terminalRefKey,
+  terminalRefLabel,
+  type TerminalRef,
+} from '@/features/terminals/terminalRefs';
+import {
+  parseTerminalScheduleRequest,
+  scheduleTerminalCommandFromChat,
+} from '@/features/terminals/terminalScheduler';
+import {
+  CONTEXT_MIME,
+  parseContextAttachment,
+  serializeContextAttachment,
+  loadStoredContextMaps,
+  type ContextAttachment,
+  type ContextMapRecord,
+} from '@/features/context/tree';
 import { MentionTypeahead } from './MentionTypeahead';
+import { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef } from './SlashCommandTypeahead';
 
 export interface ComposerProps {
   chatId: ChatId | string;
   /** Optional placeholder override */
   placeholder?: string;
+  /** Compact right-sidebar rendering. */
+  compact?: boolean;
+  /** Disable slash commands that navigate the main canvas. */
+  disableRouteSlashCommands?: boolean;
 }
 
 const LINE_HEIGHT = 20; // px - matches body type scale
@@ -76,6 +102,13 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 };
 
 type MentionContext = { start: number; query: string };
+type SlashContext = { start: number; query: string };
+
+type AudioContextCtor = typeof AudioContext;
+
+const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
+const STT_INACTIVITY_MS = 30_000;
+const STT_ACTIVITY_RMS = 0.015;
 
 /**
  * Find an active "@xxx" mention being typed at the caret.
@@ -98,11 +131,64 @@ function getMentionContext(value: string, caret: number): MentionContext | null 
 }
 
 /**
+ * Find an active "/xxx" slash command being typed at the caret.
+ * Triggers when '/' is at position 0 or directly after whitespace.
+ * Only activates if the query contains no spaces (single token).
+ */
+function getSlashContext(value: string, caret: number): SlashContext | null {
+  let i = caret - 1;
+  while (i >= 0) {
+    const c = value[i];
+    if (c === '/') {
+      if (i === 0 || /\s/.test(value[i - 1] ?? '')) {
+        const query = value.slice(i + 1, caret);
+        // Only trigger if no spaces in the query (single token command)
+        if (!/\s/.test(query)) {
+          return { start: i, query };
+        }
+      }
+      return null;
+    }
+    if (/\s/.test(c)) return null;
+    i--;
+  }
+  return null;
+}
+
+/**
+ * Fuzzy-match a query against a string. Returns a score (higher = better match).
+ * Simple scoring: prefix match > starts-with > includes > no match.
+ */
+function fuzzyScore(query: string, target: string): number {
+  if (!query) return 1;
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  if (t === q) return 100;
+  if (t.startsWith(q)) return 80;
+  if (t.includes(q)) return 50;
+  // Character-by-character fuzzy: all query chars must appear in order
+  let qi = 0;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) qi++;
+  }
+  return qi === q.length ? 20 : 0;
+}
+
+/**
  * Pull all `@slug` tokens from a string and resolve them to known AgentIds.
+ *
+ * Defensive against a sparse or partially-corrupt agent map: any entry
+ * without a slug is skipped rather than crashing the loop. The
+ * Composer's `handleSend` calls this synchronously inside a try/catch,
+ * but a defensive guard here keeps the dispatch path simple even when
+ * an agent gets registered without all of its expected fields.
  */
 function extractMentionedAgentIds(text: string, agents: Record<string, Agent>): AgentId[] {
   const slugToId: Record<string, AgentId> = {};
-  for (const a of Object.values(agents)) slugToId[a.slug] = a.id;
+  for (const a of Object.values(agents)) {
+    if (!a?.slug || !a.id) continue;
+    slugToId[a.slug] = a.id;
+  }
 
   const seen = new Set<AgentId>();
   const out: AgentId[] = [];
@@ -118,21 +204,145 @@ function extractMentionedAgentIds(text: string, agents: Record<string, Agent>): 
   return out;
 }
 
-export function Composer({ chatId, placeholder }: ComposerProps) {
+function getAudioContextCtor(): AudioContextCtor | null {
+  if (typeof window === 'undefined') return null;
+  return window.AudioContext ?? ((window as unknown as { webkitAudioContext?: AudioContextCtor }).webkitAudioContext ?? null);
+}
+
+function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
+  const sampleCount = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  let offset = 0;
+  const writeString = (value: string) => {
+    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
+    offset += value.length;
+  };
+  writeString('RIFF');
+  view.setUint32(offset, 36 + sampleCount * 2, true); offset += 4;
+  writeString('WAVE');
+  writeString('fmt ');
+  view.setUint32(offset, 16, true); offset += 4;
+  view.setUint16(offset, 1, true); offset += 2;
+  view.setUint16(offset, 1, true); offset += 2;
+  view.setUint32(offset, sampleRate, true); offset += 4;
+  view.setUint32(offset, sampleRate * 2, true); offset += 4;
+  view.setUint16(offset, 2, true); offset += 2;
+  view.setUint16(offset, 16, true); offset += 2;
+  writeString('data');
+  view.setUint32(offset, sampleCount * 2, true); offset += 4;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i += 1) {
+      const sample = Math.max(-1, Math.min(1, chunk[i] ?? 0));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function cleanupAudioRecorder(
+  processor: ScriptProcessorNode | null,
+  source: MediaStreamAudioSourceNode | null,
+  context: AudioContext | null,
+  stream: MediaStream | null,
+): void {
+  try { processor?.disconnect(); } catch { /* already disconnected */ }
+  try { source?.disconnect(); } catch { /* already disconnected */ }
+  try { void context?.close(); } catch { /* already closed */ }
+  stream?.getTracks().forEach((t) => t.stop());
+}
+
+export function Composer({ chatId, placeholder, compact = false, disableRouteSlashCommands = false }: ComposerProps) {
   const [text, setText] = useState('');
   const [mentionCtx, setMentionCtx] = useState<MentionContext | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string>('');
+  const [slashCtx, setSlashCtx] = useState<SlashContext | null>(null);
+  const [selectedSlashCmd, setSelectedSlashCmd] = useState<string>('');
   const [sending, setSending] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
+  const [attachedTerminals, setAttachedTerminals] = useState<TerminalRef[]>([]);
+  const [attachedContexts, setAttachedContexts] = useState<ContextAttachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   // V2 — speech-to-text in the composer.
   const [sttListening, setSttListening] = useState(false);
   const [sttInterim, setSttInterim] = useState('');
   const composerSttEnabled = useUIStore((s) => s.composerStt);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const wavChunksRef = useRef<Float32Array[]>([]);
+  const audioSilenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastAudioActivityRef = useRef(0);
+
+  const volumeRef = useRef<number>(0);
+  const webSpeechAudioContextRef = useRef<AudioContext | null>(null);
+  const webSpeechStreamRef = useRef<MediaStream | null>(null);
+  const webSpeechAnalyserRef = useRef<AnalyserNode | null>(null);
+  const webSpeechVolumeTimerRef = useRef<number | null>(null);
 
   const agents = useAgentStore((s) => s.agents);
   const provider = useAuthStore((s) => s.defaultProvider);
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+
+  const clearAudioSilenceTimer = () => {
+    if (audioSilenceTimerRef.current) clearInterval(audioSilenceTimerRef.current);
+    audioSilenceTimerRef.current = null;
+  };
+
+  const stopGroqSttWithoutTranscribing = (message = 'Speech-to-text stopped after 30 seconds without voice activity.') => {
+    clearAudioSilenceTimer();
+    stopWebSpeechVolumeMeter();
+    volumeRef.current = 0;
+    cleanupAudioRecorder(audioProcessorRef.current, audioSourceRef.current, audioContextRef.current, mediaStreamRef.current);
+    audioProcessorRef.current = null;
+    audioSourceRef.current = null;
+    audioContextRef.current = null;
+    mediaStreamRef.current = null;
+    wavChunksRef.current = [];
+    setSttListening(false);
+    setSttInterim('');
+    toast.info('Speech-to-text stopped', message);
+  };
+
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string; prompt?: string; code?: string }>).detail;
+      if (!detail?.path || !detail.code) return;
+      setText([
+        detail.prompt?.trim() || 'Review this code.',
+        '',
+        `File: ${detail.path}`,
+        '```',
+        detail.code,
+        '```',
+      ].join('\n'));
+      setAttachedFiles((cur) => (cur.includes(detail.path!) ? cur : [...cur, detail.path!]).slice(0, 8));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener('jarvis:files:ask', onAsk as EventListener);
+    return () => window.removeEventListener('jarvis:files:ask', onAsk as EventListener);
+  }, []);
+
+  // Free-tier nudge: the seeded Jarvis agent runs on Google's Gemini 2.5
+  // Flash Lite by default. Until the user pastes an AI Studio key
+  // (`AIza...`), the router silently falls back to mock and replies look
+  // fake. Surface a one-line CTA on the composer so they know it's a
+  // 30-second fix at aistudio.google.com/apikey (no card needed).
+  const googleKey = useAuthStore((s) => s.apiKeys.google);
+  const jarvisAgent = useMemo(
+    () => Object.values(agents).find((a) => a.slug === 'jarvis'),
+    [agents],
+  );
+  const showFreeKeyNudge =
+    !compact &&
+    !!jarvisAgent &&
+    jarvisAgent.model.provider === 'google' &&
+    !googleKey;
 
   // Filtered agent list for the mention typeahead (case-insensitive prefix match,
   // falling back to substring match for forgiving search).
@@ -163,6 +373,34 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
     }
   }, [filteredAgents, selectedSlug]);
 
+  // Filtered slash command list for the typeahead (fuzzy match on cmd + description).
+  const filteredSlashCommands = useMemo<SlashCommandDef[]>(() => {
+    const q = (slashCtx?.query ?? '').toLowerCase();
+    if (!slashCtx) return [];
+    const scored = SLASH_COMMANDS.map((c) => ({
+      cmd: c,
+      score: Math.max(
+        fuzzyScore(q, c.cmd),
+        fuzzyScore(q, c.description) * 0.5,
+      ),
+    }))
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score || a.cmd.cmd.localeCompare(b.cmd.cmd))
+      .map((s) => s.cmd);
+    return scored;
+  }, [slashCtx]);
+
+  // Keep selectedSlashCmd in sync when filtered list changes
+  useEffect(() => {
+    if (filteredSlashCommands.length === 0) {
+      setSelectedSlashCmd('');
+      return;
+    }
+    if (!filteredSlashCommands.some((c) => c.cmd === selectedSlashCmd)) {
+      setSelectedSlashCmd(filteredSlashCommands[0]!.cmd);
+    }
+  }, [filteredSlashCommands, selectedSlashCmd]);
+
   // Auto-grow the textarea up to MAX_HEIGHT, then enable internal scroll
   useEffect(() => {
     const ta = textareaRef.current;
@@ -177,6 +415,30 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
     const ta = textareaRef.current;
     if (!ta) return;
     setMentionCtx(getMentionContext(ta.value, ta.selectionStart));
+  };
+
+  const recomputeSlash = () => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    setSlashCtx(getSlashContext(ta.value, ta.selectionStart));
+  };
+
+  const insertSlashCommand = (cmd: SlashCommandDef) => {
+    if (!slashCtx || !textareaRef.current) return;
+    const ta = textareaRef.current;
+    const before = text.slice(0, slashCtx.start);
+    const after = text.slice(ta.selectionStart);
+    const insert = cmd.takesArg ? `/${cmd.cmd} ` : `/${cmd.cmd} `;
+    const next = before + insert + after;
+    setText(next);
+    setSlashCtx(null);
+    requestAnimationFrame(() => {
+      const node = textareaRef.current;
+      if (!node) return;
+      const pos = before.length + insert.length;
+      node.focus();
+      node.setSelectionRange(pos, pos);
+    });
   };
 
   const insertMention = (agent: Agent) => {
@@ -197,39 +459,256 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
     });
   };
 
+  const handleSlashCommand = async (trimmed: string): Promise<boolean> => {
+    if (!trimmed.startsWith('/')) return false;
+    const [cmdRaw, ...restParts] = trimmed.slice(1).split(/\s+/);
+    const cmd = (cmdRaw ?? '').toLowerCase();
+    const rest = restParts.join(' ').trim();
+    const addSystem = async (msg: string) => {
+      await messageRepo.create({ chat_id: chatId as ChatId, role: 'system', parts: [{ kind: 'text', text: msg }] });
+      setText('');
+    };
+    if (cmd === 'usage') {
+      const apiKey = useAuthStore.getState().apiKeys[provider];
+      await addSystem(
+        await buildUsageSummary({
+          provider,
+          apiKey,
+          providerLabel: PROVIDER_LABELS[provider],
+        }),
+      );
+      return true;
+    }
+    if (cmd === 'model') {
+      const wanted = rest.toLowerCase() as ProviderId;
+      if (wanted && PROVIDERS.includes(wanted)) {
+        setDefaultProvider(wanted);
+        await addSystem(`Model provider changed to ${PROVIDER_LABELS[wanted]}.`);
+      } else {
+        await addSystem(`Available providers: ${PROVIDERS.join(', ')}.`);
+      }
+      return true;
+    }
+    const routes: Record<string, string> = {
+      files: 'files',
+      explorer: 'files',
+      terminals: 'terminal',
+      terminal: 'terminal',
+      kanban: 'kanban',
+      context: 'context',
+      contexts: 'context',
+      skills: 'skills',
+      history: 'history',
+      tools: 'tools',
+      agents: 'agents',
+      schedule: 'schedule',
+      chat: 'chat',
+    };
+    if (cmd in routes) {
+      if (disableRouteSlashCommands) {
+        await addSystem(`/${cmd} is disabled in the sidebar so this panel stays attached to the current project.`);
+        return true;
+      }
+      useUIStore.getState().setRoute(routes[cmd] as never);
+      await addSystem(`Opened ${cmd}.`);
+      return true;
+    }
+    if (cmd === 'attach' && rest) {
+      setAttachedFiles((cur) => (cur.includes(rest) ? cur : [...cur, rest]).slice(0, 8));
+      setText('');
+      return true;
+    }
+    if (cmd === 'clearfiles') {
+      setAttachedFiles([]);
+      await addSystem('Cleared attached files.');
+      return true;
+    }
+    if (cmd === 'help') {
+      await addSystem('Slash commands: /usage, /model <provider>, /files, /terminals, /kanban, /context, /skills, /history, /tools, /agents, /schedule, /attach <absolute path>, /clearfiles, /commands.');
+      return true;
+    }
+    if (cmd === 'commands') {
+      await addSystem(`Jarvis command catalog (${JARVIS_COMMAND_CATALOG.length}):\n${JARVIS_COMMAND_CATALOG.map((c, i) => `${i + 1}. ${c}`).join('\n')}`);
+      return true;
+    }
+    // V3 — attach a context map to this chat.
+    // /contextmap           → list available maps
+    // /contextmap <name>    → attach the named map (prefix match)
+    if (cmd === 'contextmap') {
+      const projectId = useAuthStore.getState().projectId;
+      const maps = projectId ? loadStoredContextMaps(projectId) : [];
+      if (!rest) {
+        if (maps.length === 0) {
+          await addSystem('No context maps yet. Open the Context page and press "Make Context Map" to generate one.');
+        } else {
+          const active = maps.filter((m: ContextMapRecord) => m.status !== 'deleted');
+          const list = active
+            .map((m: ContextMapRecord, i: number) => `${i + 1}. ${m.name ?? 'Untitled'} (${(m.tree?.nodes ?? []).length} nodes)`)
+            .join('\n');
+          await addSystem(`Available context maps (${active.length}):\n${list}\n\nUse /contextmap <name> to attach one.`);
+        }
+        return true;
+      }
+      // Find by prefix match on name
+      const target = rest.toLowerCase();
+      const matched = maps.find((m: ContextMapRecord) => (m.name ?? '').toLowerCase().includes(target));
+      if (!matched) {
+        await addSystem(`No context map matching '${rest}'. Try /contextmap to see available maps.`);
+        return true;
+      }
+      // Attach the map's root node as a context attachment
+      const root = matched.tree?.nodes?.[0];
+      if (!root) {
+        await addSystem(`Context map '${matched.name}' has no nodes.`);
+        return true;
+      }
+      const attachment: ContextAttachment = {
+        projectId: matched.projectId,
+        rootDir: matched.rootDir,
+        generatedAt: matched.tree?.generatedAt ?? Date.now(),
+        nodeId: root.id ?? `map:${matched.name}`,
+        title: matched.name ?? 'Context Map',
+        summary: matched.tree?.summary ?? '',
+        path: '',
+        kind: 'root',
+      };
+      setAttachedContexts((cur) =>
+        cur.some((item) => item.nodeId === attachment.nodeId)
+          ? cur
+          : [...cur, attachment].slice(0, 8),
+      );
+      setText('');
+      await addSystem(`Attached context map '${matched.name}'.`);
+      return true;
+    }
+    // V3 — attach a project file to this chat.
+    // /file <absolute path>  → attach the file
+    if (cmd === 'file') {
+      if (rest) {
+        setAttachedFiles((cur) => (cur.includes(rest) ? cur : [...cur, rest]).slice(0, 8));
+        setText('');
+        await addSystem(`Attached file: ${rest}`);
+        return true;
+      }
+      await addSystem('Use /file <absolute path> to attach a file. Example: /file C:\\Users\\viper\\projects\\app.tsx\nOr drag files from the left panel into the chat.');
+      return true;
+    }
+    await addSystem(`Unknown slash command: /${cmd}. Try /help.`);
+    return true;
+  };
+
   const handleSend = async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    if ((!trimmed && attachedFiles.length === 0 && attachedTerminals.length === 0 && attachedContexts.length === 0) || sending) return;
+    if (await handleSlashCommand(trimmed)) return;
     setSending(true);
     try {
-      // Repo stamps id + timestamps + bumps parent chat.updated_at
+      if (attachedTerminals.length > 0) {
+        const scheduled = parseTerminalScheduleRequest(trimmed);
+        if (scheduled) {
+          scheduleTerminalCommandFromChat(attachedTerminals, scheduled.command, scheduled.runAt);
+          await messageRepo.create({
+            chat_id: chatId as ChatId,
+            role: 'system',
+            parts: [{ kind: 'text', text: `Scheduled terminal message for ${new Date(scheduled.runAt).toLocaleString()}: ${scheduled.command}` }],
+          });
+          setText('');
+          setAttachedTerminals([]);
+          setMentionCtx(null);
+          toast.success('Terminal message scheduled', new Date(scheduled.runAt).toLocaleString());
+          return;
+        }
+      }
+      // Repo stamps id + timestamps + bumps parent chat.updated_at.
+      // The runtime listener (started in App.tsx) will read history
+      // from the same store after we dispatch the event below — so it
+      // sees the user turn we just wrote and skips creating its own
+      // user message. (See runtime.ts: prior versions wrote a second
+      // copy here, producing the duplicate-bubble bug surfaced in the
+      // AI-router audit.)
       await messageRepo.create({
         chat_id: chatId as ChatId,
         role: 'user',
-        parts: [{ kind: 'text', text: trimmed }],
+        parts: [
+          { kind: 'text', text: trimmed || 'Attached context.' },
+          ...attachedFiles.map((path) => ({ kind: 'file_ref' as const, ref: { kind: 'file' as const, id: path } })),
+          ...attachedTerminals.map((ref) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `terminal:${terminalRefKey(ref)}`, excerpt: `Terminal reference: ${terminalRefLabel(ref)}` } })),
+          ...attachedContexts.map((context) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `context:${context.nodeId}`, excerpt: `Context: ${context.title}` } })),
+        ],
       });
 
       const mentionedAgentIds = extractMentionedAgentIds(trimmed, agents);
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
-          detail: { chatId, text: trimmed, mentionedAgentIds },
+          detail: { chatId, text: trimmed || 'Attached context.', mentionedAgentIds, filePaths: attachedFiles, terminalRefs: attachedTerminals, contextNodes: attachedContexts },
         }),
       );
       setText('');
+      setAttachedFiles([]);
+      setAttachedTerminals([]);
+      setAttachedContexts([]);
       setMentionCtx(null);
+    } catch (err) {
+      // Anything thrown here (DB error, mention extraction edge case,
+      // even an exception from the dispatch listener) used to bubble
+      // up as an unhandled rejection because the caller is
+      // `void handleSend()`. React error boundaries don't catch
+      // event-handler errors, so the previous behaviour was a blank
+      // window with a console message no user would ever read.
+      // Surface the failure as a toast and keep the composer usable;
+      // the draft text is preserved so the user can retry.
+      // eslint-disable-next-line no-console
+      console.error('[Composer] send failed:', err);
+      toast.error(
+        "Couldn't send message",
+        err instanceof Error ? err.message : 'Unknown error',
+      );
     } finally {
       setSending(false);
     }
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Mod+Enter always sends, regardless of mention popover state
+    // Mod+Enter always sends, regardless of any popover state
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       void handleSend();
       return;
     }
 
+    // Slash command navigation (higher priority than mention)
+    if (slashCtx) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSlashCtx(null);
+        return;
+      }
+      if (filteredSlashCommands.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          const i = filteredSlashCommands.findIndex((c) => c.cmd === selectedSlashCmd);
+          const next = filteredSlashCommands[(i + 1 + filteredSlashCommands.length) % filteredSlashCommands.length]!;
+          setSelectedSlashCmd(next.cmd);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          const i = filteredSlashCommands.findIndex((c) => c.cmd === selectedSlashCmd);
+          const baseI = i === -1 ? 0 : i;
+          const next = filteredSlashCommands[(baseI - 1 + filteredSlashCommands.length) % filteredSlashCommands.length]!;
+          setSelectedSlashCmd(next.cmd);
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          const cmd = filteredSlashCommands.find((c) => c.cmd === selectedSlashCmd) ?? filteredSlashCommands[0];
+          if (cmd) insertSlashCommand(cmd);
+          return;
+        }
+      }
+    }
+
+    // Mention navigation
     if (mentionCtx) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -264,7 +743,87 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
     }
   };
 
-  const canSend = text.trim().length > 0 && !sending;
+  const canSend = (text.trim().length > 0 || attachedFiles.length > 0 || attachedTerminals.length > 0 || attachedContexts.length > 0) && !sending;
+
+  const addDroppedPath = useCallback((path: string) => {
+    const clean = path.trim();
+    if (!clean) return;
+    setAttachedFiles((cur) => (cur.includes(clean) ? cur : [...cur, clean]).slice(0, 8));
+    setText((cur) => {
+      const separator = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
+      return `${cur}${separator}${clean}`;
+    });
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    const onAttachFile = (event: Event) => {
+      const detail = (event as CustomEvent<{ path?: string; chatId?: string }>).detail;
+      if (detail?.chatId && String(detail.chatId) !== String(chatId)) return;
+      if (detail?.path) addDroppedPath(detail.path);
+    };
+    window.addEventListener('jarvis:file:attach', onAttachFile as EventListener);
+    return () => window.removeEventListener('jarvis:file:attach', onAttachFile as EventListener);
+  }, [addDroppedPath, chatId]);
+
+  const addDroppedTerminal = useCallback((raw: string | TerminalRef) => {
+    const ref = typeof raw === 'string' ? parseTerminalRef(raw) : raw;
+    if (!ref) return;
+    const key = terminalRefKey(ref);
+    setAttachedTerminals((cur) => (cur.some((item) => terminalRefKey(item) === key) ? cur : [...cur, ref]).slice(0, 8));
+    setText((cur) => cur || `Please inspect the attached terminal: ${terminalRefLabel(ref)}`);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
+  const addDroppedContext = useCallback((raw: string | ContextAttachment) => {
+    const context = typeof raw === 'string' ? parseContextAttachment(raw) : raw;
+    if (!context) return;
+    setAttachedContexts((cur) => (
+      cur.some((item) => item.nodeId === context.nodeId)
+        ? cur
+        : [...cur, context].slice(0, 8)
+    ));
+    setText((cur) => cur || `Please use the attached Context: ${context.title}`);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    const onAttachTerminal = (event: Event) => {
+      const detail = (event as CustomEvent<{ raw?: string; ref?: TerminalRef; chatId?: string }>).detail;
+      if (detail?.chatId && String(detail.chatId) !== String(chatId)) return;
+      if (detail?.ref) addDroppedTerminal(detail.ref);
+      else if (detail?.raw) addDroppedTerminal(detail.raw);
+    };
+    window.addEventListener('jarvis:terminal:attach', onAttachTerminal as EventListener);
+    return () => window.removeEventListener('jarvis:terminal:attach', onAttachTerminal as EventListener);
+  }, [addDroppedTerminal, chatId]);
+
+  useEffect(() => {
+    const onAttachContext = (event: Event) => {
+      const detail = (event as CustomEvent<{ raw?: string; context?: ContextAttachment; chatId?: string }>).detail;
+      if (detail?.chatId && String(detail.chatId) !== String(chatId)) return;
+      if (detail?.context) addDroppedContext(detail.context);
+      else if (detail?.raw) addDroppedContext(detail.raw);
+    };
+    window.addEventListener('jarvis:context:attach', onAttachContext as EventListener);
+    return () => window.removeEventListener('jarvis:context:attach', onAttachContext as EventListener);
+  }, [addDroppedContext, chatId]);
+
+  useEffect(() => {
+    const onInsertText = (e: Event) => {
+      const detail = (e as CustomEvent<{ text: string; chatId?: string }>).detail;
+      if (detail?.chatId && String(detail.chatId) !== String(chatId)) return;
+      if (detail?.text) {
+        setText((cur) => {
+          const separator = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
+          return cur + separator + detail.text;
+        });
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
+    };
+    window.addEventListener('jarvis:composer:insert-text', onInsertText as EventListener);
+    return () => window.removeEventListener('jarvis:composer:insert-text', onInsertText as EventListener);
+  }, [chatId]);
 
   // ---------- V2 — speech-to-text wiring ----------
   // Subscribe to VoiceService events when the user toggles STT on. We keep
@@ -303,6 +862,11 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
       // Engine ended — sync our flag if the user didn't already turn off.
       if (!VoiceService.isListening()) setSttListening(false);
     });
+    const offTimeout = VoiceService.on('voice:timeout', ({ reason }) => {
+      setSttListening(false);
+      setSttInterim('');
+      toast.info('Speech-to-text stopped', reason);
+    });
 
     return () => {
       offStart();
@@ -310,10 +874,65 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
       offFinal();
       offError();
       offEnd();
+      offTimeout();
     };
   }, [sttListening]);
 
+  const startWebSpeechVolumeMeter = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      webSpeechStreamRef.current = stream;
+      const AudioCtor = getAudioContextCtor();
+      if (!AudioCtor) return;
+      const context = new AudioCtor();
+      webSpeechAudioContextRef.current = context;
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      webSpeechAnalyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const updateVolume = () => {
+        if (!webSpeechAnalyserRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        volumeRef.current = Math.min(1, avg / 60);
+        webSpeechVolumeTimerRef.current = requestAnimationFrame(updateVolume);
+      };
+      webSpeechVolumeTimerRef.current = requestAnimationFrame(updateVolume);
+    } catch (err) {
+      console.warn('[Composer] Web Speech volume meter failed to start', err);
+    }
+  };
+
+  const stopWebSpeechVolumeMeter = () => {
+    if (webSpeechVolumeTimerRef.current) {
+      cancelAnimationFrame(webSpeechVolumeTimerRef.current);
+      webSpeechVolumeTimerRef.current = null;
+    }
+    if (webSpeechAudioContextRef.current) {
+      void webSpeechAudioContextRef.current.close().catch(() => {});
+      webSpeechAudioContextRef.current = null;
+    }
+    if (webSpeechStreamRef.current) {
+      webSpeechStreamRef.current.getTracks().forEach((t) => t.stop());
+      webSpeechStreamRef.current = null;
+    }
+    webSpeechAnalyserRef.current = null;
+    volumeRef.current = 0;
+  };
+
   const startStt = () => {
+    const groqKey = useAuthStore.getState().apiKeys.groq;
+    if (groqKey && typeof navigator.mediaDevices?.getUserMedia === 'function' && getAudioContextCtor()) {
+      void startGroqStt(groqKey);
+      return;
+    }
     if (!VoiceService.isSupported()) {
       toast.warning(
         'Voice unsupported',
@@ -330,6 +949,7 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
       setSttInterim('');
       VoiceService.startListening();
       setSttListening(true);
+      void startWebSpeechVolumeMeter();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Voice could not start.';
       toast.error('Voice error', msg);
@@ -338,9 +958,113 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
     }
   };
 
+  const startGroqStt = async (apiKey: string) => {
+    try {
+      setSttInterim('Listening with Groq Whisper...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      wavChunksRef.current = [];
+      const AudioCtor = getAudioContextCtor();
+      if (!AudioCtor) throw new Error('Audio recording is not available in this runtime.');
+      const context = new AudioCtor();
+      const source = context.createMediaStreamSource(stream);
+      // Use smaller buffer for lower latency — 2048 samples at 44.1kHz ≈ 46ms
+      // instead of 4096 samples at ~92ms. Shorter buffers mean faster activity
+      // detection and smoother waveform updates.
+      const processor = context.createScriptProcessor(2048, 1, 1);
+      audioContextRef.current = context;
+      audioSourceRef.current = source;
+      audioProcessorRef.current = processor;
+      lastAudioActivityRef.current = Date.now();
+      processor.onaudioprocess = (event) => {
+        const channel = event.inputBuffer.getChannelData(0);
+        let sum = 0;
+        for (let i = 0; i < channel.length; i += 1) {
+          const sample = channel[i] ?? 0;
+          sum += sample * sample;
+        }
+        const rms = Math.sqrt(sum / Math.max(1, channel.length));
+        if (rms > STT_ACTIVITY_RMS) {
+          lastAudioActivityRef.current = Date.now();
+        }
+        volumeRef.current = Math.min(1, rms * 8);
+        wavChunksRef.current.push(new Float32Array(channel));
+      };
+      source.connect(processor);
+      processor.connect(context.destination);
+      clearAudioSilenceTimer();
+      audioSilenceTimerRef.current = setInterval(() => {
+        if (Date.now() - lastAudioActivityRef.current >= STT_INACTIVITY_MS) {
+          stopGroqSttWithoutTranscribing();
+        }
+      }, 1000);
+      setSttListening(true);
+    } catch (err) {
+      clearAudioSilenceTimer();
+      cleanupAudioRecorder(audioProcessorRef.current, audioSourceRef.current, audioContextRef.current, mediaStreamRef.current);
+      audioProcessorRef.current = null;
+      audioSourceRef.current = null;
+      audioContextRef.current = null;
+      mediaStreamRef.current = null;
+      setSttListening(false);
+      setSttInterim('');
+      toast.error('Voice error', err instanceof Error ? err.message : 'Could not start microphone.');
+    }
+  };
+
+  const transcribeGroq = async (blob: Blob, apiKey: string) => {
+    if (blob.size === 0) return;
+    if (!apiKey) return;
+    setSttInterim('Transcribing...');
+    try {
+      const form = new FormData();
+      form.set('file', new File([blob], 'jarvis-dictation.wav', { type: 'audio/wav' }));
+      form.set('model', GROQ_STT_MODEL);
+      form.set('response_format', 'json');
+      const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      });
+      if (!res.ok) throw new Error(`Groq STT ${res.status}: ${(await res.text()).slice(0, 180)}`);
+      const data = await res.json() as { text?: string };
+      const finalText = (data.text ?? '').trim();
+      if (finalText) {
+        setText((cur) => `${cur}${cur && !/\s$/.test(cur) ? ' ' : ''}${finalText}`);
+      }
+    } catch (err) {
+      toast.error('Groq transcription failed', err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setSttListening(false);
+      setSttInterim('');
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  };
+
   const stopStt = () => {
     setSttListening(false);
     setSttInterim('');
+    clearAudioSilenceTimer();
+    stopWebSpeechVolumeMeter();
+    volumeRef.current = 0;
+    if (audioContextRef.current || audioProcessorRef.current || audioSourceRef.current) {
+      const context = audioContextRef.current;
+      const chunks = wavChunksRef.current;
+      cleanupAudioRecorder(audioProcessorRef.current, audioSourceRef.current, context, mediaStreamRef.current);
+      audioProcessorRef.current = null;
+      audioSourceRef.current = null;
+      audioContextRef.current = null;
+      mediaStreamRef.current = null;
+      wavChunksRef.current = [];
+      if (chunks.length > 0 && context) {
+        void transcribeGroq(encodeWav(chunks, context.sampleRate), useAuthStore.getState().apiKeys.groq ?? '');
+      } else {
+        toast.warning('No speech captured', 'Try again and speak for at least one second.');
+      }
+      return;
+    }
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    mediaStreamRef.current = null;
     try {
       VoiceService.stopListening();
     } catch {
@@ -357,31 +1081,83 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
   useEffect(() => {
     return () => {
       if (sttListening) VoiceService.stopListening();
+      clearAudioSilenceTimer();
+      stopWebSpeechVolumeMeter();
+      volumeRef.current = 0;
+      cleanupAudioRecorder(audioProcessorRef.current, audioSourceRef.current, audioContextRef.current, mediaStreamRef.current);
     };
   }, [sttListening]);
 
-  // Mod+Shift+M toggles the composer mic when STT is enabled in settings.
-  useHotkey(
-    HOTKEYS.COMPOSER_STT,
-    (e) => {
+  // Ctrl+CapsLock is dispatched globally; only the focused composer consumes it.
+  useEffect(() => {
+    const onToggle = (event: Event) => {
       if (!composerSttEnabled) return;
-      e.preventDefault();
+      if (document.activeElement !== textareaRef.current) return;
+      event.preventDefault?.();
       toggleStt();
-    },
-    { whenInputs: true },
-  );
+    };
+    window.addEventListener('jarvis:stt:toggle', onToggle);
+    return () => window.removeEventListener('jarvis:stt:toggle', onToggle);
+  }, [composerSttEnabled, sttListening]);
 
   return (
-    <div className="border-t border-border bg-panel">
+    <div className={cn('border-t border-border bg-panel', compact && 'text-[12px]')}>
+      {showFreeKeyNudge && (
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-1 pt-2.5',
+            'text-secondary text-muted-foreground',
+          )}
+          role="status"
+          aria-label="Free Gemini API key recommended for the Jarvis agent"
+        >
+          <Sparkles className="h-3.5 w-3.5 text-accent-copper shrink-0" />
+          <span>
+            Add a free Gemini API key to give Jarvis a real Flash Lite
+            brain (no card needed).
+          </span>
+          <a
+            href="https://aistudio.google.com/apikey"
+            target="_blank"
+            rel="noreferrer"
+            className="text-accent-copper underline-offset-4 hover:underline"
+          >
+            Get key →
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              setSettingsOpen(true);
+              // Wait one task so the SettingsModal commits open=true and
+              // attaches its tab-switch listener before we dispatch.
+              setTimeout(() => {
+                window.dispatchEvent(
+                  new CustomEvent('jarvis:settings:tab', {
+                    detail: { tab: 'providers' },
+                  }),
+                );
+              }, 0);
+            }}
+            className="ml-auto text-accent-copper underline-offset-4 hover:underline"
+          >
+            Open Providers
+          </button>
+        </div>
+      )}
       <div className="px-3 py-2.5">
         <Popover
-          open={mentionCtx !== null}
+          open={mentionCtx !== null || slashCtx !== null}
           onOpenChange={(open) => {
-            if (!open) setMentionCtx(null);
+            if (!open) {
+              setMentionCtx(null);
+              setSlashCtx(null);
+            }
           }}
         >
           <PopoverAnchor asChild>
             <div
+              data-terminal-drop="chat"
+              data-terminal-drop-chat-id={String(chatId)}
               className={cn(
                 'rounded-lg border border-input bg-background',
                 'transition-colors focus-within:border-accent-cyan/40 focus-within:ring-1 focus-within:ring-ring',
@@ -394,11 +1170,40 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
                 onChange={(e) => {
                   setText(e.target.value);
                   // Recompute on next tick so selectionStart reflects the new value
-                  requestAnimationFrame(recomputeMention);
+                  requestAnimationFrame(() => {
+                    recomputeMention();
+                    recomputeSlash();
+                  });
                 }}
                 onKeyDown={onKeyDown}
-                onKeyUp={recomputeMention}
-                onClick={recomputeMention}
+                onKeyUp={() => {
+                  recomputeMention();
+                  recomputeSlash();
+                }}
+                onClick={() => {
+                  recomputeMention();
+                  recomputeSlash();
+                }}
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes(CONTEXT_MIME) || e.dataTransfer.types.includes('application/x-jarvis-file') || e.dataTransfer.types.includes('application/x-jarvis-terminal') || e.dataTransfer.types.includes('text/plain')) {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  const filePath = e.dataTransfer.getData('application/x-jarvis-file');
+                  const contextRaw = e.dataTransfer.getData(CONTEXT_MIME);
+                  const terminalId = e.dataTransfer.getData('application/x-jarvis-terminal');
+                  const path = filePath || (!contextRaw && !terminalId ? e.dataTransfer.getData('text/plain') : '');
+                  if (!contextRaw && !terminalId && !path) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDragOver(false);
+                  if (path) addDroppedPath(path);
+                  else if (contextRaw) addDroppedContext(contextRaw);
+                  else if (terminalId) addDroppedTerminal(terminalId);
+                }}
                 placeholder={placeholder ?? 'Message Jarvis...   (use @ to mention an agent)'}
                 aria-label="Message"
                 style={{ minHeight: MIN_HEIGHT, maxHeight: MAX_HEIGHT }}
@@ -406,8 +1211,58 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
                   'block w-full resize-none bg-transparent px-3 py-2 text-body text-foreground',
                   'placeholder:text-muted-foreground outline-none',
                   'scrollbar-hidden',
+                  compact && 'px-2 py-1.5 text-secondary',
+                  dragOver && 'bg-accent-copper/10 ring-1 ring-accent-copper/50',
                 )}
               />
+              {attachedFiles.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-2 pb-1">
+                  {attachedFiles.map((path) => (
+                    <span key={path} className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-border bg-paper-soft px-2 py-0.5 text-metadata text-foreground">
+                      <FileText className="h-3 w-3 text-accent-copper" />
+                      <span className="truncate font-mono">{path}</span>
+                      <button type="button" onClick={() => setAttachedFiles((cur) => cur.filter((p) => p !== path))} aria-label={`Remove ${path}`}>
+                        <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {attachedTerminals.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-2 pb-1">
+                  {attachedTerminals.map((ref) => (
+                    <span key={terminalRefKey(ref)} className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-accent-copper/30 bg-accent-copper/10 px-2 py-0.5 text-metadata text-foreground">
+                      <Sparkles className="h-3 w-3 text-accent-copper" />
+                      <span className="truncate font-mono">terminal:{terminalRefLabel(ref)}</span>
+                      <button type="button" onClick={() => setAttachedTerminals((cur) => cur.filter((p) => terminalRefKey(p) !== terminalRefKey(ref)))} aria-label={`Remove terminal ${terminalRefLabel(ref)}`}>
+                        <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {attachedContexts.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-2 pb-1">
+                  {attachedContexts.map((context) => (
+                    <span
+                      key={context.nodeId}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = 'copy';
+                        e.dataTransfer.setData(CONTEXT_MIME, serializeContextAttachment(context));
+                        e.dataTransfer.setData('text/plain', context.summary);
+                      }}
+                      className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-accent-copper/40 bg-accent-copper/10 px-2 py-0.5 text-metadata text-foreground shadow-[0_0_16px_hsl(var(--accent-copper)/0.12)]"
+                    >
+                      <Network className="h-3 w-3 text-accent-copper" />
+                      <span className="truncate">context:{context.title}</span>
+                      <button type="button" onClick={() => setAttachedContexts((cur) => cur.filter((item) => item.nodeId !== context.nodeId))} aria-label={`Remove context ${context.title}`}>
+                        <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="flex items-center gap-1 px-2 pb-2 pt-0.5">
                 <ModelPicker
                   provider={provider}
@@ -427,7 +1282,7 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
                       aria-pressed={sttListening}
                       className={cn(sttListening && 'animate-pulse')}
                     >
-                      {sttListening ? <MicOff /> : <Mic />}
+                      {sttListening ? <MicWaveform volumeRef={volumeRef} /> : <Mic />}
                     </Button>
                   </Hint>
                 )}
@@ -471,13 +1326,23 @@ export function Composer({ chatId, placeholder }: ComposerProps) {
               }
             }}
           >
-            <MentionTypeahead
-              agents={filteredAgents}
-              selectedSlug={selectedSlug}
-              query={mentionCtx?.query ?? ''}
-              onHoverSlug={setSelectedSlug}
-              onSelect={insertMention}
-            />
+            {slashCtx !== null ? (
+              <SlashCommandTypeahead
+                commands={filteredSlashCommands}
+                selectedCmd={selectedSlashCmd}
+                query={slashCtx.query}
+                onHoverCmd={setSelectedSlashCmd}
+                onSelect={insertSlashCommand}
+              />
+            ) : (
+              <MentionTypeahead
+                agents={filteredAgents}
+                selectedSlug={selectedSlug}
+                query={mentionCtx?.query ?? ''}
+                onHoverSlug={setSelectedSlug}
+                onSelect={insertMention}
+              />
+            )}
           </PopoverContent>
         </Popover>
       </div>

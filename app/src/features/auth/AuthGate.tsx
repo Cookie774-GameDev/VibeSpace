@@ -3,6 +3,20 @@ import { nanoid } from 'nanoid';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { Onboarding } from '@/features/onboarding';
+import { RequireModelAccess } from './RequireModelAccess';
+
+/**
+ * Providers whose presence counts as "Jarvis has a real model to talk to".
+ * A key for any of these satisfies the model-access gate. Google leads
+ * because the free, no-card Gemini key is the path we push new users toward.
+ *
+ * `mock` is included so the Skip-the-gate button on RequireModelAccess can
+ * register a sentinel mock key and let the user through. The mock provider
+ * routes locally and produces fake replies — the chat composer still
+ * surfaces the "add a Gemini key" nudge, so users always know how to swap
+ * to a real model.
+ */
+const REAL_PROVIDER_KEYS = ['google', 'anthropic', 'openai', 'groq', 'mock'] as const;
 
 interface AuthGateProps {
   children: ReactNode;
@@ -24,7 +38,14 @@ interface AuthGateProps {
 export function AuthGate({ children }: AuthGateProps) {
   const localUserId = useAuthStore((s) => s.localUserId);
   const setLocalUser = useAuthStore((s) => s.setLocalUser);
+  const apiKeys = useAuthStore((s) => s.apiKeys);
+  const offlineMode = useAuthStore((s) => s.offlineMode);
   const onboardingComplete = useUIStore((s) => s.onboardingComplete);
+
+  // Has the user connected a model yet? Either a real cloud provider key
+  // or offline (local) mode satisfies the gate.
+  const hasModelAccess =
+    offlineMode || REAL_PROVIDER_KEYS.some((id) => !!apiKeys[id]);
 
   // 1. Generate a stable local user id on first run.
   useEffect(() => {
@@ -58,6 +79,11 @@ export function AuthGate({ children }: AuthGateProps) {
 
   if (!onboardingComplete) {
     return <Onboarding />;
+  }
+
+  // Onboarding done but no model connected yet — require one before the app.
+  if (!hasModelAccess) {
+    return <RequireModelAccess />;
   }
 
   return <>{children}</>;

@@ -72,8 +72,9 @@ export function Providers({ onSkip }: ProvidersStepProps) {
       <header className="text-center max-w-xl">
         <h2 className="text-hero leading-tight">Connect your models</h2>
         <p className="text-body text-muted-foreground mt-3">
-          Bring your own keys. Stored locally and used directly from your device. Skip this and the
-          built-in mock provider keeps you running.
+          Bring your own keys. Stored locally and used directly from your device. The free path is a
+          Google Gemini key (no card) — or run fully offline with a local model. You'll be asked to
+          connect one before you start.
         </p>
       </header>
 
@@ -196,7 +197,7 @@ function MajorProviderRow({ row }: { row: MajorProvider }) {
           </Badge>
         )}
       </div>
-      <div className="relative">
+      <div className="relative" data-jarvis-rainbow="true">
         <Input
           id={`onb-key-${row.id}`}
           type={revealed ? 'text' : 'password'}
@@ -310,7 +311,7 @@ function CompatProviderCard({ row }: { row: CompatProvider }) {
 
       {editing && (
         <div className="flex items-center gap-1.5">
-          <div className="relative flex-1">
+          <div className="relative flex-1" data-jarvis-rainbow="true">
             <Input
               type={revealed ? 'text' : 'password'}
               placeholder={row.placeholder}

@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis 0.1.3 - Setup Guide</title>
+<style>
+  /*
+   * Cozy palette inlined so the guide is fully self-contained — drop the
+   * file on a USB stick, email it, host it anywhere; no external CSS,
+   * no Google Fonts dependency, no broken images.
+   */
+  :root {
+    --paper: #FAF6EE;
+    --paper-warm: #F4ECDD;
+    --panel: #FFFFFF;
+    --elevated: #F8EFDB;
+    --ink: #2A2520;
+    --ink-soft: #5C544A;
+    --ink-faint: #8B8077;
+    --copper: #B5613A;
+    --amber: #C58A3D;
+    --sage: #6F8F66;
+    --terracotta: #B5613A;
+    --rust: #944D2D;
+    --border: #E5DBC9;
+    --accent-violet: #8064A0;
+    --shadow-soft: 0 1px 2px rgba(42, 37, 32, 0.04), 0 2px 8px rgba(42, 37, 32, 0.04);
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    background: var(--paper);
+    color: var(--ink);
+    margin: 0;
+    padding: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  /* Headings */
+  h1, h2, h3, h4 {
+    font-family: ui-serif, Georgia, "Times New Roman", serif;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  h1 {
+    font-size: 44px;
+    margin: 0 0 8px;
+  }
+  h2 {
+    font-size: 28px;
+    margin: 56px 0 12px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+  }
+  h2:first-of-type { border-top: none; padding-top: 0; }
+  h3 {
+    font-size: 19px;
+    margin: 28px 0 10px;
+    color: var(--rust);
+  }
+  h4 {
+    font-size: 16px;
+    margin: 18px 0 6px;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  /* Eyebrow + tagline above H1 */
+  .eyebrow {
+    display: inline-block;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--copper);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+  .tagline {
+    font-size: 18px;
+    color: var(--ink-soft);
+    margin: 8px 0 32px;
+    line-height: 1.5;
+  }
+
+  /* Body text */
+  p {
+    margin: 0 0 12px;
+    color: var(--ink-soft);
+  }
+  strong { color: var(--ink); font-weight: 600; }
+  a {
+    color: var(--copper);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(181, 97, 58, 0.3);
+  }
+  a:hover { border-bottom-color: var(--copper); }
+
+  /* Lists */
+  ul, ol {
+    color: var(--ink-soft);
+    padding-left: 22px;
+    margin: 8px 0 16px;
+  }
+  li { margin: 4px 0; }
+  li > strong:first-child { color: var(--ink); }
+
+  /* Code */
+  code, pre, kbd {
+    font-family: ui-monospace, "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  code {
+    background: var(--elevated);
+    color: var(--ink);
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 13px;
+  }
+  pre {
+    background: var(--ink);
+    color: #F4ECDD;
+    padding: 14px 16px;
+    border-radius: var(--radius);
+    overflow-x: auto;
+    line-height: 1.55;
+    font-size: 13px;
+    margin: 12px 0 18px;
+    border: 1px solid #1F1B17;
+  }
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: inherit;
+  }
+
+  /* Keyboard chips */
+  kbd {
+    display: inline-block;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: var(--ink);
+    box-shadow: 0 1px 0 rgba(42, 37, 32, 0.04);
+    margin: 0 2px;
+    white-space: nowrap;
+  }
+
+  /* Cards / callouts */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin: 16px 0;
+    box-shadow: var(--shadow-soft);
+  }
+  .card.note   { border-left: 3px solid var(--copper); }
+  .card.warn   { border-left: 3px solid var(--amber); }
+  .card.success{ border-left: 3px solid var(--sage); }
+  .card.violet { border-left: 3px solid var(--accent-violet); }
+
+  /* Plan grid (in the plans section) */
+  .plans {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 16px 0 24px;
+  }
+  .plan {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    box-shadow: var(--shadow-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .plan.current { border-color: rgba(111, 143, 102, 0.5); box-shadow: 0 0 0 1px rgba(111, 143, 102, 0.25), var(--shadow-soft); }
+  .plan h4 { margin: 0; }
+  .plan .price {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 28px;
+    color: var(--copper);
+    line-height: 1;
+  }
+  .plan .price small {
+    font-size: 12px;
+    color: var(--ink-faint);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .plan ul { padding-left: 18px; margin: 4px 0 0; font-size: 13px; }
+  .plan li { margin: 2px 0; }
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    color: var(--ink-faint);
+    background: var(--paper-warm);
+  }
+  .badge.current { color: var(--sage); border-color: rgba(111, 143, 102, 0.4); background: rgba(111, 143, 102, 0.08); }
+
+  /* Table of contents */
+  nav.toc {
+    background: var(--paper-warm);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin: 24px 0 32px;
+  }
+  nav.toc strong {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--copper);
+  }
+  nav.toc ol {
+    margin: 8px 0 0;
+    padding-left: 20px;
+    columns: 2;
+    column-gap: 24px;
+    font-size: 14px;
+  }
+  nav.toc li { margin: 3px 0; break-inside: avoid; }
+  nav.toc a { border: none; }
+
+  /* Footer */
+  footer {
+    margin-top: 56px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--ink-faint);
+    font-size: 13px;
+  }
+
+  /* Print-friendly */
+  @media print {
+    body { background: white; }
+    main { padding: 24px 0; max-width: 100%; }
+    pre { border: 1px solid #ccc; }
+    .card { break-inside: avoid; }
+  }
+
+  @media (max-width: 600px) {
+    main { padding: 32px 18px 64px; }
+    h1 { font-size: 34px; }
+    h2 { font-size: 23px; }
+    .plans { grid-template-columns: 1fr; }
+    nav.toc ol { columns: 1; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <span class="eyebrow">Setup Guide · v0.1.3</span>
+  <h1>Welcome to Jarvis</h1>
+  <p class="tagline">
+    The local-first AI workspace where every model, agent, voice, and
+    task lives under one persistent memory and one always-available
+    assistant. This guide walks you through a clean install, gets you to
+    your first reply in under five minutes, and shows what's new in
+    0.1.3 — Approve/Cancel actions, custom tools, eye breaks, and the
+    four-tier plan ladder.
+  </p>
+
+  <nav class="toc" aria-label="Table of contents">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#first-run">First run</a></li>
+      <li><a href="#provider">Add your first provider</a></li>
+      <li><a href="#actions">The action system</a></li>
+      <li><a href="#tools">Custom tools</a></li>
+      <li><a href="#palette">Actions palette</a></li>
+      <li><a href="#wellness">20-20-20 break</a></li>
+      <li><a href="#plans">Plans</a></li>
+      <li><a href="#autostart">Auto-start at 8 AM</a></li>
+      <li><a href="#hotkeys">Hotkeys</a></li>
+      <li><a href="#troubleshoot">Troubleshooting</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="install">1. Install</h2>
+  <p>
+    Jarvis ships as a single Tauri desktop app. The Windows installer is
+    a standard MSI; macOS and Linux builds are produced from the same
+    Rust + Vite project but aren't covered here.
+  </p>
+  <ol>
+    <li>Download <code>Jarvis_0.1.3_x64_en-US.msi</code> from the release you were sent (or built locally from <code>app/src-tauri/target/release/bundle/msi/</code>).</li>
+    <li>Double-click the MSI. Windows SmartScreen may prompt — choose <strong>More info</strong> &rarr; <strong>Run anyway</strong> for unsigned dev builds.</li>
+    <li>The installer drops the app under <code>%LocalAppData%\Programs\Jarvis</code> by default and adds a Start menu shortcut.</li>
+    <li>Launch it. The first window opens to onboarding.</li>
+  </ol>
+  <div class="card success">
+    <strong>Local-first by default.</strong> Your chats, agents, custom tools,
+    skills, and memory live in a Dexie IndexedDB on this device. Cloud
+    sync is opt-in (Starter tier and above) and never moves data without
+    you toggling it on.
+  </div>
+
+  <h2 id="first-run">2. First run</h2>
+  <p>
+    Onboarding asks for a display name, then drops you on the chat
+    canvas. The seeded <strong>Jarvis</strong> agent uses the local
+    <em>mock</em> provider until you wire a real one — answers will be
+    placeholder text. That's the next step.
+  </p>
+
+  <h2 id="provider">3. Add your first provider</h2>
+  <p>
+    The fastest free path is Google's Gemini API. The free tier covers
+    Gemini 2.5 Flash Lite (the new default model in 0.1.3) at zero cost
+    with no card on file.
+  </p>
+  <ol>
+    <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a> and sign in with a Google account.</li>
+    <li>Click <strong>Create API key</strong>. Copy the <code>AIza…</code> string.</li>
+    <li>In Jarvis, press <kbd>Mod</kbd>+<kbd>,</kbd> to open Settings (Mod = <kbd>Ctrl</kbd> on Windows, <kbd>Cmd</kbd> on macOS).</li>
+    <li>Click <strong>Providers</strong> in the left rail. Find Google in the list, paste the key, click <strong>Save</strong>.</li>
+    <li>Close Settings. Type <em>"hello"</em> in the composer and press <kbd>Mod</kbd>+<kbd>Enter</kbd>.</li>
+  </ol>
+  <p>
+    Jarvis replies. You're done with setup. Every other provider — Groq
+    (free Llama 3.3), Anthropic, OpenAI, OpenRouter, Together — works
+    the same way: paste a key, save, chat.
+  </p>
+  <div class="card note">
+    <strong>Why Gemini Flash Lite?</strong> 0.1.3 swaps the default to the
+    truly-free Google quota. Earlier builds picked Flash, which Google
+    started metering on the free plan. New installs now never accidentally
+    bump into a paid budget.
+  </div>
+
+  <h2 id="actions">4. The action system</h2>
+  <p>
+    Jarvis 0.1.3 introduces <strong>Approve/Cancel actions</strong>. When
+    Jarvis decides the right answer is to <em>do</em> something — open
+    the Terminals swarm, launch Claude Code in a new pane, jump to a
+    Settings tab, start an eye break — it emits a fenced
+    <code>action</code> block in chat. The block renders as an inline
+    card with the action's name, a one-line rationale, the parameters
+    it would use, and two buttons: <strong>Approve</strong> and
+    <strong>Cancel</strong>. Nothing runs until you click Approve.
+  </p>
+  <p>
+    Status flows pending &rarr; running &rarr; success / error /
+    cancelled. The card colours track the state: copper for pending,
+    amber spinner for running, sage for done, terracotta for error,
+    muted for cancelled. The result is fed back into the chat thread so
+    Jarvis can react on its next turn.
+  </p>
+
+  <h4>Built-in actions you can ask for</h4>
+  <ul>
+    <li><strong>Open the Terminals swarm:</strong> "open the swarm" or "drop in Builder, Scout, Reviewer, Jarvis"</li>
+    <li><strong>Run Claude Code in a new pane:</strong> "open Claude in this project"</li>
+    <li><strong>Run OpenCode:</strong> "open opencode"</li>
+    <li><strong>Run any shell command in a new pane:</strong> "run npm run dev"</li>
+    <li><strong>Switch settings tabs:</strong> "open the providers tab" / "show the plans tab"</li>
+    <li><strong>Toggle theme:</strong> "switch to light mode"</li>
+    <li><strong>Start a 20-20-20 eye break:</strong> "I need an eye break"</li>
+    <li><strong>Open a URL:</strong> "open the Groq dashboard"</li>
+    <li><strong>Start a new chat / branch this conversation</strong></li>
+  </ul>
+  <p>
+    Twenty-four actions ship in 0.1.3 across eight categories. The full
+    list lives in <code>lib/actions/registry.ts</code> and shows up when
+    you open the actions palette.
+  </p>
+
+  <h2 id="tools">5. Custom tools</h2>
+  <p>
+    A <strong>custom tool</strong> is a saved preset of any built-in
+    action: a friendly name, optional emoji, description, and the params
+    you want frozen. Save it once; Jarvis can propose it from chat, and
+    you can fire it from the actions palette.
+  </p>
+  <ol>
+    <li>Open Jarvis. Click <strong>Tools</strong> in the left nav (Wrench icon) or say "open tools".</li>
+    <li>Click <strong>New tool</strong> or pick a quick-start template.</li>
+    <li>Pick a base action (e.g. <code>terminal.run</code>), fill in preset params (e.g. <code>command: npm run dev, label: dev, cwd: C:\proj</code>), give it a name like "Run my dev server", and save.</li>
+    <li>The tool now appears under <code>custom.run-my-dev-server</code>. Try it: open the actions palette and search for it.</li>
+  </ol>
+  <div class="card violet">
+    <strong>Local for now.</strong> Custom tools persist in browser storage on
+    this device. <strong>Cloud sync</strong> for tools is "Available soon"
+    — until then, use Export / Import (top of the Tools page) to move
+    them between machines.
+  </div>
+
+  <h2 id="palette">6. Actions palette</h2>
+  <p>
+    Press <kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>. The actions
+    palette opens — substring search, grouped by category, your most
+    recent actions pinned at the top, plus every custom tool you've
+    saved. Click an action: if it has required params, an inline form
+    appears; otherwise it runs immediately. Esc dismisses.
+  </p>
+  <p>
+    The palette is sister to the existing two:
+    <kbd>Mod</kbd>+<kbd>K</kbd> (general command palette — chats, nav,
+    settings) and <kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> (launcher
+    tiles for URLs and pinned items). The actions palette is for "do
+    something Jarvis can do".
+  </p>
+
+  <h2 id="wellness">7. 20-20-20 break</h2>
+  <p>
+    Every 20 minutes of screen time, look at something 20 feet away for
+    20 seconds. The new wellness break overlay enforces the third
+    number: a full-screen takeover with a breathing copper orb and a
+    serene countdown. <kbd>Esc</kbd> dismisses if you're mid-sentence.
+  </p>
+  <p>To start one:</p>
+  <ul>
+    <li>Ask Jarvis: "give me an eye break"</li>
+    <li>Open the actions palette and search "eye break"</li>
+    <li>Save a custom tool that wraps <code>wellness.eyeBreak</code> and pin it</li>
+  </ul>
+
+  <h2 id="plans">8. Plans</h2>
+  <p>
+    0.1.3 introduces a four-tier ladder. Today every install is on
+    <strong>Free</strong> — Stripe billing for the paid tiers ships in a
+    later release. Open Settings &rarr; Plans for the live cards in-app.
+  </p>
+
+  <div class="plans">
+    <div class="plan current">
+      <span class="badge current">Current</span>
+      <h4>Free</h4>
+      <span class="price">Free</span>
+      <ul>
+        <li>BYOK every provider</li>
+        <li>Free Gemini Flash Lite via Google AI Studio</li>
+        <li>Custom tools, terminal swarm, wellness break</li>
+        <li>Mod+Shift+A actions palette</li>
+        <li>Local-first storage</li>
+      </ul>
+    </div>
+    <div class="plan">
+      <span class="badge">Available soon</span>
+      <h4>Starter</h4>
+      <span class="price">$5<small>/mo</small></span>
+      <ul>
+        <li>Everything in Free</li>
+        <li>Voice modal (unlimited)</li>
+        <li>Jarvis Call — 60 min/mo</li>
+        <li>Hosted Gemini Flash &amp; Flash Lite</li>
+        <li>Cloud sync (chats + memories)</li>
+      </ul>
+    </div>
+    <div class="plan">
+      <span class="badge">Available soon</span>
+      <h4>Pro</h4>
+      <span class="price">$20<small>/mo</small></span>
+      <ul>
+        <li>Everything in Starter</li>
+        <li>Hosted Gemini 2.5 Pro</li>
+        <li>Hosted Claude Sonnet (1.5M tok/mo)</li>
+        <li>Hosted GPT-4o (300K tok/mo)</li>
+        <li>Publish custom tools &amp; agents</li>
+      </ul>
+    </div>
+    <div class="plan">
+      <span class="badge">Available soon</span>
+      <h4>Ultra</h4>
+      <span class="price">$100<small>/mo</small></span>
+      <ul>
+        <li>Everything in Pro</li>
+        <li>Hosted Claude Opus (200K tok/mo)</li>
+        <li>Hosted GPT-4o (1M tok/mo)</li>
+        <li>Unlimited Jarvis Call</li>
+        <li>Early access + dedicated support</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card note">
+    <strong>BYOK is honoured on every tier.</strong> If you have your own
+    Anthropic / OpenAI / Groq / OpenRouter / Together key, paste it under
+    Providers and Jarvis routes through that instead of the hosted budget.
+    Paid tiers exist so you don't <em>have to</em> manage keys, not to
+    lock you out of the ones you already have.
+  </div>
+
+  <h2 id="autostart">9. Auto-start at 8 AM</h2>
+  <p>
+    To have Jarvis open every morning at 8 AM on Windows, register a
+    Scheduled Task. Run this once in PowerShell (no admin required for
+    the user-scope task):
+  </p>
+  <pre><code>$exe = "$env:LocalAppData\Programs\Jarvis\Jarvis.exe"
+$action = New-ScheduledTaskAction -Execute $exe
+$trigger = New-ScheduledTaskTrigger -Daily -At 8:00am
+Register-ScheduledTask `
+  -TaskName 'JarvisMorningOpen' `
+  -Action $action `
+  -Trigger $trigger `
+  -Description 'Open Jarvis daily at 8 AM'</code></pre>
+  <p>
+    To unregister it later:
+  </p>
+  <pre><code>Unregister-ScheduledTask -TaskName 'JarvisMorningOpen' -Confirm:$false</code></pre>
+  <p>
+    If you installed Jarvis to a non-default location (or are running a
+    locally-built debug binary), point <code>$exe</code> at the actual
+    executable.
+  </p>
+
+  <h2 id="hotkeys">10. Hotkeys</h2>
+  <p>
+    Mod = <kbd>Ctrl</kbd> on Windows / Linux, <kbd>Cmd</kbd> on macOS.
+  </p>
+  <ul>
+    <li><kbd>Mod</kbd>+<kbd>K</kbd> — Command palette (chats, nav, settings)</li>
+    <li><kbd>Mod</kbd>+<kbd>J</kbd> — Jarvis Assistant bar (natural-language commands)</li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> — Actions palette <span style="color:var(--copper);font-weight:600;">(new)</span></li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> — Launcher tiles</li>
+    <li><kbd>Mod</kbd>+<kbd>Enter</kbd> — Send message</li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> — Broadcast to council agents</li>
+    <li><kbd>Mod</kbd>+<kbd>Space</kbd> — Push-to-talk voice</li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> — Voice-to-text in composer</li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> — Toggle fullscreen workspace</li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>.</kbd> — Toggle ambient mode</li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> — Open schedule</li>
+    <li><kbd>Mod</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> — Toggle todo drawer</li>
+    <li><kbd>Mod</kbd>+<kbd>B</kbd> — Toggle nav pane</li>
+    <li><kbd>Mod</kbd>+<kbd>\</kbd> — Toggle inspector pane</li>
+    <li><kbd>Mod</kbd>+<kbd>,</kbd> — Settings</li>
+    <li><kbd>Esc</kbd> — Close modal / exit council / dismiss wellness break</li>
+  </ul>
+
+  <h2 id="troubleshoot">11. Troubleshooting</h2>
+
+  <h4>The seeded Jarvis agent answers with placeholder text.</h4>
+  <p>
+    No real provider key set yet. Paste a Gemini or Groq key under
+    Settings &rarr; Providers and the agent will route through it.
+  </p>
+
+  <h4>Approve button on an action card is disabled.</h4>
+  <p>
+    The action id wasn't registered. Either the AI hallucinated the name
+    or you deleted a custom tool between when Jarvis proposed it and when
+    you tried to approve. Cancel the card and ask Jarvis to retry.
+  </p>
+
+  <h4>Mod+Shift+A doesn't open the palette.</h4>
+  <p>
+    Make sure no input field has focus first — the palette uses the
+    standard "suppress hotkey while typing" rule. Click on empty canvas
+    or press <kbd>Esc</kbd> first, then try again.
+  </p>
+
+  <h4>Terminals swarm doesn't appear after I approved it.</h4>
+  <p>
+    Fixed in 0.1.3 — earlier builds raced the lazy chunk on cold-load.
+    If you see this on 0.1.3, please file an issue with the steps. The
+    swarm now drains from a queue on page mount so it works whether the
+    Terminals route was open already or not.
+  </p>
+
+  <h4>The wellness break never auto-ends.</h4>
+  <p>
+    The countdown uses <code>requestAnimationFrame</code> — if the OS
+    throttles the window in the background, the timer pauses with it.
+    Bring the window forward; the countdown resumes from the right
+    second. <kbd>Esc</kbd> always works to skip.
+  </p>
+
+  <h4>How do I export everything?</h4>
+  <p>
+    Custom tools: Tools page &rarr; <strong>Export</strong> button (top
+    right). Chats &amp; memory: Settings &rarr; Account &rarr;
+    <em>Export local data</em>. Both produce JSON files you can store
+    anywhere.
+  </p>
+
+  <footer>
+    <p>Built with care · Jarvis 0.1.3 · Setup guide updated 2026-05-31</p>
+    <p>
+      Local-first. Honest about what works today and what's "Available
+      soon". Cozy palette, JetBrains Mono, and the warm warmth of
+      paper-coloured pixels.
+    </p>
+  </footer>
+</main>
+</body>
+</html>

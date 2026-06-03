@@ -20,10 +20,28 @@ export type AssistantIntent =
   | { kind: 'create_chat'; title?: string; project?: string }
   /** "open 4 terminals with claude code in tiger" */
   | { kind: 'open_terminals'; count: number; command?: string; project?: string }
+  /** "run opencode in all terminals" */
+  | { kind: 'run_in_terminals'; command: string; target: 'all' }
+  /** "create command dev server to run npm run dev" */
+  | { kind: 'create_custom_command'; name: string; command: string; cwd?: string }
+  /** "run command dev server" */
+  | { kind: 'run_custom_command'; name: string }
+  /** "ask opencode to fix the tests" */
+  | { kind: 'ask_provider'; provider: string; prompt: string }
+  /** "give all terminals all context" */
+  | { kind: 'give_terminals_context' }
+  /** "create context map" */
+  | { kind: 'create_context_map' }
+  /** "recenter context map" */
+  | { kind: 'recenter_context_map' }
   /** "make a todo: ship the launcher tomorrow" */
   | { kind: 'create_task'; title: string; due_at?: number }
   /** "schedule lunch with sam friday at 1pm" — raw delegated to parseEventInput */
   | { kind: 'create_event'; raw: string }
+  /** "call me at 3pm" — creates a scheduled outbound-call event */
+  | { kind: 'schedule_call'; raw: string }
+  /** "message me: build is done" — sends an outbound SMS through phone-jarvis */
+  | { kind: 'send_phone_message'; text: string }
   /** "ambient mode on" / "ambient off" */
   | { kind: 'set_ambient'; on: boolean }
   /** "fullscreen" / "exit fullscreen". `on` undefined = toggle. */
@@ -49,10 +67,12 @@ export type AssistantIntent =
    */
   | {
       kind: 'navigate';
-      route: 'chat' | 'terminal' | 'kanban' | 'agents' | 'skills' | 'benchmarks' | 'history';
+      route: 'chat' | 'terminal' | 'kanban' | 'schedule' | 'agents' | 'context' | 'skills' | 'benchmarks' | 'history' | 'tools' | 'files';
     }
+  /** "create project tiger then open 4 terminals" */
+  | { kind: 'multi_step'; steps: AssistantIntent[] }
   /** Anything that didn't match. Carries the raw text for the UI hint. */
-  | { kind: 'unknown'; raw: string };
+  | { kind: 'unknown'; raw: string; suggestions?: string[] };
 
 /** Result returned by `executeIntent`. Wraps both branches in one envelope. */
 export interface AssistantResult {

@@ -656,12 +656,391 @@
 
 /* ============================================================
    V2 — FULLSCREEN canvas mode
+   V3.1 — Side rail stays visible in fullscreen (user request:
+          "side pane in the side okay"). The left NavPane keeps its rail
+          so the user can always switch routes. Use Mod+B to also
+          hide the NavPane manually for true distraction-free.
    ============================================================ */
 
-[data-fullscreen='true'] aside#todo-drawer-root,
-[data-fullscreen='true'] [data-nav-pane='true'] {
-  display: none !important;
-}
 [data-fullscreen='true'] main[aria-label='Workspace'] {
   background: hsl(var(--background));
+}
+
+/* ============================================================
+   API key input — rainbow pulsating border + radial flow
+   ------------------------------------------------------------
+   Applied to provider/API-key Input fields and the onboarding
+   key fields. The user asked specifically for "purple, pink, or
+   the entire rainbow … pulsating but flow toward the middle"
+   when an input is focused. We layer two effects:
+
+     1. A slowly rotating conic-gradient ring around the input
+        so the whole rainbow is always visible at once. The
+        rotation is slow (34s) so it feels alive without being
+        distracting.
+
+     2. A focus-only "flow toward middle" halo that pulses
+        between the outer rainbow ring and a soft inward bloom
+        at the input's centre, giving the impression that the
+        colour is being pulled in.
+
+   Both layers respect `prefers-reduced-motion` — the rotation
+   and pulse fall back to a static gradient ring so accessibility
+   isn't traded for spectacle.
+   ============================================================ */
+
+@property --jarvis-rainbow-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes jarvis-rainbow-spin {
+  to {
+    --jarvis-rainbow-angle: 360deg;
+  }
+}
+
+@keyframes jarvis-rainbow-pulse {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.82;
+    transform: scale(1.008);
+  }
+}
+
+@keyframes jarvis-rainbow-flow {
+  0%, 100% {
+    opacity: 0.0;
+    transform: scale(1.05);
+  }
+  50% {
+    opacity: 0.68;
+    transform: scale(0.985);
+  }
+}
+
+/*
+ * The wrapper provides positioning context. The ::before paints
+ * the conic ring; the ::after paints the inward bloom. Both are
+ * absolutely positioned and `pointer-events: none` so they never
+ * steal clicks from the input.
+ *
+ * A simple `relative` ancestor (the existing `.relative` div in
+ * ProviderKeyRow) is enough — no extra DOM is needed; we just
+ * tag it with `data-jarvis-rainbow="true"`.
+ */
+[data-jarvis-rainbow='true'] {
+  position: relative;
+  isolation: isolate;
+}
+
+[data-jarvis-rainbow='true']::before,
+[data-jarvis-rainbow='true']::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: calc(var(--radius, 0.625rem) + 2px);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Cozy amber-copper outline ring — always visible, gently pulsing. */
+[data-jarvis-rainbow='true']::before {
+  background: linear-gradient(
+    135deg,
+    hsl(14 64% 60%),
+    hsl(36 56% 59%),
+    hsl(8 47% 60%),
+    hsl(14 64% 60%)
+  );
+  filter: blur(4px);
+  opacity: 0.4;
+  animation:
+    jarvis-rainbow-pulse 4.5s ease-in-out infinite;
+}
+
+/* Inward cozy copper bloom — only on focus-within. */
+[data-jarvis-rainbow='true']::after {
+  background: radial-gradient(
+    circle at 50% 50%,
+    hsl(36 56% 59% / 0.28) 0%,
+    hsl(14 64% 60% / 0.16) 42%,
+    transparent 78%
+  );
+  filter: blur(12px);
+  opacity: 0;
+  animation: jarvis-rainbow-flow 4.2s ease-in-out infinite;
+  animation-play-state: paused;
+}
+
+[data-jarvis-rainbow='true']:focus-within::after {
+  animation-play-state: running;
+}
+
+[data-jarvis-rainbow='true']:focus-within::before {
+  /* While focused the outer ring brightens and the pulse becomes more
+   * pronounced, reinforcing that the input is "live". */
+  opacity: 0.78;
+  filter: blur(12px);
+}
+
+/* ── API key save — warm expand → hold → retract wave ────────── */
+@keyframes jarvis-api-key-save-burst {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.02);
+  }
+  /* Slowly expand outward with warm glow */
+  12% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  /* Fill the viewport */
+  35% {
+    opacity: 0.75;
+    transform: translate(-50%, -50%) scale(6);
+  }
+  /* Hold at full — let the warm colour breathe */
+  55% {
+    opacity: 0.65;
+    transform: translate(-50%, -50%) scale(6.5);
+  }
+  /* Begin retraction */
+  75% {
+    opacity: 0.5;
+    transform: translate(-50%, -50%) scale(2);
+  }
+  /* Fully retracted back to origin */
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.02);
+  }
+}
+
+.jarvis-api-key-save-burst {
+  position: absolute;
+  width: 30vmax;
+  height: 30vmax;
+  border-radius: 9999px;
+  background: radial-gradient(
+    circle at 50% 50%,
+    hsl(38 80% 68% / 0.75) 0%,      /* warm amber core */
+    hsl(25 70% 55% / 0.55) 25%,      /* copper mid-ring */
+    hsl(14 64% 50% / 0.35) 50%,      /* rose edge */
+    hsl(28 30% 15% / 0) 80%          /* transparent fade */
+  );
+  filter: blur(18px);
+  mix-blend-mode: screen;
+  transform: translate(-50%, -50%) scale(0.02);
+  animation: jarvis-api-key-save-burst 2.4s cubic-bezier(0.22, 0.68, 0.36, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-jarvis-rainbow='true']::before {
+    animation: none;
+    opacity: 0.5;
+  }
+  [data-jarvis-rainbow='true']::after {
+    animation: none;
+    opacity: 0;
+  }
+  [data-jarvis-rainbow='true']:focus-within::after {
+    opacity: 0.4;
+  }
+  .jarvis-api-key-save-burst {
+    animation-duration: 600ms;
+    filter: blur(12px) saturate(1.2);
+  }
+}
+
+@keyframes terminal-focus-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px hsl(var(--accent-copper) / 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 5px hsl(var(--accent-copper) / 0.45);
+  }
+}
+
+.animate-terminal-focus {
+  animation: terminal-focus-pulse 2s ease-in-out infinite;
+  border-color: hsl(var(--accent-copper)) !important;
+}
+
+.jarvis-terminal-right-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.jarvis-terminal-drag-preview {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 9999;
+  pointer-events: none;
+  max-width: 280px;
+  border: 1px solid hsl(var(--accent-copper) / 0.65);
+  border-radius: 999px;
+  background: hsl(var(--background) / 0.94);
+  box-shadow: 0 14px 40px hsl(0 0% 0% / 0.38), 0 0 0 4px hsl(var(--accent-copper) / 0.12);
+  color: hsl(var(--foreground));
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1;
+  overflow: hidden;
+  padding: 8px 10px;
+  text-overflow: ellipsis;
+  transform: translate3d(-9999px, -9999px, 0);
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.jarvis-terminal-drop-hover {
+  position: relative;
+  outline: 1px solid hsl(var(--foreground) / 0.9) !important;
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.35), 0 0 28px hsl(var(--accent-copper) / 0.22) !important;
+}
+
+.jarvis-terminal-drop-hover::after {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  inset: 2px;
+  border: 1px solid hsl(var(--foreground) / 0.92);
+  border-radius: inherit;
+}
+
+.jarvis-terminal-right-dragging .jarvis-terminal-drop-hover::after {
+  border-width: 2px;
+}
+
+.jarvis-context-menu {
+  position: fixed;
+  z-index: 2147483646;
+  width: 248px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 20% 0%, hsl(var(--accent-copper) / 0.14), transparent 38%),
+    hsl(var(--paper) / 0.98);
+  box-shadow: 0 18px 60px hsl(var(--foreground) / 0.18), inset 0 1px 0 hsl(var(--cream) / 0.45);
+  padding: 6px;
+  color: hsl(var(--foreground));
+  backdrop-filter: blur(18px);
+}
+
+.jarvis-terminal-surface .xterm {
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.jarvis-terminal-surface .xterm .xterm-helpers,
+.jarvis-terminal-surface .xterm-screen,
+.jarvis-terminal-surface .xterm-viewport {
+  left: 0 !important;
+  width: 100% !important;
+  background: transparent !important;
+}
+
+.jarvis-terminal-surface .xterm-viewport {
+  overflow-y: scroll !important;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.jarvis-terminal-surface .xterm-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.jarvis-terminal-surface .xterm-screen canvas {
+  max-width: 100% !important;
+}
+
+@keyframes context-map-birth {
+  0% {
+    opacity: 0;
+    transform: scale(0.82);
+    background: radial-gradient(circle at 50% 50%, hsl(var(--cream) / 0.96) 0%, hsl(var(--cream) / 0.72) 18%, transparent 58%);
+    filter: blur(18px);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.02);
+    background: radial-gradient(circle at 50% 50%, hsl(var(--cream) / 0.9) 0%, hsl(var(--cream) / 0.42) 28%, transparent 68%);
+    filter: blur(8px);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.28);
+    background: radial-gradient(circle at 50% 50%, hsl(var(--cream) / 0.1) 0%, transparent 72%);
+    filter: blur(0);
+  }
+}
+
+.context-map-birth {
+  animation: context-map-birth 1.15s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Subscription tier card animations ── */
+@keyframes plan-galaxy-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes plan-star-twinkle {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+@keyframes plan-border-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes plan-lensing-pulse {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(1.05); }
+}
+
+@keyframes plan-shimmer-text {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes plan-ring-orbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes plan-glow-pulse {
+  0%, 100% { box-shadow: 0 0 20px 2px var(--glow-color, rgba(217,119,87,0.2)); }
+  50% { box-shadow: 0 0 35px 6px var(--glow-color, rgba(217,119,87,0.35)); }
+}
+
+@keyframes plan-particle-float {
+  0%, 100% { transform: translateY(0px) scale(1); opacity: 0.4; }
+  50% { transform: translateY(-8px) scale(1.2); opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes plan-galaxy-rotate { from, to { transform: none; } }
+  @keyframes plan-star-twinkle { 0%, 50%, 100% { opacity: 0.6; } }
+  @keyframes plan-border-flow { 0%, 50%, 100% { background-position: 0% 50%; } }
+  @keyframes plan-lensing-pulse { 0%, 50%, 100% { opacity: 0.2; transform: none; } }
+  @keyframes plan-shimmer-text { 0%, 100% { background-position: 0% center; } }
+  @keyframes plan-ring-orbit { from, to { transform: none; } }
+  @keyframes plan-glow-pulse { 0%, 50%, 100% { box-shadow: none; } }
+  @keyframes plan-particle-float { 0%, 50%, 100% { transform: none; opacity: 0.6; } }
 }

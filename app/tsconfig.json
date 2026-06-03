@@ -29,7 +29,7 @@
       "@/*": ["./src/*"]
     },
 
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "node", "vitest/globals"]
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

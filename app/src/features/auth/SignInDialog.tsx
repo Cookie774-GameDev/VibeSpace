@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { toast } from '@/components/ui/toast';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
 interface SignInDialogProps {
   open: boolean;
@@ -57,7 +58,7 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
     }
 
     setBusy(true);
-    const client = await loadSupabaseClient();
+    const client = loadSupabaseClient();
     if (!client) {
       setBusy(false);
       setError(NOT_CONFIGURED);
@@ -221,19 +222,20 @@ function ModeButton({
 }
 
 /**
- * Lazily load the Supabase client. Returns `null` if the helper module or
- * env vars haven't been wired yet.
+ * Look up the Supabase client through the typed wrapper.
  *
- * The dynamic `import()` is wrapped in try/catch so the bundler doesn't
- * blow up in scaffolds where `@/lib/supabase` hasn't been created yet.
+ * The wrapper itself is statically imported across the rest of the
+ * cloud-sync code paths (CallService, hosted-tier settings, bridge
+ * lifecycle), so going through it here keeps the SignIn flow on the
+ * same chunk boundary instead of fighting Vite's chunk consolidation
+ * with a redundant dynamic import.
+ *
+ * Returns `null` when env vars aren't wired up — the dialog falls back
+ * to its `setupRequired` state in that case.
  */
-async function loadSupabaseClient(): Promise<SupabaseLikeClient | null> {
+function loadSupabaseClient(): SupabaseLikeClient | null {
   try {
-    // @ts-ignore - optional module, may not exist during early scaffolding
-    const mod: { getSupabaseClient?: () => SupabaseLikeClient | null } = await import(
-      '@/lib/supabase'
-    );
-    return mod.getSupabaseClient?.() ?? null;
+    return (getSupabaseClient() as unknown as SupabaseLikeClient | null) ?? null;
   } catch {
     return null;
   }

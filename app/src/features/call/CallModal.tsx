@@ -9,7 +9,9 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { isAdminIdentity, planAllowsJarvisCall } from '@/lib/entitlements';
 import { useUIStore } from '@/stores/ui';
+import { useAuthStore } from '@/stores/auth';
 import { Orb } from '@/features/voice/Orb';
 import { PERSONAS } from '@/features/voice/personas';
 import { useCallStore, type CallStatus } from './store';
@@ -49,16 +51,27 @@ export function CallModal() {
   const awaitingConfirm = useCallStore((s) => s.awaitingConfirm);
   const unlockActive = useCallStore((s) => s.unlockActive);
   const callId = useCallStore((s) => s.callId);
+  const setStatus = useCallStore((s) => s.setStatus);
+  const plan = useAuthStore((s) => s.plan);
+  const email = useAuthStore((s) => s.email);
+  const cloudEmail = useAuthStore((s) => s.cloudSession?.email);
+  const localUserId = useAuthStore((s) => s.localUserId);
 
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const admin = isAdminIdentity({ email, cloudEmail, localUserId });
+  const entitled = planAllowsJarvisCall(plan, admin);
 
   // Auto-start when the modal opens with no call yet.
   useEffect(() => {
     if (!open) return;
     if (status === 'idle') {
+      if (!entitled) {
+        setStatus('error', 'Jarvis Call requires a voice-enabled plan or an admin-enabled build.');
+        return;
+      }
       void getCallService().start(persona);
     }
-  }, [open, status, persona]);
+  }, [open, status, persona, entitled, setStatus]);
 
   // Auto-scroll transcript
   useEffect(() => {

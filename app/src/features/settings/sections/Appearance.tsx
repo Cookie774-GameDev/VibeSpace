@@ -20,6 +20,8 @@ export function Appearance() {
   const theme = useUIStore((s) => s.theme);
   const setTheme = useUIStore((s) => s.setTheme);
   const density = useUIStore((s) => s.density);
+  const defaultTerminalFontSize = useUIStore((s) => s.defaultTerminalFontSize);
+  const setDefaultTerminalFontSize = useUIStore((s) => s.setDefaultTerminalFontSize);
 
   function setDensity(d: 'compact' | 'cozy') {
     // density has no dedicated action in the store yet; setState is the safe
@@ -100,6 +102,31 @@ export function Appearance() {
             );
           })}
         </div>
+      </section>
+
+      <Separator />
+
+      <section className="flex flex-col gap-3 max-w-md">
+        <div className="flex items-center justify-between">
+          <div>
+            <Label htmlFor="default-font-size">Terminal default font size</Label>
+            <p className="text-metadata text-muted-foreground mt-1">
+              Global baseline font size for newly spawned or unscaled terminal panes.
+            </p>
+          </div>
+          <span className="text-metadata text-accent-cyan font-medium">
+            {defaultTerminalFontSize}px
+          </span>
+        </div>
+        <input
+          id="default-font-size"
+          type="range"
+          min="1"
+          max="72"
+          value={defaultTerminalFontSize}
+          onChange={(e) => setDefaultTerminalFontSize(Number(e.target.value))}
+          className="h-1.5 w-full appearance-none rounded-lg bg-border cursor-pointer accent-accent-cyan"
+        />
       </section>
     </div>
   );

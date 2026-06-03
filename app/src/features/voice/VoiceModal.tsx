@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
-import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
+import { HOTKEYS } from '@/lib/hotkeys';
 import { cn, renderHotkey } from '@/lib/utils';
 import { Orb } from './Orb';
 import type { VoiceState } from './store';
@@ -53,23 +53,22 @@ export function VoiceModal() {
 
   const personaCfg = PERSONAS[persona];
 
-  // Cmd+Space toggles the modal globally - even when a text input is focused
-  // (otherwise users can't push-to-talk while typing in chat).
-  useHotkey(
-    HOTKEYS.PUSH_TO_TALK,
-    (e) => {
-      e.preventDefault();
-      setOpen(!open);
-    },
-    { whenInputs: true },
-  );
-
   useEffect(() => {
     if (!open) return;
 
-    // Light up the screen-edge glow + signal the orb's listening pose.
-    useUIStore.getState().setVoiceListening(true);
-    useVoiceStore.getState().setState('listening');
+    // Feature-detect first so the visual mic-state never lies about
+    // the engine. Pre-check audit (#1): on hosts without Web Speech
+    // we used to flip `voiceListening: true` and label the modal
+    // "Listening" even though startListening() bailed with an
+    // 'unsupported' error a tick later. Now we only light up the
+    // glow + state when the engine can actually run.
+    const supported = VoiceService.isSupported();
+    if (supported) {
+      useUIStore.getState().setVoiceListening(true);
+      useVoiceStore.getState().setState('listening');
+    } else {
+      useVoiceStore.getState().setState('error', 'Voice will work in Phase 3 (Pipecat).');
+    }
 
     const offs = [
       VoiceService.on('voice:partial', ({ text }) => {
@@ -80,19 +79,38 @@ export function VoiceModal() {
       }),
       VoiceService.on('voice:error', ({ kind, message }) => {
         if (kind === 'unsupported') {
+          // Mirror to state so the modal shows the message inline,
+          // not just a fleeting toast.
+          useUIStore.getState().setVoiceListening(false);
+          useVoiceStore.getState().setState('error', message);
           toast.info('Voice preview', message);
         } else if (kind === 'no_speech' || kind === 'aborted') {
           // Routine - the engine restarts itself; don't surface noise.
+        } else if (
+          kind === 'permission_denied' ||
+          kind === 'service_not_allowed' ||
+          kind === 'audio_capture'
+        ) {
+          // Terminal — VoiceService has already cleared wantsActive,
+          // so we just reflect that in the UI and let the user reopen
+          // the modal to retry once they've granted permission.
+          useUIStore.getState().setVoiceListening(false);
+          useVoiceStore.getState().setState('error', message);
         } else {
           useVoiceStore.getState().setState('error', message);
         }
       }),
+      VoiceService.on('voice:timeout', ({ reason }) => {
+        useUIStore.getState().setVoiceListening(false);
+        useVoiceStore.getState().setState('idle');
+        toast.info('Voice closed', reason);
+        setOpen(false);
+      }),
     ];
 
     // Always attempt - VoiceService emits 'unsupported' if Web Speech is missing
-    // and the listener above converts that into a toast. The modal stays usable
-    // either way (visual demo per the V1 brief).
-    VoiceService.startListening();
+    // and the listener above converts that into a toast + error state.
+    if (supported) VoiceService.startListening();
 
     return () => {
       offs.forEach((off) => off());

@@ -1,0 +1,797 @@
+/**
+ * Built-in action registry.
+ *
+ * Every entry here is a *real* action that mutates app state when run —
+ * no placeholders. The runner (`runner.ts`) uses these definitions plus
+ * any user-authored tools (`features/tools/toolStore.ts`) when looking
+ * up an action id at invocation time.
+ *
+ * Adding a new action:
+ *   1. Pick the most appropriate category from `ActionCategory`.
+ *   2. Use a dotted id with the category as the prefix (e.g.
+ *      `terminal.run`, `nav.chat`, `wellness.eyeBreak`).
+ *   3. Define `params` carefully — the AI reads them from the prompt
+ *      addendum (`promptAddendum.ts`) so the names and `help` text
+ *      double as developer documentation.
+ *   4. Keep `run()` side-effects predictable. Resolve every async
+ *      operation before returning so the approval card flips from
+ *      'running' to 'success' / 'error' atomically.
+ */
+
+import {
+  type LucideIcon,
+  MessageSquare,
+  Terminal as TerminalIcon,
+  KanbanSquare,
+  Sparkles,
+  BarChart3,
+  History as HistoryIcon,
+  Wrench,
+  Cog,
+  KeyRound,
+  CreditCard,
+  Sun,
+  Moon,
+  RotateCw,
+  Mic,
+  Layers,
+  PlayCircle,
+  Trash2,
+  Eye,
+  EyeOff,
+  ExternalLink,
+  Rocket,
+  Maximize2,
+  Bot,
+  PlusCircle,
+} from 'lucide-react';
+
+import { useUIStore, type Route } from '@/stores/ui';
+import { useAuthStore } from '@/stores/auth';
+import {
+  enqueueTerminalCommand,
+  requestTerminalSwarm,
+} from '@/features/terminals/terminalCommandQueue';
+import { taskRepo } from '@/lib/db/repositories';
+import { openExternal } from '@/lib/tauri';
+import type { ActionDef, ActionResult } from './types';
+import type { CustomToolStep } from '@/features/tools/toolStore';
+
+/* --------------------------------------------------------------------------
+ * Helpers
+ * --------------------------------------------------------------------------*/
+
+/**
+ * Defer a window event until after React commits the next render.
+ * Use this whenever an action both opens a modal AND wants to drive its
+ * inner state (e.g. open Settings then jump to a specific tab) — the
+ * modal's effect-based listener has to attach before the event fires.
+ */
+function dispatchAfterCommit(name: string, detail?: unknown): void {
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent(name, { detail }));
+  }, 0);
+}
+
+/**
+ * Switch the workspace canvas to the given route. Used by every
+ * `nav.*` and any terminal-flavored action that needs the Terminals
+ * page mounted before draining the command queue.
+ */
+function navigateTo(route: Route): void {
+  useUIStore.getState().setRoute(route);
+}
+
+/** ok-shaped success helper. */
+const ok = (summary: string, data?: unknown): ActionResult => ({
+  ok: true,
+  summary,
+  data,
+});
+
+/** Error-shaped helper, also used when validation rejects a param. */
+const fail = (error: string): ActionResult => ({ ok: false, error });
+
+/**
+ * Reject `cwd` / shell-context strings that contain characters which
+ * would break out of the quoted segment in a shell command. We only
+ * use these values for `cd "<value>"; <cmd>` interpolation; characters
+ * that close the double quote (`"`) or chain another command (`;`,
+ * `|`, `&`, `\n`, `\r`, backtick) get the action rejected before it
+ * lands in the queue.
+ *
+ * We intentionally allow forward and back slashes, spaces, parens,
+ * dots, hyphens, underscores, colons, plus the full range of
+ * non-control unicode so legitimate Windows / macOS / Linux paths
+ * (including ones with non-ASCII names) pass through untouched.
+ */
+function rejectShellMetaChars(value: string): string | null {
+  // `\u0000-\u001F` covers null + control codes (CR, LF, etc.).
+  // `"`, `\``, `;`, `|`, `&`, `$` close or chain the surrounding shell
+  // context.
+  if (/["`;|&$\u0000-\u001F]/.test(value)) {
+    return 'Path contains shell metacharacters that could break the command. Remove `"` `;` `|` `&` `$` `` ` `` or control chars.';
+  }
+  return null;
+}
+
+/* --------------------------------------------------------------------------
+ * Action defs
+ * --------------------------------------------------------------------------*/
+
+/**
+ * Navigation actions. One per top-level route, all delegating to
+ * `useUIStore.setRoute`. The boring uniformity is on purpose — Jarvis
+ * needs every page reachable as an action so the prompt addendum can
+ * advertise them all without per-route exceptions.
+ */
+const NAVIGATION_ACTIONS: ActionDef[] = (
+  [
+    ['nav.chat', 'Open Chat', 'chat', MessageSquare],
+    ['nav.terminal', 'Open Terminals', 'terminal', TerminalIcon],
+    ['nav.kanban', 'Open Kanban', 'kanban', KanbanSquare],
+    ['nav.context', 'Open Context', 'context', Sparkles],
+    ['nav.skills', 'Open Skills', 'skills', Sparkles],
+    ['nav.benchmarks', 'Open Benchmarks', 'benchmarks', BarChart3],
+    ['nav.history', 'Open History', 'history', HistoryIcon],
+    ['nav.tools', 'Open Custom Tools', 'tools', Wrench],
+  ] as const
+).map<ActionDef>(([id, label, route, icon]) => ({
+  id,
+  category: 'navigation',
+  label,
+  description: `Switch the workspace canvas to the ${route} page.`,
+  icon: icon as LucideIcon,
+  params: [],
+  run: async () => {
+    navigateTo(route as Route);
+    return ok(`Opened ${label.replace('Open ', '')}.`);
+  },
+}));
+
+/**
+ * Settings actions. Every entry opens the modal first; tab-targeted
+ * variants then dispatch `jarvis:settings:tab` after the next commit
+ * (the listener gates on `[open]` per `SettingsModal.tsx:86-94`).
+ */
+const SETTINGS_ACTIONS: ActionDef[] = [
+  {
+    id: 'settings.open',
+    category: 'settings',
+    label: 'Open Settings',
+    description: 'Open the Settings modal at its default tab.',
+    icon: Cog,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setSettingsOpen(true);
+      return ok('Opened Settings.');
+    },
+  },
+  {
+    id: 'settings.providers',
+    category: 'settings',
+    label: 'Open Settings → Providers',
+    description:
+      'Open Settings on the Providers tab so the user can paste API keys.',
+    icon: KeyRound,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setSettingsOpen(true);
+      dispatchAfterCommit('jarvis:settings:tab', { tab: 'providers' });
+      return ok('Opened Providers.');
+    },
+  },
+  {
+    id: 'settings.plans',
+    category: 'settings',
+    label: 'Open Settings → Plans',
+    description: 'Open Settings on the Plans tab (Free vs Pro $5).',
+    icon: CreditCard,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setSettingsOpen(true);
+      dispatchAfterCommit('jarvis:settings:tab', { tab: 'plans' });
+      return ok('Opened Plans.');
+    },
+  },
+];
+
+/**
+ * Theme actions. `setTheme` flips `data-theme` on `documentElement`
+ * synchronously (see `stores/ui.ts:199-202`), so no follow-up is
+ * needed.
+ */
+const THEME_ACTIONS: ActionDef[] = [
+  {
+    id: 'theme.dark',
+    category: 'theme',
+    label: 'Switch to Dark theme',
+    description: 'Set the workspace to the warm wood (dark) palette.',
+    icon: Moon,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setTheme('dark');
+      return ok('Theme: Dark.');
+    },
+  },
+  {
+    id: 'theme.light',
+    category: 'theme',
+    label: 'Switch to Light theme',
+    description: 'Set the workspace to the cream paper (light) palette.',
+    icon: Sun,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setTheme('light');
+      return ok('Theme: Light.');
+    },
+  },
+  {
+    id: 'theme.toggle',
+    category: 'theme',
+    label: 'Toggle theme',
+    description: 'Flip between Dark and Light.',
+    icon: RotateCw,
+    params: [],
+    run: async () => {
+      const cur = useUIStore.getState().theme;
+      const next = cur === 'dark' ? 'light' : 'dark';
+      useUIStore.getState().setTheme(next);
+      return ok(`Theme: ${next === 'dark' ? 'Dark' : 'Light'}.`);
+    },
+  },
+];
+
+/**
+ * Voice action — opens the voice modal. The modal handles its own
+ * lifecycle (mic permission, captions, end-of-utterance detection); we
+ * just toggle the visibility flag.
+ */
+const VOICE_ACTIONS: ActionDef[] = [
+  {
+    id: 'voice.open',
+    category: 'voice',
+    label: 'Start a voice conversation',
+    description: 'Open the in-app voice modal (push-to-talk).',
+    icon: Mic,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setVoiceModalOpen(true);
+      return ok('Opened the voice modal.');
+    },
+  },
+];
+
+/**
+ * Terminal actions. Every command-launching action queues into the
+ * terminal command queue (`terminalCommandQueue.ts`) and *then* sets
+ * the route — TerminalsPage drains the queue on mount, so the order
+ * (queue → navigate) guarantees nothing is dropped on a cold route.
+ */
+const TERMINAL_ACTIONS: ActionDef[] = [
+  {
+    id: 'terminal.open',
+    category: 'terminal',
+    label: 'Open Terminals',
+    description: 'Switch the canvas to the Terminals page.',
+    icon: TerminalIcon,
+    params: [],
+    run: async () => {
+      navigateTo('terminal');
+      return ok('Opened Terminals.');
+    },
+  },
+  {
+    id: 'terminal.bulkOpen',
+    category: 'terminal',
+    label: 'Open multiple terminal panes',
+    description:
+      'Open 1-10 new terminal panes. Optionally start the same command, such as opencode, in each new pane.',
+    icon: Layers,
+    params: [
+      {
+        key: 'count',
+        label: 'Pane count',
+        type: 'number',
+        required: true,
+        default: 1,
+        help: 'How many new panes to open. Max 10.',
+      },
+      {
+        key: 'command',
+        label: 'Startup command',
+        type: 'string',
+        required: false,
+        placeholder: 'opencode',
+        help: 'Optional command typed into every new pane after the shell starts.',
+      },
+    ],
+    run: async (params) => {
+      const rawCount = typeof params.count === 'number' ? params.count : 1;
+      const count = Math.min(10, Math.max(1, Math.floor(rawCount)));
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
+      for (let i = 0; i < count; i++) {
+        enqueueTerminalCommand({
+          command,
+          label: command ? `${command} ${i + 1}` : `terminal ${i + 1}`,
+        });
+      }
+      navigateTo('terminal');
+      return ok(`Opening ${count} terminal pane${count === 1 ? '' : 's'}${command ? ` with ${command}` : ''}.`);
+    },
+  },
+  {
+    id: 'terminal.swarm',
+    category: 'terminal',
+    label: 'Open Terminal swarm preset',
+    description:
+      'Open Terminals and lay out the 4-pane Builder / Scout / Reviewer / Jarvis swarm preset.',
+    icon: Layers,
+    params: [],
+    run: async () => {
+      // Queue first so the page picks the swarm up on its next drain
+      // cycle, regardless of whether the route component is already
+      // mounted or still loading its lazy chunk. Then navigate.
+      requestTerminalSwarm();
+      navigateTo('terminal');
+      return ok('Opening swarm: Builder, Scout, Reviewer, Jarvis.');
+    },
+  },
+  {
+    id: 'terminal.claude',
+    category: 'terminal',
+    label: 'Run Claude Code in a new pane',
+    description:
+      'Open Terminals and start Claude Code (`claude`) in a new pane. Optionally `cd` into a project folder first.',
+    icon: PlayCircle,
+    params: [
+      {
+        key: 'cwd',
+        label: 'Working directory',
+        type: 'string',
+        required: false,
+        placeholder: 'C:\\Users\\you\\projects\\my-app',
+        help: 'Optional. The pane will `cd` here before starting Claude.',
+      },
+    ],
+    run: async (params) => {
+      const cwd = typeof params.cwd === 'string' ? params.cwd : undefined;
+      if (cwd) {
+        const meta = rejectShellMetaChars(cwd);
+        if (meta) return fail(meta);
+      }
+      enqueueTerminalCommand({ command: 'claude', label: 'claude', cwd });
+      navigateTo('terminal');
+      return ok(`Queued Claude Code${cwd ? ` in ${cwd}` : ''}.`);
+    },
+  },
+  {
+    id: 'terminal.opencode',
+    category: 'terminal',
+    label: 'Run OpenCode in a new pane',
+    description:
+      'Open Terminals and start OpenCode (`opencode`) in a new pane. Optionally `cd` into a project folder first.',
+    icon: PlayCircle,
+    params: [
+      {
+        key: 'cwd',
+        label: 'Working directory',
+        type: 'string',
+        required: false,
+        placeholder: 'C:\\Users\\you\\projects\\my-app',
+        help: 'Optional. The pane will `cd` here before starting OpenCode.',
+      },
+    ],
+    run: async (params) => {
+      const cwd = typeof params.cwd === 'string' ? params.cwd : undefined;
+      if (cwd) {
+        const meta = rejectShellMetaChars(cwd);
+        if (meta) return fail(meta);
+      }
+      enqueueTerminalCommand({ command: 'opencode', label: 'opencode', cwd });
+      navigateTo('terminal');
+      return ok(`Queued OpenCode${cwd ? ` in ${cwd}` : ''}.`);
+    },
+  },
+  {
+    id: 'terminal.run',
+    category: 'terminal',
+    label: 'Run a command in a new pane',
+    description:
+      'Open Terminals and run an arbitrary shell command in a new pane.',
+    icon: PlayCircle,
+    destructive: true,
+    params: [
+      {
+        key: 'command',
+        label: 'Command',
+        type: 'string',
+        required: true,
+        placeholder: 'npm run jarvis',
+        help: 'Shell command to execute when the pane mounts.',
+      },
+      {
+        key: 'label',
+        label: 'Pane label',
+        type: 'string',
+        required: false,
+        placeholder: 'dev server',
+        help: 'Optional friendly label shown on the pane chrome.',
+      },
+      {
+        key: 'cwd',
+        label: 'Working directory',
+        type: 'string',
+        required: false,
+        placeholder: 'C:\\Users\\you\\projects\\my-app',
+        help: 'Optional. The pane will `cd` here before running.',
+      },
+    ],
+    run: async (params) => {
+      const command =
+        typeof params.command === 'string' ? params.command.trim() : '';
+      if (!command) return fail('Missing required parameter: command.');
+      // The command itself is a free-form shell string by design (the
+      // user explicitly approved it). The `cwd` value, however, is
+      // interpolated *unquoted* between double quotes — `cd "<cwd>"` —
+      // so we must reject anything that could close the quote and
+      // chain a separate command.
+      const label =
+        typeof params.label === 'string' && params.label.trim()
+          ? params.label.trim()
+          : undefined;
+      const cwd = typeof params.cwd === 'string' ? params.cwd : undefined;
+      if (cwd) {
+        const meta = rejectShellMetaChars(cwd);
+        if (meta) return fail(meta);
+      }
+      enqueueTerminalCommand({ command, label, cwd });
+      navigateTo('terminal');
+      return ok(`Queued: ${command}`);
+    },
+  },
+];
+
+/**
+ * Chat-canvas actions. `chat.fullscreen` is the most-used composer
+ * gesture; surfacing it as an action lets the AI propose distraction-
+ * free mode for long writing tasks.
+ */
+const CHAT_ACTIONS: ActionDef[] = [
+  {
+    id: 'chat.fullscreen',
+    category: 'chat',
+    label: 'Toggle chat fullscreen',
+    description:
+      'Hide the nav pane + tasks rail to focus the chat canvas. Toggles back when invoked again.',
+    icon: Maximize2,
+    params: [],
+    run: async () => {
+      useUIStore.getState().toggleChatFullscreen();
+      const now = useUIStore.getState().chatFullscreen;
+      return ok(`Chat fullscreen: ${now ? 'on' : 'off'}.`);
+    },
+  },
+];
+
+/**
+ * Wellness actions. The 20-20-20 eye break is the seed entry; future
+ * wellness modalities (stretch, breath, hydration) plug in via the
+ * `WellnessKind` union in `stores/ui.ts`.
+ */
+const WELLNESS_ACTIONS: ActionDef[] = [
+  {
+    id: 'wellness.eyeBreak',
+    category: 'wellness',
+    label: 'Start a 20-20-20 eye break',
+    description:
+      'Show a calm full-screen overlay for 20 seconds reminding the user to look 20 feet away. Reduces digital eye strain.',
+    icon: Eye,
+    params: [
+      {
+        key: 'durationSec',
+        label: 'Duration (seconds)',
+        type: 'number',
+        required: false,
+        default: 20,
+        help: 'Defaults to 20 seconds (the 20-20-20 rule).',
+      },
+    ],
+    run: async (params) => {
+      const raw = params.durationSec;
+      const sec =
+        typeof raw === 'number' && raw > 0 && raw <= 600 ? raw : 20;
+      useUIStore.getState().startWellness('eye-break-20-20-20', sec * 1000);
+      return ok(`Eye break for ${sec}s.`);
+    },
+  },
+  {
+    id: 'wellness.endBreak',
+    category: 'wellness',
+    label: 'End the wellness break',
+    description: 'Dismiss the active wellness break overlay if one is showing.',
+    icon: EyeOff,
+    params: [],
+    run: async () => {
+      useUIStore.getState().endWellness();
+      return ok('Break ended.');
+    },
+  },
+];
+
+/**
+ * Host actions — operations that touch something outside the React
+ * tree (open a URL in the OS browser, summon the launcher, etc.).
+ */
+const HOST_ACTIONS: ActionDef[] = [
+  {
+    id: 'host.openUrl',
+    category: 'host',
+    label: 'Open URL in your browser',
+    description:
+      'Open a URL in the user\'s default browser. Useful for "show me the Groq dashboard" or "take me to docs".',
+    icon: ExternalLink,
+    params: [
+      {
+        key: 'url',
+        label: 'URL',
+        type: 'string',
+        required: true,
+        placeholder: 'https://aistudio.google.com/apikey',
+        help: 'Must start with http:// or https://.',
+      },
+    ],
+    run: async (params) => {
+      const url = typeof params.url === 'string' ? params.url.trim() : '';
+      if (!/^https?:\/\//i.test(url)) {
+        return fail('URL must start with http:// or https://.');
+      }
+      try {
+        // Route through the Tauri shell plugin in packaged builds so
+        // the OS browser actually opens. `window.open` works in the
+        // dev build but is a no-op (or worse, opens a blank WebView)
+        // inside Tauri.
+        await openExternal(url);
+        return ok(`Opened ${url}`);
+      } catch (err) {
+        return fail(`Could not open URL: ${(err as Error).message}`);
+      }
+    },
+  },
+  {
+    id: 'host.openLauncher',
+    category: 'host',
+    label: 'Open quick launcher',
+    description:
+      'Pop the Quick Launcher tile grid (pinned apps and links). Same as Mod+Shift+L.',
+    icon: Rocket,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setLauncherOpen(true);
+      return ok('Opened the launcher.');
+    },
+  },
+];
+
+const PRODUCTIVITY_ACTIONS: ActionDef[] = [
+  {
+    id: 'kanban.createTask',
+    category: 'custom',
+    label: 'Create Kanban task',
+    description: 'Create a project-scoped Kanban task with optional notes, priority, and due time.',
+    icon: PlusCircle,
+    params: [
+      { key: 'title', label: 'Task title', type: 'string', required: true },
+      { key: 'notes', label: 'Notes', type: 'string', help: 'Optional task details.' },
+      {
+        key: 'priority',
+        label: 'Priority',
+        type: 'select',
+        default: 'normal',
+        options: [
+          { value: 'urgent', label: 'Urgent' },
+          { value: 'high', label: 'High' },
+          { value: 'normal', label: 'Normal' },
+          { value: 'low', label: 'Low' },
+        ],
+      },
+      { key: 'due_at', label: 'Due timestamp', type: 'number', help: 'Unix milliseconds. Omit when no specific due time exists.' },
+    ],
+    run: async (params) => {
+      const workspaceId = useAuthStore.getState().workspaceId;
+      if (!workspaceId) return fail('No active workspace.');
+      const title = typeof params.title === 'string' ? params.title.trim() : '';
+      if (!title) return fail('Task title is required.');
+      const notes = typeof params.notes === 'string' && params.notes.trim() ? params.notes.trim() : undefined;
+      const priority = ['urgent', 'high', 'normal', 'low'].includes(String(params.priority))
+        ? String(params.priority) as 'urgent' | 'high' | 'normal' | 'low'
+        : 'normal';
+      const due_at = typeof params.due_at === 'number' && Number.isFinite(params.due_at) ? params.due_at : undefined;
+      await taskRepo.create({
+        workspace_id: workspaceId,
+        project_id: useAuthStore.getState().projectId ?? undefined,
+        title,
+        notes,
+        status: 'open',
+        priority,
+        due_at,
+        created_by: 'agent',
+      });
+      navigateTo('kanban');
+      return ok(`Created Kanban task: ${title}`);
+    },
+  },
+  {
+    id: 'custom.createTerminalCommand',
+    category: 'custom',
+    label: 'Create custom terminal command',
+    description: 'Save a named Jarvis command backed by terminal.run so it appears as custom.<slug> for future use.',
+    icon: Wrench,
+    params: [
+      { key: 'name', label: 'Command name', type: 'string', required: true },
+      { key: 'command', label: 'Shell command', type: 'string', required: true },
+      { key: 'cwd', label: 'Working directory', type: 'string', help: 'Optional absolute project folder.' },
+      { key: 'description', label: 'Description', type: 'string', help: 'Optional user-facing description.' },
+    ],
+    run: async (params) => {
+      const name = typeof params.name === 'string' ? params.name.trim() : '';
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
+      if (!name || !command) return fail('Name and command are required.');
+      const { useToolStore } = await import('@/features/tools/toolStore');
+      const tool = useToolStore.getState().create({
+        name,
+        description: typeof params.description === 'string' && params.description.trim()
+          ? params.description.trim()
+          : `Run ${command} in a new terminal pane.`,
+        baseAction: 'terminal.run',
+        params: {
+          command,
+          label: name,
+          ...(typeof params.cwd === 'string' && params.cwd.trim() ? { cwd: params.cwd.trim() } : {}),
+        },
+      });
+      return ok(`Created custom command custom.${tool.slug}.`);
+    },
+  },
+  {
+    id: 'custom.createWorkflowTool',
+    category: 'custom',
+    label: 'Create custom workflow tool',
+    description:
+      'Save a named custom tool that chains multiple built-in Jarvis actions. Use this for multi-step workflows Jarvis should be able to run later.',
+    icon: Wrench,
+    params: [
+      { key: 'name', label: 'Tool name', type: 'string', required: true },
+      {
+        key: 'stepsJson',
+        label: 'Workflow steps JSON',
+        type: 'string',
+        required: true,
+        help: 'JSON array of steps like [{"action":"nav.terminal","params":{}},{"action":"terminal.run","params":{"command":"npm test"}}]. Built-in actions only.',
+      },
+      { key: 'description', label: 'Description', type: 'string', help: 'Optional user-facing description.' },
+    ],
+    run: async (params) => {
+      const name = typeof params.name === 'string' ? params.name.trim() : '';
+      const stepsJson = typeof params.stepsJson === 'string' ? params.stepsJson.trim() : '';
+      if (!name || !stepsJson) return fail('Name and workflow steps JSON are required.');
+      const { useToolStore, parseToolStepsJson } = await import('@/features/tools/toolStore');
+      let steps: CustomToolStep[];
+      try {
+        steps = parseToolStepsJson(stepsJson);
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+      }
+      for (const step of steps) {
+        if (!getBuiltinAction(step.action)) {
+          return fail(`Workflow step references an unknown built-in action: ${step.action}.`);
+        }
+      }
+      const tool = useToolStore.getState().create({
+        name,
+        description:
+          typeof params.description === 'string' && params.description.trim()
+            ? params.description.trim()
+            : `Run ${steps.length} Jarvis action step${steps.length === 1 ? '' : 's'}.`,
+        baseAction: 'workflow.run',
+        params: {},
+        steps,
+      });
+      return ok(`Created workflow tool custom.${tool.slug}.`);
+    },
+  },
+];
+
+/* --------------------------------------------------------------------------
+ * Bundle + lookup
+ * --------------------------------------------------------------------------*/
+
+/** All built-in actions in canonical display order. */
+export function getBuiltinActions(): ActionDef[] {
+  return [
+    ...NAVIGATION_ACTIONS,
+    ...SETTINGS_ACTIONS,
+    ...THEME_ACTIONS,
+    ...VOICE_ACTIONS,
+    ...TERMINAL_ACTIONS,
+    ...CHAT_ACTIONS,
+    ...WELLNESS_ACTIONS,
+    ...HOST_ACTIONS,
+    ...PRODUCTIVITY_ACTIONS,
+  ];
+}
+
+/**
+ * Stable id mapping cache. Built lazily on first lookup so the icon
+ * imports above don't pay the price on a cold module load.
+ */
+let cache: Map<string, ActionDef> | null = null;
+function getBuiltinIndex(): Map<string, ActionDef> {
+  if (cache) return cache;
+  const m = new Map<string, ActionDef>();
+  for (const a of getBuiltinActions()) m.set(a.id, a);
+  cache = m;
+  return m;
+}
+
+/** Lookup a built-in action by id. Returns undefined if none matches. */
+export function getBuiltinAction(id: string): ActionDef | undefined {
+  return getBuiltinIndex().get(id);
+}
+
+/** Stable count for tests + the prompt addendum's "N actions" header. */
+export const BUILTIN_ACTION_COUNT = (() => {
+  // Avoid building the full cache eagerly; just count in place.
+  return (
+    NAVIGATION_ACTIONS.length +
+    SETTINGS_ACTIONS.length +
+    THEME_ACTIONS.length +
+    VOICE_ACTIONS.length +
+    TERMINAL_ACTIONS.length +
+    CHAT_ACTIONS.length +
+    WELLNESS_ACTIONS.length +
+    HOST_ACTIONS.length +
+    PRODUCTIVITY_ACTIONS.length
+  );
+})();
+
+/** Expose category labels for the palette section dividers. */
+export const CATEGORY_LABELS: Record<
+  | 'navigation'
+  | 'settings'
+  | 'theme'
+  | 'voice'
+  | 'terminal'
+  | 'chat'
+  | 'wellness'
+  | 'host'
+  | 'custom',
+  string
+> = {
+  navigation: 'Navigate',
+  settings: 'Settings',
+  theme: 'Appearance',
+  voice: 'Voice',
+  terminal: 'Terminal',
+  chat: 'Chat',
+  wellness: 'Wellness',
+  host: 'Host',
+  custom: 'Your tools',
+};
+
+/** Optional category icon (palette section dividers). */
+export const CATEGORY_ICON: Record<string, LucideIcon> = {
+  navigation: MessageSquare,
+  settings: Cog,
+  theme: Sparkles,
+  voice: Mic,
+  terminal: TerminalIcon,
+  chat: Bot,
+  wellness: Eye,
+  host: Rocket,
+  custom: Wrench,
+};
+
+/* Re-export so action-driven code paths can dump a clean delete.
+ * Used by the action approval card on cancel. */
+export { Trash2 as CancelIcon };

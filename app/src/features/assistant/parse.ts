@@ -65,7 +65,7 @@ const WEEKDAY_TO_NUM: Record<string, number> = {
 };
 
 /** Route ids accepted by `useUIStore.setRoute` (V3 top-level routes). */
-type NavRoute = 'chat' | 'terminal' | 'kanban' | 'agents' | 'skills' | 'benchmarks' | 'history';
+type NavRoute = 'chat' | 'terminal' | 'kanban' | 'schedule' | 'agents' | 'context' | 'skills' | 'benchmarks' | 'history' | 'tools' | 'files';
 
 /**
  * Map the noun the user actually typed to the canonical route id. Plurals
@@ -78,12 +78,22 @@ const NAV_ROUTE_MAP: Record<string, NavRoute> = {
   terminal: 'terminal',
   terminals: 'terminal',
   kanban: 'kanban',
+  schedule: 'schedule',
+  calendar: 'schedule',
+  agenda: 'schedule',
   agent: 'agents',
   agents: 'agents',
+  context: 'context',
+  contexts: 'context',
   skills: 'skills',
   benchmark: 'benchmarks',
   benchmarks: 'benchmarks',
   history: 'history',
+  tool: 'tools',
+  tools: 'tools',
+  file: 'files',
+  files: 'files',
+  explorer: 'files',
 };
 
 function normalizeRoute(raw: string): NavRoute {
@@ -176,6 +186,15 @@ function unquote(s: string): string {
   return t;
 }
 
+function normalizeTerminalCommand(command: string | undefined): string | undefined {
+  if (!command) return undefined;
+  let c = command.trim().toLowerCase();
+  c = c.replace(/^(?:each\s+)?(?:with|running)\s+/i, '').trim();
+  c = c.replace(/\s+in\s+(?:it|them|each)$/i, '').trim();
+  c = c.replace(/^each\s+/i, '').trim();
+  return c || undefined;
+}
+
 /**
  * Try the "open claude in tiger" shorthand. Distinct from `open_terminals`
  * because there's no count token. Returns null when the shape doesn't match.
@@ -198,11 +217,11 @@ function tryShellShorthand(s: string): AssistantIntent | null {
 }
 
 /**
- * Parse a single user utterance into one of our discriminated intents.
- *
- * Always returns a value — bad input produces `{ kind: 'unknown', raw }`.
+ * Parse one command segment into one of our discriminated intents.
+ * Multi-step splitting lives in the exported wrapper below so recursive
+ * parsing never nests `multi_step` inside `multi_step`.
  */
-export function parseAssistantInput(raw: string): AssistantIntent {
+function parseSingleAssistantInput(raw: string): AssistantIntent {
   const original = raw;
   const s = clean(raw);
   if (!s) return { kind: 'unknown', raw: original };
@@ -232,15 +251,54 @@ export function parseAssistantInput(raw: string): AssistantIntent {
   const openTerms =
     /^open\s+(\d+)\s+terminals?(?:\s+(?:with|running)\s+(.+?))?(?:\s+in\s+(.+?))?(?:\s+project)?$/i.exec(s);
   if (openTerms) {
-    const count = Math.max(1, Number(openTerms[1]) || 1);
-    const command = openTerms[2]?.trim();
+    const count = Math.min(10, Math.max(1, Number(openTerms[1]) || 1));
+    const command = normalizeTerminalCommand(openTerms[2]);
     const projectRaw = openTerms[3]?.trim();
     return {
       kind: 'open_terminals',
       count,
-      command: command || undefined,
+      command,
       project: projectRaw ? unquote(projectRaw) : undefined,
     };
+  }
+
+  // ---- run command in all terminals ----
+  const runAllTerms = /^(?:run|start|launch|execute)\s+(.+?)\s+in\s+(?:all|every|any)\s+terminals?$/i.exec(s);
+  if (runAllTerms) {
+    const command = runAllTerms[1]?.trim();
+    if (command) return { kind: 'run_in_terminals', command, target: 'all' };
+  }
+
+  const createCustomCommand = /^(?:create|make|add|save)\s+(?:a\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+?)\s+(?:to\s+run|that\s+runs|as)\s+(.+)$/i.exec(s);
+  if (createCustomCommand) {
+    const name = unquote(createCustomCommand[1]);
+    const command = createCustomCommand[2]?.trim();
+    if (name && command) return { kind: 'create_custom_command', name, command };
+  }
+
+  const runCustomCommand = /^(?:run|use|execute|start)\s+(?:my\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+)$/i.exec(s);
+  if (runCustomCommand) {
+    const name = unquote(runCustomCommand[1]);
+    if (name) return { kind: 'run_custom_command', name };
+  }
+
+  const askProvider = /^(?:ask|tell|have)\s+(opencode|claude|codex|cursor|gemini|gpt|openai|anthropic|google|groq)\s+(?:to\s+)?(.+)$/i.exec(s);
+  if (askProvider) {
+    const provider = askProvider[1]?.trim();
+    const prompt = askProvider[2]?.trim();
+    if (provider && prompt) return { kind: 'ask_provider', provider, prompt };
+  }
+
+  if (/^(?:give|send)\s+(?:all\s+)?terminals?\s+(?:all\s+)?(?:the\s+)?context$/i.test(s)) {
+    return { kind: 'give_terminals_context' };
+  }
+
+  if (/^(?:create|make|generate|build)\s+(?:project\s+)?(?:context\s+)?(?:map|skill\s*tree|tree)$/i.test(s)) {
+    return { kind: 'create_context_map' };
+  }
+
+  if (/^(?:center|recenter|reset|find)\s+(?:the\s+)?(?:project\s+)?(?:context\s+)?map$/i.test(s)) {
+    return { kind: 'recenter_context_map' };
   }
 
   // ---- open <shell> in <project> shorthand ----
@@ -282,6 +340,18 @@ export function parseAssistantInput(raw: string): AssistantIntent {
     if (rest) return { kind: 'create_event', raw: rest };
   }
 
+  const callMe = /^(?:call\s+me|phone\s+me|give\s+me\s+a\s+call)(?:\s+(?:at|on|about|for)\s+)?(.+)$/i.exec(s);
+  if (callMe) {
+    const rest = callMe[1]?.trim() || 'now';
+    return { kind: 'schedule_call', raw: `Jarvis call: ${rest}` };
+  }
+
+  const messageMe = /^(?:message|text|sms)\s+me(?:\s*[:\-]\s*|\s+)(.+)$/i.exec(s);
+  if (messageMe) {
+    const text = unquote(messageMe[1]);
+    if (text) return { kind: 'send_phone_message', text };
+  }
+
   // ---- ambient mode ----
   const ambient = /^ambient(?:\s+mode)?\s+(on|off|enable|disable)$/i.exec(s);
   if (ambient) {
@@ -306,13 +376,13 @@ export function parseAssistantInput(raw: string): AssistantIntent {
   // but ordering preserves the spec's "navigate-first" intent.
   // Strict form: any of the four nav verbs, no "my", no trailing "please".
   const navStrict =
-    /^(?:open|go to|show|switch to)\s+(terminal(?:s)?|kanban|skills|benchmarks?|history|agents?|chat)$/i.exec(s);
+    /^(?:open|go to|show|switch to)\s+(terminal(?:s)?|kanban|context(?:s)?|skills|benchmarks?|history|agents?|tools?|files?|explorer|chat)$/i.exec(s);
   if (navStrict) {
     return { kind: 'navigate', route: normalizeRoute(navStrict[1]) };
   }
   // Polite form: only "open"/"show", optional "my", optional trailing "please".
   const navPolite =
-    /^(?:open|show)\s+(?:my\s+)?(terminal(?:s)?|kanban|skills|benchmarks?|history|agents?|chat)\s*(?:please)?$/i.exec(s);
+    /^(?:open|show)\s+(?:my\s+)?(terminal(?:s)?|kanban|context(?:s)?|skills|benchmarks?|history|agents?|tools?|files?|explorer|chat)\s*(?:please)?$/i.exec(s);
   if (navPolite) {
     return { kind: 'navigate', route: normalizeRoute(navPolite[1]) };
   }
@@ -333,5 +403,123 @@ export function parseAssistantInput(raw: string): AssistantIntent {
     return { kind: 'open_schedule' };
   }
 
+  // ---- inspector / sidebar toggles ----
+  if (/^(?:close|hide|toggle)\s+(?:the\s+)?(?:right\s+)?(?:side\s+)?(?:bar\s+)?(?:inspector|panel)/i.test(s)) {
+    return { kind: 'navigate', route: 'chat' }; // triggers inspector close via UI
+  }
+  if (/^(?:show|open|toggle)\s+(?:the\s+)?(?:right\s+)?(?:side\s+)?(?:bar\s+)?(?:inspector|panel)/i.test(s)) {
+    return { kind: 'navigate', route: 'chat' }; // triggers inspector open via UI
+  }
+
+  // ---- wellness / break ----
+  if (/^(?:take\s+)?(?:a\s+)?(?:break|rest|pause)|start\s+(?:a\s+)?break/i.test(s)) {
+    return { kind: 'set_ambient', on: true }; // triggers wellness
+  }
+  if (/^(?:end|stop|finish|close)\s+(?:the\s+)?(?:break|rest|pause)/i.test(s)) {
+    return { kind: 'set_ambient', on: false };
+  }
+
+  // ---- quick task creation shortcuts ----
+  if (/^(?:new|add|create)\s+(?:a\s+)?task[:\s]+(.+)$/i.test(s)) {
+    const title = s.replace(/^(?:new|add|create)\s+(?:a\s+)?task[:\s]+/i, '').trim();
+    if (title) {
+      const { title: cleanTitle, due_at } = extractCasualDue(title);
+      if (cleanTitle) return { kind: 'create_task', title: cleanTitle, due_at };
+    }
+  }
+
+  // ---- ambient toggle ----
+  if (/^(?:turn\s+)?(?:on|off)\s+ambient(?:\s+mode)?$/i.test(s)) {
+    const isOn = /on/i.test(s);
+    return { kind: 'set_ambient', on: isOn };
+  }
+  if (/^toggle\s+ambient(?:\s+mode)?$/i.test(s)) {
+    return { kind: 'set_ambient', on: true }; // toggle handled in execute
+  }
+
+  // ---- fuzzy fallback: suggest closest command ----
+  const suggestions = suggestClosestCommands(original);
+  if (suggestions.length > 0) {
+    return { kind: 'unknown', raw: original, suggestions };
+  }
+
   return { kind: 'unknown', raw: original };
+}
+
+/**
+ * Known command patterns for fuzzy suggestion. When the assistant doesn't
+ * match any regex, we fuzzy-compare the sanitised user input against each
+ * pattern's keywords and suggest the closest ones.
+ */
+const COMMAND_SUGGESTIONS = [
+  { keywords: 'create project', example: 'create project tiger' },
+  { keywords: 'switch to project', example: 'switch to tiger project' },
+  { keywords: 'create chat', example: 'create chat called planning' },
+  { keywords: 'open terminals', example: 'open 4 terminals with opencode' },
+  { keywords: 'open terminal', example: 'open 4 terminals with opencode' },
+  { keywords: 'run in all terminals', example: 'run npm test in all terminals' },
+  { keywords: 'create command', example: 'create command dev server to run npm run dev' },
+  { keywords: 'run command', example: 'run command dev server' },
+  { keywords: 'ask provider', example: 'ask claude to fix the tests' },
+  { keywords: 'create context map', example: 'create context map' },
+  { keywords: 'recenter context map', example: 'recenter context map' },
+  { keywords: 'give terminals context', example: 'give all terminals all context' },
+  { keywords: 'create task', example: 'make a todo: ship the launcher tomorrow' },
+  { keywords: 'todo', example: 'make a todo: verify the release' },
+  { keywords: 'schedule', example: 'schedule standup friday at 1pm' },
+  { keywords: 'call me', example: 'call me at 3pm' },
+  { keywords: 'message me', example: 'message me: build is done' },
+  { keywords: 'fullscreen', example: 'fullscreen' },
+  { keywords: 'exit fullscreen', example: 'exit fullscreen' },
+  { keywords: 'ambient', example: 'ambient mode on' },
+  { keywords: 'open settings', example: 'open settings' },
+  { keywords: 'open palette', example: 'open palette' },
+  { keywords: 'open launcher', example: 'open launcher' },
+  { keywords: 'open schedule', example: 'open schedule' },
+  { keywords: 'open files', example: 'open files' },
+  { keywords: 'open kanban', example: 'open kanban' },
+  { keywords: 'open context', example: 'open context' },
+  { keywords: 'open history', example: 'open history' },
+  { keywords: 'open tools', example: 'open tools' },
+  { keywords: 'open agents', example: 'open agents' },
+  { keywords: 'open benchmarks', example: 'show benchmarks' },
+  { keywords: 'break', example: 'start a break' },
+  { keywords: 'rest', example: 'take a rest' },
+  { keywords: 'pause', example: 'take a pause' },
+  { keywords: 'close inspector', example: 'close the inspector' },
+  { keywords: 'hide inspector', example: 'hide the right panel' },
+  { keywords: 'show inspector', example: 'show the inspector' },
+  { keywords: 'toggle inspector', example: 'toggle the inspector' },
+];
+
+function suggestClosestCommands(raw: string): string[] {
+  const s = raw.toLowerCase().replace(/[^a-z\s]/g, '').trim();
+  if (s.length < 2) return [];
+  const scored = COMMAND_SUGGESTIONS
+    .map((entry) => {
+      const kws = entry.keywords.split(' ').filter(Boolean);
+      let hits = 0;
+      for (const kw of kws) {
+        if (s.includes(kw)) hits++;
+      }
+      return { ...entry, hits };
+    })
+    .filter((e) => e.hits > 0)
+    .sort((a, b) => b.hits - a.hits);
+  return scored.slice(0, 3).map((e) => e.example);
+}
+
+/**
+ * Parse a user utterance into one intent. Supports simple multi-step plans
+ * separated by "then" / "and then" while preserving the existing single-
+ * command vocabulary.
+ */
+export function parseAssistantInput(raw: string): AssistantIntent {
+  const parts = raw
+    .split(/\s+(?:and\s+then|then)\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return parseSingleAssistantInput(raw);
+  const steps = parts.map(parseSingleAssistantInput);
+  return { kind: 'multi_step', steps };
 }

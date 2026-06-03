@@ -368,18 +368,7 @@ export function TerminalView({
           }
         }
 
-        useTerminalTranscriptStore.setState((state) => {
-          if (!state.sessions[sid]) return {};
-          return {
-            sessions: {
-              ...state.sessions,
-              [sid]: {
-                ...state.sessions[sid]!,
-                currentInput,
-              },
-            },
-          };
-        });
+        useTerminalTranscriptStore.getState().setCurrentInput(sid, currentInput);
 
         invoke('terminal_write', { sessionId: sid, data }).catch(() => {
           /* ignore: backend probably gone */
@@ -446,6 +435,7 @@ export function TerminalView({
         rows: number;
         cols: number;
         startedAt: number;
+        projectId?: string | null;
       }
 
       // Spawn or attach.
@@ -458,7 +448,10 @@ export function TerminalView({
           try {
             console.log(`[Jarvis] Checking if existing session ${existingSessionId} is active...`);
             const activeSessions = await invoke<BackendTerminalInfo[]>('terminal_list');
-            isExistingSessionActive = activeSessions.some((s) => s.sessionId === existingSessionId);
+            isExistingSessionActive = activeSessions.some((s) => (
+              s.sessionId === existingSessionId &&
+              (s.projectId ?? null) === (projectId ?? null)
+            ));
             console.log(`[Jarvis] Active check result for ${existingSessionId}: ${isExistingSessionActive}`);
           } catch (listErr) {
             console.error('[Jarvis] Failed to list terminal sessions:', listErr);
@@ -479,7 +472,10 @@ export function TerminalView({
           } else if (existingSessionId == null && paneId) {
             console.log(`[Jarvis] No existing session id for pane ${paneId} (app startup). Looking for historical transcript by paneId...`);
             const sessions = Object.values(useTerminalTranscriptStore.getState().sessions);
-            const oldSession = sessions.find((s) => s.paneId === paneId);
+            const oldSession = sessions.find((s) => (
+              s.paneId === paneId &&
+              (s.projectId ?? null) === (projectId ?? null)
+            ));
             if (oldSession) {
               console.log(`[Jarvis] Found historical transcript for pane ${paneId} under old session ${oldSession.sessionId}`);
               oldTranscript = oldSession.rawText || oldSession.text || '';
@@ -515,6 +511,7 @@ export function TerminalView({
             paneId: paneId,
             agentSlug: agentSlug ?? null,
             command: command ?? null,
+            projectId: projectId ?? null,
           });
 
         } else {
@@ -561,6 +558,7 @@ export function TerminalView({
         paneId,
         agentSlug: agentSlugRef.current,
         command: startupCommand ?? command ?? null,
+        projectId: projectId ?? null,
       });
       onReadyRef.current?.(sid);
       if (spawnedFresh && startupCommand) {
@@ -714,6 +712,18 @@ export function TerminalView({
     window.addEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
     return () => window.removeEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
   }, [paneId]);
+
+  useEffect(() => {
+    const onClear = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId: string }>).detail;
+      if (detail?.sessionId === activeSessionId) {
+        ignoreClearsUntilRef.current = 0; // reset ignore window on manual clear
+        termRef.current?.clear();
+      }
+    };
+    window.addEventListener('jarvis:terminal:clear', onClear as EventListener);
+    return () => window.removeEventListener('jarvis:terminal:clear', onClear as EventListener);
+  }, [activeSessionId]);
 
   useEffect(() => {
     dictatingRef.current = dictating;

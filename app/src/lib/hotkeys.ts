@@ -51,9 +51,12 @@ export function matchesHotkey(e: KeyboardEvent, hotkey: Hotkey): boolean {
 
   // Normalize the key: 'enter', 'escape', 'space', '/', single chars
   const eKey = e.key.toLowerCase();
+  const normalizedKey = key.replace(/[\s_-]/g, '');
+  const normalizedEventKey = eKey.replace(/[\s_-]/g, '');
   if (key === 'space') return eKey === ' ' || eKey === 'spacebar';
   if (key === 'esc' || key === 'escape') return eKey === 'escape';
   if (key === 'enter') return eKey === 'enter';
+  if (normalizedKey === 'capslock') return normalizedEventKey === 'capslock';
   // Special handling for backslash because '+' separator collides
   if (key === '\\' || key === 'backslash') return eKey === '\\';
   return eKey === key;
@@ -86,15 +89,18 @@ export const HOTKEYS = {
   SEND: 'Mod+Enter',
   BROADCAST: 'Mod+Shift+Enter',
   PUSH_TO_TALK: 'Mod+Space',
-  TOGGLE_TODO: 'Mod+Shift+T',
   SETTINGS: 'Mod+,',
   ESCAPE: 'Escape',
   // V2
   TOGGLE_FULLSCREEN: 'Mod+Shift+F',
   AMBIENT_TOGGLE: 'Mod+Shift+.',
-  COMPOSER_STT: 'Mod+Shift+M',
+  COMPOSER_STT: 'Ctrl+CapsLock',
   SCHEDULE: 'Mod+Shift+S',
   LAUNCHER: 'Mod+Shift+L',
   /** Jarvis Assistant — natural-language command bar. */
   ASSISTANT: 'Mod+J',
+  JARVIS_BUBBLE: 'Shift+Tab',
+  // V3
+  /** Actions palette — fire any registered action by hand or pick a custom tool. */
+  ACTIONS: 'Mod+Shift+A',
 } as const;

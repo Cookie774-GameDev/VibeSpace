@@ -8,6 +8,7 @@ import type { Message } from '@/types';
 
 export interface MessageBubbleProps {
   message: Message;
+  compact?: boolean;
 }
 
 const spring = { type: 'spring' as const, stiffness: 400, damping: 30, mass: 0.8 };
@@ -20,7 +21,7 @@ function extractText(message: Message): string {
     .trim();
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, compact = false }: MessageBubbleProps) {
   const agent = useAgentStore((s) => (message.agent_id ? s.agents[message.agent_id] : undefined));
 
   const slug = agent?.slug ?? message.agent_id ?? 'jarvis';
@@ -58,10 +59,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         transition={spring}
         className="flex w-full justify-center"
       >
-        <div className="max-w-[60ch] rounded-md border border-dashed border-border bg-elevated/60 px-3 py-2 text-center">
+        <div className={cn('rounded-md border border-dashed border-border bg-elevated/60 px-3 py-2 text-center', compact ? 'max-w-full text-metadata' : 'max-w-[60ch]')}>
           <div className="flex flex-col gap-1.5 text-secondary text-muted-foreground">
             {message.parts.map((part, i) => (
-              <MessagePart key={i} part={part} allParts={message.parts} />
+              <MessagePart key={i} part={part} allParts={message.parts} messageId={message.id} chatId={message.chat_id} />
             ))}
           </div>
         </div>
@@ -80,7 +81,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         className="flex w-full flex-col gap-1.5"
       >
         {message.parts.map((part, i) => (
-          <MessagePart key={i} part={part} allParts={message.parts} />
+          <MessagePart key={i} part={part} allParts={message.parts} messageId={message.id} chatId={message.chat_id} />
         ))}
       </motion.div>
     );
@@ -96,11 +97,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         transition={spring}
         className="flex w-full justify-end"
       >
-        <div className="group flex max-w-[80%] flex-col items-end gap-1">
-          <div className="rounded-lg bg-muted px-3 py-2 text-foreground">
+        <div className={cn('group flex flex-col items-end gap-1 min-w-0', compact ? 'max-w-[94%]' : 'max-w-[80%]')}>
+          <div className="rounded-lg bg-muted px-3 py-2 text-foreground min-w-0 w-full overflow-hidden break-all">
             <div className="flex flex-col gap-2">
               {message.parts.map((part, i) => (
-                <MessagePart key={i} part={part} allParts={message.parts} />
+                <MessagePart key={i} part={part} allParts={message.parts} messageId={message.id} chatId={message.chat_id} />
               ))}
             </div>
           </div>
@@ -124,30 +125,31 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       transition={spring}
       className="flex w-full justify-start"
     >
-      <div className="flex max-w-[88%] items-start gap-2">
-        <Avatar seed={slug} size={28} className="mt-0.5 shrink-0" />
+      <div className={cn('flex min-w-0 items-start', compact ? 'max-w-[98%] gap-1.5' : 'max-w-[88%] gap-2')}>
+        <Avatar seed={slug} size={compact ? 22 : 28} className="mt-0.5 shrink-0" />
         <div className="group flex min-w-0 flex-col gap-1">
-          <div className="flex items-baseline gap-2">
+          <div className="flex min-w-0 items-baseline gap-1.5">
             <span className="text-ui-strong text-foreground">{agent?.name ?? 'Assistant'}</span>
             <span className="text-metadata text-muted-foreground">
               {formatRelative(message.created_at)}
             </span>
             {message.usage?.model && (
-              <span className="text-metadata text-muted-foreground font-mono truncate max-w-[20ch]">
+              <span className={cn('text-metadata text-muted-foreground font-mono truncate', compact ? 'max-w-[10ch]' : 'max-w-[20ch]')}>
                 {message.usage.model}
               </span>
             )}
           </div>
           <div
             className={cn(
-              'border-l pl-3 py-0.5',
+              'border-l py-0.5 min-w-0',
+              compact ? 'pl-2 text-secondary' : 'pl-3',
               // Subtle agent tint on hover via class? We use inline style for the dynamic color.
             )}
             style={{ borderLeftColor: agentColor, borderLeftWidth: 1 }}
           >
             <div className="flex flex-col gap-2">
               {message.parts.map((part, i) => (
-                <MessagePart key={i} part={part} allParts={message.parts} />
+                <MessagePart key={i} part={part} allParts={message.parts} messageId={message.id} chatId={message.chat_id} />
               ))}
             </div>
           </div>

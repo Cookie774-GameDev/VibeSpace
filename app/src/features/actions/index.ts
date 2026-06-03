@@ -1,0 +1,1 @@
+export { ActionsPalette } from './ActionsPalette';

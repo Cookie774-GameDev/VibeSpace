@@ -10,13 +10,15 @@ export interface AvatarProps extends React.HTMLAttributes<HTMLDivElement> {
   src?: string;
   /** Pixel size; default 24 */
   size?: number;
+  /** Optional icon/content rendered instead of initials. */
+  children?: React.ReactNode;
 }
 
 /**
  * A deterministic avatar - colored gradient circle with initials.
  * Used everywhere we display an agent or user.
  */
-export function Avatar({ seed, initials, src, size = 24, className, style, ...props }: AvatarProps) {
+export function Avatar({ seed, initials, src, size = 24, className, style, children, ...props }: AvatarProps) {
   const baseHue = seed ? hueFromString(seed) : 220;
   const hue2 = (baseHue + 60) % 360;
   const gradient = `linear-gradient(135deg, hsl(${baseHue}, 70%, 60%) 0%, hsl(${hue2}, 70%, 50%) 100%)`;
@@ -38,6 +40,8 @@ export function Avatar({ seed, initials, src, size = 24, className, style, ...pr
     >
       {src ? (
         <img src={src} alt="" className="h-full w-full object-cover" />
+      ) : children ? (
+        children
       ) : (
         <span style={{ lineHeight: 1 }}>{(initials ?? seed ?? '?').slice(0, 2).toUpperCase()}</span>
       )}

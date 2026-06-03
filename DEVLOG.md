@@ -1,6 +1,165 @@
-# Jarvis - Development Log
+## 2026-06-03 - v0.1.17 Terminal Erase Confirmation, Font Customization, Inline Renaming & Freeze Fixes
 
-Append-only log of every significant development action. Each entry: timestamp, actor, summary, files touched.
+**Actor:** Antigravity (Jarvis AI)
+
+**Goal:** Implement hold-to-confirm Eraser button, inline renaming for terminals, global default font-size slider, extended font cycle ranges, and offload blocking Rust-side PTY calls to prevent random UI freezes.
+
+**Result:** Completed all implementation steps successfully. TypeScript typecheck and Cargo build check are green. Silently bumped all app configuration files to version 0.1.17.
+
+### Changes Made:
+- **Stateful Erase Confirmation**: Pressing and holding the eraser icon fills a background progress bar over 1.5 seconds. Clicking the subsequent "Confirm?" button dispatches a custom event to visually clear xterm, wipes the Zustand transcript store, and writes `\x0c` to ConPTY. A 3.5s auto-reset restores the button if not confirmed.
+- **Global Terminal Default Font Size Slider**: Added an accent-cyan range slider (1px to 72px) under Settings -> Appearance linked to the UI store's `defaultTerminalFontSize` key.
+- **Unclamped Font Cycling**: Individual terminal "T" font size cycles through `[10, 11, 12, 13, 14, 16, 18, 20]` without auto-scaling clamps.
+- **Inline Rename**: Double-clicking terminal titles (or triggering rename from the context menu) mounts an inline text input styled with `border-accent-copper/60 bg-paper`, auto-saving on Blur/Enter and cancelling on Escape.
+- **PTY Thread Offloading**: Wrapped blocking `write_all`, `flush`, and `resize` in `spawn_blocking` inside `terminal.rs` and took ownership of `PtyHandle` on `terminal_kill` to avoid thread deadlocks.
+- **Metadata Version Bumps**: Bumped app version to `0.1.17` across `package.json`, `app/package.json`, `Cargo.toml`, `tauri.conf.json`, `releases.ts`, `CHANGELOG.md`, and updated the `EMPIRE_SOVEREIGN_DIRECTORY.md`.
+
+---
+
+## 2026-06-02 - v0.1.15 Production Polish Continuation
+
+**Actor:** Codex CLI
+
+**Goal:** Continue the full Jarvis One production update across terminal persistence/performance, Context file drag/drop, account/subscription/admin access, Jarvis Call gating, silent-update warnings, About/What's New copy, ambient audio, usage reporting, and production setup documentation.
+
+**Result:** Implemented another concrete production pass and verified the Windows release/install path. macOS/Linux build verification and a trusted production Authenticode certificate are still pending.
+
+- Hardened terminal behavior: panes stay mounted across fullscreen transitions, startup commands do not rerun on reattach/same-project moves, terminal system prompts are no longer printed, false terminal-complete notifications were removed, transcript persistence is debounced, and native xterm scrollbars are hidden while wheel/touchpad scrolling remains.
+- Tightened Context/file drag-drop: project Context root drags resolve to the real `context_map.json`, dragged files append paths into chat composer text, and terminal drops paste raw paths instead of executable wrappers.
+- Added Account route/page from the top-left `J` avatar with plan, billing, key count, usage, and Jarvis Call status.
+- Added admin entitlement helpers and applied Jarvis Call gating to CallButton, CallModal, inline TopBar call button, and compact overflow call row.
+- Added silent-update warning host with 1-hour, 30-minute, 5-minute warnings, Update Later, snooze, and signed-update install action.
+- Fixed ambient soundscape resume behavior after browser audio-policy gestures.
+- Updated Plans page active-tier background and centered plan card icons.
+- Added `/usage` summary support using local monthly totals for all providers, OpenAI live usage/cost endpoints, and OpenRouter live current-key usage/limit data when the linked key has compatible access.
+- Added a lightweight Web Speech wake-word host for "Hey Jarvis" / "Okay Jarvis", a visible wake bubble, and `Shift+Tab` to summon Jarvis.
+- Removed duplicate hotkey ownership from `AppShell` and `VoiceModal`; root hotkey hosts now own global toggles to prevent double-fire behavior.
+- Extended Custom Tools beyond single-action presets: tools can now store ordered built-in action workflows, the Tools page has a workflow JSON editor/template, and the action registry exposes `custom.createWorkflowTool` so Jarvis can create complex reusable tools.
+- Updated Settings -> About, What's New, `.env.example`, `CHANGELOG.md`, `README.md`, `SETUP.md`, and added `docs/09-jarvis-calling-account-release.md`.
+- Updated cross-platform release docs/installers and GitHub workflows: Unix installer tolerates Jarvis One asset names, `DOWNLOAD.md` reflects `0.1.15`, release workflow points to `jarvis-one` and Tauri signing secrets, and CI no longer soft-fails Vitest.
+- Added `scripts/sign-windows.ps1` and wired generated Tauri signing config into local and GitHub Windows release builds. This puts Authenticode signing in Tauri's `bundle.windows.signCommand` phase, before updater `.sig` files are generated, avoiding invalid signatures from post-build signing.
+- Tightened `scripts/release-windows.ps1` so `SHA256SUMS.txt`, the file summary, and the manual `gh release create` hint only include the current version's release assets instead of every older artifact left in `releases\`.
+
+**Verification so far:** `npm --prefix app run typecheck`, `npm --prefix app run test` (11 files / 106 tests), `npm --prefix app run build`, and `cargo check` pass. `npm run release:windows` passes when `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are loaded from the local `.tauri` key files; it rebuilt `0.1.15` NSIS/MSI installers, generated Tauri updater `.sig` files, and wrote `releases/latest.json` plus current-only `releases/SHA256SUMS.txt`. Built `app/src-tauri/target/release/jarvis.exe` reports `ProductVersion=0.1.15`, `releases/latest.json` points at the `Cookie774-GameDev/jarvis-one` `Jarvis One_0.1.15_x64-setup.exe` asset, and the local silent NSIS install succeeded with `%LOCALAPPDATA%\Jarvis One\jarvis.exe` reporting `ProductVersion=0.1.15`. The generated Windows signing hook now works, but this local build remains Authenticode `NotSigned` because no trusted certificate env was provided. `install/install.sh` was hardened for Jarvis One macOS/Linux asset names, but this Windows host cannot run `bash -n` because the WSL/bash service is not installed. macOS/Linux builds remain pending.
+
+---
+
+## 2026-06-02 - v0.1.14 Inspector Hotfix, Slash Commands, Command Parser, STT Optimization
+
+**Actor:** CommandCode
+
+**Goal:** Fix Inspector infinite-loop crash, add slash command autocomplete typeahead (fuzzy match), implement /contextmap and /file commands, enhance command parser with fuzzy fallback suggestions and new patterns, optimize STT recording pipeline, and enrich Jarvis system prompt with full app-surface awareness.
+
+**Result:** All changes typechecked and compiled. Ready for silent update.
+
+### Inspector Infinite-Loop Fix
+- Fixed Zustand selector anti-pattern in `Inspector.tsx` line 81: changed object-destructured selector that returned a new object on every render to a simple function reference.
+- Removed unused `inspectorOpen` selector — only `setInspectorOpen` was actually consumed.
+
+### Slash Command Autocomplete
+- Created `features/chat/SlashCommandTypeahead.tsx` — a cmdk-based typeahead panel with 21 registered slash commands, icons, descriptions, and `takesArg`/`argPlaceholder` metadata.
+- Integrated into `Composer.tsx`: typing `/` at position 0 or after whitespace triggers a popover showing fuzzy-matched commands.
+- Full keyboard navigation: ArrowUp/Down cycle through commands, Enter/Tab inserts the selected command, Escape dismisses.
+- Slash commands take priority over mention (@agent) typeahead when both contexts are active.
+
+### New Slash Commands
+- `/contextmap` — lists all active context maps with node counts. `/contextmap <name>` attaches the matching map as a ContextAttachment to the chat.
+- `/file <path>` — attaches a project file to the chat. `/file` alone shows usage help.
+
+### Command Parser Enhancements
+- Added `suggestions` field to `unknown` intent in `intents.ts` for fuzzy fallback.
+- Added `suggestClosestCommands()` function in `parse.ts` with 40 known command patterns; scores user input against keyword overlap and returns top 3 examples.
+- `execute.ts` surfaces suggestions inline: "Did you mean: X, Y, Z?"
+- Added new patterns: inspector toggle/show/hide, quick task creation shortcuts, ambient toggle, wellness/break commands.
+- Expanded `JARVIS_COMMAND_CATALOG` with 7 new entries (break, inspector, pause, rest).
+
+### STT Recording Optimization
+- Reduced `ScriptProcessor` buffer from 4096 to 2048 samples (~46ms per chunk instead of ~92ms) for lower latency activity detection and smoother waveform updates.
+
+### System Prompt Enhancement
+- Extended the AI system prompt addendum (`promptAddendum.ts`) with a comprehensive "App Surfaces You Control" section.
+- Describes all app surfaces (NavPane, Canvas, Inspector, Command Palette, Settings, Voice Modal, Ambient, Wellness Break, To-Do Drawer, Quick Launcher, Actions Palette) so Jarvis has full spatial awareness of the app it can control.
+
+### Performance Audit
+- Scanned entire `app/src/` tree for Zustand selector anti-patterns (object returns from selectors). Zero remaining instances. The single instance in `Inspector.tsx` was the only one and has been fixed.
+
+### Files Changed
+- `app/src/components/layout/Inspector.tsx` — Zustand selector fix
+- `app/src/features/chat/SlashCommandTypeahead.tsx` — new file
+- `app/src/features/chat/Composer.tsx` — slash typeahead integration, /contextmap and /file commands, STT buffer size optimization
+- `app/src/features/assistant/intents.ts` — suggestions field on unknown
+- `app/src/features/assistant/parse.ts` — new patterns, suggestClosestCommands
+- `app/src/features/assistant/execute.ts` — suggestion surfacing in fail message
+- `app/src/features/assistant/commands.ts` — 7 new catalog entries
+- `app/src/lib/actions/promptAddendum.ts` — App Surfaces You Control section
+
+
+---
+
+## 2026-06-02 - v0.1.13 Terminal, Sidebar Jarvis, and Dictation Silent Update
+
+**Actor:** OpenCode for viper
+
+**Goal:** Polish terminal drag/drop, add self-made Jarvis commands and multi-step execution, make speech-to-text global with `Ctrl+Caps Lock` and a 30-second idle timeout, keep the right-side Jarvis chat project-connected, fix sidebar clipping, and ship via silent updater.
+
+**Result:** Built and silently installed Jarvis One `0.1.13`.
+
+- Changed same-project terminal pane drops to swap positions instead of insert-shifting the grid.
+- Added terminal drag polish: hidden source tile, white drop outline, and `Escape` cancellation for the right-drag path.
+- Scoped terminal and Context drop events to the chat composer that received them, preventing main/sidebar double-consumption and removing forced Chat-route navigation from terminal drops.
+- Added AssistantBar multi-step `then` execution plus self-made custom command creation/running backed by the existing Custom Tools/action registry.
+- Added `Ctrl+Caps Lock` speech-to-text dispatch for focused chat composers and terminal panes.
+- Added shared Web Speech inactivity timeout and Groq recorder audio-activity timeout after 30 seconds of silence.
+- Reworked the Inspector Jarvis tab to use compact chat rendering and select/create chats only for the active project without mutating the main active chat.
+- Forced TerminalView/xterm hosts to fill and clip to their pane width to remove the left-side sliver.
+
+**Verification:** `npm --prefix app run typecheck`, `npm --prefix app run test`, `npm --prefix app run build`, `cargo check`, release pipeline `npm run release:windows`, local silent installer, installed executable version check, `releases/latest.json` check.
+
+**Files touched:** `TileGrid.tsx`, `TerminalView.tsx`, `TerminalsPage.tsx`, `Composer.tsx`, `ChatView.tsx`, `ChatThread.tsx`, `MessageBubble.tsx`, `Inspector.tsx`, `VoiceService.ts`, `VoiceModal.tsx`, `useGlobalHotkeys.tsx`, `hotkeys.ts`, assistant parser/executor/bar/commands, `globals.css`, release metadata/version files, `CHANGELOG.md`, `DEVLOG.md`.
+
+---
+
+## 2026-06-02 - v0.1.12 Interactive Context Map Silent Update
+
+**Actor:** OpenCode for viper
+
+**Goal:** Replace the card-style Context skill tree with a cozy interactive map, add saved-key provider selection for map generation, make expansion arrow-only, add Context Map commands, and ship via the silent updater.
+
+**Result:** Built and silently installed Jarvis One `0.1.12`.
+
+- Rebuilt the Context workspace around a large SVG map with circular nodes, string links, left-click selection for nodes/strings, right-click panning, wheel zoom, Center Map recovery, and a white creation flash.
+- Added saved-provider generation support for Google, Groq, OpenAI, and Anthropic keys, with local fallback preserved when no configured key is selected.
+- Added file metadata to Context nodes and dragged Context payloads: size, created date, modified date, children, tags, and model metadata.
+- Changed Context and Files sidebar branches so only the dropdown arrow expands/collapses; clicking labels selects/opens instead of toggling.
+- Added assistant commands for creating/generating the Context Map and recentering it.
+- Built signed `0.1.12` Windows NSIS/MSI artifacts, staged updater metadata, and ran a silent local NSIS install.
+- Verified `%LOCALAPPDATA%\Jarvis One\jarvis.exe` reports `ProductVersion 0.1.12` and `releases/latest.json` reports `0.1.12`.
+
+**Verification:** `npm --prefix app run typecheck`, `npm --prefix app run test`, `npm --prefix app run build`, `cargo check`, release pipeline `npm run release:windows`, local silent NSIS installer, installed executable version check, `releases/latest.json` check.
+
+**Files touched:** `ContextPage.tsx`, `tree.ts`, `SidebarContextTree.tsx`, `SidebarFilesTree.tsx`, `fs.ts`, `fsread.rs`, assistant parser/executor/bar/commands, release metadata/version files, `CHANGELOG.md`, `DEVLOG.md`.
+
+---
+
+## 2026-06-02 - v0.1.11 Context Skill Tree Silent Update
+
+**Actor:** OpenCode for viper
+
+**Goal:** Replace the user-facing Skills surface with project-scoped Context, generate a project skill tree, make Context draggable into chat/terminals, inject Context into AI prompts, add sidebar file browsing, and silently install the update.
+
+**Result:** Built and silently installed Jarvis One `0.1.11`.
+
+- Added the Context workspace with `Make Skill Tree`, project-root storage, Gemini-backed generation when `apiKeys.google` is configured, and local fallback tree generation.
+- Stored generated Context trees per project and injected them into the AI runtime alongside project prompts, attached files, attached terminals, and connected terminal files.
+- Added Context drag/drop MIME support for chat and terminals, including Context chips and terminal power-up feedback.
+- Replaced the visible Skills route/sidebar entry with Context, kept `/skills` and `open skills` as Context aliases, and updated route tools/actions/onboarding/breadcrumbs.
+- Added recursive sidebar project files, draggable file paths, full Files-page handoff, and native folder/file pickers for desktop path inputs.
+- Built signed `0.1.11` Windows NSIS/MSI artifacts, staged updater metadata, and ran a silent local NSIS install.
+- Verified `%LOCALAPPDATA%\Jarvis One\jarvis.exe` reports `ProductVersion 0.1.11` and `releases/latest.json` reports `0.1.11`.
+
+**Verification:** `npm --prefix app run typecheck`, `npm --prefix app run test`, `npm --prefix app run build`, `cargo check`, release pipeline `npm run release:windows`, local silent installer, installed executable version check, `releases/latest.json` check.
+
+**Files touched:** `app/src/features/context/*`, `FilesPage.tsx`, `projectFiles.ts`, `SidebarFilesTree.tsx`, `NavPane.tsx`, `PageRouter.tsx`, `TopBar.tsx`, `Inspector.tsx`, `Composer.tsx`, `ChatView.tsx`, `TerminalView.tsx`, `ConnectedFilesButton.tsx`, `lib/ai/context.ts`, `lib/ai/runtime.ts`, assistant route parsing/actions, MCP route tool, release metadata/version files, `CHANGELOG.md`, `DEVLOG.md`, `releases/latest.json`, release installers/signatures.
 
 ---
 
@@ -1308,6 +1467,32 @@ Verification:
 
 ---
 
+# 2026-06-02 - Context Files, Right-Click UX, Skills, Commands, Benchmarks, Terminal Agent Prompts
+
+**Actor:** Codex for viper
+
+**Goal:** Polish multiple Jarvis One production flows: real Context map files and drag paths, remove the native right-click menu during right-drag, add a themed app context menu, connect Kanban/custom-command actions to Jarvis, restore Skills, harden Benchmarks, and enforce the three-layer terminal agent prompt model.
+
+**Result:** Context map creation now writes `context_map.json` into the selected project root and drags that path into chat/terminals. Right-click dragging suppresses the browser menu after drop, while normal app right-click opens a themed Jarvis command menu. Skills is restored as a first-class route. Jarvis can propose approved actions to create Kanban tasks and save custom terminal commands. Terminal agent panes get a protected shell-comment prompt prelude before startup commands. Benchmarks try multiple LMArena endpoints before snapshot fallback.
+
+**Verification:** `npm --prefix app run typecheck`, `npm --prefix app run build`, `cargo check`, signed `npm run release:windows`, local silent NSIS installer, installed executable version check (`0.1.15`), and `releases/latest.json` check.
+
+---
+
+# 2026-06-02 - Silent Update Release Channel Fix
+
+**Actor:** Codex for viper
+
+**Goal:** Fix the failed silent update path after the repo rebrand and prevent the updater/installer from resolving retired release URLs.
+
+**Result:** Updated the Windows installer, Unix installer, Tauri updater endpoint, release staging script, and README repo links from `anomalyco/jarvis` / `Cookie774-GameDev/jarvis` to `Cookie774-GameDev/jarvis-one`. Regenerated `releases/latest.json` and `releases/SHA256SUMS.txt` for `0.1.14`, so the staged updater manifest now points at the correct Jarvis One GitHub Releases URL.
+
+**Verification:** `npm run release:stage` completed successfully and rebuilt updater metadata/checksums.
+
+**Security note:** Tauri updater signatures are present and verified by the app updater. Windows SmartScreen reputation warnings can still occur for unsigned public `.exe` installers until an Authenticode code-signing certificate is used; that cannot be fixed safely in code.
+
+---
+
 ## 2026-06-01 - v0.1.7 Files Workspace + Chat/Terminal File Context
 
 **Actor:** Jarvis (opencode) for viper
@@ -1485,5 +1670,51 @@ Design: cozy Claude-inspired palette (cream `#FAF6EE`, copper `#B5613A`, amber `
 - The `JARVIS_LINKS` config block at the bottom of `site/index.html` has Discord and YouTube as `#placeholder` — swap in real URLs when ready.
 - Domain recommendation `vibejarvis.com` (~$6 first year, ~$10/yr renewal) — short, .com, aligns with product positioning.
 - First Actions run failed predictably because `configure-pages` requires Pages to be enabled first. Not a bug; the fix was enabling Pages then pushing again.
+
+---
+
+## 2026-06-03 - v0.1.16 Terminal Service Singleton, Project Ownership & Silent Update Validation
+
+**Actor:** Codex for viper
+
+**Goal:** Stabilize Jarvis One's background terminal service behavior before shipping: prevent duplicate service owners, keep terminals strictly project-scoped, make terminal persistence fast and deterministic, clean up current error spam, and validate the silent update path.
+
+**Result:** Added a Tauri single-instance owner, fixed close-to-tray/reopen duplicate processes, removed unsafe boot reconciliation, stamped terminal pane/transcript/backend records with project ownership, repaired malformed legacy terminal state on load, debounced transcript persistence, regenerated Windows updater artifacts, and verified local silent install plus installed close/reopen singleton behavior.
+
+### Root causes found
+
+1. **Duplicate service owners after close-to-tray:** `RunEvent::ExitRequested` was globally prevented, which could keep second-instance launch attempts alive after the main window was hidden.
+2. **Terminal cross-project mixing:** pane trees and transcript records did not consistently carry project ownership, so saved state from one project could be restored into another.
+3. **Terminal disappearance/kill risk:** boot-time terminal reconciliation could call the backend with an empty or stale active-session list, causing valid PTYs to be killed.
+4. **Terminal persistence lag:** transcript persistence used Zustand `persist`, causing full transcript state serialization on high-volume terminal output.
+
+### Files changed
+
+- `app/src-tauri/src/lib.rs` - single-instance plugin registration, tray close-to-background behavior, and removal of broad exit prevention.
+- `app/src-tauri/src/terminal.rs` - safe no-op guard for empty terminal reconciliation requests.
+- `app/src/App.tsx` - removed unsafe boot terminal reconciliation.
+- `app/src/features/terminals/paneTree.ts` - added stable `projectId` ownership on terminal leaves.
+- `app/src/features/terminals/terminalProjectMove.ts` - added schema repair, project stamping, wrong-owner pruning, and backend/transcript move synchronization.
+- `app/src/features/terminals/transcriptStore.ts` - added project ownership and manual debounced localStorage persistence.
+- `app/src/features/terminals/TerminalView.tsx` - filtered session attachment and historical transcript lookup by project.
+- `app/src/features/terminals/terminalProjectMove.test.ts` - added project-stamping, wrong-owner repair, and intentional move tests.
+- `app/src/features/terminals/transcriptStore.test.ts` - added debounced persistence and project ownership tests.
+- `CHANGELOG.md` - documented the v0.1.16 terminal/service fixes.
+
+### Verification
+
+- `cargo check` - passed.
+- `npm --prefix app run typecheck` - passed.
+- `npm --prefix app run test` - 12 files passed, 111 tests passed.
+- `npm run release:windows` - passed and regenerated `releases/latest.json`, updater signatures, NSIS, MSI, and `SHA256SUMS.txt`.
+- Local silent install smoke - `JARVIS_LOCAL=1`, `JARVIS_SILENT=1`, NSIS installer exit code `0`.
+- Installed duplicate launch smoke - launching installed Jarvis twice kept one running `jarvis.exe`.
+- Installed close/reopen smoke - `CloseMainWindow()` kept the background process alive; reopening focused/reused the existing owner and kept one running `jarvis.exe`.
+- Log scan - no Jarvis local log files or Windows Application errors found after startup/reopen smoke.
+
+### Known limits
+
+- Windows Authenticode status remains `NotSigned` unless `WINDOWS_CERT_BASE64` or `WINDOWS_CERT_THUMBPRINT` is configured; Tauri updater signatures are present.
+- Windows artifacts are validated on this host. macOS/Linux packaging remains unverified on this Windows machine.
 
 

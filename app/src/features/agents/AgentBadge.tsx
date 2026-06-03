@@ -11,6 +11,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import type { Agent } from '@/types';
 import { Avatar } from '@/components/ui/avatar';
 import { cn, hueFromString } from '@/lib/utils';
+import { getAgentIcon } from './icons';
 
 const badgeVariants = cva(
   'inline-flex items-center gap-1.5 select-none transition-colors',
@@ -73,11 +74,18 @@ export const AgentBadge = React.forwardRef<HTMLSpanElement, AgentBadgeProps>(
     const hue = agent.color_hue ?? hueFromString(agent.slug);
     const sizeKey = size ?? 'md';
     const seed = `${agent.slug}-${hue}`;
-    const initials = (agent.name || agent.slug || '?').slice(0, 2);
+    const Icon = getAgentIcon(agent);
+    const iconSize = Math.max(10, Math.floor(avatarSize[sizeKey] * 0.66));
 
     return (
       <span ref={ref} className={cn(badgeVariants({ variant, size }), className)} {...props}>
-        <Avatar size={avatarSize[sizeKey]} seed={seed} initials={initials} />
+        <Avatar
+          size={avatarSize[sizeKey]}
+          seed={seed}
+          className="ring-1 ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)]"
+        >
+          <Icon size={iconSize} strokeWidth={2.4} aria-hidden />
+        </Avatar>
         {showName && (
           <span className="font-medium text-foreground truncate max-w-[160px]">
             {label ?? agent.name}

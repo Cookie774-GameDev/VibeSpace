@@ -27,3 +27,12 @@ export { mockProvider } from './providers/mock';
 export { anthropicProvider, ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
 export { openaiProvider, OPENAI_DEFAULT_MODEL } from './providers/openai';
 export { googleProvider, GOOGLE_DEFAULT_MODEL } from './providers/google';
+export { groqProvider, GROQ_DEFAULT_MODEL } from './providers/groq';
+export {
+  ollamaProvider,
+  OLLAMA_DEFAULT_MODEL,
+  OLLAMA_DEFAULT_BASE,
+  ollamaBaseUrl,
+  listOllamaModels,
+  isOllamaReachable,
+} from './providers/ollama';

@@ -39,15 +39,27 @@ function readEnv(key: string): string | undefined {
 
 const STRIPE_URL = readEnv('VITE_STRIPE_CHECKOUT_URL');
 
+// Labels + descriptions for every tier in the `Tier` union. The set
+// expanded when the Stripe billing migration added paid sub-tiers
+// (starter / pro / ultra); keeping the records exhaustive here keeps
+// `Record<Tier, string>` honest. The original 'plus' tier survives as
+// the legacy hosted-proxy plan so existing subscribers don't lose
+// their label.
 const TIER_LABELS: Record<Tier, string> = {
   free: 'Free',
+  starter: 'Starter',
   plus: 'Plus',
+  pro: 'Pro',
+  ultra: 'Ultra',
   'byok-only': 'BYOK only',
 };
 
 const TIER_DESCRIPTIONS: Record<Tier, string> = {
   free: 'Up to 50 hosted requests this month.',
+  starter: 'Entry paid tier — modest hosted quota.',
   plus: '$5/month. Up to 1,500 hosted requests.',
+  pro: 'Professional tier — bumped quota + priority routing.',
+  ultra: 'Ultra tier — highest quota, fastest routing.',
   'byok-only': 'Hosted proxy off. Requests use your own API keys.',
 };
 

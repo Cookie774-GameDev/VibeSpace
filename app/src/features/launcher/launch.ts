@@ -70,7 +70,7 @@ export async function launchLink(link: QuickLink): Promise<LaunchResult> {
           ui.setPaletteOpen(true);
           return { ok: true };
         case 'schedule':
-          ui.setScheduleOpen(true);
+          ui.setRoute('schedule');
           return { ok: true };
         case 'ambient':
           if (!ui.ambient) ui.setAmbient(true);

@@ -1,0 +1,35 @@
+# Release artifacts go here.
+#
+# Binaries are NOT committed to git. They are built locally with
+#   npm run release:windows
+# (or :macos / :linux when those scripts exist) and uploaded to a
+# distribution channel — currently GitHub Releases.
+#
+# What lives here:
+#   *.exe           NSIS installer (smaller, friendlier)
+#   *.msi           Windows Installer package (IT-managed deploys)
+#   *.dmg           macOS disk image
+#   *.deb / *.rpm   Linux native packages
+#   *.AppImage      Linux portable
+#   SHA256SUMS.txt  checksums for the above (committed-friendly text)
+#   RELEASE_NOTES.md per-version changelog excerpt
+#
+# Anything binary is gitignored via /releases/.gitignore — the README
+# stays so the directory is always present in the tree.
+
+# Ignore every binary artifact.
+*.exe
+*.msi
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+*.sig
+*.zip
+*.tar.gz
+
+# But keep the human-facing files.
+!README.md
+!.gitignore
+!SHA256SUMS.txt
+!RELEASE_NOTES*.md

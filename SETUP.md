@@ -19,7 +19,7 @@ copy ..\.env.example .env.local
 # Edit .env.local with your Supabase URL + anon key
 
 # 4. Run
-npm run dev
+npm run jarvis
 # Open http://localhost:5173
 ```
 
@@ -70,7 +70,7 @@ Produces:
 - **Windows:** `app/src-tauri/target/release/bundle/msi/*.msi` and `.exe` portable
 - **Mac:** `app/src-tauri/target/release/bundle/dmg/*.dmg` and `.app`
 
-For code-signing (production releases) see `docs/RELEASE.md` (TBD).
+For code-signing, Jarvis Call, account/admin setup, and production release gates, see `docs/09-jarvis-calling-account-release.md`.
 
 ## Supabase setup
 
@@ -80,8 +80,8 @@ For code-signing (production releases) see `docs/RELEASE.md` (TBD).
    - **Project URL** -> `VITE_SUPABASE_URL`
    - **anon public** key -> `VITE_SUPABASE_ANON_KEY`
 4. Paste into `app/.env.local`
-5. Run the database migration: `app/supabase/migrations/0001_initial.sql` in the Supabase SQL editor (or via `supabase db push` if you have the Supabase CLI)
-6. Restart `npm run dev`
+5. Run the database migrations from the repo root with `supabase db push` if you have the Supabase CLI, or apply the SQL files in `supabase/migrations/` from oldest to newest in the Supabase SQL editor.
+6. Restart `npm run jarvis`
 
 ## AI Provider keys (BYOK)
 

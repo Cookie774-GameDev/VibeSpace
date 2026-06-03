@@ -9,20 +9,23 @@
  *   - All work is local. No remote AI calls.
  *   - Project name resolution is case-insensitive and trims whitespace.
  *     If a name doesn't match anything, we surface a helpful nudge.
- *   - Terminal sessions are queued as DB rows only. The PTY runtime is
- *     wired in a later milestone; the assistant just lays the data layer
- *     groundwork so users can start practising the verbs.
+ *   - Terminal intents are routed into the live terminal command queue so
+ *     they spawn real PTYs or write into existing panes.
  */
 import {
   chatRepo,
   eventRepo,
   projectRepo,
   taskRepo,
-  terminalSessionRepo,
 } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { parseEventInput } from '@/features/schedule/parseEventInput';
+import { broadcastTerminalCommand, enqueueTerminalCommand } from '@/features/terminals/terminalCommandQueue';
+import { fireOutboundCall, sendOutboundMessage } from '@/features/call/outbound';
+import { formatContextTreeForPrompt, loadStoredContextTree } from '@/features/context/tree';
+import { useToolStore, slugify } from '@/features/tools/toolStore';
+import { runAction } from '@/lib/actions';
 import type { AgentId, ProjectId, WorkspaceId } from '@/types/common';
 import type { AssistantIntent, AssistantResult } from './intents';
 
@@ -158,24 +161,111 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
         // the row has a non-empty title in the eventual terminal panel.
         const command = intent.command?.trim() || '';
         const titleBase = command || 'shell';
+        if (projectId) useAuthStore.getState().setProjectId(projectId);
         for (let i = 0; i < count; i++) {
-          await terminalSessionRepo.create({
-            workspace_id: workspaceId,
-            project_id: projectId,
-            title: count === 1 ? titleBase : `${titleBase} ${i + 1}`,
-            shell_command: command,
-            // Status defaults to 'running' inside the repo; we don't have
-            // a real PTY yet so 'detached' tells the future runtime "this
-            // hasn't been attached anywhere".
-            status: 'detached',
+          enqueueTerminalCommand({
+            command,
+            label: count === 1 ? titleBase : `${titleBase} ${i + 1}`,
           });
         }
+        useUIStore.getState().setRoute('terminal');
         const verb = count === 1 ? 'terminal' : 'terminals';
         const cmdNote = command ? ` running ${command}` : '';
         const projNote = intent.project ? ` in '${intent.project}'` : '';
-        return ok(
-          `Queued ${count} ${verb}${cmdNote}${projNote}. The terminal panel will pick these up once it ships.`,
-        );
+        return ok(`Opened ${count} ${verb}${cmdNote}${projNote}.`);
+      }
+
+      // ----------------------------------------------------------------
+      case 'run_in_terminals': {
+        const command = intent.command.trim();
+        if (!command) return fail('Tell me which command to run.');
+        broadcastTerminalCommand({ command, label: command });
+        useUIStore.getState().setRoute('terminal');
+        return ok(`Running '${command}' in all terminal panes.`);
+      }
+
+      // ----------------------------------------------------------------
+      case 'create_custom_command': {
+        const name = intent.name.trim();
+        const command = intent.command.trim();
+        if (!name || !command) return fail('Custom commands need a name and a command to run.');
+        const tool = useToolStore.getState().create({
+          name,
+          description: `Run ${command} in a new terminal pane.`,
+          baseAction: 'terminal.run',
+          params: {
+            command,
+            label: name,
+            ...(intent.cwd ? { cwd: intent.cwd } : {}),
+          },
+        });
+        return ok(`Created command '${name}' as custom.${tool.slug}.`);
+      }
+
+      // ----------------------------------------------------------------
+      case 'run_custom_command': {
+        const name = intent.name.trim();
+        if (!name) return fail('Tell me which custom command to run.');
+        const tools = useToolStore.getState().list();
+        const normalized = name.toLowerCase();
+        const slug = slugify(name);
+        const tool =
+          tools.find((item) => item.slug === slug) ??
+          tools.find((item) => item.name.trim().toLowerCase() === normalized) ??
+          tools.find((item) => item.name.trim().toLowerCase().includes(normalized));
+        if (!tool) return fail(`No custom command named '${name}'. Create it first.`);
+        const result = await runAction(`custom.${tool.slug}`, {}, { source: 'user' }, { emitToast: false });
+        if (!result.ok) return fail(result.error);
+        return ok(result.summary ?? `Ran '${tool.name}'.`);
+      }
+
+      // ----------------------------------------------------------------
+      case 'ask_provider': {
+        const provider = intent.provider.toLowerCase();
+        const prompt = intent.prompt.trim();
+        if (!prompt) return fail('Tell me what to ask.');
+        const command = `${provider} ${JSON.stringify(prompt)}`;
+        enqueueTerminalCommand({ command, label: provider });
+        useUIStore.getState().setRoute('terminal');
+        return ok(`Queued ${provider} with your request.`);
+      }
+
+      // ----------------------------------------------------------------
+      case 'give_terminals_context': {
+        const projectId = useAuthStore.getState().projectId;
+        const contextParts: string[] = [];
+        if (projectId) {
+          const project = await projectRepo.getById(projectId);
+          if (project?.system_prompt_context?.trim()) contextParts.push(project.system_prompt_context.trim());
+        }
+        const tree = loadStoredContextTree(projectId);
+        if (tree) contextParts.push(formatContextTreeForPrompt(tree));
+        const context = contextParts.join('\n\n') || 'Jarvis project context is active for this workspace.';
+        const command = context.split('\n').map((line) => (line ? `# ${line}` : '#')).join('\n');
+        broadcastTerminalCommand({
+          command,
+          label: 'context',
+        });
+        useUIStore.getState().setRoute('terminal');
+        return ok('Sent project context to every terminal pane.');
+      }
+
+      // ----------------------------------------------------------------
+      case 'create_context_map': {
+        useUIStore.getState().setRoute('context');
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('jarvis:context:create-map'));
+        }, 0);
+        return ok('Creating the project Context map.');
+      }
+
+      // ----------------------------------------------------------------
+      case 'recenter_context_map': {
+        useUIStore.getState().setRoute('context');
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('jarvis:context:recenter-map'));
+        }, 0);
+        return ok('Centered the project Context map.');
       }
 
       // ----------------------------------------------------------------
@@ -225,6 +315,44 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
       }
 
       // ----------------------------------------------------------------
+      case 'schedule_call': {
+        const workspaceId = getWorkspaceId();
+        if (!workspaceId) return fail('No active workspace yet.');
+        const parsed = parseEventInput(intent.raw);
+        await eventRepo.create({
+          workspace_id: workspaceId,
+          title: parsed.title || 'Jarvis call',
+          start_at: parsed.start_at,
+          end_at: parsed.end_at,
+          all_day: false,
+          reminders: [{ offset_min: 0, channels: ['desktop', 'in_app'] }],
+          source: 'ai',
+          created_by: useAuthStore.getState().localUserId ?? 'usr_local',
+        });
+        const delay = parsed.start_at - Date.now();
+        const callContext = {
+          title: parsed.title || 'Scheduled Jarvis call',
+          details: `User requested a Jarvis call for ${new Date(parsed.start_at).toLocaleString()}.`,
+          scheduled_for: parsed.start_at,
+        };
+        if (delay <= 30_000) {
+          fireOutboundCall('manual', callContext);
+        } else if (typeof window !== 'undefined') {
+          window.setTimeout(() => fireOutboundCall('manual', callContext), delay);
+        }
+        return ok(`Scheduled Jarvis to call you at ${new Date(parsed.start_at).toLocaleString()}.`);
+      }
+
+      // ----------------------------------------------------------------
+      case 'send_phone_message': {
+        const result = await sendOutboundMessage(intent.text, 'manual', {
+          title: 'Jarvis message',
+        });
+        if (!result.ok) return fail(result.error);
+        return ok('Sent the message to your phone number.');
+      }
+
+      // ----------------------------------------------------------------
       case 'set_ambient': {
         useUIStore.getState().setAmbientActive(intent.on);
         return ok(intent.on ? 'Ambient mode on.' : 'Ambient mode off.');
@@ -257,7 +385,7 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
         return ok('Opened quick launcher.');
       }
       case 'open_schedule': {
-        useUIStore.getState().setScheduleOpen(true);
+        useUIStore.getState().setRoute('schedule');
         return ok('Opened schedule.');
       }
 
@@ -272,10 +400,28 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
       }
 
       // ----------------------------------------------------------------
+      case 'multi_step': {
+        const messages: string[] = [];
+        for (let i = 0; i < intent.steps.length; i += 1) {
+          const step = intent.steps[i]!;
+          const result = await executeIntent(step);
+          if (!result.ok) {
+            return fail(`Step ${i + 1} failed: ${result.message}`);
+          }
+          messages.push(result.message);
+        }
+        return ok(messages.join(' '));
+      }
+
+      // ----------------------------------------------------------------
       case 'unknown':
       default: {
+        const suggestions = ('suggestions' in intent ? (intent as { suggestions?: string[] }).suggestions : undefined) ?? [];
+        const hint = suggestions.length > 0
+          ? ` Did you mean: ${suggestions.slice(0, 3).map((s) => `"${s}"`).join(', ')}?`
+          : '';
         return fail(
-          "I didn't catch that. Try: 'create project tiger', 'open 4 terminals', 'fullscreen'.",
+          `I didn't catch that. Try: 'create project tiger then open 4 terminals', 'create command dev server to run npm run dev', 'call me at 3pm', or 'message me: build is done'.${hint}`,
         );
       }
     }

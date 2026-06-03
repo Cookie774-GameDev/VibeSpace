@@ -12,6 +12,7 @@
 
 import type { SkillManifest } from './loader';
 import { loadAllAgents, loadAllSkills } from './loader';
+import { notifyDone } from '@/lib/notifications';
 
 type Listener = (entries: SkillManifest[]) => void;
 
@@ -85,6 +86,7 @@ export const skillRegistry = {
     if (!cur) return;
     entries.set(name, { ...cur, enabled });
     notify();
+    void notifyDone('skills', enabled ? 'Skill enabled' : 'Skill disabled', cur.title || cur.name);
   },
 
   /** Alias of `toggle()` for the consumer that uses this name. */

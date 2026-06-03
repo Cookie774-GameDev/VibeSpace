@@ -16,36 +16,43 @@ import type { Agent, ProviderId } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { toast } from '@/components/ui/toast';
+import { devConsole } from '@/features/dev-console';
 import type { LLMProvider, LLMRequest, LLMResponse, LLMStreamChunk, LLMMessage } from './types';
 import { mockProvider } from './providers/mock';
 import { anthropicProvider, ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
 import { openaiProvider, OPENAI_DEFAULT_MODEL } from './providers/openai';
 import { googleProvider, GOOGLE_DEFAULT_MODEL } from './providers/google';
+import { groqProvider, GROQ_DEFAULT_MODEL } from './providers/groq';
+import { ollamaProvider, OLLAMA_DEFAULT_MODEL } from './providers/ollama';
 
 /**
  * All providers, keyed by their id.
  *
- * V2 OpenAI-compatible providers (xai/openrouter/groq/deepseek/mistral/
- * together) currently route through the openai-compatible adapter when keys
- * are set. Until that lands they alias to mock so type safety is preserved
- * and saved keys persist; switching the alias to `openaiCompatProvider({...})`
- * is a one-line flip when the adapter ships.
+ * `google` (Gemini 2.5 Flash Lite) is now the lead Free option Jarvis
+ * nudges new users toward — sub-second responses on a generous free tier
+ * with no card. `groq` (Llama 3.3 70B) is still wired and free, just
+ * second in line. Other OpenAI-compatible providers (xai/openrouter/
+ * deepseek/mistral/together) still alias to mock until their adapters
+ * land; their saved keys persist in the meantime so flipping the alias
+ * is a one-line change.
  */
 const providers: Record<ProviderId, LLMProvider> = {
   anthropic: anthropicProvider,
   openai: openaiProvider,
   google: googleProvider,
+  groq: groqProvider,
   mock: mockProvider,
-  // 'local' is reserved for a future local-Ollama-style provider; alias to mock for now.
-  local: mockProvider,
+  // 'local' aliases the real Ollama adapter so an agent pinned to the
+  // generic 'local' provider also runs against the user's local daemon.
+  local: ollamaProvider,
   // V2 — placeholder routing. Saved keys persist; runs go through mock.
   xai: mockProvider,
   openrouter: mockProvider,
-  groq: mockProvider,
   deepseek: mockProvider,
   mistral: mockProvider,
   together: mockProvider,
-  ollama: mockProvider,
+  // Local model daemon (no key, no internet). Real adapter.
+  ollama: ollamaProvider,
   // V3 — placeholder routing. Saved keys persist; runs go through mock.
   cohere: mockProvider,
   perplexity: mockProvider,
@@ -65,6 +72,11 @@ function defaultModelFor(p: ProviderId): string {
       return OPENAI_DEFAULT_MODEL;
     case 'google':
       return GOOGLE_DEFAULT_MODEL;
+    case 'groq':
+      return GROQ_DEFAULT_MODEL;
+    case 'ollama':
+    case 'local':
+      return useAuthStore.getState().defaultLocalModel || OLLAMA_DEFAULT_MODEL;
     default:
       return 'mock-default';
   }
@@ -78,10 +90,24 @@ function defaultModelFor(p: ProviderId): string {
  *  - If the agent specifies a real provider that's NOT available, fall back to mock
  *    (with the original model name preserved on the response so cost tables work).
  *  - If the agent is mock-default, prefer (in order):
- *      defaultProvider from auth -> anthropic -> openai -> google,
- *    using the first one that has a key. If none, stay on mock.
+ *      defaultProvider from auth -> google -> groq -> anthropic -> openai,
+ *    using the first one that has a key. Google leads because Gemini 2.5
+ *    Flash Lite is the Free-plan default and has the lowest signup friction
+ *    (one click at aistudio.google.com/apikey, no card). If none, stay on mock.
  */
 function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; model: string } {
+  const auth = useAuthStore.getState();
+
+  // Offline mode wins over everything: route all chat through the local
+  // Ollama daemon, no key, no internet. The model comes from the user's
+  // configured default local model.
+  if (auth.offlineMode) {
+    return {
+      provider: ollamaProvider,
+      model: auth.defaultLocalModel || OLLAMA_DEFAULT_MODEL,
+    };
+  }
+
   const provId = agent.model.provider;
 
   if (provId !== 'mock' && provId !== 'local') {
@@ -93,10 +119,18 @@ function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; model: 
     return { provider: mockProvider, model: agent.model.model || 'mock-default' };
   }
 
-  const pref = useAuthStore.getState().defaultProvider;
+  // `local`-pinned agents resolve straight to the Ollama adapter.
+  if (provId === 'local') {
+    return {
+      provider: ollamaProvider,
+      model: agent.model.model || auth.defaultLocalModel || OLLAMA_DEFAULT_MODEL,
+    };
+  }
+
+  const pref = auth.defaultProvider;
   const ordered: ProviderId[] = [];
   if (pref && pref !== 'mock' && pref !== 'local') ordered.push(pref);
-  for (const p of ['anthropic', 'openai', 'google'] as const) {
+  for (const p of ['google', 'groq', 'anthropic', 'openai'] as const) {
     if (!ordered.includes(p)) ordered.push(p);
   }
 
@@ -171,6 +205,16 @@ export async function runAgent(req: {
       `Provider ${provider.name} failed`,
       `${reason.slice(0, 200)}. Using mock fallback.`,
     );
+    devConsole.log({
+      channel: 'ai',
+      level: 'warn',
+      message: `AI fallback ${provider.id} → mock`,
+      detail: {
+        agent: req.agent.slug,
+        from: { provider: provider.id, model },
+        reason: reason.slice(0, 500),
+      },
+    });
 
     const fallbackAgent: Agent = {
       ...req.agent,

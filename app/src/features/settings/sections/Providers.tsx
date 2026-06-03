@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, Sparkles, Trash2, Check } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
 import type { ProviderId } from '@/types/common';
@@ -9,12 +9,23 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import { testProviderKey } from '@/lib/ai/testKey';
+import { fireApiKeySaveBurstFromElement } from '../ApiKeySaveBurst';
 
 interface ProviderRow {
   id: ProviderId;
   name: string;
   hint: string;
   placeholder: string;
+  /**
+   * If set, render an inline external link next to the provider name
+   * pointing at the signup / dashboard URL where the user can grab a
+   * free or paid key. Used today for Groq, where free Llama-3.3-70B
+   * keys are 30 seconds away with no card.
+   */
+  freeKeyUrl?: string;
+  /** Override the link text. Defaults to "Get a free key". */
+  freeKeyLabel?: string;
 }
 
 const BYOK_PROVIDERS: ProviderRow[] = [
@@ -33,8 +44,10 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'google',
     name: 'Google',
-    hint: 'Gemini Pro / Flash',
+    hint: 'Gemini 2.5 Flash Lite (free tier, no card)',
     placeholder: 'AIza...',
+    freeKeyUrl: 'https://aistudio.google.com/apikey',
+    freeKeyLabel: 'Get a free key',
   },
   // V2 — OpenAI-compatible providers. Keys persist now; live routing
   // ships when the openai-compatible adapter lands.
@@ -53,8 +66,10 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'groq',
     name: 'Groq',
-    hint: 'Fast Llama / Mixtral inference',
+    hint: 'Llama 3.3 70B, sub-second TTFT, free tier',
     placeholder: 'gsk_...',
+    freeKeyUrl: 'https://console.groq.com/keys',
+    freeKeyLabel: 'Get a free key (no card)',
   },
   {
     id: 'deepseek',
@@ -233,11 +248,13 @@ function ProviderKeyRow({ row, value, onSave, onClear }: ProviderKeyRowProps) {
   // Single source of truth: `draft`. Sync to `value` on external change.
   // Browser handles masking via type="password" - no manual char replacement.
   const [draft, setDraft] = useState(value);
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, setRevealed] = useState(() => Boolean(value));
   const [testing, setTesting] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDraft(value);
+    if (value) setRevealed(true);
   }, [value]);
 
   const dirty = draft !== value;
@@ -246,21 +263,60 @@ function ProviderKeyRow({ row, value, onSave, onClear }: ProviderKeyRowProps) {
     const trimmed = draft.trim();
     if (!trimmed) return;
     onSave(trimmed);
+    setRevealed(true);
+    fireApiKeySaveBurstFromElement(inputRef.current);
     toast.success(`${row.name} key saved`, 'Stored locally on this device.');
   }
 
   function handleTest() {
     const key = draft.trim();
-    if (!key) {
+    // For Ollama the field is a base URL, not a secret — empty just
+    // means "use the default localhost endpoint", so let it through.
+    if (!key && row.id !== 'ollama') {
       toast.warning('No key to test', `Enter a ${row.name} key first.`);
       return;
     }
     setTesting(true);
-    setTimeout(() => {
-      setTesting(false);
-      // Mock - real validation will hit the provider once that's wired.
-      toast.info(`${row.name} key looks plausible`, 'Live validation lands soon.');
-    }, 350);
+    void (async () => {
+      try {
+        const result = await testProviderKey(row.id, key);
+        switch (result.kind) {
+          case 'ok':
+            toast.success(
+              `${row.name} key works`,
+              result.detail ?? 'Provider responded successfully.',
+            );
+            break;
+          case 'invalid':
+            toast.error(
+              `${row.name} rejected the key`,
+              result.detail || 'The provider returned an authentication error.',
+            );
+            break;
+          case 'network':
+            toast.warning(
+              `Couldn't reach ${row.name}`,
+              row.id === 'ollama'
+                ? 'Is the Ollama daemon running? Start it and try again.'
+                : `${result.detail}. Check your internet or proxy.`,
+            );
+            break;
+          case 'unconfigured':
+            toast.warning('No key entered');
+            break;
+          case 'unsupported':
+            toast.info(
+              `${row.name} live validation pending`,
+              'The key is saved; live validation lands when its adapter does.',
+            );
+            break;
+        }
+      } catch (err) {
+        toast.error(`${row.name} test failed`, (err as Error).message);
+      } finally {
+        setTesting(false);
+      }
+    })();
   }
 
   function handleClear() {
@@ -273,15 +329,26 @@ function ProviderKeyRow({ row, value, onSave, onClear }: ProviderKeyRowProps) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-end justify-between gap-2">
-        <Label htmlFor={`key-${row.id}`}>
-          {row.name}
-          <span className="text-metadata text-muted-foreground font-normal ml-2">{row.hint}</span>
+        <Label htmlFor={`key-${row.id}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span>{row.name}</span>
+          <span className="text-metadata text-muted-foreground font-normal">{row.hint}</span>
+          {row.freeKeyUrl && (
+            <a
+              href={row.freeKeyUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-metadata text-accent-copper underline-offset-4 hover:underline font-normal"
+            >
+              {row.freeKeyLabel ?? 'Get a free key'} →
+            </a>
+          )}
         </Label>
         {value && <Badge variant="success">Saved</Badge>}
       </div>
       <div className="flex items-center gap-2">
-        <div className="relative flex-1">
+        <div className="relative flex-1" data-jarvis-rainbow="true">
           <Input
+            ref={inputRef}
             id={`key-${row.id}`}
             type={revealed ? 'text' : 'password'}
             placeholder={row.placeholder}

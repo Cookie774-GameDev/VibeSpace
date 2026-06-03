@@ -183,12 +183,17 @@ export function getAgentRole(agent: Agent): AgentRole | undefined {
  * Personas only meaningfully apply to the `jarvis` agent (the voice supervisor),
  * but for safety we accept any agent and overlay regardless. Callers should
  * gate by `agent.slug === 'jarvis'` if they want strict semantics.
+ *
+ * `agent.system_prompt` is coerced to `''` when undefined so the result
+ * never contains a literal `"undefined"` substring — the LLM would
+ * happily echo that back, and provider adapters that round-trip
+ * through JSON would surface it to support.
  */
 export function applyPersona(agent: Agent, preset: PersonaPreset): Agent {
   const persona = PERSONAS[preset];
   if (!persona) return agent;
   return {
     ...agent,
-    system_prompt: persona.prompt + '\n\n' + agent.system_prompt,
+    system_prompt: persona.prompt + '\n\n' + (agent.system_prompt ?? ''),
   };
 }

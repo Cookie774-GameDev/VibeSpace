@@ -33,7 +33,6 @@ const config: Config = {
           foreground: 'hsl(var(--primary-foreground))',
         },
         secondary: {
-          DEFAULT: 'hsl(var(--secondary))',
           foreground: 'hsl(var(--secondary-foreground))',
         },
         accent: {
@@ -177,7 +176,21 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    function({ addUtilities }: any) {
+      addUtilities({
+        '.bg-secondary': {
+          backgroundColor: 'hsl(var(--secondary))',
+        },
+        '.border-secondary': {
+          borderColor: 'hsl(var(--secondary))',
+        },
+        '.hover\\:bg-secondary\\/80:hover': {
+          backgroundColor: 'hsl(var(--secondary) / 0.8)',
+        },
+      });
+    },
+  ],
 };
 
 export default config;

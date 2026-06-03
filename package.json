@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.1.0",
+  "version": "0.1.17",
   "private": true,
   "description": "Jarvis - the AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant.",
   "license": "Apache-2.0",
@@ -8,13 +8,17 @@
     "app"
   ],
   "scripts": {
-    "dev": "npm --prefix app run dev",
+    "dev": "npm --prefix app run jarvis",
+    "jarvis": "npm --prefix app run jarvis",
     "build": "npm --prefix app run build",
     "preview": "npm --prefix app run preview",
     "tauri:dev": "npm --prefix app run tauri:dev",
     "tauri:build": "npm --prefix app run tauri:build",
     "typecheck": "npm --prefix app run typecheck",
-    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\""
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
+    "release:stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -SkipBuild",
+    "release:install": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:TAURI_SIGNING_PRIVATE_KEY=(Get-Content -LiteralPath \\\"$env:USERPROFILE\\.tauri\\jarvis.key\\\" -Raw); $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD=(Get-Content -LiteralPath \\\"$env:USERPROFILE\\.tauri\\jarvis.key.password\\\" -Raw); npm run release:windows; if ($LASTEXITCODE -eq 0) { $env:JARVIS_LOCAL=\\\"1\\\"; powershell -NoProfile -ExecutionPolicy Bypass -File install/install.ps1 }\""
   },
   "devDependencies": {
     "prettier": "^3.3.3"

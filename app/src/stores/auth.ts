@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ProviderId, WorkspaceId, ProjectId } from '@/types/common';
+import type { PlanId } from '@/lib/entitlements';
 
 interface AuthState {
   /** Local-only profile (no cloud account) */
@@ -24,8 +25,27 @@ interface AuthState {
   /** Active provider for chat default */
   defaultProvider: ProviderId;
 
+  /**
+   * Offline mode. When true, the router ignores every cloud provider and
+   * sends all chat through the local Ollama endpoint instead — no API key,
+   * no internet. Configured in Settings → Local Models. Default off so the
+   * standard path is the (free) Google Gemini key.
+   */
+  offlineMode: boolean;
+  /** Model name to use in offline mode, e.g. 'llama3.2'. Set in Local Models. */
+  defaultLocalModel: string;
+
   /** Persona preset and custom prompt overrides */
   personaPreset: 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal';
+
+  /**
+   * Subscription tier. Defaults to `free` for every install. The Stripe
+   * billing webhook will flip this once paid plans ship; today no code
+   * path mutates it. Lives in the auth store so a future logout can
+   * reset it cleanly. See `lib/entitlements.ts` for what each tier
+   * unlocks.
+   */
+  plan: PlanId;
 
   /** Telemetry opt-in */
   telemetryOptIn: boolean;
@@ -41,6 +61,12 @@ interface AuthState {
   setCloudSession: (s: AuthState['cloudSession']) => void;
   setTelemetryOptIn: (v: boolean) => void;
   setLocalUser: (id: string) => void;
+  /** Toggle offline (local-model-only) mode. */
+  setOfflineMode: (v: boolean) => void;
+  /** Set the model name used in offline mode. */
+  setDefaultLocalModel: (m: string) => void;
+  /** Set the active plan id. Will be called by the Stripe webhook handler when billing ships. */
+  setPlan: (p: PlanId) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -53,8 +79,11 @@ export const useAuthStore = create<AuthState>()(
       projectId: null,
       cloudSession: null,
       apiKeys: {},
-      defaultProvider: 'mock',
+      defaultProvider: 'google',
+      offlineMode: false,
+      defaultLocalModel: 'llama3.2',
       personaPreset: 'jarvis',
+      plan: 'free',
       telemetryOptIn: false,
 
       setDisplayName: (n) => set({ displayName: n }),
@@ -72,6 +101,9 @@ export const useAuthStore = create<AuthState>()(
       setCloudSession: (s) => set({ cloudSession: s }),
       setTelemetryOptIn: (v) => set({ telemetryOptIn: v }),
       setLocalUser: (id) => set({ localUserId: id }),
+      setOfflineMode: (v) => set({ offlineMode: v }),
+      setDefaultLocalModel: (m) => set({ defaultLocalModel: m.trim() || 'llama3.2' }),
+      setPlan: (p) => set({ plan: p }),
     }),
     {
       name: 'jarvis-auth',
@@ -83,7 +115,10 @@ export const useAuthStore = create<AuthState>()(
         projectId: s.projectId,
         apiKeys: s.apiKeys,
         defaultProvider: s.defaultProvider,
+        offlineMode: s.offlineMode,
+        defaultLocalModel: s.defaultLocalModel,
         personaPreset: s.personaPreset,
+        plan: s.plan,
         telemetryOptIn: s.telemetryOptIn,
       }),
     },

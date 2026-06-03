@@ -7,7 +7,6 @@ import {
   History,
   LayoutGrid,
   ListPlus,
-  ListTodo,
   type LucideIcon,
   Maximize2,
   MessageSquare,
@@ -208,19 +207,6 @@ const STATIC_ACTIONS: Action[] = [
       closePalette();
     },
   },
-  {
-    id: 'toggle-todo-drawer',
-    label: 'Toggle to-do drawer',
-    icon: ListTodo,
-    hotkey: HOTKEYS.TOGGLE_TODO,
-    page: 'root',
-    keywords: ['tasks', 'tray'],
-    perform: ({ closePalette }) => {
-      useUIStore.getState().toggleTodoDrawer();
-      closePalette();
-    },
-  },
-
   // V2 — Schedule
   {
     id: 'open-schedule',
@@ -231,7 +217,7 @@ const STATIC_ACTIONS: Action[] = [
     page: 'root',
     keywords: ['calendar', 'events', 'meetings', 'agenda'],
     perform: ({ closePalette }) => {
-      useUIStore.getState().setScheduleOpen(true);
+      useUIStore.getState().setRoute('schedule');
       closePalette();
     },
   },

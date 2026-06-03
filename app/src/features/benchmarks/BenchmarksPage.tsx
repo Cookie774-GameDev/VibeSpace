@@ -82,6 +82,21 @@ export function BenchmarksPage() {
 
   const [selectedModel, setSelectedModel] = React.useState<string | null>(null);
 
+  // Apply a fetch result to all the relevant state slots in one shot.
+  // Used by initial load, manual refresh, focus refresh, and polling so
+  // the four code paths can't drift apart.
+  const applyResult = React.useCallback(
+    (result: Awaited<ReturnType<typeof fetchBenchmarks>>) => {
+      setRows(result.rows);
+      setFromSnapshot(result.fromSnapshot);
+      setErrorReason(result.fromSnapshot ? result.reason ?? null : null);
+      setFetchedAt(
+        result.rows.length > 0 ? result.rows[0].fetched_at : Date.now(),
+      );
+    },
+    [],
+  );
+
   // Initial load.
   React.useEffect(() => {
     let cancelled = false;
@@ -89,18 +104,13 @@ export function BenchmarksPage() {
       setLoading(true);
       const result = await fetchBenchmarks();
       if (cancelled) return;
-      setRows(result.rows);
-      setFromSnapshot(result.fromSnapshot);
-      setErrorReason(result.fromSnapshot ? result.reason ?? null : null);
-      setFetchedAt(
-        result.rows.length > 0 ? result.rows[0].fetched_at : Date.now(),
-      );
+      applyResult(result);
       setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyResult]);
 
   // Tick once a minute so the header relative-time stays fresh.
   const [, force] = React.useReducer((x: number) => x + 1, 0);
@@ -109,15 +119,50 @@ export function BenchmarksPage() {
     return () => clearInterval(id);
   }, []);
 
+  // Auto-refresh when the user comes back to the window. Soft-refresh
+  // (cache-respecting) so we don't blast the upstream every alt-tab.
+  // `visibilitychange` covers blur->restore on Windows where `focus`
+  // alone can miss; we listen to both.
+  React.useEffect(() => {
+    let cancelled = false;
+    const onFocus = () => {
+      if (cancelled) return;
+      if (refreshing || loading) return;
+      void fetchBenchmarks().then((result) => {
+        if (!cancelled) applyResult(result);
+      });
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [applyResult, refreshing, loading]);
+
+  // Background polling. Arena ELO publishes weekly-ish, so 24h is the
+  // right cadence; faster just shows the same snapshot fallback toast on
+  // a loop. Forced fetch (skips cache) so we actually re-hit the upstream.
+  React.useEffect(() => {
+    const POLL_MS = 24 * 60 * 60 * 1000;
+    let cancelled = false;
+    const id = setInterval(() => {
+      if (cancelled || refreshing || loading) return;
+      void fetchBenchmarks({ force: true }).then((result) => {
+        if (!cancelled) applyResult(result);
+      });
+    }, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [applyResult, refreshing, loading]);
+
   const handleRefresh = React.useCallback(async () => {
     setRefreshing(true);
     const result = await fetchBenchmarks({ force: true });
-    setRows(result.rows);
-    setFromSnapshot(result.fromSnapshot);
-    setErrorReason(result.fromSnapshot ? result.reason ?? null : null);
-    setFetchedAt(
-      result.rows.length > 0 ? result.rows[0].fetched_at : Date.now(),
-    );
+    applyResult(result);
     setRefreshing(false);
     if (result.fromSnapshot) {
       toast.warning(
@@ -129,7 +174,7 @@ export function BenchmarksPage() {
     } else {
       toast.success('Benchmarks refreshed', `${result.rows.length} models loaded`);
     }
-  }, []);
+  }, [applyResult]);
 
   // Distinct providers, sorted alphabetically.
   const providers = React.useMemo(() => {

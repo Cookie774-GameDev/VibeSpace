@@ -1,19 +1,49 @@
-# Jarvis Hosted (Supabase backend)
+# Jarvis on Supabase
 
-Optional $5/month tier that runs DeepSeek through a Supabase Edge Function so
-users don't have to manage their own API keys. BYOK is still supported in
-parallel - the hosted tier just removes the friction.
+Postgres + auth + edge function backing the Jarvis desktop app.
 
 ## Layout
 
 ```
 supabase/
-  schema.sql                       canonical schema (mirror of 0001_init.sql)
-  migrations/0001_init.sql         applied via `supabase db push`
-  functions/jarvis-proxy/index.ts  Deno Edge Function
+  migrations/                          run sequentially via `supabase db push`
+    0001_core_identity_billing.sql     profiles, api_keys, usage_log, view
+    0002_phone_jarvis.sql              phone_settings, outbound_pending, call_audit, RPCs
+    0003_workspace_app_entities.sql    workspaces, projects, agents, chats, messages,
+                                       tasks, reminders, memories, events,
+                                       integrations, quick_links, terminal_sessions
+    0004_billing_stripe.sql            subscriptions, stripe_events, tier sync trigger
+    0005_models_catalog.sql            public model catalog + seed
+    0006_signup_trigger.sql            auto-create profile on auth.users insert
+    0007_security_hardening.sql        advisor fixes (search_path, RPC revokes)
+    0008_revoke_anon_rpc.sql           tighten set_phone_pin
+    0009_perf_rls_initplan_and_indexes.sql  RLS perf rewrites + FK covering indexes
+  functions/
+    jarvis-proxy/                      hosted DeepSeek proxy edge function
+  schema-phone-jarvis.sql              legacy single-file schema (kept for reference)
 ```
 
-## One-time setup
+The `0001_init.sql` file from earlier scaffolding has been replaced by the
+numbered migration set above. To bootstrap a fresh project, run the migrations
+in order — they are idempotent, so re-running is safe.
+
+## Active project
+
+The desktop app's `.env.local` points at the live project:
+
+```
+project_ref:  tipeobvisjqvpbzcpckh
+url:          https://tipeobvisjqvpbzcpckh.supabase.co
+region:       us-east-1
+```
+
+Migrations 0001 through 0009 have been applied. Verify with:
+
+```sh
+supabase migration list
+```
+
+## One-time setup (new project)
 
 1. **Init** (only if this directory wasn't created by `supabase init`):
    ```sh
@@ -29,14 +59,13 @@ supabase/
    ```sh
    supabase db push
    ```
-   Re-running `db push` is safe; the SQL is idempotent.
 
 4. **Set the DeepSeek key as a function secret**:
    ```sh
    supabase secrets set DEEPSEEK_API_KEY=sk-...
    ```
    `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are
-   provided automatically to functions; you do not need to set them yourself.
+   provided automatically; you do not need to set them yourself.
 
 5. **Deploy the function**:
    ```sh
@@ -44,42 +73,96 @@ supabase/
    ```
    Endpoint will be `https://<project-ref>.functions.supabase.co/jarvis-proxy`.
 
-6. **Wire the desktop app**: open Jarvis -> Settings -> Hosted Jarvis and
-   paste your project URL + anon key. They land in `app/.env.local` as
-   `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+6. **Wire the desktop app**: copy the project URL + publishable key into
+   `app/.env.local`:
+   ```
+   VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+   VITE_SUPABASE_ANON_KEY=sb_publishable_...
+   ```
 
 ## Tiers
 
-| Tier         | Monthly quota | Notes                                       |
-| ------------ | ------------- | ------------------------------------------- |
-| `free`       | 50            | Default for new sign-ups.                   |
-| `plus`       | 1500          | $5/month. Bumped via Stripe webhook (TBD).  |
-| `byok-only`  | (unmetered)   | Skips the proxy. Requests still log usage.  |
+The canonical tier model lives in `app/src/lib/entitlements.ts`. The
+database `profiles.tier` constraint allows all of these values:
 
-The proxy enforces quotas by counting `status = 'ok'` rows in `usage_log` for
-the current calendar month. `byok-only` skips the check entirely.
+| Tier        | Monthly quota | Notes                                              |
+| ----------- | ------------- | -------------------------------------------------- |
+| `free`      | 50            | Default for new sign-ups. BYOK only.               |
+| `starter`   | 1500          | $5/mo. Hosted Gemini Flash + voice.                |
+| `pro`       | 5000          | $20/mo. Adds Claude Sonnet, GPT-4o, Gemini Pro.    |
+| `ultra`     | 25000         | $100/mo. Adds Claude Opus and o-class reasoning.   |
+| `byok-only` | (unmetered)   | Skips the proxy. Requests still log usage.         |
+| `plus`      | (legacy)      | Pre-V2 value kept so old rows don't fail validation. |
+
+`subscriptions_sync_profile` triggers on insert/update of
+`public.subscriptions` and rewrites `profiles.tier` + `monthly_quota` to
+match the active row, so the Stripe webhook only needs to upsert into
+`subscriptions`.
+
+## Tables (high-level)
+
+- **identity & billing** — `profiles`, `api_keys`, `usage_log`,
+  `usage_month` (view), `subscriptions`, `stripe_events`
+- **phone-jarvis** — `phone_settings`, `outbound_pending`, `call_audit`
+- **app domain** — `workspaces`, `projects`, `agents`, `chats`, `messages`,
+  `tasks`, `reminders`, `memories`, `events`, `integrations`,
+  `quick_links`, `terminal_sessions`
+- **catalog** — `models_catalog` (public read; service-role write)
+
+Every user-owned table has RLS with a single policy: `auth.uid() = user_id`
+(or `= id` for `profiles`). The check is wrapped as `(select auth.uid())`
+so the planner caches it once per query.
+
+## Functions
+
+- `set_phone_pin(p_user_id, p_pin)` — hash a 4-8 digit PIN with PBKDF2-SHA256
+  and write `phone_settings.pin_salt` + `pin_hash`. Authenticated users only;
+  the body checks `auth.uid() = p_user_id` and raises `'forbidden'` otherwise.
+- `pbkdf2_sha256(...)` — pure plpgsql implementation, byte-for-byte
+  compatible with Python's `hashlib.pbkdf2_hmac('sha256', ...)`.
+- `prune_outbound_pending()` — deletes rows older than 1 hour. Schedule via
+  `pg_cron`.
+- `prune_call_audit(p_days = 30)` — deletes rows older than `p_days`.
+  Schedule via `pg_cron`.
+
+The `handle_new_user` and `sync_profile_tier_from_subscription` trigger
+functions have `EXECUTE` revoked from `anon`/`authenticated` so they can't
+be called as REST RPCs.
 
 ## Vault note
 
 `api_keys.encrypted` is a `text` column. If your project has Supabase Vault
-enabled, store a Vault secret reference (`vault:<uuid>`) instead of the raw
-key and decrypt server-side. The Edge Function does not currently read this
-table - BYOK keys live on the client. The column exists so a future
-"hosted BYOK" mode can lift them server-side without another migration.
+enabled, store a Vault secret reference (`vault:<uuid>`) and decrypt
+server-side. The Edge Function does not currently read this table — BYOK
+keys live on the client. The column exists so a future "hosted BYOK" mode
+can lift them server-side without another migration.
 
-## Stripe (out of scope)
+## Stripe (out of scope here)
 
-The settings panel ships an "Upgrade to Plus ($5/month)" button that points
-at `VITE_STRIPE_CHECKOUT_URL` if defined; otherwise it shows a "coming soon"
-toast. Wire a Stripe Checkout session + webhook (`customer.subscription.*`)
-to flip `profiles.tier` to `plus` and bump `monthly_quota` to 1500.
+The settings panel ships an "Upgrade" button that points at the
+`VITE_STRIPE_CHECKOUT_*` env vars when defined; otherwise it shows a
+"coming soon" toast. Wire a Stripe Checkout session + webhook
+(`customer.subscription.*`) to upsert into `public.subscriptions`. The
+`subscriptions_sync_profile` trigger handles the rest.
 
 ## Local testing
 
 ```sh
 supabase start                                  # boot local stack
+supabase db push                                # apply migrations to local
 supabase functions serve jarvis-proxy --env-file ./.env
 ```
-The function expects an `Authorization: Bearer <jwt>` header from a real
-Supabase user. Generate one via `supabase.auth.signInWithPassword` against
-the local `studio` instance.
+
+The function expects `Authorization: Bearer <jwt>` from a real Supabase
+user. Generate one via `supabase.auth.signInWithPassword` against the local
+`studio` instance.
+
+## Regenerating TypeScript types
+
+```sh
+supabase gen types typescript --linked > app/src/lib/supabase/generated.ts
+```
+
+Then update the hand-written aliases in `app/src/lib/supabase/types.ts` if
+the schema changed in a way that affects the convenience exports
+(`Profile`, `ChatRow`, etc.).

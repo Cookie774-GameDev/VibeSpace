@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import { readWakeWordEnabled, setWakeWordEnabled } from '@/features/voice/wakeWord';
 
 type MicStatus = 'idle' | 'testing' | 'ok' | 'denied' | 'unavailable';
 
@@ -16,22 +17,10 @@ export function Voice() {
   const persona = useAuthStore((s) => s.personaPreset);
   const setPersona = useAuthStore((s) => s.setPersona);
 
-  // Wake word toggle has no dedicated store yet - persist locally so the user's
-  // pick survives reload until the voice subagent owns this state.
-  const [wakeWord, setWakeWord] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('jarvis-wake-word') === '1';
-    } catch {
-      return false;
-    }
-  });
+  const [wakeWord, setWakeWord] = useState<boolean>(() => readWakeWordEnabled());
   function toggleWake(v: boolean) {
     setWakeWord(v);
-    try {
-      localStorage.setItem('jarvis-wake-word', v ? '1' : '0');
-    } catch {
-      /* private mode - silent */
-    }
+    setWakeWordEnabled(v);
   }
 
   const [micStatus, setMicStatus] = useState<MicStatus>('idle');
@@ -86,7 +75,7 @@ export function Voice() {
           <div className="flex flex-col gap-1">
             <Label htmlFor="wake-word-toggle">Wake word</Label>
             <p className="text-metadata text-muted-foreground">
-              Listen for "Hey Jarvis" in the background. Uses openWakeWord locally.
+              Listen for "Hey Jarvis" in the background when Web Speech is available. A small wake bubble appears while enabled.
             </p>
           </div>
           <Switch id="wake-word-toggle" checked={wakeWord} onCheckedChange={toggleWake} />

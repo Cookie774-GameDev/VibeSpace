@@ -2,6 +2,20 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-06-03
+
+### Added
+- Added hold-to-confirm Eraser button in the terminal toolbar with visual progress fill and a 3.5s auto-reset timeout.
+- Added global default terminal font size range slider under Settings -> Appearance (supporting 1px to 72px sizes).
+- Added inline double-click terminal tab renaming styled with a cozy input field that saves on Enter/Blur and cancels on Escape.
+
+### Changed
+- Expanded the individual terminal "T" font size cycling icon to range from 10px to 20px without layout scale clamps.
+- Increased font size validation constraints to range from 1 to 100.
+
+### Fixed
+- Fixed random desktop UI freezes/deadlocks by offloading Rust-side PTY write, flush, and resize operations onto a separate spawn_blocking thread pool.
+
 ## [0.1.16] - 2026-06-03
 
 ### Fixed
@@ -9,9 +23,14 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 - Fixed terminal blanking out on startup in `TerminalView.tsx` by filtering ConPTY reset/clear and alternate buffer escape codes, and increasing the bypass window to 3 seconds.
 - Fixed terminal navigation lag by keeping the `TerminalsPage` permanently mounted in the background.
 - Fixed terminal transcript loss on app reload/reboot by mapping historical transcripts using the stable `paneId` of terminal slots.
+- Fixed duplicate Jarvis instances after close-to-tray/reopen by allowing second-instance launch attempts to exit instead of globally preventing all app exits.
+- Fixed terminal project cross-wiring by stamping pane trees, transcripts, backend move metadata, and restored sessions with stable project ownership.
+- Fixed malformed legacy terminal state repair so wrong-project panes are dropped rather than loaded into the active project.
+- Fixed terminal persistence lag by replacing per-output Zustand persistence writes with manual debounced transcript flushes.
 
 ### Added
 - Added Tauri System Tray Run-in-Background support so closing the Jarvis window hides it to the tray, keeping background terminal processes running continuously.
+- Added a Tauri single-instance guard so reopening Jarvis focuses the existing service owner instead of spawning a conflicting owner.
 
 ## [0.1.15] - 2026-06-02
 

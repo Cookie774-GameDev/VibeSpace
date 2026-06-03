@@ -1,7 +1,8 @@
 import { Command } from 'cmdk';
 import { Calendar, MessageSquare } from 'lucide-react';
 import type React from 'react';
-import { cn, colorFromString, formatRelative, renderHotkey } from '@/lib/utils';
+import { cn, formatRelative, renderHotkey } from '@/lib/utils';
+import { AgentBadge } from '@/features/agents/AgentBadge';
 import { useAgentStore } from '@/stores/agents';
 import { useUIStore } from '@/stores/ui';
 import {
@@ -92,7 +93,7 @@ const ROOT_CATEGORIES: { heading: string; ids: string[] }[] = [
   { heading: 'Browse', ids: ['recent-chats', 'tasks'] },
   {
     heading: 'App',
-    ids: ['settings', 'toggle-voice', 'toggle-nav', 'toggle-inspector', 'toggle-todo-drawer'],
+    ids: ['settings', 'toggle-voice', 'toggle-nav', 'toggle-inspector'],
   },
 ];
 
@@ -202,18 +203,6 @@ function NewPage({ ctx }: { ctx: ActionContext }) {
 /* Switch agent page                                                         */
 /* ------------------------------------------------------------------------- */
 
-function AgentDot({ slug, hue }: { slug: string; hue?: number }) {
-  const color =
-    typeof hue === 'number' ? `hsl(${hue}, 70%, 60%)` : colorFromString(slug, 70, 60);
-  return (
-    <span
-      className="h-2.5 w-2.5 rounded-full shrink-0"
-      style={{ backgroundColor: color }}
-      aria-hidden
-    />
-  );
-}
-
 function SwitchAgentPage({ ctx }: { ctx: ActionContext }) {
   const agents = useAgentStore((s) =>
     Object.values(s.agents).sort((a, b) => a.name.localeCompare(b.name)),
@@ -237,7 +226,7 @@ function SwitchAgentPage({ ctx }: { ctx: ActionContext }) {
             }}
             className={ITEM_BASE}
           >
-            <AgentDot slug={agent.slug} hue={agent.color_hue} />
+            <AgentBadge agent={agent} showName={false} size="md" />
             <span className="text-body text-foreground truncate">{agent.name}</span>
             {agent.description ? (
               <span className="text-secondary text-muted-foreground truncate">

@@ -311,24 +311,21 @@ Cite the smallest line range that grounds each note. End with a one-line summary
  * --------------------------------------------------------------------------*/
 
 /**
- * Build the default 10-agent roster.
+ * Build the default 2-agent roster.
  *
- * Called once per database lifetime by the seeding logic in the host app
- * (subagent A2's repository layer). Each call returns fresh ids so persisted
- * builtins don't get re-seeded; the repository layer is responsible for
- * checking existence before re-calling this.
+ * Pared down from the historical 10-agent menagerie because the user
+ * told us the agent picker was overwhelming. Two roles cover the
+ * common cases — anything else is a clone-and-edit away in the agent
+ * editor.
  *
  * Roster:
- *   1. Jarvis            - voice supervisor
- *   2. Researcher        - reads + cites
- *   3. Coder             - implementation generalist
- *   4. Writer            - long-form drafting
- *   5. Critic            - synthesises agent answers
- *   6. Memory Keeper     - extracts durable facts
- *   7. Action Extractor  - surfaces draft tasks
- *   8. Scout    (V3)     - read-only code mapper, hands a brief to Builder
- *   9. Builder  (V3)     - implements within Scout's fileScope
- *  10. Reviewer (V3)     - read-only quality gate before human merge
+ *   1. Jarvis — voice supervisor / generalist
+ *   2. Coder  — implementation generalist
+ *
+ * Called once per database lifetime by the seeding logic in the host
+ * app. Each call returns fresh ids so persisted builtins don't get
+ * re-seeded; the repository layer is responsible for checking
+ * existence before re-calling this.
  */
 export function getDefaultAgents(): Agent[] {
   return [
@@ -341,16 +338,13 @@ export function getDefaultAgents(): Agent[] {
       color_hue: 195, // cyan-leaning
       temperature: 0.6,
       max_output_tokens: 4096,
-    }),
-    makeAgent({
-      slug: 'researcher',
-      name: 'Researcher',
-      description: 'Reads docs, browses, synthesises with citations.',
-      system_prompt: RESEARCHER_PROMPT,
-      capabilities: ['research'],
-      color_hue: 220, // blue
-      temperature: 0.4,
-      max_output_tokens: 8192,
+      // Default to Gemini 2.5 Flash Lite -- generous free tier on AI Studio
+      // (no card), sub-second TTFT, 1M context. The router quietly falls
+      // back to mock if the user hasn't pasted a key yet, and the
+      // Composer banner nudges them to grab one. Groq + Llama is still
+      // available as a second-tier free option (see lib/ai/router.ts).
+      provider: 'google',
+      model: 'gemini-2.5-flash-lite',
     }),
     makeAgent({
       slug: 'coder',
@@ -361,95 +355,6 @@ export function getDefaultAgents(): Agent[] {
       color_hue: 158, // green
       temperature: 0.2,
       max_output_tokens: 8192,
-    }),
-    makeAgent({
-      slug: 'writer',
-      name: 'Writer',
-      description: 'Drafts long-form text, outlines, and edits.',
-      system_prompt: WRITER_PROMPT,
-      capabilities: ['writing'],
-      color_hue: 280, // violet
-      temperature: 0.8,
-      max_output_tokens: 8192,
-    }),
-    makeAgent({
-      slug: 'critic',
-      name: 'Critic',
-      description: 'Synthesises multiple agent answers and flags disagreements.',
-      system_prompt: CRITIC_PROMPT,
-      capabilities: ['critique'],
-      color_hue: 38, // amber
-      temperature: 0.3,
-      max_output_tokens: 4096,
-    }),
-    makeAgent({
-      slug: 'memory_keeper',
-      name: 'Memory Keeper',
-      description: 'Extracts durable facts after each turn.',
-      system_prompt: MEMORY_KEEPER_PROMPT,
-      capabilities: ['memory_keeping'],
-      color_hue: 320, // pink
-      temperature: 0.1,
-      max_output_tokens: 2048,
-    }),
-    makeAgent({
-      slug: 'action_extractor',
-      name: 'Action Extractor',
-      description: 'Surfaces draft tasks from chats and meetings.',
-      system_prompt: ACTION_EXTRACTOR_PROMPT,
-      capabilities: ['action_extraction'],
-      color_hue: 12, // red-orange
-      temperature: 0.1,
-      max_output_tokens: 2048,
-    }),
-    /* ------ V3 swarm trio ------ */
-    makeAgent({
-      slug: 'scout',
-      name: 'Scout',
-      description:
-        'Maps the codebase and gathers project context before a single line of code is written.',
-      system_prompt: SCOUT_PROMPT,
-      capabilities: ['research', 'planning'],
-      color_hue: 105, // sage
-      temperature: 0.2,
-      max_output_tokens: 4096,
-      // Fast + cheap for a read-only mapping pass.
-      provider: 'anthropic',
-      model: 'claude-3-5-haiku-latest',
-      // Read-only enforcement.
-      tools_allowed: ['read', 'search'],
-      // Encode role via the skills slot (no shared-type changes).
-      skills: ['role:scout'],
-    }),
-    makeAgent({
-      slug: 'builder',
-      name: 'Builder',
-      description: 'Senior engineer. Implements changes inside the file scope assigned by Scout.',
-      system_prompt: BUILDER_PROMPT,
-      capabilities: ['code'],
-      color_hue: 14, // terracotta
-      temperature: 0.3,
-      max_output_tokens: 8192,
-      provider: 'anthropic',
-      model: 'claude-3-5-sonnet-latest',
-      tools_allowed: ['read', 'write', 'shell'],
-      skills: ['role:builder'],
-    }),
-    makeAgent({
-      slug: 'reviewer',
-      name: 'Reviewer',
-      description: 'Principal engineer. Read-only quality gate before the human merges.',
-      system_prompt: REVIEWER_PROMPT,
-      capabilities: ['critique', 'reasoning'],
-      color_hue: 268, // lavender
-      temperature: 0.1,
-      max_output_tokens: 4096,
-      // Prefer GPT-4o; router falls back to mock if no key, and a project-level
-      // policy may swap in claude-3-5-sonnet-latest as a substitute.
-      provider: 'openai',
-      model: 'gpt-4o-2024-11-20',
-      tools_allowed: ['read'],
-      skills: ['role:reviewer'],
     }),
   ];
 }

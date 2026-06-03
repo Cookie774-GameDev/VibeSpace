@@ -40,10 +40,10 @@ const CARDS: FeatureCard[] = [
   },
   {
     icon: Sparkles,
-    title: 'Skills + agents',
+    title: 'Context + agents',
     description:
-      'Drop .md files into ~/.jarvis/skills/ and they show up in the library.',
-    command: 'open skills',
+      'Generate a project skill tree so every AI starts with the right map.',
+    command: 'open context',
   },
   {
     icon: BarChart3,
@@ -69,7 +69,7 @@ const CARDS: FeatureCard[] = [
  * Onboarding — "What's new in V3" step.
  *
  * Sits between Persona and Providers. Highlights the six BridgeMind-class
- * additions (terminals, kanban, skills/agents, benchmarks, history, the
+  * additions (terminals, kanban, context/agents, benchmarks, history, the
  * NL assistant) without hijacking the 60-second flow. Each card teaches a
  * Mod+J phrase so users can reach the feature via the assistant later.
  *

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Pin,
   FolderTree,
@@ -11,11 +11,14 @@ import {
   Plus,
   Terminal,
   KanbanSquare,
+  CalendarDays,
   BarChart3,
   History,
   LayoutGrid,
+  Wrench,
+  ChevronDown,
+  Settings as SettingsIcon,
 } from 'lucide-react';
-import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Hint } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/toast';
@@ -27,6 +30,11 @@ import { db, projectRepo, chatRepo } from '@/lib/db';
 import type { Project } from '@/lib/db/schema';
 import type { Agent, ChatId, ProjectId, WorkspaceId } from '@/types';
 import { cn } from '@/lib/utils';
+import { AgentBadge } from '@/features/agents/AgentBadge';
+import { SidebarContextTree } from '@/features/context/SidebarContextTree';
+import { SidebarFilesTree } from '@/features/files/SidebarFilesTree';
+
+const TERMINAL_MIME = 'application/x-jarvis-terminal';
 
 /**
  * NavPane - 240px expanded, 56px collapsed.
@@ -49,10 +57,13 @@ import { cn } from '@/lib/utils';
 export function NavPane() {
   const navOpen = useUIStore((s) => s.navOpen);
   const setActiveChat = useUIStore((s) => s.setActiveChat);
+  const setActiveAgent = useUIStore((s) => s.setActiveAgent);
   const setChatMode = useUIStore((s) => s.setChatMode);
   const activeChatId = useUIStore((s) => s.activeChatId);
   const route = useUIStore((s) => s.route);
   const setRoute = useUIStore((s) => s.setRoute);
+  const navSectionsCollapsed = useUIStore((s) => s.navSectionsCollapsed);
+  const toggleNavSection = useUIStore((s) => s.toggleNavSection);
 
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const localUserId = useAuthStore((s) => s.localUserId);
@@ -72,10 +83,17 @@ export function NavPane() {
     async () => {
       if (!workspaceId) return [];
       const rows = await db.chats.where('workspace_id').equals(workspaceId).toArray();
+      // Project-scoped: a chat with no project_id is "loose" and only
+      // shows when no project is active. With an active project, only
+      // chats whose project_id matches are shown — that's the
+      // "projects house their chats" part of the spec.
+      const filtered = projectId
+        ? rows.filter((c) => c.project_id === projectId)
+        : rows.filter((c) => !c.project_id);
       // newest first
-      return rows.sort((a, b) => b.updated_at - a.updated_at).slice(0, 50);
+      return filtered.sort((a, b) => b.updated_at - a.updated_at).slice(0, 50);
     },
-    [workspaceId],
+    [workspaceId, projectId],
     [],
   );
 
@@ -95,7 +113,11 @@ export function NavPane() {
         color_hue: ((existing + 1) * 47) % 360,
       });
       setProjectId(proj.id);
-      toast.success('Project created', `Switched to "${name}". Right-click to rename.`);
+      // Land the user on the project detail page so they can fill in
+      // the system-prompt context, pick agents, and rename without
+      // having to right-click the row. The toast is gone — the route
+      // change is its own confirmation.
+      setRoute('project-detail');
     } catch (err) {
       toast.error('Could not create project', err instanceof Error ? err.message : 'Try again.');
     }
@@ -118,31 +140,56 @@ export function NavPane() {
       });
       setActiveChat(chat.id);
       setChatMode('chat');
-      toast.success('Chat created', `"${title}" is open and ready.`);
+      setRoute('chat');
     } catch (err) {
       toast.error('Could not create chat', err instanceof Error ? err.message : 'Try again.');
     }
   };
 
-  const onClickAgent = async (a: Agent) => {
-    if (!workspaceId) {
-      toast.warning('Still loading', 'Workspace is initializing — try again in a sec.');
-      return;
-    }
-    try {
-      const chat = await chatRepo.create({
-        workspace_id: workspaceId,
-        project_id: projectId ?? undefined,
-        title: `Chat with ${a.name}`,
-        mode: 'chat',
-        active_agent_ids: [a.id],
+  const onDropTerminalToProject = React.useCallback(
+    async (raw: string, project: Project) => {
+      const [{ parseTerminalRef }, { moveTerminalLeafToProject }] = await Promise.all([
+        import('@/features/terminals/terminalRefs'),
+        import('@/features/terminals/terminalProjectMove'),
+      ]);
+      const ref = parseTerminalRef(raw);
+      if (!ref) return;
+      const result = moveTerminalLeafToProject({
+        ref,
+        sourceProjectId: ref.projectId ?? projectId ?? null,
+        targetProjectId: project.id,
+        targetProjectName: project.name,
       });
-      setActiveChat(chat.id);
-      setChatMode('chat');
-      toast.success(`@${a.slug} ready`, `New chat started with ${a.name}.`);
-    } catch (err) {
-      toast.error('Could not start chat', err instanceof Error ? err.message : 'Try again.');
-    }
+      if (!result.ok) {
+        toast.warning('Could not move terminal', result.reason ?? 'Try again.');
+        return;
+      }
+      setProjectId(project.id);
+      setRoute('terminal');
+    },
+    [projectId, setProjectId, setRoute],
+  );
+
+  /**
+   * Click an agent → open the agent detail page (NOT a fresh chat).
+   *
+   * The old behaviour spun up a brand-new chat per click; the user
+   * found that confusing because it created chat clutter and hid the
+   * agent's actual configuration. The detail page surfaces the system
+   * prompt + capabilities + provider, with an explicit "Start chat"
+   * button that performs the previous behaviour deliberately.
+   */
+  const onClickAgent = (a: Agent) => {
+    setActiveAgent(a.id);
+    setRoute('agent-detail');
+  };
+
+  const onCreateAgent = () => {
+    // The dedicated "create agent" flow lives inside the agent manager
+    // (clone an existing one, then edit). The simplest route is to
+    // jump there — the user can clone any agent and edit the copy.
+    setActiveAgent(null);
+    setRoute('agents');
   };
 
   return (
@@ -156,9 +203,12 @@ export function NavPane() {
     >
       <div className="flex h-full w-full flex-col overflow-y-auto overflow-x-hidden scrollbar-hidden">
         <NavSection
+          id="workspace"
           title="Workspace"
           icon={<LayoutGrid className="h-4 w-4" />}
           navOpen={navOpen}
+          collapsed={!!navSectionsCollapsed['workspace']}
+          onToggleCollapsed={() => toggleNavSection('workspace')}
         >
           <RouteItem
             navOpen={navOpen}
@@ -186,9 +236,9 @@ export function NavPane() {
           />
           <RouteItem
             navOpen={navOpen}
-            label="Skills"
-            icon={<Sparkles className="h-3.5 w-3.5 text-muted-foreground" />}
-            target="skills"
+            label="Schedule"
+            icon={<CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="schedule"
             route={route}
             setRoute={setRoute}
           />
@@ -216,22 +266,59 @@ export function NavPane() {
             route={route}
             setRoute={setRoute}
           />
+          <RouteItem
+            navOpen={navOpen}
+            label="Skills"
+            icon={<Sparkles className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="skills"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="Tools"
+            icon={<Wrench className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="tools"
+            route={route}
+            setRoute={setRoute}
+          />
+          <RouteItem
+            navOpen={navOpen}
+            label="Files"
+            icon={<FileText className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="files"
+            route={route}
+            setRoute={setRoute}
+          />
         </NavSection>
 
-        <NavSection title="Pinned" icon={<Pin className="h-4 w-4" />} navOpen={navOpen}>
+        <NavSection
+          id="pinned"
+          title="Pinned"
+          icon={<Pin className="h-4 w-4" />}
+          navOpen={navOpen}
+          collapsed={!!navSectionsCollapsed['pinned']}
+          onToggleCollapsed={() => toggleNavSection('pinned')}
+        >
           <EmptyHint navOpen={navOpen} text="Pin chats to keep them close." />
         </NavSection>
 
         <NavSection
+          id="projects"
           title="Projects"
           icon={<FolderTree className="h-4 w-4" />}
           navOpen={navOpen}
+          collapsed={!!navSectionsCollapsed['projects']}
+          onToggleCollapsed={() => toggleNavSection('projects')}
           action={
             <Hint label="New project">
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={onCreateProject}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void onCreateProject();
+                }}
                 aria-label="Create project"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -243,39 +330,42 @@ export function NavPane() {
             <EmptyHint navOpen={navOpen} text="No projects yet. Hit + to create one." />
           ) : (
             (projects ?? []).map((p) => (
-              <NavItem
+              <ProjectRow
                 key={p.id}
+                project={p}
                 navOpen={navOpen}
-                label={p.name}
                 active={p.id === projectId}
-                icon={
-                  <span
-                    aria-hidden
-                    className="h-2 w-2 rounded-full shrink-0"
-                    style={{
-                      background:
-                        p.color_hue !== undefined
-                          ? `hsl(${p.color_hue} 65% 56%)`
-                          : 'hsl(var(--accent-copper))',
-                    }}
-                  />
-                }
-                onClick={() => setProjectId(p.id)}
+                onActivate={() => setProjectId(p.id)}
+                onTerminalHover={() => {
+                  setProjectId(p.id);
+                  setRoute('terminal');
+                }}
+                onDropTerminal={(raw) => onDropTerminalToProject(raw, p)}
+                onOpenSettings={() => {
+                  setProjectId(p.id);
+                  setRoute('project-detail');
+                }}
               />
             ))
           )}
         </NavSection>
 
         <NavSection
+          id="chats"
           title="Chats"
           icon={<MessageSquare className="h-4 w-4" />}
           navOpen={navOpen}
+          collapsed={!!navSectionsCollapsed['chats']}
+          onToggleCollapsed={() => toggleNavSection('chats')}
           action={
             <Hint label="New chat">
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={onCreateChat}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void onCreateChat();
+                }}
                 aria-label="Create chat"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -296,13 +386,36 @@ export function NavPane() {
                 onClick={() => {
                   setActiveChat(c.id as unknown as ChatId);
                   setChatMode(c.mode);
+                  setRoute('chat');
                 }}
               />
             ))
           )}
         </NavSection>
 
-        <NavSection title="Agents" icon={<Bot className="h-4 w-4" />} navOpen={navOpen}>
+        <NavSection
+          id="agents"
+          title="Agents"
+          icon={<Bot className="h-4 w-4" />}
+          navOpen={navOpen}
+          collapsed={!!navSectionsCollapsed['agents']}
+          onToggleCollapsed={() => toggleNavSection('agents')}
+          action={
+            <Hint label="New agent">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCreateAgent();
+                }}
+                aria-label="Create agent"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </Hint>
+          }
+        >
           {agentList.length === 0 ? (
             <EmptyHint navOpen={navOpen} text="No agents loaded." />
           ) : (
@@ -311,19 +424,35 @@ export function NavPane() {
                 key={a.id}
                 navOpen={navOpen}
                 label={a.name}
-                icon={<Avatar seed={a.slug} size={16} />}
-                onClick={() => void onClickAgent(a)}
+                icon={<AgentBadge agent={a} showName={false} size="md" />}
+                onClick={() => onClickAgent(a)}
               />
             ))
           )}
         </NavSection>
 
-        <NavSection title="Skills" icon={<Sparkles className="h-4 w-4" />} navOpen={navOpen}>
-          <EmptyHint navOpen={navOpen} text="No skills installed." />
+        <NavSection
+          id="context"
+          title="Context"
+          icon={<Sparkles className="h-4 w-4" />}
+          navOpen={navOpen}
+          active={route === 'context'}
+          collapsed={!!navSectionsCollapsed['context']}
+          onToggleCollapsed={() => toggleNavSection('context')}
+          onTitleClick={() => setRoute('context')}
+        >
+          <SidebarContextTree navOpen={navOpen} onOpenContext={() => setRoute('context')} />
         </NavSection>
 
-        <NavSection title="Files" icon={<FileText className="h-4 w-4" />} navOpen={navOpen}>
-          <EmptyHint navOpen={navOpen} text="Search project files." />
+        <NavSection
+          id="files"
+          title="Files"
+          icon={<FileText className="h-4 w-4" />}
+          navOpen={navOpen}
+          collapsed={!!navSectionsCollapsed['files']}
+          onToggleCollapsed={() => toggleNavSection('files')}
+        >
+          <SidebarFilesTree navOpen={navOpen} active={route === 'files'} onOpenFiles={() => setRoute('files')} />
         </NavSection>
 
         {/* Tiny status footer so the user knows whose workspace they're in. */}
@@ -342,18 +471,44 @@ export function NavPane() {
 }
 
 interface NavSectionProps {
+  /** Stable id used to persist the collapsed state in `useUIStore`. */
+  id: string;
   title: string;
   icon: React.ReactNode;
   navOpen: boolean;
   /** Optional trailing action button (e.g. "+") rendered in the header row. */
   action?: React.ReactNode;
+  /** Highlights the section header when its backing page is active. */
+  active?: boolean;
+  /** When true the section body is hidden (header + chevron remains). */
+  collapsed?: boolean;
+  /** Click handler for the header — toggles `collapsed`. */
+  onToggleCollapsed?: () => void;
+  /** Optional title click handler. When present, only the chevron toggles. */
+  onTitleClick?: () => void;
   children?: React.ReactNode;
 }
 
-function NavSection({ title, icon, navOpen, action, children }: NavSectionProps) {
+function NavSection({
+  id: _id,
+  title,
+  icon,
+  navOpen,
+  action,
+  active,
+  collapsed,
+  onToggleCollapsed,
+  onTitleClick,
+  children,
+}: NavSectionProps) {
   if (!navOpen) {
+    // Collapsed rail (56px). Skip the chevron entirely; the icon stack
+    // is the only chrome.
     return (
-      <section className="flex flex-col items-center gap-1 px-2 pb-2 pt-3" aria-label={title}>
+      <section
+        className="flex flex-col items-center gap-1 px-2 pb-2 pt-3"
+        aria-label={title}
+      >
         <span className="text-muted-foreground/60" title={title}>
           {icon}
         </span>
@@ -363,13 +518,220 @@ function NavSection({ title, icon, navOpen, action, children }: NavSectionProps)
   }
   return (
     <section className="px-2 pb-3 pt-3">
-      <header className="flex items-center gap-2 px-2 pb-1.5 text-metadata uppercase tracking-wider text-muted-foreground">
+      <header
+        className={cn(
+          'group flex items-center gap-2 px-2 pb-1.5 text-metadata uppercase tracking-wider text-muted-foreground',
+          'cursor-pointer select-none rounded-sm transition-colors hover:text-foreground',
+          active && 'text-foreground',
+        )}
+        onClick={(e) => {
+          if (onTitleClick) return;
+          // Don't toggle if the click landed on the trailing action
+          // button (the "+" creates project/chat/agent and stops
+          // propagation, but we belt-and-braces here too).
+          const target = e.target as HTMLElement;
+          if (target.closest('[data-nav-action="true"]')) return;
+          onToggleCollapsed?.();
+        }}
+        aria-expanded={!collapsed}
+      >
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleCollapsed?.();
+          }}
+          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+        >
+          <ChevronDown
+            className={cn(
+              'h-3 w-3 transition-transform',
+              collapsed && '-rotate-90',
+            )}
+          />
+        </button>
         <span className="opacity-70 shrink-0">{icon}</span>
-        <span className="flex-1 truncate">{title}</span>
-        {action}
+        {onTitleClick ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onTitleClick();
+            }}
+            className="min-w-0 flex-1 truncate text-left focus-visible:outline-none"
+          >
+            {title}
+          </button>
+        ) : (
+          <span className="flex-1 truncate">{title}</span>
+        )}
+        {action && (
+          <span data-nav-action="true" className="shrink-0">
+            {action}
+          </span>
+        )}
       </header>
-      <div className="flex flex-col gap-px">{children}</div>
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            className="overflow-hidden"
+          >
+            <div className="flex flex-col gap-px">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
+  );
+}
+
+interface ProjectRowProps {
+  project: Project;
+  navOpen: boolean;
+  active: boolean;
+  onActivate: () => void;
+  onTerminalHover: () => void;
+  onDropTerminal: (raw: string) => void | Promise<void>;
+  onOpenSettings: () => void;
+}
+
+/**
+ * One project row. Clicking the body activates the project (so chats +
+ * terminals filter to it). The trailing settings cog jumps to the
+ * project detail page where the user edits name / colour / context /
+ * agents.
+ */
+function ProjectRow({
+  project: p,
+  navOpen,
+  active,
+  onActivate,
+  onTerminalHover,
+  onDropTerminal,
+  onOpenSettings,
+}: ProjectRowProps) {
+  const [terminalDragOver, setTerminalDragOver] = React.useState(false);
+  const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearHoverTimer = React.useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = null;
+  }, []);
+
+  React.useEffect(() => clearHoverTimer, [clearHoverTimer]);
+
+  const armProjectOpen = React.useCallback(() => {
+    if (hoverTimerRef.current) return;
+    hoverTimerRef.current = setTimeout(() => {
+      hoverTimerRef.current = null;
+      onTerminalHover();
+    }, 450);
+  }, [onTerminalHover]);
+
+  const projectDropProps = {
+    'data-terminal-drop': 'project',
+    'data-terminal-drop-project-id': p.id,
+    'data-terminal-drop-project-name': p.name,
+    onDragOver: (e: React.DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes(TERMINAL_MIME)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      setTerminalDragOver(true);
+      armProjectOpen();
+    },
+    onDragEnter: (e: React.DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes(TERMINAL_MIME)) return;
+      setTerminalDragOver(true);
+      armProjectOpen();
+    },
+    onDragLeave: () => {
+      setTerminalDragOver(false);
+      clearHoverTimer();
+    },
+    onDrop: (e: React.DragEvent<HTMLElement>) => {
+      const raw = e.dataTransfer.getData(TERMINAL_MIME);
+      if (!raw) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setTerminalDragOver(false);
+      clearHoverTimer();
+      void onDropTerminal(raw);
+    },
+  } as const;
+
+  if (!navOpen) {
+    return (
+      <button
+        type="button"
+        onClick={onActivate}
+        {...projectDropProps}
+        title={p.name}
+        aria-label={p.name}
+        className={cn(
+          'flex h-7 w-full items-center justify-center rounded-md text-foreground transition-colors',
+          'hover:bg-muted focus-visible:outline-none focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-ring',
+          active && 'bg-muted ring-inset ring-1 ring-accent-copper/40',
+          terminalDragOver && 'bg-accent-copper/10 ring-inset ring-1 ring-accent-copper/70',
+        )}
+      >
+        <span
+          aria-hidden
+          className="h-2 w-2 rounded-full shrink-0"
+          style={{
+            background:
+              p.color_hue !== undefined
+                ? `hsl(${p.color_hue} 65% 56%)`
+                : 'hsl(var(--accent-copper))',
+          }}
+        />
+      </button>
+    );
+  }
+  return (
+    <div
+      {...projectDropProps}
+      className={cn(
+        'group flex h-7 w-full items-center gap-2 rounded-md px-2 text-body text-foreground transition-colors',
+        'hover:bg-muted',
+        active && 'bg-muted text-foreground ring-inset ring-1 ring-accent-copper/40',
+        terminalDragOver && 'bg-accent-copper/10 ring-inset ring-1 ring-accent-copper/70',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onActivate}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none"
+      >
+        <span
+          aria-hidden
+          className="h-2 w-2 rounded-full shrink-0"
+          style={{
+            background:
+              p.color_hue !== undefined
+                ? `hsl(${p.color_hue} 65% 56%)`
+                : 'hsl(var(--accent-copper))',
+          }}
+        />
+        <span className="min-w-0 flex-1 truncate">{p.name}</span>
+      </button>
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        aria-label={`Open ${p.name} settings`}
+        title="Project settings"
+        className={cn(
+          'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground',
+          'opacity-0 group-hover:opacity-70 hover:text-foreground hover:opacity-100',
+          'focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-ring',
+        )}
+      >
+        <SettingsIcon className="h-3 w-3" />
+      </button>
+    </div>
   );
 }
 
@@ -391,8 +753,8 @@ function NavItem({ icon, label, navOpen, active, onClick }: NavItemProps) {
         aria-label={label}
         className={cn(
           'flex h-7 w-full items-center justify-center rounded-md text-foreground transition-colors',
-          'hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-          active && 'bg-muted ring-1 ring-accent-copper/40',
+          'hover:bg-muted focus-visible:outline-none focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-ring',
+          active && 'bg-muted ring-inset ring-1 ring-accent-copper/40',
         )}
       >
         <span className="shrink-0">{icon}</span>
@@ -405,8 +767,8 @@ function NavItem({ icon, label, navOpen, active, onClick }: NavItemProps) {
       onClick={onClick}
       className={cn(
         'group flex h-7 w-full items-center gap-2 rounded-md px-2 text-body text-foreground transition-colors',
-        'hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-        active && 'bg-muted text-foreground ring-1 ring-accent-copper/40',
+        'hover:bg-muted focus-visible:outline-none focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-ring',
+        active && 'bg-muted text-foreground ring-inset ring-1 ring-accent-copper/40',
       )}
     >
       <span className="shrink-0">{icon}</span>

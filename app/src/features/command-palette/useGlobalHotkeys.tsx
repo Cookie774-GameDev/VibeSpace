@@ -53,13 +53,11 @@ export function useGlobalHotkeys(): void {
     }, []),
     { whenInputs: true },
   );
-
-  // Toggle the to-do drawer.
   useHotkey(
-    HOTKEYS.TOGGLE_TODO,
+    'Mod+I',
     React.useCallback((e: KeyboardEvent) => {
       e.preventDefault();
-      useUIStore.getState().toggleTodoDrawer();
+      useUIStore.getState().toggleInspector();
     }, []),
     { whenInputs: true },
   );
@@ -124,6 +122,17 @@ export function useGlobalHotkeys(): void {
     HOTKEYS.BROADCAST,
     React.useCallback((e: KeyboardEvent) => {
       emitJarvisEvent('jarvis:broadcast-message');
+    }, []),
+    { whenInputs: true },
+  );
+
+  // Global speech-to-text toggle. Focused surfaces (chat composer,
+  // terminal pane) decide whether to consume the event.
+  useHotkey(
+    HOTKEYS.COMPOSER_STT,
+    React.useCallback((e: KeyboardEvent) => {
+      e.preventDefault();
+      emitJarvisEvent('jarvis:stt:toggle');
     }, []),
     { whenInputs: true },
   );

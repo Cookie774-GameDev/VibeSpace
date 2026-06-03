@@ -224,5 +224,14 @@ function MessagePart({ part }: { part: Part }): ReactElement {
           [{part.ref.kind}:{part.ref.id}]
         </div>
       );
+    case 'action_proposal':
+      // Council agents shouldn't be proposing actions, but if any
+      // part type lands here we render a compact, read-only line so
+      // the panel never shows a blank cell.
+      return (
+        <Badge variant="outline" className="font-mono">
+          action: {part.action_id} ({part.status})
+        </Badge>
+      );
   }
 }

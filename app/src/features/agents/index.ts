@@ -10,5 +10,6 @@ export {
   type Persona,
 } from './personas';
 export { AgentManager } from './AgentManager';
+export { AgentDetail } from './AgentDetail';
 export { AgentBadge, type AgentBadgeProps } from './AgentBadge';
 export { AgentPicker, type AgentPickerProps } from './AgentPicker';

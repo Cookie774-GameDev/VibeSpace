@@ -11,7 +11,6 @@ const HOTKEY_LABELS: Record<keyof typeof HOTKEYS, string> = {
   SEND: 'Send to current agent',
   BROADCAST: 'Broadcast to all agents (council)',
   PUSH_TO_TALK: 'Push-to-talk (global)',
-  TOGGLE_TODO: 'Toggle todo drawer',
   SETTINGS: 'Open settings',
   ESCAPE: 'Close modal / exit council',
   TOGGLE_FULLSCREEN: 'Toggle fullscreen workspace',
@@ -20,6 +19,8 @@ const HOTKEY_LABELS: Record<keyof typeof HOTKEYS, string> = {
   SCHEDULE: 'Open schedule',
   LAUNCHER: 'Open quick launcher',
   ASSISTANT: 'Open Jarvis Assistant',
+  JARVIS_BUBBLE: 'Open Jarvis wake bubble',
+  ACTIONS: 'Open actions palette',
 };
 
 export function Hotkeys() {

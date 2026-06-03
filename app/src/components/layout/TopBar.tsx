@@ -9,11 +9,11 @@ import {
   Minimize2,
   Rocket,
   Sparkles,
-  Terminal,
-  KanbanSquare,
-  BarChart3,
   Phone,
   PhoneOff,
+  Megaphone,
+  MoreHorizontal,
+  PanelRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
@@ -24,18 +24,23 @@ import { useAuthStore } from '@/stores/auth';
 import { HOTKEYS } from '@/lib/hotkeys';
 import { cn, isMac } from '@/lib/utils';
 import { useCallStore } from '@/features/call/store';
-import { getCallService } from '@/features/call/CallService';
+import { isCallConfigured, loadCallService } from '@/features/call';
 import { toast } from '@/components/ui/toast';
+import { useWhatsNew } from '@/features/whats-new';
+import { isAdminIdentity, planAllowsJarvisCall } from '@/lib/entitlements';
 
 /**
  * TopBar - 40px chrome at the very top of the app.
  *
  * Left cluster: collapse-nav button, workspace/project breadcrumb,
- * route breadcrumb segment (V3, when navigated away from chat).
+ * route breadcrumb segment (a popover route switcher shown when the user
+ * has navigated away from chat — this is the lightweight way to jump
+ * routes when the sidebar is collapsed).
  *
- * Right cluster: quick launcher, assistant, route nav (terminal /
- * kanban / benchmarks - V3), schedule, fullscreen toggle, search,
- * voice mic, settings, avatar.
+ * Right cluster: quick launcher, assistant, schedule, fullscreen toggle,
+ * search, voice mic, call, what's new, settings, avatar. Route navigation
+ * lives in the side NavPane (and the breadcrumb popover) — we deliberately
+ * don't duplicate per-route icon buttons here.
  *
  * The header itself is a Tauri drag region so users can drag the window
  * by its background. Interactive elements opt out via `no-drag`.
@@ -52,29 +57,48 @@ type Route =
   | 'chat'
   | 'terminal'
   | 'kanban'
+  | 'schedule'
   | 'agents'
+  | 'agent-detail'
+  | 'project-detail'
+  | 'context'
   | 'skills'
   | 'benchmarks'
-  | 'history';
+  | 'history'
+  | 'tools'
+  | 'files'
+  | 'account';
 
 const ROUTES: ReadonlyArray<Route> = [
   'chat',
   'terminal',
   'kanban',
+  'schedule',
   'agents',
+  'context',
   'skills',
   'benchmarks',
   'history',
+  'tools',
+  'files',
+  'account',
 ];
 
 const ROUTE_LABELS: Record<Route, string> = {
   chat: 'Chat',
   terminal: 'Terminal',
   kanban: 'Kanban',
+  schedule: 'Schedule',
   agents: 'Agents',
+  'agent-detail': 'Agent',
+  'project-detail': 'Project',
+  context: 'Context',
   skills: 'Skills',
   benchmarks: 'Benchmarks',
   history: 'History',
+  tools: 'Tools',
+  files: 'Files',
+  account: 'Account',
 };
 
 type RouteStoreShape = {
@@ -82,25 +106,26 @@ type RouteStoreShape = {
   setRoute?: (r: Route) => void;
 };
 
-// Active-button styling shared by the three route buttons. Override the
-// ghost variant's text-muted-foreground (and its hover) with copper, and
-// add a gentle copper ring so the current route is unmistakable.
-const ROUTE_BTN_ACTIVE =
-  'ring-1 ring-accent-copper/40 text-accent-copper hover:text-accent-copper';
-
 export function TopBar() {
   const navOpen = useUIStore((s) => s.navOpen);
   const toggleNav = useUIStore((s) => s.toggleNav);
+  const inspectorOpen = useUIStore((s) => s.inspectorOpen);
+  const toggleInspector = useUIStore((s) => s.toggleInspector);
   const voiceListening = useUIStore((s) => s.voiceListening);
   const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
   const toggleVoice = useUIStore((s) => s.toggleVoice);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
-  // V2 — schedule + launcher + fullscreen
-  const setScheduleOpen = useUIStore((s) => s.setScheduleOpen);
+  // V2 — launcher + fullscreen
   const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
   const setAssistantOpen = useUIStore((s) => s.setAssistantOpen);
+  const setWhatsNewOpen = useUIStore((s) => s.setWhatsNewOpen);
   const chatFullscreen = useUIStore((s) => s.chatFullscreen);
   const toggleChatFullscreen = useUIStore((s) => s.toggleChatFullscreen);
+
+  // Drives the unseen-dot indicator on the "What's new" button. The
+  // hook is backed by Zustand so this re-renders the moment the user
+  // dismisses the modal.
+  const { hasUpdate: hasUnseenWhatsNew, currentVersion } = useWhatsNew();
 
   // V3 — route store (defensive read; field may be absent pre-Slice 4).
   const route = useUIStore(
@@ -142,15 +167,28 @@ export function TopBar() {
   const offChat = route !== 'chat';
   const [routeMenuOpen, setRouteMenuOpen] = React.useState(false);
 
+  // V3.1 — compact chrome.
+  // The user wants more vertical room for terminals; specifically the
+  // top bar should shrink whenever the user is on the terminal route
+  // OR has flipped chat-fullscreen on. We collapse height to 28px and
+  // funnel low-frequency buttons (launcher, assistant, schedule, search,
+  // voice, call, what's-new) into a `⋯` overflow popover so the right
+  // cluster stays just: fullscreen, more, settings, avatar.
+  const compactChrome = route === 'terminal' || chatFullscreen;
+  const [overflowOpen, setOverflowOpen] = React.useState(false);
+
   return (
     <header
       aria-label="Application header"
       className={cn(
-        'drag-region relative flex h-10 shrink-0 items-center gap-2 border-b bg-panel pr-2 text-secondary transition-colors',
+        'drag-region relative flex shrink-0 items-center gap-2 border-b bg-panel pr-2 text-secondary transition-[height,padding,colors] duration-150',
+        compactChrome ? 'h-7 gap-1' : 'h-10 gap-2',
         offChat ? 'border-accent-copper/40' : 'border-border',
         // Reserve room on macOS for native traffic-light buttons in
-        // titleBarStyle: overlay configurations.
-        isMac ? 'pl-[72px]' : 'pl-2',
+        // titleBarStyle: overlay configurations. Compact mode uses a
+        // tighter pl since the traffic-lights themselves shrink with
+        // the title-bar height in WebView2 builds.
+        isMac ? (compactChrome ? 'pl-[64px]' : 'pl-[72px]') : 'pl-2',
       )}
     >
       {/* Left: nav toggle */}
@@ -162,6 +200,7 @@ export function TopBar() {
             onClick={toggleNav}
             aria-label="Toggle navigation"
             aria-pressed={navOpen}
+            className={cn(compactChrome && 'h-5 w-5 [&_svg]:size-3')}
           >
             <PanelLeft className="h-4 w-4" />
           </Button>
@@ -170,15 +209,23 @@ export function TopBar() {
 
       {/* Breadcrumb */}
       <div className="no-drag flex min-w-0 items-center gap-1.5">
-        <Avatar
-          seed={workspaceId ?? 'workspace'}
-          initials={(workspaceLabel || 'W').charAt(0)}
-          size={20}
-          className="shrink-0"
-        />
+        <button
+          type="button"
+          onClick={() => setRoute('account')}
+          aria-label="Open account"
+          className="rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
+        >
+          <Avatar
+            seed="jarvis-account"
+            initials="J"
+            size={compactChrome ? 16 : 20}
+            className="shrink-0"
+          />
+        </button>
         <span
           className={cn(
-            'truncate text-secondary font-medium',
+            'truncate font-medium',
+            compactChrome ? 'text-metadata' : 'text-secondary',
             workspaceId ? 'text-foreground' : 'text-muted-foreground',
           )}
         >
@@ -187,7 +234,14 @@ export function TopBar() {
         {projectLabel && (
           <>
             <span className="px-0.5 text-secondary text-muted-foreground/60 select-none">/</span>
-            <span className="truncate text-secondary text-muted-foreground">{projectLabel}</span>
+            <span
+              className={cn(
+                'truncate text-muted-foreground',
+                compactChrome ? 'text-metadata' : 'text-secondary',
+              )}
+            >
+              {projectLabel}
+            </span>
           </>
         )}
         {offChat && (
@@ -201,7 +255,8 @@ export function TopBar() {
                   aria-haspopup="menu"
                   aria-expanded={routeMenuOpen}
                   className={cn(
-                    'truncate rounded px-1 text-secondary text-accent-copper transition-colors',
+                    'truncate rounded px-1 text-accent-copper transition-colors',
+                    compactChrome ? 'text-metadata' : 'text-secondary',
                     'hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/50',
                   )}
                 >
@@ -245,150 +300,484 @@ export function TopBar() {
       {/* Spacer (also drag region) */}
       <div className="flex-1" />
 
-      {/* Right cluster */}
-      <div className="no-drag flex items-center gap-1">
-        <Hint label="Quick launcher" hotkey={HOTKEYS.LAUNCHER}>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setLauncherOpen(true)}
-            aria-label="Open quick launcher"
-          >
-            <Rocket className="h-4 w-4" />
-          </Button>
-        </Hint>
+      {/* Right cluster.
+          Two layouts on the same data:
+            - Normal: every action gets its own button.
+            - Compact: only Fullscreen + ⋯ overflow + Settings + Avatar
+              are visible inline; everything else moves into the popover so
+              the user keeps the maximum amount of vertical room for the
+              workspace canvas (terminals especially). */}
+      {compactChrome ? (
+        <CompactRightCluster
+          overflowOpen={overflowOpen}
+          setOverflowOpen={setOverflowOpen}
+          chatFullscreen={chatFullscreen}
+          toggleChatFullscreen={toggleChatFullscreen}
+          voiceListening={voiceListening}
+          setLauncherOpen={setLauncherOpen}
+          setAssistantOpen={setAssistantOpen}
+          openSchedule={() => setRoute('schedule')}
+          setPaletteOpen={setPaletteOpen}
+          toggleVoice={toggleVoice}
+          setSettingsOpen={setSettingsOpen}
+          setWhatsNewOpen={setWhatsNewOpen}
+          hasUnseenWhatsNew={hasUnseenWhatsNew}
+          currentVersion={currentVersion}
+          displayName={displayName}
+          workspaceId={workspaceId}
+          setRoute={setRoute}
+        />
+      ) : (
+        <div className="no-drag flex items-center gap-1">
+          <Hint label="Quick launcher" hotkey={HOTKEYS.LAUNCHER}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setLauncherOpen(true)}
+              aria-label="Open quick launcher"
+            >
+              <Rocket className="h-4 w-4" />
+            </Button>
+          </Hint>
 
-        <Hint label="Jarvis Assistant" hotkey={HOTKEYS.ASSISTANT}>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setAssistantOpen(true)}
-            aria-label="Open Jarvis Assistant"
-          >
-            <Sparkles className="h-4 w-4" />
-          </Button>
-        </Hint>
+          <Hint label="Jarvis Assistant" hotkey={HOTKEYS.ASSISTANT}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setAssistantOpen(true)}
+              aria-label="Open Jarvis Assistant"
+            >
+              <Sparkles className="h-4 w-4" />
+            </Button>
+          </Hint>
 
-        <Hint label="Terminals">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setRoute('terminal')}
-            aria-label="Terminals"
-            aria-pressed={route === 'terminal'}
-            className={cn(route === 'terminal' && ROUTE_BTN_ACTIVE)}
-          >
-            <Terminal className="h-4 w-4" />
-          </Button>
-        </Hint>
+          <Hint label="Schedule" hotkey={HOTKEYS.SCHEDULE}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setRoute('schedule')}
+              aria-label="Open schedule"
+            >
+              <CalendarDays className="h-4 w-4" />
+            </Button>
+          </Hint>
 
-        <Hint label="Kanban">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setRoute('kanban')}
-            aria-label="Kanban"
-            aria-pressed={route === 'kanban'}
-            className={cn(route === 'kanban' && ROUTE_BTN_ACTIVE)}
+          <Hint
+            label={chatFullscreen ? 'Exit fullscreen' : 'Fullscreen workspace'}
+            hotkey={HOTKEYS.TOGGLE_FULLSCREEN}
           >
-            <KanbanSquare className="h-4 w-4" />
-          </Button>
-        </Hint>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={toggleChatFullscreen}
+              aria-label={chatFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              aria-pressed={chatFullscreen}
+            >
+              {chatFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </Button>
+          </Hint>
 
-        <Hint label="Benchmarks">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setRoute('benchmarks')}
-            aria-label="Benchmarks"
-            aria-pressed={route === 'benchmarks'}
-            className={cn(route === 'benchmarks' && ROUTE_BTN_ACTIVE)}
-          >
-            <BarChart3 className="h-4 w-4" />
-          </Button>
-        </Hint>
+          <Hint label="Search" hotkey="Mod+K">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setPaletteOpen(true)}
+              aria-label="Open command palette"
+            >
+              <Search className="h-4 w-4" />
+            </Button>
+          </Hint>
 
-        <Hint label="Schedule" hotkey={HOTKEYS.SCHEDULE}>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setScheduleOpen(true)}
-            aria-label="Open schedule"
-          >
-            <CalendarDays className="h-4 w-4" />
-          </Button>
-        </Hint>
+          <Hint label="Voice" hotkey="Mod+Space">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={toggleVoice}
+              aria-label="Voice"
+              aria-pressed={voiceListening}
+              className="relative"
+            >
+              <Mic
+                className={cn('h-4 w-4 transition-colors', voiceListening && 'text-accent-cyan')}
+              />
+              {voiceListening && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 rounded-md ring-2 ring-accent-cyan/60 animate-pulse"
+                />
+              )}
+            </Button>
+          </Hint>
 
-        <Hint
-          label={chatFullscreen ? 'Exit fullscreen' : 'Fullscreen workspace'}
-          hotkey={HOTKEYS.TOGGLE_FULLSCREEN}
-        >
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={toggleChatFullscreen}
-            aria-label={chatFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-            aria-pressed={chatFullscreen}
-          >
-            {chatFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          </Button>
-        </Hint>
+          <CallTopBarButton />
 
-        <Hint label="Search" hotkey="Mod+K">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setPaletteOpen(true)}
-            aria-label="Open command palette"
-          >
-            <Search className="h-4 w-4" />
-          </Button>
-        </Hint>
+          <Hint label="What's new">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setWhatsNewOpen(true)}
+              aria-label={
+                hasUnseenWhatsNew
+                  ? `What's new in v${currentVersion} (unread)`
+                  : `What's new in v${currentVersion}`
+              }
+              className="relative"
+            >
+              <Megaphone className="h-4 w-4" />
+              {hasUnseenWhatsNew && (
+                <span
+                  aria-hidden
+                  className={cn(
+                    'pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full',
+                    'bg-accent-copper ring-2 ring-panel',
+                  )}
+                />
+              )}
+            </Button>
+          </Hint>
 
-        <Hint label="Voice" hotkey="Mod+Space">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={toggleVoice}
-            aria-label="Voice"
-            aria-pressed={voiceListening}
-            className="relative"
+          <Hint label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} hotkey="Mod+I">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={toggleInspector}
+              aria-label="Toggle inspector"
+              aria-pressed={inspectorOpen}
+            >
+              <PanelRight className="h-4 w-4" />
+            </Button>
+          </Hint>
+
+          <Hint label="Settings" hotkey="Mod+,">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Settings"
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          </Hint>
+
+          <button
+            type="button"
+            onClick={() => setRoute('account')}
+            className="pl-1 rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
+            aria-label={displayName ? `Open account for ${displayName}` : 'Open account'}
           >
-            <Mic
-              className={cn('h-4 w-4 transition-colors', voiceListening && 'text-accent-cyan')}
+            <Avatar
+              seed={displayName || workspaceId || 'jarvis'}
+              initials={(displayName || 'J').charAt(0)}
+              size={24}
             />
-            {voiceListening && (
+          </button>
+        </div>
+      )}
+    </header>
+  );
+}
+
+/**
+ * Compact right-cluster for the terminal route + chat-fullscreen mode.
+ *
+ * Renders inline: Fullscreen toggle, ⋯ overflow popover, Settings, small
+ * avatar. Everything else (Quick launcher, Assistant, Schedule, Search,
+ * Voice, Call, What's new) moves into the popover so the user keeps the
+ * maximum amount of vertical room for terminals.
+ *
+ * The popover contains a `<MenuRow>` per action with the same hotkey
+ * tooltip and active-state cues as the full top bar.
+ */
+interface CompactRightClusterProps {
+  overflowOpen: boolean;
+  setOverflowOpen: (v: boolean) => void;
+  chatFullscreen: boolean;
+  toggleChatFullscreen: () => void;
+  voiceListening: boolean;
+  setLauncherOpen: (v: boolean) => void;
+  setAssistantOpen: (v: boolean) => void;
+  openSchedule: () => void;
+  setPaletteOpen: (v: boolean) => void;
+  toggleVoice: () => void;
+  setSettingsOpen: (v: boolean) => void;
+  setWhatsNewOpen: (v: boolean) => void;
+  hasUnseenWhatsNew: boolean;
+  currentVersion: string;
+  displayName: string | null;
+  workspaceId: string | null;
+  setRoute: (r: Route) => void;
+}
+
+function CompactRightCluster(props: CompactRightClusterProps) {
+  const inspectorOpen = useUIStore((s) => s.inspectorOpen);
+  const toggleInspector = useUIStore((s) => s.toggleInspector);
+  const {
+    overflowOpen,
+    setOverflowOpen,
+    chatFullscreen,
+    toggleChatFullscreen,
+    voiceListening,
+    setLauncherOpen,
+    setAssistantOpen,
+    openSchedule,
+    setPaletteOpen,
+    toggleVoice,
+    setSettingsOpen,
+    setWhatsNewOpen,
+    hasUnseenWhatsNew,
+    currentVersion,
+    displayName,
+    workspaceId,
+    setRoute,
+  } = props;
+
+  // Each menu click should also dismiss the popover so the user lands
+  // on the action they wanted with no extra step. We curry that here.
+  const closeAfter = (fn: () => void) => () => {
+    fn();
+    setOverflowOpen(false);
+  };
+
+  return (
+    <div className="no-drag flex items-center gap-0.5">
+      <Hint
+        label={chatFullscreen ? 'Exit fullscreen' : 'Fullscreen workspace'}
+        hotkey={HOTKEYS.TOGGLE_FULLSCREEN}
+      >
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={toggleChatFullscreen}
+          aria-label={chatFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          aria-pressed={chatFullscreen}
+          className="h-5 w-5 [&_svg]:size-3"
+        >
+          {chatFullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+        </Button>
+      </Hint>
+
+      <Popover open={overflowOpen} onOpenChange={setOverflowOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={overflowOpen}
+            className="relative h-5 w-5 [&_svg]:size-3"
+          >
+            <MoreHorizontal className="h-3 w-3" />
+            {hasUnseenWhatsNew && (
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-0 rounded-md ring-2 ring-accent-cyan/60 animate-pulse"
+                className={cn(
+                  'pointer-events-none absolute right-0.5 top-0.5 h-1 w-1 rounded-full',
+                  'bg-accent-copper ring-1 ring-panel',
+                )}
               />
             )}
           </Button>
-        </Hint>
+        </PopoverTrigger>
+        <PopoverContent align="end" sideOffset={6} className="w-52 p-1">
+          <ul role="menu" className="flex flex-col gap-0.5">
+            <MenuRow
+              icon={<Rocket className="h-3.5 w-3.5" />}
+              label="Quick launcher"
+              hotkey={HOTKEYS.LAUNCHER}
+              onClick={closeAfter(() => setLauncherOpen(true))}
+            />
+            <MenuRow
+              icon={<Sparkles className="h-3.5 w-3.5" />}
+              label="Assistant"
+              hotkey={HOTKEYS.ASSISTANT}
+              onClick={closeAfter(() => setAssistantOpen(true))}
+            />
+            <MenuRow
+              icon={<CalendarDays className="h-3.5 w-3.5" />}
+              label="Schedule"
+              hotkey={HOTKEYS.SCHEDULE}
+              onClick={closeAfter(openSchedule)}
+            />
+            <MenuRow
+              icon={<Search className="h-3.5 w-3.5" />}
+              label="Search"
+              hotkey="Mod+K"
+              onClick={closeAfter(() => setPaletteOpen(true))}
+            />
+            <MenuRow
+              icon={
+                <Mic
+                  className={cn(
+                    'h-3.5 w-3.5',
+                    voiceListening && 'text-accent-cyan',
+                  )}
+                />
+              }
+              label={voiceListening ? 'Voice (listening)' : 'Voice'}
+              hotkey="Mod+Space"
+              onClick={closeAfter(toggleVoice)}
+            />
+            <CompactCallRow closeAfter={closeAfter} />
+            <MenuRow
+              icon={<Megaphone className="h-3.5 w-3.5" />}
+              label={`What's new${hasUnseenWhatsNew ? ' (new)' : ''}`}
+              onClick={closeAfter(() => setWhatsNewOpen(true))}
+              accent={hasUnseenWhatsNew}
+              suffix={hasUnseenWhatsNew ? `v${currentVersion}` : undefined}
+            />
+          </ul>
+        </PopoverContent>
+      </Popover>
 
-        <CallTopBarButton />
+      <Hint label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} hotkey="Mod+I">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={toggleInspector}
+          aria-label="Toggle inspector"
+          aria-pressed={inspectorOpen}
+          className="h-5 w-5 [&_svg]:size-3"
+        >
+          <PanelRight className="h-3 w-3" />
+        </Button>
+      </Hint>
 
-        <Hint label="Settings" hotkey="Mod+,">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Settings"
+      <Hint label="Settings" hotkey="Mod+,">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Settings"
+          className="h-5 w-5 [&_svg]:size-3"
+        >
+          <Settings className="h-3 w-3" />
+        </Button>
+      </Hint>
+
+      <button
+        type="button"
+        onClick={() => setRoute('account')}
+        className="pl-1 rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
+        aria-label={displayName ? `Open account for ${displayName}` : 'Open account'}
+      >
+        <Avatar
+          seed={displayName || workspaceId || 'jarvis'}
+          initials={(displayName || 'J').charAt(0)}
+          size={18}
+        />
+      </button>
+    </div>
+  );
+}
+
+interface MenuRowProps {
+  icon: React.ReactNode;
+  label: string;
+  hotkey?: string;
+  onClick: () => void;
+  accent?: boolean;
+  suffix?: string;
+}
+
+function MenuRow({ icon, label, hotkey, onClick, accent, suffix }: MenuRowProps) {
+  return (
+    <li role="none">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onClick}
+        className={cn(
+          'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-secondary transition-colors',
+          'hover:bg-muted hover:text-foreground',
+          accent ? 'text-accent-copper' : 'text-foreground/90',
+        )}
+      >
+        <span className="shrink-0 text-muted-foreground">{icon}</span>
+        <span className="flex-1 truncate">{label}</span>
+        {suffix && (
+          <span className="shrink-0 text-metadata text-muted-foreground/80">
+            {suffix}
+          </span>
+        )}
+        {hotkey && !suffix && (
+          <kbd
+            aria-hidden
+            className="shrink-0 rounded border border-border bg-background/50 px-1 text-metadata text-muted-foreground"
           >
-            <Settings className="h-4 w-4" />
-          </Button>
-        </Hint>
+            {formatHotkey(hotkey)}
+          </kbd>
+        )}
+      </button>
+    </li>
+  );
+}
 
-        <div className="pl-1">
-          <Avatar
-            seed={displayName || workspaceId || 'jarvis'}
-            initials={(displayName || 'J').charAt(0)}
-            size={24}
-            aria-label={displayName ? `Profile: ${displayName}` : 'Profile'}
-          />
-        </div>
-      </div>
-    </header>
+/** Render a hotkey string with the platform-correct meta key. */
+function formatHotkey(hotkey: string): string {
+  return hotkey.replaceAll('Mod', isMac ? '⌘' : 'Ctrl');
+}
+
+/**
+ * Call action row for the compact overflow. Reads call state so the
+ * label and click handler match the inline `<CallTopBarButton>` exactly.
+ *
+ * Bundle policy: this row is rendered eagerly inside the TopBar overflow
+ * popover. Reading the call status from `useCallStore` is cheap (Zustand,
+ * already on the boot graph), and `isCallConfigured()` is an env-only
+ * helper from `@/features/call/config` — neither pulls LiveKit. The
+ * actual `service.stop()` call goes through `loadCallService()` so the
+ * ~500KB LiveKit SDK only loads when the user is actually in a call.
+ */
+function CompactCallRow({ closeAfter }: { closeAfter: (fn: () => void) => () => void }) {
+  const status = useCallStore((state) => state.status);
+  const setCallModalOpen = useUIStore((state) => state.setCallModalOpen);
+  const plan = useAuthStore((state) => state.plan);
+  const email = useAuthStore((state) => state.email);
+  const cloudEmail = useAuthStore((state) => state.cloudSession?.email);
+  const localUserId = useAuthStore((state) => state.localUserId);
+  const inCall = status !== 'idle';
+  const configured = isCallConfigured();
+  const admin = isAdminIdentity({ email, cloudEmail, localUserId });
+  const entitled = planAllowsJarvisCall(plan, admin);
+
+  const onActivate = closeAfter(() => {
+    if (inCall) {
+      // LiveKit chunk is already loaded by the time inCall is true (the
+      // CallModal had to load it to start the call). `loadCallService` is
+      // cheap on subsequent calls — it returns the same singleton.
+      void loadCallService().then((service) => service.stop());
+      return;
+    }
+    if (!configured) {
+      toast.info(
+        'Phone & Voice not set up',
+        'Open Settings → Phone & Voice and point Jarvis at your phone-jarvis cloud.',
+      );
+      return;
+    }
+    if (!entitled) {
+      toast.warning('Jarvis Call requires a plan', 'Upgrade to a voice-enabled plan or use an admin-enabled build.');
+      return;
+    }
+    setCallModalOpen(true);
+  });
+
+  const Icon = inCall ? PhoneOff : Phone;
+  return (
+    <MenuRow
+      icon={
+        <Icon
+          className={cn(
+            'h-3.5 w-3.5',
+            inCall && 'text-rose-500',
+            !inCall && configured && entitled && 'text-emerald-500',
+            (!configured || !entitled) && !inCall && 'text-muted-foreground/60',
+          )}
+        />
+      }
+      label={inCall ? 'Hang up' : 'Call Jarvis'}
+      onClick={onActivate}
+    />
   );
 }
 
@@ -400,16 +789,30 @@ export function TopBar() {
  * active: red PhoneOff icon, click hangs up immediately.
  *
  * Disabled with explanatory toast when the cloud URL is unset.
+ *
+ * Bundle policy: same as `CompactCallRow` above — env-only `isCallConfigured`
+ * for the button colour, and `loadCallService` only when actually hanging up.
  */
 function CallTopBarButton() {
-  const status = useCallStore((s) => s.status);
-  const setCallModalOpen = useUIStore((s) => s.setCallModalOpen);
+  const status = useCallStore((state) => state.status);
+  const setCallModalOpen = useUIStore((state) => state.setCallModalOpen);
+  const plan = useAuthStore((state) => state.plan);
+  const email = useAuthStore((state) => state.email);
+  const cloudEmail = useAuthStore((state) => state.cloudSession?.email);
+  const localUserId = useAuthStore((state) => state.localUserId);
 
   const inCall = status !== 'idle';
-  const service = getCallService();
-  const configured = service.isConfigured();
+  const configured = isCallConfigured();
+  const admin = isAdminIdentity({ email, cloudEmail, localUserId });
+  const entitled = planAllowsJarvisCall(plan, admin);
 
   const handleClick = () => {
+    if (inCall) {
+      // The CallModal already pulled livekit-client onto the page when the
+      // user dialled in; `loadCallService()` is essentially free here.
+      void loadCallService().then((service) => service.stop());
+      return;
+    }
     if (!configured) {
       toast.info(
         'Phone & Voice not set up',
@@ -417,24 +820,24 @@ function CallTopBarButton() {
       );
       return;
     }
-    if (inCall) {
-      void service.stop();
+    if (!entitled) {
+      toast.warning('Jarvis Call requires a plan', 'Upgrade to a voice-enabled plan or use an admin-enabled build.');
       return;
     }
     setCallModalOpen(true);
   };
 
   return (
-    <Hint label={inCall ? 'Hang up' : 'Call Sage'}>
+    <Hint label={inCall ? 'Hang up' : !configured ? 'Phone & Voice not configured' : entitled ? 'Call Jarvis' : 'Jarvis Call requires a voice plan'}>
       <Button
         variant="ghost"
         size="icon-sm"
         onClick={handleClick}
-        aria-label={inCall ? 'Hang up' : 'Call Sage'}
+        aria-label={inCall ? 'Hang up' : 'Call Jarvis'}
         className={cn(
           inCall && 'text-rose-500 hover:text-rose-400',
-          !inCall && configured && 'text-emerald-500 hover:text-emerald-400',
-          !configured && 'text-muted-foreground/50',
+          !inCall && configured && entitled && 'text-emerald-500 hover:text-emerald-400',
+          (!configured || !entitled) && !inCall && 'text-muted-foreground/50',
         )}
       >
         {inCall ? <PhoneOff className="h-4 w-4" /> : <Phone className="h-4 w-4" />}

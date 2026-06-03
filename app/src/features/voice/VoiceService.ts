@@ -65,6 +65,7 @@ export type VoiceEventMap = {
   'voice:end': void;
   'voice:partial': { text: string };
   'voice:final': { text: string };
+  'voice:timeout': { reason: string };
   'voice:error': { kind: VoiceErrorKind; message: string };
 };
 
@@ -152,6 +153,23 @@ class VoiceServiceImpl extends VoiceEmitter {
   private active = false;
   private wantsActive = false;
   private langPref = 'en-US';
+  private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private clearInactivityTimer(): void {
+    if (this.inactivityTimer) clearTimeout(this.inactivityTimer);
+    this.inactivityTimer = null;
+  }
+
+  private armInactivityTimer(): void {
+    this.clearInactivityTimer();
+    this.inactivityTimer = setTimeout(() => {
+      this.wantsActive = false;
+      this.emit('voice:timeout', {
+        reason: 'Speech-to-text stopped after 30 seconds without speech activity.',
+      });
+      this.stopListening();
+    }, 30_000);
+  }
 
   /** True if the host browser supports the Web Speech API. */
   isSupported(): boolean {
@@ -195,10 +213,12 @@ class VoiceServiceImpl extends VoiceEmitter {
 
     r.onstart = () => {
       this.active = true;
+      this.armInactivityTimer();
       this.emit('voice:start', undefined);
     };
 
     r.onresult = (event) => {
+      this.armInactivityTimer();
       let interim = '';
       const finals: string[] = [];
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -223,15 +243,37 @@ class VoiceServiceImpl extends VoiceEmitter {
 
     r.onerror = (event) => {
       const kind = mapErrorKind(event.error);
+      // Permission/hardware errors are terminal: don't auto-restart in
+      // `onend` or we get a 16-times-per-second restart loop until the
+      // user closes the modal (the audit's high-severity finding).
+      // The user has to grant permission / fix the device and click
+      // mic again. `no_speech` and `aborted` stay restartable because
+      // the engine emits them routinely on idle / Chromium's ~60 s
+      // session cap.
+      if (
+        kind === 'permission_denied' ||
+        kind === 'service_not_allowed' ||
+        kind === 'audio_capture' ||
+        kind === 'unsupported'
+      ) {
+        this.wantsActive = false;
+      }
       this.emit('voice:error', {
         kind,
         message: event.message || event.error || 'Voice recognition error',
       });
     };
 
+    // Capture `r` in the onend closure so a stale onend from a prior
+    // recognition (which may fire after a new one has already been
+    // assigned to `this.recognition`) doesn't null out the live
+    // pointer. The audit's medium-severity rapid-toggle race.
     r.onend = () => {
       this.active = false;
-      this.recognition = null;
+      this.clearInactivityTimer();
+      if (this.recognition === r) {
+        this.recognition = null;
+      }
       // If the user wants to keep listening but the engine timed out (common
       // with Chromium's ~60 s cap), restart transparently.
       const shouldRestart = this.wantsActive;
@@ -255,6 +297,7 @@ class VoiceServiceImpl extends VoiceEmitter {
         kind: 'unknown',
         message: err instanceof Error ? err.message : 'Failed to start recognition',
       });
+      this.clearInactivityTimer();
       this.recognition = null;
       this.active = false;
       this.wantsActive = false;
@@ -264,6 +307,7 @@ class VoiceServiceImpl extends VoiceEmitter {
   /** Stop the current recognition session. No-op if not listening. */
   stopListening(): void {
     this.wantsActive = false;
+    this.clearInactivityTimer();
     const r = this.recognition;
     if (!r) {
       this.active = false;
@@ -279,6 +323,7 @@ class VoiceServiceImpl extends VoiceEmitter {
   /** Hard cancel: abort the session and discard any pending result. */
   abort(): void {
     this.wantsActive = false;
+    this.clearInactivityTimer();
     const r = this.recognition;
     if (!r) return;
     try {

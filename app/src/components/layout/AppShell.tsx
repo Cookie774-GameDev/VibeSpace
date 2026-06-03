@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import { useUIStore } from '@/stores/ui';
 import { TopBar } from './TopBar';
 import { NavPane } from './NavPane';
@@ -18,7 +17,7 @@ interface AppShellProps {
  *
  * Composition:
  *   TopBar (40px)
- *   +- NavPane (animated 240/56)  | center column                     | Inspector (slides) | TodoDrawer slot
+ *   +- NavPane (animated 240/56)  | center column                     | Inspector (slides)
  *                                 | TabStrip (32px)                   |
  *                                 | <main>{children}</main>           |
  *                                 | ActivityStrip (32px, council only)|
@@ -34,32 +33,6 @@ interface AppShellProps {
  */
 export function AppShell({ children }: AppShellProps) {
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
-  const toggleNav = useUIStore((s) => s.toggleNav);
-  const toggleInspector = useUIStore((s) => s.toggleInspector);
-  const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
-  const toggleVoice = useUIStore((s) => s.toggleVoice);
-  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
-
-  useHotkey(HOTKEYS.TOGGLE_NAV, (e) => {
-    e.preventDefault();
-    toggleNav();
-  });
-  useHotkey(HOTKEYS.TOGGLE_INSPECTOR, (e) => {
-    e.preventDefault();
-    toggleInspector();
-  });
-  useHotkey(HOTKEYS.PALETTE, (e) => {
-    e.preventDefault();
-    setPaletteOpen(true);
-  });
-  useHotkey(HOTKEYS.PUSH_TO_TALK, (e) => {
-    e.preventDefault();
-    toggleVoice();
-  });
-  useHotkey(HOTKEYS.SETTINGS, (e) => {
-    e.preventDefault();
-    setSettingsOpen(true);
-  });
 
   return (
     <MotionConfig
@@ -87,9 +60,6 @@ export function AppShell({ children }: AppShellProps) {
             <AnimatePresence initial={false}>
               {inspectorOpen && <Inspector key="inspector" />}
             </AnimatePresence>
-
-            {/* Slot owned by A5 (TodoDrawer); A5 portals into this aside. */}
-            <aside id="todo-drawer-root" aria-label="Tasks" />
           </div>
         </div>
       </TooltipProvider>

@@ -157,8 +157,17 @@ async function deliverTauri(title: string, body: string): Promise<boolean> {
   // pull it into the chunk graph eagerly. Vite's @vite-ignore tells the
   // bundler to skip resolution; the @ts-ignore covers strict TS in case
   // the package isn't installed.
+  //
+  // Tauri v2 moved this from `@tauri-apps/api/notification` (the v1
+  // path the original code used, which has not existed since the v1→v2
+  // migration and was silently failing) to the dedicated
+  // `@tauri-apps/plugin-notification` package. The audit's medium-
+  // severity finding: native banners through this path stopped working
+  // when the rest of the app moved to v2, but the function returned
+  // `false` cleanly so we just silently fell back to browser
+  // notifications without anyone noticing.
   try {
-    const path = '@tauri-apps/api/notification';
+    const path = '@tauri-apps/plugin-notification';
     // @ts-ignore - dynamic import for optional Tauri runtime
     const mod: any = await import(/* @vite-ignore */ path).catch(() => null);
     if (!mod || typeof mod.sendNotification !== 'function') return false;

@@ -1,6 +1,7 @@
 import { taskRepo, settingsRepo } from '@/lib/db/repositories';
 import { newTaskId, newReminderId } from '@/lib/ids';
 import { useAuthStore } from '@/stores/auth';
+import { notifyDone } from '@/lib/notifications';
 import type {
   Reminder,
   Task,
@@ -13,7 +14,7 @@ import { pickReminderTimes, type SchedulerContext } from './Scheduler';
 /**
  * Pure service layer for task CRUD + scheduling.
  *
- * No React. Every UI surface (TodoPanel, voice service, command palette,
+ * No React. Every UI surface (schedule, voice service, command palette,
  * extractor agent) goes through this object. It owns the rules of "what
  * happens when a task is created/updated/completed/snoozed".
  *
@@ -138,6 +139,7 @@ export async function updateTask(id: TaskId, patch: Partial<Task>): Promise<Task
   }
 
   await taskRepo.update(id, next);
+  void notifyDone('tasks', 'Task done', next.title);
   return next;
 }
 
