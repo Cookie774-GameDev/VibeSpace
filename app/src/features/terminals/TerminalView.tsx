@@ -15,21 +15,48 @@
  *      call `terminal_kill` -- sessions are owned by the user. Closing
  *      happens explicitly via the chrome `×` button.
  *
+ * Font-load race fix (the "mushed words" bug at 2x2+):
+ *   xterm measures cell width during `term.open()` and caches it. We load
+ *   JetBrains Mono via an async @import in globals.css. If we open() and
+ *   fit() before the font arrives, xterm bakes in the fallback monospace
+ *   metrics; once the real font swaps in, glyphs render at a different
+ *   advance and the canvas grid no longer matches -> overlapping text at
+ *   smaller tile sizes. Fix:
+ *     a) await `document.fonts.ready` before `term.open()`,
+ *     b) re-assign `fontFamily` after open() to bust xterm's metric cache,
+ *     c) one belt-and-braces re-fit when fonts settle later.
+ *
  * If the Tauri backend isn't reachable (e.g. running the web dev server
  * before slice 1 lands) we render a calm `bg-paper-soft` placeholder
  * instead of crashing the React tree.
  */
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Mic, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from 'xterm';
+import { isTauri } from '@/lib/utils';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebLinksAddon } from 'xterm-addon-web-links';
 import 'xterm/css/xterm.css';
 
 import { cn } from '@/lib/utils';
+import { toast } from '@/components/ui/toast';
 import type { TerminalViewProps } from './types';
+import { useTerminalTranscriptStore } from './transcriptStore';
+import { VoiceService } from '@/features/voice/VoiceService';
+import {
+  CONTEXT_MIME,
+  formatContextAttachmentForTerminal,
+  parseContextAttachment,
+} from '@/features/context/tree';
+
+/**
+ * When the parent owns its own chrome (`<TileGrid>`'s pane-tile or the
+ * splits renderer's leaf header) we suppress this component's internal
+ * border + status row so the user doesn't see two stacked chrome strips.
+ * Default `false` keeps existing call sites unchanged.
+ */
 
 interface SpawnResult {
   sessionId: string;
@@ -106,37 +133,110 @@ function pickTheme() {
   return t === 'light' ? LIGHT_THEME : DARK_THEME;
 }
 
+function commandToInput(command: string): string {
+  return command.endsWith('\n') || command.endsWith('\r') ? command : `${command}\r`;
+}
+
 export function TerminalView({
   sessionId: existingSessionId,
+  paneId,
   command,
+  startupCommand,
+  pendingCommand,
+  pendingCommandId,
   cwd,
   rows = 30,
   cols = 100,
   className,
+  hideChrome = false,
+  fontSize = 13,
+  agentSlug,
   onReady,
+  onPendingCommandSent,
   onExit,
+  onFocus,
+  onBlur,
+  projectId,
+  projectName,
 }: TerminalViewProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<string | null>(existingSessionId ?? null);
   const exitFiredRef = useRef(false);
+  const focusedRef = useRef(false);
+  const dictatingRef = useRef(false);
+  const ignoreClearsUntilRef = useRef<number>(0);
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(
     existingSessionId ?? null,
   );
+  const [isFocused, setIsFocused] = useState(false);
+  const [dictating, setDictating] = useState(false);
+  const [dropKind, setDropKind] = useState<'file' | 'context' | null>(null);
+  const [powerUpTitle, setPowerUpTitle] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const powerUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Capture latest callbacks via refs so the mount effect doesn't re-run
   // on every prop change (which would re-spawn the PTY).
   const onReadyRef = useRef(onReady);
+  const onPendingCommandSentRef = useRef(onPendingCommandSent);
   const onExitRef = useRef(onExit);
+  const onFocusRef = useRef(onFocus);
+  const onBlurRef = useRef(onBlur);
+  // Mirror agentSlug so the registerSession call inside the spawn-await
+  // path reads the *current* slug, not the one captured at first mount.
+  // The audit flagged a narrow race: if the parent flips agentSlug
+  // between this component mounting and `terminal_spawn` returning
+  // (typically 50-200 ms), the closure-captured value is stale and the
+  // first transcript record gets tagged with the old role. The retag
+  // effect below catches up on the next prop change, but any early
+  // output that arrived before that window had the wrong tag. Reading
+  // through the ref eliminates the window.
+  const agentSlugRef = useRef(agentSlug ?? null);
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
   useEffect(() => {
+    onPendingCommandSentRef.current = onPendingCommandSent;
+  }, [onPendingCommandSent]);
+  useEffect(() => {
     onExitRef.current = onExit;
   }, [onExit]);
+  useEffect(() => {
+    onFocusRef.current = onFocus;
+  }, [onFocus]);
+  useEffect(() => {
+    onBlurRef.current = onBlur;
+  }, [onBlur]);
+  useEffect(() => {
+    agentSlugRef.current = agentSlug ?? null;
+  }, [agentSlug]);
+
+  useEffect(() => {
+    return () => {
+      if (powerUpTimerRef.current) clearTimeout(powerUpTimerRef.current);
+    };
+  }, []);
+
+  const flashPowerUp = (title: string) => {
+    setPowerUpTitle(title);
+    if (powerUpTimerRef.current) clearTimeout(powerUpTimerRef.current);
+    powerUpTimerRef.current = setTimeout(() => setPowerUpTitle(null), 1500);
+  };
+
+  // Re-tag the live transcript whenever the parent flips agentSlug. This
+  // keeps the by-agent index correct without re-spawning the PTY: the
+  // user can pick a different role from the chrome dropdown and the
+  // existing buffer flows under the new slug going forward.
+  useEffect(() => {
+    const sid = sessionRef.current;
+    if (!sid) return;
+    useTerminalTranscriptStore
+      .getState()
+      .retagSession(sid, agentSlug ?? null);
+  }, [agentSlug]);
 
   useEffect(() => {
     const containerEl = containerRef.current;
@@ -149,23 +249,39 @@ export function TerminalView({
     let unlistenExit: UnlistenFn | undefined;
     let resizeObserver: ResizeObserver | null = null;
     let mutationObserver: MutationObserver | null = null;
+    let rafToken: number | null = null;
+    let handleVisible: (() => void) | null = null;
 
+    // RAF-coalesced resize. Multiple ResizeObserver fires inside the same
+    // animation frame collapse to a single fit() + IPC. Without this,
+    // dragging a split or reflowing the tile grid can fire dozens of
+    // `terminal_resize` calls per second for no benefit.
     const dispatchResize = () => {
-      const t = termRef.current;
-      const f = fitRef.current;
-      const sid = sessionRef.current;
-      if (!t || !f || !sid) return;
-      try {
-        f.fit();
-      } catch {
-        return;
-      }
-      invoke('terminal_resize', {
-        sessionId: sid,
-        rows: t.rows,
-        cols: t.cols,
-      }).catch(() => {
-        /* backend may have torn down -- ignore */
+      if (rafToken != null) return;
+      rafToken = requestAnimationFrame(() => {
+        rafToken = null;
+        const t = termRef.current;
+        const f = fitRef.current;
+        const sid = sessionRef.current;
+        if (!t || !f || !sid) return;
+
+        // Skip fitting if the container is currently hidden or collapsed
+        const width = containerEl.clientWidth;
+        const height = containerEl.clientHeight;
+        if (width <= 40 || height <= 40) return;
+
+        try {
+          f.fit();
+        } catch {
+          return;
+        }
+        invoke('terminal_resize', {
+          sessionId: sid,
+          rows: t.rows,
+          cols: t.cols,
+        }).catch(() => {
+          /* backend may have torn down -- ignore */
+        });
       });
     };
 
@@ -183,7 +299,8 @@ export function TerminalView({
         cols,
         fontFamily:
           '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: 13,
+        fontSize,
+        lineHeight: fontSize <= 10 ? 1.0 : 1.08,
         cursorBlink: true,
         allowProposedApi: true,
         scrollback: 5000,
@@ -194,19 +311,76 @@ export function TerminalView({
       term.loadAddon(new WebLinksAddon());
 
       if (cancelled) return;
-      term.open(containerEl);
+
+      // Critical: wait for JetBrains Mono (loaded via async @import in
+      // globals.css) before xterm measures cell width inside `open()`.
+      // Without this gate, xterm bakes in fallback monospace metrics and
+      // the canvas grid stops matching rendered glyphs once the real font
+      // swaps in -> visible text overlap at smaller tile sizes (the
+      // "mushed words" bug at 2x2+).
       try {
-        fit.fit();
+        await document.fonts?.ready;
       } catch {
-        /* container size unknown yet; the post-spawn fit covers it */
+        /* not all environments expose document.fonts.ready -- degrade */
       }
+      if (cancelled) return;
+
+      term.open(containerEl);
+
+      // Belt-and-braces: re-assigning fontFamily forces xterm's option
+      // proxy to re-run its cell measurement, in case fonts.ready
+      // resolved before the browser had finished building metric tables.
+      term.options.fontFamily = term.options.fontFamily;
 
       termRef.current = term;
       fitRef.current = fit;
 
+      const textarea = (term as any).textarea as HTMLTextAreaElement | undefined;
+      if (textarea) {
+        textarea.addEventListener('focus', () => {
+          focusedRef.current = true;
+          setIsFocused(true);
+          onFocusRef.current?.();
+        });
+        textarea.addEventListener('blur', () => {
+          focusedRef.current = false;
+          setIsFocused(false);
+          onBlurRef.current?.();
+        });
+      }
+
       term.onData((data: string) => {
         const sid = sessionRef.current;
         if (!sid) return;
+
+        // Trace currently typed command prompt input
+        const store = useTerminalTranscriptStore.getState();
+        const currentSession = store.sessions[sid];
+        let currentInput = currentSession?.currentInput ?? '';
+        for (let i = 0; i < data.length; i++) {
+          const char = data[i];
+          if (char === '\r' || char === '\n' || char === '\x03') {
+            currentInput = '';
+          } else if (char === '\x7f' || char === '\x08') {
+            currentInput = currentInput.slice(0, -1);
+          } else if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
+            currentInput += char;
+          }
+        }
+
+        useTerminalTranscriptStore.setState((state) => {
+          if (!state.sessions[sid]) return {};
+          return {
+            sessions: {
+              ...state.sessions,
+              [sid]: {
+                ...state.sessions[sid]!,
+                currentInput,
+              },
+            },
+          };
+        });
+
         invoke('terminal_write', { sessionId: sid, data }).catch(() => {
           /* ignore: backend probably gone */
         });
@@ -218,7 +392,19 @@ export function TerminalView({
       try {
         const u1 = await listen<OutputPayload>('terminal://output', (e) => {
           if (e.payload.sessionId !== sessionRef.current) return;
-          termRef.current?.write(e.payload.data);
+          let data = e.payload.data;
+          if (Date.now() < ignoreClearsUntilRef.current) {
+            // Strip only clear screen and resets, but preserve cursor positioning and alternate screens sent during PTY startup
+            data = data.replace(/\x1bc|\x1b\[!p|\x1b\[[0-9;]*J/g, '');
+          }
+          termRef.current?.write(data);
+          // Mirror into the transcript store so the AI runtime (and
+          // any future "what did this pane just say?" UI) can read
+          // the recent output without re-parsing the xterm buffer.
+          // The store strips ANSI + bounds the size internally.
+          useTerminalTranscriptStore
+            .getState()
+            .appendOutput(e.payload.sessionId, data);
         });
         if (cancelled) {
           u1();
@@ -243,19 +429,103 @@ export function TerminalView({
         return;
       }
 
+      // First fit AFTER listeners are subscribed but BEFORE spawn, so the
+      // PTY's initial size already reflects the visible viewport. This
+      // avoids the brief "shell renders at the 30x100 default" flicker
+      // when the surrounding tile is much smaller than that.
+      try {
+        fit.fit();
+      } catch {
+        /* container not laid out yet; post-spawn fit covers it */
+      }
+
+      interface BackendTerminalInfo {
+        sessionId: string;
+        command: string;
+        cwd: string;
+        rows: number;
+        cols: number;
+        startedAt: number;
+      }
+
       // Spawn or attach.
       let sid: string;
+      let spawnedFresh = false;
+      let restoredInput = '';
       try {
-        if (existingSessionId == null) {
+        let isExistingSessionActive = false;
+        if (existingSessionId != null) {
+          try {
+            console.log(`[Jarvis] Checking if existing session ${existingSessionId} is active...`);
+            const activeSessions = await invoke<BackendTerminalInfo[]>('terminal_list');
+            isExistingSessionActive = activeSessions.some((s) => s.sessionId === existingSessionId);
+            console.log(`[Jarvis] Active check result for ${existingSessionId}: ${isExistingSessionActive}`);
+          } catch (listErr) {
+            console.error('[Jarvis] Failed to list terminal sessions:', listErr);
+          }
+        }
+
+        if (existingSessionId == null || !isExistingSessionActive) {
+          spawnedFresh = true;
+          let oldTranscript = '';
+          let matchedOldSessionId: string | null = null;
+
+          if (existingSessionId != null && !isExistingSessionActive) {
+            console.log(`[Jarvis] Session ${existingSessionId} is dead/inactive on backend. Re-spawning PTY and restoring visual transcript.`);
+            const oldSession = useTerminalTranscriptStore.getState().sessions[existingSessionId];
+            oldTranscript = oldSession?.rawText || oldSession?.text || '';
+            restoredInput = oldSession?.currentInput ?? '';
+            matchedOldSessionId = existingSessionId;
+          } else if (existingSessionId == null && paneId) {
+            console.log(`[Jarvis] No existing session id for pane ${paneId} (app startup). Looking for historical transcript by paneId...`);
+            const sessions = Object.values(useTerminalTranscriptStore.getState().sessions);
+            const oldSession = sessions.find((s) => s.paneId === paneId);
+            if (oldSession) {
+              console.log(`[Jarvis] Found historical transcript for pane ${paneId} under old session ${oldSession.sessionId}`);
+              oldTranscript = oldSession.rawText || oldSession.text || '';
+              restoredInput = oldSession.currentInput ?? '';
+              matchedOldSessionId = oldSession.sessionId;
+            }
+          }
+
+          if (oldTranscript) {
+            term.write(oldTranscript);
+            term.write('\r\n\x1b[33m[Session restored - process restarted]\x1b[0m\r\n');
+            // Set active window of 3s to bypass ConPTY initialization screen-clear signals only when restoring transcript
+            ignoreClearsUntilRef.current = Date.now() + 3000;
+          }
+
           const result = await invoke<SpawnResult>('terminal_spawn', {
             command,
             cwd,
             rows: term.rows,
             cols: term.cols,
+            projectId: projectId,
+            projectName: projectName,
           });
           sid = result.sessionId;
+          console.log(`[Jarvis] Spawned new PTY session: ${sid}`);
+
+          if (matchedOldSessionId) {
+            useTerminalTranscriptStore.getState().transferSession(matchedOldSessionId, sid);
+          }
+
+          // Register the new session!
+          useTerminalTranscriptStore.getState().registerSession(sid, {
+            paneId: paneId,
+            agentSlug: agentSlug ?? null,
+            command: command ?? null,
+          });
+
         } else {
           sid = existingSessionId;
+          console.log(`[Jarvis] Re-attaching to existing active session: ${sid}`);
+          // Restore visual transcript for active session re-attach
+          const activeSession = useTerminalTranscriptStore.getState().sessions[sid];
+          const activeTranscript = activeSession?.rawText || activeSession?.text;
+          if (activeTranscript) {
+            term.write(activeTranscript);
+          }
         }
       } catch (err) {
         if (cancelled) return;
@@ -263,17 +533,68 @@ export function TerminalView({
         return;
       }
 
-      if (cancelled) return;
+      // Race fix: if the effect was torn down between awaiting the
+      // spawn and reaching here, the PTY is already running on the
+      // backend but we have no UI handle to it. Without this kill we
+      // leak a PTY per cancelled mount (StrictMode dev does this on
+      // every render; production does it on fast route changes
+      // during the spawn window). We kill the orphan and bail.
+      if (cancelled) {
+        if (existingSessionId == null) {
+          invoke('terminal_kill', { sessionId: sid }).catch(() => {
+            /* nothing to do — PTY may have already exited */
+          });
+        }
+        return;
+      }
       sessionRef.current = sid;
       setActiveSessionId(sid);
+      // Register the session in the transcript store so the by-agent
+      // index has somewhere to land subsequent appendOutput calls.
+      // Doing this *after* sessionRef.current is set ensures the
+      // already-subscribed `terminal://output` listener targets the
+      // right id when the first bytes flow back. We read the agent
+      // slug through `agentSlugRef.current` rather than the closure
+      // so a fast role-change between mount and spawn-completion
+      // gets the current slug, not the one at mount time.
+      useTerminalTranscriptStore.getState().registerSession(sid, {
+        paneId,
+        agentSlug: agentSlugRef.current,
+        command: startupCommand ?? command ?? null,
+      });
       onReadyRef.current?.(sid);
+      if (spawnedFresh && startupCommand) {
+        invoke('terminal_write', {
+          sessionId: sid,
+          data: commandToInput(startupCommand),
+        }).catch(() => {
+          /* backend probably gone */
+        });
+      }
+      if (spawnedFresh && restoredInput) {
+        window.setTimeout(() => {
+          invoke('terminal_write', {
+            sessionId: sid,
+            data: restoredInput,
+          }).catch(() => {
+            /* backend probably gone */
+          });
+        }, startupCommand ? 900 : 250);
+      }
+
+      handleVisible = () => {
+        window.setTimeout(() => {
+          if (!cancelled) dispatchResize();
+        }, 50);
+      };
 
       // Geometry observers.
       resizeObserver = new ResizeObserver(() => dispatchResize());
       resizeObserver.observe(containerEl);
       window.addEventListener('resize', dispatchResize);
+      window.addEventListener('jarvis:terminals:visible', handleVisible);
 
-      // Theme follower — re-skin xterm whenever the app toggles dark/light.
+      // Theme follower -- re-skin xterm whenever the app toggles dark/light.
       mutationObserver = new MutationObserver((muts) => {
         for (const m of muts) {
           if (m.attributeName === 'data-theme') {
@@ -289,6 +610,21 @@ export function TerminalView({
 
       // Final fit now that we have the real session dims.
       dispatchResize();
+
+      // Late insurance: some browsers fire fonts.ready before the metric
+      // tables are fully built. Bust xterm's metric cache one more time
+      // and re-fit on the next paint so any residual mismatch resolves.
+      const fontsReady = document.fonts?.ready;
+      if (fontsReady) {
+        void fontsReady.then(() => {
+          if (cancelled) return;
+          const t = termRef.current;
+          if (t) t.options.fontFamily = t.options.fontFamily;
+          requestAnimationFrame(() => {
+            if (!cancelled) dispatchResize();
+          });
+        });
+      }
     };
 
     void init().catch((err) => {
@@ -297,7 +633,11 @@ export function TerminalView({
 
     return () => {
       cancelled = true;
+      if (rafToken != null) cancelAnimationFrame(rafToken);
       window.removeEventListener('resize', dispatchResize);
+      if (handleVisible) {
+        window.removeEventListener('jarvis:terminals:visible', handleVisible);
+      }
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       unlistenOutput?.();
@@ -312,6 +652,136 @@ export function TerminalView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const lastPendingCommandIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!pendingCommand || pendingCommandId == null) return;
+    if (lastPendingCommandIdRef.current === pendingCommandId) return;
+    const sid = sessionRef.current;
+    if (!sid) return;
+    lastPendingCommandIdRef.current = pendingCommandId;
+    invoke('terminal_write', {
+      sessionId: sid,
+      data: commandToInput(pendingCommand),
+    })
+      .then(() => onPendingCommandSentRef.current?.())
+      .catch(() => {
+        /* backend probably gone */
+      });
+  }, [activeSessionId, pendingCommand, pendingCommandId]);
+
+  // Reactive font-size: when the pane toolbar cycles size, update xterm's
+  // option, bust the metric cache, then re-fit + IPC so the PTY learns
+  // the new cols/rows that fit in the same viewport.
+  useEffect(() => {
+    const t = termRef.current;
+    if (!t) return;
+    if (t.options.fontSize === fontSize) return;
+    t.options.fontSize = fontSize;
+    t.options.fontFamily = t.options.fontFamily;
+    const id = requestAnimationFrame(() => {
+      const term2 = termRef.current;
+      const f = fitRef.current;
+      const sid = sessionRef.current;
+      if (!term2 || !f || !sid) return;
+      try {
+        f.fit();
+      } catch {
+        return;
+      }
+      invoke('terminal_resize', {
+        sessionId: sid,
+        rows: term2.rows,
+        cols: term2.cols,
+      }).catch(() => {
+        /* backend torn down */
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [fontSize]);
+
+  useEffect(() => {
+    const onWriteText = (e: Event) => {
+      const detail = (e as CustomEvent<{ paneId: string; text: string }>).detail;
+      if (detail?.paneId === paneId) {
+        const sid = sessionRef.current;
+        if (!sid) return;
+        void invoke('terminal_write', {
+          sessionId: sid,
+          data: detail.text,
+        });
+      }
+    };
+    window.addEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
+    return () => window.removeEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
+  }, [paneId]);
+
+  useEffect(() => {
+    dictatingRef.current = dictating;
+  }, [dictating]);
+
+  useEffect(() => {
+    return () => {
+      if (dictatingRef.current) VoiceService.stopListening();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onGlobalSttToggle = (event: Event) => {
+      if (!focusedRef.current) return;
+      event.preventDefault?.();
+      if (dictatingRef.current) {
+        VoiceService.stopListening();
+        setDictating(false);
+        return;
+      }
+      if (!VoiceService.isSupported()) {
+        toast.warning('Voice unsupported', 'Speech-to-text is not available in this runtime.');
+        return;
+      }
+      try {
+        VoiceService.startListening();
+        setDictating(true);
+      } catch (err) {
+        toast.error('Voice error', err instanceof Error ? err.message : 'Voice could not start.');
+        setDictating(false);
+      }
+    };
+    window.addEventListener('jarvis:stt:toggle', onGlobalSttToggle);
+    return () => window.removeEventListener('jarvis:stt:toggle', onGlobalSttToggle);
+  }, []);
+
+  useEffect(() => {
+    if (!dictating) return;
+    const offFinal = VoiceService.on('voice:final', ({ text }) => {
+      const sid = sessionRef.current;
+      const spoken = text.trim();
+      if (!sid || !spoken) return;
+      void invoke('terminal_write', {
+        sessionId: sid,
+        data: `${spoken} `,
+      });
+    });
+    const offError = VoiceService.on('voice:error', ({ kind, message }) => {
+      setDictating(false);
+      if (kind !== 'no_speech' && kind !== 'aborted') {
+        toast.error('Voice error', message);
+      }
+    });
+    const offEnd = VoiceService.on('voice:end', () => {
+      if (!VoiceService.isListening()) setDictating(false);
+    });
+    const offTimeout = VoiceService.on('voice:timeout', ({ reason }) => {
+      setDictating(false);
+      toast.info('Speech-to-text stopped', reason);
+    });
+    return () => {
+      offFinal();
+      offError();
+      offEnd();
+      offTimeout();
+    };
+  }, [dictating]);
+
   const handleKill = async () => {
     const sid = sessionRef.current;
     if (sid) {
@@ -320,6 +790,11 @@ export function TerminalView({
       } catch {
         /* still fall through and fire onExit so the parent can react */
       }
+      // Drop the session from the transcript store so by-agent lookups
+      // don't surface a dead pane's output any more. Done after the
+      // kill IPC so a failure to kill still cleans up the in-memory
+      // buffer (the pane is going away from the user's POV either way).
+      useTerminalTranscriptStore.getState().forgetSession(sid);
     }
     if (!exitFiredRef.current) {
       exitFiredRef.current = true;
@@ -328,18 +803,40 @@ export function TerminalView({
   };
 
   if (error) {
+    // Render the *actual* error from the Tauri bridge so the user can
+    // see what went wrong. Earlier this was a hardcoded "Run the desktop
+    // build" message even when the user *was* on the desktop build —
+    // that masked real failures (e.g. `opencode` not on PATH, PTY
+    // exhaustion, sandbox denial). The honest error text is what the
+    // user reported in the bug; keep it visible.
+    //
+    // We only fall back to the "desktop build" hint when `isTauri` is
+    // genuinely false (running in a browser preview), because then we
+    // know the failure is environmental rather than a runtime issue.
+    const headline = isTauri
+      ? 'Terminal failed to start'
+      : 'Terminal backend not available';
+    const body = isTauri
+      ? error
+      : `Run the desktop build (\`npm run tauri:dev\`) to use real terminals.\n\nDetail: ${error}`;
     return (
       <div
-        className={cn(
-          'rounded-lg border border-border bg-paper-soft shadow-soft p-4',
+      className={cn(
+          'rounded-lg border border-border bg-paper-soft shadow-soft p-4 space-y-1',
           className,
         )}
         role="status"
       >
-        <p className="text-foreground text-body">
-          Terminal backend not available. Run the desktop build to use real
-          terminals.
+        <p className="text-foreground text-ui-strong">{headline}</p>
+        <p className="text-secondary text-muted-foreground whitespace-pre-wrap font-mono">
+          {body}
         </p>
+        {command && (
+          <p className="text-metadata text-muted-foreground">
+            Tried to run: <code>{command}</code>
+            {cwd ? <> in <code>{cwd}</code></> : null}
+          </p>
+        )}
       </div>
     );
   }
@@ -347,25 +844,84 @@ export function TerminalView({
   return (
     <div
       data-session-id={activeSessionId ?? undefined}
-      className={cn(
-        'flex flex-col overflow-hidden rounded-lg border border-border bg-paper shadow-soft',
+      onDragOver={(e) => {
+        const nextKind = e.dataTransfer.types.includes('application/x-jarvis-file') || e.dataTransfer.types.includes('text/plain')
+          ? 'file'
+          : e.dataTransfer.types.includes(CONTEXT_MIME)
+            ? 'context'
+            : null;
+        if (!nextKind) return;
+        e.preventDefault();
+        setDropKind(nextKind);
+      }}
+      onDragLeave={() => setDropKind(null)}
+      onDrop={(e) => {
+        const filePath = e.dataTransfer.getData('application/x-jarvis-file');
+        const contextRaw = e.dataTransfer.getData(CONTEXT_MIME);
+        const path = filePath || (!contextRaw ? e.dataTransfer.getData('text/plain') : '');
+        if (!contextRaw && !path) return;
+        e.preventDefault();
+        setDropKind(null);
+        const sid = sessionRef.current;
+        if (!sid) return;
+        if (contextRaw) {
+          const context = parseContextAttachment(contextRaw);
+          if (!context) return;
+          flashPowerUp(context.title);
+          void invoke('terminal_write', {
+            sessionId: sid,
+            data: commandToInput(formatContextAttachmentForTerminal(context)),
+          });
+          return;
+        }
+        void invoke('terminal_write', { sessionId: sid, data: path.trim() });
+      }}
+        className={cn(
+        'jarvis-terminal-surface relative flex w-full flex-col overflow-hidden bg-paper transition-shadow duration-300',
+        // Only apply the standalone chrome (border, rounding, soft shadow)
+        // when the parent isn't drawing its own pane frame.
+        !hideChrome && 'rounded-lg border border-border shadow-soft',
+        isFocused && 'animate-terminal-focus border-accent-copper/80 ring-2 ring-accent-copper/30',
+        dropKind && 'border-accent-copper ring-2 ring-accent-copper/50 shadow-[0_0_28px_hsl(var(--accent-copper)/0.35)]',
         className,
       )}
     >
-      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border bg-paper-soft px-2">
-        <span className="truncate font-mono text-metadata text-muted-foreground">
-          {command || 'terminal'}
-        </span>
-        <button
-          type="button"
-          onClick={() => void handleKill()}
-          aria-label="Kill terminal"
-          className="flex h-4 w-4 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-      <div ref={containerRef} className="min-h-0 flex-1" />
+      {dropKind && (
+        <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-accent-copper/60 bg-background/90 px-3 py-1 text-metadata text-accent-copper shadow-soft">
+          Drop {dropKind === 'context' ? 'Context' : 'file'} here to paste into this terminal
+        </div>
+      )}
+      {powerUpTitle && (
+        <div className="pointer-events-none absolute inset-x-4 top-1/2 z-20 -translate-y-1/2 rounded-2xl border border-accent-copper/60 bg-background/95 px-4 py-3 text-center text-accent-copper shadow-[0_0_42px_hsl(var(--accent-copper)/0.32)] animate-breathe">
+          <div className="text-ui-strong">Context powered up</div>
+          <div className="truncate text-metadata text-muted-foreground">{powerUpTitle}</div>
+        </div>
+      )}
+      {dictating && (
+        <div className="pointer-events-none absolute right-2 top-2 z-20 inline-flex items-center gap-1 rounded-full border border-accent-copper/60 bg-background/90 px-2 py-1 text-metadata text-accent-copper shadow-soft">
+          <Mic className="h-3 w-3" /> Dictating
+        </div>
+      )}
+      {!hideChrome && (
+        <div className="flex h-6 shrink-0 items-center justify-between border-b border-border bg-paper-soft px-2">
+          <span className="truncate font-mono text-metadata text-muted-foreground">
+            {command || 'terminal'}
+          </span>
+          <button
+            type="button"
+            onClick={() => void handleKill()}
+            aria-label="Kill terminal"
+            className="flex h-4 w-4 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+      <div
+        ref={containerRef}
+        style={{ backgroundColor: pickTheme().background }}
+        className="min-h-0 w-full flex-1 overflow-hidden"
+      />
     </div>
   );
 }
