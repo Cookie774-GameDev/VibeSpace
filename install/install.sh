@@ -336,6 +336,26 @@ esac
 
 printf "\n"
 ok "Jarvis installed."
+
+# Auto-open Jarvis
+step "Auto-launching Jarvis One..."
+case "$OS" in
+  macos)
+    if [ -n "${SUDO_USER:-}" ]; then
+      sudo -u "$SUDO_USER" open -a "Jarvis One"
+    else
+      open -a "Jarvis One"
+    fi
+    ;;
+  linux)
+    if [ -n "${SUDO_USER:-}" ]; then
+      sudo -u "$SUDO_USER" jarvis &
+    else
+      jarvis &
+    fi
+    ;;
+esac
+
 printf "\n  ${CYAN}Launch:${RESET}\n"
 case "$OS" in
   linux) printf "      jarvis    (or use your apps menu)\n" ;;

@@ -283,6 +283,23 @@ if ($exit -eq 0) {
     Write-Host ""
     Write-Ok "Jarvis installed."
     Write-Host ""
+    
+    # Auto-open Jarvis
+    $exePath = Join-Path $env:LOCALAPPDATA 'Jarvis One\jarvis.exe'
+    if (Test-Path -LiteralPath $exePath) {
+        Write-Step "Auto-launching Jarvis One..."
+        Start-Process -FilePath $exePath
+    } else {
+        $exePathMsi = "${env:ProgramFiles}\Jarvis One\jarvis.exe"
+        if (Test-Path -LiteralPath $exePathMsi) {
+            Write-Step "Auto-launching Jarvis One..."
+            Start-Process -FilePath $exePathMsi
+        } else {
+            Write-Warn "Could not locate installed jarvis.exe to auto-launch."
+        }
+    }
+    
+    Write-Host ""
     Write-Host "  Launch with:" -ForegroundColor Cyan
     Write-Host "      Start menu -> Jarvis One"
     Write-Host "      or: & `"`$env:LOCALAPPDATA\Jarvis One\jarvis.exe`""
