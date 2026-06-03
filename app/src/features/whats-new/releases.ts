@@ -192,6 +192,8 @@ export const RELEASES: readonly Release[] = [
       },
     ],
   },
+  {
+    version: '0.1.15',
     date: '2026-06-02',
     headline: 'Terminal persistence, account controls, Jarvis Call gating, and safer updates',
     summary:
