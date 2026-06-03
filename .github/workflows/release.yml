@@ -1,0 +1,230 @@
+# Build cross-platform installers and publish to GitHub Releases.
+#
+# Triggered by pushing a `v*` tag from any branch.
+# Produces:
+#   * Windows: NSIS .exe and .msi (x64)
+#   * macOS:   DMG (Apple Silicon + Intel)
+#   * Linux:   AppImage and .deb (x86_64)
+#
+# Why CI instead of local builds?
+#   * Reproducible: every release built from a clean Ubuntu/macOS/Windows runner.
+#   * No-skin-in-the-game cross-compile: building macOS bundles requires an
+#     Apple host; Windows MSI requires WiX on Windows.
+#   * Sidesteps local Defender / toolchain races that block Tauri's release
+#     profile builds on developer machines.
+#
+# Setup checklist (one-time):
+#   1. Push the repo to GitHub: `git remote add origin git@github.com:Cookie774-GameDev/jarvis-one.git`
+#      then `git push -u origin main`.
+#   2. (Optional) Add code-signing secrets so binaries don't trigger
+#      SmartScreen / Gatekeeper warnings:
+#        WINDOWS_CERT_BASE64       - base64 of your .pfx
+#        WINDOWS_CERT_PASSWORD     - password for the .pfx
+#        APPLE_CERTIFICATE         - base64 of your Developer ID Application cert
+#        APPLE_CERTIFICATE_PASSWORD
+#        APPLE_SIGNING_IDENTITY    - "Developer ID Application: Your Name (TEAMID)"
+#        APPLE_ID                  - Apple ID for notarization
+#        APPLE_PASSWORD            - app-specific password
+#        APPLE_TEAM_ID
+#        TAURI_SIGNING_PRIVATE_KEY - Tauri updater signing private key
+#        TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#      Until those exist, builds will be unsigned and the install script will warn.
+#   3. To cut a release: `git tag v0.1.15 && git push origin v0.1.15`.
+#      The workflow creates a draft release; review it on GitHub and hit Publish.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow manual trigger for testing without tagging.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.1.15-test)'
+        required: true
+        default: 'v0.1.15-test'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build (${{ matrix.label }})
+    strategy:
+      # One platform failing should not abort the others; users on
+      # working platforms still get installers.
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - label: macOS x64
+            platform: macos-13
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - label: Linux x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ''
+          - label: Windows x64
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: --config src-tauri/tauri.windows-signing.generated.json
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry + build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          # Keep the cache scoped per-target so we don't poison aarch64
+          # artifacts with x86_64 ones across the macOS jobs.
+          key: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Prepare Windows signing config
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $signScript = Join-Path $env:GITHUB_WORKSPACE 'scripts\sign-windows.ps1'
+          $config = @{
+            bundle = @{
+              windows = @{
+                signCommand = @{
+                  cmd = 'powershell'
+                  args = @(
+                    '-NoProfile',
+                    '-ExecutionPolicy',
+                    'Bypass',
+                    '-File',
+                    $signScript,
+                    '%1'
+                  )
+                }
+              }
+            }
+          }
+          $config |
+            ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath 'app/src-tauri/tauri.windows-signing.generated.json' -Encoding UTF8
+
+      - name: Build & publish (tauri-action)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Frontend env vars baked into the Vite build at release time.
+          # Only the *publishable* keys belong here; service-role keys
+          # never go on the client.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Apple code-sign + notarize (no-ops if secrets are blank)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Tauri updater signatures
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Windows Authenticode signing. The signCommand no-ops if these are blank
+          # unless JARVIS_WINDOWS_SIGN_REQUIRED=1 is set.
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CERT_THUMBPRINT }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+          JARVIS_WINDOWS_SIGN_REQUIRED: ${{ secrets.JARVIS_WINDOWS_SIGN_REQUIRED }}
+        with:
+          projectPath: app
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'Jarvis One ${{ github.event.inputs.tag || github.ref_name }}'
+          # Pull release notes from releases/RELEASE_NOTES_<version>.md when present;
+          # tauri-action falls back to the tag message when the file is missing.
+          releaseBody: |
+            ## Jarvis One ${{ github.event.inputs.tag || github.ref_name }}
+
+            See [`releases/RELEASE_NOTES_${{ github.event.inputs.tag || github.ref_name }}.md`](https://github.com/${{ github.repository }}/blob/${{ github.event.inputs.tag || github.ref_name }}/releases/RELEASE_NOTES_${{ github.event.inputs.tag || github.ref_name }}.md) for the full changelog.
+
+            ### Install (one line)
+
+            **Windows**
+            ```
+            irm https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.ps1 | iex
+            ```
+
+            **macOS / Linux**
+            ```
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | bash
+            ```
+
+            ### Direct downloads
+            See assets below. Verify SHA-256 with `SHA256SUMS.txt`.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  # Aggregate SHA256SUMS.txt across all platforms once builds finish.
+  checksums:
+    name: Generate SHA256SUMS
+    needs: release
+    runs-on: ubuntu-22.04
+    if: always()
+    steps:
+      - name: Download all release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets || true
+
+      - name: Compute hashes
+        run: |
+          cd assets
+          if compgen -G "Jarvis*" > /dev/null; then
+            sha256sum Jarvis* | tee SHA256SUMS.txt
+          else
+            echo "No assets to hash; skipping." | tee SHA256SUMS.txt
+          fi
+
+      - name: Upload SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          cd assets
+          if [ -s SHA256SUMS.txt ]; then
+            gh release upload "$TAG" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          fi

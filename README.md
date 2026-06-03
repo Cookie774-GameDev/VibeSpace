@@ -10,10 +10,10 @@ The goal is simple: stop juggling seven AI apps and ship from one calm workspace
 
 | Destination | Link |
 | --- | --- |
-| Website | `https://Cookie774-GameDev.github.io/jarvis-one/` |
-| GitHub | `https://github.com/Cookie774-GameDev/jarvis` |
-| Releases | `https://github.com/Cookie774-GameDev/jarvis/releases` |
-| Issues | `https://github.com/Cookie774-GameDev/jarvis/issues` |
+| Website | `https://Cookie774-GameDev.github.io/Jarivs-One/` |
+| GitHub | `https://github.com/Cookie774-GameDev/Jarivs-One` |
+| Releases | `https://github.com/Cookie774-GameDev/Jarivs-One/releases` |
+| Issues | `https://github.com/Cookie774-GameDev/Jarivs-One/issues` |
 | YouTube | `#youtube-placeholder` |
 | Discord | `#discord-placeholder` |
 
@@ -27,7 +27,7 @@ Replace the YouTube and Discord placeholders in `site/index.html` when the final
 2. Run:
 
 ```powershell
-irm https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
 ```
 
 3. Launch Jarvis from the Start Menu.
@@ -38,7 +38,7 @@ irm https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/install/
 2. Run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
 3. Open Jarvis from `/Applications`.
@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/i
 2. Run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/jarvis-one/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
 3. Launch Jarvis from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
@@ -79,6 +79,8 @@ Jarvis is not only a desktop window. It is an AI you can talk to.
 - Supabase JWT/RLS for auth and per-user settings.
 - Local bridge over WebSocket for file and tool access.
 - BYOK provider keys for Groq, Anthropic, Cartesia, Deepgram, and others.
+
+Production setup details live in [`docs/09-jarvis-calling-account-release.md`](docs/09-jarvis-calling-account-release.md).
 
 ### Calling privacy
 

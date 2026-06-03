@@ -1,0 +1,11 @@
+{
+  "version": "0.1.15",
+  "notes": "Jarvis 0.1.15",
+  "pub_date": "2026-06-03T02:47:10.742Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSYWx1U2JGY3FnSElSRTRBanZsV1BBWkZXNFkxMm9NaHFtbnlLOXVNVk5ONkNNdU1xc2p2TXI0RjNwek9PMGZGT1Y0UHVGWHU4bmcxUmdHWWNSYkdKcUN6SHVpQlRSK1E0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgwNDU0NjgxCWZpbGU6SmFydmlzIE9uZV8wLjEuMTVfeDY0LXNldHVwLmV4ZQpSaVV4dUd5M09yMmhBV2dhcU5Yc2FNMDlsWFVFSG5lc0g2OHZqOW1WcG1lNWxQK3FZcEdQbmZTVS80KzMzem1JeWgwRFcvbWFyeFlqa29BZVdHV1RDUT09Cg==",
+      "url": "https://github.com/Cookie774-GameDev/Jarivs-One/releases/download/v0.1.15/Jarvis%20One_0.1.15_x64-setup.exe"
+    }
+  }
+}
