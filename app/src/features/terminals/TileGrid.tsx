@@ -854,6 +854,7 @@ function Tile({
       let hoverTarget: HTMLElement | null = null;
       let hoverProjectTimer: ReturnType<typeof setTimeout> | null = null;
       let cancelled = false;
+      let suppressNativeMenuUntil = 0;
 
       const clearProjectHoverTimer = () => {
         if (hoverProjectTimer) clearTimeout(hoverProjectTimer);
@@ -921,7 +922,10 @@ function Tile({
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('keydown', onKeyDown, true);
-        document.removeEventListener('contextmenu', onContextMenu, true);
+        const delay = Math.max(0, suppressNativeMenuUntil - Date.now()) + 50;
+        window.setTimeout(() => {
+          document.removeEventListener('contextmenu', onContextMenu, true);
+        }, delay);
       };
 
       const onContextMenu = (ev: MouseEvent) => {
@@ -956,8 +960,9 @@ function Tile({
         latestX = ev.clientX;
         latestY = ev.clientY;
         const target = dragging ? findDropTarget() : null;
-        if (dragging) {
-          document.body.dataset.jarvisSuppressContextMenuUntil = String(Date.now() + 700);
+        if (dragging || ev.button === 2) {
+          suppressNativeMenuUntil = Date.now() + 900;
+          document.body.dataset.jarvisSuppressContextMenuUntil = String(suppressNativeMenuUntil);
         }
         cleanup();
         if (cancelled) return;

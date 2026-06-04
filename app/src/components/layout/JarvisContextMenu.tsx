@@ -23,6 +23,10 @@ export function JarvisContextMenu() {
       const suppressUntil = Number(document.body.dataset.jarvisSuppressContextMenuUntil ?? 0);
       if (Number.isFinite(suppressUntil) && Date.now() < suppressUntil) return;
       const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-jarvis-suppress-context-menu]')) {
+        event.preventDefault();
+        return;
+      }
       if (target?.closest('[data-native-context-menu]')) return;
       event.preventDefault();
       const selection = window.getSelection()?.toString().trim() ?? '';

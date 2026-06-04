@@ -785,6 +785,7 @@ function ContextMapCanvas({
   return (
     <div
       className={cn('relative h-full w-full select-none overflow-hidden', panning ? 'cursor-grabbing' : 'cursor-default')}
+      data-jarvis-suppress-context-menu
       onContextMenu={(event) => event.preventDefault()}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

@@ -29,6 +29,34 @@ describe('JarvisContextMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('does not open while terminal right-drag mode is active', () => {
+    document.body.classList.add('jarvis-terminal-right-dragging');
+    render(<JarvisContextMenu />);
+
+    openContextMenu();
+
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('suppresses the custom menu inside context-map interaction regions', () => {
+    render(<JarvisContextMenu />);
+    const region = document.createElement('div');
+    region.dataset.jarvisSuppressContextMenu = 'true';
+    document.body.appendChild(region);
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 24,
+      clientY: 32,
+    });
+
+    region.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+    region.remove();
+  });
+
   it('does not open for already prevented context-map events', () => {
     render(<JarvisContextMenu />);
     const event = new MouseEvent('contextmenu', {
