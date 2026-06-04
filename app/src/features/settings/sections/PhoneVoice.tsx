@@ -104,7 +104,7 @@ function writePhoneSettingsDraft(settings: PhoneSettings): void {
       JSON.stringify(sanitizePhoneSettingsDraft(settings)),
     );
   } catch {
-    // Local autosave is best-effort; Supabase remains the durable source.
+    // Local autosave is best-effort; Jarvis Cloud remains the durable source.
   }
 }
 
@@ -212,14 +212,14 @@ export function PhoneVoice() {
 
     if (!userId) {
       if (!options.silentLocal) {
-        toast.info('Saved locally', 'Phone settings will sync when Supabase sign-in is available.');
+        toast.info('Saved locally', 'Phone settings will sync when Jarvis Cloud sign-in is available.');
       }
       return;
     }
     const supa = getSupabaseClient();
     if (!supa) {
       if (!options.silentLocal) {
-        toast.info('Saved locally', 'Supabase is not configured in this build.');
+        toast.info('Saved locally', 'Jarvis Cloud is not configured in this build.');
       }
       return;
     }
@@ -361,11 +361,10 @@ function CloudCard({
           <div className="flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
             <div>
-              <p className="font-medium mb-1">phone-jarvis cloud not configured</p>
+              <p className="font-medium mb-1">Jarvis Call cloud is not configured</p>
               <p className="text-amber-500/80">
-                Set <code className="font-mono">VITE_PHONE_JARVIS_CLOUD_URL</code> in your build env to your
-                deployed cloud URL (e.g. <code className="font-mono">https://phone-jarvis-cloud.fly.dev</code>).
-                See <code className="font-mono">phone-jarvis/cloud/README.md</code> for the deploy steps.
+                Official Jarvis-One releases include the call backend. This build is missing that
+                backend URL, so phone calls and SMS stay disabled until a maintainer configures it.
               </p>
             </div>
           </div>
@@ -387,7 +386,7 @@ function PrivacyCard() {
         What happens when you call (or are called)
       </p>
       <ul className="text-xs space-y-1 list-disc list-inside">
-        <li>Your voice goes to the phone-jarvis cloud server you (or the operator) deployed.</li>
+        <li>Your voice goes to the Jarvis Call cloud service for live transcription and replies.</li>
         <li>The transcript goes to the AI provider you configured (Anthropic / Groq / etc.).</li>
         <li>
           <strong>Your files NEVER leave this computer.</strong> The AI can read files only by asking the
@@ -422,7 +421,7 @@ function PinCard({
     if (!userId) return;
     const supa = getSupabaseClient();
     if (!supa) {
-      toast.error('Supabase not configured');
+      toast.error('Jarvis Cloud is not configured in this build.');
       return;
     }
     if (!valid) {

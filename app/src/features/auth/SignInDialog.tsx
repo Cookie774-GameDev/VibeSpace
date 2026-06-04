@@ -37,7 +37,7 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
   const [error, setError] = useState<string | null>(null);
 
   const NOT_CONFIGURED =
-    'Cloud sync not configured. Add Supabase URL + key in .env.local to enable.';
+    'Jarvis Cloud is not configured in this build. Install the official Jarvis-One release, or ask the build maintainer to configure the app backend.';
 
   function reset() {
     setEmail('');
@@ -102,8 +102,8 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
         <DialogHeader>
           <DialogTitle>Sign in to Jarvis Cloud</DialogTitle>
           <DialogDescription>
-            Optional. Enables sync across devices via Supabase. You can keep using Jarvis fully
-            offline without it.
+            Optional. Enables sync, billing, and Jarvis Call through the Jarvis-One app backend.
+            You can keep using Jarvis fully offline without it.
           </DialogDescription>
         </DialogHeader>
 

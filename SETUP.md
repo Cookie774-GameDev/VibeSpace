@@ -4,7 +4,7 @@ How to run Jarvis V1 on your machine.
 
 ## Quick start (web only - no Rust required)
 
-This runs the full UI in your browser. All features work locally (chat, tasks, voice modal UI, command palette). Cloud sync via Supabase requires creds (Step 4).
+This runs the full UI in your browser. All core features work locally. Official installers include Jarvis Cloud config; source builds need maintainer env values only for cloud sync, billing, and Jarvis Call.
 
 ```powershell
 # 1. Install Node 20+ if you don't have it
@@ -14,9 +14,9 @@ node --version  # should be >= 20
 cd C:\Users\viper\projects\Jarvis\app
 npm install
 
-# 3. Optional: copy env template and fill in Supabase + AI keys
+# 3. Optional for source maintainers: copy env template and fill in app backend + AI keys
 copy ..\.env.example .env.local
-# Edit .env.local with your Supabase URL + anon key
+# End users of official releases do not need their own Supabase project.
 
 # 4. Run
 npm run jarvis
@@ -72,16 +72,19 @@ Produces:
 
 For code-signing, Jarvis Call, account/admin setup, and production release gates, see `docs/09-jarvis-calling-account-release.md`.
 
-## Supabase setup
+## Jarvis Cloud app backend
 
-1. Sign up at https://supabase.com (free tier is fine for V1)
-2. Create a new project
-3. In Project Settings -> API, copy:
+Official Jarvis-One installers are built with the app's Supabase project and call backend already configured. End users should not create or connect their own Supabase project.
+
+Source maintainers or fork builders can wire a separate backend for development:
+
+1. Create or select the app Supabase project.
+2. In Project Settings -> API, copy:
    - **Project URL** -> `VITE_SUPABASE_URL`
    - **anon public** key -> `VITE_SUPABASE_ANON_KEY`
-4. Paste into `app/.env.local`
-5. Run the database migrations from the repo root with `supabase db push` if you have the Supabase CLI, or apply the SQL files in `supabase/migrations/` from oldest to newest in the Supabase SQL editor.
-6. Restart `npm run jarvis`
+3. Paste into `app/.env.local`.
+4. Run the database migrations from the repo root with `supabase db push` if you have the Supabase CLI, or apply the SQL files in `supabase/migrations/` from oldest to newest in the Supabase SQL editor.
+5. Restart `npm run jarvis`.
 
 ## AI Provider keys (BYOK)
 

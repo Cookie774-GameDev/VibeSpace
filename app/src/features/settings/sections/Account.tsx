@@ -11,7 +11,7 @@ import { SignInDialog } from '@/features/auth/SignInDialog';
 
 /**
  * Account section - identity, cloud session, and the sign-in entry point.
- * Local-first: localUserId always exists. Cloud is opt-in via Supabase.
+ * Local-first: localUserId always exists. Cloud is opt-in via Jarvis Cloud.
  */
 export function Account() {
   const displayName = useAuthStore((s) => s.displayName);
@@ -93,7 +93,7 @@ export function Account() {
               Cloud sync
             </Label>
             <p className="text-metadata text-muted-foreground">
-              Optional. Sync history and todos across devices via Supabase.
+              Optional. Sync history and todos across devices through Jarvis Cloud.
             </p>
           </div>
           {cloudSession ? (
@@ -116,7 +116,7 @@ export function Account() {
             size="sm"
             onClick={() => setSignInOpen(true)}
           >
-            {cloudSession ? 'Manage session' : 'Sign in to Supabase'}
+            {cloudSession ? 'Manage session' : 'Sign in to Jarvis Cloud'}
           </Button>
         </div>
       </section>
