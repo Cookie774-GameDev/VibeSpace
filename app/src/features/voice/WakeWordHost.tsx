@@ -211,6 +211,7 @@ export function WakeWordHost() {
       onClick={() => setVoiceModalOpen(true)}
       className={cn(
         'fixed bottom-4 right-4 z-[70] h-auto overflow-hidden rounded-full border px-3 py-2 backdrop-blur-xl',
+        'jarvis-wake-chip',
         'before:pointer-events-none before:absolute before:inset-0 before:rounded-full before:bg-[radial-gradient(circle_at_30%_20%,hsl(var(--accent-cyan)/0.28),transparent_42%),radial-gradient(circle_at_78%_90%,hsl(var(--accent-violet)/0.22),transparent_46%)]',
         'after:pointer-events-none after:absolute after:inset-px after:rounded-full after:border after:border-white/5',
         'hover:bg-elevated/80 focus-visible:ring-2 focus-visible:ring-ring',

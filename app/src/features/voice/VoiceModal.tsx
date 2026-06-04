@@ -126,12 +126,13 @@ export function VoiceModal() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
         className={cn(
+          'jarvis-voice-panel',
           // Override the default top-1/2 centre with a bottom-anchored placement.
           'top-auto bottom-12 translate-y-0',
           // Wider feel than a standard dialog, but capped for ergonomics.
-          'max-w-[460px] w-[92vw] gap-0 p-0',
+          'max-w-[460px] w-[92vw] gap-0 overflow-hidden p-0',
           // Frosted surface that lets the GlowBorder peek through.
-          'border-border/60 bg-elevated/90 backdrop-blur-xl',
+          'border-accent-cyan/25 bg-elevated/90 backdrop-blur-xl',
           'data-[state=open]:animate-slide-up',
         )}
         hideClose
@@ -144,10 +145,13 @@ export function VoiceModal() {
           Speak to Jarvis. Press Escape to close. {personaCfg.description}
         </DialogDescription>
 
-        <div className="flex flex-col items-center gap-5 px-6 pb-6 pt-7">
-          <Orb state={state} size={170} />
+        <div className="relative z-10 flex flex-col items-center gap-5 px-6 pb-6 pt-7">
+          <div className="jarvis-voice-orb-shell">
+            <Orb state={state} size={170} />
+          </div>
 
           <div className="flex flex-col items-center gap-1 text-center">
+            <div className="text-metadata uppercase tracking-[0.34em] text-accent-cyan/80">Symbiote link</div>
             <div className="text-ui-strong text-foreground tracking-tight">{personaCfg.name}</div>
             <div
               className={cn(

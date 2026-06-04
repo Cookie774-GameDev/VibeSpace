@@ -8,6 +8,8 @@ describe('wake word helpers', () => {
   it('accepts direct and natural wake phrases', () => {
     expect(containsWakePhrase('Jarvis')).toBe(true);
     expect(containsWakePhrase('hey jarvis open voice')).toBe(true);
+    expect(containsWakePhrase('hello Jarvis')).toBe(true);
+    expect(containsWakePhrase('yo jarvis')).toBe(true);
     expect(containsWakePhrase('okay, Jarvis')).toBe(true);
     expect(containsWakePhrase('wake up jarvis')).toBe(true);
   });
