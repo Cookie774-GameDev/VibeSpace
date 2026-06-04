@@ -68,6 +68,7 @@ export function useGlobalHotkeys(): void {
     HOTKEYS.PUSH_TO_TALK,
     React.useCallback((e: KeyboardEvent) => {
       e.preventDefault();
+      if (e.repeat) return;
       useUIStore.getState().toggleVoice();
     }, []),
     { whenInputs: true },

@@ -10,10 +10,10 @@ import { cn } from '@/lib/utils';
  * Compact voice trigger button - the affordance dropped into the TopBar.
  *
  * Behaviour (per docs/04 sec 6 + the brief):
- *  - Quick tap (< 250 ms): toggle the voice modal open / closed.
- *  - Hold (>= 550 ms): push-to-talk - opens the modal and starts listening
- *    on press, closes it on release. Pointer capture keeps the release event
- *    fired even if the pointer leaves the button bounds while held.
+ *  - Quick tap (< 550 ms): toggle the voice modal open / closed.
+ *  - Hold (>= 550 ms): summons voice and keeps it open after release.
+ *    Pointer capture keeps the release event fired even if the pointer
+ *    leaves the button bounds while held.
  *  - Keyboard activation (Space / Enter while focused): toggle.
  *
  * The component is uncontrolled by default and binds to `useUIStore`. Pass
@@ -84,8 +84,7 @@ export function VoiceTrigger({ active, onActiveChange, side = 'bottom', classNam
     const wasHeld = heldRef.current;
     clearPress();
     if (wasHeld) {
-      // Push-to-talk release - close.
-      setActive(false);
+      setActive(true);
     } else {
       // Quick tap - toggle.
       setActive(!isActive);
@@ -96,7 +95,7 @@ export function VoiceTrigger({ active, onActiveChange, side = 'bottom', classNam
     if (downTimeRef.current === null) return;
     const wasHeld = heldRef.current;
     clearPress();
-    if (wasHeld) setActive(false);
+    if (wasHeld) setActive(true);
   };
 
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
