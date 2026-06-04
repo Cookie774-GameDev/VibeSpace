@@ -111,7 +111,7 @@ const MAX_SCAN_DEPTH = 6;
 const MAX_FILE_SAMPLE_CHARS = 12_000;
 const MAX_FILE_SAMPLE_BYTES = 64 * 1024;
 const MAX_TOTAL_SAMPLE_CHARS = 260_000;
-const MAX_CONTEXT_FILE_BYTES = 100 * 1024 * 1024;
+export const MAX_CONTEXT_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_PROMPT_CHARS = 280_000;
 const CONTEXT_OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const CONTEXT_GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -128,10 +128,19 @@ const IGNORED_EXTENSIONS = new Set([
   'dll', 'dylib', 'so', 'jar', 'class', 'wasm', 'pdb', 'sqlite', 'db', 'lockb', 'msi',
 ]);
 
-const MEDIA_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'icns', 'bmp', 'tiff', 'avif',
-  'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi',
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'icns', 'bmp', 'tif', 'tiff', 'avif', 'svg', 'heic', 'heif',
+]);
+const VIDEO_EXTENSIONS = new Set([
+  'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'wmv', 'mpg', 'mpeg', '3gp',
+]);
+const AUDIO_EXTENSIONS = new Set([
   'mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac',
+]);
+const MEDIA_EXTENSIONS = new Set([
+  ...IMAGE_EXTENSIONS,
+  ...VIDEO_EXTENSIONS,
+  ...AUDIO_EXTENSIONS,
 ]);
 
 export function contextStorageKey(projectId: string | null): string {
@@ -670,8 +679,8 @@ function isMediaContextFile(path: string): boolean {
 function mediaMetadataContent(rootDir: string, entry: FsEntry): string {
   const ext = extension(entry.path).toLowerCase();
   const kind =
-    ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'].includes(ext) ? 'video'
-      : ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'].includes(ext) ? 'audio'
+    VIDEO_EXTENSIONS.has(ext) ? 'video'
+      : AUDIO_EXTENSIONS.has(ext) ? 'audio'
         : 'image';
   return [
     `Media file metadata only (${kind}).`,
@@ -990,7 +999,9 @@ function extensionLabel(ext: string): string {
   if (clean === 'json') return 'configuration';
   if (clean === 'md') return 'documentation';
   if (clean === 'sql') return 'database';
-  if (MEDIA_EXTENSIONS.has(clean)) return clean === 'mp4' || clean === 'mov' || clean === 'webm' ? 'video media' : 'media asset';
+  if (VIDEO_EXTENSIONS.has(clean)) return 'video media';
+  if (AUDIO_EXTENSIONS.has(clean)) return 'audio media';
+  if (IMAGE_EXTENSIONS.has(clean)) return 'image media';
   return clean;
 }
 
