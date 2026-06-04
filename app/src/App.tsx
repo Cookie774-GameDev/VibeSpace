@@ -280,6 +280,54 @@ function useBoot() {
   }, []);
 }
 
+function useDesktopReopenLifecycle() {
+  React.useEffect(() => {
+    const notifyVisible = (reason: string) => {
+      window.requestAnimationFrame(() => {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:terminals:visible', {
+            detail: { reason },
+          }),
+        );
+      });
+    };
+
+    const onFocus = () => notifyVisible('window-focus');
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') notifyVisible('visibility');
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    let disposed = false;
+    let unlistenReopen: (() => void) | null = null;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<{ reason?: string }>('jarvis:reopen', (event) => {
+          notifyVisible(event.payload?.reason ?? 'desktop-reopen');
+        }),
+      )
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenReopen = unlisten;
+      })
+      .catch(() => {
+        /* Web preview or test runtime without Tauri events. */
+      });
+
+    return () => {
+      disposed = true;
+      unlistenReopen?.();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+}
+
 /**
  * Wires up the global Cmd+K palette + every other hotkey across features.
  */
@@ -380,6 +428,7 @@ function AssistantBarHost() {
 function WorkspaceRoot() {
   useBoot();
   useBridgeLifecycle();
+  useDesktopReopenLifecycle();
 
   // Wire outbound-call trigger so any feature can call `fireOutboundCall(...)`.
   // Default categories (manual + error) are toggled in Settings → Phone & Voice.

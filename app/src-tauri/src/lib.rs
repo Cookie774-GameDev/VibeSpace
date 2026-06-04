@@ -39,7 +39,7 @@
 //! New commands should be small and pure; heavy logic belongs in the Node
 //! runtime sidecar so we keep the Rust core boring and stable.
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 mod fsread;
 mod terminal;
@@ -60,6 +60,31 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[derive(Clone, serde::Serialize)]
+struct ReopenPayload {
+    reason: &'static str,
+}
+
+fn show_main_window(app: &tauri::AppHandle, reason: &'static str) {
+    println!("[lifecycle] showing main window ({reason})");
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(err) = window.show() {
+            eprintln!("[lifecycle] failed to show main window ({reason}): {err}");
+        }
+        if let Err(err) = window.unminimize() {
+            eprintln!("[lifecycle] failed to unminimize main window ({reason}): {err}");
+        }
+        if let Err(err) = window.set_focus() {
+            eprintln!("[lifecycle] failed to focus main window ({reason}): {err}");
+        }
+        if let Err(err) = window.emit("jarvis:reopen", ReopenPayload { reason }) {
+            eprintln!("[lifecycle] failed to emit reopen event ({reason}): {err}");
+        }
+    } else {
+        eprintln!("[lifecycle] main window missing during show request ({reason})");
+    }
+}
+
 /// Runs the Tauri app. Re-exposed under `#[mobile_entry_point]` so the same
 /// crate works for future iOS / Android builds via `npx tauri ios|android`.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -67,11 +92,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             println!("[single-instance] Reusing existing Jarvis service instance");
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            show_main_window(app, "second-instance");
         }))
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
@@ -101,10 +122,7 @@ pub fn run() {
                 .on_menu_event(|app, event| {
                     match event.id.as_ref() {
                         "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                            show_main_window(app, "tray-show");
                         }
                         "exit" => {
                             std::process::exit(0);
@@ -118,7 +136,10 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
+                println!("[lifecycle] hiding main window; background service remains alive");
+                if let Err(err) = window.hide() {
+                    eprintln!("[lifecycle] failed to hide main window: {err}");
+                }
                 api.prevent_close();
             }
         })
