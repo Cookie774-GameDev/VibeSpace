@@ -48,6 +48,8 @@ async function tauriInvoke<T = unknown>(
 export interface NotifyOptions {
   /** Suppress sound on supported platforms. */
   silent?: boolean;
+  /** Show an in-app toast when native/browser delivery is unavailable. */
+  fallbackToast?: boolean;
 }
 
 /**
@@ -63,7 +65,10 @@ export async function notify(
 ): Promise<void> {
   if (isTauri) {
     try {
-      let granted = await tauriInvoke<boolean>('plugin:notification|is_permission_granted');
+      const permissionState = await tauriInvoke<boolean | null>(
+        'plugin:notification|is_permission_granted',
+      );
+      let granted = permissionState === true;
       if (!granted) {
         const result = await tauriInvoke<string>('plugin:notification|request_permission');
         granted = result === 'granted';
@@ -95,10 +100,12 @@ export async function notify(
 
   // Last resort: in-app toast. Imported statically at the top of the
   // file so Vite keeps it on the same chunk as every other UI consumer.
-  try {
-    toast.info(title, body);
-  } catch {
-    /* nothing more we can do */
+  if (options.fallbackToast !== false) {
+    try {
+      toast.info(title, body);
+    } catch {
+      /* nothing more we can do */
+    }
   }
 }
 

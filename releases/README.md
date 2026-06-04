@@ -1,6 +1,6 @@
 # Releases
 
-This directory stages installers built locally before they get uploaded to GitHub Releases. Binaries are gitignored; only `README.md`, `SHA256SUMS.txt`, and per-version `RELEASE_NOTES*.md` files are tracked.
+This directory stages installers built locally before they get uploaded to GitHub Releases. Binaries and generated release metadata are gitignored; only `README.md` and per-version `RELEASE_NOTES*.md` files are tracked.
 
 ## Layout
 
@@ -8,8 +8,8 @@ This directory stages installers built locally before they get uploaded to GitHu
 releases/
   README.md                         this file (tracked)
   .gitignore                        binary blocklist (tracked)
-  SHA256SUMS.txt                    generated hashes (tracked, optional)
-  latest.json                       Tauri updater manifest (tracked, optional)
+  SHA256SUMS.txt                    generated hashes (gitignored)
+  latest.json                       Tauri updater manifest (gitignored)
   Jarvis One_0.1.17_x64-setup.exe   Tauri NSIS installer name (gitignored)
   Jarvis One_0.1.17_x64_en-US.msi   Tauri MSI installer name (gitignored)
   Jarvis-One-0.1.17-Windows-x64.exe friendly NSIS copy (gitignored)
@@ -72,3 +72,5 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 - **Friendly names** like `Jarvis-One-<version>-Windows-x64.exe` are for direct-download pages and humans.
 
 Keep both names when staging Windows releases so one-line installers, direct downloads, and silent updates all keep working.
+
+Do not commit `latest.json` or `SHA256SUMS.txt`; they are regenerated for the exact signed artifacts uploaded to a GitHub Release. A stale manifest can make silent updates fail signature validation.

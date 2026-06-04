@@ -61,5 +61,5 @@ export async function deliverClockAlert(entry: ClockEntry): Promise<void> {
 
   toast.warning(title, body, 15_000);
   playClockSound(entry.sound);
-  await notify(title, body, { silent: true });
+  await notify(title, body, { silent: true, fallbackToast: false });
 }

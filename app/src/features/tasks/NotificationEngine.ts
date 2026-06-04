@@ -1,6 +1,6 @@
 import { taskRepo } from '@/lib/db/repositories';
 import { useAuthStore } from '@/stores/auth';
-import { isTauri } from '@/lib/utils';
+import { notify } from '@/lib/tauri';
 import { toast } from '@/components/ui/toast';
 import type { Reminder, Task } from '@/types/task';
 
@@ -9,7 +9,7 @@ import type { Reminder, Task } from '@/types/task';
  *
  * - Polls scheduled reminders every 30 seconds.
  * - When a reminder's fires_at <= now, dispatches via:
- *     (1) browser/Tauri notification banner
+ *     (1) native/browser notification banner
  *     (2) in-app toast (always, as a soft fallback / always-visible cue)
  *     (3) the `jarvis:reminder` custom event (for the rest of the app
  *         to react - e.g., voice service speaks the reminder).
@@ -17,9 +17,8 @@ import type { Reminder, Task } from '@/types/task';
  * Permission flow is non-blocking: we ask only when the first reminder
  * is being delivered, never at boot.
  *
- * Tauri detection is graceful - if the runtime isn't Tauri or the optional
- * notification module isn't available, we silently fall through to the
- * browser path.
+ * Native/browser delivery is centralized through `lib/tauri.notify` so tasks,
+ * clock alerts, and future update reminders use the same Tauri v2 command path.
  */
 
 const POLL_INTERVAL_MS = 30 * 1000;
@@ -69,7 +68,7 @@ export function startNotificationLoop(): () => void {
 
 /**
  * Run one pass over open tasks and deliver any reminders whose
- * `fires_at` has passed.  Exported for tests.
+ * `fires_at` has passed. Exported for tests.
  */
 export async function pollOnce(now: number = Date.now()): Promise<number> {
   const workspaceId = useAuthStore.getState().workspaceId;
@@ -134,87 +133,7 @@ async function deliverReminder(task: Task, reminder: Reminder): Promise<void> {
     /* toast is best-effort */
   }
 
-  // Native banner (priority order: Tauri > browser).
-  let delivered = false;
-  if (isTauri) {
-    delivered = await deliverTauri(title, body);
-  }
-  if (!delivered) {
-    delivered = await deliverBrowser(title, body);
-  }
-
-  // If neither native channel delivered, the in-app toast is sufficient.
-  void delivered;
-}
-
-// ============================================================
-// Tauri delivery (optional / graceful)
-// ============================================================
-
-async function deliverTauri(title: string, body: string): Promise<boolean> {
-  // We don't statically import the Tauri notification module because it
-  // may not be present in the bundle (browser dev) and we don't want to
-  // pull it into the chunk graph eagerly. Vite's @vite-ignore tells the
-  // bundler to skip resolution; the @ts-ignore covers strict TS in case
-  // the package isn't installed.
-  //
-  // Tauri v2 moved this from `@tauri-apps/api/notification` (the v1
-  // path the original code used, which has not existed since the v1→v2
-  // migration and was silently failing) to the dedicated
-  // `@tauri-apps/plugin-notification` package. The audit's medium-
-  // severity finding: native banners through this path stopped working
-  // when the rest of the app moved to v2, but the function returned
-  // `false` cleanly so we just silently fell back to browser
-  // notifications without anyone noticing.
-  try {
-    const path = '@tauri-apps/plugin-notification';
-    // @ts-ignore - dynamic import for optional Tauri runtime
-    const mod: any = await import(/* @vite-ignore */ path).catch(() => null);
-    if (!mod || typeof mod.sendNotification !== 'function') return false;
-
-    if (typeof mod.isPermissionGranted === 'function') {
-      let granted: boolean = await mod.isPermissionGranted();
-      if (!granted && typeof mod.requestPermission === 'function') {
-        const status = await mod.requestPermission();
-        granted = status === 'granted';
-      }
-      if (!granted) return false;
-    }
-    mod.sendNotification({ title, body });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ============================================================
-// Browser delivery
-// ============================================================
-
-let permissionAsked = false;
-
-async function deliverBrowser(title: string, body: string): Promise<boolean> {
-  if (typeof window === 'undefined' || typeof Notification === 'undefined') return false;
-
-  try {
-    if (Notification.permission === 'default' && !permissionAsked) {
-      permissionAsked = true;
-      // Async permission request - first reminder doubles as the prompt.
-      try {
-        await Notification.requestPermission();
-      } catch {
-        return false;
-      }
-    }
-
-    if (Notification.permission !== 'granted') return false;
-
-    // eslint-disable-next-line no-new
-    new Notification(title, { body });
-    return true;
-  } catch {
-    return false;
-  }
+  await notify(title, body, { fallbackToast: false });
 }
 
 /**
@@ -225,7 +144,6 @@ async function deliverBrowser(title: string, body: string): Promise<boolean> {
 export async function ensureNotificationPermission(): Promise<NotificationPermission | 'unavailable'> {
   if (typeof window === 'undefined' || typeof Notification === 'undefined') return 'unavailable';
   if (Notification.permission !== 'default') return Notification.permission;
-  permissionAsked = true;
   try {
     return await Notification.requestPermission();
   } catch {
