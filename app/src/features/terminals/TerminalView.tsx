@@ -43,7 +43,11 @@ import 'xterm/css/xterm.css';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toast';
 import type { TerminalViewProps } from './types';
-import { terminalRestoreText, useTerminalTranscriptStore } from './transcriptStore';
+import { useTerminalTranscriptStore } from './transcriptStore';
+import {
+  resolveTerminalRestoreSession,
+  type BackendTerminalInfo,
+} from './restoreSession';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
@@ -428,64 +432,34 @@ export function TerminalView({
         /* container not laid out yet; post-spawn fit covers it */
       }
 
-      interface BackendTerminalInfo {
-        sessionId: string;
-        command: string;
-        cwd: string;
-        rows: number;
-        cols: number;
-        startedAt: number;
-        projectId?: string | null;
-      }
-
       // Spawn or attach.
       let sid: string;
       let spawnedFresh = false;
       let restoredInput = '';
       try {
-        let isExistingSessionActive = false;
-        if (existingSessionId != null) {
+        let activeSessions: BackendTerminalInfo[] = [];
+        if (existingSessionId != null || paneId) {
           try {
-            console.log(`[Jarvis] Checking if existing session ${existingSessionId} is active...`);
-            const activeSessions = await invoke<BackendTerminalInfo[]>('terminal_list');
-            isExistingSessionActive = activeSessions.some((s) => (
-              s.sessionId === existingSessionId &&
-              (s.projectId ?? null) === (projectId ?? null)
-            ));
-            console.log(`[Jarvis] Active check result for ${existingSessionId}: ${isExistingSessionActive}`);
+            activeSessions = await invoke<BackendTerminalInfo[]>('terminal_list');
           } catch (listErr) {
-            console.error('[Jarvis] Failed to list terminal sessions:', listErr);
+            console.warn('[Jarvis] Failed to list terminal sessions for restore:', listErr);
           }
         }
 
-        if (existingSessionId == null || !isExistingSessionActive) {
+        const restoreDecision = resolveTerminalRestoreSession({
+          existingSessionId,
+          paneId,
+          projectId,
+          activeSessions,
+          transcripts: useTerminalTranscriptStore.getState().sessions,
+        });
+
+        if (restoreDecision.kind === 'spawn') {
           spawnedFresh = true;
-          let oldTranscript = '';
-          let matchedOldSessionId: string | null = null;
+          restoredInput = restoreDecision.restoredInput;
 
-          if (existingSessionId != null && !isExistingSessionActive) {
-            console.log(`[Jarvis] Session ${existingSessionId} is dead/inactive on backend. Re-spawning PTY and restoring visual transcript.`);
-            const oldSession = useTerminalTranscriptStore.getState().sessions[existingSessionId];
-            oldTranscript = terminalRestoreText(oldSession);
-            restoredInput = oldSession?.currentInput ?? '';
-            matchedOldSessionId = existingSessionId;
-          } else if (existingSessionId == null && paneId) {
-            console.log(`[Jarvis] No existing session id for pane ${paneId} (app startup). Looking for historical transcript by paneId...`);
-            const sessions = Object.values(useTerminalTranscriptStore.getState().sessions);
-            const oldSession = sessions.find((s) => (
-              s.paneId === paneId &&
-              (s.projectId ?? null) === (projectId ?? null)
-            ));
-            if (oldSession) {
-              console.log(`[Jarvis] Found historical transcript for pane ${paneId} under old session ${oldSession.sessionId}`);
-              oldTranscript = terminalRestoreText(oldSession);
-              restoredInput = oldSession.currentInput ?? '';
-              matchedOldSessionId = oldSession.sessionId;
-            }
-          }
-
-          if (oldTranscript) {
-            term.write(oldTranscript);
+          if (restoreDecision.restoredText) {
+            term.write(restoreDecision.restoredText);
             term.write('\r\n\x1b[33m[Session restored - process restarted]\x1b[0m\r\n');
             // Set active window of 3s to bypass ConPTY initialization screen-clear signals only when restoring transcript
             ignoreClearsUntilRef.current = Date.now() + 3000;
@@ -502,8 +476,8 @@ export function TerminalView({
           sid = result.sessionId;
           console.log(`[Jarvis] Spawned new PTY session: ${sid}`);
 
-          if (matchedOldSessionId) {
-            useTerminalTranscriptStore.getState().transferSession(matchedOldSessionId, sid);
+          if (restoreDecision.oldSessionId) {
+            useTerminalTranscriptStore.getState().transferSession(restoreDecision.oldSessionId, sid);
           }
 
           // Register the new session!
@@ -515,13 +489,11 @@ export function TerminalView({
           });
 
         } else {
-          sid = existingSessionId;
-          console.log(`[Jarvis] Re-attaching to existing active session: ${sid}`);
+          sid = restoreDecision.sessionId;
+          console.log(`[Jarvis] Re-attaching to existing active session: ${sid} (${restoreDecision.source})`);
           // Restore visual transcript for active session re-attach
-          const activeSession = useTerminalTranscriptStore.getState().sessions[sid];
-          const activeTranscript = terminalRestoreText(activeSession);
-          if (activeTranscript) {
-            term.write(activeTranscript);
+          if (restoreDecision.restoredText) {
+            term.write(restoreDecision.restoredText);
           }
         }
       } catch (err) {
