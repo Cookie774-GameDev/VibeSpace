@@ -33,7 +33,7 @@ export class AmbientAudioEngine {
       this.masterGain = this.ctx.createGain();
       this.masterGain.connect(this.ctx.destination);
       
-      // Master volume scale: keep ambient drone very quiet (max ~0.15 scale at 100%)
+      // Master volume scale: audible but still safely below full app volume.
       this.updateMasterVolume();
     }
     
@@ -43,7 +43,7 @@ export class AmbientAudioEngine {
 
   private updateMasterVolume(): void {
     if (!this.masterGain || !this.ctx) return;
-    const targetGain = (this.currentVolumePercent / 100) * 0.15;
+    const targetGain = (this.currentVolumePercent / 100) * 0.35;
     this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, this.ctx.currentTime);
     this.masterGain.gain.linearRampToValueAtTime(targetGain, this.ctx.currentTime + 0.1);
   }
@@ -88,7 +88,11 @@ export class AmbientAudioEngine {
     const sources: { stop: () => void }[] = [];
 
     // Synthesize the chosen track
-    if (track === 'warm-hearth') {
+    if (track === 'calm-focus') {
+      this.buildCalmFocus(ctx, trackGain, sources);
+    } else if (track === 'soothing-rain') {
+      this.buildSoothingRain(ctx, trackGain, sources);
+    } else if (track === 'warm-hearth') {
       this.buildWarmHearth(ctx, trackGain, sources);
     } else if (track === 'deep-ocean') {
       this.buildDeepOcean(ctx, trackGain, sources);
@@ -96,6 +100,10 @@ export class AmbientAudioEngine {
       this.buildStarlight(ctx, trackGain, sources);
     } else if (track === 'forest-rain') {
       this.buildForestRain(ctx, trackGain, sources);
+    } else if (track === 'lofi-night') {
+      this.buildLofiNight(ctx, trackGain, sources);
+    } else if (track === 'rap-instrumental') {
+      this.buildRapInstrumental(ctx, trackGain, sources);
     }
 
     this.activeTrackNodes = {
@@ -195,6 +203,156 @@ export class AmbientAudioEngine {
   }
 
   // --- Track synthesis builders ---
+
+  private createNoiseSource(ctx: AudioContext, seconds = 2, brown = false): AudioBufferSourceNode {
+    const bufferSize = Math.max(1, Math.floor(ctx.sampleRate * seconds));
+    const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+    let lastOut = 0.0;
+    for (let i = 0; i < bufferSize; i++) {
+      const white = Math.random() * 2 - 1;
+      if (brown) {
+        output[i] = (lastOut + (0.02 * white)) / 1.02;
+        lastOut = output[i];
+        output[i] *= 3.5;
+      } else {
+        output[i] = white;
+      }
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = noiseBuffer;
+    source.loop = true;
+    return source;
+  }
+
+  private pulse(
+    ctx: AudioContext,
+    dest: AudioNode,
+    frequency: number,
+    when: number,
+    duration: number,
+    gainValue: number,
+    type: OscillatorType = 'sine',
+  ): void {
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, when);
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(gainValue, when + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + duration);
+    oscillator.connect(gain);
+    gain.connect(dest);
+    oscillator.start(when);
+    oscillator.stop(when + duration + 0.02);
+  }
+
+  private buildCalmFocus(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    const chordGain = ctx.createGain();
+    chordGain.gain.setValueAtTime(0.16, ctx.currentTime);
+    chordGain.connect(dest);
+
+    [261.63, 329.63, 392.0, 523.25].forEach((frequency, index) => {
+      const osc = ctx.createOscillator();
+      osc.type = index === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(index === 0 ? 0.22 : 0.12, ctx.currentTime);
+      osc.connect(gain);
+      gain.connect(chordGain);
+      osc.start();
+      sources.push(osc);
+    });
+
+    const shimmer = ctx.createOscillator();
+    shimmer.type = 'sine';
+    shimmer.frequency.setValueAtTime(0.045, ctx.currentTime);
+    const shimmerGain = ctx.createGain();
+    shimmerGain.gain.setValueAtTime(0.055, ctx.currentTime);
+    shimmer.connect(shimmerGain);
+    shimmerGain.connect(chordGain.gain);
+    shimmer.start();
+    sources.push(shimmer);
+  }
+
+  private buildSoothingRain(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    const pad = ctx.createGain();
+    pad.gain.setValueAtTime(0.12, ctx.currentTime);
+    pad.connect(dest);
+    [196, 246.94, 293.66].forEach((frequency) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+      osc.connect(pad);
+      osc.start();
+      sources.push(osc);
+    });
+
+    const rain = this.createNoiseSource(ctx, 2, true);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1700, ctx.currentTime);
+    filter.Q.setValueAtTime(0.6, ctx.currentTime);
+    const rainGain = ctx.createGain();
+    rainGain.gain.setValueAtTime(0.2, ctx.currentTime);
+    rain.connect(filter);
+    filter.connect(rainGain);
+    rainGain.connect(dest);
+    rain.start();
+    sources.push(rain);
+  }
+
+  private buildLofiNight(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    this.buildCalmFocus(ctx, dest, sources);
+
+    const beatGain = ctx.createGain();
+    beatGain.gain.setValueAtTime(0.35, ctx.currentTime);
+    beatGain.connect(dest);
+    const bpm = 78;
+    const step = 60 / bpm / 2;
+    let count = 0;
+    const interval = window.setInterval(() => {
+      if (!this.isEngineRunning) return;
+      const when = ctx.currentTime + 0.02;
+      const position = count % 8;
+      if (position === 0 || position === 4) this.pulse(ctx, beatGain, 58, when, 0.18, 0.45, 'sine');
+      if (position === 2 || position === 6) this.pulse(ctx, beatGain, 190, when, 0.08, 0.18, 'triangle');
+      this.pulse(ctx, beatGain, 8200, when, 0.035, position % 2 === 0 ? 0.04 : 0.025, 'square');
+      count += 1;
+    }, step * 1000);
+
+    sources.push({ stop: () => window.clearInterval(interval) });
+  }
+
+  private buildRapInstrumental(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(49, ctx.currentTime);
+    const subGain = ctx.createGain();
+    subGain.gain.setValueAtTime(0.16, ctx.currentTime);
+    sub.connect(subGain);
+    subGain.connect(dest);
+    sub.start();
+    sources.push(sub);
+
+    const beatGain = ctx.createGain();
+    beatGain.gain.setValueAtTime(0.42, ctx.currentTime);
+    beatGain.connect(dest);
+    const bpm = 92;
+    const step = 60 / bpm / 4;
+    let count = 0;
+    const interval = window.setInterval(() => {
+      if (!this.isEngineRunning) return;
+      const when = ctx.currentTime + 0.015;
+      const position = count % 16;
+      if ([0, 6, 10].includes(position)) this.pulse(ctx, beatGain, 46, when, 0.2, 0.55, 'sine');
+      if ([4, 12].includes(position)) this.pulse(ctx, beatGain, 210, when, 0.09, 0.2, 'triangle');
+      if (position % 2 === 0 || position === 15) this.pulse(ctx, beatGain, 9500, when, 0.025, 0.055, 'square');
+      count += 1;
+    }, step * 1000);
+
+    sources.push({ stop: () => window.clearInterval(interval) });
+  }
 
   private buildWarmHearth(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;

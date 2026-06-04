@@ -3,7 +3,15 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Theme } from '@/types/common';
 import { safeLocalStorage, measureStorageSizes } from '@/lib/persistence/safeLocalStorage';
 
-export type AmbientTrack = 'warm-hearth' | 'deep-ocean' | 'starlight' | 'forest-rain';
+export type AmbientTrack =
+  | 'calm-focus'
+  | 'soothing-rain'
+  | 'warm-hearth'
+  | 'deep-ocean'
+  | 'starlight'
+  | 'forest-rain'
+  | 'lofi-night'
+  | 'rap-instrumental';
 
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
 
@@ -255,8 +263,8 @@ const defaults: Pick<
   ambientActive: false,
   ambientThresholdMs: 5 * 60 * 1000,
   ambientDrone: false,
-  ambientTrack: 'warm-hearth',
-  ambientVolume: 40,
+  ambientTrack: 'calm-focus',
+  ambientVolume: 55,
   ambientAlwaysPlay: false,
   chatFullscreen: false,
   launcherOpen: false,
