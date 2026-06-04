@@ -4,6 +4,7 @@ import type { ProviderId, WorkspaceId, ProjectId } from '@/types/common';
 import type { PlanId } from '@/lib/entitlements';
 import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import {
+  SECRET_API_KEY_PROVIDERS,
   isSecretApiKeyProvider,
   loadSecureApiKeys,
   secureDeleteApiKey,
@@ -77,6 +78,36 @@ interface AuthState {
   setPlan: (p: PlanId) => void;
 }
 
+function persistedLocalApiKeys(
+  keys: Partial<Record<ProviderId, string>>,
+): Partial<Record<ProviderId, string>> {
+  return {
+    ...(keys.mock ? { mock: keys.mock } : {}),
+    ...(keys.ollama ? { ollama: keys.ollama } : {}),
+  };
+}
+
+function legacySecretApiKeys(
+  keys: Partial<Record<ProviderId, string>>,
+): Partial<Record<ProviderId, string>> {
+  const out: Partial<Record<ProviderId, string>> = {};
+  for (const provider of SECRET_API_KEY_PROVIDERS) {
+    const value = keys[provider]?.trim();
+    if (value) out[provider] = value;
+  }
+  return out;
+}
+
+function migrateLegacySecretsToVault(keys: Partial<Record<ProviderId, string>>): void {
+  for (const provider of SECRET_API_KEY_PROVIDERS) {
+    const value = keys[provider]?.trim();
+    if (!value) continue;
+    void secureSetApiKey(provider, value).catch((err) => {
+      console.warn(`[credentials] Could not migrate ${provider} API key`, err);
+    });
+  }
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
@@ -139,10 +170,7 @@ export const useAuthStore = create<AuthState>()(
         email: s.email,
         workspaceId: s.workspaceId,
         projectId: s.projectId,
-        apiKeys: {
-          ...(s.apiKeys.mock ? { mock: s.apiKeys.mock } : {}),
-          ...(s.apiKeys.ollama ? { ollama: s.apiKeys.ollama } : {}),
-        },
+        apiKeys: persistedLocalApiKeys(s.apiKeys),
         defaultProvider: s.defaultProvider,
         offlineMode: s.offlineMode,
         defaultLocalModel: s.defaultLocalModel,
@@ -155,9 +183,11 @@ export const useAuthStore = create<AuthState>()(
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
         const keys = state.apiKeys ?? {};
+        const legacySecrets = legacySecretApiKeys(keys);
+        migrateLegacySecretsToVault(legacySecrets);
         state.apiKeys = {
-          ...(keys.mock ? { mock: keys.mock } : {}),
-          ...(keys.ollama ? { ollama: keys.ollama } : {}),
+          ...persistedLocalApiKeys(keys),
+          ...legacySecrets,
         };
         return state;
       },
