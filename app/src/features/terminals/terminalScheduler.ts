@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import { enqueueTerminalCommand } from './terminalCommandQueue';
 import type { TerminalRef } from './terminalRefs';
 import { terminalRefLabel } from './terminalRefs';
@@ -55,7 +56,19 @@ export const useTerminalSchedulerStore = create<TerminalSchedulerState>()(
       })),
       pending: () => get().messages.filter((m) => m.status === 'pending'),
     }),
-    { name: 'jarvis-terminal-scheduler-v1' },
+    {
+      name: 'jarvis-terminal-scheduler-v1',
+      storage: createJSONStorage(() => safeLocalStorage),
+      partialize: (s) => ({
+        messages: s.messages
+          .filter((m) => m.status === 'pending')
+          .concat(
+            s.messages
+              .filter((m) => m.status !== 'pending')
+              .slice(-20)
+          ),
+      }),
+    },
   ),
 );
 

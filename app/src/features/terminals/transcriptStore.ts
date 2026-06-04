@@ -41,6 +41,8 @@ import { create } from 'zustand';
  * few minutes" window without ballooning memory.
  */
 export const MAX_BYTES_PER_SESSION = 32 * 1024;
+export const MAX_PERSISTED_SESSIONS = 10;
+export const MAX_TOTAL_TRANSCRIPTS_SIZE_BYTES = 512 * 1024; // 512 KB
 
 /**
  * Truncation marker prefixed when the buffer is full and we drop
@@ -187,6 +189,50 @@ function appendBounded(existing: string, chunk: string): string {
   return TRUNCATION_MARKER + combined.slice(-room);
 }
 
+/**
+ * Prunes the terminal session transcript record dynamically to stay
+ * within strict limits on count, per-session size, and total size.
+ * Newest sessions are kept; oldest are evicted.
+ */
+export function pruneSessions(sessions: Record<string, SessionTranscript>): Record<string, SessionTranscript> {
+  const sessionList = Object.values(sessions);
+  if (sessionList.length === 0) return sessions;
+
+  // 1. Ensure all session text payloads are strictly bounded
+  for (const s of sessionList) {
+    if (s.text && s.text.length > MAX_BYTES_PER_SESSION) {
+      s.text = s.text.slice(-MAX_BYTES_PER_SESSION);
+    }
+    if (s.rawText && s.rawText.length > MAX_BYTES_PER_SESSION) {
+      s.rawText = s.rawText.slice(-MAX_BYTES_PER_SESSION);
+    }
+  }
+
+  // 2. Sort by lastWriteAt descending (newest first)
+  sessionList.sort((a, b) => b.lastWriteAt - a.lastWriteAt);
+
+  // 3. Limit to MAX_PERSISTED_SESSIONS
+  const activeSessions = sessionList.slice(0, MAX_PERSISTED_SESSIONS);
+
+  // 4. Construct pruned record and check overall size constraint
+  const pruned: Record<string, SessionTranscript> = {};
+  for (const s of activeSessions) {
+    pruned[s.sessionId] = s;
+  }
+
+  let jsonStr = JSON.stringify({ sessions: pruned });
+  while (activeSessions.length > 0 && jsonStr.length > MAX_TOTAL_TRANSCRIPTS_SIZE_BYTES) {
+    const evicted = activeSessions.pop();
+    if (evicted) {
+      delete pruned[evicted.sessionId];
+      console.warn(`[TRANSCRIPTS PRUNING] Evicted old session transcript '${evicted.sessionId}' to fit total cap.`);
+    }
+    jsonStr = JSON.stringify({ sessions: pruned });
+  }
+
+  return pruned;
+}
+
 const pendingStorageWrites = new Map<string, string>();
 let transcriptStorageTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -221,7 +267,7 @@ function loadInitialSessions(): Record<string, SessionTranscript> {
         bytesSeen: typeof session.bytesSeen === 'number' ? session.bytesSeen : 0,
       };
     }
-    return next;
+    return pruneSessions(next);
   } catch {
     return {};
   }
@@ -275,23 +321,22 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
       registerSession: (sessionId, init) => {
         set((state) => {
           const existing = state.sessions[sessionId];
-          return {
-            sessions: {
-              ...state.sessions,
-                [sessionId]: {
-                  sessionId,
-                  paneId: init.paneId ?? existing?.paneId ?? null,
-                  projectId: init.projectId ?? existing?.projectId ?? null,
-                  agentSlug: init.agentSlug ?? existing?.agentSlug ?? null,
-                  command: init.command ?? existing?.command ?? null,
-                  text: existing?.text ?? '',
-                  rawText: existing?.rawText ?? '',
-                  currentInput: existing?.currentInput ?? '',
-                  lastWriteAt: existing?.lastWriteAt ?? Date.now(),
-                  bytesSeen: existing?.bytesSeen ?? 0,
-                },
+          const nextSessions = {
+            ...state.sessions,
+            [sessionId]: {
+              sessionId,
+              paneId: init.paneId ?? existing?.paneId ?? null,
+              projectId: init.projectId ?? existing?.projectId ?? null,
+              agentSlug: init.agentSlug ?? existing?.agentSlug ?? null,
+              command: init.command ?? existing?.command ?? null,
+              text: existing?.text ?? '',
+              rawText: existing?.rawText ?? '',
+              currentInput: existing?.currentInput ?? '',
+              lastWriteAt: existing?.lastWriteAt ?? Date.now(),
+              bytesSeen: existing?.bytesSeen ?? 0,
             },
           };
+          return { sessions: pruneSessions(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -300,12 +345,11 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
         set((state) => {
           const cur = state.sessions[sessionId];
           if (!cur) return {};
-          return {
-            sessions: {
-              ...state.sessions,
-              [sessionId]: { ...cur, agentSlug },
-            },
+          const nextSessions = {
+            ...state.sessions,
+            [sessionId]: { ...cur, agentSlug },
           };
+          return { sessions: pruneSessions(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -315,18 +359,17 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
         set((state) => {
           const cur = state.sessions[sessionId];
           if (!cur) return {};
-          return {
-            sessions: {
-              ...state.sessions,
-              [sessionId]: {
-                ...cur,
-                text: appendBounded(cur.text, cleaned),
-                rawText: appendBounded(cur.rawText ?? '', raw),
-                bytesSeen: cur.bytesSeen + raw.length,
-                lastWriteAt: Date.now(),
-              },
+          const nextSessions = {
+            ...state.sessions,
+            [sessionId]: {
+              ...cur,
+              text: appendBounded(cur.text, cleaned),
+              rawText: appendBounded(cur.rawText ?? '', raw),
+              bytesSeen: cur.bytesSeen + raw.length,
+              lastWriteAt: Date.now(),
             },
           };
+          return { sessions: pruneSessions(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -335,16 +378,15 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
         set((state) => {
           const cur = state.sessions[sessionId];
           if (!cur || cur.currentInput === currentInput) return {};
-          return {
-            sessions: {
-              ...state.sessions,
-              [sessionId]: {
-                ...cur,
-                currentInput,
-                lastWriteAt: Date.now(),
-              },
+          const nextSessions = {
+            ...state.sessions,
+            [sessionId]: {
+              ...cur,
+              currentInput,
+              lastWriteAt: Date.now(),
             },
           };
+          return { sessions: pruneSessions(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -354,7 +396,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
           if (!state.sessions[sessionId]) return {};
           const next = { ...state.sessions };
           delete next[sessionId];
-          return { sessions: next };
+          return { sessions: pruneSessions(next) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -363,14 +405,14 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
         set((state) => {
           const oldSession = state.sessions[oldSessionId];
           if (!oldSession) return {};
-          const next = { ...state.sessions };
-          next[newSessionId] = {
+          const nextSessions = { ...state.sessions };
+          nextSessions[newSessionId] = {
             ...oldSession,
             sessionId: newSessionId,
             lastWriteAt: Date.now(),
           };
-          delete next[oldSessionId];
-          return { sessions: next };
+          delete nextSessions[oldSessionId];
+          return { sessions: pruneSessions(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -379,19 +421,18 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
         set((state) => {
           const cur = state.sessions[sessionId];
           if (!cur) return {};
-          return {
-            sessions: {
-              ...state.sessions,
-              [sessionId]: {
-                ...cur,
-                text: '',
-                rawText: '',
-                currentInput: '',
-                bytesSeen: 0,
-                lastWriteAt: Date.now(),
-              },
+          const nextSessions = {
+            ...state.sessions,
+            [sessionId]: {
+              ...cur,
+              text: '',
+              rawText: '',
+              currentInput: '',
+              bytesSeen: 0,
+              lastWriteAt: Date.now(),
             },
           };
+          return { sessions: pruneSessions(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },

@@ -28,7 +28,8 @@
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import { Wrench } from 'lucide-react';
 import { getBuiltinAction } from '@/lib/actions/registry';
 import type { ActionDef, ActionResult, ActionRunContext } from '@/lib/actions/types';
@@ -336,6 +337,7 @@ export const useToolStore = create<ToolStoreState>()(
     }),
     {
       name: 'jarvis-tools',
+      storage: createJSONStorage(() => safeLocalStorage),
       // Persist only the tools array; everything else is derived state.
       partialize: (s) => ({ tools: s.tools }),
       version: 1,

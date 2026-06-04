@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { ProviderId, WorkspaceId, ProjectId } from '@/types/common';
 import type { PlanId } from '@/lib/entitlements';
+import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 
 interface AuthState {
   /** Local-only profile (no cloud account) */
@@ -107,6 +108,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'jarvis-auth',
+      storage: createJSONStorage(() => safeLocalStorage),
       partialize: (s) => ({
         localUserId: s.localUserId,
         displayName: s.displayName,

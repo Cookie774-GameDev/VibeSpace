@@ -1,11 +1,11 @@
 {
-  "version": "0.1.16",
-  "notes": "Jarvis 0.1.16",
-  "pub_date": "2026-06-03T17:52:22.087Z",
+  "version": "0.1.17",
+  "notes": "Jarvis 0.1.17",
+  "pub_date": "2026-06-04T03:53:06.305Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSYWx1U2JGY3FnSEtSNlVnYkUvMWF4aTFpQ0J2MDRHcFEzYzUzMytwQWFleHJOeEt6cUlvaEt3OU9TQ3Uzcmptdi9JWldCY1JHMjJFM2M4eEM5cXNhWDJmUVRFcFBNeGdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgwNTA5MTQxCWZpbGU6SmFydmlzIE9uZV8wLjEuMTZfeDY0LXNldHVwLmV4ZQpZVU04blBsaE01djRiV2NIc0hta2VXZWZ5RXYwQ1d4dGNBejl2SkVRZVFRc2o2eU9jZExjWjZaWWhZeTl5NTh3a2dpbEE1b3ppR21sbXF4Uk8xd3dDUT09Cg==",
-      "url": "https://github.com/Cookie774-GameDev/Jarivs-One/releases/download/v0.1.16/Jarvis%20One_0.1.16_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSYWx1U2JGY3FnSEhEY0J6RmUzTkloTU5NYjFnaHYzTEtLTHB4MlF3VGVoR0VFSTQxUmhDUkkweDVjbUcrcUkxdDhQSE9wZjBDbDNtYTFJV25QWGwySE5rajJ2Z3hxa1F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgwNTEyMTI4CWZpbGU6SmFydmlzIE9uZV8wLjEuMTdfeDY0LXNldHVwLmV4ZQp2T0FER2RsVEI5NU9PMGU5dGU2TXZ3QXJsOVdOc2g3YVFmbkd2eG5aOUE5S1lkOVAyQ2Q4TVNjdmJ3d2FseFFmeGd1VERtbUxUMWpuZWp3dTFLL3hDdz09Cg==",
+      "url": "https://github.com/Cookie774-GameDev/Jarivs-One/releases/download/v0.1.17/Jarvis%20One_0.1.17_x64-setup.exe"
     }
   }
 }

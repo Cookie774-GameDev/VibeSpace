@@ -1718,3 +1718,30 @@ Design: cozy Claude-inspired palette (cream `#FAF6EE`, copper `#B5613A`, amber `
 - Windows artifacts are validated on this host. macOS/Linux packaging remains unverified on this Windows machine.
 
 
+
+## June 3, 2026 - Zustand safeLocalStorage & QuotaExceededError Mitigation (v0.1.18)
+
+**Goal:** Permanently resolve the fatal React error screen crash: `QuotaExceededError: Failed to execute 'setItem' on 'Storage': Setting the value of 'jarvis-ui' exceeded the quota.`
+
+**Result:** Created a decoupled, robust persistence layer `safeLocalStorage` that prevents React crashes on quota errors and clears corrupted local storage keys. Implemented a strict capping and loop-free pruning strategy for terminal transcripts in `transcriptStore.ts` (max 10 sessions, max 512 KB total, max 32 KB per session). Configured lightweight `partialize` lists for `useUIStore`, `useAuthStore`, `useToolStore`, and `useTerminalSchedulerStore`. Added debug-gated diagnostics to track local storage sizes on startup, migration, and quota failure.
+
+### Root causes found
+
+1. **Uncaught Quota Exceptions**: Zustand's default `persist` middleware performs direct synchronous `localStorage.setItem` writes inside React update cycles without try-catch blocks. When localStorage is full, these writes throw `QuotaExceededError`, which bubbles up and crashes the React render tree.
+2. **Terminal Transcripts Cache Bloat**: The debounced `jarvis-terminal-transcripts` key was growing without count or total size limits, eventually saturating the 5MB localStorage origin quota.
+3. **Corrupted Persisted State**: Deprecated or malformed JSON payloads in localStorage could trigger deserialization exceptions during store initialization.
+
+### Files changed
+
+- `app/src/lib/persistence/safeLocalStorage.ts` - [NEW] Decoupled state storage wrapper with error isolation, auto-eviction of transcripts on write failures, minimal UI fallbacks, corrupted JSON validation, and debug-gated diagnostics.
+- `app/src/stores/ui.ts` - configured `useUIStore` to use `safeLocalStorage` and version 1 migration, restricting persisted state to lightweight UI variables only.
+- `app/src/stores/auth.ts` - configured `useAuthStore` to utilize `safeLocalStorage`.
+- `app/src/features/tools/toolStore.ts` - configured `useToolStore` to utilize `safeLocalStorage`.
+- `app/src/features/terminals/terminalScheduler.ts` - configured `useTerminalSchedulerStore` to utilize `safeLocalStorage` and added `partialize` to prune history and limit messages.
+- `app/src/features/terminals/transcriptStore.ts` - added loop-free transcript pruning (max 10 sessions, max 512 KB total, max 32 KB per session) directly inside state update handlers, and added a try-catch handler for flush writes.
+
+### Verification
+
+- `npm run typecheck` - passed.
+- `npm run build` - passed.
+- `cargo check` - passed.
