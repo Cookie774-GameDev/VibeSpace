@@ -77,7 +77,7 @@ const DEFAULT_SETTINGS: PhoneSettings = {
   unlock_phrase: 'unlock shell',
 };
 
-const PHONE_SETTINGS_DRAFT_KEY = 'jarvis-phone-settings-draft-v1';
+export const PHONE_SETTINGS_DRAFT_KEY = 'jarvis-phone-settings-draft-v1';
 
 function sanitizePhoneSettingsDraft(settings: PhoneSettings): PhoneSettings {
   const { byok_provider_keys: _keys, ...safe } = settings;
@@ -106,6 +106,23 @@ function writePhoneSettingsDraft(settings: PhoneSettings): void {
   } catch {
     // Local autosave is best-effort; Supabase remains the durable source.
   }
+}
+
+export function mergePhoneSettingsForDisplay(remote: PhoneSettings | null | undefined): PhoneSettings {
+  const draft = readPhoneSettingsDraft();
+  return {
+    ...DEFAULT_SETTINGS,
+    ...(remote ?? {}),
+    ...draft,
+  };
+}
+
+function patchPhoneSettingsDraft(base: PhoneSettings, patch: Partial<PhoneSettings>): void {
+  writePhoneSettingsDraft({
+    ...base,
+    ...readPhoneSettingsDraft(),
+    ...patch,
+  });
 }
 
 export function PhoneVoice() {
@@ -160,11 +177,9 @@ export function PhoneVoice() {
           // PGRST116 = no rows; that's fine, we'll create on first save
           toast.error('Failed to load Phone settings', error.message);
         }
-        if (data) {
-          const next = { ...DEFAULT_SETTINGS, ...readPhoneSettingsDraft(), ...(data as PhoneSettings) };
-          setSettings(next);
-          writePhoneSettingsDraft(next);
-        }
+        const next = mergePhoneSettingsForDisplay(data as PhoneSettings | null);
+        setSettings(next);
+        writePhoneSettingsDraft(next);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -282,6 +297,7 @@ export function PhoneVoice() {
         triggers={settings.outbound_triggers ?? DEFAULT_SETTINGS.outbound_triggers!}
         onChange={(outbound_triggers) => save({ outbound_triggers })}
         userPhoneNumber={settings.user_phone_number ?? ''}
+        onPhoneDraftChange={(user_phone_number) => patchPhoneSettingsDraft(settings, { user_phone_number })}
         onPhoneChange={(user_phone_number) => save({ user_phone_number }, { silentLocal: true })}
       />
 
@@ -290,6 +306,7 @@ export function PhoneVoice() {
       {/* 6. Unlock phrase */}
       <UnlockCard
         phrase={settings.unlock_phrase ?? 'unlock shell'}
+        onDraftChange={(unlock_phrase) => patchPhoneSettingsDraft(settings, { unlock_phrase })}
         onChange={(unlock_phrase) => save({ unlock_phrase }, { silentLocal: true })}
       />
     </div>
@@ -678,11 +695,13 @@ function OutboundCard({
   triggers,
   onChange,
   userPhoneNumber,
+  onPhoneDraftChange,
   onPhoneChange,
 }: {
   triggers: NonNullable<PhoneSettings['outbound_triggers']>;
   onChange: (next: NonNullable<PhoneSettings['outbound_triggers']>) => void;
   userPhoneNumber: string;
+  onPhoneDraftChange: (next: string) => void;
   onPhoneChange: (next: string) => void;
 }) {
   const [phone, setPhone] = useState(userPhoneNumber);
@@ -707,7 +726,11 @@ function OutboundCard({
           <Input
             placeholder="+15551234567"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setPhone(next);
+              onPhoneDraftChange(next);
+            }}
             onBlur={() => phone !== userPhoneNumber && onPhoneChange(phone)}
             className="font-mono text-xs"
           />
@@ -776,9 +799,11 @@ function TriggerRow({
 
 function UnlockCard({
   phrase,
+  onDraftChange,
   onChange,
 }: {
   phrase: string;
+  onDraftChange: (next: string) => void;
   onChange: (next: string) => void;
 }) {
   const [draft, setDraft] = useState(phrase);
@@ -805,7 +830,10 @@ function UnlockCard({
       <div className="flex gap-2 max-w-md">
         <Input
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            onDraftChange(e.target.value);
+          }}
           placeholder="unlock shell"
         />
         <Button
