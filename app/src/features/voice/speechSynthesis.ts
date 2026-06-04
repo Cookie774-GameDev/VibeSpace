@@ -1,7 +1,9 @@
 import type { PersonaPreset } from '@/types/common';
 import { PERSONAS } from './personas';
 
-export const VOICE_PREVIEW_TEXT = "Hi, how's your day going? Jarvis is online.";
+export const VOICE_PREVIEW_TEXT = "Hi, how's your day doing? Jarvis is online.";
+const VOICE_LOAD_TIMEOUT_MS = 1_200;
+const SPEECH_KEEPALIVE_MS = 4_000;
 
 export interface SpeakTextOptions {
   persona?: PersonaPreset;
@@ -21,6 +23,9 @@ const PREFERRED_VOICE_NAMES: Record<PersonaPreset, string[]> = {
 };
 
 const QUALITY_HINTS = ['natural', 'premium', 'enhanced', 'neural', 'online'];
+const CANCELLATION_ERRORS = new Set(['interrupted', 'canceled', 'cancelled']);
+
+let activeSpeechRequestId = 0;
 
 function getSpeechSynthesis(): SpeechSynthesis | null {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
@@ -79,7 +84,7 @@ async function getVoices(): Promise<SpeechSynthesisVoice[]> {
     const timeout = window.setTimeout(() => {
       synthesis.onvoiceschanged = null;
       resolve(synthesis.getVoices());
-    }, 500);
+    }, VOICE_LOAD_TIMEOUT_MS);
     synthesis.onvoiceschanged = () => {
       window.clearTimeout(timeout);
       synthesis.onvoiceschanged = null;
@@ -96,9 +101,15 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
     throw new Error('Speech synthesis is not available in this runtime.');
   }
 
+  const requestId = activeSpeechRequestId + 1;
+  activeSpeechRequestId = requestId;
+  synthesis.cancel();
+
   const persona = options.persona ?? 'jarvis';
   const personaVoice = PERSONAS[persona]?.voice;
   const voices = await getVoices();
+  if (requestId !== activeSpeechRequestId) return;
+
   const selectedVoice = selectPersonaVoice(voices, persona, options);
   const utterance = new SpeechSynthesisUtterance(trimmed);
   utterance.voice = selectedVoice ?? null;
@@ -107,20 +118,36 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   utterance.pitch = clamp(options.pitch ?? personaVoice?.pitch ?? 1, 0.6, 1.4);
   utterance.volume = clamp(options.volume ?? 1, 0, 1);
 
-  synthesis.cancel();
-
   await new Promise<void>((resolve, reject) => {
     const fallbackMs = Math.min(12_000, Math.max(2_000, trimmed.length * 80));
-    const timeout = window.setTimeout(() => resolve(), fallbackMs);
-    utterance.onend = () => {
+    let settled = false;
+    let timeout = 0;
+    let keepAlive = 0;
+    const settle = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
       window.clearTimeout(timeout);
-      resolve();
+      window.clearInterval(keepAlive);
+      complete();
+    };
+    timeout = window.setTimeout(() => settle(resolve), fallbackMs);
+    keepAlive = window.setInterval(() => {
+      if (requestId === activeSpeechRequestId && (synthesis.speaking || synthesis.pending)) {
+        synthesis.resume();
+      }
+    }, SPEECH_KEEPALIVE_MS);
+    utterance.onend = () => {
+      settle(resolve);
     };
     utterance.onerror = (event) => {
-      window.clearTimeout(timeout);
-      reject(new Error(event.error || 'Speech synthesis failed.'));
+      if (requestId !== activeSpeechRequestId || CANCELLATION_ERRORS.has(event.error)) {
+        settle(resolve);
+        return;
+      }
+      settle(() => reject(new Error(event.error || 'Speech synthesis failed.')));
     };
     synthesis.speak(utterance);
+    synthesis.resume();
   });
 }
 

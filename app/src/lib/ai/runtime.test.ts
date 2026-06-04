@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   chatGetById: vi.fn(),
   notifyDone: vi.fn(),
   devLog: vi.fn(),
+  speakText: vi.fn(),
 }));
 
 vi.mock('./router', () => ({
@@ -24,6 +25,10 @@ vi.mock('@/features/dev-console', () => ({
 vi.mock('@/lib/notifications', () => ({
   getAiCompletionInstruction: () => '',
   notifyDone: mocks.notifyDone,
+}));
+
+vi.mock('@/features/voice/speechSynthesis', () => ({
+  speakText: mocks.speakText,
 }));
 
 vi.mock('@/features/terminals/agentContext', () => ({
@@ -104,6 +109,57 @@ describe('startRuntimeListener agent routing', () => {
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     expect(mocks.runAgent.mock.calls[0][0].agent.id).toBe(apple.id);
     expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain('Always answer with APPLE.');
+
+    stop();
+  });
+
+  it('speaks final prose for voice-originated sends', async () => {
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_voice' as ChatId;
+    const placeholderId = 'msg_voice_assistant' as MessageId;
+    const userMessage: Message = {
+      id: 'msg_voice_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: 'tell me the plan' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+
+    mocks.runAgent.mockResolvedValueOnce({
+      text: [
+        'Here is the plan.',
+        '```action',
+        '{"action_id":"nav.chat","params":{},"rationale":"Open chat."}',
+        '```',
+      ].join('\n'),
+      usage: { input_tokens: 1, output_tokens: 4, cost_usd: 0 },
+      provider: 'mock',
+      model: 'mock-default',
+    });
+
+    const stop = startRuntimeListener({
+      getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+      getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => [userMessage]),
+      appendMessage: vi.fn(async (msg) => ({
+        ...msg,
+        id: placeholderId,
+        created_at: 2,
+        updated_at: 2,
+      })),
+      updateMessage: vi.fn(async () => undefined),
+    });
+
+    window.dispatchEvent(new CustomEvent('jarvis:send', {
+      detail: { chatId, text: 'tell me the plan', speakReply: true },
+    }));
+
+    await vi.waitFor(() => expect(mocks.speakText).toHaveBeenCalledTimes(1));
+    expect(mocks.speakText).toHaveBeenCalledWith('Here is the plan.', expect.objectContaining({
+      persona: expect.any(String),
+    }));
 
     stop();
   });

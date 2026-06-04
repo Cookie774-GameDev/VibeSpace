@@ -283,6 +283,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const webSpeechStreamRef = useRef<MediaStream | null>(null);
   const webSpeechAnalyserRef = useRef<AnalyserNode | null>(null);
   const webSpeechVolumeTimerRef = useRef<number | null>(null);
+  const voiceReplyRequestedRef = useRef(false);
 
   const agents = useAgentStore((s) => s.agents);
   const provider = useAuthStore((s) => s.defaultProvider);
@@ -640,9 +641,18 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       const mentionedAgentIds = extractMentionedAgentIds(trimmed, agents);
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
-          detail: { chatId, text: trimmed || 'Attached context.', mentionedAgentIds, filePaths: attachedFiles, terminalRefs: attachedTerminals, contextNodes: attachedContexts },
+          detail: {
+            chatId,
+            text: trimmed || 'Attached context.',
+            mentionedAgentIds,
+            filePaths: attachedFiles,
+            terminalRefs: attachedTerminals,
+            contextNodes: attachedContexts,
+            speakReply: voiceReplyRequestedRef.current,
+          },
         }),
       );
+      voiceReplyRequestedRef.current = false;
       setText('');
       setAttachedFiles([]);
       setAttachedTerminals([]);
@@ -840,6 +850,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     });
     const offFinal = VoiceService.on('voice:final', ({ text: finalText }) => {
       setSttInterim('');
+      voiceReplyRequestedRef.current = true;
       setText((cur) => {
         // Append with a space if needed so each utterance flows naturally.
         const sep = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
@@ -1041,6 +1052,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       const data = await res.json() as { text?: string };
       const finalText = (data.text ?? '').trim();
       if (finalText) {
+        voiceReplyRequestedRef.current = true;
         setText((cur) => `${cur}${cur && !/\s$/.test(cur) ? ' ' : ''}${finalText}`);
       }
     } catch (err) {

@@ -26,6 +26,7 @@ import { buildAgentTerminalContext } from '@/features/terminals/agentContext';
 import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
+import { speakText } from '@/features/voice/speechSynthesis';
 import {
   getProjectContextBlock,
   getProjectContextTreeBlock,
@@ -74,6 +75,8 @@ export interface SendDetail {
   terminalRefs?: TerminalRef[];
   /** Context tree nodes dragged into this specific message. */
   contextNodes?: ContextAttachment[];
+  /** Speak the final assistant reply when this send came from voice input. */
+  speakReply?: boolean;
 }
 
 /** The shape of the `jarvis:cancel` event detail. */
@@ -210,6 +213,18 @@ function textToParts(text: string): Part[] {
   // was filtered (shouldn't happen, but a parser change could regress).
   if (parts.length === 0) return [{ kind: 'text', text }];
   return parts;
+}
+
+function textToSpeechOutput(text: string): string {
+  const result = parseActionBlocks(text);
+  const prose = result.segments
+    .flatMap((seg) => (seg.kind === 'prose' ? [seg.text.trim()] : []))
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!prose) return '';
+  return prose.length <= 900 ? prose : `${prose.slice(0, 897).trimEnd()}…`;
 }
 
 /**
@@ -555,6 +570,19 @@ export function startRuntimeListener(
         },
       });
       void notifyDone('jarvis', `${agent.name} done`, derivePaneTitle(finalText) || 'The AI response is complete.');
+      if (detail.speakReply) {
+        const speechText = textToSpeechOutput(finalText);
+        if (speechText) {
+          void speakText(speechText, { persona: useAuthStore.getState().personaPreset }).catch((speechErr) => {
+            devConsole.log({
+              channel: 'ai',
+              level: 'warn',
+              message: `Voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+              detail: { agent: agent.slug, textChars: speechText.length },
+            });
+          });
+        }
+      }
     } catch (err) {
       // Cancel any pending flush before stamping the suffix or it'll overwrite us.
       cancelPendingFlush();
