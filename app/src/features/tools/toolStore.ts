@@ -107,6 +107,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function dispatchToolsUpdated(): void {
+  if (typeof window === 'undefined') return;
+  queueMicrotask(() => {
+    window.dispatchEvent(new CustomEvent('jarvis:tools-updated'));
+  });
+}
+
 export function normalizeToolSteps(value: unknown): CustomToolStep[] {
   if (!Array.isArray(value)) return [];
   const steps: CustomToolStep[] = [];
@@ -274,18 +281,23 @@ export const useToolStore = create<ToolStoreState>()(
           published: null,
         };
         set((s) => ({ tools: [tool, ...s.tools] }));
+        dispatchToolsUpdated();
         return tool;
       },
 
-      update: (slug, patch) =>
+      update: (slug, patch) => {
         set((s) => ({
           tools: s.tools.map((t) =>
             t.slug === slug ? { ...t, ...patch, slug, updatedAt: Date.now() } : t,
           ),
-        })),
+        }));
+        dispatchToolsUpdated();
+      },
 
-      remove: (slug) =>
-        set((s) => ({ tools: s.tools.filter((t) => t.slug !== slug) })),
+      remove: (slug) => {
+        set((s) => ({ tools: s.tools.filter((t) => t.slug !== slug) }));
+        dispatchToolsUpdated();
+      },
 
       publish: async () => {
         // Cloud registry not live yet. Honest stub returning an error
@@ -332,6 +344,7 @@ export const useToolStore = create<ToolStoreState>()(
         }
         if (added.length === 0) return 0;
         set((s) => ({ tools: [...added, ...s.tools] }));
+        dispatchToolsUpdated();
         return added.length;
       },
     }),

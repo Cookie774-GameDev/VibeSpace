@@ -4,15 +4,19 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Boxes,
   CalendarDays,
+  Clock,
   CircleDot,
   ExternalLink,
+  FileText,
   GitBranch,
   Link2,
   ListTodo,
   MessageSquare,
+  PlayCircle,
   Sparkles,
   Sun,
   Tag,
+  Terminal as TerminalIcon,
   Wrench,
   XCircle,
 } from 'lucide-react';
@@ -39,7 +43,40 @@ import type { Task, TaskPriority, TaskStatus } from '@/types/task';
 import type { Chat } from '@/types/chat';
 import type { TerminalSession } from '@/types/terminal';
 import type { WorkspaceId } from '@/types/common';
-import { flattenContextNodes, loadStoredContextTree } from '@/features/context/tree';
+import {
+  CONTEXT_MIME,
+  contextMapFilePath,
+  contextNodeFilePath,
+  flattenContextNodes,
+  formatContextAttachmentForTerminal,
+  getStoredContextSelectedFile,
+  loadStoredContextTree,
+  nodeToAttachment,
+  serializeContextAttachment,
+  setStoredContextSelectedFile,
+  type ContextAttachment,
+  type ContextTreeNode,
+  type ProjectContextTree,
+} from '@/features/context/tree';
+
+interface InspectorCustomTool {
+  slug: string;
+  name: string;
+  description: string;
+  baseAction: string;
+  steps?: unknown[];
+  emoji?: string;
+  updatedAt: number;
+}
+
+interface InspectorTerminalRef {
+  paneId?: string;
+  sessionId?: string;
+  projectId?: string | null;
+  label?: string;
+  command?: string;
+  agentSlug?: string | null;
+}
 
 /** V3 top-level routes. Mirrors the contract in `@/stores/ui` (Slice 4). */
 type Route =
@@ -231,19 +268,13 @@ export function Inspector() {
             value="context"
             className="m-0 flex-1 overflow-auto px-4 py-3 scrollbar-hidden"
           >
-            <Placeholder
-              title="Context"
-              body="Memory items, files, and runtime state the active agent is using."
-            />
+            <InspectorContextPanel />
           </TabsContent>
           <TabsContent
             value="tools"
             className="m-0 flex-1 overflow-auto px-4 py-3 scrollbar-hidden"
           >
-            <Placeholder
-              title="Tools"
-              body="Tool-call history with arguments and results, expandable inline."
-            />
+            <InspectorToolsPanel />
           </TabsContent>
           <TabsContent
             value="trace"
@@ -258,10 +289,7 @@ export function Inspector() {
             value="refs"
             className="m-0 flex-1 overflow-auto px-4 py-3 scrollbar-hidden"
           >
-            <Placeholder
-              title="References"
-              body="Source references for the current message. Click any item to open it."
-            />
+            <InspectorReferencesPanel workspaceId={workspaceId} />
           </TabsContent>
         </Tabs>
       </div>
@@ -301,6 +329,542 @@ function Placeholder({ title, body }: { title: string; body: string }) {
     </div>
   );
 }
+
+// ============================================================
+// Resource tabs — real drag/drop sources for the Jarvis composer
+// ============================================================
+
+function InspectorContextPanel() {
+  const projectId = useAuthStore((s) => s.projectId);
+  const setRoute = useUIStore((s) => s.setRoute);
+  const [tick, setTick] = React.useState(0);
+
+  React.useEffect(() => {
+    const onUpdated = () => setTick((cur) => cur + 1);
+    window.addEventListener('jarvis:context-tree-updated', onUpdated);
+    return () => window.removeEventListener('jarvis:context-tree-updated', onUpdated);
+  }, []);
+
+  const tree = React.useMemo(() => loadStoredContextTree(projectId), [projectId, tick]);
+  const rows = React.useMemo(() => {
+    if (!tree) return [] as ContextTreeNode[];
+    return flattenContextNodes(tree.nodes).filter((node) => node.kind !== 'root').slice(0, 12);
+  }, [tree]);
+
+  if (!tree) {
+    return (
+      <div className="flex flex-col gap-3">
+        <Placeholder
+          title="Context"
+          body="No active project map yet. Open Context to generate or select a project map."
+        />
+        <Button variant="ghost" size="sm" onClick={() => setRoute('context')} className="justify-start">
+          <Boxes className="h-3.5 w-3.5" />
+          Open Context
+        </Button>
+      </div>
+    );
+  }
+
+  const mapAttachment = treeMapAttachment(tree);
+  const mapPath = contextMapFilePath(tree.rootDir);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Section
+        label="Active map"
+        icon={<Boxes className="h-3.5 w-3.5" />}
+        hint={`${tree.fileCount} files`}
+      >
+        <ContextResourceRow
+          attachment={mapAttachment}
+          filePath={mapPath}
+          title={mapAttachment.title}
+          subtitle={tree.rootDir}
+          icon={<Boxes className="h-3.5 w-3.5" />}
+          onOpen={() => setRoute('context')}
+        />
+      </Section>
+
+      <Section
+        label="Context files"
+        icon={<FileText className="h-3.5 w-3.5" />}
+        hint={String(rows.length)}
+      >
+        {rows.length === 0 ? (
+          <EmptyState text="No nodes in this map yet." />
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {rows.map((node) => {
+              const attachment = nodeToAttachment(tree, node);
+              const filePath = contextNodeFilePath(tree, node);
+              return (
+                <li key={node.id}>
+                  <ContextResourceRow
+                    attachment={attachment}
+                    filePath={filePath}
+                    title={node.title}
+                    subtitle={node.path ?? node.summary}
+                    icon={node.kind === 'file'
+                      ? <FileText className="h-3.5 w-3.5" />
+                      : <Boxes className="h-3.5 w-3.5" />}
+                    meta={node.kind}
+                    onOpen={() => {
+                      if (filePath) setStoredContextSelectedFile(projectId, filePath);
+                      setRoute('context');
+                    }}
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function InspectorToolsPanel() {
+  const setRoute = useUIStore((s) => s.setRoute);
+  const projectId = useAuthStore((s) => s.projectId);
+  const tools = useStoredInspectorTools();
+  const sortedTools = React.useMemo(
+    () => [...tools].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8),
+    [tools],
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Section
+        label="Preloaded"
+        icon={<Clock className="h-3.5 w-3.5" />}
+        hint="built-in"
+      >
+        <ToolResourceRow
+          title="Clock"
+          actionId="clock.timer"
+          description="Create timers and alarms with Jarvis control, alerts, and sound."
+          icon={<Clock className="h-3.5 w-3.5" />}
+          projectId={projectId}
+          onOpen={() => setRoute('tools')}
+        />
+      </Section>
+
+      <Section
+        label="Custom tools"
+        icon={<Wrench className="h-3.5 w-3.5" />}
+        hint={String(tools.length)}
+      >
+        {sortedTools.length === 0 ? (
+          <div className="flex flex-col gap-2">
+            <EmptyState text="No custom tools saved yet." />
+            <Button variant="ghost" size="sm" onClick={() => setRoute('tools')} className="justify-start">
+              <Wrench className="h-3.5 w-3.5" />
+              Open Tools
+            </Button>
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {sortedTools.map((tool) => (
+              <li key={tool.slug}>
+                <CustomToolResourceRow
+                  tool={tool}
+                  projectId={projectId}
+                  onOpen={() => setRoute('tools')}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function useStoredInspectorTools(): InspectorCustomTool[] {
+  const [tick, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const refresh = () => setTick((cur) => cur + 1);
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === 'jarvis-tools') refresh();
+    };
+    window.addEventListener('jarvis:tools-updated', refresh);
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('jarvis:tools-updated', refresh);
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, []);
+  return React.useMemo(() => loadStoredInspectorTools(), [tick]);
+}
+
+function loadStoredInspectorTools(): InspectorCustomTool[] {
+  if (typeof window === 'undefined') return [];
+  const raw = window.localStorage.getItem('jarvis-tools');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const state = isPlainRecord(parsed) ? parsed.state : null;
+    const candidate = isPlainRecord(state) ? state.tools : isPlainRecord(parsed) ? parsed.tools : null;
+    if (!Array.isArray(candidate)) return [];
+    return candidate
+      .map(normalizeInspectorTool)
+      .filter((tool): tool is InspectorCustomTool => Boolean(tool));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeInspectorTool(raw: unknown): InspectorCustomTool | null {
+  if (!isPlainRecord(raw)) return null;
+  const slug = typeof raw.slug === 'string' ? raw.slug.trim() : '';
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const baseAction = typeof raw.baseAction === 'string' ? raw.baseAction.trim() : '';
+  if (!slug || !name) return null;
+  return {
+    slug,
+    name,
+    baseAction,
+    description: typeof raw.description === 'string' ? raw.description : '',
+    steps: Array.isArray(raw.steps) ? raw.steps : undefined,
+    emoji: typeof raw.emoji === 'string' ? raw.emoji : undefined,
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : 0,
+  };
+}
+
+function InspectorReferencesPanel({ workspaceId }: { workspaceId: WorkspaceId | null }) {
+  const projectId = useAuthStore((s) => s.projectId);
+  const setRoute = useUIStore((s) => s.setRoute);
+  const [tick, setTick] = React.useState(0);
+
+  React.useEffect(() => {
+    const onContextFile = () => setTick((cur) => cur + 1);
+    window.addEventListener('jarvis:context:select-file', onContextFile);
+    window.addEventListener('jarvis:context-tree-updated', onContextFile);
+    return () => {
+      window.removeEventListener('jarvis:context:select-file', onContextFile);
+      window.removeEventListener('jarvis:context-tree-updated', onContextFile);
+    };
+  }, []);
+
+  const selectedContextFile = React.useMemo(
+    () => getStoredContextSelectedFile(projectId),
+    [projectId, tick],
+  );
+  const tree = React.useMemo(() => loadStoredContextTree(projectId), [projectId, tick]);
+  const sessions =
+    useLiveQuery(
+      async () => {
+        if (!workspaceId) return [] as TerminalSession[];
+        const rows = await terminalSessionRepo.listByWorkspace(workspaceId);
+        return rows
+          .filter((session) => {
+            const sameProject = projectId ? session.project_id === projectId : !session.project_id;
+            return sameProject && session.status !== 'exited';
+          })
+          .sort((a, b) => b.last_active_at - a.last_active_at)
+          .slice(0, 6);
+      },
+      [workspaceId, projectId],
+      [] as TerminalSession[],
+    ) ?? [];
+
+  const mapAttachment = tree ? treeMapAttachment(tree) : null;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Section
+        label="Pinned refs"
+        icon={<Link2 className="h-3.5 w-3.5" />}
+        hint={selectedContextFile || mapAttachment ? 'ready' : undefined}
+      >
+        <div className="flex flex-col gap-1.5">
+          {selectedContextFile ? (
+            <FileResourceRow
+              path={selectedContextFile}
+              title="Selected context file"
+              onOpen={() => setRoute('files')}
+            />
+          ) : null}
+          {mapAttachment ? (
+            <ContextResourceRow
+              attachment={mapAttachment}
+              filePath={mapAttachment.path}
+              title="Active context map"
+              subtitle={mapAttachment.path ?? mapAttachment.rootDir}
+              icon={<Boxes className="h-3.5 w-3.5" />}
+              onOpen={() => setRoute('context')}
+            />
+          ) : null}
+          {!selectedContextFile && !mapAttachment ? (
+            <EmptyState text="No pinned file or context map yet." />
+          ) : null}
+        </div>
+      </Section>
+
+      <Section
+        label="Live terminals"
+        icon={<TerminalIcon className="h-3.5 w-3.5" />}
+        hint={String(sessions.length)}
+      >
+        {sessions.length === 0 ? (
+          <EmptyState text="No live terminal refs for this project." />
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {sessions.map((session) => (
+              <li key={session.id}>
+                <TerminalResourceRow session={session} onOpen={() => setRoute('terminal')} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function ContextResourceRow({
+  attachment,
+  filePath,
+  title,
+  subtitle,
+  icon,
+  meta,
+  onOpen,
+}: {
+  attachment: ContextAttachment;
+  filePath?: string;
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  meta?: string;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      draggable
+      onClick={onOpen}
+      onDragStart={(event) => setContextDragData(event, attachment, filePath)}
+      className={resourceButtonClass}
+      title={subtitle}
+    >
+      <span className="mt-0.5 shrink-0 text-accent-copper">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-secondary text-foreground">{title}</span>
+        <span className="block truncate text-metadata text-muted-foreground">{subtitle}</span>
+      </span>
+      {meta ? (
+        <span className="rounded-sm bg-paper px-1.5 py-0.5 text-metadata text-muted-foreground">
+          {meta}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function ToolResourceRow({
+  title,
+  actionId,
+  description,
+  icon,
+  projectId,
+  onOpen,
+}: {
+  title: string;
+  actionId: string;
+  description: string;
+  icon: React.ReactNode;
+  projectId: string | null;
+  onOpen: () => void;
+}) {
+  const attachment = React.useMemo(
+    () => toolAttachment({ title, actionId, description, projectId }),
+    [title, actionId, description, projectId],
+  );
+  return (
+    <button
+      type="button"
+      draggable
+      onClick={onOpen}
+      onDragStart={(event) => setContextDragData(event, attachment)}
+      className={resourceButtonClass}
+      title={`${actionId}: ${description}`}
+    >
+      <span className="mt-0.5 shrink-0 text-accent-copper">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-secondary text-foreground">{title}</span>
+        <span className="block truncate text-metadata text-muted-foreground">{actionId}</span>
+      </span>
+      <PlayCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+    </button>
+  );
+}
+
+function CustomToolResourceRow({
+  tool,
+  projectId,
+  onOpen,
+}: {
+  tool: InspectorCustomTool;
+  projectId: string | null;
+  onOpen: () => void;
+}) {
+  const actionId = `custom.${tool.slug}`;
+  const stepCount = tool.steps?.length ?? 0;
+  return (
+    <ToolResourceRow
+      title={`${tool.emoji ? `${tool.emoji} ` : ''}${tool.name}`}
+      actionId={actionId}
+      description={tool.description || (stepCount > 0
+        ? `${stepCount} workflow step${stepCount === 1 ? '' : 's'}`
+        : `Runs ${tool.baseAction}`)}
+      icon={<Wrench className="h-3.5 w-3.5" />}
+      projectId={projectId}
+      onOpen={onOpen}
+    />
+  );
+}
+
+function FileResourceRow({
+  path,
+  title,
+  onOpen,
+}: {
+  path: string;
+  title: string;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      draggable
+      onClick={onOpen}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = 'copy';
+        event.dataTransfer.setData('application/x-jarvis-file', path);
+        event.dataTransfer.setData('text/plain', path);
+      }}
+      className={resourceButtonClass}
+      title={path}
+    >
+      <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-copper" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-secondary text-foreground">{title}</span>
+        <span className="block truncate font-mono text-metadata text-muted-foreground">{path}</span>
+      </span>
+    </button>
+  );
+}
+
+function TerminalResourceRow({
+  session,
+  onOpen,
+}: {
+  session: TerminalSession;
+  onOpen: () => void;
+}) {
+  const ref: InspectorTerminalRef = {
+    sessionId: session.id,
+    projectId: session.project_id ?? null,
+    label: session.title,
+    command: [session.shell_command, ...(session.shell_args ?? [])].filter(Boolean).join(' '),
+  };
+  return (
+    <button
+      type="button"
+      draggable
+      onClick={onOpen}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = 'copyMove';
+        event.dataTransfer.setData('application/x-jarvis-terminal', JSON.stringify(ref));
+        event.dataTransfer.setData('text/plain', `terminal:${session.title}`);
+      }}
+      className={resourceButtonClass}
+      title={session.cwd ?? session.title}
+    >
+      <TerminalIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-copper" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-secondary text-foreground">{session.title}</span>
+        <span className="block truncate text-metadata text-muted-foreground">
+          {session.status} · {formatRelative(session.last_active_at)}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function treeMapAttachment(tree: ProjectContextTree): ContextAttachment {
+  const root = flattenContextNodes(tree.nodes).find((node) => node.kind === 'root');
+  if (root) return nodeToAttachment(tree, root);
+  return {
+    projectId: tree.projectId,
+    rootDir: tree.rootDir,
+    generatedAt: tree.generatedAt,
+    nodeId: '__jarvis-context-root__',
+    title: 'Project Context Map',
+    kind: 'root',
+    summary: tree.summary,
+    path: contextMapFilePath(tree.rootDir),
+    tags: ['context-map'],
+    sizeBytes: tree.totalBytes,
+    childrenCount: tree.nodes.length,
+  };
+}
+
+function toolAttachment({
+  title,
+  actionId,
+  description,
+  projectId,
+}: {
+  title: string;
+  actionId: string;
+  description: string;
+  projectId: string | null;
+}): ContextAttachment {
+  return {
+    projectId,
+    rootDir: 'jarvis://tools',
+    generatedAt: 0,
+    nodeId: `tool:${actionId}`,
+    title,
+    kind: 'note',
+    summary: [
+      `Jarvis tool resource: ${title}`,
+      `Action id: ${actionId}`,
+      description,
+      'Use this when the user asks Jarvis to run or configure this tool.',
+    ].filter(Boolean).join('\n'),
+    path: `jarvis://tools/${actionId}`,
+    tags: ['tool', actionId],
+  };
+}
+
+function setContextDragData(
+  event: React.DragEvent<HTMLElement>,
+  attachment: ContextAttachment,
+  filePath?: string,
+) {
+  event.dataTransfer.effectAllowed = 'copy';
+  event.dataTransfer.setData(CONTEXT_MIME, serializeContextAttachment(attachment));
+  if (filePath) event.dataTransfer.setData('application/x-jarvis-file', filePath);
+  event.dataTransfer.setData('text/plain', filePath || formatContextAttachmentForTerminal(attachment));
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+const resourceButtonClass = cn(
+  'group flex w-full cursor-grab items-start gap-2 rounded-md border border-border bg-paper-soft px-2 py-2 text-left transition-colors',
+  'hover:border-accent-copper/40 hover:bg-paper active:cursor-grabbing',
+  'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+);
 
 // ============================================================
 // Today panel
