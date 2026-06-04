@@ -4,6 +4,8 @@
  * router falls back to when a real provider errors.
  *
  * Behaviour:
+ * - Honors simple deterministic system-prompt contracts used in QA
+ *   ("Always answer with APPLE", "respond with the code word APPLE").
  * - Picks a short ack ("Got it. ", "Sure. ", ...) deterministically from the
  *   user's last message so repeated runs of the same prompt feel stable.
  * - Picks a longer paragraph the same way.
@@ -42,8 +44,42 @@ function pick<T>(items: T[], seed: string): T {
   return items[Math.abs(h) % items.length] as T;
 }
 
-/** Build the canned reply for a given user message. */
-function buildReply(userText: string): string {
+/** Extract a direct QA/code-word response contract from the system prompt. */
+function forcedSystemReply(systemPrompt: string): string | null {
+  const prompt = systemPrompt.trim();
+  if (!prompt) return null;
+
+  const wordPatterns = [
+    /(?:always\s+)?(?:answer|reply|respond)\s+(?:only\s+)?(?:with|using)\s+(?:the\s+)?(?:code\s+word\s+)?["'“”`]*([A-Za-z0-9][A-Za-z0-9_-]{1,63})["'“”`]*(?=[\s.!?,;:)]|$)/gi,
+    /(?:code\s+word|keyword)\s*(?:is|:)\s*["'“”`]*([A-Za-z0-9][A-Za-z0-9_-]{1,63})["'“”`]*(?=[\s.!?,;:)]|$)/gi,
+  ];
+  let forced: { value: string; index: number } | null = null;
+  for (const pattern of wordPatterns) {
+    for (const match of prompt.matchAll(pattern)) {
+      const value = match[1]?.trim();
+      const index = typeof match.index === 'number' ? match.index : -1;
+      if (value && (!forced || index >= forced.index)) forced = { value, index };
+    }
+  }
+  if (forced) return forced.value;
+
+  const phrasePatterns = [
+    /(?:answer|reply|respond)\s+(?:only\s+)?with\s+(?:the\s+)?(?:exact\s+)?(?:text|phrase)\s*[:=]?\s*["“]([^"”\n]{1,120})["”]/gi,
+  ];
+  for (const pattern of phrasePatterns) {
+    for (const match of prompt.matchAll(pattern)) {
+      const value = match[1]?.trim();
+      const index = typeof match.index === 'number' ? match.index : -1;
+      if (value && (!forced || index >= forced.index)) forced = { value, index };
+    }
+  }
+  return forced?.value ?? null;
+}
+
+/** Build the reply for a given user message and system prompt. */
+function buildReply(userText: string, systemPrompt: string): string {
+  const forced = forcedSystemReply(systemPrompt);
+  if (forced) return forced;
   return pick(ACKS, userText) + pick(PARAGRAPHS, userText);
 }
 
@@ -63,7 +99,7 @@ export const mockProvider: LLMProvider = {
   async run(req: LLMRequest): Promise<LLMResponse> {
     const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
     const userText = lastUser?.content ?? '';
-    const reply = buildReply(userText);
+    const reply = buildReply(userText, req.agent.system_prompt);
     const tokens = splitForStream(reply);
 
     // Aim for ~2s total. With ~50 words that's ~40ms/word; jitter keeps it
