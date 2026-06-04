@@ -299,6 +299,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     clearAudioSilenceTimer();
     stopWebSpeechVolumeMeter();
     volumeRef.current = 0;
+    const context = audioContextRef.current;
+    const chunks = wavChunksRef.current;
     cleanupAudioRecorder(audioProcessorRef.current, audioSourceRef.current, audioContextRef.current, mediaStreamRef.current);
     audioProcessorRef.current = null;
     audioSourceRef.current = null;
@@ -307,6 +309,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     wavChunksRef.current = [];
     setSttListening(false);
     setSttInterim('');
+    if (chunks.length > 0 && context) {
+      void transcribeGroq(encodeWav(chunks, context.sampleRate), useAuthStore.getState().apiKeys.groq ?? '');
+      return;
+    }
     toast.info('Speech-to-text stopped', message);
   };
 
@@ -945,39 +951,43 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 
   const startStt = () => {
     const groqKey = useAuthStore.getState().apiKeys.groq;
+    if (VoiceService.isSupported()) {
+      // Defensive: some Tauri WebView2 builds expose the API but throw a
+      // synchronous DOMException on `start()`. Don't flip the visible
+      // listening flag until we know the engine accepted the call — and
+      // never let the click handler propagate an unhandled exception, which
+      // would crash the React tree under StrictMode.
+      try {
+        setSttInterim('Listening with built-in speech recognition...');
+        const started = VoiceService.startListening();
+        if (!started) {
+          setSttListening(false);
+          setSttInterim('');
+          toast.warning('Voice unavailable', 'Built-in speech recognition could not start in this runtime.');
+          return;
+        }
+        setSttListening(true);
+        void startWebSpeechVolumeMeter();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Voice could not start.';
+        toast.error('Voice error', msg);
+        setSttListening(false);
+        setSttInterim('');
+      }
+      return;
+    }
     if (groqKey && typeof navigator.mediaDevices?.getUserMedia === 'function' && getAudioContextCtor()) {
       void startGroqStt(groqKey);
       return;
     }
-    if (!VoiceService.isSupported()) {
+    if (!groqKey) {
       toast.warning(
         'Voice unsupported',
-        'Web Speech API is not available in this runtime. Try Chrome on the web build.',
+        'Free built-in speech recognition is not available in this runtime. Add a Groq key to use Whisper dictation here.',
       );
       return;
     }
-    // Defensive: some Tauri WebView2 builds expose the API but throw a
-    // synchronous DOMException on `start()`. Don't flip the visible
-    // listening flag until we know the engine accepted the call — and
-    // never let the click handler propagate an unhandled exception, which
-    // would crash the React tree under StrictMode.
-    try {
-      setSttInterim('');
-      const started = VoiceService.startListening();
-      if (!started) {
-        setSttListening(false);
-        setSttInterim('');
-        toast.warning('Voice unavailable', 'Built-in speech recognition could not start in this runtime.');
-        return;
-      }
-      setSttListening(true);
-      void startWebSpeechVolumeMeter();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Voice could not start.';
-      toast.error('Voice error', msg);
-      setSttListening(false);
-      setSttInterim('');
-    }
+    toast.warning('Voice unsupported', 'Speech-to-text is not available in this runtime.');
   };
 
   const startGroqStt = async (apiKey: string) => {

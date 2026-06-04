@@ -2,7 +2,7 @@ import type { PersonaPreset } from '@/types/common';
 import { PERSONAS } from './personas';
 
 export const VOICE_PREVIEW_TEXT = "Hi, how's your day doing? Jarvis is online.";
-const VOICE_LOAD_TIMEOUT_MS = 1_200;
+const VOICE_LOAD_TIMEOUT_MS = 2_500;
 const SPEECH_KEEPALIVE_MS = 4_000;
 
 export interface SpeakTextOptions {
@@ -104,6 +104,8 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   const requestId = activeSpeechRequestId + 1;
   activeSpeechRequestId = requestId;
   synthesis.cancel();
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  if (requestId !== activeSpeechRequestId) return;
 
   const persona = options.persona ?? 'jarvis';
   const personaVoice = PERSONAS[persona]?.voice;
@@ -119,7 +121,7 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   utterance.volume = clamp(options.volume ?? 1, 0, 1);
 
   await new Promise<void>((resolve, reject) => {
-    const fallbackMs = Math.min(12_000, Math.max(2_000, trimmed.length * 80));
+    const fallbackMs = Math.min(30_000, Math.max(2_500, trimmed.length * 90));
     let settled = false;
     let timeout = 0;
     let keepAlive = 0;
@@ -148,6 +150,11 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
     };
     synthesis.speak(utterance);
     synthesis.resume();
+    window.setTimeout(() => {
+      if (!settled && requestId === activeSpeechRequestId) {
+        synthesis.resume();
+      }
+    }, 120);
   });
 }
 

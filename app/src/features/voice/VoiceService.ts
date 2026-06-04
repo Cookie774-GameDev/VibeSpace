@@ -78,6 +78,9 @@ export type VoiceErrorKind =
   | 'service_not_allowed'
   | 'unknown';
 
+export const VOICE_EXCLUSIVE_START_EVENT = 'jarvis:voice:exclusive-start';
+export const VOICE_EXCLUSIVE_STOP_EVENT = 'jarvis:voice:exclusive-stop';
+
 type Listener<T> = (payload: T) => void;
 type AnyListener = Listener<unknown>;
 
@@ -125,6 +128,11 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
     webkitSpeechRecognition?: SpeechRecognitionCtor;
   };
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+function dispatchExclusiveEvent(eventName: string): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(eventName));
 }
 
 function mapErrorKind(raw: string): VoiceErrorKind {
@@ -209,6 +217,8 @@ class VoiceServiceImpl extends VoiceEmitter {
       return false;
     }
 
+    dispatchExclusiveEvent(VOICE_EXCLUSIVE_START_EVENT);
+
     const r = new Ctor();
     r.continuous = true;
     r.interimResults = true;
@@ -282,6 +292,9 @@ class VoiceServiceImpl extends VoiceEmitter {
       // with Chromium's ~60 s cap), restart transparently.
       const shouldRestart = this.wantsActive;
       this.emit('voice:end', undefined);
+      if (!shouldRestart) {
+        dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
+      }
       if (shouldRestart) {
         // Defer to the next tick so listeners observing 'voice:end' see
         // active=false before we flip it back on.
@@ -306,6 +319,7 @@ class VoiceServiceImpl extends VoiceEmitter {
       this.recognition = null;
       this.active = false;
       this.wantsActive = false;
+      dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
       return false;
     }
   }
@@ -317,6 +331,7 @@ class VoiceServiceImpl extends VoiceEmitter {
     const r = this.recognition;
     if (!r) {
       this.active = false;
+      dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
       return;
     }
     try {
@@ -331,7 +346,10 @@ class VoiceServiceImpl extends VoiceEmitter {
     this.wantsActive = false;
     this.clearInactivityTimer();
     const r = this.recognition;
-    if (!r) return;
+    if (!r) {
+      dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
+      return;
+    }
     try {
       r.abort();
     } catch {

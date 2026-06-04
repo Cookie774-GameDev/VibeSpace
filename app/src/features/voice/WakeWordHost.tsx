@@ -9,6 +9,10 @@ import {
   readWakeWordEnabled,
   WAKE_WORD_SETTING_EVENT,
 } from './wakeWord';
+import {
+  VOICE_EXCLUSIVE_START_EVENT,
+  VOICE_EXCLUSIVE_STOP_EVENT,
+} from './VoiceService';
 
 interface SpeechRecognitionAlternative {
   transcript: string;
@@ -104,6 +108,14 @@ export function WakeWordHost() {
       restartTimerRef.current = window.setTimeout(startRecognition, 800);
     };
 
+    const onExclusiveStart = () => {
+      clearRestart(restartTimerRef);
+      stopRecognition(recognitionRef);
+    };
+    const onExclusiveStop = () => {
+      scheduleRestart();
+    };
+
     const startRecognition = () => {
       if (disposed || recognitionRef.current) return;
       const recognition = new RecognitionCtor();
@@ -153,10 +165,14 @@ export function WakeWordHost() {
       }
     };
 
+    window.addEventListener(VOICE_EXCLUSIVE_START_EVENT, onExclusiveStart);
+    window.addEventListener(VOICE_EXCLUSIVE_STOP_EVENT, onExclusiveStop);
     startRecognition();
 
     return () => {
       disposed = true;
+      window.removeEventListener(VOICE_EXCLUSIVE_START_EVENT, onExclusiveStart);
+      window.removeEventListener(VOICE_EXCLUSIVE_STOP_EVENT, onExclusiveStop);
       clearRestart(restartTimerRef);
       stopRecognition(recognitionRef);
     };
