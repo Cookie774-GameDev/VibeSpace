@@ -66,6 +66,7 @@ export function useHotkey(hotkey: Hotkey, handler: (e: KeyboardEvent) => void, o
   useEffect(() => {
     if (opts.disabled) return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return;
       if (!opts.whenInputs && isEditableTarget(e.target)) return;
       if (matchesHotkey(e, hotkey)) {
         handler(e);

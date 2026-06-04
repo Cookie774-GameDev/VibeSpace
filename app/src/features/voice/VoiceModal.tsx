@@ -135,6 +135,8 @@ export function VoiceModal() {
           'data-[state=open]:animate-slide-up',
         )}
         hideClose
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
       >
         {/* Required by Radix for screen readers; visually hidden. */}
         <DialogTitle className="sr-only">Jarvis voice session</DialogTitle>
