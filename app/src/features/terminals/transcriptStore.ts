@@ -74,6 +74,9 @@ const ANSI_REGEX =
   // CSI: ESC [ ... final byte in 0x40-0x7E
   /\x1B\[[\x30-\x3F]*[\x20-\x2F]*[\x40-\x7E]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)|\x1BP[^\x1B]*\x1B\\|\x1B[A-Za-z]/g;
 
+const ORPHAN_CSI_FRAGMENT = /\[(?:\??\d[\d;?]*|[;?][\d;?]*)[\x20-\x2F]*[A-Za-z]/g;
+const ORPHAN_CSI_NO_PARAM_FRAGMENT = /(^|[\r\n])\[(?:K|J|H|m)(?=$|[^\w])/g;
+
 /**
  * Bare control-character regex. Keeps `\n`, `\r`, `\t` because they
  * preserve layout; drops everything else in the C0 range plus DEL.
@@ -90,7 +93,11 @@ const CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
  */
 export function stripAnsi(input: string): string {
   if (!input) return '';
-  return input.replace(ANSI_REGEX, '').replace(CONTROL_CHARS, '');
+  return input
+    .replace(ANSI_REGEX, '')
+    .replace(ORPHAN_CSI_FRAGMENT, '')
+    .replace(ORPHAN_CSI_NO_PARAM_FRAGMENT, '$1')
+    .replace(CONTROL_CHARS, '');
 }
 
 export function terminalRestoreText(session: Partial<SessionTranscript> | null | undefined): string {
@@ -100,9 +107,10 @@ export function terminalRestoreText(session: Partial<SessionTranscript> | null |
       : typeof session?.rawText === 'string'
         ? stripAnsi(session.rawText)
         : '';
-  if (!source) return '';
+  const safeSource = stripAnsi(source);
+  if (!safeSource) return '';
 
-  return source
+  return safeSource
     .replace(/\x1B/g, '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')

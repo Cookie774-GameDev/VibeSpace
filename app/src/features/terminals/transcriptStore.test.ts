@@ -56,6 +56,11 @@ describe('stripAnsi', () => {
     const input = 'beep\x07after\x0Cclear';
     expect(stripAnsi(input)).toBe('beepafterclear');
   });
+
+  it('removes orphan CSI fragments from split PTY chunks', () => {
+    expect(stripAnsi('[0mready[999Ddone\n[?25hnext')).toBe('readydone\nnext');
+    expect(stripAnsi('array [0] stays')).toBe('array [0] stays');
+  });
 });
 
 describe('terminalRestoreText', () => {
@@ -68,6 +73,17 @@ describe('terminalRestoreText', () => {
     expect(restored).toBe('ready\r\nAPPLE\r\n');
     expect(restored).not.toContain('\x1B');
     expect(restored).not.toContain('[0m');
+  });
+
+  it('sanitizes orphan CSI fragments from stored plain transcript text', () => {
+    const restored = terminalRestoreText({
+      text: '[0mready\nwork[999Ddone\n[?25h',
+    });
+
+    expect(restored).toBe('ready\r\nworkdone\r\n');
+    expect(restored).not.toContain('[0m');
+    expect(restored).not.toContain('[999D');
+    expect(restored).not.toContain('[?25h');
   });
 
   it('sanitizes legacy raw-only transcripts and caps replayed lines', () => {
