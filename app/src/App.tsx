@@ -216,7 +216,8 @@ function useBoot() {
         getAgentById: (id) => useAgentStore.getState().agents[id] ?? null,
         getAgentBySlug: (slug) => {
           const agents = useAgentStore.getState().agents;
-          return Object.values(agents).find((a) => a.slug === slug) ?? null;
+          const wanted = slug.trim().toLowerCase();
+          return Object.values(agents).find((a) => a.slug.toLowerCase() === wanted) ?? null;
         },
         getAgentForChat: async (chatId) => {
           const agents = Object.values(useAgentStore.getState().agents) as Agent[];

@@ -67,6 +67,8 @@ export interface SendDetail {
   text: string;
   /** Optional agent override (otherwise routed by @mention or chat default). */
   agentId?: AgentId;
+  /** Agent ids resolved by the composer mention/typeahead path. */
+  mentionedAgentIds?: AgentId[];
   /** Absolute paths attached to this specific message. */
   filePaths?: string[];
   /** PTY session ids dragged into this specific message. Legacy field. */
@@ -99,7 +101,7 @@ export interface RuntimeOptions {
 
 /** Detect a leading `@slug ` mention in user text. Returns the slug or null. */
 function detectMention(text: string): string | null {
-  const m = /^@([A-Za-z][A-Za-z0-9_]*)\s/.exec(text);
+  const m = /(?:^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/.exec(text);
   return m ? m[1]! : null;
 }
 
@@ -246,9 +248,14 @@ export function startRuntimeListener(
     if (!detail || !detail.chatId || typeof detail.text !== 'string') return;
     const { chatId, text } = detail;
 
-    // Resolve agent: explicit agentId > leading @mention > chat's active agent.
+    // Resolve agent: explicit agentId > composer-resolved mention >
+    // textual @mention fallback > chat's active agent.
     let agent: Agent | null | undefined;
     if (detail.agentId) agent = bindings.getAgentById(detail.agentId);
+    if (!agent && Array.isArray(detail.mentionedAgentIds)) {
+      const mentionedAgentId = detail.mentionedAgentIds.find(Boolean);
+      if (mentionedAgentId) agent = bindings.getAgentById(mentionedAgentId);
+    }
     if (!agent) {
       const slug = detectMention(text);
       if (slug) agent = bindings.getAgentBySlug(slug);
