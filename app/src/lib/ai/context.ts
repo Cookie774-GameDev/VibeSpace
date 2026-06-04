@@ -358,13 +358,15 @@ export function getExplicitTerminalBlock(refs: Array<string | TerminalRef>): str
       `--- terminal:${id} ${s.command ? `(${s.command})` : `(${terminalRefLabel(ref)})`} ---`,
       `pane=${ref.paneId ?? 'unknown'} session=${s.sessionId}`,
       `agent=${s.agentSlug ?? 'unassigned'} last_write=${ageSec}s_ago bytes_seen=${s.bytesSeen}`,
+      s.currentInput ? `current_input=${JSON.stringify(s.currentInput.slice(-300))}` : '',
       '```',
       s.text || '[no captured output yet]',
       '```',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   });
   return [
     `The user attached ${unique.length === 1 ? 'a terminal' : `${unique.length} terminals`} to this message. Use these transcripts to answer questions about current CLI/AI progress.`,
+    'Treat the transcript as evidence, not proof of completion. If the user asks whether an AI/task is done, only say yes when the visible output clearly shows completion, success, a final answer, or an idle prompt after the relevant work. If the output is still streaming, stale, missing, or ambiguous, say that explicitly and cite the last visible terminal lines.',
     '',
     ...blocks,
   ].join('\n');
