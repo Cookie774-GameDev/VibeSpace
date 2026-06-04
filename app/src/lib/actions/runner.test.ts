@@ -159,4 +159,31 @@ describe('runAction', () => {
     expect(result.ok).toBe(true);
     expect(useClockStore.getState().scheduled()[0]?.label).toBe('Tea');
   });
+
+  it('coerces params inside custom workflow tool steps', async () => {
+    const tool = useToolStore.getState().create({
+      name: 'Tea workflow',
+      description: 'Set a tea timer.',
+      baseAction: 'workflow.run',
+      params: {},
+      steps: [
+        {
+          action: 'clock.timer',
+          params: { durationMinutes: '1', durationSeconds: '30', label: 'Tea' },
+        },
+      ],
+    });
+
+    const result = await runAction(
+      `custom.${tool.slug}`,
+      {},
+      { source: 'user' },
+      { emitToast: false },
+    );
+
+    expect(result.ok).toBe(true);
+    const timer = useClockStore.getState().scheduled()[0];
+    expect(timer?.label).toBe('Tea');
+    expect(timer?.durationMs).toBe(90_000);
+  });
 });

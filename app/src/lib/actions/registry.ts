@@ -54,6 +54,7 @@ import {
   enqueueTerminalCommand,
   requestTerminalSwarm,
 } from '@/features/terminals/terminalCommandQueue';
+import type { TerminalRef } from '@/features/terminals/terminalRefs';
 import { taskRepo } from '@/lib/db/repositories';
 import { openExternal } from '@/lib/tauri';
 import {
@@ -133,6 +134,82 @@ function readClockSound(value: unknown): ClockSound {
 function formatDurationMs(durationMs: number): string {
   const now = Date.now();
   return formatClockRemaining(now + durationMs, now);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function parseTerminalRefObject(raw: unknown): TerminalRef | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  const paneId = readOptionalString(source.paneId);
+  const sessionId = readOptionalString(source.sessionId);
+  if (!paneId && !sessionId) return null;
+  return {
+    paneId,
+    sessionId,
+    projectId: readOptionalString(source.projectId) ?? null,
+    label: readOptionalString(source.label),
+    command: readOptionalString(source.command),
+    agentSlug: readOptionalString(source.agentSlug) ?? null,
+  };
+}
+
+function parseTerminalRefString(raw: string): TerminalRef | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (value.startsWith('terminal:')) return { sessionId: value.slice('terminal:'.length).trim() };
+  if (!value.startsWith('{')) return { sessionId: value };
+  try {
+    return parseTerminalRefObject(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+function readTerminalRefs(params: Record<string, unknown>): { ok: true; refs: TerminalRef[] } | { ok: false; error: string } {
+  const refs: TerminalRef[] = [];
+  const refsJson = readOptionalString(params.refsJson);
+  if (refsJson) {
+    try {
+      const parsed = JSON.parse(refsJson);
+      const rawRefs = Array.isArray(parsed) ? parsed : [parsed];
+      for (const rawRef of rawRefs) {
+        const ref =
+          typeof rawRef === 'string'
+            ? parseTerminalRefString(rawRef)
+            : parseTerminalRefObject(rawRef);
+        if (ref) refs.push(ref);
+      }
+    } catch {
+      return { ok: false, error: 'refsJson must be a terminal ref object or array encoded as JSON.' };
+    }
+  }
+
+  const paneId = readOptionalString(params.paneId);
+  const sessionId = readOptionalString(params.sessionId);
+  if (paneId || sessionId) {
+    refs.push({
+      paneId,
+      sessionId,
+      projectId: readOptionalString(params.projectId) ?? null,
+      label: readOptionalString(params.label),
+      agentSlug: readOptionalString(params.agentSlug) ?? null,
+    });
+  }
+
+  const seen = new Set<string>();
+  const unique = refs.filter((ref) => {
+    const key = ref.paneId || ref.sessionId;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (unique.length === 0) {
+    return { ok: false, error: 'Provide at least one terminal paneId, sessionId, or refsJson value.' };
+  }
+  return { ok: true, refs: unique.slice(0, 8) };
 }
 
 /* --------------------------------------------------------------------------
@@ -468,6 +545,87 @@ const TERMINAL_ACTIONS: ActionDef[] = [
       enqueueTerminalCommand({ command, label, cwd });
       navigateTo('terminal');
       return ok(`Queued: ${command}`);
+    },
+  },
+  {
+    id: 'terminal.sendToRefs',
+    category: 'terminal',
+    label: 'Send command to attached terminal',
+    description:
+      'Send text or a command into existing terminal pane(s) using paneId/sessionId refs from an attached or dragged terminal.',
+    icon: PlayCircle,
+    destructive: true,
+    params: [
+      {
+        key: 'command',
+        label: 'Command text',
+        type: 'string',
+        required: true,
+        placeholder: 'opencode',
+        help: 'Text to type into the target terminal. A trailing Enter is added automatically.',
+      },
+      {
+        key: 'paneId',
+        label: 'Pane id',
+        type: 'string',
+        help: 'Optional pane id copied from the attached-terminal context.',
+      },
+      {
+        key: 'sessionId',
+        label: 'Session id',
+        type: 'string',
+        help: 'Optional PTY session id copied from the attached-terminal context.',
+      },
+      {
+        key: 'refsJson',
+        label: 'Refs JSON',
+        type: 'string',
+        help: 'Optional JSON object or array of terminal refs when targeting multiple attached terminals.',
+      },
+    ],
+    run: async (params) => {
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
+      if (!command) return fail('Command is required.');
+      const parsedRefs = readTerminalRefs(params);
+      if (!parsedRefs.ok) return fail(parsedRefs.error);
+      enqueueTerminalCommand({
+        command,
+        label: `send: ${command.slice(0, 48)}`,
+        target: 'refs',
+        refs: parsedRefs.refs,
+      });
+      navigateTo('terminal');
+      return ok(`Sent '${command}' to ${parsedRefs.refs.length} terminal${parsedRefs.refs.length === 1 ? '' : 's'}.`);
+    },
+  },
+  {
+    id: 'terminal.sendAll',
+    category: 'terminal',
+    label: 'Send command to all terminals',
+    description:
+      'Send text or a command into every existing terminal pane without creating new panes.',
+    icon: PlayCircle,
+    destructive: true,
+    params: [
+      {
+        key: 'command',
+        label: 'Command text',
+        type: 'string',
+        required: true,
+        placeholder: 'npm test',
+        help: 'Text to type into all existing terminal panes. A trailing Enter is added automatically.',
+      },
+    ],
+    run: async (params) => {
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
+      if (!command) return fail('Command is required.');
+      enqueueTerminalCommand({
+        command,
+        label: `all: ${command.slice(0, 48)}`,
+        target: 'all',
+      });
+      navigateTo('terminal');
+      return ok(`Sent '${command}' to all terminal panes.`);
     },
   },
 ];

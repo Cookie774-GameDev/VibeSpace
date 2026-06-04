@@ -24,10 +24,12 @@ vi.mock('@/components/ui/toast', () => ({
 import { runAction } from '@/lib/actions/runner';
 import { useToolStore } from '@/features/tools/toolStore';
 import { useUIStore } from '@/stores/ui';
+import { useTerminalCommandQueue } from '@/features/terminals/terminalCommandQueue';
 
 describe('runAction param coercion', () => {
   beforeEach(() => {
     useToolStore.setState({ tools: [] });
+    useTerminalCommandQueue.getState().clear();
     // Make sure each test starts with a known route so navigation
     // assertions don't depend on the previous test's state.
     useUIStore.getState().setRoute('chat');
@@ -91,6 +93,7 @@ describe('runAction param coercion', () => {
 describe('terminal action shell-injection guard', () => {
   beforeEach(() => {
     useToolStore.setState({ tools: [] });
+    useTerminalCommandQueue.getState().clear();
     useUIStore.getState().setRoute('chat');
   });
 
@@ -157,6 +160,89 @@ describe('terminal action shell-injection guard', () => {
     );
     expect(result.ok).toBe(true);
     expect(useUIStore.getState().route).toBe('terminal');
+  });
+});
+
+describe('terminal targeted command actions', () => {
+  beforeEach(() => {
+    useToolStore.setState({ tools: [] });
+    useTerminalCommandQueue.getState().clear();
+    useUIStore.getState().setRoute('chat');
+  });
+
+  it('queues a command for a dragged terminal ref without opening a new pane', async () => {
+    const result = await runAction(
+      'terminal.sendToRefs',
+      { command: 'opencode', paneId: 'pane_1', sessionId: 'pty_1' },
+      { source: 'ai' },
+      { emitToast: false },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(useUIStore.getState().route).toBe('terminal');
+    const queued = useTerminalCommandQueue.getState().drain();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      kind: 'shell',
+      command: 'opencode',
+      target: 'refs',
+      refs: [{ paneId: 'pane_1', sessionId: 'pty_1' }],
+    });
+  });
+
+  it('accepts refsJson for multi-terminal targeted sends', async () => {
+    const result = await runAction(
+      'terminal.sendToRefs',
+      {
+        command: 'npm test',
+        refsJson: JSON.stringify([
+          { paneId: 'pane_a', sessionId: 'pty_a' },
+          { paneId: 'pane_b', sessionId: 'pty_b' },
+        ]),
+      },
+      { source: 'ai' },
+      { emitToast: false },
+    );
+
+    expect(result.ok).toBe(true);
+    const queued = useTerminalCommandQueue.getState().drain();
+    expect(queued[0]).toMatchObject({
+      kind: 'shell',
+      command: 'npm test',
+      target: 'refs',
+    });
+    expect((queued[0] as { refs?: unknown[] }).refs).toHaveLength(2);
+  });
+
+  it('rejects targeted sends without a terminal ref', async () => {
+    const result = await runAction(
+      'terminal.sendToRefs',
+      { command: 'opencode' },
+      { source: 'ai' },
+      { emitToast: false },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/paneId|sessionId|refsJson/);
+    expect(useTerminalCommandQueue.getState().drain()).toHaveLength(0);
+  });
+
+  it('queues broadcast sends for all existing panes', async () => {
+    const result = await runAction(
+      'terminal.sendAll',
+      { command: 'git status' },
+      { source: 'ai' },
+      { emitToast: false },
+    );
+
+    expect(result.ok).toBe(true);
+    const queued = useTerminalCommandQueue.getState().drain();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      kind: 'shell',
+      command: 'git status',
+      target: 'all',
+    });
   });
 });
 
