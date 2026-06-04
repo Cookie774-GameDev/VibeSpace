@@ -18,14 +18,15 @@ Safe dry-run checks:
 
 ```powershell
 $env:JARVIS_DRYRUN = "1"
+$env:JARVIS_DOWNLOAD_DIR = "D:\Jarvis-Tests\downloads"
 irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
 ```
 
 ```bash
-JARVIS_DRYRUN=1 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
+JARVIS_DRYRUN=1 JARVIS_DOWNLOAD_DIR="$HOME/Jarvis-Tests/downloads" curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
-Set `JARVIS_KEEP_DOWNLOAD=1` if you want the downloaded installer kept after a normal install for audit or checksum review.
+Set `JARVIS_DOWNLOAD_DIR` when validating installers so all staged downloads stay in a known folder. Set `JARVIS_KEEP_DOWNLOAD=1` if you want the downloaded installer kept after a normal install for audit or checksum review.
 
 ## Direct Download
 

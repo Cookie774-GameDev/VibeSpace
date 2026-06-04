@@ -12,6 +12,7 @@
 #   JARVIS_PREFIX="/usr/local" install prefix (default: /usr/local on Linux)
 #   JARVIS_LOCAL="1"           install from a local Jarvis build (developer mode)
 #   JARVIS_DRYRUN="1"          download + verify only, do not install
+#   JARVIS_DOWNLOAD_DIR=""     stage downloads in a specific directory
 #   JARVIS_KEEP_DOWNLOAD="1"   keep the downloaded installer after a normal run
 
 set -euo pipefail
@@ -95,6 +96,15 @@ require_cmd() {
   fi
 }
 
+make_tmp_dir() {
+  if [ -n "${JARVIS_DOWNLOAD_DIR:-}" ]; then
+    mkdir -p "$JARVIS_DOWNLOAD_DIR"
+    mktemp -d "${JARVIS_DOWNLOAD_DIR%/}/jarvis-installer.XXXXXX"
+  else
+    mktemp -d -t jarvis-installer.XXXXXX
+  fi
+}
+
 SUDO=()
 setup_sudo() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -113,16 +123,15 @@ get_latest_version() {
   fi
   step "Checking GitHub for the latest release..." >&2
   local tag
-  tag=$(curl -fsSL "${JARVIS_API}/latest" 2>/dev/null \
-        | grep -o '"tag_name":[[:space:]]*"v\?[^"]*"' \
-        | head -n1 \
-        | sed -E 's/.*"v?([^"]+)".*/\1/' || true)
+  tag=$(curl -fsSL -H "User-Agent: jarvis-installer" "${JARVIS_API}/latest" 2>/dev/null \
+        | sed -nE 's/.*"tag_name":[[:space:]]*"v?([^"]+)".*/\1/p' \
+        | head -n1 || true)
   if [ -n "$tag" ]; then
     ok "Latest version: $tag" >&2
     printf "%s" "$tag"
   else
     local effective
-    effective=$(curl -Ls -o /dev/null -w '%{url_effective}' "https://github.com/${JARVIS_REPO}/releases/latest" 2>/dev/null || true)
+    effective=$(curl -Ls -H "User-Agent: jarvis-installer" -o /dev/null -w '%{url_effective}' "https://github.com/${JARVIS_REPO}/releases/latest" 2>/dev/null || true)
     tag=$(printf "%s" "$effective" | sed -nE 's#.*/releases/tag/v?([^/[:space:]]+)$#\1#p')
     if [ -n "$tag" ]; then
       ok "Latest version: $tag" >&2
@@ -138,14 +147,14 @@ get_latest_version() {
 asset_pattern() {
   local os="$1" arch="$2" format="$3"
   case "$os/$format" in
-    linux/deb)      printf '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.deb$' ;;
-    linux/rpm)      printf '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64).*\.rpm$' ;;
-    linux/appimage) printf '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.AppImage$' ;;
+    linux/deb)      printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.deb$' ;;
+    linux/rpm)      printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64).*\.rpm$' ;;
+    linux/appimage) printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.AppImage$' ;;
     macos/dmg)
       if [ "$arch" = "aarch64" ]; then
-        printf '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64).*\.dmg$'
+        printf '%s' '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64).*\.dmg$'
       else
-        printf '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64).*\.dmg$'
+        printf '%s' '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64).*\.dmg$'
       fi
       ;;
     *) return 1 ;;
@@ -176,7 +185,7 @@ resolve_download_url() {
   if [ -n "$pattern" ]; then
     local api_url="${JARVIS_API}/tags/v${version}"
     local asset
-    asset=$(curl -fsSL "$api_url" 2>/dev/null \
+    asset=$(curl -fsSL -H "User-Agent: jarvis-installer" "$api_url" 2>/dev/null \
       | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
       | sed -E 's/.*"browser_download_url":[[:space:]]*"([^"]*)".*/\1/' \
       | grep -Ei "$pattern" \
@@ -332,6 +341,9 @@ step "OS:        $OS"
 step "Arch:      $ARCH"
 step "Format:    $FORMAT"
 step "Prefix:    ${JARVIS_PREFIX:-/usr/local}"
+if [ -n "${JARVIS_DOWNLOAD_DIR:-}" ]; then
+  step "Download:   ${JARVIS_DOWNLOAD_DIR}"
+fi
 
 case "$OS/$FORMAT" in
   linux/deb|linux/rpm|linux/appimage|macos/dmg) ;;
@@ -343,8 +355,11 @@ if [ "${JARVIS_DRYRUN:-0}" != "1" ]; then
 fi
 
 # Pick installer
-TMP_DIR="$(mktemp -d -t jarvis-installer.XXXXXX)"
+TMP_DIR=""
 cleanup() {
+  if [ -z "${TMP_DIR:-}" ]; then
+    return
+  fi
   if [ "${JARVIS_DRYRUN:-0}" = "1" ] || [ "${JARVIS_KEEP_DOWNLOAD:-0}" = "1" ]; then
     return
   fi
@@ -365,9 +380,10 @@ else
   VERSION="$(get_latest_version)"
   URL="$(resolve_download_url "$VERSION" "$OS" "$ARCH" "$FORMAT")"
   FNAME="$(basename "$URL")"
+  TMP_DIR="$(make_tmp_dir)"
   INSTALLER="$TMP_DIR/$FNAME"
   step "Downloading: $URL"
-  if ! curl -fSL --progress-bar -o "$INSTALLER" "$URL"; then
+  if ! curl -fSL -H "User-Agent: jarvis-installer" --progress-bar -o "$INSTALLER" "$URL"; then
     fail "Download failed."
     warn "If no GitHub release exists yet, set JARVIS_LOCAL=1 to install from a local build."
     exit 1

@@ -10,6 +10,7 @@
 #   $env:JARVIS_LOCAL    = "1"         install from the local C:\Users\viper\projects\Jarvis build (for self-testing)
 #   $env:JARVIS_SILENT   = "1"         no UI, no prompts (current-user NSIS install)
 #   $env:JARVIS_DRYRUN   = "1"         download + verify only, do not run installer
+#   $env:JARVIS_DOWNLOAD_DIR = "D:\Jarvis-Tests\downloads" stage downloads in a specific folder
 #   $env:JARVIS_KEEP_DOWNLOAD = "1"    keep the downloaded installer after a normal run
 
 #Requires -Version 5.1
@@ -247,6 +248,15 @@ function Save-DownloadFile ($url, $outFile) {
     throw "Download failed: $lastError"
 }
 
+function New-InstallerTempDir {
+    if ($env:JARVIS_DOWNLOAD_DIR) {
+        $downloadRoot = [System.IO.Path]::GetFullPath($env:JARVIS_DOWNLOAD_DIR)
+        New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+        return (New-Item -ItemType Directory -Path (Join-Path $downloadRoot "jarvis-installer-$(Get-Random)") -Force).FullName
+    }
+    return (New-Item -ItemType Directory -Path (Join-Path $env:TEMP "jarvis-installer-$(Get-Random)") -Force).FullName
+}
+
 function Test-FileSignature ($file) {
     try {
         $sig = Get-AuthenticodeSignature -FilePath $file
@@ -343,6 +353,9 @@ Write-Step "Architecture:   $arch"
 Write-Step "Format:         $format"
 Write-Step "Silent:         $silent"
 Write-Step "Dry run:        $dryrun"
+if ($env:JARVIS_DOWNLOAD_DIR) {
+    Write-Step "Download dir:   $env:JARVIS_DOWNLOAD_DIR"
+}
 
 Test-WindowsVersion
 
@@ -357,8 +370,7 @@ if ($wv2) {
 }
 
 # Choose installer source
-$tmpDir = Join-Path $env:TEMP "jarvis-installer-$(Get-Random)"
-New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+$tmpDir = $null
 $installerPath = $null
 
 if ($env:JARVIS_LOCAL -eq '1') {
@@ -369,6 +381,7 @@ if ($env:JARVIS_LOCAL -eq '1') {
     $version = Get-LatestVersion
     $url     = Resolve-DownloadUrl -version $version -format $format
     $fname   = Split-Path $url -Leaf
+    $tmpDir = New-InstallerTempDir
     $installerPath = Join-Path $tmpDir $fname
     try {
         Save-DownloadFile -url $url -outFile $installerPath
@@ -426,6 +439,6 @@ if ($exit -eq 0) {
     exit $exit
 }
 
-if (-not $keepDownload -and -not $env:JARVIS_LOCAL -and (Test-Path -LiteralPath $tmpDir)) {
+if ($tmpDir -and -not $keepDownload -and -not $dryrun -and (Test-Path -LiteralPath $tmpDir)) {
     Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
 }

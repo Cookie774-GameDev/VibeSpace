@@ -21,6 +21,8 @@ Replace the YouTube and Discord placeholders in `site/index.html` when the final
 
 ## Install Jarvis
 
+These commands resolve the newest published GitHub Release, install Jarvis One, and auto-launch it. If no published release assets exist yet, the installer stops safely and prints the release requirement instead of installing a stale build.
+
 ### Windows 10/11
 
 1. Open PowerShell.
@@ -54,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 
 3. Jarvis auto-launches after install. You can also reopen it from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
 
-See [`DOWNLOAD.md`](DOWNLOAD.md) for direct release filenames, checksum verification, and troubleshooting.
+See [`DOWNLOAD.md`](DOWNLOAD.md) for dry-run checks, direct release filenames, checksum verification, and troubleshooting.
 
 ## The Headline Feature: Calling
 
