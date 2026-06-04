@@ -30,7 +30,7 @@ Replace the YouTube and Discord placeholders in `site/index.html` when the final
 irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
 ```
 
-3. Launch Jarvis from the Start Menu.
+3. Jarvis auto-launches after install. You can also reopen it from the Start Menu.
 
 ### macOS 12+
 
@@ -41,7 +41,7 @@ irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/
 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
-3. Open Jarvis from `/Applications`.
+3. Jarvis auto-launches after install. You can also reopen it from `/Applications`.
 
 ### Linux
 
@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
-3. Launch Jarvis from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
+3. Jarvis auto-launches after install. You can also reopen it from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
 
 See [`DOWNLOAD.md`](DOWNLOAD.md) for direct release filenames, checksum verification, and troubleshooting.
 

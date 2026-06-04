@@ -10,6 +10,23 @@ Install Jarvis One like a normal desktop app. The one-line installers pull the l
 
 Current staged release: `v0.1.17`. macOS and Linux filenames can vary by Tauri target, so `install/install.sh` resolves matching release assets from GitHub before falling back to the standard Jarvis One filename patterns.
 
+## Release Status
+
+The one-line commands install the newest published GitHub Release. If the [Releases page] has no installer assets yet, the commands stop safely and explain that a release must be published first. Use the source-build path below for local development until production installers are uploaded.
+
+Safe dry-run checks:
+
+```powershell
+$env:JARVIS_DRYRUN = "1"
+irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
+```
+
+```bash
+JARVIS_DRYRUN=1 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
+```
+
+Set `JARVIS_KEEP_DOWNLOAD=1` if you want the downloaded installer kept after a normal install for audit or checksum review.
+
 ## Direct Download
 
 Grab installers from the [Releases page] and compare them against `SHA256SUMS.txt` before running.

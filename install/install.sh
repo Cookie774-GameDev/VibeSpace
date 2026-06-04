@@ -12,6 +12,7 @@
 #   JARVIS_PREFIX="/usr/local" install prefix (default: /usr/local on Linux)
 #   JARVIS_LOCAL="1"           install from a local Jarvis build (developer mode)
 #   JARVIS_DRYRUN="1"          download + verify only, do not install
+#   JARVIS_KEEP_DOWNLOAD="1"   keep the downloaded installer after a normal run
 
 set -euo pipefail
 
@@ -57,7 +58,7 @@ detect_os() {
     Darwin*) echo "macos" ;;
     MINGW*|MSYS*|CYGWIN*)
       fail "Detected Windows. Please use the PowerShell installer:"
-      printf "    ${CYAN}irm https://raw.githubusercontent.com/${JARVIS_REPO}/main/install/install.ps1 | iex${RESET}\n"
+      printf "    ${CYAN}irm https://raw.githubusercontent.com/${JARVIS_REPO}/main/install/install.ps1 | iex${RESET}\n" >&2
       exit 1
       ;;
     *) fail "Unsupported OS: $(uname -s)"; exit 1 ;;
@@ -91,6 +92,16 @@ require_cmd() {
       sudo)  warn "Some installs need sudo. Re-run as root or install sudo." ;;
     esac
     exit 1
+  fi
+}
+
+SUDO=()
+setup_sudo() {
+  if [ "$(id -u)" -eq 0 ]; then
+    SUDO=()
+  else
+    require_cmd sudo
+    SUDO=(sudo)
   fi
 }
 
@@ -182,9 +193,9 @@ resolve_download_url() {
 install_deb() {
   local file="$1"
   step "Installing .deb (sudo required)..."
-  sudo apt install -y "$file" || sudo dpkg -i "$file" || {
+  "${SUDO[@]}" apt install -y "$file" || "${SUDO[@]}" dpkg -i "$file" || {
     fail "dpkg failed. Trying to fix dependencies..."
-    sudo apt-get install -fy
+    "${SUDO[@]}" apt-get install -fy
   }
 }
 
@@ -192,9 +203,9 @@ install_rpm() {
   local file="$1"
   step "Installing .rpm (sudo required)..."
   if command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y "$file"
+    "${SUDO[@]}" dnf install -y "$file"
   else
-    sudo yum install -y "$file"
+    "${SUDO[@]}" yum install -y "$file"
   fi
 }
 
@@ -203,7 +214,7 @@ install_appimage() {
   local prefix="${JARVIS_PREFIX:-/usr/local}"
   local target="${prefix}/bin/jarvis"
   step "Installing AppImage to ${target}..."
-  sudo install -m 0755 "$file" "$target"
+  "${SUDO[@]}" install -m 0755 "$file" "$target"
 
   # Desktop entry for menu integration
   local desktop="${HOME}/.local/share/applications/jarvis.desktop"
@@ -240,10 +251,10 @@ install_dmg() {
     exit 1
   fi
   step "Copying to /Applications..."
-  sudo cp -R "$app" /Applications/
+  "${SUDO[@]}" cp -R "$app" /Applications/
   hdiutil detach "$mountpoint" -force >/dev/null 2>&1 || true
   step "Removing macOS quarantine flag..."
-  sudo xattr -dr com.apple.quarantine "/Applications/$(basename "$app")" || true
+  "${SUDO[@]}" xattr -dr com.apple.quarantine "/Applications/$(basename "$app")" || true
   ok "Installed: /Applications/$(basename "$app")"
   warn "First launch: Right-click Jarvis One in Finder -> Open if Gatekeeper prompts."
   warn "After the first 'Open', macOS remembers the trust for future updates."
@@ -322,9 +333,24 @@ step "Arch:      $ARCH"
 step "Format:    $FORMAT"
 step "Prefix:    ${JARVIS_PREFIX:-/usr/local}"
 
+case "$OS/$FORMAT" in
+  linux/deb|linux/rpm|linux/appimage|macos/dmg) ;;
+  *) fail "Unsupported JARVIS_FORMAT '${FORMAT}' for ${OS}. Use deb, rpm, appimage, or dmg."; exit 1 ;;
+esac
+
+if [ "${JARVIS_DRYRUN:-0}" != "1" ]; then
+  setup_sudo
+fi
+
 # Pick installer
 TMP_DIR="$(mktemp -d -t jarvis-installer.XXXXXX)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+cleanup() {
+  if [ "${JARVIS_DRYRUN:-0}" = "1" ] || [ "${JARVIS_KEEP_DOWNLOAD:-0}" = "1" ]; then
+    return
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 INSTALLER=""
 
 if [ "${JARVIS_LOCAL:-0}" = "1" ]; then
