@@ -40,6 +40,7 @@ import {
 } from '@/features/context/tree';
 import { MentionTypeahead } from './MentionTypeahead';
 import { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef } from './SlashCommandTypeahead';
+import { getChatDragKind, getChatDropPayload } from './dropPayload';
 
 export interface ComposerProps {
   chatId: ChatId | string;
@@ -1218,24 +1219,21 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                   recomputeSlash();
                 }}
                 onDragOver={(e) => {
-                  if (e.dataTransfer.types.includes(CONTEXT_MIME) || e.dataTransfer.types.includes('application/x-jarvis-file') || e.dataTransfer.types.includes('application/x-jarvis-terminal') || e.dataTransfer.types.includes('text/plain')) {
+                  if (getChatDragKind(e.dataTransfer.types)) {
                     e.preventDefault();
                     setDragOver(true);
                   }
                 }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={(e) => {
-                  const filePath = e.dataTransfer.getData('application/x-jarvis-file');
-                  const contextRaw = e.dataTransfer.getData(CONTEXT_MIME);
-                  const terminalId = e.dataTransfer.getData('application/x-jarvis-terminal');
-                  const path = filePath || (!contextRaw && !terminalId ? e.dataTransfer.getData('text/plain') : '');
-                  if (!contextRaw && !terminalId && !path) return;
+                  const payload = getChatDropPayload(e.dataTransfer);
+                  if (!payload) return;
                   e.preventDefault();
                   e.stopPropagation();
                   setDragOver(false);
-                  if (path) addDroppedPath(path);
-                  else if (contextRaw) addDroppedContext(contextRaw);
-                  else if (terminalId) addDroppedTerminal(terminalId);
+                  if (payload.kind === 'context') addDroppedContext(payload.raw);
+                  else if (payload.kind === 'terminal') addDroppedTerminal(payload.raw);
+                  else addDroppedPath(payload.path);
                 }}
                 placeholder={placeholder ?? 'Message Jarvis...   (use @ to mention an agent)'}
                 aria-label="Message"
