@@ -5,12 +5,16 @@ import { safeLocalStorage, measureStorageSizes } from '@/lib/persistence/safeLoc
 
 export type AmbientTrack =
   | 'calm-focus'
+  | 'calm-piano'
   | 'soothing-rain'
+  | 'soothing-space'
   | 'warm-hearth'
   | 'deep-ocean'
   | 'starlight'
   | 'forest-rain'
   | 'lofi-night'
+  | 'lofi-rain'
+  | 'rap-cipher'
   | 'rap-instrumental';
 
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';

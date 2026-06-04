@@ -33,7 +33,7 @@ export class AmbientAudioEngine {
       this.masterGain = this.ctx.createGain();
       this.masterGain.connect(this.ctx.destination);
       
-      // Master volume scale: audible but still safely below full app volume.
+      // Master volume scale: audible at normal speaker levels without hitting full app volume.
       this.updateMasterVolume();
     }
     
@@ -43,7 +43,7 @@ export class AmbientAudioEngine {
 
   private updateMasterVolume(): void {
     if (!this.masterGain || !this.ctx) return;
-    const targetGain = (this.currentVolumePercent / 100) * 0.35;
+    const targetGain = (this.currentVolumePercent / 100) * 0.55;
     this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, this.ctx.currentTime);
     this.masterGain.gain.linearRampToValueAtTime(targetGain, this.ctx.currentTime + 0.1);
   }
@@ -90,8 +90,12 @@ export class AmbientAudioEngine {
     // Synthesize the chosen track
     if (track === 'calm-focus') {
       this.buildCalmFocus(ctx, trackGain, sources);
+    } else if (track === 'calm-piano') {
+      this.buildCalmPiano(ctx, trackGain, sources);
     } else if (track === 'soothing-rain') {
       this.buildSoothingRain(ctx, trackGain, sources);
+    } else if (track === 'soothing-space') {
+      this.buildSoothingSpace(ctx, trackGain, sources);
     } else if (track === 'warm-hearth') {
       this.buildWarmHearth(ctx, trackGain, sources);
     } else if (track === 'deep-ocean') {
@@ -102,6 +106,10 @@ export class AmbientAudioEngine {
       this.buildForestRain(ctx, trackGain, sources);
     } else if (track === 'lofi-night') {
       this.buildLofiNight(ctx, trackGain, sources);
+    } else if (track === 'lofi-rain') {
+      this.buildLofiRain(ctx, trackGain, sources);
+    } else if (track === 'rap-cipher') {
+      this.buildRapCipher(ctx, trackGain, sources);
     } else if (track === 'rap-instrumental') {
       this.buildRapInstrumental(ctx, trackGain, sources);
     }
@@ -302,6 +310,32 @@ export class AmbientAudioEngine {
     sources.push(rain);
   }
 
+  private buildCalmPiano(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    this.buildCalmFocus(ctx, dest, sources);
+    const notes = [523.25, 659.25, 783.99, 987.77];
+    let index = 0;
+    const interval = window.setInterval(() => {
+      if (!this.isEngineRunning) return;
+      const when = ctx.currentTime + 0.025;
+      this.pulse(ctx, dest, notes[index % notes.length]!, when, 0.45, 0.055, 'triangle');
+      index += 1;
+    }, 2400);
+    sources.push({ stop: () => window.clearInterval(interval) });
+  }
+
+  private buildSoothingSpace(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    this.buildStarlight(ctx, dest, sources);
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(73.42, ctx.currentTime);
+    const subGain = ctx.createGain();
+    subGain.gain.setValueAtTime(0.08, ctx.currentTime);
+    sub.connect(subGain);
+    subGain.connect(dest);
+    sub.start();
+    sources.push(sub);
+  }
+
   private buildLofiNight(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
     this.buildCalmFocus(ctx, dest, sources);
 
@@ -351,6 +385,38 @@ export class AmbientAudioEngine {
       count += 1;
     }, step * 1000);
 
+    sources.push({ stop: () => window.clearInterval(interval) });
+  }
+
+  private buildLofiRain(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    this.buildLofiNight(ctx, dest, sources);
+    const rain = this.createNoiseSource(ctx, 2, true);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1400, ctx.currentTime);
+    filter.Q.setValueAtTime(0.5, ctx.currentTime);
+    const rainGain = ctx.createGain();
+    rainGain.gain.setValueAtTime(0.08, ctx.currentTime);
+    rain.connect(filter);
+    filter.connect(rainGain);
+    rainGain.connect(dest);
+    rain.start();
+    sources.push(rain);
+  }
+
+  private buildRapCipher(ctx: AudioContext, dest: AudioNode, sources: { stop: () => void }[]): void {
+    this.buildRapInstrumental(ctx, dest, sources);
+    const leadGain = ctx.createGain();
+    leadGain.gain.setValueAtTime(0.18, ctx.currentTime);
+    leadGain.connect(dest);
+    const notes = [146.83, 174.61, 196, 220];
+    let count = 0;
+    const interval = window.setInterval(() => {
+      if (!this.isEngineRunning) return;
+      const when = ctx.currentTime + 0.02;
+      if (count % 4 !== 3) this.pulse(ctx, leadGain, notes[count % notes.length]!, when, 0.12, 0.08, 'sawtooth');
+      count += 1;
+    }, 330);
     sources.push({ stop: () => window.clearInterval(interval) });
   }
 
