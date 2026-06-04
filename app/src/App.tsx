@@ -30,6 +30,7 @@ import { JarvisContextMenu } from '@/components/layout/JarvisContextMenu';
 import { PageRouter } from '@/components/layout/PageRouter';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { startNotificationLoop } from '@/features/tasks';
+import { startClockEngine } from '@/features/clock';
 import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
 import { GlowBorder } from '@/features/voice/GlowBorder';
 import { WakeWordHost } from '@/features/voice/WakeWordHost';
@@ -179,6 +180,7 @@ function useBoot() {
   React.useEffect(() => {
     let stopRuntime: (() => void) | undefined;
     let stopNotifications: (() => void) | undefined;
+    let stopClock: (() => void) | undefined;
     let stopTerminalScheduler: (() => void) | undefined;
     let cancelled = false;
 
@@ -246,6 +248,12 @@ function useBoot() {
         console.error('Failed to start notification loop:', err);
       }
 
+      try {
+        stopClock = startClockEngine();
+      } catch (err) {
+        console.error('Failed to start clock engine:', err);
+      }
+
       // 5) Re-arm durable scheduled terminal messages. These are stored in
       //    localStorage so a delayed "send this terminal ..." request survives
       //    route changes and full app restarts.
@@ -263,6 +271,7 @@ function useBoot() {
       cancelled = true;
       stopRuntime?.();
       stopNotifications?.();
+      stopClock?.();
       stopTerminalScheduler?.();
     };
     // Run once - boot is one-shot.

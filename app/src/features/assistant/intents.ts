@@ -26,6 +26,10 @@ export type AssistantIntent =
   | { kind: 'create_custom_command'; name: string; command: string; cwd?: string }
   /** "run command dev server" */
   | { kind: 'run_custom_command'; name: string }
+  /** "make me a one-hour timer" */
+  | { kind: 'clock_timer'; durationMinutes: number; durationSeconds?: number; label?: string }
+  /** "set an alarm for 3:30 PM" */
+  | { kind: 'clock_alarm'; time: string; label?: string }
   /** "ask opencode to fix the tests" */
   | { kind: 'ask_provider'; provider: string; prompt: string }
   /** "give all terminals all context" */

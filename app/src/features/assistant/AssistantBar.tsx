@@ -98,6 +98,10 @@ function renderPreview(intent: AssistantIntent): React.ReactNode {
       return <>→ Will {verb('create command')} <span className="text-foreground">'{intent.name}'</span> to run <span className="text-foreground">{intent.command}</span>.</>;
     case 'run_custom_command':
       return <>→ Will {verb('run custom command')} <span className="text-foreground">'{intent.name}'</span>.</>;
+    case 'clock_timer':
+      return <>→ Will {verb('start timer')} for <span className="text-foreground">{intent.durationMinutes}m{intent.durationSeconds ? ` ${intent.durationSeconds}s` : ''}</span>.</>;
+    case 'clock_alarm':
+      return <>→ Will {verb('set alarm')} for <span className="text-foreground">{intent.time}</span>.</>;
     case 'ask_provider':
       return <>→ Will {verb(`ask ${intent.provider}`)}: <span className="text-foreground">{intent.prompt}</span>.</>;
     case 'give_terminals_context':

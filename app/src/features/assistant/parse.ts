@@ -232,6 +232,78 @@ function splitProjectSuffix(commandRaw: string): { command: string; project?: st
   return { command: commandRaw.trim() };
 }
 
+function parseDurationWord(value: string): number | null {
+  const words: Record<string, number> = {
+    a: 1,
+    an: 1,
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+  };
+  const normalized = value.trim().toLowerCase();
+  if (normalized in words) return words[normalized];
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseTimerDuration(raw: string): { durationMinutes: number; durationSeconds?: number } | null {
+  const text = raw.replace(/-/g, ' ').toLowerCase();
+  const matches = [
+    ...text.matchAll(
+      /\b(\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(hours?|hrs?|hr|h|minutes?|mins?|min|m|seconds?|secs?|sec|s)\b/g,
+    ),
+  ];
+  if (matches.length === 0) return null;
+
+  let totalSeconds = 0;
+  for (const match of matches) {
+    const amount = parseDurationWord(match[1]);
+    if (!amount || amount <= 0) continue;
+    const unit = match[2];
+    if (/^h/.test(unit)) totalSeconds += amount * 3600;
+    else if (/^m/.test(unit)) totalSeconds += amount * 60;
+    else totalSeconds += amount;
+  }
+
+  if (totalSeconds <= 0) return null;
+  const durationMinutes = Math.floor(totalSeconds / 60);
+  const durationSeconds = totalSeconds % 60;
+  return { durationMinutes, ...(durationSeconds > 0 ? { durationSeconds } : {}) };
+}
+
+function tryClockIntent(s: string): AssistantIntent | null {
+  const timerBefore =
+    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?(.+?)\s+timer(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+  if (timerBefore) {
+    const duration = parseTimerDuration(timerBefore[1]);
+    if (duration) return { kind: 'clock_timer', ...duration, label: timerBefore[2] ? unquote(timerBefore[2]) : undefined };
+  }
+
+  const timerAfter =
+    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?timer\s+(?:for\s+)?(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+  if (timerAfter) {
+    const duration = parseTimerDuration(timerAfter[1]);
+    if (duration) return { kind: 'clock_timer', ...duration, label: timerAfter[2] ? unquote(timerAfter[2]) : undefined };
+  }
+
+  const alarm =
+    /^(?:set|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?alarm\s+(?:for|at)\s+(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+  if (alarm) {
+    return { kind: 'clock_alarm', time: alarm[1].trim(), label: alarm[2] ? unquote(alarm[2]) : undefined };
+  }
+
+  return null;
+}
+
 function tryOpenTerminalRunChain(raw: string): AssistantIntent | null {
   const s = clean(raw);
   const match =
@@ -276,6 +348,9 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
 
   const openTerminalRunChain = tryOpenTerminalRunChain(s);
   if (openTerminalRunChain) return openTerminalRunChain;
+
+  const clockIntent = tryClockIntent(s);
+  if (clockIntent) return clockIntent;
 
   // ---- create project ----
   const createProject = /^(?:create|new|make|add)\s+(?:a\s+)?(?:new\s+)?project\s+(?:called\s+|named\s+)?(.+)$/i.exec(s);

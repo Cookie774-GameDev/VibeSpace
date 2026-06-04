@@ -101,8 +101,9 @@ Jarvis currently includes or is actively wiring these surfaces:
 - **Coding terminals:** real PTY terminals, tile grids, manual resize handles, terminal swarm presets.
 - **Scout / Builder / Reviewer roles:** scoped research, implementation, and quality-gate workflow.
 - **Chat:** multi-thread chat, composer, message rendering, action approval cards.
-- **Actions:** 24 built-in Approve/Cancel actions across navigation, settings, theme, voice, terminal, chat, wellness, and host actions.
+- **Actions:** built-in Approve/Cancel actions across navigation, settings, theme, voice, terminal, clock, chat, wellness, and host actions.
 - **Custom tools:** local tool templates, import/export, run-in-place workflows.
+- **Clock tool:** preloaded local timers/alarms with Jarvis actions, notifications, and sound.
 - **Command palette:** global command center on `Mod+K`.
 - **Actions palette:** `Mod+Shift+A` for actionable commands.
 - **Quick launcher:** pinned apps and links.

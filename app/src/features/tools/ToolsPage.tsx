@@ -27,6 +27,7 @@ import {
   Info,
   Workflow,
 } from 'lucide-react';
+import { ClockToolPanel } from '@/features/clock';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -66,6 +67,13 @@ interface QuickTemplate {
 }
 
 const QUICK_TEMPLATES: QuickTemplate[] = [
+  {
+    emoji: '⏱',
+    name: 'One-hour timer',
+    description: 'Start a one-hour Clock timer with a chime.',
+    baseAction: 'clock.timer',
+    params: { durationMinutes: 60, label: 'One-hour timer', sound: 'chime' },
+  },
   {
     emoji: '🤖',
     name: 'Claude in my project',
@@ -697,6 +705,8 @@ export function ToolsPage() {
             (above) to move them between machines.
           </div>
         </div>
+
+        <ClockToolPanel />
 
         {/* Quick-start templates (always visible — they make new tools cheap) */}
         <div className="mb-8">

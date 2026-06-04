@@ -458,6 +458,7 @@ Detection always proposes (not auto-marks) unless confidence > 0.95 AND user has
 For the first release we ship:
 
 - Task CRUD + Reminder CRUD.
+- Local Clock timers/alarms that work without sign-in and fire sound + notification.
 - Smart scheduler (deadline pressure + quiet hours + meeting avoidance).
 - Voice intents (create, modify, complete, query, snooze).
 - OS native banners + tray badge + sound.

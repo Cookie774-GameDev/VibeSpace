@@ -220,6 +220,37 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
       }
 
       // ----------------------------------------------------------------
+      case 'clock_timer': {
+        const result = await runAction(
+          'clock.timer',
+          {
+            durationMinutes: intent.durationMinutes,
+            durationSeconds: intent.durationSeconds ?? 0,
+            label: intent.label ?? 'Timer',
+          },
+          { source: 'user' },
+          { emitToast: false },
+        );
+        if (!result.ok) return fail(result.error);
+        return ok(result.summary ?? 'Timer set.');
+      }
+
+      // ----------------------------------------------------------------
+      case 'clock_alarm': {
+        const result = await runAction(
+          'clock.alarm',
+          {
+            time: intent.time,
+            label: intent.label ?? 'Alarm',
+          },
+          { source: 'user' },
+          { emitToast: false },
+        );
+        if (!result.ok) return fail(result.error);
+        return ok(result.summary ?? 'Alarm set.');
+      }
+
+      // ----------------------------------------------------------------
       case 'ask_provider': {
         const provider = intent.provider.toLowerCase();
         const prompt = intent.prompt.trim();

@@ -22,6 +22,7 @@ vi.mock('@/components/ui/toast', () => ({
 import { runAction, resolveAction, getAllActions } from '@/lib/actions/runner';
 import { toast } from '@/components/ui/toast';
 import { useToolStore } from '@/features/tools/toolStore';
+import { useClockStore } from '@/features/clock/clockStore';
 
 describe('resolveAction', () => {
   it('finds built-in actions by id', () => {
@@ -88,6 +89,7 @@ describe('runAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useToolStore.setState({ tools: [] });
+    useClockStore.setState({ entries: [] });
   });
 
   it('returns a structured error for unknown ids and toasts by default', async () => {
@@ -141,5 +143,20 @@ describe('runAction', () => {
     const result = await runAction('custom.kaboom', {}, { source: 'user' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/unknown base action/i);
+  });
+
+  it('runs the preloaded Clock timer action', async () => {
+    const def = resolveAction('clock.timer');
+    expect(def?.category).toBe('clock');
+
+    const result = await runAction(
+      'clock.timer',
+      { durationMinutes: 1, label: 'Tea' },
+      { source: 'user' },
+      { emitToast: false },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(useClockStore.getState().scheduled()[0]?.label).toBe('Tea');
   });
 });

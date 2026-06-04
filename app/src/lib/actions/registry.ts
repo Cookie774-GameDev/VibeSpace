@@ -44,6 +44,8 @@ import {
   Maximize2,
   Bot,
   PlusCircle,
+  Clock,
+  AlarmClock,
 } from 'lucide-react';
 
 import { useUIStore, type Route } from '@/stores/ui';
@@ -54,6 +56,13 @@ import {
 } from '@/features/terminals/terminalCommandQueue';
 import { taskRepo } from '@/lib/db/repositories';
 import { openExternal } from '@/lib/tauri';
+import {
+  CLOCK_SOUNDS,
+  formatClockRemaining,
+  parseAlarmTime,
+  useClockStore,
+  type ClockSound,
+} from '@/features/clock/clockStore';
 import type { ActionDef, ActionResult } from './types';
 import type { CustomToolStep } from '@/features/tools/toolStore';
 
@@ -113,6 +122,17 @@ function rejectShellMetaChars(value: string): string | null {
     return 'Path contains shell metacharacters that could break the command. Remove `"` `;` `|` `&` `$` `` ` `` or control chars.';
   }
   return null;
+}
+
+function readClockSound(value: unknown): ClockSound {
+  return typeof value === 'string' && CLOCK_SOUNDS.includes(value as ClockSound)
+    ? (value as ClockSound)
+    : 'chime';
+}
+
+function formatDurationMs(durationMs: number): string {
+  const now = Date.now();
+  return formatClockRemaining(now + durationMs, now);
 }
 
 /* --------------------------------------------------------------------------
@@ -573,6 +593,106 @@ const HOST_ACTIONS: ActionDef[] = [
   },
 ];
 
+const CLOCK_ACTIONS: ActionDef[] = [
+  {
+    id: 'clock.timer',
+    category: 'clock',
+    label: 'Start timer',
+    description: 'Create a local Clock timer with sound and notification when it finishes.',
+    icon: Clock,
+    params: [
+      {
+        key: 'durationMinutes',
+        label: 'Duration minutes',
+        type: 'number',
+        default: 25,
+        help: 'Timer duration in minutes. Use 60 for a one-hour timer.',
+      },
+      {
+        key: 'durationSeconds',
+        label: 'Extra seconds',
+        type: 'number',
+        default: 0,
+        help: 'Optional seconds added to the minute duration.',
+      },
+      { key: 'label', label: 'Label', type: 'string', placeholder: 'Focus timer' },
+      {
+        key: 'sound',
+        label: 'Sound',
+        type: 'select',
+        default: 'chime',
+        options: CLOCK_SOUNDS.map((sound) => ({ value: sound, label: sound })),
+      },
+    ],
+    run: async (params) => {
+      const minutes = typeof params.durationMinutes === 'number' ? params.durationMinutes : 25;
+      const seconds = typeof params.durationSeconds === 'number' ? params.durationSeconds : 0;
+      const durationMs = Math.round((minutes * 60 + seconds) * 1000);
+      if (!Number.isFinite(durationMs) || durationMs <= 0) return fail('Timer duration must be greater than zero.');
+      const entry = useClockStore.getState().createTimer({
+        durationMs,
+        label: typeof params.label === 'string' ? params.label : undefined,
+        sound: readClockSound(params.sound),
+      });
+      return ok(`Timer set for ${formatDurationMs(entry.durationMs ?? durationMs)}.`, {
+        id: entry.id,
+        dueAt: entry.dueAt,
+      });
+    },
+  },
+  {
+    id: 'clock.alarm',
+    category: 'clock',
+    label: 'Set alarm',
+    description: 'Create a local Clock alarm at a future time, such as 15:30, 3:30 PM, or an ISO timestamp.',
+    icon: AlarmClock,
+    params: [
+      {
+        key: 'time',
+        label: 'Alarm time',
+        type: 'string',
+        required: true,
+        placeholder: '3:30 PM',
+        help: 'Local time like 15:30 or 3:30 PM. Past times roll to tomorrow.',
+      },
+      { key: 'label', label: 'Label', type: 'string', placeholder: 'Alarm' },
+      {
+        key: 'sound',
+        label: 'Sound',
+        type: 'select',
+        default: 'chime',
+        options: CLOCK_SOUNDS.map((sound) => ({ value: sound, label: sound })),
+      },
+    ],
+    run: async (params) => {
+      const time = typeof params.time === 'string' ? params.time.trim() : '';
+      const dueAt = parseAlarmTime(time);
+      if (!dueAt) return fail('Alarm time must be a future time like 15:30, 3:30 PM, or an ISO timestamp.');
+      const entry = useClockStore.getState().createAlarm({
+        dueAt,
+        label: typeof params.label === 'string' ? params.label : undefined,
+        sound: readClockSound(params.sound),
+      });
+      return ok(`Alarm set for ${new Date(entry.dueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`, {
+        id: entry.id,
+        dueAt: entry.dueAt,
+      });
+    },
+  },
+  {
+    id: 'clock.cancelAll',
+    category: 'clock',
+    label: 'Cancel all timers and alarms',
+    description: 'Cancel every active local Clock timer and alarm.',
+    icon: AlarmClock,
+    params: [],
+    run: async () => {
+      const count = useClockStore.getState().cancelAllScheduled();
+      return ok(`Cancelled ${count} active clock item${count === 1 ? '' : 's'}.`);
+    },
+  },
+];
+
 const PRODUCTIVITY_ACTIONS: ActionDef[] = [
   {
     id: 'kanban.createTask',
@@ -717,6 +837,7 @@ export function getBuiltinActions(): ActionDef[] {
     ...CHAT_ACTIONS,
     ...WELLNESS_ACTIONS,
     ...HOST_ACTIONS,
+    ...CLOCK_ACTIONS,
     ...PRODUCTIVITY_ACTIONS,
   ];
 }
@@ -751,6 +872,7 @@ export const BUILTIN_ACTION_COUNT = (() => {
     CHAT_ACTIONS.length +
     WELLNESS_ACTIONS.length +
     HOST_ACTIONS.length +
+    CLOCK_ACTIONS.length +
     PRODUCTIVITY_ACTIONS.length
   );
 })();
@@ -762,6 +884,7 @@ export const CATEGORY_LABELS: Record<
   | 'theme'
   | 'voice'
   | 'terminal'
+  | 'clock'
   | 'chat'
   | 'wellness'
   | 'host'
@@ -773,6 +896,7 @@ export const CATEGORY_LABELS: Record<
   theme: 'Appearance',
   voice: 'Voice',
   terminal: 'Terminal',
+  clock: 'Clock',
   chat: 'Chat',
   wellness: 'Wellness',
   host: 'Host',
@@ -786,6 +910,7 @@ export const CATEGORY_ICON: Record<string, LucideIcon> = {
   theme: Sparkles,
   voice: Mic,
   terminal: TerminalIcon,
+  clock: Clock,
   chat: Bot,
   wellness: Eye,
   host: Rocket,

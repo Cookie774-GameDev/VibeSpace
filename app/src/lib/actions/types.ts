@@ -34,6 +34,7 @@ export type ActionCategory =
   | 'theme' // dark/light/density
   | 'voice' // voice modal, captions
   | 'terminal' // terminal pane operations
+  | 'clock' // timers and alarms
   | 'chat' // new chat, fullscreen, nav toggle
   | 'wellness' // 20-20-20 break, etc.
   | 'host' // OS / app-launch (open URL, palette, launcher)
