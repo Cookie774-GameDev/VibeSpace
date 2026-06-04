@@ -684,7 +684,10 @@ function ContextMapWorkspace({
 }) {
   return (
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
-      <section className="relative min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/80 shadow-soft backdrop-blur">
+      <section
+        className="relative min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/80 shadow-soft backdrop-blur"
+        data-jarvis-suppress-context-menu
+      >
         <div className="absolute left-4 top-4 z-20 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-paper/90 p-2 shadow-soft backdrop-blur">
           <div className="flex items-center gap-2 px-2 text-metadata text-muted-foreground">
             <Move className="h-3.5 w-3.5 text-accent-copper" /> Right-click drag
