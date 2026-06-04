@@ -18,7 +18,10 @@ export function JarvisContextMenu() {
   React.useEffect(() => {
     const close = () => setMenu(null);
     const onContextMenu = (event: MouseEvent) => {
+      if (event.defaultPrevented) return;
       if (document.body.classList.contains('jarvis-terminal-right-dragging')) return;
+      const suppressUntil = Number(document.body.dataset.jarvisSuppressContextMenuUntil ?? 0);
+      if (Number.isFinite(suppressUntil) && Date.now() < suppressUntil) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest('[data-native-context-menu]')) return;
       event.preventDefault();

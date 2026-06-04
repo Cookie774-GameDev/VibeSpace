@@ -29,15 +29,17 @@
 //!     gigabytes into the WebView heap.
 
 use serde::Serialize;
+use std::io::Read;
 use std::path::PathBuf;
 
 /// Hard ceiling on a single file. Anything bigger is rejected with
 /// `too_large` so callers don't accidentally force a multi-GB read
 /// into the WebView heap. 1 MiB ≈ 250k tokens worth of text — plenty
 /// for any prompt context the user could realistically want.
-const MAX_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
 const MAX_DIR_ENTRIES: usize = 500;
+const MAX_SAMPLE_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +89,32 @@ pub fn fs_read_text(path: String) -> Result<String, String> {
     }
     let bytes = std::fs::read(&p).map_err(|e| format!("io: {}", e))?;
     String::from_utf8(bytes).map_err(|_| "not_utf8".to_string())
+}
+
+#[tauri::command]
+pub fn fs_read_text_sample(path: String, max_bytes: Option<u64>) -> Result<String, String> {
+    let p = require_absolute(&path)?;
+    let meta = match std::fs::metadata(&p) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("not_found".to_string());
+        }
+        Err(e) => return Err(format!("io: {}", e)),
+    };
+    if !meta.is_file() {
+        return Err("not_a_file".to_string());
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return Err("too_large".to_string());
+    }
+    let limit = max_bytes.unwrap_or(MAX_SAMPLE_BYTES).clamp(1, MAX_SAMPLE_BYTES);
+    let mut file = std::fs::File::open(&p).map_err(|e| format!("io: {}", e))?;
+    let mut bytes = Vec::with_capacity(limit as usize);
+    file.by_ref()
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("io: {}", e))?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 #[tauri::command]

@@ -43,7 +43,7 @@ import 'xterm/css/xterm.css';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toast';
 import type { TerminalViewProps } from './types';
-import { useTerminalTranscriptStore } from './transcriptStore';
+import { terminalRestoreText, useTerminalTranscriptStore } from './transcriptStore';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
@@ -466,7 +466,7 @@ export function TerminalView({
           if (existingSessionId != null && !isExistingSessionActive) {
             console.log(`[Jarvis] Session ${existingSessionId} is dead/inactive on backend. Re-spawning PTY and restoring visual transcript.`);
             const oldSession = useTerminalTranscriptStore.getState().sessions[existingSessionId];
-            oldTranscript = oldSession?.rawText || oldSession?.text || '';
+            oldTranscript = terminalRestoreText(oldSession);
             restoredInput = oldSession?.currentInput ?? '';
             matchedOldSessionId = existingSessionId;
           } else if (existingSessionId == null && paneId) {
@@ -478,7 +478,7 @@ export function TerminalView({
             ));
             if (oldSession) {
               console.log(`[Jarvis] Found historical transcript for pane ${paneId} under old session ${oldSession.sessionId}`);
-              oldTranscript = oldSession.rawText || oldSession.text || '';
+              oldTranscript = terminalRestoreText(oldSession);
               restoredInput = oldSession.currentInput ?? '';
               matchedOldSessionId = oldSession.sessionId;
             }
@@ -519,7 +519,7 @@ export function TerminalView({
           console.log(`[Jarvis] Re-attaching to existing active session: ${sid}`);
           // Restore visual transcript for active session re-attach
           const activeSession = useTerminalTranscriptStore.getState().sessions[sid];
-          const activeTranscript = activeSession?.rawText || activeSession?.text;
+          const activeTranscript = terminalRestoreText(activeSession);
           if (activeTranscript) {
             term.write(activeTranscript);
           }

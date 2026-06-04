@@ -43,6 +43,7 @@ use tauri::Manager;
 
 mod fsread;
 mod terminal;
+mod credentials;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -127,6 +128,7 @@ pub fn run() {
             fsread::fs_create_text_file,
             fsread::fs_list_dir,
             fsread::fs_read_text,
+            fsread::fs_read_text_sample,
             fsread::fs_write_text,
             terminal::terminal_spawn,
             terminal::terminal_write,
@@ -135,6 +137,9 @@ pub fn run() {
             terminal::terminal_move,
             terminal::terminal_list,
             terminal::terminal_reconcile,
+            credentials::credential_set,
+            credentials::credential_get,
+            credentials::credential_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -956,6 +956,9 @@ function Tile({
         latestX = ev.clientX;
         latestY = ev.clientY;
         const target = dragging ? findDropTarget() : null;
+        if (dragging) {
+          document.body.dataset.jarvisSuppressContextMenuUntil = String(Date.now() + 700);
+        }
         cleanup();
         if (cancelled) return;
         ev.preventDefault();

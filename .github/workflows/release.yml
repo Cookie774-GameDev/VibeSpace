@@ -29,7 +29,7 @@
 #        TAURI_SIGNING_PRIVATE_KEY - Tauri updater signing private key
 #        TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #      Until those exist, builds will be unsigned and the install script will warn.
-#   3. To cut a release: `git tag v0.1.15 && git push origin v0.1.15`.
+#   3. To cut a release: `git tag v0.1.17 && git push origin v0.1.17`.
 #      The workflow creates a draft release; review it on GitHub and hit Publish.
 
 name: Release
@@ -42,9 +42,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v0.1.15-test)'
+        description: 'Tag to build (e.g. v0.1.17-test)'
         required: true
-        default: 'v0.1.15-test'
+        default: 'v0.1.17-test'
 
 permissions:
   contents: write
@@ -175,7 +175,7 @@ jobs:
           releaseBody: |
             ## Jarvis One ${{ github.event.inputs.tag || github.ref_name }}
 
-            See [`releases/RELEASE_NOTES_${{ github.event.inputs.tag || github.ref_name }}.md`](https://github.com/${{ github.repository }}/blob/${{ github.event.inputs.tag || github.ref_name }}/releases/RELEASE_NOTES_${{ github.event.inputs.tag || github.ref_name }}.md) for the full changelog.
+            See the matching `releases/RELEASE_NOTES_<version>.md` file in this tag for the full changelog.
 
             ### Install (one line)
 
@@ -202,6 +202,14 @@ jobs:
     runs-on: ubuntu-22.04
     if: always()
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Download all release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -209,6 +217,22 @@ jobs:
         run: |
           mkdir -p assets
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets || true
+
+      - name: Build updater manifest
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if compgen -G "assets/*.sig" > /dev/null; then
+            VERSION="${TAG#v}"
+            node scripts/build-updater-manifest.mjs \
+              --version "$VERSION" \
+              --assets-dir assets \
+              --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+              --outfile assets/latest.json \
+              --notes "Jarvis One $VERSION"
+          else
+            echo "No updater signatures found; latest.json not generated."
+          fi
 
       - name: Compute hashes
         run: |
@@ -227,4 +251,13 @@ jobs:
           cd assets
           if [ -s SHA256SUMS.txt ]; then
             gh release upload "$TAG" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          fi
+
+      - name: Upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [ -s assets/latest.json ]; then
+            gh release upload "$TAG" assets/latest.json --repo "$GITHUB_REPOSITORY" --clobber
           fi

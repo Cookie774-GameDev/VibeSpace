@@ -850,6 +850,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     const offError = VoiceService.on('voice:error', ({ kind, message }) => {
       setSttListening(false);
       setSttInterim('');
+      stopWebSpeechVolumeMeter();
       if (kind === 'unsupported') {
         toast.warning('Voice unsupported', message);
       } else if (kind === 'service_not_allowed' || kind === 'permission_denied') {
@@ -860,11 +861,15 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     });
     const offEnd = VoiceService.on('voice:end', () => {
       // Engine ended — sync our flag if the user didn't already turn off.
-      if (!VoiceService.isListening()) setSttListening(false);
+      if (!VoiceService.isListening() && !VoiceService.wantsListening()) {
+        setSttListening(false);
+        stopWebSpeechVolumeMeter();
+      }
     });
     const offTimeout = VoiceService.on('voice:timeout', ({ reason }) => {
       setSttListening(false);
       setSttInterim('');
+      stopWebSpeechVolumeMeter();
       toast.info('Speech-to-text stopped', reason);
     });
 
@@ -947,7 +952,13 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     // would crash the React tree under StrictMode.
     try {
       setSttInterim('');
-      VoiceService.startListening();
+      const started = VoiceService.startListening();
+      if (!started) {
+        setSttListening(false);
+        setSttInterim('');
+        toast.warning('Voice unavailable', 'Built-in speech recognition could not start in this runtime.');
+        return;
+      }
       setSttListening(true);
       void startWebSpeechVolumeMeter();
     } catch (err) {

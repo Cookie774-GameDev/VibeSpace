@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
  *
  * Behaviour (per docs/04 sec 6 + the brief):
  *  - Quick tap (< 250 ms): toggle the voice modal open / closed.
- *  - Hold (>= 250 ms): push-to-talk - opens the modal and starts listening
+ *  - Hold (>= 550 ms): push-to-talk - opens the modal and starts listening
  *    on press, closes it on release. Pointer capture keeps the release event
  *    fired even if the pointer leaves the button bounds while held.
  *  - Keyboard activation (Space / Enter while focused): toggle.
@@ -32,7 +32,7 @@ export interface VoiceTriggerProps {
   className?: string;
 }
 
-const PTT_HOLD_MS = 250;
+const PTT_HOLD_MS = 550;
 
 export function VoiceTrigger({ active, onActiveChange, side = 'bottom', className }: VoiceTriggerProps) {
   const storeOpen = useUIStore((s) => s.voiceModalOpen);

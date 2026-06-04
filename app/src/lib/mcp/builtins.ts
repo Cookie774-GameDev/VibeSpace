@@ -17,6 +17,8 @@
  */
 
 import { isTauri } from '@/lib/utils';
+import { speakText } from '@/features/voice/speechSynthesis';
+import type { PersonaPreset } from '@/types/common';
 import { toolRegistry } from './registry';
 
 /**
@@ -163,8 +165,10 @@ toolRegistry.register<{ text: string }, void>({
 
 interface VoiceSpeakInput {
   text: string;
+  persona?: PersonaPreset;
   rate?: number;
   pitch?: number;
+  volume?: number;
   lang?: string;
 }
 
@@ -176,24 +180,19 @@ toolRegistry.register<VoiceSpeakInput, void>({
     type: 'object',
     properties: {
       text: { type: 'string' },
+      persona: { type: 'string' },
       rate: { type: 'number' },
       pitch: { type: 'number' },
+      volume: { type: 'number' },
       lang: { type: 'string' },
     },
     required: ['text'],
   },
-  invoke: async ({ text, rate, pitch, lang }) => {
+  invoke: async ({ text, persona, rate, pitch, volume, lang }) => {
     if (typeof text !== 'string' || text.length === 0) {
       throw new Error('text must be a non-empty string');
     }
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      throw new Error('SpeechSynthesis not available');
-    }
-    const utter = new SpeechSynthesisUtterance(text);
-    if (typeof rate === 'number') utter.rate = rate;
-    if (typeof pitch === 'number') utter.pitch = pitch;
-    if (typeof lang === 'string') utter.lang = lang;
-    window.speechSynthesis.speak(utter);
+    await speakText(text, { persona, rate, pitch, volume, lang });
   },
 });
 

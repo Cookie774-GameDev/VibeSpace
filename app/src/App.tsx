@@ -193,12 +193,20 @@ function useBoot() {
 
       if (cancelled) return;
 
-      // 2) Register the 7 built-in agents into the in-memory agent store so
-      //    the UI can find them. The DB also has rows for these from seedIfEmpty.
       try {
-        registerMany(getDefaultAgents());
+        await useAuthStore.getState().hydrateApiKeysFromVault();
       } catch (err) {
-        console.error('Failed to register default agents:', err);
+        console.warn('Failed to hydrate API keys from secure storage:', err);
+      }
+
+      // 2) Register persisted agents into the in-memory agent store so custom
+      //    system prompts, cloned agents, and provider choices survive relaunch.
+      try {
+        const persistedAgents = await agentRepo.list();
+        registerMany(persistedAgents.length > 0 ? persistedAgents : getDefaultAgents());
+      } catch (err) {
+        console.error('Failed to register persisted agents:', err);
+        registerMany(getDefaultAgents());
       }
 
       // 3) Wire the AI runtime to the chat composer events.
@@ -208,10 +216,13 @@ function useBoot() {
           const agents = useAgentStore.getState().agents;
           return Object.values(agents).find((a) => a.slug === slug) ?? null;
         },
-        getAgentForChat: () => {
-          // Default to Jarvis (slug='jarvis') for now. Real chat-bound default
-          // resolution lands when the chat list / picker stores the chosen agent.
+        getAgentForChat: async (chatId) => {
           const agents = Object.values(useAgentStore.getState().agents) as Agent[];
+          const chat = await chatRepo.getById(chatId as never);
+          const chatAgentId = chat?.active_agent_ids?.[0];
+          if (chatAgentId && useAgentStore.getState().agents[chatAgentId]) {
+            return useAgentStore.getState().agents[chatAgentId];
+          }
           return agents.find((a) => a.slug === 'jarvis') ?? agents[0] ?? null;
         },
         getMessages: async (chatId) => {

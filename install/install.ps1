@@ -4,7 +4,7 @@
 # GitHub:   irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
 #
 # Optional environment variables (set before piping into iex):
-#   $env:JARVIS_VERSION  = "0.1.4"     pin to a specific version (default: latest)
+#   $env:JARVIS_VERSION  = "0.1.17"    pin to a specific version (default: latest published release)
 #   $env:JARVIS_CHANNEL  = "stable"    stable or nightly (default: stable)
 #   $env:JARVIS_FORMAT   = "nsis"      nsis (smaller, friendlier) or msi (IT-managed) (default: nsis)
 #   $env:JARVIS_LOCAL    = "1"         install from the local C:\Users\viper\projects\Jarvis build (for self-testing)
@@ -20,6 +20,14 @@ $JarvisRepo       = 'Cookie774-GameDev/Jarivs-One'
 $JarvisGitHubApi  = "https://api.github.com/repos/$JarvisRepo/releases"
 $JarvisDownloads  = "https://github.com/$JarvisRepo/releases/download"
 $JarvisLocalBuild = 'C:\Users\viper\projects\Jarvis\app\src-tauri\target\release\bundle'
+
+# GitHub requires modern TLS. Windows PowerShell 5.1 can inherit older defaults
+# on some machines, so force TLS 1.2 before any release API or asset request.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+} catch {
+    # Best-effort only; PowerShell 7+ and modern Windows already negotiate this.
+}
 
 # --- Pretty banner --------------------------------------------------------
 # PS 5.1 does not interpret `e as ESC; build it from [char]27 so colors work everywhere.
@@ -100,6 +108,7 @@ function Get-LatestVersion {
         return $env:JARVIS_VERSION
     }
     Write-Step 'Checking GitHub for the latest release...'
+    $apiError = $null
     try {
         $rel = Invoke-RestMethod -Uri "$JarvisGitHubApi/latest" -Headers @{ 'User-Agent' = 'jarvis-installer' } -TimeoutSec 15
         if ($rel.tag_name) {
@@ -108,9 +117,27 @@ function Get-LatestVersion {
             return $v
         }
     } catch {
-        Write-Warn "Could not reach GitHub (probably no public release yet). Falling back to a known good version."
+        $apiError = $_.Exception.Message
     }
-    return '0.1.4'
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        try {
+            $effective = & $curl.Source -Ls -o NUL -w '%{url_effective}' -A 'jarvis-installer' "https://github.com/$JarvisRepo/releases/latest"
+            if ($LASTEXITCODE -eq 0 -and $effective -match '/releases/tag/v?([^/\s]+)$') {
+                $v = $Matches[1]
+                Write-Ok "Latest version: $v"
+                return $v
+            }
+        } catch {
+            if (-not $apiError) { $apiError = $_.Exception.Message }
+        }
+    }
+
+    if ($apiError) {
+        Write-Warn "GitHub latest-release lookup failed: $apiError"
+    }
+    throw "No published Jarvis One GitHub Release was found. Publish a release with installer assets, or set JARVIS_VERSION/JARVIS_LOCAL for controlled testing."
 }
 
 function Get-DownloadUrl ($version, $format) {
@@ -142,15 +169,47 @@ function Get-LocalInstaller ($format) {
 function Save-DownloadFile ($url, $outFile) {
     Write-Step "Downloading: $url"
     $tmp = "$outFile.partial"
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 300
-        Move-Item -LiteralPath $tmp -Destination $outFile -Force
-        $size = [math]::Round((Get-Item $outFile).Length / 1MB, 2)
-        Write-Ok "Downloaded $size MB"
-    } catch {
-        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
-        throw "Download failed: $($_.Exception.Message)"
+    $headers = @{ 'User-Agent' = 'jarvis-installer' }
+    $lastError = $null
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 300 -Headers $headers
+            Move-Item -LiteralPath $tmp -Destination $outFile -Force
+            $size = [math]::Round((Get-Item $outFile).Length / 1MB, 2)
+            Write-Ok "Downloaded $size MB"
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+            if ($attempt -lt 3) {
+                Write-Warn "Download attempt $attempt failed; retrying..."
+                Start-Sleep -Seconds ([math]::Min(2 * $attempt, 6))
+            }
+        }
     }
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        try {
+            if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+            Write-Step "Retrying with curl.exe..."
+            & $curl.Source -fL --retry 3 --connect-timeout 30 --max-time 600 -A 'jarvis-installer' -o $tmp $url
+            if ($LASTEXITCODE -ne 0) {
+                throw "curl.exe exited with code $LASTEXITCODE"
+            }
+            Move-Item -LiteralPath $tmp -Destination $outFile -Force
+            $size = [math]::Round((Get-Item $outFile).Length / 1MB, 2)
+            Write-Ok "Downloaded $size MB"
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    throw "Download failed: $lastError"
 }
 
 function Test-FileSignature ($file) {
@@ -207,6 +266,23 @@ function Invoke-Installer ($file, $format, $silent) {
         throw
     }
     return 1
+}
+
+function Get-InstalledJarvisExe {
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Jarvis One\jarvis.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Jarvis One\jarvis.exe'),
+        (Join-Path $env:ProgramFiles 'Jarvis One\jarvis.exe')
+    )
+    if (${env:ProgramFiles(x86)}) {
+        $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Jarvis One\jarvis.exe')
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+    return $null
 }
 
 # --- Main -----------------------------------------------------------------
@@ -284,25 +360,21 @@ if ($exit -eq 0) {
     Write-Ok "Jarvis installed."
     Write-Host ""
     
-    # Auto-open Jarvis
-    $exePath = Join-Path $env:LOCALAPPDATA 'Jarvis One\jarvis.exe'
-    if (Test-Path -LiteralPath $exePath) {
+    # Auto-open Jarvis. Tauri's current-user NSIS target installs under
+    # %LOCALAPPDATA%\Programs\Jarvis One, while older local builds used the
+    # legacy %LOCALAPPDATA%\Jarvis One path.
+    $exePath = Get-InstalledJarvisExe
+    if ($exePath -and (Test-Path -LiteralPath $exePath)) {
         Write-Step "Auto-launching Jarvis One..."
         Start-Process -FilePath $exePath
     } else {
-        $exePathMsi = "${env:ProgramFiles}\Jarvis One\jarvis.exe"
-        if (Test-Path -LiteralPath $exePathMsi) {
-            Write-Step "Auto-launching Jarvis One..."
-            Start-Process -FilePath $exePathMsi
-        } else {
-            Write-Warn "Could not locate installed jarvis.exe to auto-launch."
-        }
+        Write-Warn "Could not locate installed jarvis.exe to auto-launch."
     }
     
     Write-Host ""
     Write-Host "  Launch with:" -ForegroundColor Cyan
     Write-Host "      Start menu -> Jarvis One"
-    Write-Host "      or: & `"`$env:LOCALAPPDATA\Jarvis One\jarvis.exe`""
+    Write-Host "      or: & `"`$env:LOCALAPPDATA\Programs\Jarvis One\jarvis.exe`""
     Write-Host ""
     Write-Host "  Voice push-to-talk:  Cmd/Ctrl + Space"
     Write-Host "  Command palette:     Cmd/Ctrl + K"

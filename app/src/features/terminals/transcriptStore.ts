@@ -93,6 +93,24 @@ export function stripAnsi(input: string): string {
   return input.replace(ANSI_REGEX, '').replace(CONTROL_CHARS, '');
 }
 
+export function terminalRestoreText(session: Partial<SessionTranscript> | null | undefined): string {
+  const source =
+    typeof session?.text === 'string' && session.text.length > 0
+      ? session.text
+      : typeof session?.rawText === 'string'
+        ? stripAnsi(session.rawText)
+        : '';
+  if (!source) return '';
+
+  return source
+    .replace(/\x1B/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .slice(-800)
+    .join('\r\n');
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Store shape                                                               */
 /* -------------------------------------------------------------------------- */

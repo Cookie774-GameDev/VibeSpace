@@ -77,8 +77,42 @@ const DEFAULT_SETTINGS: PhoneSettings = {
   unlock_phrase: 'unlock shell',
 };
 
+const PHONE_SETTINGS_DRAFT_KEY = 'jarvis-phone-settings-draft-v1';
+
+function sanitizePhoneSettingsDraft(settings: PhoneSettings): PhoneSettings {
+  const { byok_provider_keys: _keys, ...safe } = settings;
+  return safe;
+}
+
+function readPhoneSettingsDraft(): PhoneSettings {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(PHONE_SETTINGS_DRAFT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PhoneSettings;
+    return sanitizePhoneSettingsDraft(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function writePhoneSettingsDraft(settings: PhoneSettings): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      PHONE_SETTINGS_DRAFT_KEY,
+      JSON.stringify(sanitizePhoneSettingsDraft(settings)),
+    );
+  } catch {
+    // Local autosave is best-effort; Supabase remains the durable source.
+  }
+}
+
 export function PhoneVoice() {
-  const [settings, setSettings] = useState<PhoneSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<PhoneSettings>(() => ({
+    ...DEFAULT_SETTINGS,
+    ...readPhoneSettingsDraft(),
+  }));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
@@ -127,7 +161,9 @@ export function PhoneVoice() {
           toast.error('Failed to load Phone settings', error.message);
         }
         if (data) {
-          setSettings({ ...DEFAULT_SETTINGS, ...(data as PhoneSettings) });
+          const next = { ...DEFAULT_SETTINGS, ...readPhoneSettingsDraft(), ...(data as PhoneSettings) };
+          setSettings(next);
+          writePhoneSettingsDraft(next);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -154,18 +190,24 @@ export function PhoneVoice() {
     return () => window.clearInterval(id);
   }, [configured]);
 
-  async function save(patch: Partial<PhoneSettings>) {
+  async function save(patch: Partial<PhoneSettings>, options: { silentLocal?: boolean } = {}) {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    writePhoneSettingsDraft(next);
+
     if (!userId) {
-      toast.error('Sign in first', 'Phone settings need a Supabase user.');
+      if (!options.silentLocal) {
+        toast.info('Saved locally', 'Phone settings will sync when Supabase sign-in is available.');
+      }
       return;
     }
     const supa = getSupabaseClient();
     if (!supa) {
-      toast.error('Supabase not configured');
+      if (!options.silentLocal) {
+        toast.info('Saved locally', 'Supabase is not configured in this build.');
+      }
       return;
     }
-    const next = { ...settings, ...patch };
-    setSettings(next);
     setSaving(true);
     try {
       // Loose-typed call so this compiles before we regen Supabase Database types
@@ -240,7 +282,7 @@ export function PhoneVoice() {
         triggers={settings.outbound_triggers ?? DEFAULT_SETTINGS.outbound_triggers!}
         onChange={(outbound_triggers) => save({ outbound_triggers })}
         userPhoneNumber={settings.user_phone_number ?? ''}
-        onPhoneChange={(user_phone_number) => save({ user_phone_number })}
+        onPhoneChange={(user_phone_number) => save({ user_phone_number }, { silentLocal: true })}
       />
 
       <Separator />
@@ -248,7 +290,7 @@ export function PhoneVoice() {
       {/* 6. Unlock phrase */}
       <UnlockCard
         phrase={settings.unlock_phrase ?? 'unlock shell'}
-        onChange={(unlock_phrase) => save({ unlock_phrase })}
+        onChange={(unlock_phrase) => save({ unlock_phrase }, { silentLocal: true })}
       />
     </div>
   );
@@ -644,7 +686,16 @@ function OutboundCard({
   onPhoneChange: (next: string) => void;
 }) {
   const [phone, setPhone] = useState(userPhoneNumber);
+  const onPhoneChangeRef = useRef(onPhoneChange);
   useEffect(() => setPhone(userPhoneNumber), [userPhoneNumber]);
+  useEffect(() => {
+    onPhoneChangeRef.current = onPhoneChange;
+  }, [onPhoneChange]);
+  useEffect(() => {
+    if (phone === userPhoneNumber) return;
+    const id = window.setTimeout(() => onPhoneChangeRef.current(phone), 650);
+    return () => window.clearTimeout(id);
+  }, [phone, userPhoneNumber]);
 
   return (
     <section className="flex flex-col gap-3">
@@ -731,8 +782,17 @@ function UnlockCard({
   onChange: (next: string) => void;
 }) {
   const [draft, setDraft] = useState(phrase);
+  const onChangeRef = useRef(onChange);
   useEffect(() => setDraft(phrase), [phrase]);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
   const dirty = draft.trim() !== phrase.trim();
+  useEffect(() => {
+    if (!dirty || draft.trim().length < 3) return;
+    const id = window.setTimeout(() => onChangeRef.current(draft.trim()), 800);
+    return () => window.clearTimeout(id);
+  }, [dirty, draft]);
 
   return (
     <section className="flex flex-col gap-3">

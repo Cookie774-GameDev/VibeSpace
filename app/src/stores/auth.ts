@@ -3,6 +3,12 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { ProviderId, WorkspaceId, ProjectId } from '@/types/common';
 import type { PlanId } from '@/lib/entitlements';
 import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
+import {
+  isSecretApiKeyProvider,
+  loadSecureApiKeys,
+  secureDeleteApiKey,
+  secureSetApiKey,
+} from '@/lib/security/secureApiKeys';
 
 interface AuthState {
   /** Local-only profile (no cloud account) */
@@ -55,6 +61,7 @@ interface AuthState {
   setDisplayName: (n: string) => void;
   setApiKey: (provider: ProviderId, key: string) => void;
   clearApiKey: (provider: ProviderId) => void;
+  hydrateApiKeysFromVault: () => Promise<void>;
   setDefaultProvider: (p: ProviderId) => void;
   setPersona: (p: AuthState['personaPreset']) => void;
   setWorkspaceId: (id: WorkspaceId | null) => void;
@@ -89,12 +96,29 @@ export const useAuthStore = create<AuthState>()(
 
       setDisplayName: (n) => set({ displayName: n }),
       setApiKey: (provider, key) =>
-        set((s) => ({ apiKeys: { ...s.apiKeys, [provider]: key.trim() } })),
+        set((s) => {
+          const trimmed = key.trim();
+          if (isSecretApiKeyProvider(provider)) {
+            void secureSetApiKey(provider, trimmed).catch((err) => {
+              console.warn(`[credentials] Could not save ${provider} API key`, err);
+            });
+          }
+          return { apiKeys: { ...s.apiKeys, [provider]: trimmed } };
+        }),
       clearApiKey: (provider) =>
         set((s) => {
+          if (isSecretApiKeyProvider(provider)) {
+            void secureDeleteApiKey(provider).catch((err) => {
+              console.warn(`[credentials] Could not delete ${provider} API key`, err);
+            });
+          }
           const { [provider]: _, ...rest } = s.apiKeys;
           return { apiKeys: rest };
         }),
+      hydrateApiKeysFromVault: async () => {
+        const secureKeys = await loadSecureApiKeys();
+        set((s) => ({ apiKeys: { ...s.apiKeys, ...secureKeys } }));
+      },
       setDefaultProvider: (p) => set({ defaultProvider: p }),
       setPersona: (p) => set({ personaPreset: p }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
@@ -115,7 +139,10 @@ export const useAuthStore = create<AuthState>()(
         email: s.email,
         workspaceId: s.workspaceId,
         projectId: s.projectId,
-        apiKeys: s.apiKeys,
+        apiKeys: {
+          ...(s.apiKeys.mock ? { mock: s.apiKeys.mock } : {}),
+          ...(s.apiKeys.ollama ? { ollama: s.apiKeys.ollama } : {}),
+        },
         defaultProvider: s.defaultProvider,
         offlineMode: s.offlineMode,
         defaultLocalModel: s.defaultLocalModel,
@@ -123,6 +150,17 @@ export const useAuthStore = create<AuthState>()(
         plan: s.plan,
         telemetryOptIn: s.telemetryOptIn,
       }),
+      version: 2,
+      migrate: (persisted) => {
+        if (!persisted || typeof persisted !== 'object') return persisted;
+        const state = persisted as Partial<AuthState>;
+        const keys = state.apiKeys ?? {};
+        state.apiKeys = {
+          ...(keys.mock ? { mock: keys.mock } : {}),
+          ...(keys.ollama ? { ollama: keys.ollama } : {}),
+        };
+        return state;
+      },
     },
   ),
 );

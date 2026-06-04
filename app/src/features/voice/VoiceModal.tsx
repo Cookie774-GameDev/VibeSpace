@@ -67,7 +67,7 @@ export function VoiceModal() {
       useUIStore.getState().setVoiceListening(true);
       useVoiceStore.getState().setState('listening');
     } else {
-      useVoiceStore.getState().setState('error', 'Voice will work in Phase 3 (Pipecat).');
+      useVoiceStore.getState().setState('error', 'Built-in speech recognition is not available in this runtime.');
     }
 
     const offs = [
@@ -103,8 +103,7 @@ export function VoiceModal() {
       VoiceService.on('voice:timeout', ({ reason }) => {
         useUIStore.getState().setVoiceListening(false);
         useVoiceStore.getState().setState('idle');
-        toast.info('Voice closed', reason);
-        setOpen(false);
+        toast.info('Voice paused', reason);
       }),
     ];
 

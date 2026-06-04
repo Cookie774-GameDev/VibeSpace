@@ -64,6 +64,18 @@ if (-not (Test-Path -LiteralPath $ReleasesDir)) {
   New-Item -ItemType Directory -Path $ReleasesDir -Force | Out-Null
 }
 
+$nsisDir = Join-Path $BundleDir 'nsis'
+$msiDir  = Join-Path $BundleDir 'msi'
+
+# Tauri-canonical filenames as written by the bundler.
+$nsisName = "Jarvis One_${Version}_x64-setup.exe"
+$msiName  = "Jarvis One_${Version}_x64_en-US.msi"
+
+$nsisSrc = Join-Path $nsisDir $nsisName
+$msiSrc  = Join-Path $msiDir  $msiName
+$friendlyNsisName = "Jarvis-One-${Version}-Windows-x64.exe"
+$friendlyMsiName = "Jarvis-One-${Version}-Windows-x64.msi"
+
 # --- Pretty output ---------------------------------------------------------
 function Write-Step ($msg) { Write-Host "  -> " -NoNewline -ForegroundColor Cyan; Write-Host $msg }
 function Write-Ok   ($msg) { Write-Host "  OK " -NoNewline -ForegroundColor Green; Write-Host $msg }
@@ -77,6 +89,13 @@ Write-Host ""
 
 # --- 1. Build (unless skipped) ---------------------------------------------
 if (-not $SkipBuild) {
+  foreach ($staleSig in @("$nsisSrc.sig", "$msiSrc.sig")) {
+    if (Test-Path -LiteralPath $staleSig) {
+      Remove-Item -LiteralPath $staleSig -Force
+      Write-Warn "Removed stale pre-build updater signature: $staleSig"
+    }
+  }
+
   $signScript = Join-Path $RepoRoot 'scripts\sign-windows.ps1'
   $signConfig = Join-Path $AppDir 'src-tauri\tauri.windows-signing.generated.json'
   $signingConfigObject = @{
@@ -116,15 +135,23 @@ if (-not $SkipBuild) {
 }
 
 # --- 2. Locate built artifacts ---------------------------------------------
-$nsisDir = Join-Path $BundleDir 'nsis'
-$msiDir  = Join-Path $BundleDir 'msi'
-
-# Tauri-canonical filenames as written by the bundler.
-$nsisName = "Jarvis One_${Version}_x64-setup.exe"
-$msiName  = "Jarvis One_${Version}_x64_en-US.msi"
-
-$nsisSrc = Join-Path $nsisDir $nsisName
-$msiSrc  = Join-Path $msiDir  $msiName
+foreach ($releaseName in @(
+  $nsisName,
+  "$nsisName.sig",
+  $msiName,
+  "$msiName.sig",
+  $friendlyNsisName,
+  "$friendlyNsisName.sig",
+  $friendlyMsiName,
+  "$friendlyMsiName.sig",
+  'latest.json'
+)) {
+  $existing = Join-Path $ReleasesDir $releaseName
+  if (Test-Path -LiteralPath $existing) {
+    Remove-Item -LiteralPath $existing -Force
+    Write-Warn "Removed stale staged release asset: $releaseName"
+  }
+}
 
 # --- 3. Stage with friendly + canonical names ------------------------------
 $staged = @()
@@ -145,6 +172,12 @@ function Copy-Artifact {
 
     $sigSrc = "$Src.sig"
     if (Test-Path -LiteralPath $sigSrc) {
+      $artifactItem = Get-Item -LiteralPath $Src
+      $sigItem = Get-Item -LiteralPath $sigSrc
+      if ($sigItem.LastWriteTimeUtc -lt $artifactItem.LastWriteTimeUtc) {
+        Write-Warn "Ignoring stale updater signature for $Canonical; rebuild with TAURI_SIGNING_PRIVATE_KEY."
+        continue
+      }
       $sigDst = Join-Path $ReleasesDir "$name.sig"
       Copy-Item -LiteralPath $sigSrc -Destination $sigDst -Force
       Write-Ok "Staged $name.sig"
@@ -157,12 +190,12 @@ function Copy-Artifact {
 $staged += Copy-Artifact `
   -Src       $nsisSrc `
   -Canonical $nsisName `
-  -Friendly  "Jarvis-One-${Version}-Windows-x64.exe"
+  -Friendly  $friendlyNsisName
 
 $staged += Copy-Artifact `
   -Src       $msiSrc `
   -Canonical $msiName `
-  -Friendly  "Jarvis-One-${Version}-Windows-x64.msi"
+  -Friendly  $friendlyMsiName
 
 if ($staged.Count -eq 0) {
   Write-Fail 'No installers staged. Aborting.'

@@ -4,11 +4,10 @@
  * voice modal has *some* working transcription path on Chromium-based hosts
  * (Tauri Windows uses WebView2 which supports it).
  *
- * Real ASR/TTS comes in Phase 3 via the Pipecat sidecar. Until then, this
- * service:
+ * This service:
  *  - feature-detects the Web Speech API
  *  - emits typed events the modal can wire into the voice store
- *  - falls back to a "voice will work in Phase 3" toast if the API is missing
+ *  - falls back cleanly when the API is missing
  *
  * The service is a *singleton*. Import the named export `VoiceService`.
  */
@@ -131,10 +130,10 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
 function mapErrorKind(raw: string): VoiceErrorKind {
   switch (raw) {
     case 'not-allowed':
-    case 'service-not-allowed':
-      return 'service_not_allowed';
     case 'permission-denied':
       return 'permission_denied';
+    case 'service-not-allowed':
+      return 'service_not_allowed';
     case 'no-speech':
       return 'no_speech';
     case 'aborted':
@@ -181,6 +180,11 @@ class VoiceServiceImpl extends VoiceEmitter {
     return this.active;
   }
 
+  /** True while callers expect recognition to survive Chromium/browser restarts. */
+  wantsListening(): boolean {
+    return this.wantsActive;
+  }
+
   /** Set the BCP-47 language tag used for recognition. Default is en-US. */
   setLanguage(lang: string): void {
     this.langPref = lang;
@@ -194,15 +198,15 @@ class VoiceServiceImpl extends VoiceEmitter {
    * No-op if already listening. Emits 'voice:error' with kind=unsupported
    * when the Web Speech API is missing.
    */
-  startListening(): void {
-    if (this.active) return;
+  startListening(): boolean {
+    if (this.active) return true;
     const Ctor = getRecognitionCtor();
     if (!Ctor) {
       this.emit('voice:error', {
         kind: 'unsupported',
-        message: 'Voice will work in Phase 3 (Pipecat sidecar).',
+        message: 'Built-in speech recognition is not available in this runtime.',
       });
-      return;
+      return false;
     }
 
     const r = new Ctor();
@@ -291,6 +295,7 @@ class VoiceServiceImpl extends VoiceEmitter {
     this.wantsActive = true;
     try {
       r.start();
+      return true;
     } catch (err) {
       // Some browsers throw if start() is called too quickly after stop().
       this.emit('voice:error', {
@@ -301,6 +306,7 @@ class VoiceServiceImpl extends VoiceEmitter {
       this.recognition = null;
       this.active = false;
       this.wantsActive = false;
+      return false;
     }
   }
 

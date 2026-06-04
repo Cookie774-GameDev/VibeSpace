@@ -47,7 +47,7 @@ export interface RuntimeBindings {
   /** Resolve an agent by slug (for @mentions in user text). */
   getAgentBySlug: (slug: string) => Agent | null | undefined;
   /** Pick the active agent for a chat (first id in `chat.active_agent_ids`). */
-  getAgentForChat: (chatId: ChatId | string) => Agent | null | undefined;
+  getAgentForChat: (chatId: ChatId | string) => Agent | null | undefined | Promise<Agent | null | undefined>;
   /** Read message history for a chat in chronological order. */
   getMessages: (chatId: ChatId | string) => Promise<Message[]> | Message[];
   /** Append a new message; returns the saved message (with id + timestamps). */
@@ -238,7 +238,7 @@ export function startRuntimeListener(
       const slug = detectMention(text);
       if (slug) agent = bindings.getAgentBySlug(slug);
     }
-    if (!agent) agent = bindings.getAgentForChat(chatId);
+    if (!agent) agent = await bindings.getAgentForChat(chatId);
     if (!agent) {
       // Loud-but-not-crashy: surface the misconfiguration so it's visible in
       // dev console; the UI will likely show no response.

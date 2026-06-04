@@ -5,7 +5,7 @@
 # GitHub:   wget -qO- https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 #
 # Optional environment variables:
-#   JARVIS_VERSION="0.1.4"     pin to a version (default: latest from GitHub releases)
+#   JARVIS_VERSION="0.1.17"    pin to a version (default: latest published GitHub release)
 #   JARVIS_CHANNEL="stable"    stable | nightly (default: stable)
 #   JARVIS_FORMAT=""           linux: deb | rpm | appimage  (auto-detected if blank)
 #                              macOS: dmg (the only option)
@@ -35,14 +35,14 @@ fi
 
 banner() {
   printf "\n"
-  printf "${CYAN}------------------------------------------------------------${RESET}\n"
-  printf "${CYAN}      _                   _      ${RESET}\n"
-  printf "${CYAN}     | | __ _ _ ____   _(_)___  ${VIOLET}  the AI workspace${RESET}\n"
-  printf "${CYAN}  _  | |/ _\` | '__\\ \\ / / / __| ${VIOLET}  for every model,${RESET}\n"
-  printf "${CYAN} | |_| | (_| | |   \\ V /| \\__ \\ ${VIOLET}  agent, voice & task${RESET}\n"
-  printf "${CYAN}  \\___/ \\__,_|_|    \\_/ |_|___/ ${RESET}\n"
-  printf "${DIM}                                  https://github.com/${JARVIS_REPO}${RESET}\n"
-  printf "${CYAN}------------------------------------------------------------${RESET}\n\n"
+  printf "%b\n" "${CYAN}------------------------------------------------------------${RESET}"
+  printf "%b\n" "${CYAN}      _                   _      ${RESET}"
+  printf "%b\n" "${CYAN}     | | __ _ _ ____   _(_)___  ${VIOLET}  the AI workspace${RESET}"
+  printf "%b\n" "${CYAN}  _  | |/ _\` | '__\\ \\ / / / __| ${VIOLET}  for every model,${RESET}"
+  printf "%b\n" "${CYAN} | |_| | (_| | |   \\ V /| \\__ \\ ${VIOLET}  agent, voice & task${RESET}"
+  printf "%b\n" "${CYAN}  \\___/ \\__,_|_|    \\_/ |_|___/ ${RESET}"
+  printf "%b\n" "${DIM}                                  https://github.com/${JARVIS_REPO}${RESET}"
+  printf "%b\n\n" "${CYAN}------------------------------------------------------------${RESET}"
 }
 
 step() { printf "  ${CYAN}->${RESET}  %s\n" "$1"; }
@@ -110,8 +110,16 @@ get_latest_version() {
     ok "Latest version: $tag" >&2
     printf "%s" "$tag"
   else
-    warn "Could not reach GitHub. Falling back to known version."
-    printf "%s" "0.1.15"
+    local effective
+    effective=$(curl -Ls -o /dev/null -w '%{url_effective}' "https://github.com/${JARVIS_REPO}/releases/latest" 2>/dev/null || true)
+    tag=$(printf "%s" "$effective" | sed -nE 's#.*/releases/tag/v?([^/[:space:]]+)$#\1#p')
+    if [ -n "$tag" ]; then
+      ok "Latest version: $tag" >&2
+      printf "%s" "$tag"
+    else
+      fail "No published Jarvis One GitHub Release was found. Publish a release with installer assets, or set JARVIS_VERSION/JARVIS_LOCAL for controlled testing."
+      exit 1
+    fi
   fi
 }
 
@@ -241,6 +249,38 @@ install_dmg() {
   warn "After the first 'Open', macOS remembers the trust for future updates."
 }
 
+launch_linux_app() {
+  local runner=""
+  if command -v jarvis >/dev/null 2>&1; then
+    runner="jarvis"
+  elif command -v jarvis-one >/dev/null 2>&1; then
+    runner="jarvis-one"
+  fi
+
+  if [ -n "$runner" ]; then
+    if [ -n "${SUDO_USER:-}" ]; then
+      sudo -u "$SUDO_USER" nohup "$runner" >/dev/null 2>&1 &
+    else
+      nohup "$runner" >/dev/null 2>&1 &
+    fi
+    return 0
+  fi
+
+  if command -v gtk-launch >/dev/null 2>&1; then
+    if [ -n "${SUDO_USER:-}" ]; then
+      sudo -u "$SUDO_USER" gtk-launch jarvis.desktop >/dev/null 2>&1 || \
+      sudo -u "$SUDO_USER" gtk-launch "Jarvis One" >/dev/null 2>&1 || true
+    else
+      gtk-launch jarvis.desktop >/dev/null 2>&1 || \
+      gtk-launch "Jarvis One" >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+
+  warn "Installed successfully, but no launcher command was found. Open Jarvis One from your apps menu."
+  return 0
+}
+
 # --- Local build ---------------------------------------------------------
 get_local_installer() {
   local os="$1" format="$2"
@@ -348,11 +388,7 @@ case "$OS" in
     fi
     ;;
   linux)
-    if [ -n "${SUDO_USER:-}" ]; then
-      sudo -u "$SUDO_USER" jarvis &
-    else
-      jarvis &
-    fi
+    launch_linux_app
     ;;
 esac
 

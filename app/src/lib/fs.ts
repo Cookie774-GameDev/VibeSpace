@@ -107,6 +107,15 @@ export async function readTextFile(path: string): Promise<FsReadResult> {
   }
 }
 
+export async function readTextFileSample(path: string, maxBytes = 64 * 1024): Promise<FsReadResult> {
+  try {
+    const content = await invoke<string>('fs_read_text_sample', { path, maxBytes });
+    return { ok: true, content, path };
+  } catch (err) {
+    return { ok: false, error: classifyInvokeError(err), path };
+  }
+}
+
 export async function listDirectory(path: string): Promise<FsListResult> {
   try {
     const entries = await invoke<FsEntry[]>('fs_list_dir', { path });
@@ -166,7 +175,7 @@ export function describeFsError(err: FsReadError): string {
     case 'not_a_dir':
       return 'Path is not a folder.';
     case 'too_large':
-      return 'File exceeds the 1 MB read cap.';
+      return 'File exceeds the 100 MB read cap.';
     case 'not_utf8':
       return 'File is not valid UTF-8 text.';
     case 'parent_not_found':

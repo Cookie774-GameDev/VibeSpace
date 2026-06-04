@@ -20,6 +20,14 @@ export { WakeWordHost } from './WakeWordHost';
 // Services
 export { VoiceService } from './VoiceService';
 export type { VoiceEventMap, VoiceErrorKind } from './VoiceService';
+export {
+  isSpeechSynthesisSupported,
+  selectPersonaVoice,
+  speakPersonaPreview,
+  speakText,
+  VOICE_PREVIEW_TEXT,
+} from './speechSynthesis';
+export type { SpeakTextOptions } from './speechSynthesis';
 export { IntentClassifier, classify } from './IntentClassifier';
 export type { Intent, VoiceIntent, VoiceSlots } from './IntentClassifier';
 

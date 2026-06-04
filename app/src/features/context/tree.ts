@@ -1,4 +1,4 @@
-import { readTextFile, listDirectory, writeTextFile, type FsEntry } from '@/lib/fs';
+import { readTextFileSample, listDirectory, writeTextFile, type FsEntry } from '@/lib/fs';
 import { basename, extension, isPopularTextFile } from '@/features/files/projectFiles';
 
 export const CONTEXT_MIME = 'application/x-jarvis-context';
@@ -109,7 +109,9 @@ interface ScannedContextFile {
 const MAX_SCAN_FILES = 120;
 const MAX_SCAN_DEPTH = 6;
 const MAX_FILE_SAMPLE_CHARS = 12_000;
+const MAX_FILE_SAMPLE_BYTES = 64 * 1024;
 const MAX_TOTAL_SAMPLE_CHARS = 260_000;
+const MAX_CONTEXT_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_PROMPT_CHARS = 280_000;
 const CONTEXT_OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const CONTEXT_GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -122,9 +124,14 @@ const IGNORED_DIRS = new Set([
 ]);
 
 const IGNORED_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'icns', 'bmp', 'tiff', 'avif', 'mp4', 'mov',
-  'mp3', 'wav', 'flac', 'ogg', 'zip', '7z', 'rar', 'tar', 'gz', 'xz', 'bz2', 'pdf', 'exe',
+  'zip', '7z', 'rar', 'tar', 'gz', 'xz', 'bz2', 'pdf', 'exe',
   'dll', 'dylib', 'so', 'jar', 'class', 'wasm', 'pdb', 'sqlite', 'db', 'lockb', 'msi',
+]);
+
+const MEDIA_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'icns', 'bmp', 'tiff', 'avif',
+  'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi',
+  'mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac',
 ]);
 
 export function contextStorageKey(projectId: string | null): string {
@@ -592,7 +599,23 @@ async function scanProjectFiles(
         continue;
       }
       if (!isContextCandidate(entry)) continue;
-      const result = await readTextFile(entry.path);
+      if (isMediaContextFile(entry.path)) {
+        const content = mediaMetadataContent(rootDir, entry);
+        totalChars += content.length;
+        files.push({
+          path: entry.path,
+          relativePath: relativePath(rootDir, entry.path),
+          extension: extension(entry.path) || 'media',
+          size: entry.size ?? 0,
+          createdMs: entry.createdMs,
+          modifiedMs: entry.modifiedMs,
+          content,
+          truncated: false,
+        });
+        continue;
+      }
+
+      const result = await readTextFileSample(entry.path, MAX_FILE_SAMPLE_BYTES);
       if (!result.ok) continue;
       const remaining = MAX_TOTAL_SAMPLE_CHARS - totalChars;
       if (remaining <= 0) break;
@@ -607,7 +630,7 @@ async function scanProjectFiles(
         createdMs: entry.createdMs,
         modifiedMs: entry.modifiedMs,
         content,
-        truncated: result.content.length > content.length,
+        truncated: result.content.length > content.length || Boolean(entry.size && entry.size > MAX_FILE_SAMPLE_BYTES),
       });
       if (files.length % 20 === 0) onProgress?.(`Scanned ${files.length} project files...`);
     }
@@ -634,9 +657,31 @@ function prioritizeEntries(entries: FsEntry[]): FsEntry[] {
 
 function isContextCandidate(entry: FsEntry): boolean {
   const ext = extension(entry.path).toLowerCase();
+  if (entry.size && entry.size > MAX_CONTEXT_FILE_BYTES) return false;
+  if (MEDIA_EXTENSIONS.has(ext)) return true;
   if (IGNORED_EXTENSIONS.has(ext)) return false;
-  if (entry.size && entry.size > 1_000_000) return false;
   return isPopularTextFile(entry.path) || basename(entry.path).startsWith('.env') || ext.length <= 6;
+}
+
+function isMediaContextFile(path: string): boolean {
+  return MEDIA_EXTENSIONS.has(extension(path).toLowerCase());
+}
+
+function mediaMetadataContent(rootDir: string, entry: FsEntry): string {
+  const ext = extension(entry.path).toLowerCase();
+  const kind =
+    ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'].includes(ext) ? 'video'
+      : ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'].includes(ext) ? 'audio'
+        : 'image';
+  return [
+    `Media file metadata only (${kind}).`,
+    `Relative path: ${relativePath(rootDir, entry.path)}`,
+    `Extension: ${ext || 'unknown'}`,
+    typeof entry.size === 'number' ? `Size: ${entry.size} bytes` : '',
+    entry.createdMs ? `Created: ${new Date(entry.createdMs).toISOString()}` : '',
+    entry.modifiedMs ? `Modified: ${new Date(entry.modifiedMs).toISOString()}` : '',
+    'Binary bytes were not read into the prompt.',
+  ].filter(Boolean).join('\n');
 }
 
 async function generateProviderTree(args: {
@@ -931,6 +976,7 @@ function inferFilePurpose(file: ScannedContextFile): string {
   if (path.includes('/features/')) return 'belongs to a product feature and helps that feature run';
   if (path.includes('/lib/')) return 'provides shared support code used by other parts of the app';
   if (path.includes('/src-tauri/') || /\.(rs)$/.test(name)) return 'supports the native desktop side of the app';
+  if (isMediaContextFile(file.relativePath)) return 'is a media asset tracked by metadata without reading binary bytes into the prompt';
   if (path.includes('/migrations/')) return 'changes database structure or security rules';
   return 'is part of the project structure and may be useful when questions mention this path';
 }
@@ -944,6 +990,7 @@ function extensionLabel(ext: string): string {
   if (clean === 'json') return 'configuration';
   if (clean === 'md') return 'documentation';
   if (clean === 'sql') return 'database';
+  if (MEDIA_EXTENSIONS.has(clean)) return clean === 'mp4' || clean === 'mov' || clean === 'webm' ? 'video media' : 'media asset';
   return clean;
 }
 
