@@ -23,10 +23,9 @@
 //!     workflow doesn't need one and the safest privilege is "only
 //!     what's used."
 //!   - No directory listing, no globbing — keep the surface tight.
-//!   - The size cap (1 MiB) is conservative; readers typically chop
-//!     to a few KB before sending to a model anyway. If a user pins a
-//!     huge log we surface a clear error rather than reading
-//!     gigabytes into the WebView heap.
+//!   - The size cap (100 MiB) is high enough for large project files,
+//!     while prompt callers use `fs_read_text_sample` so huge logs do
+//!     not get copied wholesale into the WebView heap.
 
 use serde::Serialize;
 use std::io::Read;
@@ -34,8 +33,8 @@ use std::path::PathBuf;
 
 /// Hard ceiling on a single file. Anything bigger is rejected with
 /// `too_large` so callers don't accidentally force a multi-GB read
-/// into the WebView heap. 1 MiB ≈ 250k tokens worth of text — plenty
-/// for any prompt context the user could realistically want.
+/// into the WebView heap. Prompt callers should prefer
+/// `fs_read_text_sample` and then apply their own token budget.
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
 const MAX_DIR_ENTRIES: usize = 500;
