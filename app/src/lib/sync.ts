@@ -1,25 +1,74 @@
 /**
  * Sync queue + skeleton sync loop for Jarvis V1.
  *
- * Cloud sync is optional. When a Supabase client is configured, the loop
- * drains the local `sync_queue` table and pushes mutations to Postgres.
+ * Cloud sync is optional. When a Supabase client is configured and signed
+ * in, the loop drains the local `sync_queue` table and pushes mutations to
+ * Postgres.
  * When no client is configured the loop is effectively a no-op - the queue
  * still grows so that flipping cloud sync on later flushes accumulated
  * changes.
  *
- * Real conflict resolution is stubbed. The current strategy is naive
- * last-writer-wins via Supabase's default upsert. A richer per-field LWW
- * with a conflict log lives in the design doc and is owned by a later
- * subagent.
+ * The cloud target is `app_sync_records`, a generic per-user document table.
+ * That keeps desktop local-first data safe even while the hosted Supabase
+ * schema evolves independently from Dexie's full table set.
  */
 
 import { nanoid } from 'nanoid';
 import { db, openDb } from './db';
-import type { SyncOp, SyncQueueRow, SyncStatus } from './db';
+import type { StoreName, SyncOp, SyncQueueRow, SyncStatus } from './db';
 import { getSupabaseClient, isCloudSyncConfigured } from './supabase';
 
 const SYNC_ID_PREFIX = 'syq';
 const newSyncId = (): string => `${SYNC_ID_PREFIX}_${nanoid(16)}`;
+const CLOUD_SYNC_RECORDS_TABLE = 'app_sync_records';
+const CLOUD_SYNC_CONFLICT_TARGET = 'user_id,table_name,row_id';
+let syncFlushInFlight = false;
+
+const PRIMARY_KEY_BY_TABLE: Partial<Record<StoreName, string>> = {
+  settings: 'key',
+  terminal_layouts: 'project_id',
+};
+
+export function primaryKeyForSyncTable(table: string): string {
+  return PRIMARY_KEY_BY_TABLE[table as StoreName] ?? 'id';
+}
+
+export type CloudSyncRecord = {
+  user_id: string;
+  table_name: string;
+  row_id: string;
+  op: SyncOp;
+  payload: Record<string, unknown> | null;
+  deleted_at: string | null;
+  updated_at: string;
+};
+
+function payloadForCloudRecord(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  return payload as Record<string, unknown>;
+}
+
+function isoFromMs(ms: number, fallbackIso: string): string {
+  if (!Number.isFinite(ms)) return fallbackIso;
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? fallbackIso : date.toISOString();
+}
+
+export function buildCloudSyncRecord(
+  row: SyncQueueRow,
+  userId: string,
+  nowIso = new Date().toISOString(),
+): CloudSyncRecord {
+  return {
+    user_id: userId,
+    table_name: row.table,
+    row_id: row.row_id,
+    op: row.op,
+    payload: row.op === 'delete' ? null : payloadForCloudRecord(row.payload),
+    deleted_at: row.op === 'delete' ? nowIso : null,
+    updated_at: isoFromMs(row.created_at, nowIso),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -68,8 +117,9 @@ export type SyncFlushResult = {
 /**
  * Drain up to `batchSize` pending rows from the sync queue.
  *
- * - If no Supabase client is configured: returns immediately with `skipped`
- *   set to the pending count, leaving rows in `pending`.
+ * - If no Supabase client is configured or no user is signed in: returns
+ *   immediately with `skipped` set to the pending count, leaving rows in
+ *   `pending`.
  * - Otherwise: marks each row `in_progress`, calls Supabase, and marks
  *   `done` or `error` based on the result. Errors don't block the rest of
  *   the batch.
@@ -78,58 +128,61 @@ export type SyncFlushResult = {
  * are recorded on the offending row for later inspection.
  */
 export async function processSyncQueue(batchSize = 100): Promise<SyncFlushResult> {
-  await openDb();
+  if (syncFlushInFlight) return { processed: 0, errored: 0, skipped: 0 };
+  syncFlushInFlight = true;
+  try {
+    await openDb();
 
-  const client = getSupabaseClient();
-  const pending = await db.sync_queue
-    .where('status')
-    .equals('pending' as SyncStatus)
-    .limit(batchSize)
-    .toArray();
+    const client = getSupabaseClient();
+    const pending = await db.sync_queue
+      .where('status')
+      .equals('pending' as SyncStatus)
+      .limit(batchSize)
+      .toArray();
+    pending.sort((a, b) => a.created_at - b.created_at);
 
-  if (!client) {
-    return { processed: 0, errored: 0, skipped: pending.length };
-  }
-
-  let processed = 0;
-  let errored = 0;
-
-  for (const row of pending) {
-    try {
-      await db.sync_queue.update(row.id, {
-        status: 'in_progress' as SyncStatus,
-        attempted_at: Date.now(),
-      });
-
-      // Stubbed routing. Real impl would:
-      //   - Map our prefixed string IDs to Supabase row keys (no-op since
-      //     we accept client IDs).
-      //   - Translate our snake_case JSONB columns to camelCase if the
-      //     Postgres schema diverges (it doesn't today - see migration).
-      //   - Implement per-field LWW conflict resolution against the server
-      //     copy before upserting.
-      if (row.op === 'delete') {
-        const { error } = await client.from(row.table).delete().eq('id', row.row_id);
-        if (error) throw error;
-      } else {
-        // insert and update both go through upsert for idempotency.
-        const { error } = await client.from(row.table).upsert(row.payload as object);
-        if (error) throw error;
-      }
-
-      await db.sync_queue.update(row.id, { status: 'done' as SyncStatus });
-      processed++;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      await db.sync_queue.update(row.id, {
-        status: 'error' as SyncStatus,
-        error: message,
-      });
-      errored++;
+    if (!client) {
+      return { processed: 0, errored: 0, skipped: pending.length };
     }
-  }
 
-  return { processed, errored, skipped: 0 };
+    const { data } = await client.auth.getSession();
+    const userId = data.session?.user?.id;
+    if (!userId) {
+      return { processed: 0, errored: 0, skipped: pending.length };
+    }
+
+    let processed = 0;
+    let errored = 0;
+
+    for (const row of pending) {
+      try {
+        await db.sync_queue.update(row.id, {
+          status: 'in_progress' as SyncStatus,
+          attempted_at: Date.now(),
+        });
+
+        const cloudRecord = buildCloudSyncRecord(row, userId);
+        const { error } = await client
+          .from(CLOUD_SYNC_RECORDS_TABLE)
+          .upsert(cloudRecord, { onConflict: CLOUD_SYNC_CONFLICT_TARGET });
+        if (error) throw error;
+
+        await db.sync_queue.update(row.id, { status: 'done' as SyncStatus });
+        processed++;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        await db.sync_queue.update(row.id, {
+          status: 'error' as SyncStatus,
+          error: message,
+        });
+        errored++;
+      }
+    }
+
+    return { processed, errored, skipped: 0 };
+  } finally {
+    syncFlushInFlight = false;
+  }
 }
 
 /**

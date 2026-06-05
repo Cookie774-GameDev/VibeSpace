@@ -18,6 +18,7 @@ supabase/
     0007_security_hardening.sql        advisor fixes (search_path, RPC revokes)
     0008_revoke_anon_rpc.sql           tighten set_phone_pin
     0009_perf_rls_initplan_and_indexes.sql  RLS perf rewrites + FK covering indexes
+    0010_app_sync_records.sql          generic desktop sync_queue document table
   functions/
     jarvis-proxy/                      hosted DeepSeek proxy edge function
   schema-phone-jarvis.sql              legacy single-file schema (kept for reference)
@@ -37,7 +38,8 @@ url:          https://tipeobvisjqvpbzcpckh.supabase.co
 region:       us-east-1
 ```
 
-Migrations 0001 through 0009 have been applied. Verify with:
+Migrations 0001 through 0009 were previously applied. Apply and verify
+`0010_app_sync_records.sql` before enabling desktop cloud sync in production:
 
 ```sh
 supabase migration list
@@ -107,6 +109,8 @@ match the active row, so the Stripe webhook only needs to upsert into
 - **app domain** — `workspaces`, `projects`, `agents`, `chats`, `messages`,
   `tasks`, `reminders`, `memories`, `events`, `integrations`,
   `quick_links`, `terminal_sessions`
+- **desktop sync** — `app_sync_records` stores local-first Dexie mutations
+  from the desktop `sync_queue` as per-user JSON documents
 - **catalog** — `models_catalog` (public read; service-role write)
 
 Every user-owned table has RLS with a single policy: `auth.uid() = user_id`

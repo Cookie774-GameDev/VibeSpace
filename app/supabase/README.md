@@ -18,15 +18,16 @@ silently degrades to local-only mode.
 
 ## Apply the schema
 
-The single migration file is `migrations/0001_initial.sql`. It mirrors the
-Dexie schema in `app/src/lib/db/schema.ts` and turns on row-level security so
-each user only sees their own rows.
+The migrations in `migrations/` mirror the Dexie schema in
+`app/src/lib/db/schema.ts` and turn on row-level security so each user only
+sees their own rows. `0004_app_sync_records.sql` adds the generic document
+table used by the desktop `sync_queue`.
 
 ### Option 1 - Supabase dashboard (easiest)
 
 1. Open your project at https://supabase.com/dashboard.
 2. Go to **SQL Editor** -> **New query**.
-3. Paste the contents of `migrations/0001_initial.sql`.
+3. Paste and run the migration files in order.
 4. Run.
 
 The script is idempotent: re-running it on an already-migrated project is a
@@ -81,6 +82,6 @@ That covers select, insert, update, delete. Unauthenticated requests get
 ## Local sync queue
 
 The desktop app writes outbound mutations to a Dexie-only `sync_queue`
-table - it is **not** mirrored in Postgres. The sync loop in
-`app/src/lib/sync.ts` drains the queue and `upsert`s into the tables above
-when a Supabase client is configured.
+table. The sync loop in `app/src/lib/sync.ts` drains that queue and upserts
+per-user JSON documents into `public.app_sync_records` when a Supabase client
+is configured and signed in.

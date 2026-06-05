@@ -50,6 +50,14 @@ import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
 import { UpdateWarningHost } from '@/features/updates/UpdateWarningHost';
 import type { Agent, AgentId, Message } from '@/types';
 
+type SupabaseSessionLike = {
+  user?: {
+    id?: string;
+    email?: string;
+  };
+  expires_at?: number;
+} | null;
+
 /**
  * Lazy-mounted modals + canvas surfaces.
  *
@@ -103,6 +111,19 @@ const AmbientHome = React.lazy(() =>
 const CelebrationHost = React.lazy(() =>
   import('@/features/celebrate').then((m) => ({ default: m.CelebrationHost })),
 );
+
+function applyCloudSession(session: SupabaseSessionLike): void {
+  const userId = session?.user?.id;
+  if (!userId) {
+    useAuthStore.getState().setCloudSession(null);
+    return;
+  }
+  useAuthStore.getState().setCloudSession({
+    user_id: userId,
+    email: session.user?.email ?? '',
+    expires_at: session.expires_at ?? 0,
+  });
+}
 
 /**
  * Renders the right canvas based on `useUIStore.route` (V3) and
@@ -182,6 +203,8 @@ function useBoot() {
     let stopNotifications: (() => void) | undefined;
     let stopClock: (() => void) | undefined;
     let stopTerminalScheduler: (() => void) | undefined;
+    let stopSyncLoop: (() => void) | undefined;
+    let stopCloudAuth: (() => void) | undefined;
     let cancelled = false;
 
     (async () => {
@@ -199,6 +222,39 @@ function useBoot() {
         await useAuthStore.getState().hydrateApiKeysFromVault();
       } catch (err) {
         console.warn('Failed to hydrate API keys from secure storage:', err);
+      }
+
+      try {
+        const { isSupabaseConfigured } = await import('@/lib/supabase/env');
+        if (!isSupabaseConfigured()) {
+          applyCloudSession(null);
+        } else {
+          const [{ getSupabaseClient }, { processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop }] =
+            await Promise.all([import('@/lib/supabase/client'), import('@/lib/sync')]);
+          if (cancelled) return;
+          const supa = getSupabaseClient();
+          if (supa) {
+            void supa.auth.getSession().then(({ data }) => {
+              if (!cancelled) applyCloudSession(data.session as SupabaseSessionLike);
+            });
+            const sub = supa.auth.onAuthStateChange((_event, session) => {
+              if (cancelled) return;
+              applyCloudSession(session as SupabaseSessionLike);
+              if (session?.user?.id) {
+                void retrySyncErrors()
+                  .then(() => processSyncQueue())
+                  .catch((err) => console.warn('[sync] immediate flush failed:', err));
+              }
+            });
+            stopCloudAuth = () => sub.data.subscription.unsubscribe();
+          }
+
+          await retrySyncErrors();
+          void pruneSyncQueue().catch((err) => console.warn('[sync] prune failed:', err));
+          if (!cancelled) stopSyncLoop = startSyncLoop();
+        }
+      } catch (err) {
+        console.warn('Failed to start cloud sync lifecycle:', err);
       }
 
       // 2) Register persisted agents into the in-memory agent store so custom
@@ -274,6 +330,8 @@ function useBoot() {
       stopNotifications?.();
       stopClock?.();
       stopTerminalScheduler?.();
+      stopSyncLoop?.();
+      stopCloudAuth?.();
     };
     // Run once - boot is one-shot.
     // eslint-disable-next-line react-hooks/exhaustive-deps

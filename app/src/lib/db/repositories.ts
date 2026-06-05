@@ -12,10 +12,9 @@
  * `messageRepo.listByChat(chatId)`. Mutating helpers ALWAYS bump
  * `updated_at` and never allow patching `id` or `created_at`.
  *
- * Repos do NOT call into the sync layer. The runtime calls
- * `enqueueMutation` from `@/lib/sync` after CRUD when cloud sync is on.
- * That keeps the layers decoupled and avoids circular imports between
- * `db/*` and `sync.ts`.
+ * Repos also mirror mutations into the local `sync_queue`. The sync loop
+ * drains that queue when Jarvis Cloud is configured, while local writes stay
+ * reliable even if queueing fails.
  */
 
 import { nanoid } from 'nanoid';
@@ -72,7 +71,7 @@ import {
   newWorkspaceId,
 } from '@/lib/ids';
 import { db } from './index';
-import type { Project, SettingsRow, Workspace } from './schema';
+import type { Project, SettingsRow, StoreName, SyncOp, Workspace } from './schema';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -94,6 +93,85 @@ async function requireRow<T>(loader: () => Promise<T | undefined>, table: string
   const row = await loader();
   if (!row) throw new Error(`${table} ${id} not found`);
   return row;
+}
+
+const SYNCABLE_TABLES = new Set<StoreName>([
+  'workspaces',
+  'projects',
+  'chats',
+  'messages',
+  'agents',
+  'tasks',
+  'memory_items',
+  'settings',
+  'events',
+  'quick_links',
+  'quick_link_groups',
+  'terminal_presets',
+  'terminal_sessions',
+  'terminal_layouts',
+  'integrations',
+]);
+
+const SYNC_ID_PREFIX = 'syq';
+
+function syncRowId(table: StoreName, row: unknown): string | null {
+  if (!row || typeof row !== 'object') return null;
+  const record = row as Record<string, unknown>;
+  const key = table === 'settings' ? 'key' : table === 'terminal_layouts' ? 'project_id' : 'id';
+  const value = record[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+async function enqueueLocalSync(
+  op: SyncOp,
+  table: StoreName,
+  rowId: string,
+  payload: unknown,
+): Promise<void> {
+  if (!SYNCABLE_TABLES.has(table)) return;
+  try {
+    const pending = await db.sync_queue
+      .where('status')
+      .equals('pending')
+      .filter((row) => row.table === table && row.row_id === rowId)
+      .first();
+    const ts = now();
+    if (pending) {
+      await db.sync_queue.update(pending.id, {
+        op: pending.op === 'insert' && op !== 'delete' ? 'insert' : op,
+        payload,
+        created_at: ts,
+        error: undefined,
+      });
+      return;
+    }
+    await db.sync_queue.add({
+      id: `${SYNC_ID_PREFIX}_${nanoid(16)}`,
+      op,
+      table,
+      row_id: rowId,
+      payload,
+      status: 'pending',
+      created_at: ts,
+    });
+  } catch (err) {
+    console.warn('[sync] failed to enqueue local mutation', { table, rowId, op, err });
+  }
+}
+
+async function syncInsert<T>(table: StoreName, row: T): Promise<void> {
+  const rowId = syncRowId(table, row);
+  if (rowId) await enqueueLocalSync('insert', table, rowId, row);
+}
+
+async function syncUpdate<T>(table: StoreName, row: T): Promise<void> {
+  const rowId = syncRowId(table, row);
+  if (rowId) await enqueueLocalSync('update', table, rowId, row);
+}
+
+async function syncDelete(table: StoreName, rowId: string): Promise<void> {
+  await enqueueLocalSync('delete', table, rowId, null);
 }
 
 // ---------------------------------------------------------------------------
@@ -127,14 +205,18 @@ export const workspaceRepo = {
       updated_at: ts,
     };
     await db.workspaces.add(row);
+    await syncInsert('workspaces', row);
     return row;
   },
   async update(id: WorkspaceId, patch: Partial<Workspace>): Promise<Workspace> {
     await db.workspaces.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.workspaces.get(id), 'workspace', id);
+    const row = await requireRow(() => db.workspaces.get(id), 'workspace', id);
+    await syncUpdate('workspaces', row);
+    return row;
   },
   async delete(id: WorkspaceId): Promise<void> {
     await db.workspaces.delete(id);
+    await syncDelete('workspaces', id);
   },
 };
 
@@ -177,14 +259,18 @@ export const projectRepo = {
       updated_at: ts,
     };
     await db.projects.add(row);
+    await syncInsert('projects', row);
     return row;
   },
   async update(id: ProjectId, patch: Partial<Project>): Promise<Project> {
     await db.projects.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.projects.get(id), 'project', id);
+    const row = await requireRow(() => db.projects.get(id), 'project', id);
+    await syncUpdate('projects', row);
+    return row;
   },
   async delete(id: ProjectId): Promise<void> {
     await db.projects.delete(id);
+    await syncDelete('projects', id);
   },
 };
 
@@ -254,17 +340,23 @@ export const chatRepo = {
       updated_at: ts,
     };
     await db.chats.add(row);
+    await syncInsert('chats', row);
     return row;
   },
   async update(id: ChatId, patch: Partial<Chat>): Promise<Chat> {
     await db.chats.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.chats.get(id), 'chat', id);
+    const row = await requireRow(() => db.chats.get(id), 'chat', id);
+    await syncUpdate('chats', row);
+    return row;
   },
   async delete(id: ChatId): Promise<void> {
+    const messages = await db.messages.where('chat_id').equals(id).toArray();
     await db.transaction('rw', db.chats, db.messages, async () => {
       await db.messages.where('chat_id').equals(id).delete();
       await db.chats.delete(id);
     });
+    await Promise.all(messages.map((message) => syncDelete('messages', message.id)));
+    await syncDelete('chats', id);
   },
 };
 
@@ -323,14 +415,20 @@ export const messageRepo = {
     await db.messages.add(row);
     // Bump the parent chat's updated_at so chat lists reorder by recency.
     await db.chats.update(input.chat_id, { updated_at: ts });
+    const chat = await db.chats.get(input.chat_id);
+    await syncInsert('messages', row);
+    if (chat) await syncUpdate('chats', chat);
     return row;
   },
   async update(id: MessageId, patch: Partial<Message>): Promise<Message> {
     await db.messages.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.messages.get(id), 'message', id);
+    const row = await requireRow(() => db.messages.get(id), 'message', id);
+    await syncUpdate('messages', row);
+    return row;
   },
   async delete(id: MessageId): Promise<void> {
     await db.messages.delete(id);
+    await syncDelete('messages', id);
   },
 };
 
@@ -368,11 +466,14 @@ export const agentRepo = {
       updated_at: ts,
     } as Agent;
     await db.agents.add(row);
+    await syncInsert('agents', row);
     return row;
   },
   async update(id: AgentId, patch: Partial<Agent>): Promise<Agent> {
     await db.agents.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.agents.get(id), 'agent', id);
+    const row = await requireRow(() => db.agents.get(id), 'agent', id);
+    await syncUpdate('agents', row);
+    return row;
   },
   async delete(id: AgentId): Promise<void> {
     const existing = await db.agents.get(id);
@@ -380,6 +481,7 @@ export const agentRepo = {
       throw new Error(`agent ${id} is built-in and cannot be deleted`);
     }
     await db.agents.delete(id);
+    await syncDelete('agents', id);
   },
 };
 
@@ -517,14 +619,18 @@ export const taskRepo = {
       updated_at: ts,
     };
     await db.tasks.add(row);
+    await syncInsert('tasks', row);
     return row;
   },
   async update(id: TaskId, patch: Partial<Task>): Promise<Task> {
     await db.tasks.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.tasks.get(id), 'task', id);
+    const row = await requireRow(() => db.tasks.get(id), 'task', id);
+    await syncUpdate('tasks', row);
+    return row;
   },
   async delete(id: TaskId): Promise<void> {
     await db.tasks.delete(id);
+    await syncDelete('tasks', id);
   },
 
   // ---------- Reminder helpers (live inside the task row) ----------
@@ -632,18 +738,24 @@ export const memoryRepo = {
       updated_at: ts,
     } as MemoryItem;
     await db.memory_items.add(row);
+    await syncInsert('memory_items', row);
     return row;
   },
   async update(id: string, patch: Partial<MemoryItem>): Promise<MemoryItem> {
     await db.memory_items.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.memory_items.get(id), 'memory_item', id);
+    const row = await requireRow(() => db.memory_items.get(id), 'memory_item', id);
+    await syncUpdate('memory_items', row);
+    return row;
   },
   async delete(id: string): Promise<void> {
     await db.memory_items.delete(id);
+    await syncDelete('memory_items', id);
   },
   /** Stamp `last_accessed_at` to mark a memory item as recently used by retrieval. */
   async touchAccessed(id: string): Promise<void> {
     await db.memory_items.update(id, { last_accessed_at: now() });
+    const row = await db.memory_items.get(id);
+    if (row) await syncUpdate('memory_items', row);
   },
 };
 
@@ -673,6 +785,7 @@ export const settingsRepo = {
   async create(input: { key: string; value: unknown }): Promise<SettingsRow> {
     const row: SettingsRow = { key: input.key, value: input.value, updated_at: now() };
     await db.settings.put(row);
+    await syncUpdate('settings', row);
     return row;
   },
   /** Upsert `value` at `key`. Idempotent. */
@@ -687,10 +800,12 @@ export const settingsRepo = {
       updated_at: now(),
     };
     await db.settings.put(next);
+    await syncUpdate('settings', next);
     return next;
   },
   async delete(key: string): Promise<void> {
     await db.settings.delete(key);
+    await syncDelete('settings', key);
   },
 };
 
@@ -805,14 +920,18 @@ export const eventRepo = {
       updated_at: ts,
     };
     await db.events.add(row);
+    await syncInsert('events', row);
     return row;
   },
   async update(id: EventId, patch: Partial<EventRow>): Promise<EventRow> {
     await db.events.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.events.get(id), 'event', id);
+    const row = await requireRow(() => db.events.get(id), 'event', id);
+    await syncUpdate('events', row);
+    return row;
   },
   async delete(id: EventId): Promise<void> {
     await db.events.delete(id);
+    await syncDelete('events', id);
   },
 };
 
@@ -858,21 +977,30 @@ export const quickLinkGroupRepo = {
       updated_at: ts,
     };
     await db.quick_link_groups.add(row);
+    await syncInsert('quick_link_groups', row);
     return row;
   },
   async update(id: QuickLinkGroupId, patch: Partial<QuickLinkGroup>): Promise<QuickLinkGroup> {
     await db.quick_link_groups.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.quick_link_groups.get(id), 'quick_link_group', id);
+    const row = await requireRow(() => db.quick_link_groups.get(id), 'quick_link_group', id);
+    await syncUpdate('quick_link_groups', row);
+    return row;
   },
   async delete(id: QuickLinkGroupId): Promise<void> {
     // Detach links from the group rather than cascading. Keeps user data safe.
+    const affectedLinks = await db.quick_links.where('group_id').equals(id).toArray();
+    const ts = now();
     await db.transaction('rw', db.quick_link_groups, db.quick_links, async () => {
       await db.quick_links
         .where('group_id')
         .equals(id)
-        .modify({ group_id: undefined, updated_at: now() });
+        .modify({ group_id: undefined, updated_at: ts });
       await db.quick_link_groups.delete(id);
     });
+    await Promise.all(
+      affectedLinks.map((link) => syncUpdate('quick_links', { ...link, group_id: undefined, updated_at: ts })),
+    );
+    await syncDelete('quick_link_groups', id);
   },
 };
 
@@ -926,17 +1054,23 @@ export const quickLinkRepo = {
       updated_at: ts,
     };
     await db.quick_links.add(row);
+    await syncInsert('quick_links', row);
     return row;
   },
   async update(id: QuickLinkId, patch: Partial<QuickLink>): Promise<QuickLink> {
     await db.quick_links.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.quick_links.get(id), 'quick_link', id);
+    const row = await requireRow(() => db.quick_links.get(id), 'quick_link', id);
+    await syncUpdate('quick_links', row);
+    return row;
   },
   async delete(id: QuickLinkId): Promise<void> {
     await db.quick_links.delete(id);
+    await syncDelete('quick_links', id);
   },
   async touchLastUsed(id: QuickLinkId): Promise<void> {
     await db.quick_links.update(id, { last_used_at: now() });
+    const row = await db.quick_links.get(id);
+    if (row) await syncUpdate('quick_links', row);
   },
   /**
    * Re-order `dragId` to land just before `beforeId` (or at the end of the
@@ -972,6 +1106,12 @@ export const quickLinkRepo = {
         }
       }
     });
+    await Promise.all(
+      without.map(async (link) => {
+        const row = await db.quick_links.get(link.id);
+        if (row) await syncUpdate('quick_links', row);
+      }),
+    );
   },
 };
 
@@ -1026,14 +1166,18 @@ export const terminalPresetRepo = {
       updated_at: ts,
     };
     await db.terminal_presets.add(row);
+    await syncInsert('terminal_presets', row);
     return row;
   },
   async update(id: TerminalPresetId, patch: Partial<TerminalPreset>): Promise<TerminalPreset> {
     await db.terminal_presets.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.terminal_presets.get(id), 'terminal_preset', id);
+    const row = await requireRow(() => db.terminal_presets.get(id), 'terminal_preset', id);
+    await syncUpdate('terminal_presets', row);
+    return row;
   },
   async delete(id: TerminalPresetId): Promise<void> {
     await db.terminal_presets.delete(id);
+    await syncDelete('terminal_presets', id);
   },
 };
 
@@ -1101,6 +1245,7 @@ export const terminalSessionRepo = {
       last_active_at: ts,
     };
     await db.terminal_sessions.add(row);
+    await syncInsert('terminal_sessions', row);
     return row;
   },
   async update(id: TerminalSessionId, patch: Partial<TerminalSession>): Promise<TerminalSession> {
@@ -1108,10 +1253,14 @@ export const terminalSessionRepo = {
     delete (sanitized as { id?: unknown }).id;
     delete (sanitized as { created_at?: unknown }).created_at;
     await db.terminal_sessions.update(id, sanitized);
-    return requireRow(() => db.terminal_sessions.get(id), 'terminal_session', id);
+    const row = await requireRow(() => db.terminal_sessions.get(id), 'terminal_session', id);
+    await syncUpdate('terminal_sessions', row);
+    return row;
   },
   async touchActive(id: TerminalSessionId): Promise<void> {
     await db.terminal_sessions.update(id, { last_active_at: now() });
+    const row = await db.terminal_sessions.get(id);
+    if (row) await syncUpdate('terminal_sessions', row);
   },
   async markExited(id: TerminalSessionId, exitCode: number): Promise<TerminalSession> {
     return terminalSessionRepo.update(id, { status: 'exited', exit_code: exitCode });
@@ -1121,6 +1270,7 @@ export const terminalSessionRepo = {
       await db.terminal_scrollback.where('session_id').equals(id).delete();
       await db.terminal_sessions.delete(id);
     });
+    await syncDelete('terminal_sessions', id);
   },
 };
 
@@ -1195,16 +1345,20 @@ export const terminalLayoutRepo = {
   async upsert(layout: Omit<TerminalLayout, 'updated_at'>): Promise<TerminalLayout> {
     const next: TerminalLayout = { ...layout, updated_at: now() };
     await db.terminal_layouts.put(next);
+    await syncUpdate('terminal_layouts', next);
     return next;
   },
   async update(projectId: ProjectId, patch: Partial<TerminalLayout>): Promise<TerminalLayout> {
     const sanitized: Partial<TerminalLayout> = { ...patch };
     delete (sanitized as { project_id?: unknown }).project_id;
     await db.terminal_layouts.update(projectId, { ...sanitized, updated_at: now() });
-    return requireRow(() => db.terminal_layouts.get(projectId), 'terminal_layout', projectId);
+    const row = await requireRow(() => db.terminal_layouts.get(projectId), 'terminal_layout', projectId);
+    await syncUpdate('terminal_layouts', row);
+    return row;
   },
   async delete(projectId: ProjectId): Promise<void> {
     await db.terminal_layouts.delete(projectId);
+    await syncDelete('terminal_layouts', projectId);
   },
 };
 
@@ -1244,7 +1398,9 @@ export const integrationRepo = {
       delete (sanitized as { created_at?: unknown }).created_at;
       delete (sanitized as { kind?: unknown }).kind;
       await db.integrations.update(existing.id, { ...sanitized, updated_at: ts });
-      return requireRow(() => db.integrations.get(existing.id), 'integration', existing.id);
+      const row = await requireRow(() => db.integrations.get(existing.id), 'integration', existing.id);
+      await syncUpdate('integrations', row);
+      return row;
     }
     const row: Integration = {
       id: input.id ?? newIntegrationId(),
@@ -1260,13 +1416,17 @@ export const integrationRepo = {
       updated_at: ts,
     };
     await db.integrations.add(row);
+    await syncInsert('integrations', row);
     return row;
   },
   async update(id: IntegrationId, patch: Partial<Integration>): Promise<Integration> {
     await db.integrations.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    return requireRow(() => db.integrations.get(id), 'integration', id);
+    const row = await requireRow(() => db.integrations.get(id), 'integration', id);
+    await syncUpdate('integrations', row);
+    return row;
   },
   async delete(id: IntegrationId): Promise<void> {
     await db.integrations.delete(id);
+    await syncDelete('integrations', id);
   },
 };
