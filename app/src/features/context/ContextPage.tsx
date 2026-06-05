@@ -720,6 +720,9 @@ function ContextMapCanvas({
   const [view, setView] = React.useState(DEFAULT_VIEW);
   const [panning, setPanning] = React.useState(false);
   const dragRef = React.useRef<{ pointerId: number; startX: number; startY: number; startView: MapView } | null>(null);
+  const suppressContextMenu = React.useCallback((durationMs = 900) => {
+    document.body.dataset.jarvisSuppressContextMenuUntil = String(Date.now() + durationMs);
+  }, []);
 
   const recenter = React.useCallback(() => setView(DEFAULT_VIEW), []);
 
@@ -736,6 +739,8 @@ function ContextMapCanvas({
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 2) return;
     event.preventDefault();
+    suppressContextMenu();
+    document.body.classList.add('jarvis-context-map-right-dragging');
     setPanning(true);
     dragRef.current = {
       pointerId: event.pointerId,
@@ -763,9 +768,17 @@ function ContextMapCanvas({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     dragRef.current = null;
+    suppressContextMenu();
+    document.body.classList.remove('jarvis-context-map-right-dragging');
     setPanning(false);
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
+
+  React.useEffect(() => {
+    return () => {
+      document.body.classList.remove('jarvis-context-map-right-dragging');
+    };
+  }, []);
 
   const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
