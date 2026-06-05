@@ -619,7 +619,7 @@ export const RELEASES: readonly Release[] = [
           'Default model swapped to Gemini 2.5 Flash Lite — the truly free Google quota — so a fresh Free-tier user never accidentally hits the paid Gemini Flash budget.',
           'Action catalogue is added to the Jarvis system prompt only (not to Builder / Scout / Reviewer), so sub-agent prompts stay lean.',
           'Approval cards style status with the cozy palette: copper for pending, amber spinner for running, sage for success, terracotta for error, muted for cancelled.',
-          'Custom tools persist locally under `jarvis-tools` browser storage; Export / Import buttons let you move them between machines until cloud sync ships.',
+          'Custom tools persist locally under `jarvis-tools` browser storage and queue private Jarvis Cloud account sync when signed in. Export / Import remains available for manual backups.',
         ],
       },
       {
@@ -642,7 +642,7 @@ export const RELEASES: readonly Release[] = [
         kind: 'known',
         items: [
           'Stripe billing is not yet connected, so Starter / Pro / Ultra cards say "Available soon". The entitlements module (`lib/entitlements.ts`) is the source of truth for what each tier unlocks; it just isn\'t enforced until the webhook lands.',
-          'Tool publishing to Jarvis Cloud is a stub — `useToolStore.publish()` returns "Available soon". Use Export / Import to move tools between machines.',
+          'Public tool publishing is still separate from private account sync. `useToolStore.publish()` queues the private tool record for Jarvis Cloud sync.',
           'Approving an action that lacks a built-in registration (typo from the AI, or a custom tool deleted between proposal and approval) shows an error inline instead of guessing.',
         ],
       },

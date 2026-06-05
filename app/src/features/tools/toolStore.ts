@@ -21,10 +21,8 @@
  *     and lives in this feature folder.
  *
  * Persistence: Zustand `persist` middleware keyed by `jarvis-tools`.
- * Cloud publish is intentionally a stub today (`publish()` returns
- * `{ ok: false, error: 'Available soon' }`); the field exists so the
- * UI can display "Local only" or "Published" badges once the cloud
- * registry ships.
+ * Mutations are also mirrored into the local sync queue so signed-in users
+ * can carry custom tools through Jarvis Cloud's app sync records.
  */
 
 import { create } from 'zustand';
@@ -64,10 +62,8 @@ export interface CustomTool {
   createdAt: number;
   updatedAt: number;
   /**
-   * Cloud-publish state. Always `null` today — `publish()` is stubbed
-   * because the Jarvis cloud registry hasn't shipped. When it does,
-   * this becomes a server-issued id + timestamp pair and the UI swaps
-   * "Local only" for "Published".
+   * Public cloud-publish state. Private account sync is handled by the
+   * local sync queue and does not require a server-issued publish id.
    */
   published: { id: string; at: number } | null;
 }
@@ -206,6 +202,22 @@ function dispatchToolsUpdated(): void {
   });
 }
 
+const CUSTOM_TOOLS_SYNC_TABLE = 'custom_tools';
+
+function enqueueToolSync(op: 'insert' | 'update' | 'delete', tool: CustomTool): void {
+  void import('@/lib/sync')
+    .then(({ enqueueMutation }) =>
+      enqueueMutation(op, CUSTOM_TOOLS_SYNC_TABLE, tool.slug, op === 'delete' ? null : tool),
+    )
+    .catch((err) => {
+      console.warn('[sync] failed to enqueue custom tool mutation', {
+        slug: tool.slug,
+        op,
+        err,
+      });
+    });
+}
+
 export function normalizeToolSteps(value: unknown): CustomToolStep[] {
   if (!Array.isArray(value)) return [];
   const steps: CustomToolStep[] = [];
@@ -270,11 +282,7 @@ interface ToolStoreState {
   /** Delete a tool by slug. */
   remove: (slug: string) => void;
 
-  /**
-   * Cloud publish — stubbed. Returns an error result today so callers
-   * can render a clear "Available soon" message; we'll wire the real
-   * upload once the cloud registry ships.
-   */
+  /** Queue the current tool state into private Jarvis Cloud account sync. */
   publish: (slug: string) => Promise<ActionResult>;
 
   /** Bulk import (used by the "Import JSON" UI). Returns count added. */
@@ -373,31 +381,39 @@ export const useToolStore = create<ToolStoreState>()(
           published: null,
         };
         set((s) => ({ tools: [tool, ...s.tools] }));
+        enqueueToolSync('insert', tool);
         dispatchToolsUpdated();
         return tool;
       },
 
       update: (slug, patch) => {
+        let updatedTool: CustomTool | undefined;
         set((s) => ({
-          tools: s.tools.map((t) =>
-            t.slug === slug ? { ...t, ...patch, slug, updatedAt: Date.now() } : t,
-          ),
+          tools: s.tools.map((t) => {
+            if (t.slug !== slug) return t;
+            updatedTool = { ...t, ...patch, slug, updatedAt: Date.now() };
+            return updatedTool;
+          }),
         }));
+        if (updatedTool) enqueueToolSync('update', updatedTool);
         dispatchToolsUpdated();
       },
 
       remove: (slug) => {
+        const removedTool = get().tools.find((t) => t.slug === slug);
         set((s) => ({ tools: s.tools.filter((t) => t.slug !== slug) }));
+        if (removedTool) enqueueToolSync('delete', removedTool);
         dispatchToolsUpdated();
       },
 
-      publish: async () => {
-        // Cloud registry not live yet. Honest stub returning an error
-        // so the UI can render "Available soon" without lying.
+      publish: async (slug) => {
+        const tool = get().tools.find((t) => t.slug === slug);
+        if (!tool) return { ok: false, error: `Unknown custom tool: ${slug}` };
+        enqueueToolSync('update', tool);
         return {
-          ok: false,
-          error:
-            'Publishing to Jarvis Cloud is available soon. Until then, your tools live on this device only.',
+          ok: true,
+          summary: 'Queued for Jarvis Cloud account sync.',
+          data: { slug },
         };
       },
 
@@ -436,6 +452,7 @@ export const useToolStore = create<ToolStoreState>()(
         }
         if (added.length === 0) return 0;
         set((s) => ({ tools: [...added, ...s.tools] }));
+        added.forEach((tool) => enqueueToolSync('insert', tool));
         dispatchToolsUpdated();
         return added.length;
       },
