@@ -22,7 +22,10 @@ const SYNC_ID_PREFIX = 'syq';
 const newSyncId = (): string => `${SYNC_ID_PREFIX}_${nanoid(16)}`;
 const CLOUD_SYNC_RECORDS_TABLE = 'app_sync_records';
 const CLOUD_SYNC_CONFLICT_TARGET = 'user_id,table_name,row_id';
+const CUSTOM_TOOLS_SYNC_TABLE = 'custom_tools';
+const PULL_CURSOR_KEY_PREFIX = 'cloud_sync:last_pull_at';
 let syncFlushInFlight = false;
+let syncPullInFlight = false;
 
 const PRIMARY_KEY_BY_TABLE: Partial<Record<StoreName, string>> = {
   settings: 'key',
@@ -41,6 +44,25 @@ export type CloudSyncRecord = {
   payload: Record<string, unknown> | null;
   deleted_at: string | null;
   updated_at: string;
+};
+
+type SyncedCustomTool = {
+  slug: string;
+  name: string;
+  description: string;
+  baseAction: string;
+  params: Record<string, unknown>;
+  steps?: SyncedCustomToolStep[];
+  emoji?: string;
+  createdAt: number;
+  updatedAt: number;
+  published: { id: string; at: number } | null;
+};
+
+type SyncedCustomToolStep = {
+  action: string;
+  params: Record<string, unknown>;
+  label?: string;
 };
 
 function payloadForCloudRecord(payload: unknown): Record<string, unknown> | null {
@@ -67,6 +89,71 @@ export function buildCloudSyncRecord(
     payload: row.op === 'delete' ? null : payloadForCloudRecord(row.payload),
     deleted_at: row.op === 'delete' ? nowIso : null,
     updated_at: isoFromMs(row.created_at, nowIso),
+  };
+}
+
+function pullCursorKey(userId: string): string {
+  return `${PULL_CURSOR_KEY_PREFIX}:${userId}`;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeCustomToolSteps(value: unknown): SyncedCustomToolStep[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const steps: SyncedCustomToolStep[] = [];
+  for (const rawStep of value) {
+    const step = recordValue(rawStep);
+    const action = stringValue(step?.action);
+    if (!step || !action || action.startsWith('custom.')) continue;
+    const normalized: SyncedCustomToolStep = {
+      action,
+      params: recordValue(step.params) ?? {},
+    };
+    const label = stringValue(step.label);
+    if (label) normalized.label = label;
+    steps.push(normalized);
+    if (steps.length >= 12) break;
+  }
+  return steps.length > 0 ? steps : undefined;
+}
+
+export function customToolFromCloudRecord(row: CloudSyncRecord): SyncedCustomTool | null {
+  if (row.table_name !== CUSTOM_TOOLS_SYNC_TABLE || row.op === 'delete') return null;
+  const payload = recordValue(row.payload);
+  if (!payload) return null;
+  const slug = stringValue(row.row_id) ?? stringValue(payload.slug);
+  const name = stringValue(payload.name);
+  const baseAction = stringValue(payload.baseAction);
+  const steps = normalizeCustomToolSteps(payload.steps);
+  if (!slug || !name || (!baseAction && !steps)) return null;
+  const updatedFallback = Date.parse(row.updated_at);
+  const now = Number.isFinite(updatedFallback) ? updatedFallback : Date.now();
+  const published = recordValue(payload.published);
+  const publishedId = stringValue(published?.id);
+  const publishedAt = numberValue(published?.at, 0);
+  return {
+    slug,
+    name,
+    description: stringValue(payload.description) ?? '',
+    baseAction: steps ? baseAction ?? 'workflow.run' : baseAction ?? 'workflow.run',
+    params: recordValue(payload.params) ?? {},
+    steps,
+    emoji: stringValue(payload.emoji) ?? undefined,
+    createdAt: numberValue(payload.createdAt, now),
+    updatedAt: numberValue(payload.updatedAt, now),
+    published: publishedId && publishedAt > 0 ? { id: publishedId, at: publishedAt } : null,
   };
 }
 
@@ -112,6 +199,15 @@ export type SyncFlushResult = {
   errored: number;
   /** Number of rows skipped because cloud sync is not configured. */
   skipped: number;
+};
+
+export type SyncPullResult = {
+  /** Number of remote rows applied locally. */
+  applied: number;
+  /** Number of remote rows intentionally ignored. */
+  skipped: number;
+  /** Number of remote rows that failed to apply. */
+  errored: number;
 };
 
 /**
@@ -219,6 +315,91 @@ export async function pruneSyncQueue(olderThanMs: number = 7 * 24 * 60 * 60 * 10
   return removed;
 }
 
+async function applyCustomToolCloudRecord(row: CloudSyncRecord): Promise<boolean> {
+  const { useToolStore } = await import('@/features/tools/toolStore');
+  if (row.op === 'delete') {
+    useToolStore.setState((state) => ({
+      tools: state.tools.filter((tool) => tool.slug !== row.row_id),
+    }));
+  } else {
+    const tool = customToolFromCloudRecord(row);
+    if (!tool) return false;
+    useToolStore.setState((state) => ({
+      tools: [tool, ...state.tools.filter((existing) => existing.slug !== tool.slug)],
+    }));
+  }
+  if (typeof window !== 'undefined') {
+    queueMicrotask(() => window.dispatchEvent(new CustomEvent('jarvis:tools-updated')));
+  }
+  return true;
+}
+
+async function applyCloudSyncRecord(row: CloudSyncRecord): Promise<boolean> {
+  if (row.table_name === CUSTOM_TOOLS_SYNC_TABLE) {
+    return applyCustomToolCloudRecord(row);
+  }
+  return false;
+}
+
+/**
+ * Pull remote app sync records and apply the small subset this client can
+ * safely restore today. Unsupported table names still advance the cursor so
+ * they do not replay forever while broader Dexie restore work is unfinished.
+ */
+export async function processCloudPull(batchSize = 200): Promise<SyncPullResult> {
+  if (syncPullInFlight) return { applied: 0, skipped: 0, errored: 0 };
+  syncPullInFlight = true;
+  try {
+    await openDb();
+    const client = getSupabaseClient();
+    if (!client) return { applied: 0, skipped: 0, errored: 0 };
+
+    const { data } = await client.auth.getSession();
+    const userId = data.session?.user?.id;
+    if (!userId) return { applied: 0, skipped: 0, errored: 0 };
+
+    const cursorKey = pullCursorKey(userId);
+    const cursor = await db.settings.get(cursorKey);
+    const lastPulledAt = typeof cursor?.value === 'string' ? cursor.value : null;
+    let query = client
+      .from(CLOUD_SYNC_RECORDS_TABLE)
+      .select('user_id,table_name,row_id,op,payload,deleted_at,updated_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: true })
+      .limit(batchSize);
+    if (lastPulledAt) query = query.gt('updated_at', lastPulledAt);
+
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    let applied = 0;
+    let skipped = 0;
+    let errored = 0;
+    let cursorValue = lastPulledAt;
+
+    for (const row of (rows ?? []) as CloudSyncRecord[]) {
+      try {
+        const didApply = await applyCloudSyncRecord(row);
+        if (didApply) applied++;
+        else skipped++;
+        cursorValue = row.updated_at;
+      } catch (e) {
+        console.warn('[sync] cloud pull record failed:', e);
+        errored++;
+        break;
+      }
+    }
+
+    if (cursorValue && cursorValue !== lastPulledAt) {
+      await db.settings.put({ key: cursorKey, value: cursorValue, updated_at: Date.now() });
+    }
+
+    return { applied, skipped, errored };
+  } finally {
+    syncPullInFlight = false;
+  }
+}
+
 /**
  * Start a background loop that drains the sync queue every `intervalMs`.
  * Returns a `stop()` function. Safe to call when cloud sync is not
@@ -235,6 +416,7 @@ export function startSyncLoop(intervalMs: number = 30_000): () => void {
     if (stopped) return;
     try {
       await processSyncQueue();
+      await processCloudPull();
     } catch (e) {
       // Swallow - we'll retry on the next tick. Log so it's visible in dev.
       // eslint-disable-next-line no-console

@@ -229,7 +229,7 @@ function useBoot() {
         if (!isSupabaseConfigured()) {
           applyCloudSession(null);
         } else {
-          const [{ getSupabaseClient }, { processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop }] =
+          const [{ getSupabaseClient }, { processCloudPull, processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop }] =
             await Promise.all([import('@/lib/supabase/client'), import('@/lib/sync')]);
           if (cancelled) return;
           const supa = getSupabaseClient();
@@ -243,6 +243,7 @@ function useBoot() {
               if (session?.user?.id) {
                 void retrySyncErrors()
                   .then(() => processSyncQueue())
+                  .then(() => processCloudPull())
                   .catch((err) => console.warn('[sync] immediate flush failed:', err));
               }
             });
@@ -250,6 +251,7 @@ function useBoot() {
           }
 
           await retrySyncErrors();
+          void processCloudPull().catch((err) => console.warn('[sync] initial pull failed:', err));
           void pruneSyncQueue().catch((err) => console.warn('[sync] prune failed:', err));
           if (!cancelled) stopSyncLoop = startSyncLoop();
         }

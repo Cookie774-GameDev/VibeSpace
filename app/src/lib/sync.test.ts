@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SyncQueueRow } from './db';
-import { buildCloudSyncRecord, primaryKeyForSyncTable } from './sync';
+import { buildCloudSyncRecord, customToolFromCloudRecord, primaryKeyForSyncTable } from './sync';
 
 describe('sync table metadata', () => {
   it('uses id for normal app-sync tables', () => {
@@ -59,5 +59,54 @@ describe('cloud sync records', () => {
       deleted_at: '2026-06-04T12:05:00.000Z',
       updated_at: '2026-06-04T12:00:00.000Z',
     });
+  });
+
+  it('normalizes custom tool payloads from cloud records', () => {
+    expect(
+      customToolFromCloudRecord({
+        user_id: 'auth_user_1',
+        table_name: 'custom_tools',
+        row_id: 'ship-check',
+        op: 'update',
+        payload: {
+          slug: 'different-local-slug',
+          name: 'Ship check',
+          description: 'Run release checks',
+          baseAction: 'workflow.run',
+          params: {},
+          steps: [{ action: 'clock.timer', params: { durationMinutes: 1 }, label: 'Timer' }],
+          createdAt: 10,
+          updatedAt: 20,
+          published: null,
+        },
+        deleted_at: null,
+        updated_at: '2026-06-04T12:00:00.000Z',
+      }),
+    ).toEqual({
+      slug: 'ship-check',
+      name: 'Ship check',
+      description: 'Run release checks',
+      baseAction: 'workflow.run',
+      params: {},
+      steps: [{ action: 'clock.timer', params: { durationMinutes: 1 }, label: 'Timer' }],
+      emoji: undefined,
+      createdAt: 10,
+      updatedAt: 20,
+      published: null,
+    });
+  });
+
+  it('rejects malformed custom tool cloud records', () => {
+    expect(
+      customToolFromCloudRecord({
+        user_id: 'auth_user_1',
+        table_name: 'custom_tools',
+        row_id: 'bad',
+        op: 'update',
+        payload: { description: 'missing name and action' },
+        deleted_at: null,
+        updated_at: '2026-06-04T12:00:00.000Z',
+      }),
+    ).toBeNull();
   });
 });
