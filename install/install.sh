@@ -354,13 +354,13 @@ DIM="${ESC}[2m"
 RESET="${ESC}[0m"
 
 printf "\n"
-printf "%b\n" "${CYAN}  ____.                     .__        ${RESET}"
-printf "%b\n" "${CYAN} |    |____ _________  ___|__| ______${RESET}"
-printf "%b\n" "${CYAN} |    \__  \\_  __ \\/  _ \\  |/  ___/${RESET}"
-printf "%b\n" "${CYAN} |    |/ __ \\|  | \\(  <_> ) |\\___ \\ ${RESET}"
-printf "%b\n" "${CYAN} |____(____  /__|   \\____/|__/____  >${RESET}"
-printf "%b\n" "${VIOLET}           \\/                     \\/ ${RESET}"
-printf "%b\n\n" "${DIM}  launching Jarvis One from your terminal${RESET}"
+printf "%b\n" "${CYAN}  +----------------------------------------+${RESET}"
+printf "%b\n" "${CYAN}  |${RESET}                                        ${CYAN}|${RESET}"
+printf "%b\n" "${CYAN}  |${RESET}${VIOLET}              J A R V I S   O N E         ${CYAN}|${RESET}"
+printf "%b\n" "${CYAN}  |${RESET}${DIM}                 AI DESKTOP             ${CYAN}|${RESET}"
+printf "%b\n" "${CYAN}  |${RESET}                                        ${CYAN}|${RESET}"
+printf "%b\n" "${CYAN}  +----------------------------------------+${RESET}"
+printf "%b\n\n" "${VIOLET}    STATUS${RESET}${DIM}  Launching your workspace...${RESET}"
 
 case "$(uname -s)" in
   Darwin*)
