@@ -72,6 +72,12 @@ irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/
 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
+The one-line installers now default to user-scope installs with no installer UI where the OS allows it:
+
+- Windows: silent NSIS install under `%LOCALAPPDATA%`.
+- macOS: copy into `~/Applications`.
+- Linux: AppImage install into `~/.local/bin/jarvis`.
+
 ## Filename Rules
 
 - **Tauri names** like `Jarvis One_<version>_x64-setup.exe` are what the installers and updater resolve first.

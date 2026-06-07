@@ -21,7 +21,7 @@ Replace the YouTube and Discord placeholders in `site/index.html` when the final
 
 ## Install Jarvis
 
-These commands resolve the newest published GitHub Release, install Jarvis One, and auto-launch it. If no published release assets exist yet, the installer stops safely and prints the release requirement instead of installing a stale build.
+These commands resolve the newest published GitHub Release, perform the default user-scope install, and auto-launch Jarvis One. If no published release assets exist yet, the installer stops safely and prints the release requirement instead of installing a stale build.
 
 ### Windows 10/11
 
@@ -32,7 +32,7 @@ These commands resolve the newest published GitHub Release, install Jarvis One, 
 irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
 ```
 
-3. Jarvis auto-launches after install. You can also reopen it from the Start Menu.
+3. Jarvis installs silently by default, then auto-launches. You can also reopen it from the Start Menu.
 
 ### macOS 12+
 
@@ -43,7 +43,7 @@ irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/
 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
-3. Jarvis auto-launches after install. You can also reopen it from `/Applications`.
+3. Jarvis installs into `~/Applications` by default and auto-launches. You can also reopen it from `~/Applications`.
 
 ### Linux
 
@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
-3. Jarvis auto-launches after install. You can also reopen it from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
+3. Jarvis installs a user-local AppImage by default and auto-launches. You can also reopen it from your app menu.
 
 See [`DOWNLOAD.md`](DOWNLOAD.md) for dry-run checks, direct release filenames, checksum verification, and troubleshooting.
 

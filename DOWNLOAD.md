@@ -8,7 +8,7 @@ Install Jarvis One like a normal desktop app. The one-line installers pull the l
 | macOS 12+ | DMG | `curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh \| bash` |
 | Linux | `.deb`, `.rpm`, or AppImage | `curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh \| bash` |
 
-Current staged release: `v0.1.17`. macOS and Linux filenames can vary by Tauri target, so `install/install.sh` resolves matching release assets from GitHub before falling back to the standard Jarvis One filename patterns.
+Current staged release: `v0.1.20`. macOS and Linux filenames can vary by Tauri target, so `install/install.sh` resolves matching release assets from GitHub before falling back to the standard Jarvis One filename patterns.
 
 ## Release Status
 
@@ -26,6 +26,8 @@ irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/
 JARVIS_DRYRUN=1 JARVIS_DOWNLOAD_DIR="$HOME/Jarvis-Tests/downloads" curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
+The default one-line installers now use the user-scope path with no installer UI: Windows uses silent NSIS, macOS copies into `~/Applications`, and Linux installs an AppImage under `~/.local/bin/jarvis`. Set `JARVIS_SYSTEM=1` for system-wide macOS/Linux installs, or `$env:JARVIS_SILENT="0"` on Windows to force the interactive UI.
+
 Set `JARVIS_DOWNLOAD_DIR` when validating installers so all staged downloads stay in a known folder. Set `JARVIS_KEEP_DOWNLOAD=1` if you want the downloaded installer kept after a normal install for audit or checksum review.
 
 ## Direct Download
@@ -35,30 +37,30 @@ Grab installers from the [Releases page] and compare them against `SHA256SUMS.tx
 [Releases page]: https://github.com/Cookie774-GameDev/Jarivs-One/releases
 
 ```text
-Windows:  Jarvis One_0.1.17_x64-setup.exe
-Windows:  Jarvis One_0.1.17_x64_en-US.msi
-Windows:  Jarvis-One-0.1.17-Windows-x64.exe
-Windows:  Jarvis-One-0.1.17-Windows-x64.msi
-macOS:    Jarvis One_0.1.17_aarch64.dmg
-macOS:    Jarvis One_0.1.17_x64.dmg
-Linux:    Jarvis One_0.1.17_amd64.deb
-Linux:    Jarvis One-0.1.17-1.x86_64.rpm
-Linux:    Jarvis One_0.1.17_amd64.AppImage
+Windows:  Jarvis One_0.1.20_x64-setup.exe
+Windows:  Jarvis One_0.1.20_x64_en-US.msi
+Windows:  Jarvis-One-0.1.20-Windows-x64.exe
+Windows:  Jarvis-One-0.1.20-Windows-x64.msi
+macOS:    Jarvis One_0.1.20_aarch64.dmg
+macOS:    Jarvis One_0.1.20_x64.dmg
+Linux:    Jarvis One_0.1.20_amd64.deb
+Linux:    Jarvis One-0.1.20-1.x86_64.rpm
+Linux:    Jarvis One_0.1.20_amd64.AppImage
 ```
 
 ```powershell
-Get-FileHash -Algorithm SHA256 '.\Jarvis One_0.1.17_x64-setup.exe'
+Get-FileHash -Algorithm SHA256 '.\Jarvis One_0.1.20_x64-setup.exe'
 ```
 
 ```bash
-sha256sum 'Jarvis One_0.1.17_amd64.deb'
+sha256sum 'Jarvis One_0.1.20_amd64.deb'
 ```
 
 ## What Gets Installed
 
 - Windows: installs per-user under `%LOCALAPPDATA%\Programs\Jarvis One\` and adds Start Menu shortcuts.
-- macOS: copies `Jarvis One.app` into `/Applications`.
-- Linux: installs a native package when possible, or places the AppImage at `/usr/local/bin/jarvis` with a desktop entry named `Jarvis One`.
+- macOS: copies `Jarvis One.app` into `~/Applications` by default, or `/Applications` when `JARVIS_SYSTEM=1`.
+- Linux: installs `jarvis` into `~/.local/bin` by default via AppImage, or uses native system packages/AppImage prefixes when explicitly requested.
 
 Jarvis One is local-first. External services are optional and only used for enabled features such as cloud sync, hosted models, Stripe billing, and Jarvis Call.
 

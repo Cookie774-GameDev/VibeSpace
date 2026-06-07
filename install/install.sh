@@ -5,12 +5,13 @@
 # GitHub:   wget -qO- https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 #
 # Optional environment variables:
-#   JARVIS_VERSION="0.1.17"    pin to a version (default: latest published GitHub release)
+#   JARVIS_VERSION="0.1.20"    pin to a version (default: latest published GitHub release)
 #   JARVIS_CHANNEL="stable"    stable | nightly (default: stable)
-#   JARVIS_FORMAT=""           linux: deb | rpm | appimage  (auto-detected if blank)
+#   JARVIS_FORMAT=""           linux: deb | rpm | appimage  (default: appimage for zero-touch user installs)
 #                              macOS: dmg (the only option)
-#   JARVIS_PREFIX="/usr/local" install prefix (default: /usr/local on Linux)
+#   JARVIS_PREFIX=""           install prefix (default: ~/.local for Linux AppImage user installs)
 #   JARVIS_LOCAL="1"           install from a local Jarvis build (developer mode)
+#   JARVIS_SYSTEM="1"          install system-wide and allow sudo/elevation when required
 #   JARVIS_DRYRUN="1"          download + verify only, do not install
 #   JARVIS_DOWNLOAD_DIR=""     stage downloads in a specific directory
 #   JARVIS_KEEP_DOWNLOAD="1"   keep the downloaded installer after a normal run
@@ -112,6 +113,56 @@ setup_sudo() {
   else
     require_cmd sudo
     SUDO=(sudo)
+  fi
+}
+
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+needs_sudo() {
+  case "${OS}/${FORMAT}" in
+    linux/deb|linux/rpm)
+      return 0
+      ;;
+    macos/dmg)
+      if is_truthy "${JARVIS_SYSTEM:-0}"; then
+        return 0
+      fi
+      return 1
+      ;;
+    linux/appimage)
+      local prefix
+      prefix="$(linux_install_prefix)"
+      case "$prefix" in
+        "$HOME"/*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+linux_install_prefix() {
+  if [ -n "${JARVIS_PREFIX:-}" ]; then
+    printf "%s" "${JARVIS_PREFIX%/}"
+  elif is_truthy "${JARVIS_SYSTEM:-0}"; then
+    printf "/usr/local"
+  else
+    printf "%s" "${HOME}/.local"
+  fi
+}
+
+macos_install_dir() {
+  if is_truthy "${JARVIS_SYSTEM:-0}"; then
+    printf "/Applications"
+  else
+    printf "%s" "${HOME}/Applications"
   fi
 }
 
@@ -220,10 +271,17 @@ install_rpm() {
 
 install_appimage() {
   local file="$1"
-  local prefix="${JARVIS_PREFIX:-/usr/local}"
+  local prefix
+  prefix="$(linux_install_prefix)"
   local target="${prefix}/bin/jarvis"
   step "Installing AppImage to ${target}..."
-  "${SUDO[@]}" install -m 0755 "$file" "$target"
+  if [ ${#SUDO[@]} -gt 0 ]; then
+    "${SUDO[@]}" mkdir -p "${prefix}/bin"
+    "${SUDO[@]}" install -m 0755 "$file" "$target"
+  else
+    mkdir -p "${prefix}/bin"
+    install -m 0755 "$file" "$target"
+  fi
 
   # Desktop entry for menu integration
   local desktop="${HOME}/.local/share/applications/jarvis.desktop"
@@ -244,6 +302,8 @@ EOF
 
 install_dmg() {
   local file="$1"
+  local target_dir
+  target_dir="$(macos_install_dir)"
   step "Mounting DMG..."
   local mountpoint
   mountpoint=$(hdiutil attach -nobrowse -noautoopen -readonly "$file" \
@@ -259,13 +319,23 @@ install_dmg() {
     fail "No .app found inside DMG"
     exit 1
   fi
-  step "Copying to /Applications..."
-  "${SUDO[@]}" cp -R "$app" /Applications/
+  step "Copying to ${target_dir}..."
+  if [ ${#SUDO[@]} -gt 0 ]; then
+    "${SUDO[@]}" mkdir -p "$target_dir"
+    "${SUDO[@]}" cp -R "$app" "$target_dir/"
+  else
+    mkdir -p "$target_dir"
+    cp -R "$app" "$target_dir/"
+  fi
   hdiutil detach "$mountpoint" -force >/dev/null 2>&1 || true
   step "Removing macOS quarantine flag..."
-  "${SUDO[@]}" xattr -dr com.apple.quarantine "/Applications/$(basename "$app")" || true
-  ok "Installed: /Applications/$(basename "$app")"
-  warn "First launch: Right-click Jarvis One in Finder -> Open if Gatekeeper prompts."
+  if [ ${#SUDO[@]} -gt 0 ]; then
+    "${SUDO[@]}" xattr -dr com.apple.quarantine "${target_dir}/$(basename "$app")" || true
+  else
+    xattr -dr com.apple.quarantine "${target_dir}/$(basename "$app")" || true
+  fi
+  ok "Installed: ${target_dir}/$(basename "$app")"
+  warn "First launch may still require Finder -> Open until the app is notarized."
   warn "After the first 'Open', macOS remembers the trust for future updates."
 }
 
@@ -331,7 +401,7 @@ if [ -n "${JARVIS_FORMAT:-}" ]; then
   FORMAT="$JARVIS_FORMAT"
 else
   if [ "$OS" = "linux" ]; then
-    FORMAT="$(detect_linux_format)"
+    FORMAT="appimage"
   else
     FORMAT="dmg"
   fi
@@ -340,7 +410,11 @@ fi
 step "OS:        $OS"
 step "Arch:      $ARCH"
 step "Format:    $FORMAT"
-step "Prefix:    ${JARVIS_PREFIX:-/usr/local}"
+if [ "$OS" = "linux" ] && [ "$FORMAT" = "appimage" ]; then
+  step "Prefix:    $(linux_install_prefix)"
+elif [ "$OS" = "macos" ]; then
+  step "App dir:    $(macos_install_dir)"
+fi
 if [ -n "${JARVIS_DOWNLOAD_DIR:-}" ]; then
   step "Download:   ${JARVIS_DOWNLOAD_DIR}"
 fi
@@ -350,7 +424,7 @@ case "$OS/$FORMAT" in
   *) fail "Unsupported JARVIS_FORMAT '${FORMAT}' for ${OS}. Use deb, rpm, appimage, or dmg."; exit 1 ;;
 esac
 
-if [ "${JARVIS_DRYRUN:-0}" != "1" ]; then
+if [ "${JARVIS_DRYRUN:-0}" != "1" ] && needs_sudo; then
   setup_sudo
 fi
 

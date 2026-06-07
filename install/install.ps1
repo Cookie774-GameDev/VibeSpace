@@ -4,11 +4,11 @@
 # GitHub:   irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
 #
 # Optional environment variables (set before piping into iex):
-#   $env:JARVIS_VERSION  = "0.1.17"    pin to a specific version (default: latest published release)
+#   $env:JARVIS_VERSION  = "0.1.20"    pin to a specific version (default: latest published release)
 #   $env:JARVIS_CHANNEL  = "stable"    stable or nightly (default: stable)
 #   $env:JARVIS_FORMAT   = "nsis"      nsis (smaller, friendlier) or msi (IT-managed) (default: nsis)
 #   $env:JARVIS_LOCAL    = "1"         install from the local C:\Users\viper\projects\Jarvis build (for self-testing)
-#   $env:JARVIS_SILENT   = "1"         no UI, no prompts (current-user NSIS install)
+#   $env:JARVIS_SILENT   = "0"         force the interactive installer UI (default: silent current-user NSIS install)
 #   $env:JARVIS_DRYRUN   = "1"         download + verify only, do not run installer
 #   $env:JARVIS_DOWNLOAD_DIR = "D:\Jarvis-Tests\downloads" stage downloads in a specific folder
 #   $env:JARVIS_KEEP_DOWNLOAD = "1"    keep the downloaded installer after a normal run
@@ -335,7 +335,11 @@ Write-Banner
 
 $arch    = Test-Architecture
 $format  = if ($env:JARVIS_FORMAT) { $env:JARVIS_FORMAT.ToLower() } else { 'nsis' }
-$silent  = $env:JARVIS_SILENT -eq '1'
+$silent  = $true
+$silentRaw = $env:JARVIS_SILENT
+if (-not [string]::IsNullOrWhiteSpace($silentRaw)) {
+    $silent = $silentRaw -ne '0'
+}
 $dryrun  = $env:JARVIS_DRYRUN -eq '1'
 $keepDownload = $env:JARVIS_KEEP_DOWNLOAD -eq '1'
 
