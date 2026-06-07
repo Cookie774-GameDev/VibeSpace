@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Check,
   Copy,
@@ -23,6 +24,8 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { testProviderKey } from '@/lib/ai/testKey';
+import { db, openDb } from '@/lib/db';
+import { summarizeLocalProviderUsage, type LocalUsageTotals } from '@/lib/usage/usageSummary';
 import { fireApiKeySaveBurstFromElement } from '../ApiKeySaveBurst';
 import { ProviderUsageCounter, type ProviderUsageData } from '../components/ProviderUsageCounter';
 
@@ -250,6 +253,17 @@ export function Providers() {
   const clearApiKey = useAuthStore((s) => s.clearApiKey);
   const defaultProvider = useAuthStore((s) => s.defaultProvider);
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
+  const usageByProvider = useLiveQuery(async () => {
+    await openDb();
+    const messages = await db.messages.toArray();
+    return BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
+      (acc, provider) => {
+        acc[provider.id] = toProviderUsageData(summarizeLocalProviderUsage(messages, provider.id));
+        return acc;
+      },
+      {},
+    );
+  }, []);
 
   const groupedProviders = useMemo(() => {
     const groups: Record<ProviderRow['category'], ProviderRow[]> = {
@@ -306,6 +320,7 @@ export function Providers() {
                   value={apiKeys[p.id] ?? ''}
                   onSave={(v) => setApiKey(p.id, v)}
                   onClear={() => clearApiKey(p.id)}
+                  usageData={usageByProvider?.[p.id] ?? null}
                 />
               ))}
             </div>
@@ -356,7 +371,9 @@ export function Providers() {
                     <span className="text-ui-strong text-foreground">{opt.label}</span>
                     {!hasKey && opt.id !== 'mock' && <Badge variant="outline">No key</Badge>}
                   </span>
-                  <span className="text-metadata text-muted-foreground block">{opt.description}</span>
+                  <span className="text-metadata text-muted-foreground block">
+                    {opt.description}
+                  </span>
                 </span>
               </button>
             );
@@ -372,6 +389,7 @@ interface ProviderKeyRowProps {
   value: string;
   onSave: (value: string) => void;
   onClear: () => void;
+  usageData: ProviderUsageData | null;
 }
 
 function maskKey(key: string): string {
@@ -382,7 +400,20 @@ function maskKey(key: string): string {
   return `${prefix}${masked}${suffix}`;
 }
 
-function ProviderKeyRow({ row, value, onSave, onClear }: ProviderKeyRowProps) {
+function toProviderUsageData(totals: LocalUsageTotals): ProviderUsageData | null {
+  const totalTokens = totals.inputTokens + totals.outputTokens + totals.cachedTokens;
+  if (totals.calls === 0 && totalTokens === 0) return null;
+  return {
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    cachedTokens: totals.cachedTokens,
+    totalTokens,
+    costUsd: totals.costUsd,
+    lastUsed: totals.lastUsed,
+  };
+}
+
+function ProviderKeyRow({ row, value, onSave, onClear, usageData }: ProviderKeyRowProps) {
   const [draft, setDraft] = useState(value);
   const [revealed, setRevealed] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -397,10 +428,6 @@ function ProviderKeyRow({ row, value, onSave, onClear }: ProviderKeyRowProps) {
 
   const dirty = draft !== value;
   const isSaved = !!value;
-
-  const usageData: ProviderUsageData | null = useMemo(() => {
-    return null;
-  }, []);
 
   function handleSave() {
     const trimmed = draft.trim();
@@ -423,7 +450,10 @@ function ProviderKeyRow({ row, value, onSave, onClear }: ProviderKeyRowProps) {
         const result = await testProviderKey(row.id, key);
         switch (result.kind) {
           case 'ok':
-            toast.success(`${row.name} key works`, result.detail ?? 'Provider responded successfully.');
+            toast.success(
+              `${row.name} key works`,
+              result.detail ?? 'Provider responded successfully.',
+            );
             break;
           case 'invalid':
             toast.error(

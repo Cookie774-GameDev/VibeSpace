@@ -196,7 +196,7 @@ export function VoiceModal() {
           analyser.getByteFrequencyData(data);
           let sum = 0;
           for (const value of data) sum += value;
-          levelRef.current = Math.min(1, sum / Math.max(1, data.length) / 52);
+          levelRef.current = Math.min(1, sum / Math.max(1, data.length) / 40);
           animationFrame = window.requestAnimationFrame(update);
         };
         animationFrame = window.requestAnimationFrame(update);
@@ -228,7 +228,7 @@ export function VoiceModal() {
     )
     .map((message) => ({ ...message, displayText: messageText(message) }))
     .filter((message) => message.displayText);
-  const visibleTranscript = transcript.slice(-4);
+  const visibleTranscript = transcript;
 
   return (
     <AnimatePresence>
@@ -237,13 +237,13 @@ export function VoiceModal() {
         animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
         exit={{ opacity: 0, x: 20, scale: 0.97 }}
         transition={{ type: 'spring', stiffness: 360, damping: 30 }}
-        className="fixed right-5 top-5 z-[90] w-[min(338px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-[#7b4717]/70 bg-[#251d16]/95 shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_rgba(255,214,149,0.06),0_0_30px_rgba(234,126,18,0.1)] backdrop-blur-xl"
+        className="fixed right-5 top-5 z-[90] w-[min(338px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-border-mid/80 bg-elevated/95 shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_30px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
         aria-label="Jarvis voice session"
       >
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full text-[#b39b82]/65 transition-colors hover:bg-[#3a2b1f] hover:text-[#f4d6b1] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#f59e0b]/55"
+          className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           aria-label="Close Jarvis voice session"
           title="Close"
         >
@@ -251,26 +251,26 @@ export function VoiceModal() {
         </button>
 
         <div className="flex items-center gap-3 px-4 pb-2.5 pt-4">
-          <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-[#9b5d19]/80 bg-[#312016] shadow-[inset_0_0_13px_rgba(255,168,38,0.64),0_0_15px_rgba(250,142,14,0.72),0_0_28px_rgba(250,142,14,0.24)]">
-            <div className="absolute inset-1.5 rounded-full border border-[#ffd077]/70 shadow-[inset_0_0_7px_rgba(255,245,195,0.62)]" />
+          <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-accent-copper/80 bg-background/70 shadow-[inset_0_0_13px_hsl(var(--accent-copper)/0.58),0_0_15px_hsl(var(--accent-copper)/0.7),0_0_28px_hsl(var(--accent-copper)/0.24)]">
+            <div className="absolute inset-1.5 rounded-full border border-accent-amber/70 shadow-[inset_0_0_7px_hsl(var(--accent-amber)/0.55)]" />
             <div className="h-[34px] w-[34px] rounded-full bg-[radial-gradient(circle_at_38%_34%,#fff7cb_0%,#ffd45a_18%,#ff980f_48%,#cf6205_72%,#5b2300_100%)] shadow-[0_0_12px_rgba(255,167,31,0.92)]" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[21px] font-medium leading-6 text-[#f3eadf]">
+            <div className="truncate text-[21px] font-medium leading-6 text-foreground">
               {personaCfg.name}
             </div>
             <div
               className={cn(
                 'mt-0.5 flex items-center gap-1.5 text-[16px] leading-5',
-                state === 'error' ? 'text-[#ff7b63]' : 'text-[#cbbba8]',
+                state === 'error' ? 'text-destructive' : 'text-muted-foreground',
               )}
             >
               <span
                 className={cn(
                   'h-2.5 w-2.5 rounded-full',
                   state === 'error'
-                    ? 'bg-[#ff6a55]'
-                    : 'bg-[#37d246] shadow-[0_0_8px_rgba(55,210,70,0.75)]',
+                    ? 'bg-destructive'
+                    : 'bg-success shadow-[0_0_8px_hsl(var(--success)/0.75)]',
                 )}
               />
               <span className="truncate">
@@ -278,8 +278,8 @@ export function VoiceModal() {
               </span>
             </div>
           </div>
-          <div className="mr-2 flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-full border border-[#6f5138]/65 bg-[#2b221b]/72 shadow-[inset_0_0_0_1px_rgba(255,210,153,0.04)]">
-            <Mic className="h-5 w-5 text-[#d9c4ac]" strokeWidth={1.8} />
+          <div className="mr-2 flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60 shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04)]">
+            <Mic className="h-5 w-5 text-muted-foreground" strokeWidth={1.8} />
           </div>
         </div>
 
@@ -287,9 +287,12 @@ export function VoiceModal() {
           <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
         </div>
 
-        <div ref={transcriptRef} className="min-h-[66px] space-y-2 overflow-hidden px-4 pb-4 pt-0">
+        <div
+          ref={transcriptRef}
+          className="max-h-[190px] min-h-[66px] space-y-2 overflow-y-auto px-4 pb-4 pt-0"
+        >
           {transcript.length === 0 && !partial ? (
-            <div className="flex h-[58px] items-center justify-center text-center text-[14px] text-[#9f8d7a]">
+            <div className="flex h-[58px] items-center justify-center text-center text-[14px] text-muted-foreground">
               {activeChatId
                 ? 'Listening for your first request.'
                 : 'Open a chat, then speak to Jarvis.'}
@@ -300,32 +303,32 @@ export function VoiceModal() {
             return (
               <div
                 key={message.id}
-                className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[17px] leading-6"
+                className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[15px] leading-6"
               >
                 <span
                   className={cn(
                     'flex h-[23px] w-[23px] items-center justify-center rounded-full border',
                     user
-                      ? 'border-[#2e82dd]/80 text-[#3b8eea]'
-                      : 'border-[#f18a09]/80 text-[#f18a09]',
+                      ? 'border-info/80 text-info'
+                      : 'border-accent-copper/80 text-accent-copper',
                   )}
                 >
                   {user ? <UserRound className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                 </span>
-                <span className={cn('font-medium', user ? 'text-[#2f84df]' : 'text-[#f08a08]')}>
+                <span className={cn('font-medium', user ? 'text-info' : 'text-accent-copper')}>
                   {user ? 'You' : 'Jarvis:'}
                 </span>
-                <span className="min-w-0 truncate text-[#d8cbbd]">{message.displayText}</span>
+                <span className="min-w-0 truncate text-foreground/80">{message.displayText}</span>
               </div>
             );
           })}
           {partial ? (
-            <div className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[17px] leading-6">
-              <span className="flex h-[23px] w-[23px] items-center justify-center rounded-full border border-[#2e82dd]/80 text-[#3b8eea]">
+            <div className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[15px] leading-6">
+              <span className="flex h-[23px] w-[23px] items-center justify-center rounded-full border border-info/80 text-info">
                 <UserRound className="h-3.5 w-3.5" />
               </span>
-              <span className="font-medium text-[#2f84df]">You</span>
-              <span className="min-w-0 truncate text-[#d8cbbd]/80">{partial}</span>
+              <span className="font-medium text-info">You</span>
+              <span className="min-w-0 truncate text-foreground/70">{partial}</span>
             </div>
           ) : null}
         </div>

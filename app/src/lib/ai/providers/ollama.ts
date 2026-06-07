@@ -32,6 +32,21 @@ export const OLLAMA_DEFAULT_BASE = 'http://localhost:11434';
 /** Default local model used when promoting a mock/local-default agent. */
 export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
 
+export interface OllamaModelInfo {
+  name: string;
+  size?: number;
+  modifiedAt?: string;
+}
+
+export interface OllamaPullProgress {
+  status: string;
+  digest?: string;
+  total?: number;
+  completed?: number;
+  percent?: number;
+  done?: boolean;
+}
+
 /** Resolve the configured base URL, trimming any trailing slash. */
 export function ollamaBaseUrl(): string {
   const raw = useAuthStore.getState().apiKeys.ollama?.trim();
@@ -45,6 +60,11 @@ export function ollamaBaseUrl(): string {
  * friendly "start Ollama" hint rather than throwing).
  */
 export async function listOllamaModels(signal?: AbortSignal): Promise<string[]> {
+  const models = await listOllamaModelInfo(signal);
+  return models.map((model) => model.name);
+}
+
+export async function listOllamaModelInfo(signal?: AbortSignal): Promise<OllamaModelInfo[]> {
   try {
     const res = await nativeFetch(`${ollamaBaseUrl()}/api/tags`, { signal });
     if (!res.ok) return [];
@@ -52,8 +72,15 @@ export async function listOllamaModels(signal?: AbortSignal): Promise<string[]> 
     const models = data?.models;
     if (!Array.isArray(models)) return [];
     return models
-      .map((m: { name?: string }) => m?.name)
-      .filter((n: unknown): n is string => typeof n === 'string' && n.length > 0);
+      .map((m: { name?: string; size?: number; modified_at?: string }): OllamaModelInfo | null => {
+        if (!m?.name || typeof m.name !== 'string') return null;
+        return {
+          name: m.name,
+          size: typeof m.size === 'number' ? m.size : undefined,
+          modifiedAt: typeof m.modified_at === 'string' ? m.modified_at : undefined,
+        };
+      })
+      .filter((model: OllamaModelInfo | null): model is OllamaModelInfo => Boolean(model));
   } catch {
     return [];
   }
@@ -66,6 +93,103 @@ export async function isOllamaReachable(signal?: AbortSignal): Promise<boolean> 
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+export async function waitForOllamaReachable(
+  timeoutMs = 12_000,
+  intervalMs = 600,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (signal?.aborted) return false;
+    if (await isOllamaReachable(signal)) return true;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+export async function pullOllamaModel(
+  model: string,
+  onProgress?: (progress: OllamaPullProgress) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const name = model.trim();
+  if (!name) throw new Error('Choose an Ollama model before downloading.');
+
+  const res = await nativeFetch(`${ollamaBaseUrl()}/api/pull`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: name, stream: true }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(
+      `Ollama pull failed (${res.status}): ${errText.slice(0, 300) || res.statusText}`,
+    );
+  }
+
+  if (!res.body) {
+    const data = await res.json().catch(() => null);
+    if (data?.error) throw new Error(String(data.error));
+    onProgress?.({ status: 'success', done: true });
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  const reader = res.body.getReader();
+  let buffer = '';
+  let sawSuccess = false;
+
+  const processLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const data = safeJSON(trimmed);
+    if (!data) throw new Error(`Ollama returned invalid pull progress: ${trimmed.slice(0, 120)}`);
+    if (data.error) throw new Error(`Ollama pull failed: ${String(data.error)}`);
+    const total = typeof data.total === 'number' ? data.total : undefined;
+    const completed = typeof data.completed === 'number' ? data.completed : undefined;
+    const percent =
+      total && completed !== undefined
+        ? Math.min(100, Math.max(0, (completed / total) * 100))
+        : undefined;
+    const status = typeof data.status === 'string' ? data.status : 'downloading';
+    const done = status === 'success';
+    if (done) sawSuccess = true;
+    onProgress?.({
+      status,
+      digest: typeof data.digest === 'string' ? data.digest : undefined,
+      total,
+      completed,
+      percent,
+      done,
+    });
+  };
+
+  try {
+    for (;;) {
+      if (signal?.aborted) throw new DOMException('Aborted by user', 'AbortError');
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf('\n');
+      while (newline >= 0) {
+        processLine(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf('\n');
+      }
+    }
+    buffer += decoder.decode();
+    processLine(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!sawSuccess) {
+    onProgress?.({ status: 'success', done: true });
   }
 }
 
@@ -84,9 +208,7 @@ export const ollamaProvider: LLMProvider = {
   async run(req: LLMRequest): Promise<LLMResponse> {
     const base = ollamaBaseUrl();
     const model =
-      req.agent.model.model ||
-      useAuthStore.getState().defaultLocalModel ||
-      OLLAMA_DEFAULT_MODEL;
+      req.agent.model.model || useAuthStore.getState().defaultLocalModel || OLLAMA_DEFAULT_MODEL;
 
     // OpenAI-compatible message shape: system prompt as a leading system message.
     const messages = [
@@ -142,7 +264,7 @@ export const ollamaProvider: LLMProvider = {
 
       if (data.error) {
         const msg =
-          typeof data.error === 'string' ? data.error : data.error?.message ?? 'unknown';
+          typeof data.error === 'string' ? data.error : (data.error?.message ?? 'unknown');
         throw new Error(`Ollama stream error: ${msg}`);
       }
 

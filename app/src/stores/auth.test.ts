@@ -4,7 +4,12 @@ import { secureDeleteApiKey, secureGetApiKey } from '@/lib/security/secureApiKey
 describe('useAuthStore API key persistence', () => {
   beforeEach(async () => {
     window.localStorage.clear();
-    useAuthStore.setState({ apiKeys: {} });
+    useAuthStore.setState({
+      apiKeys: {},
+      voicePreset: 'jarvis-prime',
+      voiceEngine: 'system',
+      speakReplies: true,
+    });
     await secureDeleteApiKey('groq');
   });
 
@@ -18,16 +23,19 @@ describe('useAuthStore API key persistence', () => {
   });
 
   it('migrates legacy plaintext provider keys into secure storage', async () => {
-    window.localStorage.setItem('jarvis-auth', JSON.stringify({
-      state: {
-        apiKeys: {
-          groq: 'gsk_legacy_secret',
-          ollama: 'http://localhost:11434',
+    window.localStorage.setItem(
+      'jarvis-auth',
+      JSON.stringify({
+        state: {
+          apiKeys: {
+            groq: 'gsk_legacy_secret',
+            ollama: 'http://localhost:11434',
+          },
+          defaultProvider: 'groq',
         },
-        defaultProvider: 'groq',
-      },
-      version: 1,
-    }));
+        version: 1,
+      }),
+    );
 
     await useAuthStore.persist.rehydrate();
 
@@ -37,5 +45,28 @@ describe('useAuthStore API key persistence', () => {
     const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
     expect(persisted).not.toContain('gsk_legacy_secret');
     expect(persisted).toContain('http://localhost:11434');
+  });
+
+  it('persists the selected spoken voice settings', async () => {
+    useAuthStore.getState().setVoicePreset('sentinel');
+    useAuthStore.getState().setVoiceEngine('local');
+    useAuthStore.getState().setSpeakReplies(false);
+
+    const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
+    expect(persisted).toContain('"voicePreset":"sentinel"');
+    expect(persisted).toContain('"voiceEngine":"local"');
+    expect(persisted).toContain('"speakReplies":false');
+
+    useAuthStore.setState({
+      voicePreset: 'jarvis-prime',
+      voiceEngine: 'system',
+      speakReplies: true,
+    });
+    window.localStorage.setItem('jarvis-auth', persisted);
+    await useAuthStore.persist.rehydrate();
+
+    expect(useAuthStore.getState().voicePreset).toBe('sentinel');
+    expect(useAuthStore.getState().voiceEngine).toBe('local');
+    expect(useAuthStore.getState().speakReplies).toBe(false);
   });
 });

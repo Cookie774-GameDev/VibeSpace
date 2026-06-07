@@ -9,7 +9,15 @@ export type ID = string;
  * Lets us trace provenance from any output back to its origin.
  */
 export type ContextRef = {
-  kind: 'chat_message' | 'meeting' | 'file' | 'email' | 'calendar_event' | 'memory' | 'url' | 'task';
+  kind:
+    | 'chat_message'
+    | 'meeting'
+    | 'file'
+    | 'email'
+    | 'calendar_event'
+    | 'memory'
+    | 'url'
+    | 'task';
   id: string;
   excerpt?: string;
   ts?: number;
@@ -34,13 +42,19 @@ export const err = <E>(error: E): Result<never, E> => ({ ok: false, error });
 /**
  * Theme variants. V1 ships dark only but the hook is here.
  */
-export type Theme = 'dark' | 'light' | 'system';
+export type Theme = 'dark' | 'light' | 'system' | 'jarvis';
 
 /**
  * Persona presets the user can pick for Jarvis.
  * Drives system prompt + voice persona.
  */
 export type PersonaPreset = 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal';
+
+/** Persisted spoken-voice profiles. Independent from the conversational persona. */
+export type VoicePresetId = 'jarvis-prime' | 'aurora' | 'atlas' | 'nova' | 'sentinel';
+
+/** System may use any OS/browser voice; local restricts playback to installed voices. */
+export type VoiceEngine = 'system' | 'local';
 
 /**
  * Provider IDs we know about.

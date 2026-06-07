@@ -45,6 +45,7 @@ mod fsread;
 mod terminal;
 mod credentials;
 mod launcher;
+mod local_ai;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -163,6 +164,9 @@ pub fn run() {
             credentials::credential_get,
             credentials::credential_delete,
             launcher::install_terminal_launcher,
+            local_ai::ollama_installation_status,
+            local_ai::ollama_start,
+            local_ai::open_system_speech_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

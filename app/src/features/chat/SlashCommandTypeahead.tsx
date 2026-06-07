@@ -31,11 +31,45 @@ export interface SlashCommandDef {
 
 export const SLASH_COMMANDS: SlashCommandDef[] = [
   // Actions
-  { cmd: 'contextmap', description: 'Attach a context map', icon: Network, category: 'action', hasOptions: true },
-  { cmd: 'terminal', description: 'Attach a terminal', icon: Terminal, category: 'action', hasOptions: true },
-  { cmd: 'file', description: 'Attach a project file', icon: FileText, category: 'action', takesArg: true, argPlaceholder: '<filename>' },
-  { cmd: 'model', description: 'Switch AI model', icon: Zap, category: 'action', takesArg: true, argPlaceholder: '<provider>', hasOptions: true },
-  { cmd: 'attach', description: 'Attach by path', icon: FileText, category: 'action', takesArg: true, argPlaceholder: '<path>' },
+  {
+    cmd: 'contextmap',
+    description: 'Attach a context map',
+    icon: Network,
+    category: 'action',
+    hasOptions: true,
+  },
+  {
+    cmd: 'terminal',
+    description: 'Attach a terminal',
+    icon: Terminal,
+    category: 'action',
+    hasOptions: true,
+  },
+  {
+    cmd: 'file',
+    description: 'Attach a project file',
+    icon: FileText,
+    category: 'action',
+    takesArg: true,
+    argPlaceholder: '<filename>',
+  },
+  {
+    cmd: 'model',
+    description: 'Switch AI model',
+    icon: Zap,
+    category: 'action',
+    takesArg: true,
+    argPlaceholder: '<provider>',
+    hasOptions: true,
+  },
+  {
+    cmd: 'attach',
+    description: 'Attach by path',
+    icon: FileText,
+    category: 'action',
+    takesArg: true,
+    argPlaceholder: '<path>',
+  },
   { cmd: 'clearfiles', description: 'Clear attachments', icon: FileText, category: 'action' },
 
   // Navigation
@@ -77,127 +111,133 @@ export interface SlashCommandTypeaheadRef {
   selectCurrent: () => void;
 }
 
-export const SlashCommandTypeahead = forwardRef<SlashCommandTypeaheadRef, SlashCommandTypeaheadProps>(
-  function SlashCommandTypeahead(
-    { commands, selectedCmd, query, onHoverCmd, onSelect },
-    ref,
-  ) {
-    const listRef = useRef<HTMLDivElement>(null);
+export const SlashCommandTypeahead = forwardRef<
+  SlashCommandTypeaheadRef,
+  SlashCommandTypeaheadProps
+>(function SlashCommandTypeahead({ commands, selectedCmd, query, onHoverCmd, onSelect }, ref) {
+  const listRef = useRef<HTMLDivElement>(null);
 
-    useImperativeHandle(ref, () => ({
-      moveUp: () => {
-        if (commands.length === 0) return;
-        const i = commands.findIndex((c) => c.cmd === selectedCmd);
-        const next = commands[(i - 1 + commands.length) % commands.length]!;
-        onHoverCmd?.(next.cmd);
-      },
-      moveDown: () => {
-        if (commands.length === 0) return;
-        const i = commands.findIndex((c) => c.cmd === selectedCmd);
-        const next = commands[(i + 1) % commands.length]!;
-        onHoverCmd?.(next.cmd);
-      },
-      selectCurrent: () => {
-        const cmd = commands.find((c) => c.cmd === selectedCmd) ?? commands[0];
-        if (cmd) onSelect(cmd);
-      },
-    }));
+  useImperativeHandle(ref, () => ({
+    moveUp: () => {
+      if (commands.length === 0) return;
+      const i = commands.findIndex((c) => c.cmd === selectedCmd);
+      const next = commands[(i - 1 + commands.length) % commands.length]!;
+      onHoverCmd?.(next.cmd);
+    },
+    moveDown: () => {
+      if (commands.length === 0) return;
+      const i = commands.findIndex((c) => c.cmd === selectedCmd);
+      const next = commands[(i + 1) % commands.length]!;
+      onHoverCmd?.(next.cmd);
+    },
+    selectCurrent: () => {
+      const cmd = commands.find((c) => c.cmd === selectedCmd) ?? commands[0];
+      if (cmd) onSelect(cmd);
+    },
+  }));
 
-    useEffect(() => {
-      if (!listRef.current || !selectedCmd) return;
-      const selected = listRef.current.querySelector(`[data-value="${selectedCmd}"]`);
-      selected?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }, [selectedCmd]);
+  useEffect(() => {
+    if (!listRef.current || !selectedCmd) return;
+    const selected = listRef.current.querySelector(`[data-value="${selectedCmd}"]`);
+    selected?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedCmd]);
 
-    const groupedCommands = commands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
-      const cat = cmd.category ?? 'utility';
-      if (!acc[cat]) acc[cat] = [];
-      acc[cat].push(cmd);
-      return acc;
-    }, {});
+  const groupedCommands = commands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
+    const cat = cmd.category ?? 'utility';
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(cmd);
+    return acc;
+  }, {});
 
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 4, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 4, scale: 0.98 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-        className={cn(
-          'w-[240px] rounded-lg border border-violet-500/40 overflow-hidden',
-          'bg-[#1a1625]/98 backdrop-blur-lg',
-          'shadow-[0_4px_20px_rgba(139,92,246,0.2)]',
-          'font-mono text-[11px]',
-        )}
-      >
-        {/* Header */}
-        <div className="px-2 py-1.5 border-b border-violet-500/20 bg-violet-500/5">
-          <div className="flex items-center gap-1.5">
-            <Zap className="h-3 w-3 text-violet-400" />
-            <span className="text-violet-300/80 text-[10px]">
-              {query ? `/${query}` : 'commands'}
-            </span>
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 4, scale: 0.98 }}
+      transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+      className={cn(
+        'jarvis-slash-dropdown w-[276px] overflow-hidden rounded-[12px] border border-border-mid/80',
+        'bg-elevated/95 text-foreground backdrop-blur-xl',
+        'shadow-[0_18px_48px_rgba(0,0,0,0.48),inset_0_1px_0_hsl(var(--foreground)/0.05)]',
+        'font-mono text-[11px]',
+      )}
+    >
+      {/* Header */}
+      <div className="border-b border-border bg-panel/90 px-3 py-2">
+        <div className="flex items-center gap-1.5">
+          <Zap className="h-3 w-3 text-accent-copper" />
+          <span className="text-[10px] text-muted-foreground">
+            {query ? `/${query}` : 'commands'}
+          </span>
+        </div>
+      </div>
+
+      {/* List */}
+      <div ref={listRef} className="max-h-[200px] overflow-y-auto py-0.5 scrollbar-hidden">
+        {commands.length === 0 ? (
+          <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
+            No match for /{query}
           </div>
-        </div>
-
-        {/* List */}
-        <div ref={listRef} className="max-h-[200px] overflow-y-auto py-0.5 scrollbar-hidden">
-          {commands.length === 0 ? (
-            <div className="px-2 py-3 text-center text-violet-400/60 text-[10px]">
-              No match for /{query}
-            </div>
-          ) : (
-            CATEGORY_ORDER.map((category) => {
-              const cmds = groupedCommands[category];
-              if (!cmds?.length) return null;
-              return (
-                <div key={category}>
-                  <div className="px-2 py-1 text-[9px] text-violet-500/60 uppercase tracking-wider">
-                    {CATEGORY_LABELS[category]}
-                  </div>
-                  {cmds.map((c) => {
-                    const Icon = c.icon;
-                    const isSelected = selectedCmd === c.cmd;
-
-                    return (
-                      <div
-                        key={c.cmd}
-                        data-value={c.cmd}
-                        onClick={() => onSelect(c)}
-                        onMouseEnter={() => onHoverCmd?.(c.cmd)}
-                        className={cn(
-                          'flex items-center gap-2 px-2 py-1 mx-0.5 rounded cursor-pointer',
-                          'transition-all duration-100',
-                          isSelected
-                            ? 'bg-violet-500/25 text-violet-200'
-                            : 'text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200',
-                        )}
-                      >
-                        <Icon className={cn(
-                          'h-3 w-3 shrink-0',
-                          isSelected ? 'text-violet-400' : 'text-violet-500/50',
-                        )} />
-                        <span className="flex-1 truncate">/{c.cmd}</span>
-                        {c.hasOptions && (
-                          <ChevronRight className="h-2.5 w-2.5 text-violet-500/40" />
-                        )}
-                      </div>
-                    );
-                  })}
+        ) : (
+          CATEGORY_ORDER.map((category) => {
+            const cmds = groupedCommands[category];
+            if (!cmds?.length) return null;
+            return (
+              <div key={category}>
+                <div className="px-3 py-1 text-[9px] uppercase tracking-[0.16em] text-accent-copper/65">
+                  {CATEGORY_LABELS[category]}
                 </div>
-              );
-            })
-          )}
-        </div>
+                {cmds.map((c) => {
+                  const Icon = c.icon;
+                  const isSelected = selectedCmd === c.cmd;
 
-        {/* Footer */}
-        <div className="px-2 py-1 border-t border-violet-500/20 bg-violet-500/5 flex items-center gap-2 text-[9px] text-violet-500/50">
-          <span><kbd className="text-violet-400">↑↓</kbd> nav</span>
-          <span><kbd className="text-violet-400">↵</kbd> select</span>
-          <span className="ml-auto"><kbd className="text-violet-400">esc</kbd></span>
-        </div>
-      </motion.div>
-    );
-  },
-);
+                  return (
+                    <div
+                      key={c.cmd}
+                      data-value={c.cmd}
+                      onClick={() => onSelect(c)}
+                      onMouseEnter={() => onHoverCmd?.(c.cmd)}
+                      className={cn(
+                        'mx-1 flex cursor-pointer items-center gap-2 rounded-[7px] border px-2.5 py-1.5',
+                        'transition-all duration-100',
+                        isSelected
+                          ? 'jarvis-slash-item-selected border-accent-copper/45 bg-accent-copper/12 text-foreground'
+                          : 'border-transparent text-muted-foreground hover:border-border hover:bg-muted/70 hover:text-foreground',
+                      )}
+                    >
+                      <Icon
+                        className={cn(
+                          'h-3 w-3 shrink-0',
+                          isSelected ? 'text-accent-copper' : 'text-muted-foreground/70',
+                        )}
+                      />
+                      <span className="flex-1 truncate">/{c.cmd}</span>
+                      {c.hasOptions && (
+                        <ChevronRight className="h-2.5 w-2.5 text-accent-copper/60" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center gap-2 border-t border-border bg-panel/90 px-3 py-1.5 text-[9px] text-muted-foreground">
+        <span>
+          <kbd className="jarvis-kbd">up/down</kbd> nav
+        </span>
+        <span>
+          <kbd className="jarvis-kbd">enter</kbd> select
+        </span>
+        <span className="ml-auto">
+          <kbd className="jarvis-kbd">esc</kbd>
+        </span>
+      </div>
+    </motion.div>
+  );
+});
 
 export default SlashCommandTypeahead;

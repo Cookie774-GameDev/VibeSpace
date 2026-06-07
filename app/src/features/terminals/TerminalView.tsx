@@ -44,10 +44,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toast';
 import type { TerminalViewProps } from './types';
 import { useTerminalTranscriptStore } from './transcriptStore';
-import {
-  resolveTerminalRestoreSession,
-  type BackendTerminalInfo,
-} from './restoreSession';
+import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
@@ -89,11 +86,11 @@ const DARK_THEME = {
   selectionBackground: '#d97757',
   selectionForeground: '#2a2018',
   black: '#2a2018',
-  red: '#d97757',          // terracotta
-  green: '#7c9870',        // sage
-  yellow: '#d4a258',       // honey
-  blue: '#9d8aa8',         // lavender
-  magenta: '#c97b6e',      // rose
+  red: '#d97757', // terracotta
+  green: '#7c9870', // sage
+  yellow: '#d4a258', // honey
+  blue: '#9d8aa8', // lavender
+  magenta: '#c97b6e', // rose
   cyan: '#7c9870',
   white: '#f5e6c8',
   brightBlack: '#5d4c3c',
@@ -131,10 +128,37 @@ const LIGHT_THEME = {
   brightWhite: '#3a2e22',
 };
 
+const JARVIS_THEME = {
+  foreground: '#eee4d7',
+  background: '#080a0f',
+  cursor: '#ff8500',
+  cursorAccent: '#080a0f',
+  selectionBackground: '#7a410f',
+  selectionForeground: '#fff5e8',
+  black: '#080a0f',
+  red: '#ff5d47',
+  green: '#47d45b',
+  yellow: '#ffb000',
+  blue: '#4ca8ff',
+  magenta: '#b37aff',
+  cyan: '#45d4d4',
+  white: '#eee4d7',
+  brightBlack: '#5f626b',
+  brightRed: '#ff7b68',
+  brightGreen: '#6ce17c',
+  brightYellow: '#ffc247',
+  brightBlue: '#7bc0ff',
+  brightMagenta: '#cb9cff',
+  brightCyan: '#7be3e3',
+  brightWhite: '#fff8ef',
+};
+
 function pickTheme() {
   if (typeof document === 'undefined') return DARK_THEME;
   const t = document.documentElement.getAttribute('data-theme');
-  return t === 'light' ? LIGHT_THEME : DARK_THEME;
+  if (t === 'light') return LIGHT_THEME;
+  if (t === 'jarvis') return JARVIS_THEME;
+  return DARK_THEME;
 }
 
 function commandToInput(command: string): string {
@@ -172,9 +196,7 @@ export function TerminalView({
   const dictatingRef = useRef(false);
   const ignoreClearsUntilRef = useRef<number>(0);
 
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(
-    existingSessionId ?? null,
-  );
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(existingSessionId ?? null);
   const [isFocused, setIsFocused] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [dropKind, setDropKind] = useState<'file' | 'context' | null>(null);
@@ -237,9 +259,7 @@ export function TerminalView({
   useEffect(() => {
     const sid = sessionRef.current;
     if (!sid) return;
-    useTerminalTranscriptStore
-      .getState()
-      .retagSession(sid, agentSlug ?? null);
+    useTerminalTranscriptStore.getState().retagSession(sid, agentSlug ?? null);
   }, [agentSlug]);
 
   useEffect(() => {
@@ -301,8 +321,7 @@ export function TerminalView({
       term = new Terminal({
         rows,
         cols,
-        fontFamily:
-          '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize,
         lineHeight: fontSize <= 10 ? 1.0 : 1.08,
         cursorBlink: true,
@@ -395,9 +414,7 @@ export function TerminalView({
           // any future "what did this pane just say?" UI) can read
           // the recent output without re-parsing the xterm buffer.
           // The store strips ANSI + bounds the size internally.
-          useTerminalTranscriptStore
-            .getState()
-            .appendOutput(e.payload.sessionId, data);
+          useTerminalTranscriptStore.getState().appendOutput(e.payload.sessionId, data);
         });
         if (cancelled) {
           u1();
@@ -477,7 +494,9 @@ export function TerminalView({
           console.log(`[Jarvis] Spawned new PTY session: ${sid}`);
 
           if (restoreDecision.oldSessionId) {
-            useTerminalTranscriptStore.getState().transferSession(restoreDecision.oldSessionId, sid);
+            useTerminalTranscriptStore
+              .getState()
+              .transferSession(restoreDecision.oldSessionId, sid);
           }
 
           // Register the new session!
@@ -487,10 +506,11 @@ export function TerminalView({
             command: command ?? null,
             projectId: projectId ?? null,
           });
-
         } else {
           sid = restoreDecision.sessionId;
-          console.log(`[Jarvis] Re-attaching to existing active session: ${sid} (${restoreDecision.source})`);
+          console.log(
+            `[Jarvis] Re-attaching to existing active session: ${sid} (${restoreDecision.source})`,
+          );
           // Restore visual transcript for active session re-attach
           if (restoreDecision.restoredText) {
             term.write(restoreDecision.restoredText);
@@ -542,14 +562,17 @@ export function TerminalView({
         });
       }
       if (spawnedFresh && restoredInput) {
-        window.setTimeout(() => {
-          invoke('terminal_write', {
-            sessionId: sid,
-            data: restoredInput,
-          }).catch(() => {
-            /* backend probably gone */
-          });
-        }, startupCommand ? 900 : 250);
+        window.setTimeout(
+          () => {
+            invoke('terminal_write', {
+              sessionId: sid,
+              data: restoredInput,
+            }).catch(() => {
+              /* backend probably gone */
+            });
+          },
+          startupCommand ? 900 : 250,
+        );
       }
 
       handleVisible = () => {
@@ -682,7 +705,8 @@ export function TerminalView({
       }
     };
     window.addEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
-    return () => window.removeEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
+    return () =>
+      window.removeEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
   }, [paneId]);
 
   useEffect(() => {
@@ -795,28 +819,29 @@ export function TerminalView({
     // We only fall back to the "desktop build" hint when `isTauri` is
     // genuinely false (running in a browser preview), because then we
     // know the failure is environmental rather than a runtime issue.
-    const headline = isTauri
-      ? 'Terminal failed to start'
-      : 'Terminal backend not available';
+    const headline = isTauri ? 'Terminal failed to start' : 'Terminal backend not available';
     const body = isTauri
       ? error
       : `Run the desktop build (\`npm run tauri:dev\`) to use real terminals.\n\nDetail: ${error}`;
     return (
       <div
-      className={cn(
+        className={cn(
           'rounded-lg border border-border bg-paper-soft shadow-soft p-4 space-y-1',
           className,
         )}
         role="status"
       >
         <p className="text-foreground text-ui-strong">{headline}</p>
-        <p className="text-secondary text-muted-foreground whitespace-pre-wrap font-mono">
-          {body}
-        </p>
+        <p className="text-secondary text-muted-foreground whitespace-pre-wrap font-mono">{body}</p>
         {command && (
           <p className="text-metadata text-muted-foreground">
             Tried to run: <code>{command}</code>
-            {cwd ? <> in <code>{cwd}</code></> : null}
+            {cwd ? (
+              <>
+                {' '}
+                in <code>{cwd}</code>
+              </>
+            ) : null}
           </p>
         )}
       </div>
@@ -827,11 +852,13 @@ export function TerminalView({
     <div
       data-session-id={activeSessionId ?? undefined}
       onDragOver={(e) => {
-        const nextKind = e.dataTransfer.types.includes('application/x-jarvis-file') || e.dataTransfer.types.includes('text/plain')
-          ? 'file'
-          : e.dataTransfer.types.includes(CONTEXT_MIME)
-            ? 'context'
-            : null;
+        const nextKind =
+          e.dataTransfer.types.includes('application/x-jarvis-file') ||
+          e.dataTransfer.types.includes('text/plain')
+            ? 'file'
+            : e.dataTransfer.types.includes(CONTEXT_MIME)
+              ? 'context'
+              : null;
         if (!nextKind) return;
         e.preventDefault();
         setDropKind(nextKind);
@@ -858,13 +885,14 @@ export function TerminalView({
         }
         void invoke('terminal_write', { sessionId: sid, data: path.trim() });
       }}
-        className={cn(
+      className={cn(
         'jarvis-terminal-surface relative flex w-full flex-col overflow-hidden bg-paper transition-shadow duration-300',
         // Only apply the standalone chrome (border, rounding, soft shadow)
         // when the parent isn't drawing its own pane frame.
         !hideChrome && 'rounded-lg border border-border shadow-soft',
         isFocused && 'animate-terminal-focus border-accent-copper/80 ring-2 ring-accent-copper/30',
-        dropKind && 'border-accent-copper ring-2 ring-accent-copper/50 shadow-[0_0_28px_hsl(var(--accent-copper)/0.35)]',
+        dropKind &&
+          'border-accent-copper ring-2 ring-accent-copper/50 shadow-[0_0_28px_hsl(var(--accent-copper)/0.35)]',
         className,
       )}
     >

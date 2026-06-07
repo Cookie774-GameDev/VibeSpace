@@ -4,15 +4,9 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
-import {
-  containsWakePhrase,
-  readWakeWordEnabled,
-  WAKE_WORD_SETTING_EVENT,
-} from './wakeWord';
-import {
-  VOICE_EXCLUSIVE_START_EVENT,
-  VOICE_EXCLUSIVE_STOP_EVENT,
-} from './VoiceService';
+import { containsWakePhrase, readWakeWordEnabled, WAKE_WORD_SETTING_EVENT } from './wakeWord';
+import { VOICE_EXCLUSIVE_START_EVENT, VOICE_EXCLUSIVE_STOP_EVENT } from './VoiceService';
+import { speakText, VOICE_ACKNOWLEDGEMENT_TEXT } from './speechSynthesis';
 
 interface SpeechRecognitionAlternative {
   transcript: string;
@@ -125,7 +119,11 @@ export function WakeWordHost() {
       recognition.lang = 'en-US';
       recognition.onresult = (event) => {
         const transcripts: string[] = [];
-        for (let resultIndex = event.resultIndex; resultIndex < event.results.length; resultIndex += 1) {
+        for (
+          let resultIndex = event.resultIndex;
+          resultIndex < event.results.length;
+          resultIndex += 1
+        ) {
           const result = event.results[resultIndex];
           const alternative = result[0];
           if (alternative?.transcript) transcripts.push(alternative.transcript);
@@ -136,6 +134,14 @@ export function WakeWordHost() {
         toast.success('Hey Jarvis heard', 'Opening voice.');
         stopRecognition(recognitionRef);
         setVoiceModalOpen(true);
+        window.setTimeout(() => {
+          void speakText(VOICE_ACKNOWLEDGEMENT_TEXT).catch((err) => {
+            toast.warning(
+              'Voice acknowledgement unavailable',
+              err instanceof Error ? err.message : 'Jarvis could not play the acknowledgement.',
+            );
+          });
+        }, 140);
       };
       recognition.onerror = (event) => {
         const blocked =
@@ -240,7 +246,9 @@ function clearRestart(restartTimerRef: React.MutableRefObject<number | null>): v
   restartTimerRef.current = null;
 }
 
-function stopRecognition(recognitionRef: React.MutableRefObject<WakeSpeechRecognition | null>): void {
+function stopRecognition(
+  recognitionRef: React.MutableRefObject<WakeSpeechRecognition | null>,
+): void {
   const recognition = recognitionRef.current;
   if (!recognition) return;
   recognitionRef.current = null;

@@ -231,6 +231,45 @@ function registerWindowHotkey(combo: string, handler: GlobalHotkeyHandler): Unre
 /*  Misc                                                                      */
 /* -------------------------------------------------------------------------- */
 
+export interface NativeOllamaStatus {
+  installed: boolean | null;
+  version?: string | null;
+  executable?: string | null;
+  detail?: string | null;
+}
+
+export async function getNativeOllamaStatus(): Promise<NativeOllamaStatus> {
+  if (!isTauri) {
+    return {
+      installed: null,
+      detail: 'Native Ollama detection is available in the desktop app.',
+    };
+  }
+
+  try {
+    return await tauriInvoke<NativeOllamaStatus>('ollama_installation_status');
+  } catch (err) {
+    return {
+      installed: null,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function startNativeOllama(): Promise<void> {
+  if (!isTauri) {
+    throw new Error('Starting Ollama automatically is only available in the desktop app.');
+  }
+  await tauriInvoke('ollama_start');
+}
+
+export async function openSystemSpeechSettings(): Promise<void> {
+  if (!isTauri) {
+    throw new Error('Open your operating system speech settings to install a local voice.');
+  }
+  await tauriInvoke('open_system_speech_settings');
+}
+
 /**
  * App version. Pulled from the Tauri context in desktop, from
  * `import.meta.env.VITE_APP_VERSION` in web (set by Vite at build time).

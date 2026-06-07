@@ -592,19 +592,21 @@ export function startRuntimeListener(
         `${agent.name} done`,
         derivePaneTitle(finalText) || 'The AI response is complete.',
       );
-      if (detail.speakReply) {
+      const voiceSettings = useAuthStore.getState();
+      if (detail.speakReply || voiceSettings.speakReplies) {
         const speechText = textToSpeechOutput(finalText);
         if (speechText) {
-          void speakText(speechText, { persona: useAuthStore.getState().personaPreset }).catch(
-            (speechErr) => {
-              devConsole.log({
-                channel: 'ai',
-                level: 'warn',
-                message: `Voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
-                detail: { agent: agent.slug, textChars: speechText.length },
-              });
-            },
-          );
+          void speakText(speechText, {
+            voicePreset: voiceSettings.voicePreset,
+            engine: voiceSettings.voiceEngine,
+          }).catch((speechErr) => {
+            devConsole.log({
+              channel: 'ai',
+              level: 'warn',
+              message: `Voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+              detail: { agent: agent.slug, textChars: speechText.length },
+            });
+          });
         }
       }
     } catch (err) {

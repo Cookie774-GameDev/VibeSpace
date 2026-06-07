@@ -51,4 +51,17 @@ describe('AI provider routing', () => {
     expect(resolved.provider.id).toBe('mock');
     expect(resolved.model).toBe('gemini-2.5-flash-lite');
   });
+
+  it('forces every agent through the selected Ollama model in fully local mode', () => {
+    useAuthStore.setState({
+      apiKeys: { google: 'cloud-key-that-must-not-be-used' },
+      defaultProvider: 'google',
+      offlineMode: true,
+      defaultLocalModel: 'qwen3:4b',
+    });
+
+    const resolved = resolveProviderAndModel(jarvis);
+    expect(resolved.provider.id).toBe('ollama');
+    expect(resolved.model).toBe('qwen3:4b');
+  });
 });

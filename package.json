@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "private": true,
   "description": "Jarvis - the AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant.",
   "license": "Apache-2.0",
@@ -15,6 +15,7 @@
     "tauri:dev": "npm --prefix app run tauri:dev",
     "tauri:build": "npm --prefix app run tauri:build",
     "typecheck": "npm --prefix app run typecheck",
+    "test:release-manifest": "node --test scripts/build-updater-manifest.test.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
     "release:stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -SkipBuild",

@@ -88,21 +88,21 @@ export const SlashCommandOptionPicker = forwardRef<
       exit={{ opacity: 0, y: 4, scale: 0.98 }}
       transition={{ type: 'spring', stiffness: 500, damping: 30 }}
       className={cn(
-        'jarvis-slash-dropdown w-[338px] overflow-hidden rounded-[14px] border border-[#7b4717]/70',
-        'bg-[#251d16]/95 text-[#f3eadf] backdrop-blur-xl',
-        'shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_rgba(255,214,149,0.06),0_0_30px_rgba(234,126,18,0.1)]',
+        'jarvis-slash-dropdown w-[338px] overflow-hidden rounded-[14px] border border-border-mid/80',
+        'bg-elevated/95 text-foreground backdrop-blur-xl',
+        'shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_30px_hsl(var(--accent-copper)/0.1)]',
       )}
     >
-      <div className="border-b border-[#6d3f16]/55 bg-[#2b2119]/92 px-4 py-3">
+      <div className="border-b border-border bg-panel/90 px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#9b5d19]/70 bg-[#312016] shadow-[inset_0_0_10px_rgba(255,168,38,0.34),0_0_13px_rgba(250,142,14,0.25)]">
-            <CommandIcon className="h-4 w-4 text-[#f08a08]" />
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-accent-copper/55 bg-background/70 shadow-[inset_0_0_10px_hsl(var(--accent-copper)/0.28),0_0_13px_hsl(var(--accent-copper)/0.2)]">
+            <CommandIcon className="h-4 w-4 text-accent-copper" />
           </span>
           <div className="min-w-0">
-            <div className="truncate text-[17px] font-medium leading-5 text-[#f3eadf]">
+            <div className="truncate text-[17px] font-medium leading-5 text-foreground">
               /{commandLabel}
             </div>
-            <div className="text-[12px] leading-4 text-[#cbbba8]">Choose an option</div>
+            <div className="text-[12px] leading-4 text-muted-foreground">Choose an option</div>
           </div>
         </div>
       </div>
@@ -110,26 +110,26 @@ export const SlashCommandOptionPicker = forwardRef<
       <div ref={listRef} className="max-h-[238px] overflow-y-auto py-2 scrollbar-hidden">
         {loading ? (
           <div className="flex flex-col items-center gap-2 px-4 py-6">
-            <Loader2 className="h-4 w-4 animate-spin text-[#f08a08]" />
-            <span className="text-[13px] text-[#a99682]">Loading...</span>
+            <Loader2 className="h-4 w-4 animate-spin text-accent-copper" />
+            <span className="text-[13px] text-muted-foreground">Loading...</span>
           </div>
         ) : error ? (
           <div className="flex flex-col items-center gap-2 px-4 py-5">
-            <AlertCircle className="h-4 w-4 text-[#ff7b63]" />
-            <span className="text-[13px] text-[#ff9a87]">{error}</span>
+            <AlertCircle className="h-4 w-4 text-destructive" />
+            <span className="text-[13px] text-destructive">{error}</span>
           </div>
         ) : filteredOptions.length === 0 ? (
           <div className="px-4 py-5 text-center">
-            <span className="text-[13px] text-[#a99682]">
+            <span className="text-[13px] text-muted-foreground">
               {options.length === 0 ? 'No options available' : `No match for "${query}"`}
             </span>
           </div>
         ) : (
           <>
-            <div className="px-4 pb-1 pt-0.5 text-[11px] uppercase tracking-[0.2em] text-[#b98956]">
+            <div className="px-4 pb-1 pt-0.5 text-[11px] uppercase tracking-[0.2em] text-accent-copper/70">
               Options
               {query && (
-                <span className="ml-1 normal-case tracking-normal text-[#a99682]">
+                <span className="ml-1 normal-case tracking-normal text-muted-foreground">
                   -&gt; {query}
                 </span>
               )}
@@ -148,30 +148,32 @@ export const SlashCommandOptionPicker = forwardRef<
                     'mx-2 flex cursor-pointer items-center gap-3 rounded-[12px] border px-3 py-2.5',
                     'transition-all duration-100',
                     isSelected
-                      ? 'jarvis-slash-item-selected border-[#9b5d19]/85 bg-[#3a281a] text-[#f3eadf] shadow-[inset_0_0_0_1px_rgba(255,210,153,0.05),0_0_16px_rgba(240,138,8,0.1)]'
-                      : 'border-transparent text-[#cbbba8] hover:border-[#6d3f16]/70 hover:bg-[#30241a] hover:text-[#f3eadf]',
+                      ? 'jarvis-slash-item-selected border-accent-copper/60 bg-accent-copper/12 text-foreground shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04),0_0_16px_hsl(var(--accent-copper)/0.1)]'
+                      : 'border-transparent text-muted-foreground hover:border-border hover:bg-muted/70 hover:text-foreground',
                   )}
                 >
                   <Icon
                     className={cn(
                       'h-4 w-4 shrink-0',
-                      isSelected ? 'text-[#f08a08]' : 'text-[#b98956]',
+                      isSelected ? 'text-accent-copper' : 'text-muted-foreground/70',
                     )}
                   />
                   <div className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px] font-medium leading-5 text-[#f3eadf]">
+                    <span className="block truncate text-[15px] font-medium leading-5 text-foreground">
                       {option.label}
                     </span>
                     {option.description && (
-                      <span className="block truncate text-[12px] leading-4 text-[#a99682]">
+                      <span className="block truncate text-[12px] leading-4 text-muted-foreground">
                         {option.description}
                       </span>
                     )}
                   </div>
                   {option.metadata && (
-                    <span className="shrink-0 text-[11px] text-[#d59b55]">{option.metadata}</span>
+                    <span className="shrink-0 text-[11px] text-accent-copper/80">
+                      {option.metadata}
+                    </span>
                   )}
-                  {isSelected && <span className="shrink-0 text-[#f08a08]">&gt;</span>}
+                  {isSelected && <span className="shrink-0 text-accent-copper">&gt;</span>}
                 </div>
               );
             })}
@@ -179,7 +181,7 @@ export const SlashCommandOptionPicker = forwardRef<
         )}
       </div>
 
-      <div className="flex items-center gap-3 border-t border-[#6d3f16]/55 bg-[#2b2119]/92 px-4 py-2.5 text-[11px] text-[#a99682]">
+      <div className="flex items-center gap-3 border-t border-border bg-panel/90 px-4 py-2.5 text-[11px] text-muted-foreground">
         <span className="flex items-center gap-1">
           <kbd className="jarvis-kbd">up/down</kbd>
           <span>nav</span>

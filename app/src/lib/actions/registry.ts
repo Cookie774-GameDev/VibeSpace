@@ -169,7 +169,9 @@ function parseTerminalRefString(raw: string): TerminalRef | null {
   }
 }
 
-function readTerminalRefs(params: Record<string, unknown>): { ok: true; refs: TerminalRef[] } | { ok: false; error: string } {
+function readTerminalRefs(
+  params: Record<string, unknown>,
+): { ok: true; refs: TerminalRef[] } | { ok: false; error: string } {
   const refs: TerminalRef[] = [];
   const refsJson = readOptionalString(params.refsJson);
   if (refsJson) {
@@ -184,7 +186,10 @@ function readTerminalRefs(params: Record<string, unknown>): { ok: true; refs: Te
         if (ref) refs.push(ref);
       }
     } catch {
-      return { ok: false, error: 'refsJson must be a terminal ref object or array encoded as JSON.' };
+      return {
+        ok: false,
+        error: 'refsJson must be a terminal ref object or array encoded as JSON.',
+      };
     }
   }
 
@@ -208,7 +213,10 @@ function readTerminalRefs(params: Record<string, unknown>): { ok: true; refs: Te
     return true;
   });
   if (unique.length === 0) {
-    return { ok: false, error: 'Provide at least one terminal paneId, sessionId, or refsJson value.' };
+    return {
+      ok: false,
+      error: 'Provide at least one terminal paneId, sessionId, or refsJson value.',
+    };
   }
   return { ok: true, refs: unique.slice(0, 8) };
 }
@@ -269,8 +277,7 @@ const SETTINGS_ACTIONS: ActionDef[] = [
     id: 'settings.providers',
     category: 'settings',
     label: 'Open Settings → Providers',
-    description:
-      'Open Settings on the Providers tab so the user can paste API keys.',
+    description: 'Open Settings on the Providers tab so the user can paste API keys.',
     icon: KeyRound,
     params: [],
     run: async () => {
@@ -300,6 +307,18 @@ const SETTINGS_ACTIONS: ActionDef[] = [
  * needed.
  */
 const THEME_ACTIONS: ActionDef[] = [
+  {
+    id: 'theme.jarvis',
+    category: 'theme',
+    label: 'Switch to Jarvis Core theme',
+    description: 'Set the workspace to the black and orange command-center palette.',
+    icon: Sparkles,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setTheme('jarvis');
+      return ok('Theme: Jarvis Core.');
+    },
+  },
   {
     id: 'theme.dark',
     category: 'theme',
@@ -415,7 +434,9 @@ const TERMINAL_ACTIONS: ActionDef[] = [
         });
       }
       navigateTo('terminal');
-      return ok(`Opening ${count} terminal pane${count === 1 ? '' : 's'}${command ? ` with ${command}` : ''}.`);
+      return ok(
+        `Opening ${count} terminal pane${count === 1 ? '' : 's'}${command ? ` with ${command}` : ''}.`,
+      );
     },
   },
   {
@@ -495,8 +516,7 @@ const TERMINAL_ACTIONS: ActionDef[] = [
     id: 'terminal.run',
     category: 'terminal',
     label: 'Run a command in a new pane',
-    description:
-      'Open Terminals and run an arbitrary shell command in a new pane.',
+    description: 'Open Terminals and run an arbitrary shell command in a new pane.',
     icon: PlayCircle,
     destructive: true,
     params: [
@@ -526,8 +546,7 @@ const TERMINAL_ACTIONS: ActionDef[] = [
       },
     ],
     run: async (params) => {
-      const command =
-        typeof params.command === 'string' ? params.command.trim() : '';
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
       if (!command) return fail('Missing required parameter: command.');
       // The command itself is a free-form shell string by design (the
       // user explicitly approved it). The `cwd` value, however, is
@@ -535,9 +554,7 @@ const TERMINAL_ACTIONS: ActionDef[] = [
       // so we must reject anything that could close the quote and
       // chain a separate command.
       const label =
-        typeof params.label === 'string' && params.label.trim()
-          ? params.label.trim()
-          : undefined;
+        typeof params.label === 'string' && params.label.trim() ? params.label.trim() : undefined;
       const cwd = typeof params.cwd === 'string' ? params.cwd : undefined;
       if (cwd) {
         const meta = rejectShellMetaChars(cwd);
@@ -596,7 +613,9 @@ const TERMINAL_ACTIONS: ActionDef[] = [
         refs: parsedRefs.refs,
       });
       navigateTo('terminal');
-      return ok(`Sent '${command}' to ${parsedRefs.refs.length} terminal${parsedRefs.refs.length === 1 ? '' : 's'}.`);
+      return ok(
+        `Sent '${command}' to ${parsedRefs.refs.length} terminal${parsedRefs.refs.length === 1 ? '' : 's'}.`,
+      );
     },
   },
   {
@@ -678,8 +697,7 @@ const WELLNESS_ACTIONS: ActionDef[] = [
     ],
     run: async (params) => {
       const raw = params.durationSec;
-      const sec =
-        typeof raw === 'number' && raw > 0 && raw <= 600 ? raw : 20;
+      const sec = typeof raw === 'number' && raw > 0 && raw <= 600 ? raw : 20;
       useUIStore.getState().startWellness('eye-break-20-20-20', sec * 1000);
       return ok(`Eye break for ${sec}s.`);
     },
@@ -741,8 +759,7 @@ const HOST_ACTIONS: ActionDef[] = [
     id: 'host.openLauncher',
     category: 'host',
     label: 'Open quick launcher',
-    description:
-      'Pop the Quick Launcher tile grid (pinned apps and links). Same as Mod+Shift+L.',
+    description: 'Pop the Quick Launcher tile grid (pinned apps and links). Same as Mod+Shift+L.',
     icon: Rocket,
     params: [],
     run: async () => {
@@ -851,7 +868,8 @@ const CLOCK_ACTIONS: ActionDef[] = [
       const minutes = typeof params.durationMinutes === 'number' ? params.durationMinutes : 25;
       const seconds = typeof params.durationSeconds === 'number' ? params.durationSeconds : 0;
       const durationMs = Math.round((minutes * 60 + seconds) * 1000);
-      if (!Number.isFinite(durationMs) || durationMs <= 0) return fail('Timer duration must be greater than zero.');
+      if (!Number.isFinite(durationMs) || durationMs <= 0)
+        return fail('Timer duration must be greater than zero.');
       const entry = useClockStore.getState().createTimer({
         durationMs,
         label: typeof params.label === 'string' ? params.label : undefined,
@@ -867,7 +885,8 @@ const CLOCK_ACTIONS: ActionDef[] = [
     id: 'clock.alarm',
     category: 'clock',
     label: 'Set alarm',
-    description: 'Create a local Clock alarm at a future time, such as 15:30, 3:30 PM, or an ISO timestamp.',
+    description:
+      'Create a local Clock alarm at a future time, such as 15:30, 3:30 PM, or an ISO timestamp.',
     icon: AlarmClock,
     params: [
       {
@@ -890,16 +909,20 @@ const CLOCK_ACTIONS: ActionDef[] = [
     run: async (params) => {
       const time = typeof params.time === 'string' ? params.time.trim() : '';
       const dueAt = parseAlarmTime(time);
-      if (!dueAt) return fail('Alarm time must be a future time like 15:30, 3:30 PM, or an ISO timestamp.');
+      if (!dueAt)
+        return fail('Alarm time must be a future time like 15:30, 3:30 PM, or an ISO timestamp.');
       const entry = useClockStore.getState().createAlarm({
         dueAt,
         label: typeof params.label === 'string' ? params.label : undefined,
         sound: readClockSound(params.sound),
       });
-      return ok(`Alarm set for ${new Date(entry.dueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`, {
-        id: entry.id,
-        dueAt: entry.dueAt,
-      });
+      return ok(
+        `Alarm set for ${new Date(entry.dueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`,
+        {
+          id: entry.id,
+          dueAt: entry.dueAt,
+        },
+      );
     },
   },
   {
@@ -938,18 +961,27 @@ const PRODUCTIVITY_ACTIONS: ActionDef[] = [
           { value: 'low', label: 'Low' },
         ],
       },
-      { key: 'due_at', label: 'Due timestamp', type: 'number', help: 'Unix milliseconds. Omit when no specific due time exists.' },
+      {
+        key: 'due_at',
+        label: 'Due timestamp',
+        type: 'number',
+        help: 'Unix milliseconds. Omit when no specific due time exists.',
+      },
     ],
     run: async (params) => {
       const workspaceId = useAuthStore.getState().workspaceId;
       if (!workspaceId) return fail('No active workspace.');
       const title = typeof params.title === 'string' ? params.title.trim() : '';
       if (!title) return fail('Task title is required.');
-      const notes = typeof params.notes === 'string' && params.notes.trim() ? params.notes.trim() : undefined;
+      const notes =
+        typeof params.notes === 'string' && params.notes.trim() ? params.notes.trim() : undefined;
       const priority = ['urgent', 'high', 'normal', 'low'].includes(String(params.priority))
-        ? String(params.priority) as 'urgent' | 'high' | 'normal' | 'low'
+        ? (String(params.priority) as 'urgent' | 'high' | 'normal' | 'low')
         : 'normal';
-      const due_at = typeof params.due_at === 'number' && Number.isFinite(params.due_at) ? params.due_at : undefined;
+      const due_at =
+        typeof params.due_at === 'number' && Number.isFinite(params.due_at)
+          ? params.due_at
+          : undefined;
       await taskRepo.create({
         workspace_id: workspaceId,
         project_id: useAuthStore.getState().projectId ?? undefined,
@@ -968,13 +1000,24 @@ const PRODUCTIVITY_ACTIONS: ActionDef[] = [
     id: 'custom.createTerminalCommand',
     category: 'custom',
     label: 'Create custom terminal command',
-    description: 'Save a named Jarvis command backed by terminal.run so it appears as custom.<slug> for future use.',
+    description:
+      'Save a named Jarvis command backed by terminal.run so it appears as custom.<slug> for future use.',
     icon: Wrench,
     params: [
       { key: 'name', label: 'Command name', type: 'string', required: true },
       { key: 'command', label: 'Shell command', type: 'string', required: true },
-      { key: 'cwd', label: 'Working directory', type: 'string', help: 'Optional absolute project folder.' },
-      { key: 'description', label: 'Description', type: 'string', help: 'Optional user-facing description.' },
+      {
+        key: 'cwd',
+        label: 'Working directory',
+        type: 'string',
+        help: 'Optional absolute project folder.',
+      },
+      {
+        key: 'description',
+        label: 'Description',
+        type: 'string',
+        help: 'Optional user-facing description.',
+      },
     ],
     run: async (params) => {
       const name = typeof params.name === 'string' ? params.name.trim() : '';
@@ -983,14 +1026,17 @@ const PRODUCTIVITY_ACTIONS: ActionDef[] = [
       const { useToolStore } = await import('@/features/tools/toolStore');
       const tool = useToolStore.getState().create({
         name,
-        description: typeof params.description === 'string' && params.description.trim()
-          ? params.description.trim()
-          : `Run ${command} in a new terminal pane.`,
+        description:
+          typeof params.description === 'string' && params.description.trim()
+            ? params.description.trim()
+            : `Run ${command} in a new terminal pane.`,
         baseAction: 'terminal.run',
         params: {
           command,
           label: name,
-          ...(typeof params.cwd === 'string' && params.cwd.trim() ? { cwd: params.cwd.trim() } : {}),
+          ...(typeof params.cwd === 'string' && params.cwd.trim()
+            ? { cwd: params.cwd.trim() }
+            : {}),
         },
       });
       return ok(`Created custom command custom.${tool.slug}.`);
@@ -1012,7 +1058,12 @@ const PRODUCTIVITY_ACTIONS: ActionDef[] = [
         required: true,
         help: 'JSON array of steps like [{"action":"nav.terminal","params":{}},{"action":"terminal.run","params":{"command":"npm test"}}]. Built-in actions only.',
       },
-      { key: 'description', label: 'Description', type: 'string', help: 'Optional user-facing description.' },
+      {
+        key: 'description',
+        label: 'Description',
+        type: 'string',
+        help: 'Optional user-facing description.',
+      },
     ],
     run: async (params) => {
       const name = typeof params.name === 'string' ? params.name.trim() : '';

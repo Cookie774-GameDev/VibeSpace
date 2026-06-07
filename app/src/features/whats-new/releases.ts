@@ -22,14 +22,7 @@
  *   4. Build. The first time a user runs the new build, the modal pops.
  */
 
-import {
-  Sparkles,
-  Wrench,
-  Rocket,
-  Package,
-  AlertTriangle,
-  type LucideIcon,
-} from 'lucide-react';
+import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } from 'lucide-react';
 
 /**
  * Authoritative current build version.
@@ -38,7 +31,7 @@ import {
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.24';
+export const CURRENT_VERSION = '0.1.25';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -49,12 +42,7 @@ export const CURRENT_VERSION = '0.1.24';
  * - `shipped`     — release-management notes (build, installer, infra).
  * - `known`       — known issues / things deferred.
  */
-export type ReleaseSectionKind =
-  | 'feature'
-  | 'improvement'
-  | 'fix'
-  | 'shipped'
-  | 'known';
+export type ReleaseSectionKind = 'feature' | 'improvement' | 'fix' | 'shipped' | 'known';
 
 export interface ReleaseSection {
   kind: ReleaseSectionKind;
@@ -80,6 +68,42 @@ export interface Release {
    */
   sections: ReleaseSection[];
 }
+
+const RELEASE_0_1_25: Release = {
+  version: '0.1.25',
+  date: '2026-06-07',
+  headline: 'Jarvis Core theme, production voice, and real local models',
+  summary:
+    'Jarvis now has five persisted spoken voice profiles, normal chat replies can speak aloud, and Hey Jarvis acknowledges activation with the selected voice. Local Models can start Ollama, download models inside the app with progress, and route every chat fully local.',
+  sections: [
+    {
+      kind: 'feature',
+      items: [
+        'Added five selectable Jarvis voices: Jarvis Prime, Aurora, Atlas, Nova, and Sentinel.',
+        'Normal chat replies, wake acknowledgement, and voice-panel replies use the selected spoken voice profile.',
+        'Added Local-only voice mode with installed voice detection and a Windows speech-pack install handoff.',
+        'Local Models now detects installed Ollama, starts the daemon, downloads models with live progress, and auto-selects completed pulls.',
+        'Added the optional Jarvis Core black/orange app theme while keeping Dark, Light, and System themes intact.',
+      ],
+    },
+    {
+      kind: 'improvement',
+      items: [
+        'Slash command dropdowns and option pickers now inherit the active app theme instead of fixed purple/brown colors.',
+        'The mini Jarvis panel is token-aware, more microphone-reactive, and keeps the full conversation transcript scrollable.',
+        'Provider cards now show real locally recorded monthly usage instead of placeholder data.',
+        'System theme now follows the operating system preference and gets its own API-key input glow.',
+      ],
+    },
+    {
+      kind: 'fix',
+      items: [
+        'Fixed historical release manifest generation so unsigned macOS/Linux assets no longer fail a Windows-signed updater manifest.',
+        'Added regression coverage for Ollama pull progress, fully local routing, voice settings persistence, theme resolution, provider usage aggregation, and updater manifests.',
+      ],
+    },
+  ],
+};
 
 const RELEASE_0_1_24: Release = {
   version: '0.1.24',
@@ -257,6 +281,7 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  RELEASE_0_1_25,
   RELEASE_0_1_24,
   RELEASE_0_1_23,
   RELEASE_0_1_22,
@@ -313,7 +338,8 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.18',
     date: '2026-06-05',
-    headline: 'Safer persistence, cloud-sync tool queues, voice summon stabilization, and terminal PTY reattachment',
+    headline:
+      'Safer persistence, cloud-sync tool queues, voice summon stabilization, and terminal PTY reattachment',
     summary:
       'This release prevents localStorage quota failures from taking down the React UI, connects custom tool changes to Supabase sync queues, reattaches active terminal PTYs on app reload, and suppresses context menus on terminal drag operations.',
     sections: [
@@ -350,7 +376,8 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.17',
     date: '2026-06-03',
-    headline: 'Stateful terminal erase hold, inline renaming, custom default font size, and UI freeze fixes',
+    headline:
+      'Stateful terminal erase hold, inline renaming, custom default font size, and UI freeze fixes',
     summary:
       'This release introduces substantial terminal polish: an eraser button that requires a pointer-hold to confirm, inline double-click tab renaming, a global default font size slider in Settings, and critical Rust-side thread safety optimizations to resolve random application freezes.',
     sections: [
@@ -380,7 +407,8 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.16',
     date: '2026-06-03',
-    headline: 'System tray background run, update warning consolidation, and terminal project mapping',
+    headline:
+      'System tray background run, update warning consolidation, and terminal project mapping',
     summary:
       'This release adds tray background capabilities, solves update warning loops, and fixes alternate buffer / clear screens on terminal initialization.',
     sections: [
@@ -578,7 +606,8 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.10',
     date: '2026-06-02',
-    headline: 'Right-click terminal dragging, project moves, and better scheduled terminal messages',
+    headline:
+      'Right-click terminal dragging, project moves, and better scheduled terminal messages',
     summary:
       'This update makes terminals feel movable across the workspace: right-drag a terminal into chat for context, onto another terminal position to reorder the puzzle, or onto a project to move the live PTY there. Scheduled terminal messages now understand word numbers like “five hours.”',
     sections: [
@@ -610,7 +639,8 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.9',
     date: '2026-06-01',
-    headline: 'Reliable Groq dictation, stable terminal references, and durable terminal scheduling',
+    headline:
+      'Reliable Groq dictation, stable terminal references, and durable terminal scheduling',
     summary:
       'This patch fixes the broken Groq speech-to-text upload path and makes terminal references production-safe by using stable pane references instead of only volatile PTY session ids. Scheduled terminal messages now persist and re-arm after Jarvis restarts.',
     sections: [
@@ -640,7 +670,8 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.8',
     date: '2026-06-01',
-    headline: 'Workspace restore, better dictation, recursive files, terminal references, and more commands',
+    headline:
+      'Workspace restore, better dictation, recursive files, terminal references, and more commands',
     summary:
       'Jarvis One now restores the active chat, route, project files, terminal layouts, and terminal transcripts after closing or updating. Dictation can use Groq Whisper for faster, more accurate transcription, Files now shows an expandable project tree, and terminal panes can be dragged into chat as context.',
     sections: [
@@ -694,7 +725,8 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.6',
     date: '2026-06-01',
-    headline: 'Fully automatic silent updates, renamed to Jarvis One, and per-project terminal limit',
+    headline:
+      'Fully automatic silent updates, renamed to Jarvis One, and per-project terminal limit',
     summary:
       'Welcome to Jarvis One! This update introduces a fully automatic and silent background updater that runs without UAC elevation warnings or manual confirmation prompts, along with terminal limits that are now scoped to 10 sessions per project rather than globally.',
     sections: [
@@ -725,7 +757,7 @@ export const RELEASES: readonly Release[] = [
         kind: 'feature',
         items: [
           'Manual resize handles between every terminal tile in Tiles mode. Drag a handle to redistribute the columns or rows; double-click resets that boundary to even. Sizes are remembered per layout shape (2x2, 3x2, etc.) across reloads, so a 4-tile grid keeps your column ratios when you toggle back to it.',
-          'Compact top bar on the Terminals page (and whenever chat is in fullscreen). The bar shrinks from 40px to 28px and the low-frequency buttons (launcher, assistant, schedule, search, voice, call, what\'s-new) tuck into a `...` overflow menu so the right cluster stays just fullscreen / more / settings / avatar.',
+          "Compact top bar on the Terminals page (and whenever chat is in fullscreen). The bar shrinks from 40px to 28px and the low-frequency buttons (launcher, assistant, schedule, search, voice, call, what's-new) tuck into a `...` overflow menu so the right cluster stays just fullscreen / more / settings / avatar.",
           'Side rail stays visible in fullscreen mode (Mod+Shift+F). Previously the left navigation hid along with the to-do drawer; now only the drawer collapses, so route switching is always one click away. Use Mod+B to also hide the rail manually for true distraction-free.',
         ],
       },
@@ -733,9 +765,9 @@ export const RELEASES: readonly Release[] = [
         kind: 'improvement',
         items: [
           'Terminals page header collapsed into a single 32px toolbar. The big "Terminals" hero title with eyebrow text is gone — the page now opens straight into the grid, with the page label, pane count, and mode toggle all sharing one row with Add pane / Reset / Open swarm.',
-          'Cold start payload dropped about 227 kB gzipped. LiveKit (132 kB), Supabase (54 kB), and the settings sections chunk (41 kB) were sitting on the initial preload list for every load — they\'re lazy now and only download when you open Call, sign-in, or Settings. Boot module preloads went from 13 chunks to 10.',
+          "Cold start payload dropped about 227 kB gzipped. LiveKit (132 kB), Supabase (54 kB), and the settings sections chunk (41 kB) were sitting on the initial preload list for every load — they're lazy now and only download when you open Call, sign-in, or Settings. Boot module preloads went from 13 chunks to 10.",
           'Tile inner padding tightened from p-3 to p-2, and the tile chrome strip from h-9 to h-7, so the actual terminal viewport is wider and taller in every grid layout.',
-          'Smarter Cargo release profile: thin LTO with 4 codegen units instead of full LTO with 1 unit. Builds get a few percent larger but link in roughly a third the peak memory, which keeps Tauri from OOM-ing during release optimisation on machines that aren\'t huge.',
+          "Smarter Cargo release profile: thin LTO with 4 codegen units instead of full LTO with 1 unit. Builds get a few percent larger but link in roughly a third the peak memory, which keeps Tauri from OOM-ing during release optimisation on machines that aren't huge.",
         ],
       },
       {
@@ -749,7 +781,7 @@ export const RELEASES: readonly Release[] = [
         kind: 'shipped',
         items: [
           'Bumped to 0.1.5 (package.json, Cargo.toml, tauri.conf.json, releases.ts).',
-          'Drop counterproductive `settings-sections` manualChunks rule in `vite.config.ts`. Rollup was relocating shared symbols into the named chunk and forcing the boot chunk to back-import it — which was preloading PhoneVoice\'s LiveKit + Supabase deps for everyone.',
+          "Drop counterproductive `settings-sections` manualChunks rule in `vite.config.ts`. Rollup was relocating shared symbols into the named chunk and forcing the boot chunk to back-import it — which was preloading PhoneVoice's LiveKit + Supabase deps for everyone.",
           'New: persisted resize state lives under `localStorage["jarvis-tile-grid-sizes-v1"]`, keyed by layout shape.',
         ],
       },
@@ -782,7 +814,7 @@ export const RELEASES: readonly Release[] = [
         items: [
           'Top bar no longer duplicates the Terminals / Kanban / Benchmarks buttons that already live in the side panel. Route navigation now has one home (the sidebar), with the breadcrumb popover as the switcher when the sidebar is collapsed.',
           'Default provider is now Google (Gemini 2.5 Flash Lite) instead of the mock provider, matching the seeded Jarvis agent so a connected key works immediately.',
-          'Onboarding no longer promises the mock provider keeps you running — it points you at the free Gemini key or the offline path you\'ll be asked to pick.',
+          "Onboarding no longer promises the mock provider keeps you running — it points you at the free Gemini key or the offline path you'll be asked to pick.",
           'Built-in agent files renamed to the AgentsScout / AgentsBuilder / AgentsReviewer.md convention.',
         ],
       },
@@ -820,7 +852,7 @@ export const RELEASES: readonly Release[] = [
           'Actions palette (Mod+Shift+A). Direct invocation of every registered action plus your custom tools. Substring search, grouped by category, recent actions pinned at top, inline parameter form when an action needs values.',
           'Wellness break overlay: full-screen 20-20-20 eye break with breathing orb and serene countdown. Triggered by Jarvis proposing `wellness.eyeBreak`, by clicking it in the actions palette, or by saving it as a quick-start tool. Esc skips.',
           'Plans tab redesigned as a four-card ladder. Free is "Current"; Starter $5/mo (voice + Jarvis Call), Pro $20/mo (premium models), and Ultra $100/mo (frontier models) are "Available soon" until Stripe ships.',
-          'Terminal command queue. When the AI proposes a terminal action and you Approve, the new pane appears reliably even when you weren\'t already on the Terminals route — the page drains the queue on mount.',
+          "Terminal command queue. When the AI proposes a terminal action and you Approve, the new pane appears reliably even when you weren't already on the Terminals route — the page drains the queue on mount.",
         ],
       },
       {

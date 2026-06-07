@@ -42,6 +42,9 @@ jobs:
       - name: Test (vitest)
         run: npm --prefix app run test
 
+      - name: Test release manifest
+        run: npm run test:release-manifest
+
   rust:
     name: Rust (cargo check)
     runs-on: ubuntu-22.04
