@@ -1,3 +1,16 @@
+## 2026-06-07 - v0.1.21 AI, Music, and Notification Update
+
+- Replaced procedural ambient synthesis with a five-track hosted playlist that advances in order and repeats.
+- Added placeholder Cloudflare R2 URLs for later replacement with final music links.
+- Reworked `/model` and the composer picker to persist a real provider/model pair and route built-in Jarvis through it.
+- Limited the chat picker to implemented adapters instead of providers that still route to mock.
+- Added automatic absolute Windows file-path extraction so file-summary prompts receive referenced file content.
+- Removed silent fallback from failed real providers to canned mock prose; API failures now remain visible.
+- Added regression tests for model routing, model catalogs, file paths, reminder channels, and task completion.
+- Verified `209` tests, TypeScript typecheck, and the production frontend build.
+
+---
+
 ## 2026-06-06 - v0.1.20 Plugins Major Update
 
 **Actor:** Codex
@@ -24,8 +37,14 @@
 - `npm run release:windows` generated matching 0.1.20 NSIS/MSI updater signatures with the private key selected only after its sibling `.pub` matched `tauri.conf.json`.
 - `npm run release:stage` completed cleanly and regenerated `releases/latest.json` plus current-only `releases/SHA256SUMS.txt`.
 - Public release verification caught GitHub's space-to-period asset-name normalization; the manifest generator now prefers the stable hyphenated NSIS asset and the published manifest was replaced.
+- The public `v0.1.20` release contains the locally verified Windows NSIS/MSI artifacts, updater signatures, `latest.json`, and `SHA256SUMS.txt`.
 - The silent local NSIS upgrade completed with exit code 0; `%LOCALAPPDATA%\Jarvis One\jarvis.exe` and the relaunched process both report `ProductVersion=0.1.20`.
+- The first tagged cross-platform Release run failed before compilation because `tauri-action` invokes `npm run tauri build` and the app package exposed only `tauri:build`. Added the expected `tauri` script, changed workflow installs to `npm ci`, and added an explicit `TAURI_SIGNING_PRIVATE_KEY` preflight.
+- A follow-up run from the stale `v0.1.20` tag reproduced the same missing-script failure on Linux, Windows, and macOS ARM; the remaining queued macOS x64 job was cancelled after confirmation.
+- The GitHub repository currently has no Actions secrets configured, so a future updater-producing matrix release will stop at the new preflight until the maintainer deliberately installs the updater key and optional platform signing credentials.
 - The Windows installer is updater-signed but remains Authenticode `NotSigned` because no trusted Windows certificate is configured. macOS/Linux build, signing, and runtime verification remain pending.
+- Reminder dispatch now honors `banner` versus `in_app` channels, task-completion notifications fire only from the completion path, and onboarding requests desktop notification permission through the Tauri plugin rather than the browser-only API.
+- Added focused notification and task-service regression coverage for channel isolation, false completion suppression, and scheduled-reminder closure.
 
 ---
 

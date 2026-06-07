@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Lock, Moon, Play, Pause, Music } from 'lucide-react';
+import { Moon, Play, Pause, Music } from 'lucide-react';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { effectivePlan, isAdminIdentity } from '@/lib/entitlements';
@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
-import { toast } from '@/components/ui/toast';
 import {
   AMBIENT_TRACKS,
   FREE_AMBIENT_TRACK,
@@ -16,7 +15,7 @@ import {
 
 /**
  * Ambient settings — controls the V2 idle takeover (breathing orb, clock,
- * rotating quote, glance cards) and the V3 procedural ambient soundtrack.
+ * rotating quote, glance cards) and the hosted ambient music playlist.
  */
 const PRESETS_MIN: { label: string; value: number }[] = [
   { label: '1 min', value: 1 },
@@ -52,8 +51,6 @@ export function Ambient() {
   const thresholdMin = Math.round(ambientThresholdMs / 60000);
   const admin = isAdminIdentity({ email, cloudEmail, localUserId });
   const activePlan = effectivePlan(plan, admin);
-  const premiumUnlocked = admin || activePlan !== 'free';
-
   useEffect(() => {
     if (planAllowsAmbientTrack(ambientTrack, activePlan, admin)) return;
     setAmbientTrack(FREE_AMBIENT_TRACK);
@@ -136,7 +133,7 @@ export function Ambient() {
         <div>
           <Label htmlFor="ambient-drone" className={!ambient ? 'opacity-50' : ''}>Ambient soundscape</Label>
           <p className="text-metadata text-muted-foreground mt-1">
-            Soft procedural soundscape while ambient is active.
+            Play the hosted Jarvis music playlist while ambient is active.
           </p>
         </div>
         <Switch
@@ -152,21 +149,16 @@ export function Ambient() {
         <div className="flex flex-col gap-2">
           <Label className={isDroneControlsDisabled ? 'opacity-50' : ''}>Track selector</Label>
           <p className="text-metadata text-muted-foreground">
-            Choose a procedurally synthesized soundtrack.
+            Choose where the five-track playlist starts. It continues in order and repeats.
           </p>
           <div className="grid grid-cols-2 gap-2 mt-1">
             {AMBIENT_TRACKS.map((t) => {
               const active = ambientTrack === t.id;
-              const locked = !planAllowsAmbientTrack(t.id, activePlan, admin);
               return (
                 <button
                   key={t.id}
                   type="button"
                   onClick={() => {
-                    if (locked) {
-                      toast.info('Premium music', 'Any paid tier unlocks lo-fi and rap instrumental tracks.');
-                      return;
-                    }
                     setAmbientTrack(t.id);
                   }}
                   disabled={isDroneControlsDisabled}
@@ -174,22 +166,13 @@ export function Ambient() {
                     'flex items-center gap-2.5 p-3 rounded-lg border text-left transition-all ' +
                     (active
                       ? 'border-accent-copper bg-accent-copper/10 text-foreground shadow-sm'
-                      : locked
-                        ? 'border-border bg-panel/70 text-muted-foreground/60 hover:border-accent-amber/40 disabled:opacity-40'
-                        : 'border-border bg-panel text-muted-foreground hover:border-border-mid disabled:opacity-40')
+                      : 'border-border bg-panel text-muted-foreground hover:border-border-mid disabled:opacity-40')
                   }
                 >
-                  {locked ? (
-                    <Lock className="h-4 w-4 shrink-0 text-accent-amber/80" />
-                  ) : (
-                    <Music className={`h-4 w-4 shrink-0 ${active ? 'text-accent-copper' : 'text-muted-foreground/60'}`} />
-                  )}
+                  <Music className={`h-4 w-4 shrink-0 ${active ? 'text-accent-copper' : 'text-muted-foreground/60'}`} />
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-semibold text-foreground">{t.label}</span>
-                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${t.premium ? 'bg-accent-amber/15 text-accent-amber' : 'bg-success/12 text-success'}`}>
-                        {t.premium ? 'Paid' : 'Free'}
-                      </span>
                     </div>
                     <div className="text-[10px] text-muted-foreground leading-tight mt-0.5">{t.desc}</div>
                   </div>
@@ -197,15 +180,9 @@ export function Ambient() {
               );
             })}
           </div>
-          {!premiumUnlocked ? (
-            <p className="text-metadata text-muted-foreground">
-              Calm and soothing procedural tracks are free. Lo-fi and rap instrumental tracks unlock on any paid tier.
-            </p>
-          ) : (
-            <p className="text-metadata text-success">
-              Premium music unlocked. All tracks are generated locally with no copyrighted samples.
-            </p>
-          )}
+          <p className="text-metadata text-muted-foreground">
+            Replace the five placeholder URLs in the ambient track configuration with your public R2 links.
+          </p>
         </div>
 
         <div className="flex flex-col gap-2 max-w-md">
@@ -231,7 +208,7 @@ export function Ambient() {
           <div>
             <Label htmlFor="ambient-always-play" className={isDroneControlsDisabled ? 'opacity-50' : ''}>Always play 24/7</Label>
             <p className="text-metadata text-muted-foreground mt-1">
-              Keep the ambient soundscape playing continuously, even when not in idle mode.
+              Keep the hosted music playlist playing continuously, even when not in idle mode.
             </p>
           </div>
           <Switch

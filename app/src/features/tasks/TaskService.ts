@@ -2,12 +2,7 @@ import { taskRepo, settingsRepo } from '@/lib/db/repositories';
 import { newTaskId, newReminderId } from '@/lib/ids';
 import { useAuthStore } from '@/stores/auth';
 import { notifyDone } from '@/lib/notifications';
-import type {
-  Reminder,
-  Task,
-  TaskInput,
-  QuietHours,
-} from '@/types/task';
+import type { Reminder, Task, TaskInput, QuietHours } from '@/types/task';
 import type { ContextRef, TaskId, ReminderId } from '@/types/common';
 import { pickReminderTimes, type SchedulerContext } from './Scheduler';
 
@@ -126,8 +121,7 @@ export async function updateTask(id: TaskId, patch: Partial<Task>): Promise<Task
   const now = Date.now();
   const next: Task = { ...existing, ...patch, updated_at: now };
 
-  const timingChanged =
-    'due_at' in patch || 'scheduled_for' in patch || 'priority' in patch;
+  const timingChanged = 'due_at' in patch || 'scheduled_for' in patch || 'priority' in patch;
 
   if (timingChanged) {
     // Drop only `scheduled` reminders so any already-fired/snoozed/dismissed
@@ -139,7 +133,6 @@ export async function updateTask(id: TaskId, patch: Partial<Task>): Promise<Task
   }
 
   await taskRepo.update(id, next);
-  void notifyDone('tasks', 'Task done', next.title);
   return next;
 }
 
@@ -169,6 +162,7 @@ export async function completeTask(id: TaskId, evidence?: ContextRef): Promise<T
   };
 
   await taskRepo.update(id, next);
+  void notifyDone('tasks', 'Task done', next.title);
   return next;
 }
 
@@ -202,7 +196,11 @@ export async function deleteTask(id: TaskId): Promise<void> {
  * `snooze_history` and resets status back to 'scheduled' so it'll fire
  * again at the new time.
  */
-export async function snoozeReminder(reminderId: ReminderId, until: number, reason?: string): Promise<Task | null> {
+export async function snoozeReminder(
+  reminderId: ReminderId,
+  until: number,
+  reason?: string,
+): Promise<Task | null> {
   const all = await findTaskByReminderId(reminderId);
   if (!all) return null;
 

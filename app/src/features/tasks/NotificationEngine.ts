@@ -1,6 +1,6 @@
 import { taskRepo } from '@/lib/db/repositories';
 import { useAuthStore } from '@/stores/auth';
-import { notify } from '@/lib/tauri';
+import { notify, requestNotificationPermission } from '@/lib/tauri';
 import { toast } from '@/components/ui/toast';
 import type { Reminder, Task } from '@/types/task';
 
@@ -10,7 +10,7 @@ import type { Reminder, Task } from '@/types/task';
  * - Polls scheduled reminders every 30 seconds.
  * - When a reminder's fires_at <= now, dispatches via:
  *     (1) native/browser notification banner
- *     (2) in-app toast (always, as a soft fallback / always-visible cue)
+ *     (2) in-app toast when the reminder includes the in_app channel
  *     (3) the `jarvis:reminder` custom event (for the rest of the app
  *         to react - e.g., voice service speaks the reminder).
  *
@@ -112,6 +112,7 @@ export async function pollOnce(now: number = Date.now()): Promise<number> {
 async function deliverReminder(task: Task, reminder: Reminder): Promise<void> {
   const title = task.title;
   const body = reminder.message_override || reminder.smart_reason || 'Reminder';
+  const channels = new Set(reminder.channels);
 
   // Always emit the in-app event so other features can react.
   if (typeof window !== 'undefined') {
@@ -126,27 +127,26 @@ async function deliverReminder(task: Task, reminder: Reminder): Promise<void> {
     }
   }
 
-  // Always show an in-app toast - it's the always-visible surface.
-  try {
-    toast.info(title, body, 6000);
-  } catch {
-    /* toast is best-effort */
+  if (channels.has('in_app')) {
+    try {
+      toast.info(title, body, 6000);
+    } catch {
+      /* toast is best-effort */
+    }
   }
 
-  await notify(title, body, { fallbackToast: false });
+  if (channels.has('banner')) {
+    await notify(title, body, { fallbackToast: false });
+  }
 }
 
 /**
- * Ask for browser notification permission ahead of time.
+ * Ask for native/browser notification permission ahead of time.
  * Optional - the engine will request lazily on first delivery if you
  * don't call this. Useful from a settings page or onboarding step.
  */
-export async function ensureNotificationPermission(): Promise<NotificationPermission | 'unavailable'> {
-  if (typeof window === 'undefined' || typeof Notification === 'undefined') return 'unavailable';
-  if (Notification.permission !== 'default') return Notification.permission;
-  try {
-    return await Notification.requestPermission();
-  } catch {
-    return 'denied';
-  }
+export async function ensureNotificationPermission(): Promise<
+  NotificationPermission | 'unavailable'
+> {
+  return requestNotificationPermission();
 }

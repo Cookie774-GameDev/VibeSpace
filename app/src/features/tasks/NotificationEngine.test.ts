@@ -110,10 +110,32 @@ describe('NotificationEngine', () => {
     expect(firedEvents).toHaveLength(1);
   });
 
+  it('keeps in-app-only reminders out of OS notification delivery', async () => {
+    mocks.listOpen.mockResolvedValue([task({ reminders: [reminder({ channels: ['in_app'] })] })]);
+
+    await expect(pollOnce(2000)).resolves.toBe(1);
+
+    expect(mocks.toastInfo).toHaveBeenCalledWith(
+      'Release check',
+      'Stretch and check the build',
+      6000,
+    );
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it('keeps banner-only reminders out of in-app toast delivery', async () => {
+    mocks.listOpen.mockResolvedValue([task({ reminders: [reminder({ channels: ['banner'] })] })]);
+
+    await expect(pollOnce(2000)).resolves.toBe(1);
+
+    expect(mocks.toastInfo).not.toHaveBeenCalled();
+    expect(mocks.notify).toHaveBeenCalledWith('Release check', 'Stretch and check the build', {
+      fallbackToast: false,
+    });
+  });
+
   it('leaves future reminders scheduled', async () => {
-    mocks.listOpen.mockResolvedValue([
-      task({ reminders: [reminder({ fires_at: 3000 })] }),
-    ]);
+    mocks.listOpen.mockResolvedValue([task({ reminders: [reminder({ fires_at: 3000 })] })]);
 
     await expect(pollOnce(2000)).resolves.toBe(0);
     expect(mocks.notify).not.toHaveBeenCalled();

@@ -29,7 +29,7 @@
 #        TAURI_SIGNING_PRIVATE_KEY - Tauri updater signing private key
 #        TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #      Until those exist, builds will be unsigned and the install script will warn.
-#   3. To cut a release: `git tag v0.1.17 && git push origin v0.1.17`.
+#   3. To cut a release: `git tag v0.1.20 && git push origin v0.1.20`.
 #      The workflow creates a draft release; review it on GitHub and hit Publish.
 
 name: Release
@@ -50,8 +50,22 @@ permissions:
   contents: write
 
 jobs:
+  release-preflight:
+    name: Validate release configuration
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Require updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is required because createUpdaterArtifacts is enabled."
+            exit 1
+          fi
+
   release:
     name: Build (${{ matrix.label }})
+    needs: release-preflight
     strategy:
       # One platform failing should not abort the others; users on
       # working platforms still get installers.
@@ -112,7 +126,7 @@ jobs:
             libssl-dev
 
       - name: Install npm dependencies
-        run: npm install
+        run: npm ci
 
       - name: Prepare Windows signing config
         if: matrix.platform == 'windows-latest'
