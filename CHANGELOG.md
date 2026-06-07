@@ -9,25 +9,28 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 - **Premium API key settings**: colorful surge animation expands from input, washes across screen, and retracts with sparkles when saving keys.
 - **21 AI providers**: added Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.
 - **Provider usage counters**: shows input/output/cached tokens, cost, and last-used timestamp per provider.
-- **Purple slash command UI**: upgraded dropdown with violet theme, category grouping, and keyboard hints.
-- **InputToken component**: purple pill tokens for confirmed commands and attachments.
-- **SlashCommandOptionPicker**: secondary dropdown for commands with selectable options.
+- **Compact terminal-style slash command dropdown**: thinner 240px panel with smaller options and monospace font.
+- **Purple command tokens**: confirmed slash commands display as removable purple pill tokens in the input.
+- **/terminal command**: attach open terminal sessions from a picker filtered by current project.
+- **/contextmap command**: attach context maps from a picker with node counts and dates.
+- **Ref-based keyboard navigation**: arrow keys now properly navigate the slash command and option pickers.
 - Masked key previews with show/hide toggle and copy button.
 - Ambient glow effects and gradient backgrounds for provider cards.
-- Provider cards organized by category: Major Cloud, Fast Inference, Gateways, Enterprise, and Local.
 
 ### Improved
 
+- Slash command dropdown reduced from 420px to 240px for a cleaner terminal aesthetic.
+- Option picker shows available terminals and context maps dynamically.
 - API key input focus triggers a warm pulsing rainbow border animation.
 - Connected providers display a glowing "Connected" badge with micro-animations.
 - Provider list shows connection count summary at the top.
-- Slash commands show category headers (Actions, Navigation, Utility).
 - macOS installer CI uses stable `macos-13` runner instead of `macos-15-intel`.
 - Installer shows detailed error messages with available assets when downloads fail.
 - README redesigned with polished layout, badges, tables, and collapsible sections.
 
 ### Fixed
 
+- Arrow key navigation now works correctly in slash command and option picker dropdowns.
 - `Jarvis ultra`, `Jarvis claude`, `Jarvis codex`, and `Jarvis opencode` now forward trailing CLI arguments.
 - The in-app What's New data now includes both `0.1.21` and `0.1.22` entries with correct version labels.
 

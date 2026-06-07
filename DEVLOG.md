@@ -1,8 +1,25 @@
-## 2026-06-07 - v0.1.23 Terminal Ultra Argument Forwarding
+## 2026-06-07 - v0.1.23 Compact Terminal-Style Slash Commands
 
+### Slash Command UI Refinements
+- Redesigned slash command dropdown from 420px to 240px with terminal-style monospace font.
+- Made option items smaller and more compact with a dark violet theme.
+- Confirmed slash commands now display as removable purple pill tokens in the input area.
+- Added `/terminal` command with an option picker showing all open terminal sessions for the current project.
+- Added `/contextmap` command with an option picker showing available context maps with node counts.
+- Fixed arrow key navigation using ref-based imperative handles (`moveUp`, `moveDown`, `selectCurrent`).
+- Option picker dynamically loads terminals from transcript store filtered by project ID.
+
+### API Key Settings (from earlier in session)
+- Premium API key settings with colorful surge animation on save.
+- 21 AI providers with Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.
+- Provider usage counters showing tokens, cost, and last-used timestamp.
+- Masked key previews with show/hide toggle and copy button.
+
+### Other Fixes
 - Fixed terminal coding modes so trailing arguments pass through to Claude Code, Codex, or OpenCode.
 - Split the in-app update history into correct 0.1.21, 0.1.22, and 0.1.23 entries.
-- Bumped `CURRENT_VERSION` to 0.1.23 so the startup What's New modal opens for this corrective update.
+- macOS installer CI uses stable `macos-13` runner for reliable x64 builds.
+- README redesigned with polished layout, badges, tables, and collapsible sections.
 
 ---
 

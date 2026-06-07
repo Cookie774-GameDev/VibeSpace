@@ -84,38 +84,39 @@ export interface Release {
 const RELEASE_0_1_23: Release = {
   version: '0.1.23',
   date: '2026-06-07',
-  headline: 'Premium slash commands, API settings, and 21 providers',
+  headline: 'Compact terminal-style slash commands with purple tokens',
   summary:
-    'Slash commands now display as purple tokens with a refined typeahead. The provider settings screen features cozy colorful animations, masked key previews, usage counters, and support for 21 AI providers.',
+    'The slash command dropdown is now a sleek 240px terminal-style panel. Confirmed commands appear as removable purple tokens. /terminal and /contextmap commands show option pickers for open sessions and maps.',
   sections: [
     {
       kind: 'feature',
       items: [
-        'Purple slash command UI: upgraded dropdown with violet theme, category grouping, and keyboard hints.',
-        'InputToken component shows confirmed commands as purple pill tokens.',
-        'SlashCommandOptionPicker provides a secondary dropdown for commands with selectable options.',
-        'API key save triggers a colorful surge animation that expands from the input, washes across the screen, and retracts with sparkles.',
-        'Added 4 new providers: Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face — bringing the total to 21.',
-        'Each provider card shows a usage counter with input/output/cached tokens, estimated cost, and last-used timestamp.',
-        'Masked key previews with show/hide toggle and copy button.',
+        'Compact terminal-style slash command dropdown (240px) with monospace font and smaller options.',
+        'Confirmed slash commands display as removable purple pill tokens in the input area.',
+        '/terminal command opens a picker to attach any open terminal session from the current project.',
+        '/contextmap command opens a picker showing available context maps with node counts.',
+        'API key save triggers a colorful surge animation with expanding glow and sparkles.',
+        'Added 4 new providers: Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face (21 total).',
+        'Each provider card shows usage counters with tokens, estimated cost, and last-used timestamp.',
       ],
     },
     {
       kind: 'improvement',
       items: [
-        'Slash command typeahead shows category headers (Actions, Navigation, Utility).',
+        'Arrow key navigation works properly in slash command and option picker dropdowns.',
+        'Option picker dynamically shows terminals and context maps filtered by project.',
         'API key input focus triggers a warm pulsing rainbow border animation.',
         'Connected providers display ambient glow effects and gradient backgrounds.',
-        'macOS installer CI uses stable `macos-13` runner for reliable x64 builds.',
-        'Installer shows detailed error messages with available assets when downloads fail.',
+        'macOS installer CI uses stable macos-13 runner for reliable x64 builds.',
         'README redesigned with polished layout, badges, tables, and collapsible sections.',
       ],
     },
     {
       kind: 'fix',
       items: [
-        '`Jarvis ultra`, `Jarvis claude`, `Jarvis codex`, and `Jarvis opencode` now forward trailing CLI arguments.',
-        "The What's New release data includes the missing 0.1.21 history and labels the 0.1.22 entry correctly.",
+        'Arrow keys now correctly navigate dropdown options instead of moving the cursor.',
+        'Jarvis ultra, claude, codex, and opencode now forward trailing CLI arguments.',
+        "The What's New release data includes the missing 0.1.21 history.",
       ],
     },
   ],
