@@ -50,22 +50,8 @@ permissions:
   contents: write
 
 jobs:
-  release-preflight:
-    name: Validate release configuration
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Require updater signing key
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is required because createUpdaterArtifacts is enabled."
-            exit 1
-          fi
-
   release:
     name: Build (${{ matrix.label }})
-    needs: release-preflight
     strategy:
       # One platform failing should not abort the others; users on
       # working platforms still get installers.
@@ -77,7 +63,7 @@ jobs:
             target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
           - label: macOS x64
-            platform: macos-13
+            platform: macos-15-intel
             target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
           - label: Linux x64
@@ -87,7 +73,7 @@ jobs:
           - label: Windows x64
             platform: windows-latest
             target: x86_64-pc-windows-msvc
-            args: --config src-tauri/tauri.windows-signing.generated.json
+            args: ''
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
 
@@ -128,31 +114,10 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Prepare Windows signing config
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
+      - name: Prepare unsigned release config
+        shell: bash
         run: |
-          $signScript = Join-Path $env:GITHUB_WORKSPACE 'scripts\sign-windows.ps1'
-          $config = @{
-            bundle = @{
-              windows = @{
-                signCommand = @{
-                  cmd = 'powershell'
-                  args = @(
-                    '-NoProfile',
-                    '-ExecutionPolicy',
-                    'Bypass',
-                    '-File',
-                    $signScript,
-                    '%1'
-                  )
-                }
-              }
-            }
-          }
-          $config |
-            ConvertTo-Json -Depth 8 |
-            Set-Content -LiteralPath 'app/src-tauri/tauri.windows-signing.generated.json' -Encoding UTF8
+          node -e "require('fs').writeFileSync('app/src-tauri/tauri.release.generated.json', JSON.stringify({ bundle: { createUpdaterArtifacts: false } }))"
 
       - name: Build & publish (tauri-action)
         uses: tauri-apps/tauri-action@v0
@@ -163,16 +128,6 @@ jobs:
           # never go on the client.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          # Apple code-sign + notarize (no-ops if secrets are blank)
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Tauri updater signatures
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Windows Authenticode signing. The signCommand no-ops if these are blank
           # unless JARVIS_WINDOWS_SIGN_REQUIRED=1 is set.
           WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
@@ -207,7 +162,7 @@ jobs:
             See assets below. Verify SHA-256 with `SHA256SUMS.txt`.
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.generated.json
 
   # Aggregate SHA256SUMS.txt across all platforms once builds finish.
   checksums:
