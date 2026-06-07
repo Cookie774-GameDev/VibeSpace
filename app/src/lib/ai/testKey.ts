@@ -351,6 +351,10 @@ export async function testProviderKey(
     case 'hyperbolic':
     case 'novita':
     case 'lambda':
+    case 'azure':
+    case 'cerebras':
+    case 'huggingface':
+    case 'bedrock':
     case 'mock':
     case 'local':
       return { kind: 'unsupported', provider };

@@ -76,7 +76,12 @@ export type ProviderId =
   | 'replicate'
   | 'hyperbolic'
   | 'novita'
-  | 'lambda';
+  | 'lambda'
+  // V4 — enterprise and specialized providers.
+  | 'azure'
+  | 'cerebras'
+  | 'huggingface'
+  | 'bedrock';
 
 /**
  * Branded type helpers - useful when we want compile-time distinction

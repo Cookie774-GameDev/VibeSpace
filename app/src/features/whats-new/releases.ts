@@ -38,7 +38,7 @@ import {
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.22';
+export const CURRENT_VERSION = '0.1.23';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -81,44 +81,93 @@ export interface Release {
   sections: ReleaseSection[];
 }
 
+const RELEASE_0_1_23: Release = {
+  version: ‘0.1.23’,
+  date: ‘2026-06-07’,
+  headline: ‘Premium API key settings and 21 providers’,
+  summary:
+    ‘The provider settings screen got a major UI upgrade with cozy colorful animations, masked key previews, usage counters, and support for 21 AI providers including Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.’,
+  sections: [
+    {
+      kind: ‘feature’,
+      items: [
+        ‘API key save triggers a colorful surge animation that expands from the input, washes across the screen, and retracts with sparkles.’,
+        ‘Added 4 new providers: Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face — bringing the total to 21.’,
+        ‘Each provider card shows a usage counter with input/output/cached tokens, estimated cost, and last-used timestamp.’,
+        ‘API keys now display masked previews (sk-••••••7xQ9) with show/hide toggle and copy button.’,
+        ‘Provider cards organized by category: Major Cloud, Fast Inference, Gateways, Enterprise, and Local.’,
+      ],
+    },
+    {
+      kind: ‘improvement’,
+      items: [
+        ‘API key input focus triggers a warm pulsing rainbow border animation.’,
+        ‘Connected providers display ambient glow effects and gradient backgrounds.’,
+        ‘Provider list shows connection count summary at the top.’,
+        ‘`Jarvis help` shows the command list without opening the desktop app.’,
+        ‘`Jarvis ultra`, `Jarvis claude`, `Jarvis codex`, and `Jarvis opencode` preserve trailing arguments for CLI workflows.’,
+      ],
+    },
+    {
+      kind: ‘fix’,
+      items: [
+        ‘The What’s New release data now includes the missing 0.1.21 history and labels the 0.1.22 entry correctly.’,
+      ],
+    },
+  ],
+};
+
+const RELEASE_0_1_22: Release = {
+  version: '0.1.22',
+  date: '2026-06-07',
+  headline: 'Startup update log and Jarvis Terminal Ultra',
+  summary:
+    'The terminal command became an interactive coding command center instead of a launch-only animation, and the startup What’s New modal was restored for every shipped update.',
+  sections: [
+    {
+      kind: 'feature',
+      items: [
+        'Run `Jarvis` with no arguments to choose Ultra Code, Jarvis One, Claude Code, or Codex from the terminal.',
+        'Run `Jarvis ultra` to launch the strongest installed coding agent in the current working directory.',
+        'Added direct `Jarvis app`, `Jarvis claude`, `Jarvis codex`, `Jarvis opencode`, and `Jarvis help` modes.',
+      ],
+    },
+    {
+      kind: 'improvement',
+      items: [
+        'Ultra Code automatically chooses between Claude Code, Codex, and OpenCode.',
+        'Terminal launchers preserve command-line arguments instead of discarding them at the `.cmd` shim.',
+      ],
+    },
+  ],
+};
+
 const RELEASE_0_1_21: Release = {
-    version: '0.1.22',
-    date: '2026-06-07',
-    headline: 'Real AI routing, hosted music, and a stronger Jarvis terminal',
-    summary:
-      'Jarvis now uses your selected provider and model, understands file paths typed into chat, and ships a hosted five-track ambient playlist foundation. The terminal launcher is also becoming a proper coding command center.',
-    sections: [
-      {
-        kind: 'feature',
-        items: [
-          'Use /model to open a real provider and model picker, with the selection persisted for future chats.',
-          'Windows file paths typed into chat are automatically attached as request context.',
-          'Ambient music now supports five hosted tracks played sequentially on repeat.',
-        ],
-      },
-      {
-        kind: 'improvement',
-        items: [
-          'Built-in Jarvis agents follow the provider and model you selected.',
-          'The Jarvis terminal command now exposes focused app, code, Ultra, Claude, and Codex launch modes.',
-          'Reminder channels and completion notifications behave consistently across desktop and in-app surfaces.',
-        ],
-      },
-      {
-        kind: 'fix',
-        items: [
-          'Provider failures remain visible instead of being replaced by unrelated mock responses.',
-          'Mock mode clearly identifies itself and no longer pretends it analyzed unavailable files.',
-        ],
-      },
-      {
-        kind: 'shipped',
-        items: [
-          'Published the updater-signed Jarvis One 0.1.22 Windows release and verified a silent local upgrade.',
-        ],
-      },
-    ],
-  };
+  version: '0.1.21',
+  date: '2026-06-07',
+  headline: 'Real AI routing, hosted music, and notification fixes',
+  summary:
+    'Jarvis now uses your selected provider and model, understands file paths typed into chat, and ships a hosted five-track ambient playlist foundation.',
+  sections: [
+    {
+      kind: 'feature',
+      items: [
+        'Use `/model` to open a real provider and model picker, with the selection persisted for future chats.',
+        'Windows file paths typed into chat are automatically attached as request context.',
+        'Ambient music supports five hosted tracks played sequentially on repeat.',
+      ],
+    },
+    {
+      kind: 'fix',
+      items: [
+        'Built-in Jarvis agents follow the provider and model you selected.',
+        'Provider failures remain visible instead of being replaced by unrelated mock responses.',
+        'Mock mode clearly identifies itself and no longer pretends it analyzed unavailable files.',
+        'Reminder channels and completion notifications behave consistently across desktop and in-app surfaces.',
+      ],
+    },
+  ],
+};
 
 /**
  * Per-section heading + icon. The renderer reads this so we keep
@@ -176,6 +225,8 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  RELEASE_0_1_23,
+  RELEASE_0_1_22,
   RELEASE_0_1_21,
   {
     version: '0.1.20',
