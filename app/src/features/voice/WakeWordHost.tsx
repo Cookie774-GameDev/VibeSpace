@@ -5,10 +5,14 @@ import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
 import {
+  containsWakePhrase,
   readWakeWordEnabled,
   WAKE_WORD_SETTING_EVENT,
-  WAKE_WORD_STORAGE_KEY,
 } from './wakeWord';
+import {
+  VOICE_EXCLUSIVE_START_EVENT,
+  VOICE_EXCLUSIVE_STOP_EVENT,
+} from './VoiceService';
 
 interface SpeechRecognitionAlternative {
   transcript: string;
@@ -60,15 +64,6 @@ function getRecognitionCtor(): WakeSpeechRecognitionCtor | null {
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
 }
 
-function normalizeTranscript(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function containsWakePhrase(text: string): boolean {
-  const normalized = normalizeTranscript(text);
-  return normalized.includes('hey jarvis') || normalized.includes('okay jarvis');
-}
-
 export function WakeWordHost() {
   const voiceModalOpen = useUIStore((state) => state.voiceModalOpen);
   const setVoiceModalOpen = useUIStore((state) => state.setVoiceModalOpen);
@@ -111,6 +106,14 @@ export function WakeWordHost() {
       clearRestart(restartTimerRef);
       if (disposed || !readWakeWordEnabled() || useUIStore.getState().voiceModalOpen) return;
       restartTimerRef.current = window.setTimeout(startRecognition, 800);
+    };
+
+    const onExclusiveStart = () => {
+      clearRestart(restartTimerRef);
+      stopRecognition(recognitionRef);
+    };
+    const onExclusiveStop = () => {
+      scheduleRestart();
     };
 
     const startRecognition = () => {
@@ -162,10 +165,14 @@ export function WakeWordHost() {
       }
     };
 
+    window.addEventListener(VOICE_EXCLUSIVE_START_EVENT, onExclusiveStart);
+    window.addEventListener(VOICE_EXCLUSIVE_STOP_EVENT, onExclusiveStop);
     startRecognition();
 
     return () => {
       disposed = true;
+      window.removeEventListener(VOICE_EXCLUSIVE_START_EVENT, onExclusiveStart);
+      window.removeEventListener(VOICE_EXCLUSIVE_STOP_EVENT, onExclusiveStop);
       clearRestart(restartTimerRef);
       stopRecognition(recognitionRef);
     };
@@ -176,13 +183,13 @@ export function WakeWordHost() {
   const statusCopy: Record<WakeStatus, { title: string; body: string; tone: string }> = {
     listening: {
       title: 'Wake word active',
-      body: 'Say "Hey Jarvis"',
-      tone: 'border-accent-cyan/30 bg-elevated/90 text-accent-cyan',
+      body: 'Say "Jarvis" or "Hey Jarvis"',
+      tone: 'border-accent-cyan/35 bg-background/70 text-accent-cyan shadow-[0_0_30px_hsl(var(--accent-cyan)/0.18)]',
     },
     heard: {
       title: 'Jarvis awake',
       body: 'Opening voice',
-      tone: 'border-success/40 bg-success/10 text-success',
+      tone: 'border-success/45 bg-success/10 text-success shadow-[0_0_34px_hsl(var(--success)/0.18)]',
     },
     unsupported: {
       title: 'Wake unavailable',
@@ -203,20 +210,23 @@ export function WakeWordHost() {
       variant="ghost"
       onClick={() => setVoiceModalOpen(true)}
       className={cn(
-        'fixed bottom-4 right-4 z-[70] h-auto rounded-full border px-3 py-2 shadow-soft backdrop-blur',
-        'hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring',
+        'fixed bottom-4 right-4 z-[70] h-auto overflow-hidden rounded-full border px-3 py-2 backdrop-blur-xl',
+        'jarvis-wake-chip',
+        'before:pointer-events-none before:absolute before:inset-0 before:rounded-full before:bg-[radial-gradient(circle_at_30%_20%,hsl(var(--accent-cyan)/0.28),transparent_42%),radial-gradient(circle_at_78%_90%,hsl(var(--accent-violet)/0.22),transparent_46%)]',
+        'after:pointer-events-none after:absolute after:inset-px after:rounded-full after:border after:border-white/5',
+        'hover:bg-elevated/80 focus-visible:ring-2 focus-visible:ring-ring',
         copy.tone,
       )}
       aria-live="polite"
       aria-label={`${copy.title}. ${copy.body}`}
     >
-      <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-background/60">
+      <span className="relative z-10 flex h-8 w-8 items-center justify-center rounded-full bg-background/65 shadow-[inset_0_0_14px_hsl(var(--accent-cyan)/0.22)]">
         {status === 'heard' ? <Sparkles className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
         {status === 'listening' ? (
           <span className="absolute inset-0 rounded-full border border-accent-cyan/50 animate-ping" />
         ) : null}
       </span>
-      <span className="flex flex-col items-start leading-tight">
+      <span className="relative z-10 flex flex-col items-start leading-tight">
         <span className="text-metadata font-semibold uppercase tracking-wide">{copy.title}</span>
         <span className="text-xs text-foreground/80">{copy.body}</span>
       </span>

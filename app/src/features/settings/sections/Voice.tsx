@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from 'react';
-import { Mic, MicOff, AudioLines, Check } from 'lucide-react';
+import { Mic, MicOff, AudioLines, Check, Play } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
 import type { PersonaPreset } from '@/types/common';
 import { PERSONAS } from '@/features/onboarding/steps/personas-data';
+import { isSpeechSynthesisSupported, speakPersonaPreview } from '@/features/voice/speechSynthesis';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
@@ -16,6 +17,7 @@ type MicStatus = 'idle' | 'testing' | 'ok' | 'denied' | 'unavailable';
 export function Voice() {
   const persona = useAuthStore((s) => s.personaPreset);
   const setPersona = useAuthStore((s) => s.setPersona);
+  const [previewingPersona, setPreviewingPersona] = useState<PersonaPreset | null>(null);
 
   const [wakeWord, setWakeWord] = useState<boolean>(() => readWakeWordEnabled());
   function toggleWake(v: boolean) {
@@ -45,6 +47,21 @@ export function Voice() {
     }
   }
 
+  async function previewVoice(nextPersona: PersonaPreset) {
+    if (!isSpeechSynthesisSupported()) {
+      toast.warning('Voice preview unavailable', 'Speech synthesis is not available in this runtime.');
+      return;
+    }
+    setPreviewingPersona(nextPersona);
+    try {
+      await speakPersonaPreview(nextPersona);
+    } catch (err) {
+      toast.error('Voice preview failed', err instanceof Error ? err.message : 'Could not play this voice.');
+    } finally {
+      setPreviewingPersona((cur) => (cur === nextPersona ? null : cur));
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <header>
@@ -63,6 +80,8 @@ export function Voice() {
               persona={p}
               selected={persona === p.id}
               onSelect={() => setPersona(p.id)}
+              onPreview={() => void previewVoice(p.id)}
+              previewing={previewingPersona === p.id}
             />
           ))}
         </div>
@@ -75,7 +94,7 @@ export function Voice() {
           <div className="flex flex-col gap-1">
             <Label htmlFor="wake-word-toggle">Wake word</Label>
             <p className="text-metadata text-muted-foreground">
-              Listen for "Hey Jarvis" in the background when Web Speech is available. A small wake bubble appears while enabled.
+              Listen for "Jarvis", "Hey Jarvis", and similar phrases when Web Speech is available. A small wake bubble appears while enabled.
             </p>
           </div>
           <Switch id="wake-word-toggle" checked={wakeWord} onCheckedChange={toggleWake} />
@@ -94,7 +113,7 @@ export function Voice() {
           <MicStatusPill status={micStatus} />
         </div>
         <p className="text-metadata text-muted-foreground">
-          We open a track briefly to confirm permission, then release it.
+          Chat dictation uses free built-in speech recognition when available, or Groq Whisper when you connect a Groq key.
         </p>
       </section>
     </div>
@@ -105,17 +124,16 @@ interface PersonaCardProps {
   persona: (typeof PERSONAS)[number];
   selected: boolean;
   onSelect: () => void;
+  onPreview: () => void;
+  previewing: boolean;
 }
 
-function PersonaCard({ persona, selected, onSelect }: PersonaCardProps) {
+function PersonaCard({ persona, selected, onSelect, onPreview, previewing }: PersonaCardProps) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
+    <div
       className={cn(
-        'group relative flex flex-col items-start gap-1 rounded-md border bg-panel p-3 text-left transition-colors',
-        'hover:bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        'group relative rounded-md border bg-panel text-left transition-colors',
+        'hover:bg-elevated focus-within:ring-1 focus-within:ring-ring',
         selected
           ? 'border-accent-cyan/50 shadow-[0_0_0_1px_hsl(var(--accent-cyan)/0.4)]'
           : 'border-border',
@@ -127,18 +145,43 @@ function PersonaCard({ persona, selected, onSelect }: PersonaCardProps) {
           strokeWidth={3}
         />
       )}
-      <span
-        className={cn(
-          'text-ui-strong',
-          selected ? 'text-accent-gradient' : 'text-foreground',
-        )}
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={selected}
+        className="flex w-full flex-col items-start gap-1 rounded-md px-3 pb-0 pt-3 text-left focus-visible:outline-none"
       >
-        {persona.name}
-      </span>
-      <span className="text-metadata text-muted-foreground line-clamp-2">
-        {persona.tone}
-      </span>
-    </button>
+        <span
+          className={cn(
+            'text-ui-strong',
+            selected ? 'text-accent-gradient' : 'text-foreground',
+          )}
+        >
+          {persona.name}
+        </span>
+        <span className="text-metadata text-muted-foreground line-clamp-2">
+          {persona.tone}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onPreview();
+        }}
+        className={cn(
+          'mx-3 mb-3 mt-2 inline-flex items-center gap-1 rounded-full border px-2 py-1 text-metadata font-medium transition-colors',
+          'border-border/70 bg-background/70 text-muted-foreground hover:border-accent-cyan/40 hover:text-accent-cyan',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          previewing && 'border-accent-cyan/50 text-accent-cyan',
+        )}
+        aria-label={`Preview ${persona.name} voice`}
+      >
+        <Play className={cn('h-3 w-3', previewing && 'animate-pulse')} />
+        {previewing ? 'Playing' : 'Preview'}
+      </button>
+    </div>
   );
 }
 

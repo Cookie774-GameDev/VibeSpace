@@ -1,10 +1,18 @@
-import { useState } from 'react';
-import { Moon, Play, Pause, Music } from 'lucide-react';
-import { useUIStore, type AmbientTrack } from '@/stores/ui';
+import { useEffect, useState } from 'react';
+import { Lock, Moon, Play, Pause, Music } from 'lucide-react';
+import { useUIStore } from '@/stores/ui';
+import { useAuthStore } from '@/stores/auth';
+import { effectivePlan, isAdminIdentity } from '@/lib/entitlements';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
+import { toast } from '@/components/ui/toast';
+import {
+  AMBIENT_TRACKS,
+  FREE_AMBIENT_TRACK,
+  planAllowsAmbientTrack,
+} from '@/features/ambient/tracks';
 
 /**
  * Ambient settings — controls the V2 idle takeover (breathing orb, clock,
@@ -17,13 +25,6 @@ const PRESETS_MIN: { label: string; value: number }[] = [
   { label: '10 min', value: 10 },
   { label: '15 min', value: 15 },
   { label: '30 min', value: 30 },
-];
-
-const TRACKS: { id: AmbientTrack; label: string; desc: string }[] = [
-  { id: 'warm-hearth', label: 'Warm Hearth', desc: 'Crackling fireside pad' },
-  { id: 'deep-ocean', label: 'Deep Ocean', desc: 'Low sub swells & waves' },
-  { id: 'starlight', label: 'Starlight', desc: 'Ethereal cosmic shimmer' },
-  { id: 'forest-rain', label: 'Forest Rain', desc: 'Soft rain & distant thunder' },
 ];
 
 export function Ambient() {
@@ -41,10 +42,22 @@ export function Ambient() {
   const setAmbientAlwaysPlay = useUIStore((s) => s.setAmbientAlwaysPlay);
   const setAmbientActive = useUIStore((s) => s.setAmbientActive);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const plan = useAuthStore((s) => s.plan);
+  const email = useAuthStore((s) => s.email);
+  const cloudEmail = useAuthStore((s) => s.cloudSession?.email ?? null);
+  const localUserId = useAuthStore((s) => s.localUserId);
 
   const [previewing, setPreviewing] = useState(false);
 
   const thresholdMin = Math.round(ambientThresholdMs / 60000);
+  const admin = isAdminIdentity({ email, cloudEmail, localUserId });
+  const activePlan = effectivePlan(plan, admin);
+  const premiumUnlocked = admin || activePlan !== 'free';
+
+  useEffect(() => {
+    if (planAllowsAmbientTrack(ambientTrack, activePlan, admin)) return;
+    setAmbientTrack(FREE_AMBIENT_TRACK);
+  }, [activePlan, admin, ambientTrack, setAmbientTrack]);
 
   const handlePreview = () => {
     setPreviewing(true);
@@ -142,30 +155,57 @@ export function Ambient() {
             Choose a procedurally synthesized soundtrack.
           </p>
           <div className="grid grid-cols-2 gap-2 mt-1">
-            {TRACKS.map((t) => {
+            {AMBIENT_TRACKS.map((t) => {
               const active = ambientTrack === t.id;
+              const locked = !planAllowsAmbientTrack(t.id, activePlan, admin);
               return (
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => setAmbientTrack(t.id)}
+                  onClick={() => {
+                    if (locked) {
+                      toast.info('Premium music', 'Any paid tier unlocks lo-fi and rap instrumental tracks.');
+                      return;
+                    }
+                    setAmbientTrack(t.id);
+                  }}
                   disabled={isDroneControlsDisabled}
                   className={
                     'flex items-center gap-2.5 p-3 rounded-lg border text-left transition-all ' +
                     (active
                       ? 'border-accent-copper bg-accent-copper/10 text-foreground shadow-sm'
-                      : 'border-border bg-panel text-muted-foreground hover:border-border-mid disabled:opacity-40')
+                      : locked
+                        ? 'border-border bg-panel/70 text-muted-foreground/60 hover:border-accent-amber/40 disabled:opacity-40'
+                        : 'border-border bg-panel text-muted-foreground hover:border-border-mid disabled:opacity-40')
                   }
                 >
-                  <Music className={`h-4 w-4 shrink-0 ${active ? 'text-accent-copper' : 'text-muted-foreground/60'}`} />
-                  <div>
-                    <div className="text-xs font-semibold text-foreground">{t.label}</div>
+                  {locked ? (
+                    <Lock className="h-4 w-4 shrink-0 text-accent-amber/80" />
+                  ) : (
+                    <Music className={`h-4 w-4 shrink-0 ${active ? 'text-accent-copper' : 'text-muted-foreground/60'}`} />
+                  )}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-foreground">{t.label}</span>
+                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${t.premium ? 'bg-accent-amber/15 text-accent-amber' : 'bg-success/12 text-success'}`}>
+                        {t.premium ? 'Paid' : 'Free'}
+                      </span>
+                    </div>
                     <div className="text-[10px] text-muted-foreground leading-tight mt-0.5">{t.desc}</div>
                   </div>
                 </button>
               );
             })}
           </div>
+          {!premiumUnlocked ? (
+            <p className="text-metadata text-muted-foreground">
+              Calm and soothing procedural tracks are free. Lo-fi and rap instrumental tracks unlock on any paid tier.
+            </p>
+          ) : (
+            <p className="text-metadata text-success">
+              Premium music unlocked. All tracks are generated locally with no copyrighted samples.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-2 max-w-md">

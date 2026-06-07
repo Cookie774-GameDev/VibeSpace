@@ -684,7 +684,10 @@ function ContextMapWorkspace({
 }) {
   return (
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
-      <section className="relative min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/80 shadow-soft backdrop-blur">
+      <section
+        className="relative min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/80 shadow-soft backdrop-blur"
+        data-jarvis-suppress-context-menu
+      >
         <div className="absolute left-4 top-4 z-20 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-paper/90 p-2 shadow-soft backdrop-blur">
           <div className="flex items-center gap-2 px-2 text-metadata text-muted-foreground">
             <Move className="h-3.5 w-3.5 text-accent-copper" /> Right-click drag
@@ -717,6 +720,9 @@ function ContextMapCanvas({
   const [view, setView] = React.useState(DEFAULT_VIEW);
   const [panning, setPanning] = React.useState(false);
   const dragRef = React.useRef<{ pointerId: number; startX: number; startY: number; startView: MapView } | null>(null);
+  const suppressContextMenu = React.useCallback((durationMs = 900) => {
+    document.body.dataset.jarvisSuppressContextMenuUntil = String(Date.now() + durationMs);
+  }, []);
 
   const recenter = React.useCallback(() => setView(DEFAULT_VIEW), []);
 
@@ -733,6 +739,8 @@ function ContextMapCanvas({
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 2) return;
     event.preventDefault();
+    suppressContextMenu();
+    document.body.classList.add('jarvis-context-map-right-dragging');
     setPanning(true);
     dragRef.current = {
       pointerId: event.pointerId,
@@ -760,9 +768,17 @@ function ContextMapCanvas({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     dragRef.current = null;
+    suppressContextMenu();
+    document.body.classList.remove('jarvis-context-map-right-dragging');
     setPanning(false);
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
+
+  React.useEffect(() => {
+    return () => {
+      document.body.classList.remove('jarvis-context-map-right-dragging');
+    };
+  }, []);
 
   const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -785,6 +801,7 @@ function ContextMapCanvas({
   return (
     <div
       className={cn('relative h-full w-full select-none overflow-hidden', panning ? 'cursor-grabbing' : 'cursor-default')}
+      data-jarvis-suppress-context-menu
       onContextMenu={(event) => event.preventDefault()}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

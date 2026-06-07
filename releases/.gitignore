@@ -11,7 +11,7 @@
 #   *.dmg           macOS disk image
 #   *.deb / *.rpm   Linux native packages
 #   *.AppImage      Linux portable
-#   SHA256SUMS.txt  checksums for the above (committed-friendly text)
+#   SHA256SUMS.txt  generated checksums for staged artifacts
 #   RELEASE_NOTES.md per-version changelog excerpt
 #
 # Anything binary is gitignored via /releases/.gitignore — the README
@@ -28,8 +28,12 @@
 *.zip
 *.tar.gz
 
+# Generated release metadata must not be committed because it is valid only
+# for the exact signed artifacts staged at build time.
+latest.json
+SHA256SUMS.txt
+
 # But keep the human-facing files.
 !README.md
 !.gitignore
-!SHA256SUMS.txt
 !RELEASE_NOTES*.md

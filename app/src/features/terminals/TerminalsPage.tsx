@@ -30,12 +30,14 @@ import { cn } from '@/lib/utils';
 import { TileGrid } from './TileGrid';
 import {
   type PaneNode,
+  type PaneTreeChange,
   newLeaf,
   countLeaves,
   flattenLeaves,
   appendLeaf,
   fromLeaves,
   MAX_PANES,
+  resolvePaneTreeChange,
 } from './paneTree';
 import { useTerminalCommandQueue } from './terminalCommandQueue';
 import type { TerminalRef } from './terminalRefs';
@@ -246,16 +248,20 @@ export function TerminalsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleChange = (next: PaneNode | null) => {
-    const newTree = next ?? newLeaf({ command: defaultShell() });
-    setTree(newTree);
-    if (fullscreenPaneId) {
-      const stillExists = flattenLeaves(newTree).some(
-        (l) => l.id === fullscreenPaneId,
-      );
-      if (!stillExists) setFullscreenPaneId(null);
-    }
-  };
+  const handleChange = React.useCallback((next: PaneTreeChange) => {
+    setTree((currentTree) => {
+      return resolvePaneTreeChange(currentTree, next, {
+        command: defaultShell(),
+        projectId: currentProjectId,
+      });
+    });
+  }, [currentProjectId]);
+
+  React.useEffect(() => {
+    if (!fullscreenPaneId) return;
+    const stillExists = flattenLeaves(tree).some((l) => l.id === fullscreenPaneId);
+    if (!stillExists) setFullscreenPaneId(null);
+  }, [fullscreenPaneId, tree]);
 
   const handleAddPane = () => {
     setTree(appendLeaf(tree, { command: defaultShell() }));

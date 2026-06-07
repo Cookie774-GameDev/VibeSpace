@@ -1,8 +1,21 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Theme } from '@/types/common';
+import { safeLocalStorage, measureStorageSizes } from '@/lib/persistence/safeLocalStorage';
 
-export type AmbientTrack = 'warm-hearth' | 'deep-ocean' | 'starlight' | 'forest-rain';
+export type AmbientTrack =
+  | 'calm-focus'
+  | 'calm-piano'
+  | 'soothing-rain'
+  | 'soothing-space'
+  | 'warm-hearth'
+  | 'deep-ocean'
+  | 'starlight'
+  | 'forest-rain'
+  | 'lofi-night'
+  | 'lofi-rain'
+  | 'rap-cipher'
+  | 'rap-instrumental';
 
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
 
@@ -254,8 +267,8 @@ const defaults: Pick<
   ambientActive: false,
   ambientThresholdMs: 5 * 60 * 1000,
   ambientDrone: false,
-  ambientTrack: 'warm-hearth',
-  ambientVolume: 40,
+  ambientTrack: 'calm-focus',
+  ambientVolume: 55,
   ambientAlwaysPlay: false,
   chatFullscreen: false,
   launcherOpen: false,
@@ -313,7 +326,11 @@ export const useUIStore = create<UIState>()(
       resetUI: () => set(defaults),
 
       // V2
-      setAmbient: (v) => set({ ambient: v, ambientActive: v ? undefined : false } as Partial<UIState>),
+      setAmbient: (v) =>
+        set((state) => ({
+          ambient: v,
+          ambientActive: v ? state.ambientActive : false,
+        })),
       setAmbientActive: (v) => set({ ambientActive: v }),
       setAmbientThresholdMs: (ms) => set({ ambientThresholdMs: Math.max(15_000, ms) }),
       setAmbientDrone: (v) => set({ ambientDrone: v }),
@@ -374,6 +391,31 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'jarvis-ui',
+      storage: createJSONStorage(() => safeLocalStorage),
+      version: 1,
+      migrate: (persistedState: any, version: number) => {
+        if (version < 1) {
+          console.info(`[useUIStore] Migrating persisted state from version ${version} to 1`);
+          const safeKeys = [
+            'navOpen', 'inspectorOpen', 'activeChatId', 'activeAgentId', 'route',
+            'navSectionsCollapsed', 'chatMode', 'theme', 'density', 'onboardingComplete',
+            'ambient', 'ambientThresholdMs', 'ambientDrone', 'ambientTrack', 'ambientVolume',
+            'ambientAlwaysPlay', 'composerStt', 'defaultTerminalFontSize', 'notificationMaster',
+            'doneNotifications', 'aiCompletionCue', 'lastSeenWhatsNewVersion'
+          ];
+          const migrated: Record<string, any> = {};
+          if (persistedState && typeof persistedState === 'object') {
+            for (const key of safeKeys) {
+              if (key in persistedState) {
+                migrated[key] = persistedState[key];
+              }
+            }
+          }
+          measureStorageSizes('migration', true);
+          return migrated;
+        }
+        return persistedState;
+      },
       partialize: (s) => ({
         navOpen: s.navOpen,
         inspectorOpen: s.inspectorOpen,
@@ -401,3 +443,6 @@ export const useUIStore = create<UIState>()(
     },
   ),
 );
+
+// Trigger debug-gated boot diagnostics on initialization
+measureStorageSizes('boot');

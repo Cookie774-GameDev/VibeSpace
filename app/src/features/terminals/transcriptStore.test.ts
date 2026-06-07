@@ -19,6 +19,7 @@ import {
   getSessionTranscript,
   getSessionsForAgent,
   stripAnsi,
+  terminalRestoreText,
   useTerminalTranscriptStore,
 } from '@/features/terminals/transcriptStore';
 
@@ -54,6 +55,45 @@ describe('stripAnsi', () => {
   it('drops bell and other C0 control characters', () => {
     const input = 'beep\x07after\x0Cclear';
     expect(stripAnsi(input)).toBe('beepafterclear');
+  });
+
+  it('removes orphan CSI fragments from split PTY chunks', () => {
+    expect(stripAnsi('[0mready[999Ddone\n[?25hnext')).toBe('readydone\nnext');
+    expect(stripAnsi('array [0] stays')).toBe('array [0] stays');
+  });
+});
+
+describe('terminalRestoreText', () => {
+  it('prefers safe plain transcript text over raw escape buffers', () => {
+    const restored = terminalRestoreText({
+      text: 'ready\nAPPLE\n',
+      rawText: '\x1B[2J\x1B[0mready\x1B[999Dcorrupt',
+    });
+
+    expect(restored).toBe('ready\r\nAPPLE\r\n');
+    expect(restored).not.toContain('\x1B');
+    expect(restored).not.toContain('[0m');
+  });
+
+  it('sanitizes orphan CSI fragments from stored plain transcript text', () => {
+    const restored = terminalRestoreText({
+      text: '[0mready\nwork[999Ddone\n[?25h',
+    });
+
+    expect(restored).toBe('ready\r\nworkdone\r\n');
+    expect(restored).not.toContain('[0m');
+    expect(restored).not.toContain('[999D');
+    expect(restored).not.toContain('[?25h');
+  });
+
+  it('sanitizes legacy raw-only transcripts and caps replayed lines', () => {
+    const rawText = Array.from({ length: 900 }, (_, i) => `\x1B[32mline-${i}\x1B[0m`).join('\n');
+    const restored = terminalRestoreText({ rawText });
+
+    expect(restored).not.toContain('\x1B');
+    expect(restored).not.toContain('line-0');
+    expect(restored).toContain('line-899');
+    expect(restored.split('\r\n')).toHaveLength(800);
   });
 });
 

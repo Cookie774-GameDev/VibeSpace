@@ -21,12 +21,15 @@
       "allow": [
         { "url": "http://localhost:11434/*" },
         { "url": "http://127.0.0.1:11434/*" },
-        { "url": "http://localhost:*/*" },
-        { "url": "http://127.0.0.1:*/*" },
         { "url": "https://api.openai.com/*" },
         { "url": "https://api.anthropic.com/*" },
         { "url": "https://generativelanguage.googleapis.com/*" },
-        { "url": "https://api.groq.com/*" }
+        { "url": "https://api.groq.com/*" },
+        { "url": "https://api.github.com/*" },
+        { "url": "https://api.figma.com/*" },
+        { "url": "https://*.supabase.co/*" },
+        { "url": "https://*.myshopify.com/*" },
+        { "url": "https://slack.com/*" }
       ]
     }
   ]

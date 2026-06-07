@@ -40,6 +40,7 @@ import {
 } from '@/features/context/tree';
 import { MentionTypeahead } from './MentionTypeahead';
 import { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef } from './SlashCommandTypeahead';
+import { getChatDragKind, getChatDropPayload } from './dropPayload';
 
 export interface ComposerProps {
   chatId: ChatId | string;
@@ -283,6 +284,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const webSpeechStreamRef = useRef<MediaStream | null>(null);
   const webSpeechAnalyserRef = useRef<AnalyserNode | null>(null);
   const webSpeechVolumeTimerRef = useRef<number | null>(null);
+  const voiceReplyRequestedRef = useRef(false);
 
   const agents = useAgentStore((s) => s.agents);
   const provider = useAuthStore((s) => s.defaultProvider);
@@ -298,6 +300,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     clearAudioSilenceTimer();
     stopWebSpeechVolumeMeter();
     volumeRef.current = 0;
+    const context = audioContextRef.current;
+    const chunks = wavChunksRef.current;
     cleanupAudioRecorder(audioProcessorRef.current, audioSourceRef.current, audioContextRef.current, mediaStreamRef.current);
     audioProcessorRef.current = null;
     audioSourceRef.current = null;
@@ -306,6 +310,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     wavChunksRef.current = [];
     setSttListening(false);
     setSttInterim('');
+    if (chunks.length > 0 && context) {
+      void transcribeGroq(encodeWav(chunks, context.sampleRate), useAuthStore.getState().apiKeys.groq ?? '');
+      return;
+    }
     toast.info('Speech-to-text stopped', message);
   };
 
@@ -640,9 +648,18 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       const mentionedAgentIds = extractMentionedAgentIds(trimmed, agents);
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
-          detail: { chatId, text: trimmed || 'Attached context.', mentionedAgentIds, filePaths: attachedFiles, terminalRefs: attachedTerminals, contextNodes: attachedContexts },
+          detail: {
+            chatId,
+            text: trimmed || 'Attached context.',
+            mentionedAgentIds,
+            filePaths: attachedFiles,
+            terminalRefs: attachedTerminals,
+            contextNodes: attachedContexts,
+            speakReply: voiceReplyRequestedRef.current,
+          },
         }),
       );
+      voiceReplyRequestedRef.current = false;
       setText('');
       setAttachedFiles([]);
       setAttachedTerminals([]);
@@ -840,6 +857,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     });
     const offFinal = VoiceService.on('voice:final', ({ text: finalText }) => {
       setSttInterim('');
+      voiceReplyRequestedRef.current = true;
       setText((cur) => {
         // Append with a space if needed so each utterance flows naturally.
         const sep = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
@@ -850,6 +868,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     const offError = VoiceService.on('voice:error', ({ kind, message }) => {
       setSttListening(false);
       setSttInterim('');
+      stopWebSpeechVolumeMeter();
       if (kind === 'unsupported') {
         toast.warning('Voice unsupported', message);
       } else if (kind === 'service_not_allowed' || kind === 'permission_denied') {
@@ -860,11 +879,15 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     });
     const offEnd = VoiceService.on('voice:end', () => {
       // Engine ended — sync our flag if the user didn't already turn off.
-      if (!VoiceService.isListening()) setSttListening(false);
+      if (!VoiceService.isListening() && !VoiceService.wantsListening()) {
+        setSttListening(false);
+        stopWebSpeechVolumeMeter();
+      }
     });
     const offTimeout = VoiceService.on('voice:timeout', ({ reason }) => {
       setSttListening(false);
       setSttInterim('');
+      stopWebSpeechVolumeMeter();
       toast.info('Speech-to-text stopped', reason);
     });
 
@@ -929,33 +952,43 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 
   const startStt = () => {
     const groqKey = useAuthStore.getState().apiKeys.groq;
+    if (VoiceService.isSupported()) {
+      // Defensive: some Tauri WebView2 builds expose the API but throw a
+      // synchronous DOMException on `start()`. Don't flip the visible
+      // listening flag until we know the engine accepted the call — and
+      // never let the click handler propagate an unhandled exception, which
+      // would crash the React tree under StrictMode.
+      try {
+        setSttInterim('Listening with built-in speech recognition...');
+        const started = VoiceService.startListening();
+        if (!started) {
+          setSttListening(false);
+          setSttInterim('');
+          toast.warning('Voice unavailable', 'Built-in speech recognition could not start in this runtime.');
+          return;
+        }
+        setSttListening(true);
+        void startWebSpeechVolumeMeter();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Voice could not start.';
+        toast.error('Voice error', msg);
+        setSttListening(false);
+        setSttInterim('');
+      }
+      return;
+    }
     if (groqKey && typeof navigator.mediaDevices?.getUserMedia === 'function' && getAudioContextCtor()) {
       void startGroqStt(groqKey);
       return;
     }
-    if (!VoiceService.isSupported()) {
+    if (!groqKey) {
       toast.warning(
         'Voice unsupported',
-        'Web Speech API is not available in this runtime. Try Chrome on the web build.',
+        'Free built-in speech recognition is not available in this runtime. Add a Groq key to use Whisper dictation here.',
       );
       return;
     }
-    // Defensive: some Tauri WebView2 builds expose the API but throw a
-    // synchronous DOMException on `start()`. Don't flip the visible
-    // listening flag until we know the engine accepted the call — and
-    // never let the click handler propagate an unhandled exception, which
-    // would crash the React tree under StrictMode.
-    try {
-      setSttInterim('');
-      VoiceService.startListening();
-      setSttListening(true);
-      void startWebSpeechVolumeMeter();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Voice could not start.';
-      toast.error('Voice error', msg);
-      setSttListening(false);
-      setSttInterim('');
-    }
+    toast.warning('Voice unsupported', 'Speech-to-text is not available in this runtime.');
   };
 
   const startGroqStt = async (apiKey: string) => {
@@ -1030,6 +1063,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       const data = await res.json() as { text?: string };
       const finalText = (data.text ?? '').trim();
       if (finalText) {
+        voiceReplyRequestedRef.current = true;
         setText((cur) => `${cur}${cur && !/\s$/.test(cur) ? ' ' : ''}${finalText}`);
       }
     } catch (err) {
@@ -1185,24 +1219,21 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                   recomputeSlash();
                 }}
                 onDragOver={(e) => {
-                  if (e.dataTransfer.types.includes(CONTEXT_MIME) || e.dataTransfer.types.includes('application/x-jarvis-file') || e.dataTransfer.types.includes('application/x-jarvis-terminal') || e.dataTransfer.types.includes('text/plain')) {
+                  if (getChatDragKind(e.dataTransfer.types)) {
                     e.preventDefault();
                     setDragOver(true);
                   }
                 }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={(e) => {
-                  const filePath = e.dataTransfer.getData('application/x-jarvis-file');
-                  const contextRaw = e.dataTransfer.getData(CONTEXT_MIME);
-                  const terminalId = e.dataTransfer.getData('application/x-jarvis-terminal');
-                  const path = filePath || (!contextRaw && !terminalId ? e.dataTransfer.getData('text/plain') : '');
-                  if (!contextRaw && !terminalId && !path) return;
+                  const payload = getChatDropPayload(e.dataTransfer);
+                  if (!payload) return;
                   e.preventDefault();
                   e.stopPropagation();
                   setDragOver(false);
-                  if (path) addDroppedPath(path);
-                  else if (contextRaw) addDroppedContext(contextRaw);
-                  else if (terminalId) addDroppedTerminal(terminalId);
+                  if (payload.kind === 'context') addDroppedContext(payload.raw);
+                  else if (payload.kind === 'terminal') addDroppedTerminal(payload.raw);
+                  else addDroppedPath(payload.path);
                 }}
                 placeholder={placeholder ?? 'Message Jarvis...   (use @ to mention an agent)'}
                 aria-label="Message"

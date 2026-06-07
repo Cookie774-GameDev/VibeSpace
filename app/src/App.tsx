@@ -30,6 +30,7 @@ import { JarvisContextMenu } from '@/components/layout/JarvisContextMenu';
 import { PageRouter } from '@/components/layout/PageRouter';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { startNotificationLoop } from '@/features/tasks';
+import { startClockEngine } from '@/features/clock';
 import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
 import { GlowBorder } from '@/features/voice/GlowBorder';
 import { WakeWordHost } from '@/features/voice/WakeWordHost';
@@ -48,6 +49,14 @@ import { DevConsoleHost } from '@/features/dev-console';
 import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
 import { UpdateWarningHost } from '@/features/updates/UpdateWarningHost';
 import type { Agent, AgentId, Message } from '@/types';
+
+type SupabaseSessionLike = {
+  user?: {
+    id?: string;
+    email?: string;
+  };
+  expires_at?: number;
+} | null;
 
 /**
  * Lazy-mounted modals + canvas surfaces.
@@ -102,6 +111,19 @@ const AmbientHome = React.lazy(() =>
 const CelebrationHost = React.lazy(() =>
   import('@/features/celebrate').then((m) => ({ default: m.CelebrationHost })),
 );
+
+function applyCloudSession(session: SupabaseSessionLike): void {
+  const userId = session?.user?.id;
+  if (!userId) {
+    useAuthStore.getState().setCloudSession(null);
+    return;
+  }
+  useAuthStore.getState().setCloudSession({
+    user_id: userId,
+    email: session.user?.email ?? '',
+    expires_at: session.expires_at ?? 0,
+  });
+}
 
 /**
  * Renders the right canvas based on `useUIStore.route` (V3) and
@@ -179,7 +201,10 @@ function useBoot() {
   React.useEffect(() => {
     let stopRuntime: (() => void) | undefined;
     let stopNotifications: (() => void) | undefined;
+    let stopClock: (() => void) | undefined;
     let stopTerminalScheduler: (() => void) | undefined;
+    let stopSyncLoop: (() => void) | undefined;
+    let stopCloudAuth: (() => void) | undefined;
     let cancelled = false;
 
     (async () => {
@@ -193,12 +218,55 @@ function useBoot() {
 
       if (cancelled) return;
 
-      // 2) Register the 7 built-in agents into the in-memory agent store so
-      //    the UI can find them. The DB also has rows for these from seedIfEmpty.
       try {
-        registerMany(getDefaultAgents());
+        await useAuthStore.getState().hydrateApiKeysFromVault();
       } catch (err) {
-        console.error('Failed to register default agents:', err);
+        console.warn('Failed to hydrate API keys from secure storage:', err);
+      }
+
+      try {
+        const { isSupabaseConfigured } = await import('@/lib/supabase/env');
+        if (!isSupabaseConfigured()) {
+          applyCloudSession(null);
+        } else {
+          const [{ getSupabaseClient }, { processCloudPull, processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop }] =
+            await Promise.all([import('@/lib/supabase/client'), import('@/lib/sync')]);
+          if (cancelled) return;
+          const supa = getSupabaseClient();
+          if (supa) {
+            void supa.auth.getSession().then(({ data }) => {
+              if (!cancelled) applyCloudSession(data.session as SupabaseSessionLike);
+            });
+            const sub = supa.auth.onAuthStateChange((_event, session) => {
+              if (cancelled) return;
+              applyCloudSession(session as SupabaseSessionLike);
+              if (session?.user?.id) {
+                void retrySyncErrors()
+                  .then(() => processSyncQueue())
+                  .then(() => processCloudPull())
+                  .catch((err) => console.warn('[sync] immediate flush failed:', err));
+              }
+            });
+            stopCloudAuth = () => sub.data.subscription.unsubscribe();
+          }
+
+          await retrySyncErrors();
+          void processCloudPull().catch((err) => console.warn('[sync] initial pull failed:', err));
+          void pruneSyncQueue().catch((err) => console.warn('[sync] prune failed:', err));
+          if (!cancelled) stopSyncLoop = startSyncLoop();
+        }
+      } catch (err) {
+        console.warn('Failed to start cloud sync lifecycle:', err);
+      }
+
+      // 2) Register persisted agents into the in-memory agent store so custom
+      //    system prompts, cloned agents, and provider choices survive relaunch.
+      try {
+        const persistedAgents = await agentRepo.list();
+        registerMany(persistedAgents.length > 0 ? persistedAgents : getDefaultAgents());
+      } catch (err) {
+        console.error('Failed to register persisted agents:', err);
+        registerMany(getDefaultAgents());
       }
 
       // 3) Wire the AI runtime to the chat composer events.
@@ -206,12 +274,16 @@ function useBoot() {
         getAgentById: (id) => useAgentStore.getState().agents[id] ?? null,
         getAgentBySlug: (slug) => {
           const agents = useAgentStore.getState().agents;
-          return Object.values(agents).find((a) => a.slug === slug) ?? null;
+          const wanted = slug.trim().toLowerCase();
+          return Object.values(agents).find((a) => a.slug.toLowerCase() === wanted) ?? null;
         },
-        getAgentForChat: () => {
-          // Default to Jarvis (slug='jarvis') for now. Real chat-bound default
-          // resolution lands when the chat list / picker stores the chosen agent.
+        getAgentForChat: async (chatId) => {
           const agents = Object.values(useAgentStore.getState().agents) as Agent[];
+          const chat = await chatRepo.getById(chatId as never);
+          const chatAgentId = chat?.active_agent_ids?.[0];
+          if (chatAgentId && useAgentStore.getState().agents[chatAgentId]) {
+            return useAgentStore.getState().agents[chatAgentId];
+          }
           return agents.find((a) => a.slug === 'jarvis') ?? agents[0] ?? null;
         },
         getMessages: async (chatId) => {
@@ -235,6 +307,12 @@ function useBoot() {
         console.error('Failed to start notification loop:', err);
       }
 
+      try {
+        stopClock = startClockEngine();
+      } catch (err) {
+        console.error('Failed to start clock engine:', err);
+      }
+
       // 5) Re-arm durable scheduled terminal messages. These are stored in
       //    localStorage so a delayed "send this terminal ..." request survives
       //    route changes and full app restarts.
@@ -252,10 +330,61 @@ function useBoot() {
       cancelled = true;
       stopRuntime?.();
       stopNotifications?.();
+      stopClock?.();
       stopTerminalScheduler?.();
+      stopSyncLoop?.();
+      stopCloudAuth?.();
     };
     // Run once - boot is one-shot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
+function useDesktopReopenLifecycle() {
+  React.useEffect(() => {
+    const notifyVisible = (reason: string) => {
+      window.requestAnimationFrame(() => {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:terminals:visible', {
+            detail: { reason },
+          }),
+        );
+      });
+    };
+
+    const onFocus = () => notifyVisible('window-focus');
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') notifyVisible('visibility');
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    let disposed = false;
+    let unlistenReopen: (() => void) | null = null;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<{ reason?: string }>('jarvis:reopen', (event) => {
+          notifyVisible(event.payload?.reason ?? 'desktop-reopen');
+        }),
+      )
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenReopen = unlisten;
+      })
+      .catch(() => {
+        /* Web preview or test runtime without Tauri events. */
+      });
+
+    return () => {
+      disposed = true;
+      unlistenReopen?.();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 }
 
@@ -359,6 +488,7 @@ function AssistantBarHost() {
 function WorkspaceRoot() {
   useBoot();
   useBridgeLifecycle();
+  useDesktopReopenLifecycle();
 
   // Wire outbound-call trigger so any feature can call `fireOutboundCall(...)`.
   // Default categories (manual + error) are toggled in Settings → Phone & Voice.

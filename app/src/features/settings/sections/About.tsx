@@ -28,9 +28,21 @@ import {
 const VERSION = import.meta.env.VITE_APP_VERSION || '0.1.0';
 
 const LINKS: { label: string; href: string; icon: typeof BookOpen }[] = [
-  { label: 'Documentation', href: 'https://github.com/Cookie774-GameDev/Jarivs-One#readme', icon: BookOpen },
-  { label: 'Downloads', href: 'https://github.com/Cookie774-GameDev/Jarivs-One/blob/main/DOWNLOAD.md', icon: Shield },
-  { label: 'License', href: 'https://github.com/Cookie774-GameDev/Jarivs-One/blob/main/LICENSE', icon: ScrollText },
+  {
+    label: 'Documentation',
+    href: 'https://github.com/Cookie774-GameDev/Jarivs-One#readme',
+    icon: BookOpen,
+  },
+  {
+    label: 'Downloads',
+    href: 'https://github.com/Cookie774-GameDev/Jarivs-One/blob/main/DOWNLOAD.md',
+    icon: Shield,
+  },
+  {
+    label: 'License',
+    href: 'https://github.com/Cookie774-GameDev/Jarivs-One/blob/main/LICENSE',
+    icon: ScrollText,
+  },
 ];
 
 export function About() {
@@ -101,7 +113,8 @@ export function About() {
     }
   };
 
-  const busy = updatePhase === 'checking' || updatePhase === 'downloading' || updatePhase === 'installing';
+  const busy =
+    updatePhase === 'checking' || updatePhase === 'downloading' || updatePhase === 'installing';
 
   return (
     <div className="flex flex-col gap-6">
@@ -122,15 +135,16 @@ export function About() {
       <section className="max-w-xl rounded-2xl border border-border bg-elevated/70 p-5 shadow-soft">
         <h3 className="text-ui-strong text-foreground mb-4">Version History & Roadmap</h3>
         <div className="flex flex-col gap-5 border-l border-border pl-4 relative">
-          
           <div className="relative">
             <div className="absolute -left-[21.5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-accent-copper bg-panel" />
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-foreground text-secondary">v0.1.15 (Latest)</span>
-              <span className="text-metadata text-muted-foreground font-mono">June 2, 2026</span>
+              <span className="font-semibold text-foreground text-secondary">v0.1.20 (Latest)</span>
+              <span className="text-metadata text-muted-foreground font-mono">June 6, 2026</span>
             </div>
             <p className="text-secondary text-muted-foreground mt-1 leading-relaxed">
-              Faster state-restoring terminals, real draggable project Context files, account and plan-aware Jarvis Call gating, wake-word bubble, `Shift+Tab` Jarvis summon, workflow-capable custom tools, live `/usage` summaries, and snoozable silent-update warnings.
+              Secure Plugins in Settings with a 353-service catalog, OS-keychain credentials, tested
+              GitHub/Figma/Supabase/Shopify/Slack connectors, metadata-only cloud sync, and
+              controlled terminal capability context.
             </p>
           </div>
 
@@ -141,7 +155,8 @@ export function About() {
               <span className="text-metadata text-muted-foreground font-mono">June 2, 2026</span>
             </div>
             <p className="text-secondary text-muted-foreground mt-1 leading-relaxed">
-              Context maps, file routing, done-notification controls, slash commands, command-parser suggestions, STT optimization, and terminal project-switch stabilization.
+              Context maps, file routing, done-notification controls, slash commands, command-parser
+              suggestions, STT optimization, and terminal project-switch stabilization.
             </p>
           </div>
 
@@ -150,10 +165,10 @@ export function About() {
               <span>What to Expect Next</span>
             </div>
             <p className="text-secondary text-muted-foreground mt-1 leading-relaxed">
-              All-provider hosted usage APIs and final cross-platform installer verification.
+              OAuth browser flows, additional tested MCP servers, and final cross-platform installer
+              verification.
             </p>
           </div>
-
         </div>
       </section>
 
@@ -191,7 +206,8 @@ export function About() {
           <div className="flex flex-col gap-1">
             <Label htmlFor="telemetry-toggle">Anonymous usage telemetry</Label>
             <p className="text-metadata text-muted-foreground">
-              Helps us prioritize. No prompts, no message contents, ever. You can revoke at any time.
+              Helps us prioritize. No prompts, no message contents, ever. You can revoke at any
+              time.
             </p>
           </div>
           <Switch
@@ -226,7 +242,8 @@ export function About() {
           <div className="flex min-w-0 flex-col gap-1">
             <h3 className="text-ui-strong text-foreground">Updates</h3>
             <p className="text-secondary text-muted-foreground">
-              Signed releases are delivered from GitHub Releases. Jarvis verifies every bundle, shows pre-install warnings, and lets you update now or later.
+              Signed releases are delivered from GitHub Releases. Jarvis verifies every bundle,
+              shows pre-install warnings, and lets you update now or later.
             </p>
           </div>
           <Button
@@ -236,7 +253,9 @@ export function About() {
             onClick={() => void checkForUpdates()}
             disabled={!isTauri || busy}
           >
-            <RefreshCw className={updatePhase === 'checking' ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+            <RefreshCw
+              className={updatePhase === 'checking' ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
+            />
             Check now
           </Button>
         </div>
@@ -280,12 +299,22 @@ function UpdateStatus({
 }) {
   if (!isTauri) {
     return (
-      <StatusLine icon={<AlertTriangle className="h-4 w-4 text-accent-amber" />} title="Desktop app required" body="Updater checks are disabled in the browser preview." />
+      <StatusLine
+        icon={<AlertTriangle className="h-4 w-4 text-accent-amber" />}
+        title="Desktop app required"
+        body="Updater checks are disabled in the browser preview."
+      />
     );
   }
 
   if (phase === 'checking') {
-    return <StatusLine icon={<RefreshCw className="h-4 w-4 animate-spin text-accent-cyan" />} title="Checking for updates" body="Contacting the signed release channel." />;
+    return (
+      <StatusLine
+        icon={<RefreshCw className="h-4 w-4 animate-spin text-accent-cyan" />}
+        title="Checking for updates"
+        body="Contacting the signed release channel."
+      />
+    );
   }
 
   if (phase === 'available' && pendingUpdate) {
@@ -299,26 +328,62 @@ function UpdateStatus({
   }
 
   if (phase === 'downloading') {
-    return <StatusLine icon={<RefreshCw className="h-4 w-4 animate-spin text-accent-cyan" />} title="Downloading update" body={formatProgress(downloadedBytes, totalBytes)} />;
+    return (
+      <StatusLine
+        icon={<RefreshCw className="h-4 w-4 animate-spin text-accent-cyan" />}
+        title="Downloading update"
+        body={formatProgress(downloadedBytes, totalBytes)}
+      />
+    );
   }
 
   if (phase === 'installing') {
-    return <StatusLine icon={<RefreshCw className="h-4 w-4 animate-spin text-accent-cyan" />} title="Installing update" body="Jarvis will relaunch when installation finishes." />;
+    return (
+      <StatusLine
+        icon={<RefreshCw className="h-4 w-4 animate-spin text-accent-cyan" />}
+        title="Installing update"
+        body="Jarvis will relaunch when installation finishes."
+      />
+    );
   }
 
   if (phase === 'installed') {
-    return <StatusLine icon={<CheckCircle2 className="h-4 w-4 text-success" />} title="Update installed" body="Relaunching Jarvis." />;
+    return (
+      <StatusLine
+        icon={<CheckCircle2 className="h-4 w-4 text-success" />}
+        title="Update installed"
+        body="Relaunching Jarvis."
+      />
+    );
   }
 
   if (phase === 'none') {
-    return <StatusLine icon={<CheckCircle2 className="h-4 w-4 text-success" />} title="Jarvis is up to date" body="No newer signed release was found." />;
+    return (
+      <StatusLine
+        icon={<CheckCircle2 className="h-4 w-4 text-success" />}
+        title="Jarvis is up to date"
+        body="No newer signed release was found."
+      />
+    );
   }
 
   if (phase === 'error') {
-    return <StatusLine icon={<AlertTriangle className="h-4 w-4 text-destructive" />} title="Update check failed" body={error ?? 'Try again later.'} />;
+    return (
+      <StatusLine
+        icon={<AlertTriangle className="h-4 w-4 text-destructive" />}
+        title="Update check failed"
+        body={error ?? 'Try again later.'}
+      />
+    );
   }
 
-  return <StatusLine icon={<CheckCircle2 className="h-4 w-4 text-muted-foreground" />} title="Ready" body="Use Check now to look for the latest signed release." />;
+  return (
+    <StatusLine
+      icon={<CheckCircle2 className="h-4 w-4 text-muted-foreground" />}
+      title="Ready"
+      body="Use Check now to look for the latest signed release."
+    />
+  );
 }
 
 function StatusLine({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {

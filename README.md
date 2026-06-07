@@ -21,6 +21,8 @@ Replace the YouTube and Discord placeholders in `site/index.html` when the final
 
 ## Install Jarvis
 
+These commands resolve the newest published GitHub Release, install Jarvis One, and auto-launch it. If no published release assets exist yet, the installer stops safely and prints the release requirement instead of installing a stale build.
+
 ### Windows 10/11
 
 1. Open PowerShell.
@@ -30,7 +32,7 @@ Replace the YouTube and Discord placeholders in `site/index.html` when the final
 irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
 ```
 
-3. Launch Jarvis from the Start Menu.
+3. Jarvis auto-launches after install. You can also reopen it from the Start Menu.
 
 ### macOS 12+
 
@@ -41,7 +43,7 @@ irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/
 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
-3. Open Jarvis from `/Applications`.
+3. Jarvis auto-launches after install. You can also reopen it from `/Applications`.
 
 ### Linux
 
@@ -52,9 +54,9 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 ```
 
-3. Launch Jarvis from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
+3. Jarvis auto-launches after install. You can also reopen it from your app menu. The installer auto-detects `.deb`, `.rpm`, or AppImage.
 
-See [`DOWNLOAD.md`](DOWNLOAD.md) for direct release filenames, checksum verification, and troubleshooting.
+See [`DOWNLOAD.md`](DOWNLOAD.md) for dry-run checks, direct release filenames, checksum verification, and troubleshooting.
 
 ## The Headline Feature: Calling
 
@@ -101,8 +103,9 @@ Jarvis currently includes or is actively wiring these surfaces:
 - **Coding terminals:** real PTY terminals, tile grids, manual resize handles, terminal swarm presets.
 - **Scout / Builder / Reviewer roles:** scoped research, implementation, and quality-gate workflow.
 - **Chat:** multi-thread chat, composer, message rendering, action approval cards.
-- **Actions:** 24 built-in Approve/Cancel actions across navigation, settings, theme, voice, terminal, chat, wellness, and host actions.
+- **Actions:** built-in Approve/Cancel actions across navigation, settings, theme, voice, terminal, clock, chat, wellness, and host actions.
 - **Custom tools:** local tool templates, import/export, run-in-place workflows.
+- **Clock tool:** preloaded local timers/alarms with Jarvis actions, notifications, and sound.
 - **Command palette:** global command center on `Mod+K`.
 - **Actions palette:** `Mod+Shift+A` for actionable commands.
 - **Quick launcher:** pinned apps and links.

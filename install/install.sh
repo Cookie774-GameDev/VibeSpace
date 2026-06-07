@@ -5,13 +5,15 @@
 # GitHub:   wget -qO- https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
 #
 # Optional environment variables:
-#   JARVIS_VERSION="0.1.4"     pin to a version (default: latest from GitHub releases)
+#   JARVIS_VERSION="0.1.17"    pin to a version (default: latest published GitHub release)
 #   JARVIS_CHANNEL="stable"    stable | nightly (default: stable)
 #   JARVIS_FORMAT=""           linux: deb | rpm | appimage  (auto-detected if blank)
 #                              macOS: dmg (the only option)
 #   JARVIS_PREFIX="/usr/local" install prefix (default: /usr/local on Linux)
 #   JARVIS_LOCAL="1"           install from a local Jarvis build (developer mode)
 #   JARVIS_DRYRUN="1"          download + verify only, do not install
+#   JARVIS_DOWNLOAD_DIR=""     stage downloads in a specific directory
+#   JARVIS_KEEP_DOWNLOAD="1"   keep the downloaded installer after a normal run
 
 set -euo pipefail
 
@@ -35,14 +37,14 @@ fi
 
 banner() {
   printf "\n"
-  printf "${CYAN}------------------------------------------------------------${RESET}\n"
-  printf "${CYAN}      _                   _      ${RESET}\n"
-  printf "${CYAN}     | | __ _ _ ____   _(_)___  ${VIOLET}  the AI workspace${RESET}\n"
-  printf "${CYAN}  _  | |/ _\` | '__\\ \\ / / / __| ${VIOLET}  for every model,${RESET}\n"
-  printf "${CYAN} | |_| | (_| | |   \\ V /| \\__ \\ ${VIOLET}  agent, voice & task${RESET}\n"
-  printf "${CYAN}  \\___/ \\__,_|_|    \\_/ |_|___/ ${RESET}\n"
-  printf "${DIM}                                  https://github.com/${JARVIS_REPO}${RESET}\n"
-  printf "${CYAN}------------------------------------------------------------${RESET}\n\n"
+  printf "%b\n" "${CYAN}------------------------------------------------------------${RESET}"
+  printf "%b\n" "${CYAN}      _                   _      ${RESET}"
+  printf "%b\n" "${CYAN}     | | __ _ _ ____   _(_)___  ${VIOLET}  the AI workspace${RESET}"
+  printf "%b\n" "${CYAN}  _  | |/ _\` | '__\\ \\ / / / __| ${VIOLET}  for every model,${RESET}"
+  printf "%b\n" "${CYAN} | |_| | (_| | |   \\ V /| \\__ \\ ${VIOLET}  agent, voice & task${RESET}"
+  printf "%b\n" "${CYAN}  \\___/ \\__,_|_|    \\_/ |_|___/ ${RESET}"
+  printf "%b\n" "${DIM}                                  https://github.com/${JARVIS_REPO}${RESET}"
+  printf "%b\n\n" "${CYAN}------------------------------------------------------------${RESET}"
 }
 
 step() { printf "  ${CYAN}->${RESET}  %s\n" "$1"; }
@@ -57,7 +59,7 @@ detect_os() {
     Darwin*) echo "macos" ;;
     MINGW*|MSYS*|CYGWIN*)
       fail "Detected Windows. Please use the PowerShell installer:"
-      printf "    ${CYAN}irm https://raw.githubusercontent.com/${JARVIS_REPO}/main/install/install.ps1 | iex${RESET}\n"
+      printf "    ${CYAN}irm https://raw.githubusercontent.com/${JARVIS_REPO}/main/install/install.ps1 | iex${RESET}\n" >&2
       exit 1
       ;;
     *) fail "Unsupported OS: $(uname -s)"; exit 1 ;;
@@ -94,6 +96,25 @@ require_cmd() {
   fi
 }
 
+make_tmp_dir() {
+  if [ -n "${JARVIS_DOWNLOAD_DIR:-}" ]; then
+    mkdir -p "$JARVIS_DOWNLOAD_DIR"
+    mktemp -d "${JARVIS_DOWNLOAD_DIR%/}/jarvis-installer.XXXXXX"
+  else
+    mktemp -d -t jarvis-installer.XXXXXX
+  fi
+}
+
+SUDO=()
+setup_sudo() {
+  if [ "$(id -u)" -eq 0 ]; then
+    SUDO=()
+  else
+    require_cmd sudo
+    SUDO=(sudo)
+  fi
+}
+
 # --- Latest version ----------------------------------------------------------
 get_latest_version() {
   if [ -n "${JARVIS_VERSION:-}" ]; then
@@ -102,16 +123,23 @@ get_latest_version() {
   fi
   step "Checking GitHub for the latest release..." >&2
   local tag
-  tag=$(curl -fsSL "${JARVIS_API}/latest" 2>/dev/null \
-        | grep -o '"tag_name":[[:space:]]*"v\?[^"]*"' \
-        | head -n1 \
-        | sed -E 's/.*"v?([^"]+)".*/\1/' || true)
+  tag=$(curl -fsSL -H "User-Agent: jarvis-installer" "${JARVIS_API}/latest" 2>/dev/null \
+        | sed -nE 's/.*"tag_name":[[:space:]]*"v?([^"]+)".*/\1/p' \
+        | head -n1 || true)
   if [ -n "$tag" ]; then
     ok "Latest version: $tag" >&2
     printf "%s" "$tag"
   else
-    warn "Could not reach GitHub. Falling back to known version."
-    printf "%s" "0.1.15"
+    local effective
+    effective=$(curl -Ls -H "User-Agent: jarvis-installer" -o /dev/null -w '%{url_effective}' "https://github.com/${JARVIS_REPO}/releases/latest" 2>/dev/null || true)
+    tag=$(printf "%s" "$effective" | sed -nE 's#.*/releases/tag/v?([^/[:space:]]+)$#\1#p')
+    if [ -n "$tag" ]; then
+      ok "Latest version: $tag" >&2
+      printf "%s" "$tag"
+    else
+      fail "No published Jarvis One GitHub Release was found. Publish a release with installer assets, or set JARVIS_VERSION/JARVIS_LOCAL for controlled testing."
+      exit 1
+    fi
   fi
 }
 
@@ -119,14 +147,14 @@ get_latest_version() {
 asset_pattern() {
   local os="$1" arch="$2" format="$3"
   case "$os/$format" in
-    linux/deb)      printf '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.deb$' ;;
-    linux/rpm)      printf '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64).*\.rpm$' ;;
-    linux/appimage) printf '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.AppImage$' ;;
+    linux/deb)      printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.deb$' ;;
+    linux/rpm)      printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64).*\.rpm$' ;;
+    linux/appimage) printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.AppImage$' ;;
     macos/dmg)
       if [ "$arch" = "aarch64" ]; then
-        printf '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64).*\.dmg$'
+        printf '%s' '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64).*\.dmg$'
       else
-        printf '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64).*\.dmg$'
+        printf '%s' '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64).*\.dmg$'
       fi
       ;;
     *) return 1 ;;
@@ -157,7 +185,7 @@ resolve_download_url() {
   if [ -n "$pattern" ]; then
     local api_url="${JARVIS_API}/tags/v${version}"
     local asset
-    asset=$(curl -fsSL "$api_url" 2>/dev/null \
+    asset=$(curl -fsSL -H "User-Agent: jarvis-installer" "$api_url" 2>/dev/null \
       | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
       | sed -E 's/.*"browser_download_url":[[:space:]]*"([^"]*)".*/\1/' \
       | grep -Ei "$pattern" \
@@ -174,9 +202,9 @@ resolve_download_url() {
 install_deb() {
   local file="$1"
   step "Installing .deb (sudo required)..."
-  sudo apt install -y "$file" || sudo dpkg -i "$file" || {
+  "${SUDO[@]}" apt install -y "$file" || "${SUDO[@]}" dpkg -i "$file" || {
     fail "dpkg failed. Trying to fix dependencies..."
-    sudo apt-get install -fy
+    "${SUDO[@]}" apt-get install -fy
   }
 }
 
@@ -184,9 +212,9 @@ install_rpm() {
   local file="$1"
   step "Installing .rpm (sudo required)..."
   if command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y "$file"
+    "${SUDO[@]}" dnf install -y "$file"
   else
-    sudo yum install -y "$file"
+    "${SUDO[@]}" yum install -y "$file"
   fi
 }
 
@@ -195,7 +223,7 @@ install_appimage() {
   local prefix="${JARVIS_PREFIX:-/usr/local}"
   local target="${prefix}/bin/jarvis"
   step "Installing AppImage to ${target}..."
-  sudo install -m 0755 "$file" "$target"
+  "${SUDO[@]}" install -m 0755 "$file" "$target"
 
   # Desktop entry for menu integration
   local desktop="${HOME}/.local/share/applications/jarvis.desktop"
@@ -232,13 +260,45 @@ install_dmg() {
     exit 1
   fi
   step "Copying to /Applications..."
-  sudo cp -R "$app" /Applications/
+  "${SUDO[@]}" cp -R "$app" /Applications/
   hdiutil detach "$mountpoint" -force >/dev/null 2>&1 || true
   step "Removing macOS quarantine flag..."
-  sudo xattr -dr com.apple.quarantine "/Applications/$(basename "$app")" || true
+  "${SUDO[@]}" xattr -dr com.apple.quarantine "/Applications/$(basename "$app")" || true
   ok "Installed: /Applications/$(basename "$app")"
   warn "First launch: Right-click Jarvis One in Finder -> Open if Gatekeeper prompts."
   warn "After the first 'Open', macOS remembers the trust for future updates."
+}
+
+launch_linux_app() {
+  local runner=""
+  if command -v jarvis >/dev/null 2>&1; then
+    runner="jarvis"
+  elif command -v jarvis-one >/dev/null 2>&1; then
+    runner="jarvis-one"
+  fi
+
+  if [ -n "$runner" ]; then
+    if [ -n "${SUDO_USER:-}" ]; then
+      sudo -u "$SUDO_USER" nohup "$runner" >/dev/null 2>&1 &
+    else
+      nohup "$runner" >/dev/null 2>&1 &
+    fi
+    return 0
+  fi
+
+  if command -v gtk-launch >/dev/null 2>&1; then
+    if [ -n "${SUDO_USER:-}" ]; then
+      sudo -u "$SUDO_USER" gtk-launch jarvis.desktop >/dev/null 2>&1 || \
+      sudo -u "$SUDO_USER" gtk-launch "Jarvis One" >/dev/null 2>&1 || true
+    else
+      gtk-launch jarvis.desktop >/dev/null 2>&1 || \
+      gtk-launch "Jarvis One" >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+
+  warn "Installed successfully, but no launcher command was found. Open Jarvis One from your apps menu."
+  return 0
 }
 
 # --- Local build ---------------------------------------------------------
@@ -281,10 +341,31 @@ step "OS:        $OS"
 step "Arch:      $ARCH"
 step "Format:    $FORMAT"
 step "Prefix:    ${JARVIS_PREFIX:-/usr/local}"
+if [ -n "${JARVIS_DOWNLOAD_DIR:-}" ]; then
+  step "Download:   ${JARVIS_DOWNLOAD_DIR}"
+fi
+
+case "$OS/$FORMAT" in
+  linux/deb|linux/rpm|linux/appimage|macos/dmg) ;;
+  *) fail "Unsupported JARVIS_FORMAT '${FORMAT}' for ${OS}. Use deb, rpm, appimage, or dmg."; exit 1 ;;
+esac
+
+if [ "${JARVIS_DRYRUN:-0}" != "1" ]; then
+  setup_sudo
+fi
 
 # Pick installer
-TMP_DIR="$(mktemp -d -t jarvis-installer.XXXXXX)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_DIR=""
+cleanup() {
+  if [ -z "${TMP_DIR:-}" ]; then
+    return
+  fi
+  if [ "${JARVIS_DRYRUN:-0}" = "1" ] || [ "${JARVIS_KEEP_DOWNLOAD:-0}" = "1" ]; then
+    return
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 INSTALLER=""
 
 if [ "${JARVIS_LOCAL:-0}" = "1" ]; then
@@ -299,9 +380,10 @@ else
   VERSION="$(get_latest_version)"
   URL="$(resolve_download_url "$VERSION" "$OS" "$ARCH" "$FORMAT")"
   FNAME="$(basename "$URL")"
+  TMP_DIR="$(make_tmp_dir)"
   INSTALLER="$TMP_DIR/$FNAME"
   step "Downloading: $URL"
-  if ! curl -fSL --progress-bar -o "$INSTALLER" "$URL"; then
+  if ! curl -fSL -H "User-Agent: jarvis-installer" --progress-bar -o "$INSTALLER" "$URL"; then
     fail "Download failed."
     warn "If no GitHub release exists yet, set JARVIS_LOCAL=1 to install from a local build."
     exit 1
@@ -348,11 +430,7 @@ case "$OS" in
     fi
     ;;
   linux)
-    if [ -n "${SUDO_USER:-}" ]; then
-      sudo -u "$SUDO_USER" jarvis &
-    else
-      jarvis &
-    fi
+    launch_linux_app
     ;;
 esac
 

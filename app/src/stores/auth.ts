@@ -1,7 +1,15 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { ProviderId, WorkspaceId, ProjectId } from '@/types/common';
 import type { PlanId } from '@/lib/entitlements';
+import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
+import {
+  SECRET_API_KEY_PROVIDERS,
+  isSecretApiKeyProvider,
+  loadSecureApiKeys,
+  secureDeleteApiKey,
+  secureSetApiKey,
+} from '@/lib/security/secureApiKeys';
 
 interface AuthState {
   /** Local-only profile (no cloud account) */
@@ -54,6 +62,7 @@ interface AuthState {
   setDisplayName: (n: string) => void;
   setApiKey: (provider: ProviderId, key: string) => void;
   clearApiKey: (provider: ProviderId) => void;
+  hydrateApiKeysFromVault: () => Promise<void>;
   setDefaultProvider: (p: ProviderId) => void;
   setPersona: (p: AuthState['personaPreset']) => void;
   setWorkspaceId: (id: WorkspaceId | null) => void;
@@ -67,6 +76,36 @@ interface AuthState {
   setDefaultLocalModel: (m: string) => void;
   /** Set the active plan id. Will be called by the Stripe webhook handler when billing ships. */
   setPlan: (p: PlanId) => void;
+}
+
+function persistedLocalApiKeys(
+  keys: Partial<Record<ProviderId, string>>,
+): Partial<Record<ProviderId, string>> {
+  return {
+    ...(keys.mock ? { mock: keys.mock } : {}),
+    ...(keys.ollama ? { ollama: keys.ollama } : {}),
+  };
+}
+
+function legacySecretApiKeys(
+  keys: Partial<Record<ProviderId, string>>,
+): Partial<Record<ProviderId, string>> {
+  const out: Partial<Record<ProviderId, string>> = {};
+  for (const provider of SECRET_API_KEY_PROVIDERS) {
+    const value = keys[provider]?.trim();
+    if (value) out[provider] = value;
+  }
+  return out;
+}
+
+function migrateLegacySecretsToVault(keys: Partial<Record<ProviderId, string>>): void {
+  for (const provider of SECRET_API_KEY_PROVIDERS) {
+    const value = keys[provider]?.trim();
+    if (!value) continue;
+    void secureSetApiKey(provider, value).catch((err) => {
+      console.warn(`[credentials] Could not migrate ${provider} API key`, err);
+    });
+  }
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -88,12 +127,29 @@ export const useAuthStore = create<AuthState>()(
 
       setDisplayName: (n) => set({ displayName: n }),
       setApiKey: (provider, key) =>
-        set((s) => ({ apiKeys: { ...s.apiKeys, [provider]: key.trim() } })),
+        set((s) => {
+          const trimmed = key.trim();
+          if (isSecretApiKeyProvider(provider)) {
+            void secureSetApiKey(provider, trimmed).catch((err) => {
+              console.warn(`[credentials] Could not save ${provider} API key`, err);
+            });
+          }
+          return { apiKeys: { ...s.apiKeys, [provider]: trimmed } };
+        }),
       clearApiKey: (provider) =>
         set((s) => {
+          if (isSecretApiKeyProvider(provider)) {
+            void secureDeleteApiKey(provider).catch((err) => {
+              console.warn(`[credentials] Could not delete ${provider} API key`, err);
+            });
+          }
           const { [provider]: _, ...rest } = s.apiKeys;
           return { apiKeys: rest };
         }),
+      hydrateApiKeysFromVault: async () => {
+        const secureKeys = await loadSecureApiKeys();
+        set((s) => ({ apiKeys: { ...s.apiKeys, ...secureKeys } }));
+      },
       setDefaultProvider: (p) => set({ defaultProvider: p }),
       setPersona: (p) => set({ personaPreset: p }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
@@ -107,13 +163,14 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'jarvis-auth',
+      storage: createJSONStorage(() => safeLocalStorage),
       partialize: (s) => ({
         localUserId: s.localUserId,
         displayName: s.displayName,
         email: s.email,
         workspaceId: s.workspaceId,
         projectId: s.projectId,
-        apiKeys: s.apiKeys,
+        apiKeys: persistedLocalApiKeys(s.apiKeys),
         defaultProvider: s.defaultProvider,
         offlineMode: s.offlineMode,
         defaultLocalModel: s.defaultLocalModel,
@@ -121,6 +178,19 @@ export const useAuthStore = create<AuthState>()(
         plan: s.plan,
         telemetryOptIn: s.telemetryOptIn,
       }),
+      version: 2,
+      migrate: (persisted) => {
+        if (!persisted || typeof persisted !== 'object') return persisted;
+        const state = persisted as Partial<AuthState>;
+        const keys = state.apiKeys ?? {};
+        const legacySecrets = legacySecretApiKeys(keys);
+        migrateLegacySecretsToVault(legacySecrets);
+        state.apiKeys = {
+          ...persistedLocalApiKeys(keys),
+          ...legacySecrets,
+        };
+        return state;
+      },
     },
   ),
 );

@@ -44,6 +44,9 @@ import {
   Maximize2,
   Bot,
   PlusCircle,
+  Clock,
+  AlarmClock,
+  Plug,
 } from 'lucide-react';
 
 import { useUIStore, type Route } from '@/stores/ui';
@@ -52,8 +55,16 @@ import {
   enqueueTerminalCommand,
   requestTerminalSwarm,
 } from '@/features/terminals/terminalCommandQueue';
+import type { TerminalRef } from '@/features/terminals/terminalRefs';
 import { taskRepo } from '@/lib/db/repositories';
 import { openExternal } from '@/lib/tauri';
+import {
+  CLOCK_SOUNDS,
+  formatClockRemaining,
+  parseAlarmTime,
+  useClockStore,
+  type ClockSound,
+} from '@/features/clock/clockStore';
 import type { ActionDef, ActionResult } from './types';
 import type { CustomToolStep } from '@/features/tools/toolStore';
 
@@ -113,6 +124,93 @@ function rejectShellMetaChars(value: string): string | null {
     return 'Path contains shell metacharacters that could break the command. Remove `"` `;` `|` `&` `$` `` ` `` or control chars.';
   }
   return null;
+}
+
+function readClockSound(value: unknown): ClockSound {
+  return typeof value === 'string' && CLOCK_SOUNDS.includes(value as ClockSound)
+    ? (value as ClockSound)
+    : 'chime';
+}
+
+function formatDurationMs(durationMs: number): string {
+  const now = Date.now();
+  return formatClockRemaining(now + durationMs, now);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function parseTerminalRefObject(raw: unknown): TerminalRef | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  const paneId = readOptionalString(source.paneId);
+  const sessionId = readOptionalString(source.sessionId);
+  if (!paneId && !sessionId) return null;
+  return {
+    paneId,
+    sessionId,
+    projectId: readOptionalString(source.projectId) ?? null,
+    label: readOptionalString(source.label),
+    command: readOptionalString(source.command),
+    agentSlug: readOptionalString(source.agentSlug) ?? null,
+  };
+}
+
+function parseTerminalRefString(raw: string): TerminalRef | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (value.startsWith('terminal:')) return { sessionId: value.slice('terminal:'.length).trim() };
+  if (!value.startsWith('{')) return { sessionId: value };
+  try {
+    return parseTerminalRefObject(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+function readTerminalRefs(params: Record<string, unknown>): { ok: true; refs: TerminalRef[] } | { ok: false; error: string } {
+  const refs: TerminalRef[] = [];
+  const refsJson = readOptionalString(params.refsJson);
+  if (refsJson) {
+    try {
+      const parsed = JSON.parse(refsJson);
+      const rawRefs = Array.isArray(parsed) ? parsed : [parsed];
+      for (const rawRef of rawRefs) {
+        const ref =
+          typeof rawRef === 'string'
+            ? parseTerminalRefString(rawRef)
+            : parseTerminalRefObject(rawRef);
+        if (ref) refs.push(ref);
+      }
+    } catch {
+      return { ok: false, error: 'refsJson must be a terminal ref object or array encoded as JSON.' };
+    }
+  }
+
+  const paneId = readOptionalString(params.paneId);
+  const sessionId = readOptionalString(params.sessionId);
+  if (paneId || sessionId) {
+    refs.push({
+      paneId,
+      sessionId,
+      projectId: readOptionalString(params.projectId) ?? null,
+      label: readOptionalString(params.label),
+      agentSlug: readOptionalString(params.agentSlug) ?? null,
+    });
+  }
+
+  const seen = new Set<string>();
+  const unique = refs.filter((ref) => {
+    const key = ref.paneId || ref.sessionId;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (unique.length === 0) {
+    return { ok: false, error: 'Provide at least one terminal paneId, sessionId, or refsJson value.' };
+  }
+  return { ok: true, refs: unique.slice(0, 8) };
 }
 
 /* --------------------------------------------------------------------------
@@ -450,6 +548,87 @@ const TERMINAL_ACTIONS: ActionDef[] = [
       return ok(`Queued: ${command}`);
     },
   },
+  {
+    id: 'terminal.sendToRefs',
+    category: 'terminal',
+    label: 'Send command to attached terminal',
+    description:
+      'Send text or a command into existing terminal pane(s) using paneId/sessionId refs from an attached or dragged terminal.',
+    icon: PlayCircle,
+    destructive: true,
+    params: [
+      {
+        key: 'command',
+        label: 'Command text',
+        type: 'string',
+        required: true,
+        placeholder: 'opencode',
+        help: 'Text to type into the target terminal. A trailing Enter is added automatically.',
+      },
+      {
+        key: 'paneId',
+        label: 'Pane id',
+        type: 'string',
+        help: 'Optional pane id copied from the attached-terminal context.',
+      },
+      {
+        key: 'sessionId',
+        label: 'Session id',
+        type: 'string',
+        help: 'Optional PTY session id copied from the attached-terminal context.',
+      },
+      {
+        key: 'refsJson',
+        label: 'Refs JSON',
+        type: 'string',
+        help: 'Optional JSON object or array of terminal refs when targeting multiple attached terminals.',
+      },
+    ],
+    run: async (params) => {
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
+      if (!command) return fail('Command is required.');
+      const parsedRefs = readTerminalRefs(params);
+      if (!parsedRefs.ok) return fail(parsedRefs.error);
+      enqueueTerminalCommand({
+        command,
+        label: `send: ${command.slice(0, 48)}`,
+        target: 'refs',
+        refs: parsedRefs.refs,
+      });
+      navigateTo('terminal');
+      return ok(`Sent '${command}' to ${parsedRefs.refs.length} terminal${parsedRefs.refs.length === 1 ? '' : 's'}.`);
+    },
+  },
+  {
+    id: 'terminal.sendAll',
+    category: 'terminal',
+    label: 'Send command to all terminals',
+    description:
+      'Send text or a command into every existing terminal pane without creating new panes.',
+    icon: PlayCircle,
+    destructive: true,
+    params: [
+      {
+        key: 'command',
+        label: 'Command text',
+        type: 'string',
+        required: true,
+        placeholder: 'npm test',
+        help: 'Text to type into all existing terminal panes. A trailing Enter is added automatically.',
+      },
+    ],
+    run: async (params) => {
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
+      if (!command) return fail('Command is required.');
+      enqueueTerminalCommand({
+        command,
+        label: `all: ${command.slice(0, 48)}`,
+        target: 'all',
+      });
+      navigateTo('terminal');
+      return ok(`Sent '${command}' to all terminal panes.`);
+    },
+  },
 ];
 
 /**
@@ -569,6 +748,170 @@ const HOST_ACTIONS: ActionDef[] = [
     run: async () => {
       useUIStore.getState().setLauncherOpen(true);
       return ok('Opened the launcher.');
+    },
+  },
+];
+
+const PLUGIN_ACTIONS: ActionDef[] = [
+  {
+    id: 'plugin.call',
+    category: 'custom',
+    label: 'Call connected plugin tool',
+    description:
+      'Run a declared tool from a connected and terminal-enabled plugin. Credentials remain in the OS keychain.',
+    icon: Plug,
+    params: [
+      {
+        key: 'pluginId',
+        label: 'Plugin id',
+        type: 'string',
+        required: true,
+        help: 'Stable plugin id shown in the connected plugin capability context.',
+      },
+      {
+        key: 'toolName',
+        label: 'Tool name',
+        type: 'string',
+        required: true,
+        help: 'A declared tool name from the plugin capability context.',
+      },
+    ],
+    run: async (params) => {
+      const pluginId = typeof params.pluginId === 'string' ? params.pluginId.trim() : '';
+      const toolName = typeof params.toolName === 'string' ? params.toolName.trim() : '';
+      if (!pluginId || !toolName) return fail('Plugin id and tool name are required.');
+
+      const [{ getPluginManifest, callPluginTool }, { usePluginStore }] = await Promise.all([
+        import('@/features/plugins'),
+        import('@/features/plugins/store'),
+      ]);
+      const manifest = getPluginManifest(pluginId);
+      const connection = usePluginStore.getState().connections[pluginId];
+      if (!manifest || manifest.status !== 'implemented') {
+        return fail(`Plugin ${pluginId} is not implemented.`);
+      }
+      if (!connection || connection.state !== 'connected') {
+        return fail(`${manifest.name} is not connected.`);
+      }
+      if (!connection.enabled) {
+        return fail(`${manifest.name} terminal access is disabled.`);
+      }
+      const projectId = useAuthStore.getState().projectId;
+      const availableHere =
+        connection.enabledProjectIds.includes('*') ||
+        Boolean(projectId && connection.enabledProjectIds.includes(projectId));
+      if (!availableHere) {
+        return fail(`${manifest.name} is not enabled for the active project.`);
+      }
+      const tool = manifest.tools.find((candidate) => candidate.name === toolName);
+      if (!tool) return fail(`Unknown ${manifest.name} tool: ${toolName}.`);
+
+      try {
+        const data = await callPluginTool(pluginId, toolName);
+        return ok(`${manifest.name}.${toolName} completed.`, data);
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+    },
+  },
+];
+
+const CLOCK_ACTIONS: ActionDef[] = [
+  {
+    id: 'clock.timer',
+    category: 'clock',
+    label: 'Start timer',
+    description: 'Create a local Clock timer with sound and notification when it finishes.',
+    icon: Clock,
+    params: [
+      {
+        key: 'durationMinutes',
+        label: 'Duration minutes',
+        type: 'number',
+        default: 25,
+        help: 'Timer duration in minutes. Use 60 for a one-hour timer.',
+      },
+      {
+        key: 'durationSeconds',
+        label: 'Extra seconds',
+        type: 'number',
+        default: 0,
+        help: 'Optional seconds added to the minute duration.',
+      },
+      { key: 'label', label: 'Label', type: 'string', placeholder: 'Focus timer' },
+      {
+        key: 'sound',
+        label: 'Sound',
+        type: 'select',
+        default: 'chime',
+        options: CLOCK_SOUNDS.map((sound) => ({ value: sound, label: sound })),
+      },
+    ],
+    run: async (params) => {
+      const minutes = typeof params.durationMinutes === 'number' ? params.durationMinutes : 25;
+      const seconds = typeof params.durationSeconds === 'number' ? params.durationSeconds : 0;
+      const durationMs = Math.round((minutes * 60 + seconds) * 1000);
+      if (!Number.isFinite(durationMs) || durationMs <= 0) return fail('Timer duration must be greater than zero.');
+      const entry = useClockStore.getState().createTimer({
+        durationMs,
+        label: typeof params.label === 'string' ? params.label : undefined,
+        sound: readClockSound(params.sound),
+      });
+      return ok(`Timer set for ${formatDurationMs(entry.durationMs ?? durationMs)}.`, {
+        id: entry.id,
+        dueAt: entry.dueAt,
+      });
+    },
+  },
+  {
+    id: 'clock.alarm',
+    category: 'clock',
+    label: 'Set alarm',
+    description: 'Create a local Clock alarm at a future time, such as 15:30, 3:30 PM, or an ISO timestamp.',
+    icon: AlarmClock,
+    params: [
+      {
+        key: 'time',
+        label: 'Alarm time',
+        type: 'string',
+        required: true,
+        placeholder: '3:30 PM',
+        help: 'Local time like 15:30 or 3:30 PM. Past times roll to tomorrow.',
+      },
+      { key: 'label', label: 'Label', type: 'string', placeholder: 'Alarm' },
+      {
+        key: 'sound',
+        label: 'Sound',
+        type: 'select',
+        default: 'chime',
+        options: CLOCK_SOUNDS.map((sound) => ({ value: sound, label: sound })),
+      },
+    ],
+    run: async (params) => {
+      const time = typeof params.time === 'string' ? params.time.trim() : '';
+      const dueAt = parseAlarmTime(time);
+      if (!dueAt) return fail('Alarm time must be a future time like 15:30, 3:30 PM, or an ISO timestamp.');
+      const entry = useClockStore.getState().createAlarm({
+        dueAt,
+        label: typeof params.label === 'string' ? params.label : undefined,
+        sound: readClockSound(params.sound),
+      });
+      return ok(`Alarm set for ${new Date(entry.dueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`, {
+        id: entry.id,
+        dueAt: entry.dueAt,
+      });
+    },
+  },
+  {
+    id: 'clock.cancelAll',
+    category: 'clock',
+    label: 'Cancel all timers and alarms',
+    description: 'Cancel every active local Clock timer and alarm.',
+    icon: AlarmClock,
+    params: [],
+    run: async () => {
+      const count = useClockStore.getState().cancelAllScheduled();
+      return ok(`Cancelled ${count} active clock item${count === 1 ? '' : 's'}.`);
     },
   },
 ];
@@ -717,6 +1060,8 @@ export function getBuiltinActions(): ActionDef[] {
     ...CHAT_ACTIONS,
     ...WELLNESS_ACTIONS,
     ...HOST_ACTIONS,
+    ...PLUGIN_ACTIONS,
+    ...CLOCK_ACTIONS,
     ...PRODUCTIVITY_ACTIONS,
   ];
 }
@@ -751,6 +1096,8 @@ export const BUILTIN_ACTION_COUNT = (() => {
     CHAT_ACTIONS.length +
     WELLNESS_ACTIONS.length +
     HOST_ACTIONS.length +
+    PLUGIN_ACTIONS.length +
+    CLOCK_ACTIONS.length +
     PRODUCTIVITY_ACTIONS.length
   );
 })();
@@ -762,6 +1109,7 @@ export const CATEGORY_LABELS: Record<
   | 'theme'
   | 'voice'
   | 'terminal'
+  | 'clock'
   | 'chat'
   | 'wellness'
   | 'host'
@@ -773,6 +1121,7 @@ export const CATEGORY_LABELS: Record<
   theme: 'Appearance',
   voice: 'Voice',
   terminal: 'Terminal',
+  clock: 'Clock',
   chat: 'Chat',
   wellness: 'Wellness',
   host: 'Host',
@@ -786,6 +1135,7 @@ export const CATEGORY_ICON: Record<string, LucideIcon> = {
   theme: Sparkles,
   voice: Mic,
   terminal: TerminalIcon,
+  clock: Clock,
   chat: Bot,
   wellness: Eye,
   host: Rocket,

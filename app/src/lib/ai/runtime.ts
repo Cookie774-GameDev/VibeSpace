@@ -23,9 +23,11 @@ import type { LLMMessage } from './types';
 import { applyPersona } from '@/features/agents/personas';
 import { applyAvailableActions, parseActionBlocks } from '@/lib/actions';
 import { buildAgentTerminalContext } from '@/features/terminals/agentContext';
+import { getPluginContextBlock } from '@/features/plugins';
 import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
+import { speakText } from '@/features/voice/speechSynthesis';
 import {
   getProjectContextBlock,
   getProjectContextTreeBlock,
@@ -47,13 +49,13 @@ export interface RuntimeBindings {
   /** Resolve an agent by slug (for @mentions in user text). */
   getAgentBySlug: (slug: string) => Agent | null | undefined;
   /** Pick the active agent for a chat (first id in `chat.active_agent_ids`). */
-  getAgentForChat: (chatId: ChatId | string) => Agent | null | undefined;
+  getAgentForChat: (
+    chatId: ChatId | string,
+  ) => Agent | null | undefined | Promise<Agent | null | undefined>;
   /** Read message history for a chat in chronological order. */
   getMessages: (chatId: ChatId | string) => Promise<Message[]> | Message[];
   /** Append a new message; returns the saved message (with id + timestamps). */
-  appendMessage: (
-    msg: Omit<Message, 'id' | 'created_at' | 'updated_at'>,
-  ) => Promise<Message>;
+  appendMessage: (msg: Omit<Message, 'id' | 'created_at' | 'updated_at'>) => Promise<Message>;
   /** Apply a partial update to an existing message. */
   updateMessage: (id: MessageId, patch: Partial<Omit<Message, 'id'>>) => Promise<void>;
 }
@@ -66,6 +68,8 @@ export interface SendDetail {
   text: string;
   /** Optional agent override (otherwise routed by @mention or chat default). */
   agentId?: AgentId;
+  /** Agent ids resolved by the composer mention/typeahead path. */
+  mentionedAgentIds?: AgentId[];
   /** Absolute paths attached to this specific message. */
   filePaths?: string[];
   /** PTY session ids dragged into this specific message. Legacy field. */
@@ -74,6 +78,8 @@ export interface SendDetail {
   terminalRefs?: TerminalRef[];
   /** Context tree nodes dragged into this specific message. */
   contextNodes?: ContextAttachment[];
+  /** Speak the final assistant reply when this send came from voice input. */
+  speakReply?: boolean;
 }
 
 /** The shape of the `jarvis:cancel` event detail. */
@@ -96,7 +102,7 @@ export interface RuntimeOptions {
 
 /** Detect a leading `@slug ` mention in user text. Returns the slug or null. */
 function detectMention(text: string): string | null {
-  const m = /^@([A-Za-z][A-Za-z0-9_]*)\s/.exec(text);
+  const m = /(?:^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/.exec(text);
   return m ? m[1]! : null;
 }
 
@@ -212,6 +218,18 @@ function textToParts(text: string): Part[] {
   return parts;
 }
 
+function textToSpeechOutput(text: string): string {
+  const result = parseActionBlocks(text);
+  const prose = result.segments
+    .flatMap((seg) => (seg.kind === 'prose' ? [seg.text.trim()] : []))
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!prose) return '';
+  return prose.length <= 900 ? prose : `${prose.slice(0, 897).trimEnd()}…`;
+}
+
 /**
  * Subscribe to the chat composer events. Returns an unsubscribe function that
  * removes listeners and aborts any in-flight runs.
@@ -231,14 +249,19 @@ export function startRuntimeListener(
     if (!detail || !detail.chatId || typeof detail.text !== 'string') return;
     const { chatId, text } = detail;
 
-    // Resolve agent: explicit agentId > leading @mention > chat's active agent.
+    // Resolve agent: explicit agentId > composer-resolved mention >
+    // textual @mention fallback > chat's active agent.
     let agent: Agent | null | undefined;
     if (detail.agentId) agent = bindings.getAgentById(detail.agentId);
+    if (!agent && Array.isArray(detail.mentionedAgentIds)) {
+      const mentionedAgentId = detail.mentionedAgentIds.find(Boolean);
+      if (mentionedAgentId) agent = bindings.getAgentById(mentionedAgentId);
+    }
     if (!agent) {
       const slug = detectMention(text);
       if (slug) agent = bindings.getAgentBySlug(slug);
     }
-    if (!agent) agent = bindings.getAgentForChat(chatId);
+    if (!agent) agent = await bindings.getAgentForChat(chatId);
     if (!agent) {
       // Loud-but-not-crashy: surface the misconfiguration so it's visible in
       // dev console; the UI will likely show no response.
@@ -293,6 +316,7 @@ export function startRuntimeListener(
     let explicitContext = '';
     let explicitFilesContext = '';
     let explicitTerminalContext = '';
+    let pluginContext = '';
     try {
       projectContext = await getProjectContextBlock(projectId);
     } catch (err) {
@@ -324,10 +348,7 @@ export function startRuntimeListener(
       });
     }
     try {
-      connectedFilesContext = await getConnectedFilesBlock(
-        agent.slug,
-        projectId,
-      );
+      connectedFilesContext = await getConnectedFilesBlock(agent.slug, projectId);
     } catch (err) {
       devConsole.log({
         channel: 'ai',
@@ -347,7 +368,9 @@ export function startRuntimeListener(
       });
     }
     try {
-      explicitTerminalContext = getExplicitTerminalBlock(detail.terminalRefs ?? detail.terminalSessionIds ?? []);
+      explicitTerminalContext = getExplicitTerminalBlock(
+        detail.terminalRefs ?? detail.terminalSessionIds ?? [],
+      );
     } catch (err) {
       devConsole.log({
         channel: 'ai',
@@ -356,10 +379,21 @@ export function startRuntimeListener(
         detail: { error: err instanceof Error ? err.message : String(err) },
       });
     }
+    try {
+      pluginContext = getPluginContextBlock(projectId);
+    } catch (err) {
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'plugin context fetch failed',
+        detail: { error: err instanceof Error ? err.message : String(err) },
+      });
+    }
 
     const contextBlocks = [
       projectContext,
       projectContextTree,
+      pluginContext,
       explicitContext,
       explicitFilesContext,
       explicitTerminalContext,
@@ -370,8 +404,7 @@ export function startRuntimeListener(
     if (contextBlocks.length > 0) {
       runnable = {
         ...runnable,
-        system_prompt:
-          contextBlocks.join('\n\n') + '\n\n' + (runnable.system_prompt ?? ''),
+        system_prompt: contextBlocks.join('\n\n') + '\n\n' + (runnable.system_prompt ?? ''),
       };
     }
 
@@ -554,7 +587,26 @@ export function startRuntimeListener(
           partCount: textToParts(finalText).length,
         },
       });
-      void notifyDone('jarvis', `${agent.name} done`, derivePaneTitle(finalText) || 'The AI response is complete.');
+      void notifyDone(
+        'jarvis',
+        `${agent.name} done`,
+        derivePaneTitle(finalText) || 'The AI response is complete.',
+      );
+      if (detail.speakReply) {
+        const speechText = textToSpeechOutput(finalText);
+        if (speechText) {
+          void speakText(speechText, { persona: useAuthStore.getState().personaPreset }).catch(
+            (speechErr) => {
+              devConsole.log({
+                channel: 'ai',
+                level: 'warn',
+                message: `Voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+                detail: { agent: agent.slug, textChars: speechText.length },
+              });
+            },
+          );
+        }
+      }
     } catch (err) {
       // Cancel any pending flush before stamping the suffix or it'll overwrite us.
       cancelPendingFlush();
@@ -585,10 +637,7 @@ export function startRuntimeListener(
             message: 'AI error-stamp write failed',
             detail: {
               agent: agent.slug,
-              error:
-                writeErr instanceof Error
-                  ? writeErr.message
-                  : String(writeErr),
+              error: writeErr instanceof Error ? writeErr.message : String(writeErr),
             },
           });
         }

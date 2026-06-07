@@ -25,8 +25,8 @@ import { cn } from '@/lib/utils';
  * Settings panel for the hosted $5/month Jarvis tier. The integrator wires
  * this into the SettingsModal alongside Account, Providers, etc.
  *
- * Local-first contract: if Supabase env vars aren't wired, render a setup
- * card pointing at the README rather than blowing up.
+ * Local-first contract: if the app backend env vars aren't wired, render a
+ * maintainer-facing setup card rather than blowing up.
  */
 
 function readEnv(key: string): string | undefined {
@@ -87,22 +87,17 @@ function SetupCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-ui-strong">
           <Cloud className="h-4 w-4 text-accent-cyan" />
-          Hosted Jarvis isn&apos;t configured
+          Hosted Jarvis isn&apos;t available in this build
         </CardTitle>
         <CardDescription>
-          Add your Supabase project URL and anon key, then restart Jarvis.
-          Until then the app runs local-only with BYOK keys.
+          Official Jarvis-One releases include the app backend configuration.
+          This build is missing it, so Jarvis stays local-only with BYOK keys.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-secondary">
-        <code className="block rounded-md border border-border bg-muted px-2 py-1 font-mono text-metadata">
-          VITE_SUPABASE_URL=https://&lt;project-ref&gt;.supabase.co
-        </code>
-        <code className="block rounded-md border border-border bg-muted px-2 py-1 font-mono text-metadata">
-          VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
-        </code>
         <p className="text-metadata text-muted-foreground mt-2">
-          Setup walkthrough: <span className="font-mono">supabase/README.md</span>
+          Maintainers building from source should set the Jarvis app Supabase URL and anon key
+          at build time. End users should not create or connect their own Supabase project.
         </p>
       </CardContent>
     </Card>

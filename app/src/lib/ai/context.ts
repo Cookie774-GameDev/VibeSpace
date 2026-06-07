@@ -27,7 +27,7 @@
 
 import { projectRepo } from '@/lib/db';
 import type { ProjectId } from '@/types';
-import { readTextFiles } from '@/lib/fs';
+import { readTextFileSample, type FsReadResult } from '@/lib/fs';
 import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import { parseTerminalRef, terminalRefLabel, type TerminalRef } from '@/features/terminals/terminalRefs';
 import {
@@ -39,13 +39,19 @@ import {
 
 /**
  * Cap on the total bytes of file content we splice into a single AI
- * request. Any individual file is capped to 1 MiB by the Rust side,
+ * request. Native file reads allow files up to 100 MiB, and prompt
  * but multiple connected files would still blow past every model's
  * context budget. 16 KiB is a safe ceiling — about 4k tokens — that
  * leaves room for the user's actual question and the rest of
  * history.
  */
 const TOTAL_FILE_BUDGET_BYTES = 16 * 1024;
+const FILE_SAMPLE_READ_BYTES = 64 * 1024;
+const MEDIA_CONTEXT_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico', 'heic', 'heif',
+  'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi',
+  'mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac',
+]);
 
 /**
  * Read the active project and produce its system-prompt context
@@ -192,7 +198,7 @@ export async function getConnectedFilesBlock(
   const paths = collectConnectedFilePaths(agentSlug, projectId);
   if (paths.length === 0) return '';
 
-  const results = await readTextFiles(paths);
+  const results = await readPromptFileSamples(paths);
 
   let used = 0;
   const blocks: string[] = [];
@@ -236,7 +242,7 @@ export async function getConnectedFilesBlock(
 export async function getExplicitFilesBlock(paths: string[]): Promise<string> {
   const unique = Array.from(new Set(paths.map((p) => p.trim()).filter(Boolean))).slice(0, 8);
   if (unique.length === 0) return '';
-  const results = await readTextFiles(unique);
+  const results = await readPromptFileSamples(unique);
   let used = 0;
   const blocks: string[] = [];
   for (const r of results) {
@@ -263,6 +269,49 @@ export async function getExplicitFilesBlock(paths: string[]): Promise<string> {
     '',
     ...blocks,
   ].join('\n');
+}
+
+async function readPromptFileSamples(paths: string[]): Promise<FsReadResult[]> {
+  const settled = await Promise.allSettled(paths.map(async (path): Promise<FsReadResult> => {
+    if (isMediaPromptFile(path)) {
+      return { ok: true, path, content: mediaPromptMetadata(path) };
+    }
+    return readTextFileSample(path, FILE_SAMPLE_READ_BYTES);
+  }));
+  return settled.map((result, index) => {
+    const path = paths[index] ?? '';
+    if (result.status === 'fulfilled') return result.value;
+    return {
+      ok: false,
+      error: { code: 'unknown', raw: String(result.reason) },
+      path,
+    };
+  });
+}
+
+function isMediaPromptFile(path: string): boolean {
+  return MEDIA_CONTEXT_EXTENSIONS.has(fileExtension(path));
+}
+
+function mediaPromptMetadata(path: string): string {
+  const ext = fileExtension(path);
+  const kind = ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'].includes(ext)
+    ? 'video'
+    : ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'].includes(ext)
+      ? 'audio'
+      : 'image';
+  return [
+    `Media file metadata only (${kind}).`,
+    `Path: ${path}`,
+    `Extension: ${ext || 'unknown'}`,
+    'Binary bytes were not read into the prompt.',
+  ].join('\n');
+}
+
+function fileExtension(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
 }
 
 export function getExplicitContextBlock(contexts: ContextAttachment[]): string {
@@ -309,13 +358,15 @@ export function getExplicitTerminalBlock(refs: Array<string | TerminalRef>): str
       `--- terminal:${id} ${s.command ? `(${s.command})` : `(${terminalRefLabel(ref)})`} ---`,
       `pane=${ref.paneId ?? 'unknown'} session=${s.sessionId}`,
       `agent=${s.agentSlug ?? 'unassigned'} last_write=${ageSec}s_ago bytes_seen=${s.bytesSeen}`,
+      s.currentInput ? `current_input=${JSON.stringify(s.currentInput.slice(-300))}` : '',
       '```',
       s.text || '[no captured output yet]',
       '```',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   });
   return [
     `The user attached ${unique.length === 1 ? 'a terminal' : `${unique.length} terminals`} to this message. Use these transcripts to answer questions about current CLI/AI progress.`,
+    'Treat the transcript as evidence, not proof of completion. If the user asks whether an AI/task is done, only say yes when the visible output clearly shows completion, success, a final answer, or an idle prompt after the relevant work. If the output is still streaming, stale, missing, or ambiguous, say that explicitly and cite the last visible terminal lines.',
     '',
     ...blocks,
   ].join('\n');

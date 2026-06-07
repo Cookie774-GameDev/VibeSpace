@@ -3,15 +3,9 @@
  * deleting agents.
  *
  * Layout: a list of agents on the left, a detail editor on the right.
- * The editor is a controlled form bound to a draft state object that's reset
- * whenever the selection changes. "Save" pushes the diff into the agent store;
- * "Clone" creates a new non-builtin copy with a fresh id; "Delete" removes a
- * non-builtin agent entirely (built-ins cannot be deleted, only edited).
- *
- * Persistence: this component reads from and writes to `useAgentStore`. The
- * store is the in-memory roster the rest of the app binds to. A sibling
- * subagent owns the database side of seeding/persistence; this component does
- * not interact with the DB directly.
+ * whenever the selection changes. "Save" persists the diff to IndexedDB and
+ * updates the runtime store; "Clone" creates a durable non-builtin copy with a
+ * fresh id; "Delete" removes a non-builtin agent entirely.
  */
 import * as React from 'react';
 import { Trash2, Copy, Save, RotateCcw, Sparkles, Lock } from 'lucide-react';
@@ -26,6 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { newAgentId } from '@/lib/ids';
+import { agentRepo } from '@/lib/db';
 import { AgentBadge } from './AgentBadge';
 import { getDefaultAgents } from './registry';
 import { getAgentRole, ROLE_PERSONAS, type AgentRole } from './personas';
@@ -140,16 +135,22 @@ export function AgentManager() {
 
   const dirty = !!(draft && selectedAgent && draftDiffers(draft, selectedAgent));
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!selectedAgent || !draft || !dirty) return;
-    updateAgent(selectedAgent.id, {
+    const patch: Partial<Agent> = {
       name: draft.name,
       description: draft.description,
       system_prompt: draft.system_prompt,
       model: { ...selectedAgent.model, provider: draft.provider, model: draft.model },
       temperature: draft.temperature,
-    });
-    toast.success('Saved', `Updated "${draft.name}"`);
+    };
+    try {
+      const saved = await agentRepo.update(selectedAgent.id, patch);
+      updateAgent(selectedAgent.id, saved);
+      toast.success('Saved', `Updated "${draft.name}"`);
+    } catch (err) {
+      toast.error('Save failed', err instanceof Error ? err.message : 'Could not save this agent.');
+    }
   };
 
   const handleReset = () => {
@@ -157,7 +158,7 @@ export function AgentManager() {
     setDraft(agentToDraft(selectedAgent));
   };
 
-  const handleClone = () => {
+  const handleClone = async () => {
     if (!selectedAgent || !draft) return;
     const id = newAgentId();
     const t = Date.now();
@@ -175,16 +176,26 @@ export function AgentManager() {
       created_at: t,
       updated_at: t,
     };
-    registerAgent(cloned);
-    setSelectedId(id);
-    toast.success('Cloned', `Created "${cloned.name}"`);
+    try {
+      const saved = await agentRepo.create(cloned);
+      registerAgent(saved);
+      setSelectedId(saved.id);
+      toast.success('Cloned', `Created "${saved.name}"`);
+    } catch (err) {
+      toast.error('Clone failed', err instanceof Error ? err.message : 'Could not clone this agent.');
+    }
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!selectedAgent || selectedAgent.builtin) return;
     const name = selectedAgent.name;
-    unregisterAgent(selectedAgent.id);
-    toast.info('Deleted', `Removed "${name}"`);
+    try {
+      await agentRepo.delete(selectedAgent.id);
+      unregisterAgent(selectedAgent.id);
+      toast.info('Deleted', `Removed "${name}"`);
+    } catch (err) {
+      toast.error('Delete failed', err instanceof Error ? err.message : 'Could not delete this agent.');
+    }
   };
 
   const seedDefaults = () => {

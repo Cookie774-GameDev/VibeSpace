@@ -21,17 +21,16 @@
  *     and lives in this feature folder.
  *
  * Persistence: Zustand `persist` middleware keyed by `jarvis-tools`.
- * Cloud publish is intentionally a stub today (`publish()` returns
- * `{ ok: false, error: 'Available soon' }`); the field exists so the
- * UI can display "Local only" or "Published" badges once the cloud
- * registry ships.
+ * Mutations are also mirrored into the local sync queue so signed-in users
+ * can carry custom tools through Jarvis Cloud's app sync records.
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import { Wrench } from 'lucide-react';
 import { getBuiltinAction } from '@/lib/actions/registry';
-import type { ActionDef, ActionResult, ActionRunContext } from '@/lib/actions/types';
+import type { ActionDef, ActionParam, ActionResult, ActionRunContext } from '@/lib/actions/types';
 
 /* --------------------------------------------------------------------------
  * Types
@@ -63,10 +62,8 @@ export interface CustomTool {
   createdAt: number;
   updatedAt: number;
   /**
-   * Cloud-publish state. Always `null` today — `publish()` is stubbed
-   * because the Jarvis cloud registry hasn't shipped. When it does,
-   * this becomes a server-issued id + timestamp pair and the UI swaps
-   * "Local only" for "Published".
+   * Public cloud-publish state. Private account sync is handled by the
+   * local sync queue and does not require a server-issued publish id.
    */
   published: { id: string; at: number } | null;
 }
@@ -104,6 +101,121 @@ function uniqueSlug(base: string, existing: ReadonlyArray<CustomTool>): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+type ParamCheck =
+  | { ok: true; value: unknown }
+  | { ok: false; error: string };
+
+function describeParamValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return 'an array';
+  if (typeof value === 'object') return 'an object';
+  const text = String(value);
+  return text.length > 40 ? `"${text.slice(0, 40)}…"` : `"${text}"`;
+}
+
+function coerceToolParam(param: ActionParam, raw: unknown): ParamCheck {
+  const isEmpty = raw === undefined || raw === null || raw === '';
+  if (isEmpty) {
+    if (param.required) {
+      return { ok: false, error: `Missing required parameter: ${param.label} (${param.key}).` };
+    }
+    if (param.default !== undefined) return { ok: true, value: param.default };
+    return { ok: true, value: undefined };
+  }
+
+  switch (param.type) {
+    case 'number': {
+      if (typeof raw === 'number' && Number.isFinite(raw)) return { ok: true, value: raw };
+      if (typeof raw === 'string' && raw.trim()) {
+        const value = Number(raw);
+        if (Number.isFinite(value)) return { ok: true, value };
+      }
+      return { ok: false, error: `Parameter "${param.key}" must be a number; got ${describeParamValue(raw)}.` };
+    }
+    case 'boolean': {
+      if (typeof raw === 'boolean') return { ok: true, value: raw };
+      if (typeof raw === 'string') {
+        const value = raw.trim().toLowerCase();
+        if (value === 'true' || value === 'on' || value === '1') return { ok: true, value: true };
+        if (value === 'false' || value === 'off' || value === '0') return { ok: true, value: false };
+      }
+      return { ok: false, error: `Parameter "${param.key}" must be true/false; got ${describeParamValue(raw)}.` };
+    }
+    case 'select': {
+      if (typeof raw !== 'string') {
+        return { ok: false, error: `Parameter "${param.key}" must be a string; got ${describeParamValue(raw)}.` };
+      }
+      const allowed = (param.options ?? []).map((option) => option.value);
+      if (allowed.length > 0 && !allowed.includes(raw)) {
+        return { ok: false, error: `Parameter "${param.key}" must be one of: ${allowed.join(', ')}.` };
+      }
+      return { ok: true, value: raw };
+    }
+    case 'route':
+    case 'string':
+    default: {
+      if (typeof raw === 'string') return { ok: true, value: raw };
+      if (typeof raw === 'number' || typeof raw === 'boolean') return { ok: true, value: String(raw) };
+      return { ok: false, error: `Parameter "${param.key}" must be a string; got ${describeParamValue(raw)}.` };
+    }
+  }
+}
+
+function validateToolParams(
+  def: ActionDef,
+  params: Record<string, unknown>,
+): { ok: true; params: Record<string, unknown> } | { ok: false; error: string } {
+  const errors: string[] = [];
+  const next: Record<string, unknown> = { ...params };
+  for (const param of def.params) {
+    const checked = coerceToolParam(param, params[param.key]);
+    if (!checked.ok) {
+      errors.push(checked.error);
+      continue;
+    }
+    if (checked.value === undefined) {
+      delete next[param.key];
+    } else {
+      next[param.key] = checked.value;
+    }
+  }
+  return errors.length > 0 ? { ok: false, error: errors.join(' ') } : { ok: true, params: next };
+}
+
+async function runValidatedBuiltinAction(
+  action: ActionDef,
+  params: Record<string, unknown>,
+  ctx: ActionRunContext,
+): Promise<ActionResult> {
+  const validation = validateToolParams(action, params);
+  if (!validation.ok) return { ok: false, error: validation.error };
+  return action.run(validation.params, ctx);
+}
+
+function dispatchToolsUpdated(): void {
+  if (typeof window === 'undefined') return;
+  queueMicrotask(() => {
+    window.dispatchEvent(new CustomEvent('jarvis:tools-updated'));
+  });
+}
+
+const CUSTOM_TOOLS_SYNC_TABLE = 'custom_tools';
+
+function enqueueToolSync(op: 'insert' | 'update' | 'delete', tool: CustomTool): void {
+  void import('@/lib/sync')
+    .then(({ enqueueMutation }) =>
+      enqueueMutation(op, CUSTOM_TOOLS_SYNC_TABLE, tool.slug, op === 'delete' ? null : tool),
+    )
+    .catch((err) => {
+      console.warn('[sync] failed to enqueue custom tool mutation', {
+        slug: tool.slug,
+        op,
+        err,
+      });
+    });
 }
 
 export function normalizeToolSteps(value: unknown): CustomToolStep[] {
@@ -170,11 +282,7 @@ interface ToolStoreState {
   /** Delete a tool by slug. */
   remove: (slug: string) => void;
 
-  /**
-   * Cloud publish — stubbed. Returns an error result today so callers
-   * can render a clear "Available soon" message; we'll wire the real
-   * upload once the cloud registry ships.
-   */
+  /** Queue the current tool state into private Jarvis Cloud account sync. */
   publish: (slug: string) => Promise<ActionResult>;
 
   /** Bulk import (used by the "Import JSON" UI). Returns count added. */
@@ -210,7 +318,7 @@ function toolToActionDef(t: CustomTool): ActionDef {
               error: `Step ${stepIndex + 1} references an unknown built-in action: ${step.action}.`,
             };
           }
-          const result = await action.run(step.params, ctx);
+          const result = await runValidatedBuiltinAction(action, step.params, ctx);
           if (!result.ok) {
             return {
               ok: false,
@@ -232,7 +340,7 @@ function toolToActionDef(t: CustomTool): ActionDef {
           error: `Tool "${t.name}" is wired to an unknown base action: ${t.baseAction}.`,
         };
       }
-      return base.run(t.params, ctx);
+      return runValidatedBuiltinAction(base, t.params, ctx);
     },
   };
 }
@@ -273,26 +381,39 @@ export const useToolStore = create<ToolStoreState>()(
           published: null,
         };
         set((s) => ({ tools: [tool, ...s.tools] }));
+        enqueueToolSync('insert', tool);
+        dispatchToolsUpdated();
         return tool;
       },
 
-      update: (slug, patch) =>
+      update: (slug, patch) => {
+        let updatedTool: CustomTool | undefined;
         set((s) => ({
-          tools: s.tools.map((t) =>
-            t.slug === slug ? { ...t, ...patch, slug, updatedAt: Date.now() } : t,
-          ),
-        })),
+          tools: s.tools.map((t) => {
+            if (t.slug !== slug) return t;
+            updatedTool = { ...t, ...patch, slug, updatedAt: Date.now() };
+            return updatedTool;
+          }),
+        }));
+        if (updatedTool) enqueueToolSync('update', updatedTool);
+        dispatchToolsUpdated();
+      },
 
-      remove: (slug) =>
-        set((s) => ({ tools: s.tools.filter((t) => t.slug !== slug) })),
+      remove: (slug) => {
+        const removedTool = get().tools.find((t) => t.slug === slug);
+        set((s) => ({ tools: s.tools.filter((t) => t.slug !== slug) }));
+        if (removedTool) enqueueToolSync('delete', removedTool);
+        dispatchToolsUpdated();
+      },
 
-      publish: async () => {
-        // Cloud registry not live yet. Honest stub returning an error
-        // so the UI can render "Available soon" without lying.
+      publish: async (slug) => {
+        const tool = get().tools.find((t) => t.slug === slug);
+        if (!tool) return { ok: false, error: `Unknown custom tool: ${slug}` };
+        enqueueToolSync('update', tool);
         return {
-          ok: false,
-          error:
-            'Publishing to Jarvis Cloud is available soon. Until then, your tools live on this device only.',
+          ok: true,
+          summary: 'Queued for Jarvis Cloud account sync.',
+          data: { slug },
         };
       },
 
@@ -331,11 +452,14 @@ export const useToolStore = create<ToolStoreState>()(
         }
         if (added.length === 0) return 0;
         set((s) => ({ tools: [...added, ...s.tools] }));
+        added.forEach((tool) => enqueueToolSync('insert', tool));
+        dispatchToolsUpdated();
         return added.length;
       },
     }),
     {
       name: 'jarvis-tools',
+      storage: createJSONStorage(() => safeLocalStorage),
       // Persist only the tools array; everything else is derived state.
       partialize: (s) => ({ tools: s.tools }),
       version: 1,

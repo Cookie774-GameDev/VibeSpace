@@ -11,7 +11,7 @@
        - The Tauri-canonical name (Jarvis One_<v>_x64-setup.exe) so install.ps1
          keeps working when published to GitHub Releases.
        - A friendly name (Jarvis-<v>-Windows-x64.exe) for direct downloads.
-     If Tauri generated updater signatures, matching .sig files are copied too.
+     Matching updater signatures are generated and copied too.
   3. Builds releases\latest.json for tauri-plugin-updater.
   4. Computes SHA-256 hashes and updates releases\SHA256SUMS.txt.
   5. Prints a summary.
@@ -64,11 +64,151 @@ if (-not (Test-Path -LiteralPath $ReleasesDir)) {
   New-Item -ItemType Directory -Path $ReleasesDir -Force | Out-Null
 }
 
+$nsisDir = Join-Path $BundleDir 'nsis'
+$msiDir  = Join-Path $BundleDir 'msi'
+
+# Tauri-canonical filenames as written by the bundler.
+$nsisName = "Jarvis One_${Version}_x64-setup.exe"
+$msiName  = "Jarvis One_${Version}_x64_en-US.msi"
+
+$nsisSrc = Join-Path $nsisDir $nsisName
+$msiSrc  = Join-Path $msiDir  $msiName
+$friendlyNsisName = "Jarvis-One-${Version}-Windows-x64.exe"
+$friendlyMsiName = "Jarvis-One-${Version}-Windows-x64.msi"
+$script:UpdaterSigningPasswordIsBlank = $false
+
 # --- Pretty output ---------------------------------------------------------
 function Write-Step ($msg) { Write-Host "  -> " -NoNewline -ForegroundColor Cyan; Write-Host $msg }
 function Write-Ok   ($msg) { Write-Host "  OK " -NoNewline -ForegroundColor Green; Write-Host $msg }
 function Write-Warn ($msg) { Write-Host "  !! " -NoNewline -ForegroundColor Yellow; Write-Host $msg -ForegroundColor Yellow }
 function Write-Fail ($msg) { Write-Host "  XX " -NoNewline -ForegroundColor Red; Write-Host $msg -ForegroundColor Red }
+
+function Get-ConfiguredUpdaterPublicKey {
+  $tauriConfigPath = Join-Path $AppDir 'src-tauri\tauri.conf.json'
+  $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+  $publicKey = $tauriConfig.plugins.updater.pubkey
+  if ([string]::IsNullOrWhiteSpace($publicKey)) {
+    Write-Fail "Updater public key is missing from $tauriConfigPath"
+    exit 1
+  }
+  return $publicKey.Trim()
+}
+
+function Test-UpdaterKeyPair {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PrivateKeyPath,
+    [Parameter(Mandatory = $true)]
+    [string]$ConfiguredPublicKey
+  )
+
+  $publicKeyPath = "$PrivateKeyPath.pub"
+  if (-not (Test-Path -LiteralPath $publicKeyPath)) {
+    return $false
+  }
+
+  $candidatePublicKey = (Get-Content -LiteralPath $publicKeyPath -Raw).Trim()
+  return $candidatePublicKey -eq $ConfiguredPublicKey
+}
+
+function Initialize-UpdaterSigningKey {
+  $hasInlineKey = -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)
+  $hasKeyPath = -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH)
+  $configuredPublicKey = Get-ConfiguredUpdaterPublicKey
+  $tauriKeyDir = Join-Path $env:USERPROFILE '.tauri'
+  $defaultKeyPaths = @(
+    (Join-Path $tauriKeyDir 'jarvis.key'),
+    (Join-Path $tauriKeyDir 'jarvis-plain.key')
+  )
+
+  if ($hasKeyPath -and -not (Test-Path -LiteralPath $env:TAURI_SIGNING_PRIVATE_KEY_PATH)) {
+    Write-Fail "TAURI_SIGNING_PRIVATE_KEY_PATH does not exist: $env:TAURI_SIGNING_PRIVATE_KEY_PATH"
+    exit 1
+  }
+
+  if (-not $hasInlineKey -and -not $hasKeyPath) {
+    $matchingKeyPath = $defaultKeyPaths |
+      Where-Object {
+        (Test-Path -LiteralPath $_) -and
+        (Test-UpdaterKeyPair -PrivateKeyPath $_ -ConfiguredPublicKey $configuredPublicKey)
+      } |
+      Select-Object -First 1
+
+    if ($matchingKeyPath) {
+      $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $matchingKeyPath
+      $hasKeyPath = $true
+      Write-Ok "Using updater signing key at $matchingKeyPath"
+    }
+  }
+
+  if (-not $hasInlineKey -and -not $hasKeyPath) {
+    Write-Fail 'Missing Tauri updater signing private key.'
+    Write-Warn 'Set TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_PATH before running release:windows.'
+    Write-Warn "For local maintainer builds, place the key and matching .pub file in $tauriKeyDir."
+    Write-Warn 'Without this key, Tauri cannot generate .sig files and latest.json cannot be valid.'
+    exit 1
+  }
+
+  if ($hasKeyPath) {
+    $keyPath = (Resolve-Path -LiteralPath $env:TAURI_SIGNING_PRIVATE_KEY_PATH).Path
+    if (-not (Test-UpdaterKeyPair -PrivateKeyPath $keyPath -ConfiguredPublicKey $configuredPublicKey)) {
+      Write-Fail "Updater key does not match app/src-tauri/tauri.conf.json: $keyPath"
+      Write-Warn "Expected a matching public key at $keyPath.pub"
+      exit 1
+    }
+
+    $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
+    $passwordPath = "$keyPath.password"
+    if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) -and (Test-Path -LiteralPath $passwordPath)) {
+      $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (Get-Content -LiteralPath $passwordPath -Raw).TrimEnd()
+      Write-Ok "Loaded updater signing key password from $passwordPath"
+    } elseif ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+      $blankPasswordPath = Join-Path $tauriKeyDir 'empty-password.txt'
+      if (Test-Path -LiteralPath $blankPasswordPath) {
+        $script:UpdaterSigningPasswordIsBlank = $true
+        Write-Ok "Using an empty updater signing key password"
+      }
+    }
+  } elseif ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PUBLIC_KEY)) {
+    Write-Fail 'Inline updater keys require TAURI_SIGNING_PUBLIC_KEY for pair validation.'
+    Write-Warn 'Prefer TAURI_SIGNING_PRIVATE_KEY_PATH with a sibling .pub file.'
+    exit 1
+  } elseif ($env:TAURI_SIGNING_PUBLIC_KEY.Trim() -ne $configuredPublicKey) {
+    Write-Fail 'TAURI_SIGNING_PUBLIC_KEY does not match app/src-tauri/tauri.conf.json.'
+    exit 1
+  }
+}
+
+function Invoke-UpdaterSignature {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ArtifactPath
+  )
+
+  if (-not (Test-Path -LiteralPath $ArtifactPath)) {
+    Write-Fail "Cannot sign missing updater artifact: $ArtifactPath"
+    exit 1
+  }
+
+  Write-Step "Generating updater signature for $(Split-Path -Leaf $ArtifactPath)..."
+  $tauriCli = Join-Path $RepoRoot 'node_modules\@tauri-apps\cli\tauri.js'
+  $nodePath = (Get-Command node -ErrorAction Stop).Source
+
+  if ($script:UpdaterSigningPasswordIsBlank) {
+    # Windows PowerShell drops empty native arguments, so cmd.exe is used to
+    # preserve the explicit `-p ""` required by an unencrypted minisign key.
+    $command = '"{0}" "{1}" signer sign -f "{2}" -p "" "{3}"' -f `
+      $nodePath, $tauriCli, $env:TAURI_SIGNING_PRIVATE_KEY_PATH, $ArtifactPath
+    & cmd.exe /d /s /c $command
+  } else {
+    & $nodePath $tauriCli signer sign $ArtifactPath
+  }
+
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath "$ArtifactPath.sig")) {
+    throw "Updater signing failed for $ArtifactPath"
+  }
+  Write-Ok "Generated $(Split-Path -Leaf "$ArtifactPath.sig")"
+}
 
 Write-Host ""
 Write-Host "  Jarvis release pipeline (Windows x64)" -ForegroundColor Cyan
@@ -77,10 +217,20 @@ Write-Host ""
 
 # --- 1. Build (unless skipped) ---------------------------------------------
 if (-not $SkipBuild) {
+  Initialize-UpdaterSigningKey
+
+  foreach ($staleSig in @("$nsisSrc.sig", "$msiSrc.sig")) {
+    if (Test-Path -LiteralPath $staleSig) {
+      Remove-Item -LiteralPath $staleSig -Force
+      Write-Warn "Removed stale pre-build updater signature: $staleSig"
+    }
+  }
+
   $signScript = Join-Path $RepoRoot 'scripts\sign-windows.ps1'
   $signConfig = Join-Path $AppDir 'src-tauri\tauri.windows-signing.generated.json'
   $signingConfigObject = @{
     bundle = @{
+      createUpdaterArtifacts = $false
       windows = @{
         signCommand = @{
           cmd = 'powershell'
@@ -111,20 +261,30 @@ if (-not $SkipBuild) {
     Pop-Location
   }
   Write-Ok 'Build complete'
+  Invoke-UpdaterSignature -ArtifactPath $nsisSrc
+  Invoke-UpdaterSignature -ArtifactPath $msiSrc
 } else {
   Write-Warn 'Skipping build (-SkipBuild)'
 }
 
 # --- 2. Locate built artifacts ---------------------------------------------
-$nsisDir = Join-Path $BundleDir 'nsis'
-$msiDir  = Join-Path $BundleDir 'msi'
-
-# Tauri-canonical filenames as written by the bundler.
-$nsisName = "Jarvis One_${Version}_x64-setup.exe"
-$msiName  = "Jarvis One_${Version}_x64_en-US.msi"
-
-$nsisSrc = Join-Path $nsisDir $nsisName
-$msiSrc  = Join-Path $msiDir  $msiName
+foreach ($releaseName in @(
+  $nsisName,
+  "$nsisName.sig",
+  $msiName,
+  "$msiName.sig",
+  $friendlyNsisName,
+  "$friendlyNsisName.sig",
+  $friendlyMsiName,
+  "$friendlyMsiName.sig",
+  'latest.json'
+)) {
+  $existing = Join-Path $ReleasesDir $releaseName
+  if (Test-Path -LiteralPath $existing) {
+    Remove-Item -LiteralPath $existing -Force
+    Write-Warn "Removed stale staged release asset: $releaseName"
+  }
+}
 
 # --- 3. Stage with friendly + canonical names ------------------------------
 $staged = @()
@@ -145,6 +305,12 @@ function Copy-Artifact {
 
     $sigSrc = "$Src.sig"
     if (Test-Path -LiteralPath $sigSrc) {
+      $artifactItem = Get-Item -LiteralPath $Src
+      $sigItem = Get-Item -LiteralPath $sigSrc
+      if ($sigItem.LastWriteTimeUtc -lt $artifactItem.LastWriteTimeUtc) {
+        Write-Warn "Ignoring stale updater signature for $Canonical; rebuild with TAURI_SIGNING_PRIVATE_KEY."
+        continue
+      }
       $sigDst = Join-Path $ReleasesDir "$name.sig"
       Copy-Item -LiteralPath $sigSrc -Destination $sigDst -Force
       Write-Ok "Staged $name.sig"
@@ -157,12 +323,12 @@ function Copy-Artifact {
 $staged += Copy-Artifact `
   -Src       $nsisSrc `
   -Canonical $nsisName `
-  -Friendly  "Jarvis-One-${Version}-Windows-x64.exe"
+  -Friendly  $friendlyNsisName
 
 $staged += Copy-Artifact `
   -Src       $msiSrc `
   -Canonical $msiName `
-  -Friendly  "Jarvis-One-${Version}-Windows-x64.msi"
+  -Friendly  $friendlyMsiName
 
 if ($staged.Count -eq 0) {
   Write-Fail 'No installers staged. Aborting.'

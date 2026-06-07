@@ -9,6 +9,11 @@ interface MenuState {
   selection: string;
 }
 
+const SUPPRESS_CONTEXT_MENU_CLASSES = [
+  'jarvis-terminal-right-dragging',
+  'jarvis-context-map-right-dragging',
+];
+
 export function JarvisContextMenu() {
   const [menu, setMenu] = React.useState<MenuState | null>(null);
   const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
@@ -18,8 +23,21 @@ export function JarvisContextMenu() {
   React.useEffect(() => {
     const close = () => setMenu(null);
     const onContextMenu = (event: MouseEvent) => {
-      if (document.body.classList.contains('jarvis-terminal-right-dragging')) return;
+      if (event.defaultPrevented) return;
+      if (SUPPRESS_CONTEXT_MENU_CLASSES.some((className) => document.body.classList.contains(className))) {
+        event.preventDefault();
+        return;
+      }
+      const suppressUntil = Number(document.body.dataset.jarvisSuppressContextMenuUntil ?? 0);
+      if (Number.isFinite(suppressUntil) && Date.now() < suppressUntil) {
+        event.preventDefault();
+        return;
+      }
       const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-jarvis-suppress-context-menu]')) {
+        event.preventDefault();
+        return;
+      }
       if (target?.closest('[data-native-context-menu]')) return;
       event.preventDefault();
       const selection = window.getSelection()?.toString().trim() ?? '';

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const args = parseArgs(process.argv.slice(2));
@@ -37,6 +37,11 @@ async function addPlatform(platform, artifactName, allNames) {
   const sigName = `${artifactName}.sig`;
   if (!allNames.includes(sigName)) {
     throw new Error(`Missing signature for ${artifactName}: expected ${sigName}`);
+  }
+  const artifactStat = await stat(path.join(assetsDir, artifactName));
+  const sigStat = await stat(path.join(assetsDir, sigName));
+  if (sigStat.mtimeMs + 1000 < artifactStat.mtimeMs) {
+    throw new Error(`Stale signature for ${artifactName}: ${sigName} is older than the artifact`);
   }
   const signature = (await readFile(path.join(assetsDir, sigName), 'utf8')).trim();
   platforms[platform] = {

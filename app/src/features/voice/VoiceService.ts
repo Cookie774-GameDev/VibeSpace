@@ -4,11 +4,10 @@
  * voice modal has *some* working transcription path on Chromium-based hosts
  * (Tauri Windows uses WebView2 which supports it).
  *
- * Real ASR/TTS comes in Phase 3 via the Pipecat sidecar. Until then, this
- * service:
+ * This service:
  *  - feature-detects the Web Speech API
  *  - emits typed events the modal can wire into the voice store
- *  - falls back to a "voice will work in Phase 3" toast if the API is missing
+ *  - falls back cleanly when the API is missing
  *
  * The service is a *singleton*. Import the named export `VoiceService`.
  */
@@ -79,6 +78,9 @@ export type VoiceErrorKind =
   | 'service_not_allowed'
   | 'unknown';
 
+export const VOICE_EXCLUSIVE_START_EVENT = 'jarvis:voice:exclusive-start';
+export const VOICE_EXCLUSIVE_STOP_EVENT = 'jarvis:voice:exclusive-stop';
+
 type Listener<T> = (payload: T) => void;
 type AnyListener = Listener<unknown>;
 
@@ -128,13 +130,18 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+function dispatchExclusiveEvent(eventName: string): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(eventName));
+}
+
 function mapErrorKind(raw: string): VoiceErrorKind {
   switch (raw) {
     case 'not-allowed':
-    case 'service-not-allowed':
-      return 'service_not_allowed';
     case 'permission-denied':
       return 'permission_denied';
+    case 'service-not-allowed':
+      return 'service_not_allowed';
     case 'no-speech':
       return 'no_speech';
     case 'aborted':
@@ -181,6 +188,11 @@ class VoiceServiceImpl extends VoiceEmitter {
     return this.active;
   }
 
+  /** True while callers expect recognition to survive Chromium/browser restarts. */
+  wantsListening(): boolean {
+    return this.wantsActive;
+  }
+
   /** Set the BCP-47 language tag used for recognition. Default is en-US. */
   setLanguage(lang: string): void {
     this.langPref = lang;
@@ -194,16 +206,18 @@ class VoiceServiceImpl extends VoiceEmitter {
    * No-op if already listening. Emits 'voice:error' with kind=unsupported
    * when the Web Speech API is missing.
    */
-  startListening(): void {
-    if (this.active) return;
+  startListening(): boolean {
+    if (this.active) return true;
     const Ctor = getRecognitionCtor();
     if (!Ctor) {
       this.emit('voice:error', {
         kind: 'unsupported',
-        message: 'Voice will work in Phase 3 (Pipecat sidecar).',
+        message: 'Built-in speech recognition is not available in this runtime.',
       });
-      return;
+      return false;
     }
+
+    dispatchExclusiveEvent(VOICE_EXCLUSIVE_START_EVENT);
 
     const r = new Ctor();
     r.continuous = true;
@@ -278,6 +292,9 @@ class VoiceServiceImpl extends VoiceEmitter {
       // with Chromium's ~60 s cap), restart transparently.
       const shouldRestart = this.wantsActive;
       this.emit('voice:end', undefined);
+      if (!shouldRestart) {
+        dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
+      }
       if (shouldRestart) {
         // Defer to the next tick so listeners observing 'voice:end' see
         // active=false before we flip it back on.
@@ -291,6 +308,7 @@ class VoiceServiceImpl extends VoiceEmitter {
     this.wantsActive = true;
     try {
       r.start();
+      return true;
     } catch (err) {
       // Some browsers throw if start() is called too quickly after stop().
       this.emit('voice:error', {
@@ -301,6 +319,8 @@ class VoiceServiceImpl extends VoiceEmitter {
       this.recognition = null;
       this.active = false;
       this.wantsActive = false;
+      dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
+      return false;
     }
   }
 
@@ -311,6 +331,7 @@ class VoiceServiceImpl extends VoiceEmitter {
     const r = this.recognition;
     if (!r) {
       this.active = false;
+      dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
       return;
     }
     try {
@@ -325,7 +346,10 @@ class VoiceServiceImpl extends VoiceEmitter {
     this.wantsActive = false;
     this.clearInactivityTimer();
     const r = this.recognition;
-    if (!r) return;
+    if (!r) {
+      dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
+      return;
+    }
     try {
       r.abort();
     } catch {

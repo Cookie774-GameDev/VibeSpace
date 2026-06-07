@@ -8,9 +8,8 @@
  *   - The actions palette (Mod+Shift+A) so you can fire it manually.
  *   - The Jarvis system-prompt addendum so the AI can propose it.
  *
- * Cloud publish is intentionally a stub today — the field exists but
- * `toolStore.publish()` returns an `Available soon` error. That keeps
- * the UI honest while the cloud registry isn't live.
+ * Tool mutations are mirrored into Jarvis Cloud account sync when signed in.
+ * Public tool publishing remains separate from private account sync.
  */
 
 import * as React from 'react';
@@ -27,6 +26,7 @@ import {
   Info,
   Workflow,
 } from 'lucide-react';
+import { ClockToolPanel } from '@/features/clock';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -66,6 +66,13 @@ interface QuickTemplate {
 }
 
 const QUICK_TEMPLATES: QuickTemplate[] = [
+  {
+    emoji: '⏱',
+    name: 'One-hour timer',
+    description: 'Start a one-hour Clock timer with a chime.',
+    baseAction: 'clock.timer',
+    params: { durationMinutes: 60, label: 'One-hour timer', sound: 'chime' },
+  },
   {
     emoji: '🤖',
     name: 'Claude in my project',
@@ -299,7 +306,7 @@ function ToolEditor({ open, onClose, initial, templateSeed }: ToolEditorProps) {
 
   const handleDelete = () => {
     if (!initial) return;
-    if (!confirm(`Delete "${initial.name}"? This is local; published tools are unaffected.`)) return;
+    if (!confirm(`Delete "${initial.name}"? This removes the local copy and queues a cloud-sync tombstone.`)) return;
     remove(initial.slug);
     toast.success('Tool deleted', initial.name);
     onClose();
@@ -530,10 +537,10 @@ function ToolCard({ tool, onEdit, onRun }: ToolCardProps) {
         </div>
         <span
           className="text-metadata uppercase tracking-wide text-muted-foreground/70"
-          title="Cloud publishing is available soon"
+          title="Queued for Jarvis Cloud account sync when signed in"
         >
           <Cloud className="mr-1 inline h-3 w-3" />
-          local
+          sync
         </span>
       </div>
 
@@ -686,17 +693,17 @@ export function ToolsPage() {
           </div>
         </div>
 
-        {/* Cloud publish banner — honest "available soon" */}
+        {/* Cloud sync banner */}
         <div className="rounded-md border border-border bg-elevated px-3 py-2 mb-6 flex items-start gap-2">
           <Cloud className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
           <div className="text-secondary text-muted-foreground leading-relaxed">
             <span className="text-foreground font-medium">Jarvis Cloud sync</span>{' '}
-            for publishing tools is{' '}
-            <span className="text-accent-copper">available soon</span>. Until
-            then your tools live on this device only — use Export / Import
-            (above) to move them between machines.
+            now queues private custom-tool changes for your account when signed in.
+            Export / Import still works for manual backups and offline moves.
           </div>
         </div>
+
+        <ClockToolPanel />
 
         {/* Quick-start templates (always visible — they make new tools cheap) */}
         <div className="mb-8">
@@ -764,7 +771,7 @@ export function ToolsPage() {
           <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <p>
             Tools are stored locally under <span className="font-mono">jarvis-tools</span>{' '}
-            in browser storage. They persist across sessions on this device.
+            and mirrored into the local sync queue for signed-in Jarvis Cloud accounts.
           </p>
         </div>
       </div>

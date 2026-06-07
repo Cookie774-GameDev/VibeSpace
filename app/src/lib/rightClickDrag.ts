@@ -96,8 +96,10 @@ export function startRightClickDrag(
   }
 
   function onUp(ev: MouseEvent) {
+    if (ev.button !== 2) return;
     if (dragging) {
       suppressNativeMenuUntil = Date.now() + 700;
+      document.body.dataset.jarvisSuppressContextMenuUntil = String(suppressNativeMenuUntil);
       ev.preventDefault();
       ev.stopPropagation();
       const dropTarget = findDropTarget();

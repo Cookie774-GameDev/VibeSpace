@@ -77,8 +77,59 @@ const DEFAULT_SETTINGS: PhoneSettings = {
   unlock_phrase: 'unlock shell',
 };
 
+export const PHONE_SETTINGS_DRAFT_KEY = 'jarvis-phone-settings-draft-v1';
+
+function sanitizePhoneSettingsDraft(settings: PhoneSettings): PhoneSettings {
+  const { byok_provider_keys: _keys, ...safe } = settings;
+  return safe;
+}
+
+function readPhoneSettingsDraft(): PhoneSettings {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(PHONE_SETTINGS_DRAFT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PhoneSettings;
+    return sanitizePhoneSettingsDraft(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function writePhoneSettingsDraft(settings: PhoneSettings): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      PHONE_SETTINGS_DRAFT_KEY,
+      JSON.stringify(sanitizePhoneSettingsDraft(settings)),
+    );
+  } catch {
+    // Local autosave is best-effort; Jarvis Cloud remains the durable source.
+  }
+}
+
+export function mergePhoneSettingsForDisplay(remote: PhoneSettings | null | undefined): PhoneSettings {
+  const draft = readPhoneSettingsDraft();
+  return {
+    ...DEFAULT_SETTINGS,
+    ...(remote ?? {}),
+    ...draft,
+  };
+}
+
+function patchPhoneSettingsDraft(base: PhoneSettings, patch: Partial<PhoneSettings>): void {
+  writePhoneSettingsDraft({
+    ...base,
+    ...readPhoneSettingsDraft(),
+    ...patch,
+  });
+}
+
 export function PhoneVoice() {
-  const [settings, setSettings] = useState<PhoneSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<PhoneSettings>(() => ({
+    ...DEFAULT_SETTINGS,
+    ...readPhoneSettingsDraft(),
+  }));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
@@ -126,9 +177,9 @@ export function PhoneVoice() {
           // PGRST116 = no rows; that's fine, we'll create on first save
           toast.error('Failed to load Phone settings', error.message);
         }
-        if (data) {
-          setSettings({ ...DEFAULT_SETTINGS, ...(data as PhoneSettings) });
-        }
+        const next = mergePhoneSettingsForDisplay(data as PhoneSettings | null);
+        setSettings(next);
+        writePhoneSettingsDraft(next);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -154,18 +205,24 @@ export function PhoneVoice() {
     return () => window.clearInterval(id);
   }, [configured]);
 
-  async function save(patch: Partial<PhoneSettings>) {
+  async function save(patch: Partial<PhoneSettings>, options: { silentLocal?: boolean } = {}) {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    writePhoneSettingsDraft(next);
+
     if (!userId) {
-      toast.error('Sign in first', 'Phone settings need a Supabase user.');
+      if (!options.silentLocal) {
+        toast.info('Saved locally', 'Phone settings will sync when Jarvis Cloud sign-in is available.');
+      }
       return;
     }
     const supa = getSupabaseClient();
     if (!supa) {
-      toast.error('Supabase not configured');
+      if (!options.silentLocal) {
+        toast.info('Saved locally', 'Jarvis Cloud is not configured in this build.');
+      }
       return;
     }
-    const next = { ...settings, ...patch };
-    setSettings(next);
     setSaving(true);
     try {
       // Loose-typed call so this compiles before we regen Supabase Database types
@@ -240,7 +297,8 @@ export function PhoneVoice() {
         triggers={settings.outbound_triggers ?? DEFAULT_SETTINGS.outbound_triggers!}
         onChange={(outbound_triggers) => save({ outbound_triggers })}
         userPhoneNumber={settings.user_phone_number ?? ''}
-        onPhoneChange={(user_phone_number) => save({ user_phone_number })}
+        onPhoneDraftChange={(user_phone_number) => patchPhoneSettingsDraft(settings, { user_phone_number })}
+        onPhoneChange={(user_phone_number) => save({ user_phone_number }, { silentLocal: true })}
       />
 
       <Separator />
@@ -248,7 +306,8 @@ export function PhoneVoice() {
       {/* 6. Unlock phrase */}
       <UnlockCard
         phrase={settings.unlock_phrase ?? 'unlock shell'}
-        onChange={(unlock_phrase) => save({ unlock_phrase })}
+        onDraftChange={(unlock_phrase) => patchPhoneSettingsDraft(settings, { unlock_phrase })}
+        onChange={(unlock_phrase) => save({ unlock_phrase }, { silentLocal: true })}
       />
     </div>
   );
@@ -302,11 +361,10 @@ function CloudCard({
           <div className="flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
             <div>
-              <p className="font-medium mb-1">phone-jarvis cloud not configured</p>
+              <p className="font-medium mb-1">Jarvis Call cloud is not configured</p>
               <p className="text-amber-500/80">
-                Set <code className="font-mono">VITE_PHONE_JARVIS_CLOUD_URL</code> in your build env to your
-                deployed cloud URL (e.g. <code className="font-mono">https://phone-jarvis-cloud.fly.dev</code>).
-                See <code className="font-mono">phone-jarvis/cloud/README.md</code> for the deploy steps.
+                Official Jarvis-One releases include the call backend. This build is missing that
+                backend URL, so phone calls and SMS stay disabled until a maintainer configures it.
               </p>
             </div>
           </div>
@@ -328,7 +386,7 @@ function PrivacyCard() {
         What happens when you call (or are called)
       </p>
       <ul className="text-xs space-y-1 list-disc list-inside">
-        <li>Your voice goes to the phone-jarvis cloud server you (or the operator) deployed.</li>
+        <li>Your voice goes to the Jarvis Call cloud service for live transcription and replies.</li>
         <li>The transcript goes to the AI provider you configured (Anthropic / Groq / etc.).</li>
         <li>
           <strong>Your files NEVER leave this computer.</strong> The AI can read files only by asking the
@@ -363,7 +421,7 @@ function PinCard({
     if (!userId) return;
     const supa = getSupabaseClient();
     if (!supa) {
-      toast.error('Supabase not configured');
+      toast.error('Jarvis Cloud is not configured in this build.');
       return;
     }
     if (!valid) {
@@ -636,15 +694,26 @@ function OutboundCard({
   triggers,
   onChange,
   userPhoneNumber,
+  onPhoneDraftChange,
   onPhoneChange,
 }: {
   triggers: NonNullable<PhoneSettings['outbound_triggers']>;
   onChange: (next: NonNullable<PhoneSettings['outbound_triggers']>) => void;
   userPhoneNumber: string;
+  onPhoneDraftChange: (next: string) => void;
   onPhoneChange: (next: string) => void;
 }) {
   const [phone, setPhone] = useState(userPhoneNumber);
+  const onPhoneChangeRef = useRef(onPhoneChange);
   useEffect(() => setPhone(userPhoneNumber), [userPhoneNumber]);
+  useEffect(() => {
+    onPhoneChangeRef.current = onPhoneChange;
+  }, [onPhoneChange]);
+  useEffect(() => {
+    if (phone === userPhoneNumber) return;
+    const id = window.setTimeout(() => onPhoneChangeRef.current(phone), 650);
+    return () => window.clearTimeout(id);
+  }, [phone, userPhoneNumber]);
 
   return (
     <section className="flex flex-col gap-3">
@@ -656,7 +725,11 @@ function OutboundCard({
           <Input
             placeholder="+15551234567"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setPhone(next);
+              onPhoneDraftChange(next);
+            }}
             onBlur={() => phone !== userPhoneNumber && onPhoneChange(phone)}
             className="font-mono text-xs"
           />
@@ -725,14 +798,25 @@ function TriggerRow({
 
 function UnlockCard({
   phrase,
+  onDraftChange,
   onChange,
 }: {
   phrase: string;
+  onDraftChange: (next: string) => void;
   onChange: (next: string) => void;
 }) {
   const [draft, setDraft] = useState(phrase);
+  const onChangeRef = useRef(onChange);
   useEffect(() => setDraft(phrase), [phrase]);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
   const dirty = draft.trim() !== phrase.trim();
+  useEffect(() => {
+    if (!dirty || draft.trim().length < 3) return;
+    const id = window.setTimeout(() => onChangeRef.current(draft.trim()), 800);
+    return () => window.clearTimeout(id);
+  }, [dirty, draft]);
 
   return (
     <section className="flex flex-col gap-3">
@@ -745,7 +829,10 @@ function UnlockCard({
       <div className="flex gap-2 max-w-md">
         <Input
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            onDraftChange(e.target.value);
+          }}
           placeholder="unlock shell"
         />
         <Button

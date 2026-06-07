@@ -195,6 +195,127 @@ function normalizeTerminalCommand(command: string | undefined): string | undefin
   return c || undefined;
 }
 
+function parseTerminalCount(raw: string | undefined): number {
+  if (!raw) return 1;
+  const normalized = raw.trim().toLowerCase();
+  const words: Record<string, number> = {
+    a: 1,
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+  };
+  const numeric = words[normalized] ?? Number(normalized);
+  return Math.min(10, Math.max(1, numeric || 1));
+}
+
+function matchKnownShellCommand(raw: string): string | undefined {
+  const cmd = raw.trim().toLowerCase();
+  const sortedCommands = [...KNOWN_SHELL_COMMANDS].sort((a, b) => b.length - a.length);
+  return sortedCommands.find((candidate) => cmd === candidate);
+}
+
+function splitProjectSuffix(commandRaw: string): { command: string; project?: string } {
+  const inProject = /^(.+?)\s+(?:in|inside)\s+project\s+(.+)$/i.exec(commandRaw.trim());
+  if (inProject) {
+    return {
+      command: inProject[1].trim(),
+      project: unquote(inProject[2].trim()),
+    };
+  }
+  return { command: commandRaw.trim() };
+}
+
+function parseDurationWord(value: string): number | null {
+  const words: Record<string, number> = {
+    a: 1,
+    an: 1,
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+  };
+  const normalized = value.trim().toLowerCase();
+  if (normalized in words) return words[normalized];
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseTimerDuration(raw: string): { durationMinutes: number; durationSeconds?: number } | null {
+  const text = raw.replace(/-/g, ' ').toLowerCase();
+  const matches = [
+    ...text.matchAll(
+      /\b(\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(hours?|hrs?|hr|h|minutes?|mins?|min|m|seconds?|secs?|sec|s)\b/g,
+    ),
+  ];
+  if (matches.length === 0) return null;
+
+  let totalSeconds = 0;
+  for (const match of matches) {
+    const amount = parseDurationWord(match[1]);
+    if (!amount || amount <= 0) continue;
+    const unit = match[2];
+    if (/^h/.test(unit)) totalSeconds += amount * 3600;
+    else if (/^m/.test(unit)) totalSeconds += amount * 60;
+    else totalSeconds += amount;
+  }
+
+  if (totalSeconds <= 0) return null;
+  const durationMinutes = Math.floor(totalSeconds / 60);
+  const durationSeconds = totalSeconds % 60;
+  return { durationMinutes, ...(durationSeconds > 0 ? { durationSeconds } : {}) };
+}
+
+function tryClockIntent(s: string): AssistantIntent | null {
+  const timerBefore =
+    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?(.+?)\s+timer(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+  if (timerBefore) {
+    const duration = parseTimerDuration(timerBefore[1]);
+    if (duration) return { kind: 'clock_timer', ...duration, label: timerBefore[2] ? unquote(timerBefore[2]) : undefined };
+  }
+
+  const timerAfter =
+    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?timer\s+(?:for\s+)?(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+  if (timerAfter) {
+    const duration = parseTimerDuration(timerAfter[1]);
+    if (duration) return { kind: 'clock_timer', ...duration, label: timerAfter[2] ? unquote(timerAfter[2]) : undefined };
+  }
+
+  const alarm =
+    /^(?:set|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?alarm\s+(?:for|at)\s+(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+  if (alarm) {
+    return { kind: 'clock_alarm', time: alarm[1].trim(), label: alarm[2] ? unquote(alarm[2]) : undefined };
+  }
+
+  return null;
+}
+
+function tryOpenTerminalRunChain(raw: string): AssistantIntent | null {
+  const s = clean(raw);
+  const match =
+    /^(?:open|start|launch)\s+(?:(a|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(?:new\s+)?terminals?\s+(?:and\s+then|then|and)\s+(?:type|run|execute|start|launch)\s+(.+)$/i.exec(s);
+  if (!match) return null;
+  const count = parseTerminalCount(match[1]);
+  const { command, project } = splitProjectSuffix(match[2]);
+  const normalizedCommand = normalizeTerminalCommand(command);
+  if (!normalizedCommand) return null;
+  return { kind: 'open_terminals', count, command: normalizedCommand, project };
+}
+
 /**
  * Try the "open claude in tiger" shorthand. Distinct from `open_terminals`
  * because there's no count token. Returns null when the shape doesn't match.
@@ -210,8 +331,7 @@ function tryShellShorthand(s: string): AssistantIntent | null {
   const projectRaw = unquote(m[2].trim());
   // Validate the command against the known list so we don't misfire on
   // things like "open chat in tiger".
-  const sortedCommands = [...KNOWN_SHELL_COMMANDS].sort((a, b) => b.length - a.length);
-  const matched = sortedCommands.find((c) => cmdRaw === c);
+  const matched = matchKnownShellCommand(cmdRaw);
   if (!matched) return null;
   return { kind: 'open_terminals', count: 1, command: matched, project: projectRaw };
 }
@@ -225,6 +345,12 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   const original = raw;
   const s = clean(raw);
   if (!s) return { kind: 'unknown', raw: original };
+
+  const openTerminalRunChain = tryOpenTerminalRunChain(s);
+  if (openTerminalRunChain) return openTerminalRunChain;
+
+  const clockIntent = tryClockIntent(s);
+  if (clockIntent) return clockIntent;
 
   // ---- create project ----
   const createProject = /^(?:create|new|make|add)\s+(?:a\s+)?(?:new\s+)?project\s+(?:called\s+|named\s+)?(.+)$/i.exec(s);
@@ -251,7 +377,7 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   const openTerms =
     /^open\s+(\d+)\s+terminals?(?:\s+(?:with|running)\s+(.+?))?(?:\s+in\s+(.+?))?(?:\s+project)?$/i.exec(s);
   if (openTerms) {
-    const count = Math.min(10, Math.max(1, Number(openTerms[1]) || 1));
+    const count = parseTerminalCount(openTerms[1]);
     const command = normalizeTerminalCommand(openTerms[2]);
     const projectRaw = openTerms[3]?.trim();
     return {
@@ -260,6 +386,26 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
       command,
       project: projectRaw ? unquote(projectRaw) : undefined,
     };
+  }
+
+  const openOneTerm =
+    /^open\s+(?:(a|one)\s+)?(?:new\s+)?terminals?(?:\s+(?:with|running)\s+(.+?))?(?:(?:\s+(?:in|inside)\s+project\s+(.+))|(?:\s+in\s+(.+?)\s+project))?$/i.exec(s);
+  if (openOneTerm) {
+    const count = parseTerminalCount(openOneTerm[1]);
+    const command = normalizeTerminalCommand(openOneTerm[2]);
+    const projectRaw = openOneTerm[3]?.trim() || openOneTerm[4]?.trim();
+    return {
+      kind: 'open_terminals',
+      count,
+      command,
+      project: projectRaw ? unquote(projectRaw) : undefined,
+    };
+  }
+
+  const openKnownShell = /^(?:open|run|launch|start)\s+(.+?)(?:\s+(?:terminal|pane))?$/i.exec(s);
+  if (openKnownShell) {
+    const command = matchKnownShellCommand(openKnownShell[1]);
+    if (command) return { kind: 'open_terminals', count: 1, command };
   }
 
   // ---- run command in all terminals ----
@@ -515,6 +661,9 @@ function suggestClosestCommands(raw: string): string[] {
  * command vocabulary.
  */
 export function parseAssistantInput(raw: string): AssistantIntent {
+  const openTerminalRunChain = tryOpenTerminalRunChain(raw);
+  if (openTerminalRunChain) return openTerminalRunChain;
+
   const parts = raw
     .split(/\s+(?:and\s+then|then)\s+/i)
     .map((part) => part.trim())

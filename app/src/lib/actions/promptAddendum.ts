@@ -95,6 +95,8 @@ export function buildAddendumText(): string {
     '- The user clicks **Approve** to actually run the action; until then,',
     '  treat the action as not yet executed. Do not assume side-effects.',
     '- Terminal basics: "open terminals" means create new panes. "run a command in all terminals" means send text into existing panes. Never reuse one existing pane when the user asked for multiple new panes.',
+    '- If the user attached/dragged a terminal and asks to type or run something there, use `terminal.sendToRefs` with the paneId/sessionId from the attached-terminal context. Do not open a new pane.',
+    '- For "run/send/type this in every terminal", use `terminal.sendAll`; for "open a new terminal and run", use `terminal.run` or `terminal.bulkOpen`.',
     '- Jarvis supports up to 10 terminal panes. Requests for 10 are valid and should not be rejected as too many.',
     '- For "open 10 terminals with opencode", use new terminal panes and start `opencode` in each new pane.',
     '- Avoid triple-backticks inside `params` values; they break the fence.',

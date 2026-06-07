@@ -219,13 +219,9 @@ export function PageRouter() {
 
   return (
     <React.Suspense fallback={<PageLoading />}>
-      <div
-        style={{ display: route === 'terminal' ? 'block' : 'none' }}
-        className="w-full h-full"
-      >
+      {route === 'terminal' ? (
         <TerminalsPage />
-      </div>
-      {route !== 'terminal' && (
+      ) : (
         <Page key={route} />
       )}
     </React.Suspense>

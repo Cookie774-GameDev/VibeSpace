@@ -47,6 +47,7 @@ import { AgentRolePicker } from './AgentRolePicker';
 import { ConnectedFilesButton } from './ConnectedFilesButton';
 import {
   type PaneNode,
+  type PaneTreeChange,
   newLeaf,
   MAX_PANES,
   flattenLeaves,
@@ -74,7 +75,7 @@ import { useUIStore } from '@/stores/ui';
 
 interface TileGridProps {
   tree: PaneNode;
-  onChange: (next: PaneNode | null) => void;
+  onChange: (next: PaneTreeChange) => void;
   defaultCommand?: string;
   /**
    * Called when an agent role is picked on a pane that has no command yet.
@@ -430,16 +431,16 @@ export function TileGrid({
         /* transcript store should never throw, but defend against it */
       }
     }
-    onChange(closePane(tree, paneId));
+    onChange((currentTree) => closePane(currentTree, paneId));
   };
 
   const handleSessionAttach = (paneId: string, sessionId: string) => {
-    onChange(updateLeaf(tree, paneId, { sessionId }));
+    onChange((currentTree) => updateLeaf(currentTree, paneId, { sessionId }));
   };
 
   const handlePendingCommandSent = (paneId: string) => {
-    onChange(
-      updateLeaf(tree, paneId, {
+    onChange((currentTree) =>
+      updateLeaf(currentTree, paneId, {
         pendingCommand: undefined,
         pendingCommandId: undefined,
       }),
@@ -449,42 +450,46 @@ export function TileGrid({
   const handleAgentChange = (paneId: string, slug: string | null) => {
     // If the pane has no command yet and we're picking an agent that
     // implies a CLI, pre-fill it. We never overwrite a user-set command.
-    const leaf = allLeaves.find((l) => l.id === paneId);
-    let nextCommand = leaf?.command;
-    if (slug && !leaf?.command) {
-      const suggested = defaultCommandForAgent?.(slug);
-      if (suggested) nextCommand = suggested;
-    }
-    onChange(
-      updateLeaf(tree, paneId, {
+    onChange((currentTree) => {
+      const leaf = flattenLeaves(currentTree).find((l) => l.id === paneId);
+      let nextCommand = leaf?.command;
+      if (slug && !leaf?.command) {
+        const suggested = defaultCommandForAgent?.(slug);
+        if (suggested) nextCommand = suggested;
+      }
+      return updateLeaf(currentTree, paneId, {
         agentSlug: slug ?? undefined,
         command: nextCommand,
-      }),
-    );
+      });
+    });
   };
 
   const handleFontSizeCycle = (paneId: string) => {
-    const leaf = allLeaves.find((l) => l.id === paneId);
-    if (!leaf) return;
-    const current = leaf.fontSize ?? DEFAULT_FONT_SIZE;
-    onChange(updateLeaf(tree, paneId, { fontSize: nextFontSize(current) }));
+    onChange((currentTree) => {
+      const leaf = flattenLeaves(currentTree).find((l) => l.id === paneId);
+      if (!leaf) return currentTree;
+      const current = leaf.fontSize ?? DEFAULT_FONT_SIZE;
+      return updateLeaf(currentTree, paneId, { fontSize: nextFontSize(current) });
+    });
   };
 
   const handleSwapLeaves = (fromId: string, toId: string) => {
-    const fromIdx = allLeaves.findIndex((l) => l.id === fromId);
-    const toIdx = allLeaves.findIndex((l) => l.id === toId);
-    if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-      const nextLeaves = [...allLeaves];
+    onChange((currentTree) => {
+      const currentLeaves = flattenLeaves(currentTree);
+      const fromIdx = currentLeaves.findIndex((l) => l.id === fromId);
+      const toIdx = currentLeaves.findIndex((l) => l.id === toId);
+      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return currentTree;
+      const nextLeaves = [...currentLeaves];
       const temp = nextLeaves[fromIdx]!;
       nextLeaves[fromIdx] = nextLeaves[toIdx]!;
       nextLeaves[toIdx] = temp;
-      onChange(fromLeaves(nextLeaves));
-    }
+      return fromLeaves(nextLeaves);
+    });
   };
 
   const handleConnectedFilesChange = (paneId: string, next: string[]) => {
-    onChange(
-      updateLeaf(tree, paneId, {
+    onChange((currentTree) =>
+      updateLeaf(currentTree, paneId, {
         connectedFiles: next.length > 0 ? next : undefined,
       }),
     );
@@ -518,6 +523,24 @@ export function TileGrid({
     />
   );
 
+  // Chunk the flat leaves array into rows so we can lay out as flex of
+  // flex-rows. The last row may be short (e.g. N=5 with cols=3 has a row
+  // of 2 leaves); we pad with `null` so the column widths line up across
+  // rows. The placeholder takes its column's flex value but renders no
+  // tile, matching the previous CSS-Grid behaviour where the unused cell
+  // simply showed empty space.
+  const rowChunks = React.useMemo(() => {
+    const out: (typeof leaves[number] | null)[][] = [];
+    for (let r = 0; r < rows; r++) {
+      const rowLeaves: (typeof leaves[number] | null)[] = [];
+      for (let c = 0; c < cols; c++) {
+        rowLeaves.push(leaves[r * cols + c] ?? null);
+      }
+      out.push(rowLeaves);
+    }
+    return out;
+  }, [leaves, cols, rows]);
+
   const fullscreenLeaf = fullscreenPaneId
     ? allLeaves.find((leaf) => leaf.id === fullscreenPaneId) ?? null
     : null;
@@ -548,23 +571,6 @@ export function TileGrid({
     );
   }
 
-  // Chunk the flat leaves array into rows so we can lay out as flex of
-  // flex-rows. The last row may be short (e.g. N=5 with cols=3 has a row
-  // of 2 leaves); we pad with `null` so the column widths line up across
-  // rows. The placeholder takes its column's flex value but renders no
-  // tile, matching the previous CSS-Grid behaviour where the unused cell
-  // simply showed empty space.
-  const rowChunks = React.useMemo(() => {
-    const out: (typeof leaves[number] | null)[][] = [];
-    for (let r = 0; r < rows; r++) {
-      const rowLeaves: (typeof leaves[number] | null)[] = [];
-      for (let c = 0; c < cols; c++) {
-        rowLeaves.push(leaves[r * cols + c] ?? null);
-      }
-      out.push(rowLeaves);
-    }
-    return out;
-  }, [leaves, cols, rows]);
 
   return (
     <div
@@ -666,7 +672,7 @@ function ResizeHandle({ axis, onMouseDown, onDoubleClick }: ResizeHandleProps) {
 
 interface TileProps {
   tree: PaneNode;
-  onChange: (next: PaneNode | null) => void;
+  onChange: (next: PaneTreeChange) => void;
   leaf: Extract<PaneNode, { kind: 'leaf' }>;
   defaultCommand?: string;
   isFullscreen: boolean;
@@ -749,22 +755,26 @@ function Tile({
   };
 
   const handleSplit = (direction: 'col' | 'row') => {
-    const allLeaves = flattenLeaves(tree);
-    if (allLeaves.length >= MAX_PANES) {
-      toast.warning('Cannot split', `Maximum of ${MAX_PANES} terminals reached.`);
-      return;
-    }
-    const idx = allLeaves.findIndex((l) => l.id === leaf.id);
-    if (idx === -1) return;
-    const nextLeaves = [...allLeaves];
-    const spawnedLeaf = newLeaf({
-      command: leaf.command || defaultCommand,
-      agentSlug: leaf.agentSlug,
-      fontSize: leaf.fontSize,
-    }) as Extract<PaneNode, { kind: 'leaf' }>;
+    onChange((currentTree) => {
+      const allLeaves = flattenLeaves(currentTree);
+      if (allLeaves.length >= MAX_PANES) {
+        toast.warning('Cannot split', `Maximum of ${MAX_PANES} terminals reached.`);
+        return currentTree;
+      }
+      const currentLeaf = allLeaves.find((l) => l.id === leaf.id);
+      const idx = currentLeaf ? allLeaves.indexOf(currentLeaf) : -1;
+      if (idx === -1 || !currentLeaf) return currentTree;
+      const nextLeaves = [...allLeaves];
+      const spawnedLeaf = newLeaf({
+        command: currentLeaf.command || defaultCommand,
+        agentSlug: currentLeaf.agentSlug,
+        fontSize: currentLeaf.fontSize,
+        projectId: currentLeaf.projectId ?? projectId ?? null,
+      }) as Extract<PaneNode, { kind: 'leaf' }>;
 
-    nextLeaves.splice(idx + 1, 0, spawnedLeaf);
-    onChange(fromLeaves(nextLeaves));
+      nextLeaves.splice(idx + 1, 0, spawnedLeaf);
+      return fromLeaves(nextLeaves);
+    });
   };
   const globalDefaultFontSize = useUIStore((s) => s.defaultTerminalFontSize);
   const fontSize = leaf.fontSize ?? globalDefaultFontSize;
@@ -854,6 +864,7 @@ function Tile({
       let hoverTarget: HTMLElement | null = null;
       let hoverProjectTimer: ReturnType<typeof setTimeout> | null = null;
       let cancelled = false;
+      let suppressNativeMenuUntil = 0;
 
       const clearProjectHoverTimer = () => {
         if (hoverProjectTimer) clearTimeout(hoverProjectTimer);
@@ -921,7 +932,10 @@ function Tile({
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('keydown', onKeyDown, true);
-        document.removeEventListener('contextmenu', onContextMenu, true);
+        const delay = Math.max(0, suppressNativeMenuUntil - Date.now()) + 50;
+        window.setTimeout(() => {
+          document.removeEventListener('contextmenu', onContextMenu, true);
+        }, delay);
       };
 
       const onContextMenu = (ev: MouseEvent) => {
@@ -956,6 +970,10 @@ function Tile({
         latestX = ev.clientX;
         latestY = ev.clientY;
         const target = dragging ? findDropTarget() : null;
+        if (dragging || ev.button === 2) {
+          suppressNativeMenuUntil = Date.now() + 900;
+          document.body.dataset.jarvisSuppressContextMenuUntil = String(suppressNativeMenuUntil);
+        }
         cleanup();
         if (cancelled) return;
         ev.preventDefault();
@@ -1054,12 +1072,16 @@ function Tile({
               onChange={(e) => setEditNameValue(e.target.value)}
               onBlur={() => {
                 setIsEditingName(false);
-                onChange(updateLeaf(tree, leaf.id, { name: editNameValue.trim() || undefined }));
+                onChange((currentTree) =>
+                  updateLeaf(currentTree, leaf.id, { name: editNameValue.trim() || undefined }),
+                );
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   setIsEditingName(false);
-                  onChange(updateLeaf(tree, leaf.id, { name: editNameValue.trim() || undefined }));
+                  onChange((currentTree) =>
+                    updateLeaf(currentTree, leaf.id, { name: editNameValue.trim() || undefined }),
+                  );
                 } else if (e.key === 'Escape') {
                   setIsEditingName(false);
                 }

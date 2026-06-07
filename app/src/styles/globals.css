@@ -516,6 +516,76 @@
   100% { transform: rotate(360deg); }
 }
 
+@keyframes jarvis-voice-tendril {
+  0%, 100% {
+    transform: translate3d(-2%, 1%, 0) rotate(0deg) scale(1);
+    opacity: 0.62;
+  }
+  50% {
+    transform: translate3d(3%, -2%, 0) rotate(12deg) scale(1.08);
+    opacity: 0.86;
+  }
+}
+
+.jarvis-voice-panel {
+  isolation: isolate;
+  box-shadow:
+    0 30px 90px hsl(0 0% 0% / 0.58),
+    0 0 70px hsl(var(--accent-cyan) / 0.18),
+    inset 0 1px 0 hsl(0 0% 100% / 0.08);
+}
+
+.jarvis-voice-panel::before {
+  content: '';
+  position: absolute;
+  inset: -42%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 18% 18%, hsl(var(--accent-cyan) / 0.24) 0%, transparent 34%),
+    radial-gradient(ellipse at 80% 78%, hsl(var(--accent-violet) / 0.22) 0%, transparent 38%),
+    conic-gradient(from 210deg at 50% 52%, transparent 0deg, hsl(var(--accent-cyan) / 0.16) 72deg, transparent 132deg, hsl(var(--accent-violet) / 0.15) 220deg, transparent 360deg);
+  filter: blur(28px);
+  animation: jarvis-voice-tendril 8s ease-in-out infinite;
+}
+
+.jarvis-voice-panel::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  border: 1px solid hsl(0 0% 100% / 0.06);
+  background:
+    linear-gradient(135deg, hsl(0 0% 100% / 0.055), transparent 34%),
+    radial-gradient(circle at 50% 0%, hsl(var(--accent-cyan) / 0.08), transparent 52%);
+}
+
+.jarvis-voice-orb-shell {
+  position: relative;
+  border-radius: 9999px;
+}
+
+.jarvis-voice-orb-shell::before {
+  content: '';
+  position: absolute;
+  inset: -16%;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 50% 50%, hsl(var(--accent-cyan) / 0.18), transparent 58%),
+    conic-gradient(from 90deg, transparent, hsl(var(--accent-cyan) / 0.22), hsl(var(--accent-violet) / 0.2), transparent);
+  filter: blur(18px);
+  animation: jarvis-voice-tendril 5.5s ease-in-out infinite reverse;
+}
+
+.jarvis-wake-chip {
+  box-shadow:
+    0 18px 55px hsl(0 0% 0% / 0.42),
+    0 0 34px hsl(var(--accent-cyan) / 0.16),
+    inset 0 1px 0 hsl(0 0% 100% / 0.08);
+}
+
 .ambient-root {
   position: fixed;
   inset: 0;
@@ -647,6 +717,10 @@
   .ambient-hint,
   .ambient-card,
   .ambient-dot {
+    animation: none !important;
+  }
+  .jarvis-voice-panel::before,
+  .jarvis-voice-orb-shell::before {
     animation: none !important;
   }
   .ambient-root {

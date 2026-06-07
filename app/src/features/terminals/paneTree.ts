@@ -90,6 +90,8 @@ export type PaneNode =
       right: PaneNode;
     };
 
+export type PaneTreeChange = PaneNode | null | ((current: PaneNode) => PaneNode | null);
+
 export const MAX_PANES = 10;
 
 export function newLeaf(seed?: Partial<LeafBase>): PaneNode {
@@ -155,6 +157,15 @@ export function updateLeaf(
     };
   }
   return recurse(tree);
+}
+
+export function resolvePaneTreeChange(
+  current: PaneNode,
+  change: PaneTreeChange,
+  fallbackSeed?: Partial<LeafBase>,
+): PaneNode {
+  const next = typeof change === 'function' ? change(current) : change;
+  return next ?? newLeaf(fallbackSeed);
 }
 
 /** Find the id of the first leaf in a depth-first walk. Used by callers

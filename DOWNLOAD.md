@@ -8,7 +8,25 @@ Install Jarvis One like a normal desktop app. The one-line installers pull the l
 | macOS 12+ | DMG | `curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh \| bash` |
 | Linux | `.deb`, `.rpm`, or AppImage | `curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh \| bash` |
 
-Current staged Windows release: `v0.1.15`. macOS and Linux filenames can vary by Tauri target, so `install/install.sh` resolves matching release assets from GitHub before falling back to the standard Jarvis One filename patterns.
+Current staged release: `v0.1.17`. macOS and Linux filenames can vary by Tauri target, so `install/install.sh` resolves matching release assets from GitHub before falling back to the standard Jarvis One filename patterns.
+
+## Release Status
+
+The one-line commands install the newest published GitHub Release. If the [Releases page] has no installer assets yet, the commands stop safely and explain that a release must be published first. Use the source-build path below for local development until production installers are uploaded.
+
+Safe dry-run checks:
+
+```powershell
+$env:JARVIS_DRYRUN = "1"
+$env:JARVIS_DOWNLOAD_DIR = "D:\Jarvis-Tests\downloads"
+irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
+```
+
+```bash
+JARVIS_DRYRUN=1 JARVIS_DOWNLOAD_DIR="$HOME/Jarvis-Tests/downloads" curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
+```
+
+Set `JARVIS_DOWNLOAD_DIR` when validating installers so all staged downloads stay in a known folder. Set `JARVIS_KEEP_DOWNLOAD=1` if you want the downloaded installer kept after a normal install for audit or checksum review.
 
 ## Direct Download
 
@@ -17,23 +35,23 @@ Grab installers from the [Releases page] and compare them against `SHA256SUMS.tx
 [Releases page]: https://github.com/Cookie774-GameDev/Jarivs-One/releases
 
 ```text
-Windows:  Jarvis One_0.1.15_x64-setup.exe
-Windows:  Jarvis One_0.1.15_x64_en-US.msi
-Windows:  Jarvis-One-0.1.15-Windows-x64.exe
-Windows:  Jarvis-One-0.1.15-Windows-x64.msi
-macOS:    Jarvis One_0.1.15_aarch64.dmg
-macOS:    Jarvis One_0.1.15_x64.dmg
-Linux:    Jarvis One_0.1.15_amd64.deb
-Linux:    Jarvis One-0.1.15-1.x86_64.rpm
-Linux:    Jarvis One_0.1.15_amd64.AppImage
+Windows:  Jarvis One_0.1.17_x64-setup.exe
+Windows:  Jarvis One_0.1.17_x64_en-US.msi
+Windows:  Jarvis-One-0.1.17-Windows-x64.exe
+Windows:  Jarvis-One-0.1.17-Windows-x64.msi
+macOS:    Jarvis One_0.1.17_aarch64.dmg
+macOS:    Jarvis One_0.1.17_x64.dmg
+Linux:    Jarvis One_0.1.17_amd64.deb
+Linux:    Jarvis One-0.1.17-1.x86_64.rpm
+Linux:    Jarvis One_0.1.17_amd64.AppImage
 ```
 
 ```powershell
-Get-FileHash -Algorithm SHA256 '.\Jarvis One_0.1.15_x64-setup.exe'
+Get-FileHash -Algorithm SHA256 '.\Jarvis One_0.1.17_x64-setup.exe'
 ```
 
 ```bash
-sha256sum 'Jarvis One_0.1.15_amd64.deb'
+sha256sum 'Jarvis One_0.1.17_amd64.deb'
 ```
 
 ## What Gets Installed

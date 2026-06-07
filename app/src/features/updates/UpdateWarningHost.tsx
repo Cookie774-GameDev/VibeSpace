@@ -46,6 +46,7 @@ export function UpdateWarningHost() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const checkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const warnedRef = useRef<Set<number>>(new Set());
+  const ignoreNextCloseRef = useRef(false);
 
   const clearCountdown = () => {
     if (timerRef.current) {
@@ -128,6 +129,7 @@ export function UpdateWarningHost() {
   };
 
   const handleUpdateLater = () => {
+    ignoreNextCloseRef.current = true;
     setSnoozedUntil(Date.now() + UPDATE_LATER_MS);
     clearCountdown();
     setUpdateAvailable(false);
@@ -167,8 +169,17 @@ export function UpdateWarningHost() {
   const showModal = updateAvailable && timeLeft !== null && timeLeft <= 300 && timeLeft > 0 && !isUpdating;
   const isOpen = showModal || isUpdating;
 
+  const handleOpenChange = (open: boolean) => {
+    if (open) return;
+    if (ignoreNextCloseRef.current) {
+      ignoreNextCloseRef.current = false;
+      return;
+    }
+    if (!isUpdating) handleSnooze();
+  };
+
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => { if (!isUpdating && !open) handleSnooze(); }}>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       {isUpdating ? (
         <DialogContent className="flex max-w-sm flex-col items-center justify-center rounded-xl border border-border bg-panel p-6 text-center shadow-lg">
           <DialogTitle className="sr-only">Updating Jarvis</DialogTitle>
