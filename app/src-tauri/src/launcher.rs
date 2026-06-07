@@ -84,16 +84,32 @@ if (-not (Test-Path -LiteralPath $jarvisExe)) {{
 $esc = [char]27
 $cyan = "$esc[38;5;51m"
 $violet = "$esc[38;5;141m"
+$pink = "$esc[38;5;213m"
+$blue = "$esc[38;5;39m"
+$green = "$esc[38;5;82m"
+$bold = "$esc[1m"
 $dim = "$esc[2m"
 $reset = "$esc[0m"
-Write-Host ''
-Write-Host ($cyan + '  +----------------------------------------+' + $reset)
-Write-Host ($cyan + '  |' + $reset + '                                        ' + $cyan + '|' + $reset)
-Write-Host ($cyan + '  |' + $reset + $violet + '              J A R V I S   O N E         ' + $cyan + '|' + $reset)
-Write-Host ($cyan + '  |' + $reset + $dim + '                 AI DESKTOP             ' + $cyan + '|' + $reset)
-Write-Host ($cyan + '  |' + $reset + '                                        ' + $cyan + '|' + $reset)
-Write-Host ($cyan + '  +----------------------------------------+' + $reset)
-Write-Host ($violet + '    STATUS' + $reset + $dim + '  Launching your workspace...' + $reset)
+Clear-Host
+$frames = @(
+  @($cyan,   '[=                   ]', 'WAKING CORE'),
+  @($blue,   '[=====               ]', 'LINKING MODELS'),
+  @($violet, '[==========          ]', 'SYNCING MEMORY'),
+  @($pink,   '[===============     ]', 'ARMING INTERFACE'),
+  @($green,  '[====================]', 'SYSTEM ONLINE')
+)
+foreach ($frame in $frames) {{
+  Write-Host "`r  " -NoNewline
+  Write-Host ($frame[0] + $frame[1] + $reset + '  ' + $bold + $frame[2] + $reset) -NoNewline
+  Start-Sleep -Milliseconds 110
+}}
+Write-Host "`n"
+Write-Host ($cyan + '  +--------------------------------------------------+' + $reset)
+Write-Host ($cyan + '  |' + $reset + $violet + $bold + '              J  A  R  V  I  S    O  N  E           ' + $reset + $cyan + '|' + $reset)
+Write-Host ($blue + '  |' + $reset + $dim + '             INTELLIGENT DESKTOP SYSTEM             ' + $reset + $blue + '|' + $reset)
+Write-Host ($violet + '  +--------------------------------------------------+' + $reset)
+Write-Host ($pink + '       * ' + $cyan + 'VOICE' + $pink + ' * ' + $blue + 'AGENTS' + $pink + ' * ' + $violet + 'MEMORY' + $pink + ' * ' + $green + 'AUTOMATION' + $reset)
+Write-Host ($green + $bold + '    >> ACCESS GRANTED' + $reset + $dim + '  Launching your workspace...' + $reset)
 Write-Host ''
 Start-Process -FilePath $jarvisExe
 "#
@@ -147,17 +163,35 @@ set -euo pipefail
 ESC=$'\033'
 CYAN="${ESC}[38;5;51m"
 VIOLET="${ESC}[38;5;141m"
+PINK="${ESC}[38;5;213m"
+BLUE="${ESC}[38;5;39m"
+GREEN="${ESC}[38;5;82m"
+BOLD="${ESC}[1m"
 DIM="${ESC}[2m"
 RESET="${ESC}[0m"
 
-printf "\n"
-printf "%b\n" "${CYAN}  ____.                     .__        ${RESET}"
-printf "%b\n" "${CYAN} |    |____ _________  ___|__| ______${RESET}"
-printf "%b\n" "${CYAN} |    \__  \\_  __ \\/  _ \\  |/  ___/${RESET}"
-printf "%b\n" "${CYAN} |    |/ __ \\|  | \\(  <_> ) |\\___ \\ ${RESET}"
-printf "%b\n" "${CYAN} |____(____  /__|   \\____/|__/____  >${RESET}"
-printf "%b\n" "${VIOLET}           \\/                     \\/ ${RESET}"
-printf "%b\n\n" "${DIM}  launching Jarvis One from your terminal${RESET}"
+clear
+for frame in \
+  "${CYAN}|=                   | WAKING CORE" \
+  "${BLUE}|=====               | LINKING MODELS" \
+  "${VIOLET}|==========          | SYNCING MEMORY" \
+  "${PINK}|===============     | ARMING INTERFACE" \
+  "${GREEN}|====================| SYSTEM ONLINE"
+do
+  color=${frame%%|*}
+  rest=${frame#*|}
+  bar=${rest%%|*}
+  label=${rest#*|}
+  printf "\r  %b[%-20s]%b  %b%s%b" "$color" "$bar" "$RESET" "$BOLD" "$label" "$RESET"
+  sleep 0.11
+done
+printf "\n\n"
+printf "%b\n" "${CYAN}  +--------------------------------------------------+${RESET}"
+printf "%b\n" "${CYAN}  |${RESET}${VIOLET}${BOLD}              J  A  R  V  I  S    O  N  E           ${RESET}${CYAN}|${RESET}"
+printf "%b\n" "${BLUE}  |${RESET}${DIM}             INTELLIGENT DESKTOP SYSTEM             ${RESET}${BLUE}|${RESET}"
+printf "%b\n" "${VIOLET}  +--------------------------------------------------+${RESET}"
+printf "%b\n" "${PINK}       * ${CYAN}VOICE${PINK} * ${BLUE}AGENTS${PINK} * ${VIOLET}MEMORY${PINK} * ${GREEN}AUTOMATION${RESET}"
+printf "%b\n\n" "${GREEN}${BOLD}    >> ACCESS GRANTED${RESET}${DIM}  Launching your workspace...${RESET}"
 
 if [ "$(uname -s)" = "Darwin" ]; then
   APP_PATH="$HOME/Applications/Jarvis One.app"
@@ -244,7 +278,8 @@ mod tests {
         ]);
 
         assert!(script.contains(r"$jarvisExe = 'C:\Users\Test\Programs\Jarvis One\jarvis.exe'"));
-        assert!(script.contains("J A R V I S   O N E"));
+        assert!(script.contains("J  A  R  V  I  S    O  N  E"));
+        assert!(script.contains("SYSTEM ONLINE"));
         assert!(script.contains("Launching your workspace..."));
         assert!(script.contains("Start-Process -FilePath $jarvisExe"));
         assert!(!script.contains(r"C:\\Users"));

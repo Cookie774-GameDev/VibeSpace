@@ -346,16 +346,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Jarvis.ps1"
 `$esc = [char]27
 `$cyan = "`$esc[38;5;51m"
 `$violet = "`$esc[38;5;141m"
+`$pink = "`$esc[38;5;213m"
+`$blue = "`$esc[38;5;39m"
+`$green = "`$esc[38;5;82m"
+`$bold = "`$esc[1m"
 `$dim = "`$esc[2m"
 `$reset = "`$esc[0m"
-Write-Host ''
-Write-Host (`$cyan + '  +----------------------------------------+' + `$reset)
-Write-Host (`$cyan + '  |' + `$reset + '                                        ' + `$cyan + '|' + `$reset)
-Write-Host (`$cyan + '  |' + `$reset + `$violet + '              J A R V I S   O N E         ' + `$cyan + '|' + `$reset)
-Write-Host (`$cyan + '  |' + `$reset + `$dim + '                 AI DESKTOP             ' + `$cyan + '|' + `$reset)
-Write-Host (`$cyan + '  |' + `$reset + '                                        ' + `$cyan + '|' + `$reset)
-Write-Host (`$cyan + '  +----------------------------------------+' + `$reset)
-Write-Host (`$violet + '    STATUS' + `$reset + `$dim + '  Launching your workspace...' + `$reset)
+Clear-Host
+`$frames = @(
+  @(`$cyan,   '[=                   ]', 'WAKING CORE'),
+  @(`$blue,   '[=====               ]', 'LINKING MODELS'),
+  @(`$violet, '[==========          ]', 'SYNCING MEMORY'),
+  @(`$pink,   '[===============     ]', 'ARMING INTERFACE'),
+  @(`$green,  '[====================]', 'SYSTEM ONLINE')
+)
+foreach (`$frame in `$frames) {
+  Write-Host "`r  " -NoNewline
+  Write-Host (`$frame[0] + `$frame[1] + `$reset + '  ' + `$bold + `$frame[2] + `$reset) -NoNewline
+  Start-Sleep -Milliseconds 110
+}
+Write-Host "`n"
+Write-Host (`$cyan + '  +--------------------------------------------------+' + `$reset)
+Write-Host (`$cyan + '  |' + `$reset + `$violet + `$bold + '              J  A  R  V  I  S    O  N  E           ' + `$reset + `$cyan + '|' + `$reset)
+Write-Host (`$blue + '  |' + `$reset + `$dim + '             INTELLIGENT DESKTOP SYSTEM             ' + `$reset + `$blue + '|' + `$reset)
+Write-Host (`$violet + '  +--------------------------------------------------+' + `$reset)
+Write-Host (`$pink + '       * ' + `$cyan + 'VOICE' + `$pink + ' * ' + `$blue + 'AGENTS' + `$pink + ' * ' + `$violet + 'MEMORY' + `$pink + ' * ' + `$green + 'AUTOMATION' + `$reset)
+Write-Host (`$green + `$bold + '    >> ACCESS GRANTED' + `$reset + `$dim + '  Launching your workspace...' + `$reset)
 Write-Host ''
 Start-Process -FilePath `$jarvisExe
 "@
