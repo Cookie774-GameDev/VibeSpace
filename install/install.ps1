@@ -330,6 +330,50 @@ function Get-InstalledJarvisExe {
     return $null
 }
 
+function Install-TerminalLauncher ($exePath) {
+    $binDir = Join-Path $env:USERPROFILE '.jarvis\bin'
+    $cmdPath = Join-Path $binDir 'Jarvis.cmd'
+    $scriptPath = Join-Path $binDir 'Jarvis.ps1'
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+
+    $cmdLauncher = @'
+@echo off
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Jarvis.ps1"
+'@
+    $psLauncher = @"
+`$ErrorActionPreference = 'Stop'
+`$jarvisExe = '$($exePath.Replace("'", "''"))'
+`$esc = [char]27
+`$cyan = "`$esc[38;5;51m"
+`$violet = "`$esc[38;5;141m"
+`$dim = "`$esc[2m"
+`$reset = "`$esc[0m"
+Write-Host ''
+Write-Host (`$cyan + '  ____.                     .__        ' + `$reset)
+Write-Host (`$cyan + ' |    |____ _________  ___|__| ______' + `$reset)
+Write-Host (`$cyan + ' |    \__  \_  __ \/  _ \  |/  ___/' + `$reset)
+Write-Host (`$cyan + ' |    |/ __ \|  | \(  <_> ) |\___ \ ' + `$reset)
+Write-Host (`$cyan + ' |____(____  /__|   \____/|__/____  >' + `$reset)
+Write-Host (`$violet + '           \/                     \/' + `$reset)
+Write-Host (`$dim + '  launching Jarvis One from your terminal' + `$reset)
+Write-Host ''
+Start-Process -FilePath `$jarvisExe
+"@
+    Set-Content -LiteralPath $cmdPath -Value $cmdLauncher -Encoding ASCII
+    Set-Content -LiteralPath $scriptPath -Value $psLauncher -Encoding UTF8
+
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries = @($userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not ($entries | Where-Object { $_.Trim().Equals($binDir, [StringComparison]::OrdinalIgnoreCase) })) {
+        $updatedPath = (@($entries) + $binDir) -join ';'
+        [Environment]::SetEnvironmentVariable('Path', $updatedPath, 'User')
+    }
+    if (-not (($env:Path -split ';') | Where-Object { $_.Trim().Equals($binDir, [StringComparison]::OrdinalIgnoreCase) })) {
+        $env:Path = "$binDir;$env:Path"
+    }
+    Write-Ok 'Terminal command ready: Jarvis'
+}
+
 # --- Main -----------------------------------------------------------------
 Write-Banner
 
@@ -423,6 +467,7 @@ if ($exit -eq 0) {
     # legacy %LOCALAPPDATA%\Jarvis One path.
     $exePath = Get-InstalledJarvisExe
     if ($exePath -and (Test-Path -LiteralPath $exePath)) {
+        Install-TerminalLauncher -exePath $exePath
         Write-Step "Auto-launching Jarvis One..."
         Start-Process -FilePath $exePath
     } else {
