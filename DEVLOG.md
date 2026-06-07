@@ -20,6 +20,12 @@
 - Runtime tests cover the mock tool path and invalid credential handling.
 - Context tests prove disabled or wrong-project plugins are excluded and secrets are absent.
 - Action tests cover approved mock execution and rejection of disabled plugins.
+- `npm --prefix app run typecheck`, `npm --prefix app run test` (41 files / 199 tests), `npm --prefix app run build`, and `cargo check` pass.
+- `npm run release:windows` generated matching 0.1.20 NSIS/MSI updater signatures with the private key selected only after its sibling `.pub` matched `tauri.conf.json`.
+- `npm run release:stage` completed cleanly and regenerated `releases/latest.json` plus current-only `releases/SHA256SUMS.txt`.
+- Public release verification caught GitHub's space-to-period asset-name normalization; the manifest generator now prefers the stable hyphenated NSIS asset and the published manifest was replaced.
+- The silent local NSIS upgrade completed with exit code 0; `%LOCALAPPDATA%\Jarvis One\jarvis.exe` and the relaunched process both report `ProductVersion=0.1.20`.
+- The Windows installer is updater-signed but remains Authenticode `NotSigned` because no trusted Windows certificate is configured. macOS/Linux build, signing, and runtime verification remain pending.
 
 ---
 
