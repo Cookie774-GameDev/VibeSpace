@@ -350,17 +350,35 @@ set -euo pipefail
 ESC=$'\033'
 CYAN="${ESC}[38;5;51m"
 VIOLET="${ESC}[38;5;141m"
+PINK="${ESC}[38;5;213m"
+BLUE="${ESC}[38;5;39m"
+GREEN="${ESC}[38;5;82m"
+BOLD="${ESC}[1m"
 DIM="${ESC}[2m"
 RESET="${ESC}[0m"
 
-printf "\n"
-printf "%b\n" "${CYAN}  +----------------------------------------+${RESET}"
-printf "%b\n" "${CYAN}  |${RESET}                                        ${CYAN}|${RESET}"
-printf "%b\n" "${CYAN}  |${RESET}${VIOLET}              J A R V I S   O N E         ${CYAN}|${RESET}"
-printf "%b\n" "${CYAN}  |${RESET}${DIM}                 AI DESKTOP             ${CYAN}|${RESET}"
-printf "%b\n" "${CYAN}  |${RESET}                                        ${CYAN}|${RESET}"
-printf "%b\n" "${CYAN}  +----------------------------------------+${RESET}"
-printf "%b\n\n" "${VIOLET}    STATUS${RESET}${DIM}  Launching your workspace...${RESET}"
+clear
+for frame in \
+  "${CYAN}|=                   | WAKING CORE" \
+  "${BLUE}|=====               | LINKING MODELS" \
+  "${VIOLET}|==========          | SYNCING MEMORY" \
+  "${PINK}|===============     | ARMING INTERFACE" \
+  "${GREEN}|====================| SYSTEM ONLINE"
+do
+  color=${frame%%|*}
+  rest=${frame#*|}
+  bar=${rest%%|*}
+  label=${rest#*|}
+  printf "\r  %b[%-20s]%b  %b%s%b" "$color" "$bar" "$RESET" "$BOLD" "$label" "$RESET"
+  sleep 0.11
+done
+printf "\n\n"
+printf "%b\n" "${CYAN}  +--------------------------------------------------+${RESET}"
+printf "%b\n" "${CYAN}  |${RESET}${VIOLET}${BOLD}              J  A  R  V  I  S    O  N  E           ${RESET}${CYAN}|${RESET}"
+printf "%b\n" "${BLUE}  |${RESET}${DIM}             INTELLIGENT DESKTOP SYSTEM             ${RESET}${BLUE}|${RESET}"
+printf "%b\n" "${VIOLET}  +--------------------------------------------------+${RESET}"
+printf "%b\n" "${PINK}       * ${CYAN}VOICE${PINK} * ${BLUE}AGENTS${PINK} * ${VIOLET}MEMORY${PINK} * ${GREEN}AUTOMATION${RESET}"
+printf "%b\n\n" "${GREEN}${BOLD}    >> ACCESS GRANTED${RESET}${DIM}  Launching your workspace...${RESET}"
 
 case "$(uname -s)" in
   Darwin*)
