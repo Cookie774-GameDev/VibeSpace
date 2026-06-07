@@ -1,3 +1,11 @@
+## 2026-06-07 - v0.1.23 Terminal Ultra Argument Forwarding
+
+- Fixed terminal coding modes so trailing arguments pass through to Claude Code, Codex, or OpenCode.
+- Split the in-app update history into correct 0.1.21, 0.1.22, and 0.1.23 entries.
+- Bumped `CURRENT_VERSION` to 0.1.23 so the startup What's New modal opens for this corrective update.
+
+---
+
 ## 2026-06-07 - v0.1.22 Startup Update Log and Ultra Terminal
 
 - Added the 0.1.22 in-app release entry and bumped `CURRENT_VERSION`, ensuring What's New auto-opens once after upgrade.

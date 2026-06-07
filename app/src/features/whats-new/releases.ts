@@ -82,36 +82,40 @@ export interface Release {
 }
 
 const RELEASE_0_1_23: Release = {
-  version: ‘0.1.23’,
-  date: ‘2026-06-07’,
-  headline: ‘Premium API key settings and 21 providers’,
+  version: '0.1.23',
+  date: '2026-06-07',
+  headline: 'Premium slash commands, API settings, and 21 providers',
   summary:
-    ‘The provider settings screen got a major UI upgrade with cozy colorful animations, masked key previews, usage counters, and support for 21 AI providers including Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.’,
+    'Slash commands now display as purple tokens with a refined typeahead. The provider settings screen features cozy colorful animations, masked key previews, usage counters, and support for 21 AI providers.',
   sections: [
     {
-      kind: ‘feature’,
+      kind: 'feature',
       items: [
-        ‘API key save triggers a colorful surge animation that expands from the input, washes across the screen, and retracts with sparkles.’,
-        ‘Added 4 new providers: Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face — bringing the total to 21.’,
-        ‘Each provider card shows a usage counter with input/output/cached tokens, estimated cost, and last-used timestamp.’,
-        ‘API keys now display masked previews (sk-••••••7xQ9) with show/hide toggle and copy button.’,
-        ‘Provider cards organized by category: Major Cloud, Fast Inference, Gateways, Enterprise, and Local.’,
+        'Purple slash command UI: upgraded dropdown with violet theme, category grouping, and keyboard hints.',
+        'InputToken component shows confirmed commands as purple pill tokens.',
+        'SlashCommandOptionPicker provides a secondary dropdown for commands with selectable options.',
+        'API key save triggers a colorful surge animation that expands from the input, washes across the screen, and retracts with sparkles.',
+        'Added 4 new providers: Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face — bringing the total to 21.',
+        'Each provider card shows a usage counter with input/output/cached tokens, estimated cost, and last-used timestamp.',
+        'Masked key previews with show/hide toggle and copy button.',
       ],
     },
     {
-      kind: ‘improvement’,
+      kind: 'improvement',
       items: [
-        ‘API key input focus triggers a warm pulsing rainbow border animation.’,
-        ‘Connected providers display ambient glow effects and gradient backgrounds.’,
-        ‘Provider list shows connection count summary at the top.’,
-        ‘`Jarvis help` shows the command list without opening the desktop app.’,
-        ‘`Jarvis ultra`, `Jarvis claude`, `Jarvis codex`, and `Jarvis opencode` preserve trailing arguments for CLI workflows.’,
+        'Slash command typeahead shows category headers (Actions, Navigation, Utility).',
+        'API key input focus triggers a warm pulsing rainbow border animation.',
+        'Connected providers display ambient glow effects and gradient backgrounds.',
+        'macOS installer CI uses stable `macos-13` runner for reliable x64 builds.',
+        'Installer shows detailed error messages with available assets when downloads fail.',
+        'README redesigned with polished layout, badges, tables, and collapsible sections.',
       ],
     },
     {
-      kind: ‘fix’,
+      kind: 'fix',
       items: [
-        ‘The What’s New release data now includes the missing 0.1.21 history and labels the 0.1.22 entry correctly.’,
+        '`Jarvis ultra`, `Jarvis claude`, `Jarvis codex`, and `Jarvis opencode` now forward trailing CLI arguments.',
+        "The What's New release data includes the missing 0.1.21 history and labels the 0.1.22 entry correctly.",
       ],
     },
   ],
@@ -122,7 +126,7 @@ const RELEASE_0_1_22: Release = {
   date: '2026-06-07',
   headline: 'Startup update log and Jarvis Terminal Ultra',
   summary:
-    'The terminal command became an interactive coding command center instead of a launch-only animation, and the startup What’s New modal was restored for every shipped update.',
+    "The terminal command became an interactive coding command center instead of a launch-only animation, and the startup What's New modal was restored for every shipped update.",
   sections: [
     {
       kind: 'feature',

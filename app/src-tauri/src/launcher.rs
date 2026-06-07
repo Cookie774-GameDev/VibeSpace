@@ -99,7 +99,7 @@ function Show-Header {{
   Write-Host ''
 }}
 
-function Start-CodeAgent([string]$requested) {{
+function Start-CodeAgent([string]$requested, [string[]]$agentArgs = @()) {{
   $available = @()
   if (Get-Command claude -ErrorAction SilentlyContinue) {{ $available += 'claude' }}
   if (Get-Command codex -ErrorAction SilentlyContinue) {{ $available += 'codex' }}
@@ -119,19 +119,20 @@ function Start-CodeAgent([string]$requested) {{
   Write-Host ($dim + '  Scope: ' + $reset + (Get-Location).Path)
   Write-Host ($dim + '  Full repository context, native terminal control, persistent session.' + $reset)
   Write-Host ''
-  & $target
+  & $target @agentArgs
   exit $LASTEXITCODE
 }}
 
 $mode = if ($args.Count -gt 0) {{ $args[0].ToLowerInvariant() }} else {{ '' }}
+$modeArgs = @($args | Select-Object -Skip 1)
 switch ($mode) {{
   'app' {{ Start-Process -FilePath $jarvisExe; exit 0 }}
   'open' {{ Start-Process -FilePath $jarvisExe; exit 0 }}
-  'code' {{ Start-CodeAgent 'code' }}
-  'ultra' {{ Start-CodeAgent 'ultra' }}
-  'claude' {{ Start-CodeAgent 'claude' }}
-  'codex' {{ Start-CodeAgent 'codex' }}
-  'opencode' {{ Start-CodeAgent 'opencode' }}
+  'code' {{ Start-CodeAgent 'code' $modeArgs }}
+  'ultra' {{ Start-CodeAgent 'ultra' $modeArgs }}
+  'claude' {{ Start-CodeAgent 'claude' $modeArgs }}
+  'codex' {{ Start-CodeAgent 'codex' $modeArgs }}
+  'opencode' {{ Start-CodeAgent 'opencode' $modeArgs }}
   'help' {{
     Show-Header
     Write-Host ($bold + '  Commands' + $reset)
@@ -358,11 +359,15 @@ mod tests {
         ]);
 
         assert!(script.contains(r"$jarvisExe = 'C:\Users\Test\Programs\Jarvis One\jarvis.exe'"));
-        assert!(script.contains("J  A  R  V  I  S    O  N  E"));
-        assert!(script.contains("SYSTEM ONLINE"));
-        assert!(script.contains("Launching your workspace..."));
+        assert!(script.contains("JARVIS"));
+        assert!(script.contains("TERMINAL INTELLIGENCE"));
+        assert!(script.contains("ULTRA CODE ONLINE"));
+        assert!(script.contains("$modeArgs"));
+        assert!(script.contains("& $target @agentArgs"));
+        assert!(script.contains("'help'"));
         assert!(script.contains("Start-Process -FilePath $jarvisExe"));
         assert!(!script.contains(r"C:\\Users"));
         assert!(windows_cmd_launcher().contains(r#""%~dp0Jarvis.ps1""#));
+        assert!(windows_cmd_launcher().contains("%*"));
     }
 }

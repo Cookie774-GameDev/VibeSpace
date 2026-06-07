@@ -6,18 +6,25 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 
 ### Added
 
-- Enhanced API key settings with premium animations: cozy colorful surge effect expands from input, washes across screen, and retracts with sparkles.
-- Expanded provider list to 21 providers: added Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.
-- Added per-provider usage counter component showing input/output/cached tokens, cost, and last-used timestamp.
-- Added masked key preview (sk-••••••7xQ9) with show/hide toggle and copy button.
-- Added ambient glow effects and gradient backgrounds for provider cards based on connection status.
-- Provider cards now organized by category: Major Cloud, Fast Inference, Gateways, Enterprise, and Local.
+- **Premium API key settings**: colorful surge animation expands from input, washes across screen, and retracts with sparkles when saving keys.
+- **21 AI providers**: added Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.
+- **Provider usage counters**: shows input/output/cached tokens, cost, and last-used timestamp per provider.
+- **Purple slash command UI**: upgraded dropdown with violet theme, category grouping, and keyboard hints.
+- **InputToken component**: purple pill tokens for confirmed commands and attachments.
+- **SlashCommandOptionPicker**: secondary dropdown for commands with selectable options.
+- Masked key previews with show/hide toggle and copy button.
+- Ambient glow effects and gradient backgrounds for provider cards.
+- Provider cards organized by category: Major Cloud, Fast Inference, Gateways, Enterprise, and Local.
 
 ### Improved
 
-- API key input focus now triggers a warm pulsing rainbow border animation.
+- API key input focus triggers a warm pulsing rainbow border animation.
 - Connected providers display a glowing "Connected" badge with micro-animations.
 - Provider list shows connection count summary at the top.
+- Slash commands show category headers (Actions, Navigation, Utility).
+- macOS installer CI uses stable `macos-13` runner instead of `macos-15-intel`.
+- Installer shows detailed error messages with available assets when downloads fail.
+- README redesigned with polished layout, badges, tables, and collapsible sections.
 
 ### Fixed
 
