@@ -1,3 +1,14 @@
+## 2026-06-07 - v0.1.22 Startup Update Log and Ultra Terminal
+
+- Added the 0.1.22 in-app release entry and bumped `CURRENT_VERSION`, ensuring What's New auto-opens once after upgrade.
+- Replaced the launch-only `Jarvis` terminal command with an interactive command center.
+- Added direct app and coding modes plus automatic Ultra selection across Claude Code, Codex, and OpenCode.
+- Fixed Windows launcher argument forwarding by passing `%*` from `Jarvis.cmd`.
+- Updated both the installer-generated launcher and the Tauri in-app launcher generator.
+- Verified the installed `Jarvis help` output, 209 frontend tests, production build, and Rust launcher tests.
+
+---
+
 ## 2026-06-07 - v0.1.21 AI, Music, and Notification Update
 
 - Replaced procedural ambient synthesis with a five-track hosted playlist that advances in order and repeats.

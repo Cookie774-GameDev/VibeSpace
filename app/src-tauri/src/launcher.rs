@@ -58,7 +58,7 @@ fn io_err(err: std::io::Error) -> String {
 
 #[cfg(target_os = "windows")]
 fn windows_cmd_launcher() -> &'static str {
-    "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Jarvis.ps1\"\r\n"
+    "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Jarvis.ps1\" %*\r\n"
 }
 
 #[cfg(target_os = "windows")]
@@ -90,6 +90,86 @@ $green = "$esc[38;5;82m"
 $bold = "$esc[1m"
 $dim = "$esc[2m"
 $reset = "$esc[0m"
+
+function Show-Header {{
+  Clear-Host
+  Write-Host ($cyan + '  JARVIS' + $reset + $dim + ' // TERMINAL INTELLIGENCE' + $reset)
+  Write-Host ($violet + '  --------------------------------------------------------' + $reset)
+  Write-Host ($dim + '  Workspace: ' + $reset + (Get-Location).Path)
+  Write-Host ''
+}}
+
+function Start-CodeAgent([string]$requested) {{
+  $available = @()
+  if (Get-Command claude -ErrorAction SilentlyContinue) {{ $available += 'claude' }}
+  if (Get-Command codex -ErrorAction SilentlyContinue) {{ $available += 'codex' }}
+  if (Get-Command opencode -ErrorAction SilentlyContinue) {{ $available += 'opencode' }}
+  $target = $requested
+  if ($requested -eq 'ultra' -or $requested -eq 'code') {{
+    $target = @('claude', 'codex', 'opencode') | Where-Object {{ $available -contains $_ }} | Select-Object -First 1
+  }}
+  if (-not $target -or -not (Get-Command $target -ErrorAction SilentlyContinue)) {{
+    Write-Host ($pink + $bold + '  No coding agent CLI was found.' + $reset)
+    Write-Host ($dim + '  Install Claude Code, Codex, or OpenCode, then run Jarvis ultra again.' + $reset)
+    exit 1
+  }}
+  Show-Header
+  Write-Host ($green + $bold + '  ULTRA CODE ONLINE' + $reset)
+  Write-Host ($dim + '  Agent: ' + $reset + $target)
+  Write-Host ($dim + '  Scope: ' + $reset + (Get-Location).Path)
+  Write-Host ($dim + '  Full repository context, native terminal control, persistent session.' + $reset)
+  Write-Host ''
+  & $target
+  exit $LASTEXITCODE
+}}
+
+$mode = if ($args.Count -gt 0) {{ $args[0].ToLowerInvariant() }} else {{ '' }}
+switch ($mode) {{
+  'app' {{ Start-Process -FilePath $jarvisExe; exit 0 }}
+  'open' {{ Start-Process -FilePath $jarvisExe; exit 0 }}
+  'code' {{ Start-CodeAgent 'code' }}
+  'ultra' {{ Start-CodeAgent 'ultra' }}
+  'claude' {{ Start-CodeAgent 'claude' }}
+  'codex' {{ Start-CodeAgent 'codex' }}
+  'opencode' {{ Start-CodeAgent 'opencode' }}
+  'help' {{
+    Show-Header
+    Write-Host ($bold + '  Commands' + $reset)
+    Write-Host '    Jarvis app       Open Jarvis One'
+    Write-Host '    Jarvis ultra     Start the best installed coding agent'
+    Write-Host '    Jarvis claude    Start Claude Code here'
+    Write-Host '    Jarvis codex     Start Codex here'
+    Write-Host '    Jarvis opencode  Start OpenCode here'
+    exit 0
+  }}
+}}
+
+if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {{
+  Start-Process -FilePath $jarvisExe
+  exit 0
+}}
+
+Show-Header
+Write-Host ($bold + '  Choose a mode' + $reset)
+Write-Host ($green + '    [1] ULTRA CODE' + $reset + $dim + '  best installed coding agent' + $reset)
+Write-Host ($cyan + '    [2] JARVIS ONE' + $reset + $dim + '  desktop AI workspace' + $reset)
+Write-Host ($violet + '    [3] CLAUDE CODE' + $reset)
+Write-Host ($blue + '    [4] CODEX' + $reset)
+Write-Host ($dim + '    [Q] Exit' + $reset)
+Write-Host ''
+$choice = (Read-Host '  jarvis').Trim().ToLowerInvariant()
+switch ($choice) {{
+  '1' {{ Start-CodeAgent 'ultra' }}
+  'ultra' {{ Start-CodeAgent 'ultra' }}
+  '2' {{ Start-Process -FilePath $jarvisExe; exit 0 }}
+  'app' {{ Start-Process -FilePath $jarvisExe; exit 0 }}
+  '3' {{ Start-CodeAgent 'claude' }}
+  'claude' {{ Start-CodeAgent 'claude' }}
+  '4' {{ Start-CodeAgent 'codex' }}
+  'codex' {{ Start-CodeAgent 'codex' }}
+  default {{ exit 0 }}
+}}
+
 Clear-Host
 $frames = @(
   @($cyan,   '[=                   ]', 'WAKING CORE'),

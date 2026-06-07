@@ -38,7 +38,7 @@ import {
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.20';
+export const CURRENT_VERSION = '0.1.22';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -80,6 +80,45 @@ export interface Release {
    */
   sections: ReleaseSection[];
 }
+
+const RELEASE_0_1_21: Release = {
+    version: '0.1.22',
+    date: '2026-06-07',
+    headline: 'Real AI routing, hosted music, and a stronger Jarvis terminal',
+    summary:
+      'Jarvis now uses your selected provider and model, understands file paths typed into chat, and ships a hosted five-track ambient playlist foundation. The terminal launcher is also becoming a proper coding command center.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Use /model to open a real provider and model picker, with the selection persisted for future chats.',
+          'Windows file paths typed into chat are automatically attached as request context.',
+          'Ambient music now supports five hosted tracks played sequentially on repeat.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Built-in Jarvis agents follow the provider and model you selected.',
+          'The Jarvis terminal command now exposes focused app, code, Ultra, Claude, and Codex launch modes.',
+          'Reminder channels and completion notifications behave consistently across desktop and in-app surfaces.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Provider failures remain visible instead of being replaced by unrelated mock responses.',
+          'Mock mode clearly identifies itself and no longer pretends it analyzed unavailable files.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Published the updater-signed Jarvis One 0.1.22 Windows release and verified a silent local upgrade.',
+        ],
+      },
+    ],
+  };
 
 /**
  * Per-section heading + icon. The renderer reads this so we keep
@@ -137,6 +176,7 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  RELEASE_0_1_21,
   {
     version: '0.1.20',
     date: '2026-06-06',

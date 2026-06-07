@@ -2,6 +2,19 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-06-07
+
+### Added
+
+- Added the missing startup What's New entry so every shipped update presents its update log once after launch.
+- Rebuilt the `Jarvis` terminal command as an interactive coding command center.
+- Added `Jarvis ultra`, `Jarvis code`, `Jarvis claude`, `Jarvis codex`, `Jarvis opencode`, `Jarvis app`, and `Jarvis help`.
+
+### Improved
+
+- Ultra Code automatically chooses the strongest installed coding CLI in the current working directory.
+- Terminal launchers now preserve command-line arguments instead of discarding them.
+
 ## [0.1.21] - 2026-06-07
 
 ### Added
