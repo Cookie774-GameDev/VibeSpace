@@ -245,6 +245,11 @@ resolve_download_url() {
       printf "%s" "$asset"
       return
     fi
+    if [ "$os" = "macos" ]; then
+      fail "Release v${version} has no macOS ${arch} DMG asset."
+      warn "The release is incomplete. Check https://github.com/${JARVIS_REPO}/releases/tag/v${version}"
+      exit 1
+    fi
   fi
   download_url "$version" "$os" "$arch" "$format"
 }
