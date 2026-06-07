@@ -61,6 +61,11 @@ const providers: Record<ProviderId, LLMProvider> = {
   hyperbolic: mockProvider,
   novita: mockProvider,
   lambda: mockProvider,
+  // V4 — enterprise & specialized providers. Placeholder routing.
+  azure: mockProvider,
+  cerebras: mockProvider,
+  huggingface: mockProvider,
+  bedrock: mockProvider,
 };
 
 /** Default model name to use when promoting a mock-default agent to a real provider. */

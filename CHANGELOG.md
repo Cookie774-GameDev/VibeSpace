@@ -2,6 +2,28 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.23] - 2026-06-07
+
+### Added
+
+- Enhanced API key settings with premium animations: cozy colorful surge effect expands from input, washes across screen, and retracts with sparkles.
+- Expanded provider list to 21 providers: added Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.
+- Added per-provider usage counter component showing input/output/cached tokens, cost, and last-used timestamp.
+- Added masked key preview (sk-••••••7xQ9) with show/hide toggle and copy button.
+- Added ambient glow effects and gradient backgrounds for provider cards based on connection status.
+- Provider cards now organized by category: Major Cloud, Fast Inference, Gateways, Enterprise, and Local.
+
+### Improved
+
+- API key input focus now triggers a warm pulsing rainbow border animation.
+- Connected providers display a glowing "Connected" badge with micro-animations.
+- Provider list shows connection count summary at the top.
+
+### Fixed
+
+- `Jarvis ultra`, `Jarvis claude`, `Jarvis codex`, and `Jarvis opencode` now forward trailing CLI arguments.
+- The in-app What's New data now includes both `0.1.21` and `0.1.22` entries with correct version labels.
+
 ## [0.1.22] - 2026-06-07
 
 ### Added

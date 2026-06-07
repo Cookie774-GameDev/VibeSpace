@@ -83,6 +83,10 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   hyperbolic: 'Hyperbolic',
   novita: 'Novita',
   lambda: 'Lambda',
+  azure: 'Azure OpenAI',
+  cerebras: 'Cerebras',
+  huggingface: 'Hugging Face',
+  bedrock: 'AWS Bedrock',
   mock: 'Mock',
   local: 'Local',
 };

@@ -862,56 +862,153 @@
   filter: blur(12px);
 }
 
-/* ── API key save — warm expand → hold → retract wave ────────── */
-@keyframes jarvis-api-key-save-burst {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.02);
-  }
-  /* Slowly expand outward with warm glow */
-  12% {
-    opacity: 0.9;
-    transform: translate(-50%, -50%) scale(0.6);
-  }
-  /* Fill the viewport */
-  35% {
-    opacity: 0.75;
-    transform: translate(-50%, -50%) scale(6);
-  }
-  /* Hold at full — let the warm colour breathe */
-  55% {
-    opacity: 0.65;
-    transform: translate(-50%, -50%) scale(6.5);
-  }
-  /* Begin retraction */
-  75% {
-    opacity: 0.5;
-    transform: translate(-50%, -50%) scale(2);
-  }
-  /* Fully retracted back to origin */
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.02);
-  }
+/* ── API key save — cozy colorful surge with sparkles ────────── */
+
+/* Wave layer: soft blues, purples, pinks, oranges */
+.jarvis-api-key-save-burst-wave {
+  position: absolute;
+  width: 40vmax;
+  height: 40vmax;
+  border-radius: 9999px;
+  background: conic-gradient(
+    from 0deg at 50% 50%,
+    hsl(280 60% 65% / 0.6),       /* soft purple */
+    hsl(320 70% 65% / 0.55),      /* pink */
+    hsl(14 70% 60% / 0.5),        /* warm orange */
+    hsl(36 70% 60% / 0.45),       /* honey */
+    hsl(180 50% 55% / 0.4),       /* soft teal */
+    hsl(220 60% 60% / 0.45),      /* soft blue */
+    hsl(280 60% 65% / 0.6)        /* back to purple */
+  );
+  filter: blur(40px);
+  mix-blend-mode: screen;
+  transform: translate(-50%, -50%) scale(0.02);
+  opacity: 0;
+  will-change: transform, opacity;
+  transition: transform 400ms cubic-bezier(0.22, 0.68, 0.36, 1),
+              opacity 300ms ease-out;
 }
 
-.jarvis-api-key-save-burst {
+.jarvis-api-key-save-burst-wave.phase-expanding {
+  transform: translate(-50%, -50%) scale(4);
+  opacity: 0.85;
+  transition: transform 450ms cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 200ms ease-out;
+}
+
+.jarvis-api-key-save-burst-wave.phase-holding {
+  transform: translate(-50%, -50%) scale(5);
+  opacity: 0.7;
+  transition: transform 500ms ease-in-out,
+              opacity 400ms ease-in-out;
+}
+
+.jarvis-api-key-save-burst-wave.phase-retracting {
+  transform: translate(-50%, -50%) scale(0.3);
+  opacity: 0.4;
+  transition: transform 700ms cubic-bezier(0.7, 0, 0.84, 0),
+              opacity 500ms ease-in;
+}
+
+.jarvis-api-key-save-burst-wave.phase-sparkle {
+  transform: translate(-50%, -50%) scale(0.02);
+  opacity: 0;
+  transition: transform 300ms ease-out,
+              opacity 200ms ease-out;
+}
+
+/* Glow layer: warm center bloom */
+.jarvis-api-key-save-burst-glow {
   position: absolute;
   width: 30vmax;
   height: 30vmax;
   border-radius: 9999px;
   background: radial-gradient(
     circle at 50% 50%,
-    hsl(38 80% 68% / 0.75) 0%,      /* warm amber core */
-    hsl(25 70% 55% / 0.55) 25%,      /* copper mid-ring */
-    hsl(14 64% 50% / 0.35) 50%,      /* rose edge */
-    hsl(28 30% 15% / 0) 80%          /* transparent fade */
+    hsl(42 90% 75% / 0.9) 0%,       /* bright warm center */
+    hsl(36 80% 65% / 0.7) 20%,      /* honey glow */
+    hsl(14 70% 60% / 0.5) 40%,      /* copper */
+    hsl(320 60% 60% / 0.3) 60%,     /* pink edge */
+    transparent 80%
   );
-  filter: blur(18px);
+  filter: blur(30px);
   mix-blend-mode: screen;
   transform: translate(-50%, -50%) scale(0.02);
-  animation: jarvis-api-key-save-burst 2.4s cubic-bezier(0.22, 0.68, 0.36, 1) forwards;
+  opacity: 0;
   will-change: transform, opacity;
+  transition: transform 400ms cubic-bezier(0.22, 0.68, 0.36, 1),
+              opacity 300ms ease-out;
+}
+
+.jarvis-api-key-save-burst-glow.phase-expanding {
+  transform: translate(-50%, -50%) scale(2.5);
+  opacity: 1;
+  transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 150ms ease-out;
+}
+
+.jarvis-api-key-save-burst-glow.phase-holding {
+  transform: translate(-50%, -50%) scale(3);
+  opacity: 0.85;
+  transition: transform 500ms ease-in-out,
+              opacity 400ms ease-in-out;
+}
+
+.jarvis-api-key-save-burst-glow.phase-retracting {
+  transform: translate(-50%, -50%) scale(0.5);
+  opacity: 0.6;
+  transition: transform 600ms cubic-bezier(0.7, 0, 0.84, 0),
+              opacity 400ms ease-in;
+}
+
+.jarvis-api-key-save-burst-glow.phase-sparkle {
+  transform: translate(-50%, -50%) scale(0.15);
+  opacity: 0.9;
+  filter: blur(8px);
+  transition: transform 200ms ease-out,
+              opacity 400ms ease-out,
+              filter 300ms ease-out;
+}
+
+/* Sparkles container */
+.jarvis-api-key-sparkles {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 120px;
+  height: 120px;
+  pointer-events: none;
+}
+
+/* Individual sparkle */
+.jarvis-sparkle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, hsl(42 100% 80%), hsl(36 80% 65%));
+  box-shadow:
+    0 0 8px 2px hsl(42 100% 70% / 0.8),
+    0 0 16px 4px hsl(36 80% 60% / 0.5);
+  transform-origin: center center;
+  animation: jarvis-sparkle-burst 600ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: var(--sparkle-delay, 0ms);
+}
+
+@keyframes jarvis-sparkle-burst {
+  0% {
+    transform: translate(-50%, -50%) rotate(var(--sparkle-angle, 0deg)) translateX(0) scale(0);
+    opacity: 1;
+  }
+  50% {
+    transform: translate(-50%, -50%) rotate(var(--sparkle-angle, 0deg)) translateX(45px) scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(var(--sparkle-angle, 0deg)) translateX(65px) scale(0);
+    opacity: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -926,9 +1023,24 @@
   [data-jarvis-rainbow='true']:focus-within::after {
     opacity: 0.4;
   }
-  .jarvis-api-key-save-burst {
-    animation-duration: 600ms;
-    filter: blur(12px) saturate(1.2);
+
+  .jarvis-api-key-save-burst-wave,
+  .jarvis-api-key-save-burst-glow {
+    transition-duration: 150ms !important;
+  }
+
+  .jarvis-api-key-save-burst-wave.phase-expanding,
+  .jarvis-api-key-save-burst-glow.phase-expanding {
+    transform: translate(-50%, -50%) scale(1.5);
+  }
+
+  .jarvis-api-key-save-burst-wave.phase-holding,
+  .jarvis-api-key-save-burst-glow.phase-holding {
+    transform: translate(-50%, -50%) scale(1.5);
+  }
+
+  .jarvis-sparkle {
+    animation-duration: 200ms;
   }
 }
 
