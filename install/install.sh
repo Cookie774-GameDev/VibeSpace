@@ -235,8 +235,10 @@ resolve_download_url() {
   pattern="$(asset_pattern "$os" "$arch" "$format" || true)"
   if [ -n "$pattern" ]; then
     local api_url="${JARVIS_API}/tags/v${version}"
+    local response
+    response=$(curl -fsSL -H "User-Agent: jarvis-installer" "$api_url" 2>/dev/null || true)
     local asset
-    asset=$(curl -fsSL -H "User-Agent: jarvis-installer" "$api_url" 2>/dev/null \
+    asset=$(printf "%s" "$response" \
       | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
       | sed -E 's/.*"browser_download_url":[[:space:]]*"([^"]*)".*/\1/' \
       | grep -Ei "$pattern" \
@@ -245,9 +247,48 @@ resolve_download_url() {
       printf "%s" "$asset"
       return
     fi
+    # For macOS, try to find any available DMG if the specific arch isn't available
     if [ "$os" = "macos" ]; then
+      # List all available assets for better error reporting
+      local all_assets
+      all_assets=$(printf "%s" "$response" \
+        | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
+        | sed -E 's/.*"browser_download_url":[[:space:]]*"([^"]*)".*/\1/' \
+        | grep -Ei '\.dmg$' || true)
+
+      if [ -z "$all_assets" ]; then
+        fail "Release v${version} has no macOS DMG assets."
+        printf "\n"
+        printf "  ${YELLOW}Details:${RESET}\n"
+        printf "    OS:           macOS\n"
+        printf "    Architecture: %s\n" "$arch"
+        printf "    Version:      v%s\n" "$version"
+        printf "    Expected:     Jarvis One_%s_%s.dmg\n" "$version" "$([ "$arch" = "aarch64" ] && echo "aarch64" || echo "x64")"
+        printf "\n"
+        printf "  ${CYAN}Possible fixes:${RESET}\n"
+        printf "    1. Wait for the release to complete (CI may still be building)\n"
+        printf "    2. Try a different version: JARVIS_VERSION=0.1.22 and re-run\n"
+        printf "    3. Check: https://github.com/${JARVIS_REPO}/releases/tag/v${version}\n"
+        printf "\n"
+        exit 1
+      fi
+
+      # If we have DMGs but not for this architecture, suggest alternatives
       fail "Release v${version} has no macOS ${arch} DMG asset."
-      warn "The release is incomplete. Check https://github.com/${JARVIS_REPO}/releases/tag/v${version}"
+      printf "\n"
+      printf "  ${YELLOW}Available macOS assets:${RESET}\n"
+      printf "%s" "$all_assets" | while read -r url; do
+        printf "    - %s\n" "$(basename "$url")"
+      done
+      printf "\n"
+      printf "  ${CYAN}Your system:${RESET} macOS %s\n" "$arch"
+      printf "\n"
+      if [ "$arch" = "x86_64" ]; then
+        printf "  ${YELLOW}Note:${RESET} If you have Apple Silicon (M1/M2/M3), Rosetta 2 can run the arm64 version.\n"
+        printf "  You can try: JARVIS_ARCH=aarch64 and re-run the installer.\n"
+      fi
+      printf "\n"
+      warn "Check https://github.com/${JARVIS_REPO}/releases/tag/v${version}"
       exit 1
     fi
   fi

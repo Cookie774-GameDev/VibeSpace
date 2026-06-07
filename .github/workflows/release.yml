@@ -63,7 +63,7 @@ jobs:
             target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
           - label: macOS x64
-            platform: macos-15-intel
+            platform: macos-13
             target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
           - label: Linux x64
