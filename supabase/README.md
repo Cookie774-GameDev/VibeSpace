@@ -19,6 +19,7 @@ supabase/
     0008_revoke_anon_rpc.sql           tighten set_phone_pin
     0009_perf_rls_initplan_and_indexes.sql  RLS perf rewrites + FK covering indexes
     0010_app_sync_records.sql          generic desktop sync_queue document table
+    0011_plugin_connections.sql        rejects secrets in plugin sync metadata
   functions/
     jarvis-proxy/                      hosted DeepSeek proxy edge function
   schema-phone-jarvis.sql              legacy single-file schema (kept for reference)
@@ -38,8 +39,8 @@ url:          https://tipeobvisjqvpbzcpckh.supabase.co
 region:       us-east-1
 ```
 
-Migrations 0001 through 0009 were previously applied. Apply and verify
-`0010_app_sync_records.sql` before enabling desktop cloud sync in production:
+Apply migrations through `0011_plugin_connections.sql` before enabling
+plugin metadata sync in production:
 
 ```sh
 supabase migration list
@@ -48,31 +49,38 @@ supabase migration list
 ## One-time setup (new project)
 
 1. **Init** (only if this directory wasn't created by `supabase init`):
+
    ```sh
    supabase init
    ```
 
 2. **Link** to your Supabase project:
+
    ```sh
    supabase link --project-ref <your-project-ref>
    ```
 
 3. **Apply the schema**:
+
    ```sh
    supabase db push
    ```
 
 4. **Set the DeepSeek key as a function secret**:
+
    ```sh
    supabase secrets set DEEPSEEK_API_KEY=sk-...
    ```
+
    `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are
    provided automatically; you do not need to set them yourself.
 
 5. **Deploy the function**:
+
    ```sh
    supabase functions deploy jarvis-proxy
    ```
+
    Endpoint will be `https://<project-ref>.functions.supabase.co/jarvis-proxy`.
 
 6. **Wire the desktop app**: copy the project URL + publishable key into
@@ -87,13 +95,13 @@ supabase migration list
 The canonical tier model lives in `app/src/lib/entitlements.ts`. The
 database `profiles.tier` constraint allows all of these values:
 
-| Tier        | Monthly quota | Notes                                              |
-| ----------- | ------------- | -------------------------------------------------- |
-| `free`      | 50            | Default for new sign-ups. BYOK only.               |
-| `starter`   | 1500          | $5/mo. Hosted Gemini Flash + voice.                |
-| `pro`       | 5000          | $20/mo. Adds Claude Sonnet, GPT-4o, Gemini Pro.    |
-| `ultra`     | 25000         | $100/mo. Adds Claude Opus and o-class reasoning.   |
-| `byok-only` | (unmetered)   | Skips the proxy. Requests still log usage.         |
+| Tier        | Monthly quota | Notes                                                |
+| ----------- | ------------- | ---------------------------------------------------- |
+| `free`      | 50            | Default for new sign-ups. BYOK only.                 |
+| `starter`   | 1500          | $5/mo. Hosted Gemini Flash + voice.                  |
+| `pro`       | 5000          | $20/mo. Adds Claude Sonnet, GPT-4o, Gemini Pro.      |
+| `ultra`     | 25000         | $100/mo. Adds Claude Opus and o-class reasoning.     |
+| `byok-only` | (unmetered)   | Skips the proxy. Requests still log usage.           |
 | `plus`      | (legacy)      | Pre-V2 value kept so old rows don't fail validation. |
 
 `subscriptions_sync_profile` triggers on insert/update of

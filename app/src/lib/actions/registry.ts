@@ -46,6 +46,7 @@ import {
   PlusCircle,
   Clock,
   AlarmClock,
+  Plug,
 } from 'lucide-react';
 
 import { useUIStore, type Route } from '@/stores/ui';
@@ -751,6 +752,70 @@ const HOST_ACTIONS: ActionDef[] = [
   },
 ];
 
+const PLUGIN_ACTIONS: ActionDef[] = [
+  {
+    id: 'plugin.call',
+    category: 'custom',
+    label: 'Call connected plugin tool',
+    description:
+      'Run a declared tool from a connected and terminal-enabled plugin. Credentials remain in the OS keychain.',
+    icon: Plug,
+    params: [
+      {
+        key: 'pluginId',
+        label: 'Plugin id',
+        type: 'string',
+        required: true,
+        help: 'Stable plugin id shown in the connected plugin capability context.',
+      },
+      {
+        key: 'toolName',
+        label: 'Tool name',
+        type: 'string',
+        required: true,
+        help: 'A declared tool name from the plugin capability context.',
+      },
+    ],
+    run: async (params) => {
+      const pluginId = typeof params.pluginId === 'string' ? params.pluginId.trim() : '';
+      const toolName = typeof params.toolName === 'string' ? params.toolName.trim() : '';
+      if (!pluginId || !toolName) return fail('Plugin id and tool name are required.');
+
+      const [{ getPluginManifest, callPluginTool }, { usePluginStore }] = await Promise.all([
+        import('@/features/plugins'),
+        import('@/features/plugins/store'),
+      ]);
+      const manifest = getPluginManifest(pluginId);
+      const connection = usePluginStore.getState().connections[pluginId];
+      if (!manifest || manifest.status !== 'implemented') {
+        return fail(`Plugin ${pluginId} is not implemented.`);
+      }
+      if (!connection || connection.state !== 'connected') {
+        return fail(`${manifest.name} is not connected.`);
+      }
+      if (!connection.enabled) {
+        return fail(`${manifest.name} terminal access is disabled.`);
+      }
+      const projectId = useAuthStore.getState().projectId;
+      const availableHere =
+        connection.enabledProjectIds.includes('*') ||
+        Boolean(projectId && connection.enabledProjectIds.includes(projectId));
+      if (!availableHere) {
+        return fail(`${manifest.name} is not enabled for the active project.`);
+      }
+      const tool = manifest.tools.find((candidate) => candidate.name === toolName);
+      if (!tool) return fail(`Unknown ${manifest.name} tool: ${toolName}.`);
+
+      try {
+        const data = await callPluginTool(pluginId, toolName);
+        return ok(`${manifest.name}.${toolName} completed.`, data);
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+    },
+  },
+];
+
 const CLOCK_ACTIONS: ActionDef[] = [
   {
     id: 'clock.timer',
@@ -995,6 +1060,7 @@ export function getBuiltinActions(): ActionDef[] {
     ...CHAT_ACTIONS,
     ...WELLNESS_ACTIONS,
     ...HOST_ACTIONS,
+    ...PLUGIN_ACTIONS,
     ...CLOCK_ACTIONS,
     ...PRODUCTIVITY_ACTIONS,
   ];
@@ -1030,6 +1096,7 @@ export const BUILTIN_ACTION_COUNT = (() => {
     CHAT_ACTIONS.length +
     WELLNESS_ACTIONS.length +
     HOST_ACTIONS.length +
+    PLUGIN_ACTIONS.length +
     CLOCK_ACTIONS.length +
     PRODUCTIVITY_ACTIONS.length
   );

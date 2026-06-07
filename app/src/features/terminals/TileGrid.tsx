@@ -523,6 +523,24 @@ export function TileGrid({
     />
   );
 
+  // Chunk the flat leaves array into rows so we can lay out as flex of
+  // flex-rows. The last row may be short (e.g. N=5 with cols=3 has a row
+  // of 2 leaves); we pad with `null` so the column widths line up across
+  // rows. The placeholder takes its column's flex value but renders no
+  // tile, matching the previous CSS-Grid behaviour where the unused cell
+  // simply showed empty space.
+  const rowChunks = React.useMemo(() => {
+    const out: (typeof leaves[number] | null)[][] = [];
+    for (let r = 0; r < rows; r++) {
+      const rowLeaves: (typeof leaves[number] | null)[] = [];
+      for (let c = 0; c < cols; c++) {
+        rowLeaves.push(leaves[r * cols + c] ?? null);
+      }
+      out.push(rowLeaves);
+    }
+    return out;
+  }, [leaves, cols, rows]);
+
   const fullscreenLeaf = fullscreenPaneId
     ? allLeaves.find((leaf) => leaf.id === fullscreenPaneId) ?? null
     : null;
@@ -553,23 +571,6 @@ export function TileGrid({
     );
   }
 
-  // Chunk the flat leaves array into rows so we can lay out as flex of
-  // flex-rows. The last row may be short (e.g. N=5 with cols=3 has a row
-  // of 2 leaves); we pad with `null` so the column widths line up across
-  // rows. The placeholder takes its column's flex value but renders no
-  // tile, matching the previous CSS-Grid behaviour where the unused cell
-  // simply showed empty space.
-  const rowChunks = React.useMemo(() => {
-    const out: (typeof leaves[number] | null)[][] = [];
-    for (let r = 0; r < rows; r++) {
-      const rowLeaves: (typeof leaves[number] | null)[] = [];
-      for (let c = 0; c < cols; c++) {
-        rowLeaves.push(leaves[r * cols + c] ?? null);
-      }
-      out.push(rowLeaves);
-    }
-    return out;
-  }, [leaves, cols, rows]);
 
   return (
     <div

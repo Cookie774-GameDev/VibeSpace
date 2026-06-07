@@ -24,7 +24,12 @@
         { "url": "https://api.openai.com/*" },
         { "url": "https://api.anthropic.com/*" },
         { "url": "https://generativelanguage.googleapis.com/*" },
-        { "url": "https://api.groq.com/*" }
+        { "url": "https://api.groq.com/*" },
+        { "url": "https://api.github.com/*" },
+        { "url": "https://api.figma.com/*" },
+        { "url": "https://*.supabase.co/*" },
+        { "url": "https://*.myshopify.com/*" },
+        { "url": "https://slack.com/*" }
       ]
     }
   ]

@@ -115,7 +115,10 @@ export function Inspector() {
   const [inspectorChatId, setInspectorChatId] = React.useState<string | null>(null);
   const [activeTab, setActiveTab] = React.useState('today');
 
-  const setInspectorOpen = (open: boolean) => useUIStore.setState({ inspectorOpen: open });
+  const setInspectorOpen = React.useCallback(
+    (open: boolean) => useUIStore.setState({ inspectorOpen: open }),
+    [],
+  );
 
   React.useEffect(() => {
     const handleAttach = () => {

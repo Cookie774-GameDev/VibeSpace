@@ -21,7 +21,8 @@ silently degrades to local-only mode.
 The migrations in `migrations/` mirror the Dexie schema in
 `app/src/lib/db/schema.ts` and turn on row-level security so each user only
 sees their own rows. `0004_app_sync_records.sql` adds the generic document
-table used by the desktop `sync_queue`.
+table used by the desktop `sync_queue`. `0005_plugin_connections.sql` rejects
+credential-shaped fields in plugin metadata sync records.
 
 ### Option 1 - Supabase dashboard (easiest)
 

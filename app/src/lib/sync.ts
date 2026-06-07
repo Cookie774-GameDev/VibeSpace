@@ -23,6 +23,7 @@ const newSyncId = (): string => `${SYNC_ID_PREFIX}_${nanoid(16)}`;
 const CLOUD_SYNC_RECORDS_TABLE = 'app_sync_records';
 const CLOUD_SYNC_CONFLICT_TARGET = 'user_id,table_name,row_id';
 const CUSTOM_TOOLS_SYNC_TABLE = 'custom_tools';
+const PLUGIN_CONNECTIONS_SYNC_TABLE = 'plugin_connections';
 const PULL_CURSOR_KEY_PREFIX = 'cloud_sync:last_pull_at';
 let syncFlushInFlight = false;
 let syncPullInFlight = false;
@@ -147,7 +148,7 @@ export function customToolFromCloudRecord(row: CloudSyncRecord): SyncedCustomToo
     slug,
     name,
     description: stringValue(payload.description) ?? '',
-    baseAction: steps ? baseAction ?? 'workflow.run' : baseAction ?? 'workflow.run',
+    baseAction: steps ? (baseAction ?? 'workflow.run') : (baseAction ?? 'workflow.run'),
     params: recordValue(payload.params) ?? {},
     steps,
     emoji: stringValue(payload.emoji) ?? undefined,
@@ -304,7 +305,9 @@ export async function retrySyncErrors(): Promise<number> {
  * Delete sync queue rows that have completed and are older than `olderThanMs`.
  * Default: keep 7 days of history.
  */
-export async function pruneSyncQueue(olderThanMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
+export async function pruneSyncQueue(
+  olderThanMs: number = 7 * 24 * 60 * 60 * 1000,
+): Promise<number> {
   await openDb();
   const cutoff = Date.now() - olderThanMs;
   const removed = await db.sync_queue
@@ -334,9 +337,63 @@ async function applyCustomToolCloudRecord(row: CloudSyncRecord): Promise<boolean
   return true;
 }
 
+function pluginConnectionFromCloudRecord(row: CloudSyncRecord) {
+  if (row.table_name !== PLUGIN_CONNECTIONS_SYNC_TABLE || row.op === 'delete') return null;
+  const payload = recordValue(row.payload);
+  const pluginId = stringValue(row.row_id) ?? stringValue(payload?.pluginId);
+  const state = stringValue(payload?.state);
+  if (
+    !payload ||
+    !pluginId ||
+    !['connected', 'not_connected', 'needs_setup', 'error'].includes(state ?? '')
+  ) {
+    return null;
+  }
+  return {
+    pluginId,
+    state: state as 'connected' | 'not_connected' | 'needs_setup' | 'error',
+    enabled: payload.enabled === true,
+    enabledProjectIds: Array.isArray(payload.enabledProjectIds)
+      ? payload.enabledProjectIds
+          .filter((value): value is string => typeof value === 'string')
+          .slice(0, 50)
+      : ['*'],
+    accountLabel: stringValue(payload.accountLabel) ?? undefined,
+    lastTestedAt: numberValue(payload.lastTestedAt, 0) || undefined,
+    error: stringValue(payload.error) ?? undefined,
+    configuredFields: Array.isArray(payload.configuredFields)
+      ? payload.configuredFields
+          .filter((value): value is string => typeof value === 'string')
+          .slice(0, 20)
+      : [],
+    updatedAt: numberValue(payload.updatedAt, Date.parse(row.updated_at) || Date.now()),
+  };
+}
+
+async function applyPluginConnectionCloudRecord(row: CloudSyncRecord): Promise<boolean> {
+  const { usePluginStore } = await import('@/features/plugins/store');
+  if (row.op === 'delete') {
+    usePluginStore.setState((state) => {
+      const connections = { ...state.connections };
+      delete connections[row.row_id];
+      return { connections };
+    });
+    return true;
+  }
+  const connection = pluginConnectionFromCloudRecord(row);
+  if (!connection) return false;
+  usePluginStore.setState((state) => ({
+    connections: { ...state.connections, [connection.pluginId]: connection },
+  }));
+  return true;
+}
+
 async function applyCloudSyncRecord(row: CloudSyncRecord): Promise<boolean> {
   if (row.table_name === CUSTOM_TOOLS_SYNC_TABLE) {
     return applyCustomToolCloudRecord(row);
+  }
+  if (row.table_name === PLUGIN_CONNECTIONS_SYNC_TABLE) {
+    return applyPluginConnectionCloudRecord(row);
   }
   return false;
 }
@@ -430,9 +487,12 @@ export function startSyncLoop(intervalMs: number = 30_000): () => void {
   };
 
   // Kick off after a short delay so the app finishes booting first.
-  timer = setTimeout(() => {
-    void tick();
-  }, Math.min(intervalMs, 2_000));
+  timer = setTimeout(
+    () => {
+      void tick();
+    },
+    Math.min(intervalMs, 2_000),
+  );
 
   return function stop() {
     stopped = true;

@@ -326,7 +326,11 @@ export const useUIStore = create<UIState>()(
       resetUI: () => set(defaults),
 
       // V2
-      setAmbient: (v) => set({ ambient: v, ambientActive: v ? undefined : false } as Partial<UIState>),
+      setAmbient: (v) =>
+        set((state) => ({
+          ambient: v,
+          ambientActive: v ? state.ambientActive : false,
+        })),
       setAmbientActive: (v) => set({ ambientActive: v }),
       setAmbientThresholdMs: (ms) => set({ ambientThresholdMs: Math.max(15_000, ms) }),
       setAmbientDrone: (v) => set({ ambientDrone: v }),

@@ -38,7 +38,7 @@ import {
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.17';
+export const CURRENT_VERSION = '0.1.20';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -137,6 +137,92 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.20',
+    date: '2026-06-06',
+    headline: 'Secure Plugins catalog and terminal capability context',
+    summary:
+      'Jarvis now has a searchable Plugins section with secure OS-keychain credentials, connection testing, metadata-only cloud sync, and controlled plugin capability context for project agents. The catalog includes 353 services while clearly separating working connectors from planned entries.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Added Settings -> Plugins with search, filters, connection status, setup instructions, masked credential fields, reconnect, disconnect, and terminal-access controls.',
+          'Added live connection tests for GitHub, Figma, Supabase, Shopify, and Slack plus a deterministic local mock connector.',
+          'Added a validated 353-entry catalog spanning developer tools, cloud, databases, productivity, communication, ecommerce, payments, analytics, design, AI, CMS, and infrastructure.',
+          'Connected and enabled plugins now contribute bounded capability descriptors and approval-gated plugin.call actions to project agents without exposing credentials.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Plugin credentials use the existing Tauri OS-keychain bridge; localStorage and Supabase persist only non-secret connection metadata.',
+          'Plugin connection metadata participates in private account sync and the Supabase migration rejects credential-shaped plugin payloads.',
+          'Native HTTP scopes now cover the implemented connector API hosts.',
+        ],
+      },
+      {
+        kind: 'known',
+        items: [
+          'Catalog entries marked Planned are discoverable but cannot connect until a tested connector is implemented.',
+          'Real service validation requires user-provided credentials; automated tests use mocks and the local connector.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.1.19',
+    date: '2026-06-06',
+    headline: 'Critical hotfix: fixed maximum update depth React crash on app boot',
+    summary:
+      'This hotfix resolves a React Error #185 (maximum update depth exceeded) that could crash the app during initial load or route changes. The root cause was TerminalsPage being unconditionally mounted behind CSS display:none in PageRouter, triggering synchronous useLayoutEffect re-render cascades inside the Suspense boundary.',
+    sections: [
+      {
+        kind: 'fix',
+        items: [
+          'Fixed React Error #185 crash by conditionally mounting TerminalsPage only when the terminal route is active, instead of hiding it with CSS.',
+          'Stabilized Inspector setInspectorOpen callback with useCallback to prevent unnecessary effect churn.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.1.18',
+    date: '2026-06-05',
+    headline: 'Safer persistence, cloud-sync tool queues, voice summon stabilization, and terminal PTY reattachment',
+    summary:
+      'This release prevents localStorage quota failures from taking down the React UI, connects custom tool changes to Supabase sync queues, reattaches active terminal PTYs on app reload, and suppresses context menus on terminal drag operations.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Added a preloaded Clock tool to support timestamped scheduling.',
+          'Added cloud sync queue integration for custom tool changes.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Configured a decoupled safeLocalStorage layer that handles quota full writes without crashing the React UI.',
+          'Implemented loop-free terminal transcript pruning (clamped to 10 sessions, max 512 KB total, and 32 KB per session) to protect localStorage space.',
+          'Upgraded the voice summon modal and summon UI to stay open and display continuous transcription.',
+          'Expanded the ambient music catalog with additional high-fidelity audio tracks.',
+          'Route mentioned agents (Scout, Builder, Reviewer) directly to their respective system prompts.',
+          'Windows release packaging now fails fast when the updater private key is missing.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Fixed context menu popups by suppressing custom menus during terminal right-click drags and across the context map canvas.',
+          'Fixed terminal session persistence by reattaching live terminal sessions and stabilizing the reopen lifecycle after app reload.',
+          'Stabilized voice dictation recording, playback replies, and general voice terminal security.',
+          'Fixed native HTTP localhost scopes and secured legacy API key migrations.',
+          'Fixed update-warning dialog close handling and ambient toggle state to avoid React maximum-update-depth crashes.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.17',
     date: '2026-06-03',

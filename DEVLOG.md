@@ -1,3 +1,54 @@
+## 2026-06-06 - v0.1.20 Plugins Major Update
+
+**Actor:** Codex
+
+**Goal:** Add a production Plugins system with a scalable catalog, secure credentials, connection management, terminal capability context, cloud metadata sync, tests, and release packaging.
+
+**Result:** Implemented a 353-entry validated plugin catalog and six working connector paths: GitHub, Figma, Supabase, Shopify, Slack, and a deterministic local test connector. Added Settings UI, OS-keychain credential storage, connection testing, enable/disable state, metadata-only Supabase sync, bounded plugin capability context in the AI runtime, and approval-gated `plugin.call` execution.
+
+### Security Model
+
+- Raw plugin credentials are stored only through the existing Tauri keyring commands.
+- Persisted Zustand and Supabase records contain status, configured field names, account labels, and enablement only.
+- Terminal/AI context receives tool names and permission descriptors, never credential values.
+- Supabase migration `0011_plugin_connections.sql` rejects credential-shaped plugin payload fields.
+
+### Verification
+
+- Catalog schema/count tests cover every entry.
+- UI tests cover search, connect, manage, and disconnect.
+- Runtime tests cover the mock tool path and invalid credential handling.
+- Context tests prove disabled or wrong-project plugins are excluded and secrets are absent.
+- Action tests cover approved mock execution and rejection of disabled plugins.
+
+---
+
+## 2026-06-06 - v0.1.19 Critical Hotfix: React Error #185 Crash
+
+**Actor:** CommandCode
+
+**Goal:** Fix production React Error #185 (maximum update depth exceeded) crashing the app on boot and route transitions.
+
+**Result:** Two surgical fixes applied. All 190 tests pass. Typecheck clean.
+
+### Root Cause
+
+`PageRouter.tsx` unconditionally mounted `<TerminalsPage />` inside its Suspense boundary on every route, hiding it with `style={{ display: 'none' }}` for non-terminal routes. `TerminalsPage`'s `useLayoutEffect` then synchronously fired tree state updates inside `captureLiveTree()` / `saveTerminalTree()`, which triggered re-renders, which re-fired the effect — cascading past React's 50-iteration limit inside Suspense resolution.
+
+### Changes Made
+
+- **PageRouter.tsx**: Conditionally mount `TerminalsPage` only when `route === 'terminal'` instead of CSS-hiding it.
+- **Inspector.tsx**: Wrap `setInspectorOpen` in `useCallback` to prevent unstable function identity churning the effect dependency.
+- **Version bump**: `0.1.18` → `0.1.19` across all configs.
+
+### Files Changed
+
+- `app/src/components/layout/PageRouter.tsx`
+- `app/src/components/layout/Inspector.tsx`
+- `package.json` / `app/package.json` / `Cargo.toml` / `tauri.conf.json` / `releases.ts` / `CHANGELOG.md`
+
+---
+
 ## 2026-06-03 - v0.1.17 Terminal Erase Confirmation, Font Customization, Inline Renaming & Freeze Fixes
 
 **Actor:** Antigravity (Jarvis AI)
@@ -7,6 +58,7 @@
 **Result:** Completed all implementation steps successfully. TypeScript typecheck and Cargo build check are green. Silently bumped all app configuration files to version 0.1.17.
 
 ### Changes Made:
+
 - **Stateful Erase Confirmation**: Pressing and holding the eraser icon fills a background progress bar over 1.5 seconds. Clicking the subsequent "Confirm?" button dispatches a custom event to visually clear xterm, wipes the Zustand transcript store, and writes `\x0c` to ConPTY. A 3.5s auto-reset restores the button if not confirmed.
 - **Global Terminal Default Font Size Slider**: Added an accent-cyan range slider (1px to 72px) under Settings -> Appearance linked to the UI store's `defaultTerminalFontSize` key.
 - **Unclamped Font Cycling**: Individual terminal "T" font size cycles through `[10, 11, 12, 13, 14, 16, 18, 20]` without auto-scaling clamps.
@@ -53,20 +105,24 @@
 **Result:** All changes typechecked and compiled. Ready for silent update.
 
 ### Inspector Infinite-Loop Fix
+
 - Fixed Zustand selector anti-pattern in `Inspector.tsx` line 81: changed object-destructured selector that returned a new object on every render to a simple function reference.
 - Removed unused `inspectorOpen` selector — only `setInspectorOpen` was actually consumed.
 
 ### Slash Command Autocomplete
+
 - Created `features/chat/SlashCommandTypeahead.tsx` — a cmdk-based typeahead panel with 21 registered slash commands, icons, descriptions, and `takesArg`/`argPlaceholder` metadata.
 - Integrated into `Composer.tsx`: typing `/` at position 0 or after whitespace triggers a popover showing fuzzy-matched commands.
 - Full keyboard navigation: ArrowUp/Down cycle through commands, Enter/Tab inserts the selected command, Escape dismisses.
 - Slash commands take priority over mention (@agent) typeahead when both contexts are active.
 
 ### New Slash Commands
+
 - `/contextmap` — lists all active context maps with node counts. `/contextmap <name>` attaches the matching map as a ContextAttachment to the chat.
 - `/file <path>` — attaches a project file to the chat. `/file` alone shows usage help.
 
 ### Command Parser Enhancements
+
 - Added `suggestions` field to `unknown` intent in `intents.ts` for fuzzy fallback.
 - Added `suggestClosestCommands()` function in `parse.ts` with 40 known command patterns; scores user input against keyword overlap and returns top 3 examples.
 - `execute.ts` surfaces suggestions inline: "Did you mean: X, Y, Z?"
@@ -74,16 +130,20 @@
 - Expanded `JARVIS_COMMAND_CATALOG` with 7 new entries (break, inspector, pause, rest).
 
 ### STT Recording Optimization
+
 - Reduced `ScriptProcessor` buffer from 4096 to 2048 samples (~46ms per chunk instead of ~92ms) for lower latency activity detection and smoother waveform updates.
 
 ### System Prompt Enhancement
+
 - Extended the AI system prompt addendum (`promptAddendum.ts`) with a comprehensive "App Surfaces You Control" section.
 - Describes all app surfaces (NavPane, Canvas, Inspector, Command Palette, Settings, Voice Modal, Ambient, Wellness Break, To-Do Drawer, Quick Launcher, Actions Palette) so Jarvis has full spatial awareness of the app it can control.
 
 ### Performance Audit
+
 - Scanned entire `app/src/` tree for Zustand selector anti-patterns (object returns from selectors). Zero remaining instances. The single instance in `Inspector.tsx` was the only one and has been fixed.
 
 ### Files Changed
+
 - `app/src/components/layout/Inspector.tsx` — Zustand selector fix
 - `app/src/features/chat/SlashCommandTypeahead.tsx` — new file
 - `app/src/features/chat/Composer.tsx` — slash typeahead integration, /contextmap and /file commands, STT buffer size optimization
@@ -92,7 +152,6 @@
 - `app/src/features/assistant/execute.ts` — suggestion surfacing in fail message
 - `app/src/features/assistant/commands.ts` — 7 new catalog entries
 - `app/src/lib/actions/promptAddendum.ts` — App Surfaces You Control section
-
 
 ---
 
@@ -270,6 +329,7 @@
 ### 18:00 - Phase 1: Foundation (sequential, by main agent)
 
 Created the bones every subagent would share:
+
 - Monorepo-lite root with `app/` workspace
 - App configs: `vite.config.ts`, `tsconfig.json`, `tsconfig.node.json`, `tailwind.config.ts`, `postcss.config.js`, `index.html`
 - Voltage design tokens in `app/src/styles/globals.css` (HSL CSS vars, OLED-grounded, cyan-to-violet accent)
@@ -285,20 +345,21 @@ Created the bones every subagent would share:
 
 Each subagent owned a non-overlapping directory. Strict file-ownership contracts so they could run independently without merge conflicts.
 
-| ID | Owner | Directory | Deliverables |
-|---|---|---|---|
-| **A1** | Database | `lib/db/`, `lib/supabase.ts`, `lib/sync.ts`, `supabase/` | Dexie schema (9 tables), repositories, seed (1 workspace + 7 agents), Supabase client (null-safe), sync queue, Postgres migration with RLS |
-| **A2** | Layout shell | `components/layout/` | AppShell + TopBar + NavPane (240/56 collapsible) + Inspector (slide-over) + TabStrip (Arc-style) + ActivityStrip (council-only) + global hotkey wiring |
-| **A3** | Chat | `features/chat/` | ChatView + ChatThread + Composer (auto-grow, Mod+Enter) + MessageBubble (per-agent colored borders) + ToolCallCard (collapsible) + MentionTypeahead + EmptyChat + `useChatMessages` |
-| **A4** | Council | `features/council/` | CouncilView + CouncilGrid (n-up, capped 4 cols) + AgentPanel + AnimatedBeam (SVG cubic Bezier) + BeamLayer (ResizeObserver) + SynthesizeButton + CouncilToggle |
-| **A5** | Tasks | `features/tasks/` | TodoPanel + TaskCard + TaskComposer (NL parser via date-fns) + SnoozePopover + DraftTaskList + TaskService + Scheduler (deadline pressure curve, quiet hours) + NotificationEngine (Tauri + browser fallback + in-app) + parseTaskInput |
-| **A6** | Voice | `features/voice/` | VoiceModal (bottom-anchored Dialog) + Orb (5-layer CSS) + GlowBorder (conic gradient) + VoiceCaption + VoiceTrigger (PTT 250ms hold) + VoiceService (Web Speech API) + IntentClassifier (10 intents) + 5 personas |
-| **A7** | Palette | `features/command-palette/` | CommandPalette (cmdk + Radix) with nested pages + actions registry + useGlobalHotkeys + emit-event helpers |
-| **A8** | Auth/Onboarding/Settings | `features/auth/`, `features/onboarding/`, `features/settings/` | AuthGate + SignInDialog + 5-step onboarding (welcome/persona/providers/permissions/demo) + 6-tab Settings modal |
-| **A9** | Agents + AI | `features/agents/`, `lib/ai/` | 7 default agents w/ production prompts + 5 persona presets + AgentBadge/AgentManager/AgentPicker + LLMProvider abstraction + Anthropic/OpenAI/Google/mock providers + router with fallback + runtime listener |
-| **A10** | Tauri shell | `src-tauri/`, `lib/tauri.ts`, `public/jarvis.svg` | Cargo.toml + lib.rs (4 plugins) + tauri.conf.json + capabilities/default.json + JS bridge with dynamic-import gating + SVG monogram |
+| ID      | Owner                    | Directory                                                      | Deliverables                                                                                                                                                                                                                            |
+| ------- | ------------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A1**  | Database                 | `lib/db/`, `lib/supabase.ts`, `lib/sync.ts`, `supabase/`       | Dexie schema (9 tables), repositories, seed (1 workspace + 7 agents), Supabase client (null-safe), sync queue, Postgres migration with RLS                                                                                              |
+| **A2**  | Layout shell             | `components/layout/`                                           | AppShell + TopBar + NavPane (240/56 collapsible) + Inspector (slide-over) + TabStrip (Arc-style) + ActivityStrip (council-only) + global hotkey wiring                                                                                  |
+| **A3**  | Chat                     | `features/chat/`                                               | ChatView + ChatThread + Composer (auto-grow, Mod+Enter) + MessageBubble (per-agent colored borders) + ToolCallCard (collapsible) + MentionTypeahead + EmptyChat + `useChatMessages`                                                     |
+| **A4**  | Council                  | `features/council/`                                            | CouncilView + CouncilGrid (n-up, capped 4 cols) + AgentPanel + AnimatedBeam (SVG cubic Bezier) + BeamLayer (ResizeObserver) + SynthesizeButton + CouncilToggle                                                                          |
+| **A5**  | Tasks                    | `features/tasks/`                                              | TodoPanel + TaskCard + TaskComposer (NL parser via date-fns) + SnoozePopover + DraftTaskList + TaskService + Scheduler (deadline pressure curve, quiet hours) + NotificationEngine (Tauri + browser fallback + in-app) + parseTaskInput |
+| **A6**  | Voice                    | `features/voice/`                                              | VoiceModal (bottom-anchored Dialog) + Orb (5-layer CSS) + GlowBorder (conic gradient) + VoiceCaption + VoiceTrigger (PTT 250ms hold) + VoiceService (Web Speech API) + IntentClassifier (10 intents) + 5 personas                       |
+| **A7**  | Palette                  | `features/command-palette/`                                    | CommandPalette (cmdk + Radix) with nested pages + actions registry + useGlobalHotkeys + emit-event helpers                                                                                                                              |
+| **A8**  | Auth/Onboarding/Settings | `features/auth/`, `features/onboarding/`, `features/settings/` | AuthGate + SignInDialog + 5-step onboarding (welcome/persona/providers/permissions/demo) + 6-tab Settings modal                                                                                                                         |
+| **A9**  | Agents + AI              | `features/agents/`, `lib/ai/`                                  | 7 default agents w/ production prompts + 5 persona presets + AgentBadge/AgentManager/AgentPicker + LLMProvider abstraction + Anthropic/OpenAI/Google/mock providers + router with fallback + runtime listener                           |
+| **A10** | Tauri shell              | `src-tauri/`, `lib/tauri.ts`, `public/jarvis.svg`              | Cargo.toml + lib.rs (4 plugins) + tauri.conf.json + capabilities/default.json + JS bridge with dynamic-import gating + SVG monogram                                                                                                     |
 
 All 10 returned successfully. Each ran isolated typecheck on their files only. Cross-cutting issues bubbled up:
+
 1. **`tsconfig.node.json` had `composite: true` + `noEmit: true`** - TS6310 forbids that combo. Pre-existing config bug; fixed by main agent during integration.
 2. **A5's repositories shim** `repositories-shim.d.ts` was a stand-in until A1 landed. Removed after integration.
 3. **A5 used `settingsRepo.getById<QuietHours>('quiet_hours')`** but A1's contract has `settingsRepo.get<T>(...)` for raw value access. Patched.
@@ -336,6 +397,7 @@ Build warnings: bundle >500 kB (acceptable for V1, optimize via manualChunks lat
 Committed in 12 logical chunks (plus the initial commit). Note: commit `00ceba4` is mislabeled `feat(layout)` but actually contains the database layer due to a parallel-git collision during the integration phase. The actual layout commit is `3288eea`. Both are present and correct in the diff; only the message is misleading. Not amending history since both refs are useful and the diffs themselves are clean.
 
 Final commit log (newest first):
+
 ```
 8853ae9 feat(app): App.tsx root - composes AuthGate + AppShell + ActiveCanvas + global modals + boot effects
 b587cac feat(tauri): Tauri 2 desktop shell (Cargo + lib.rs + capabilities + JS bridge with browser fallback)
@@ -540,20 +602,20 @@ The V1 "Voltage" theme was OLED black + cyan/violet electric accents — strikin
 
 `app/src/styles/globals.css` — header rewrite (Voltage → Cozy):
 
-| Token            | V1 Voltage      | V2 Cozy                  | Why                                  |
-|------------------|-----------------|--------------------------|--------------------------------------|
-| `--background`   | `0 0% 4%`       | `28 12% 7%` (#14110F)    | Warm umber, not pure OLED black      |
-| `--panel`        | `0 0% 7%`       | `26 10% 11%` (#1D1916)   | Side panel/chrome warmth             |
-| `--elevated`     | `0 0% 10%`      | `26 10% 15%` (#2A2521)   | Cards, dialogs                       |
-| `--foreground`   | `0 0% 98%`      | `36 25% 92%` (#EFEAE2)   | Paper cream — never stark white      |
-| `--accent-cyan`  | `187 95% 43%`   | `22 65% 56%` (#D97757)   | Copper. Name kept for back-compat.   |
-| `--accent-violet`| `258 90% 66%`   | `35 70% 60%` (#E5A35F)   | Amber. Name kept for back-compat.    |
-| `--ring`         | `187 95% 43%`   | `22 65% 56%`             | Copper focus ring                    |
-| `--destructive`  | `0 72% 56%`     | `6 70% 55%` (#D9624B)    | Brick red — warm side                |
-| `--success`      | `158 64% 40%`   | `130 35% 50%`            | Sage green                           |
-| `--radius`       | `0.625rem`      | `0.75rem`                | 12px cozier corners                  |
-| `--surface-warm` | `0 0% 9%`       | `26 12% 13%`             | Chat bubbles, ambient cards          |
-| `--ambient-deep` | `222 28% 4%`    | `28 25% 5%`              | Ambient takeover ground (warm umber) |
+| Token             | V1 Voltage    | V2 Cozy                | Why                                  |
+| ----------------- | ------------- | ---------------------- | ------------------------------------ |
+| `--background`    | `0 0% 4%`     | `28 12% 7%` (#14110F)  | Warm umber, not pure OLED black      |
+| `--panel`         | `0 0% 7%`     | `26 10% 11%` (#1D1916) | Side panel/chrome warmth             |
+| `--elevated`      | `0 0% 10%`    | `26 10% 15%` (#2A2521) | Cards, dialogs                       |
+| `--foreground`    | `0 0% 98%`    | `36 25% 92%` (#EFEAE2) | Paper cream — never stark white      |
+| `--accent-cyan`   | `187 95% 43%` | `22 65% 56%` (#D97757) | Copper. Name kept for back-compat.   |
+| `--accent-violet` | `258 90% 66%` | `35 70% 60%` (#E5A35F) | Amber. Name kept for back-compat.    |
+| `--ring`          | `187 95% 43%` | `22 65% 56%`           | Copper focus ring                    |
+| `--destructive`   | `0 72% 56%`   | `6 70% 55%` (#D9624B)  | Brick red — warm side                |
+| `--success`       | `158 64% 40%` | `130 35% 50%`          | Sage green                           |
+| `--radius`        | `0.625rem`    | `0.75rem`              | 12px cozier corners                  |
+| `--surface-warm`  | `0 0% 9%`     | `26 12% 13%`           | Chat bubbles, ambient cards          |
+| `--ambient-deep`  | `222 28% 4%`  | `28 25% 5%`            | Ambient takeover ground (warm umber) |
 
 Light theme also rewritten — promoted from "provisional" to shipping. Cream paper background (`36 30% 96%`), copper accents at deeper saturation for AA contrast.
 
@@ -590,11 +652,11 @@ Light theme also rewritten — promoted from "provisional" to shipping. Cream pa
 
 **Artifacts produced:**
 
-| File | Size | Use |
-|------|------|-----|
-| `target/release/jarvis.exe` | 5.52 MB | Bare release binary |
-| `target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi` | 3.28 MB | Windows MSI installer |
-| `target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 2.62 MB | NSIS setup wizard |
+| File                                                    | Size    | Use                   |
+| ------------------------------------------------------- | ------- | --------------------- |
+| `target/release/jarvis.exe`                             | 5.52 MB | Bare release binary   |
+| `target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi`  | 3.28 MB | Windows MSI installer |
+| `target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 2.62 MB | NSIS setup wizard     |
 
 These are the files to hand to other people. The `.msi` is the corporate-friendly format (deploys via Group Policy, Intune, etc.). The NSIS `-setup.exe` is the friendly double-clickable consumer format. Both install to `Program Files`, register an uninstaller, and ship the same release binary.
 
@@ -624,6 +686,7 @@ DEVLOG.md                             — this entry
 ### Why "the buttons weren't working"
 
 Two compounding things:
+
 1. **Stale dev servers from May 28 still bound localhost ports.** Viper's browser tab was attached to last night's pre-V2 build, where `setLauncherOpen` and the rocket/calendar/maximize TopBar buttons literally didn't exist yet. Clicks on the new V2 buttons would have done nothing because the V2 store actions weren't in that bundle.
 2. **The browser kept the old bundle cached** even after the new vite started, until we forced a fresh `Start-Process http://127.0.0.1:5173/`.
 
@@ -643,6 +706,7 @@ After the cleanup pass and fresh launch, the V2 buttons (Quick Launch / Schedule
 **Actor:** opencode (claude) for viper
 
 **User report driving the wave:**
+
 > "the model picker is literally invisible, STT crashes the whole system, I can't make a project, I can't make chats, the AIs on the side are placeholders. Use the cozy theme from `theme-design.md`. Add a Jarvis Assistant that takes commands like 'open 4 terminals with claude in tiger project'. The buttons at the side for specific AI agents are not working."
 
 **Result:** Every visible bug fixed, Cozy Checklist palette adopted, Jarvis Assistant shipped at Mod+J, fresh installers built. Typecheck clean. Vite build clean. Both `.msi` and NSIS `.exe` regenerated.
@@ -652,18 +716,21 @@ After the cleanup pass and fresh launch, the V2 buttons (Quick Launch / Schedule
 #### 1. Model picker invisible
 
 `src/features/chat/Composer.tsx` `ModelPicker`:
+
 - The `<Sparkles />` and `<ChevronDown />` icons rendered without any size class — lucide-react defaults to 24×24, which collapsed under flex without explicit sizing. Added `h-3.5 w-3.5 shrink-0` on both. Active-row indicator switched from `text-accent-cyan` (now warm but at low contrast on the popover surface) to `text-accent-copper` for clarity.
 - Popover content was `bg-elevated` by default but had no explicit text color and no width cap — added `bg-elevated text-foreground`, widened to `260px`, capped height with `max-h-[320px] overflow-y-auto scrollbar-hidden` so all 12 providers actually scroll.
 
 #### 2. STT crash
 
 `src/features/chat/Composer.tsx` `startStt` / `stopStt`:
-- Some Tauri WebView2 builds expose `window.SpeechRecognition` but throw a synchronous `DOMException` from `.start()` (commonly when the mic permission was never granted to the WebView host). The previous code flipped `sttListening` to true and called `VoiceService.startListening()` *before* the engine confirmed, so the throw bubbled into React's render pipeline and tore the tree down under StrictMode.
-- Wrapped both operations in `try/catch`, only flipping the visible flag *after* the engine accepted the call, and surfacing `toast.error('Voice error', msg)` instead of crashing.
+
+- Some Tauri WebView2 builds expose `window.SpeechRecognition` but throw a synchronous `DOMException` from `.start()` (commonly when the mic permission was never granted to the WebView host). The previous code flipped `sttListening` to true and called `VoiceService.startListening()` _before_ the engine confirmed, so the throw bubbled into React's render pipeline and tore the tree down under StrictMode.
+- Wrapped both operations in `try/catch`, only flipping the visible flag _after_ the engine accepted the call, and surfacing `toast.error('Voice error', msg)` instead of crashing.
 
 #### 3. NavPane decorative — "can't make project / chats / agents inactive"
 
 `src/components/layout/NavPane.tsx` rewritten end-to-end:
+
 - **Projects section** — `useLiveQuery(projectRepo.listByWorkspace)` for live data, header gets a `+` button that calls `projectRepo.create({ name: "Project N", color_hue: hash })` and `setProjectId(...)`. Clicking a row activates the project. Active row gets a `ring-1 ring-accent-copper/40`.
 - **Chats section** — `useLiveQuery(db.chats.where('workspace_id').equals(workspaceId))` sorted by `updated_at desc`, `+` button calls `chatRepo.create({ mode: 'chat' })` and `setActiveChat`. Click switches active chat + `setChatMode(chat.mode)`.
 - **Agents section** — clicking an agent now creates a new chat with `active_agent_ids: [a.id]` and switches to it. This was the literal "buttons at the side for AI agents are not working" complaint — the items had no `onClick`. Toast confirms `@slug ready · New chat started with NAME`.
@@ -676,31 +743,33 @@ Source: `C:\Users\viper\projects\shopify-urbeauty-audit\theme-design.md` (the us
 
 `app/src/styles/globals.css` rewritten. Light + dark both shipping:
 
-| Token | Dark (warm wood) | Light (cream paper) |
-|---|---|---|
-| `--background` | `#2a2018` | `#f5efe6` |
-| `--panel` | `#34281e` | `#ede4d3` |
-| `--elevated` | `#3a2d22` (cardstock) | `#fffbf5` (paper) |
-| `--foreground` | `#f5e6c8` (cream ink) | `#3a2e22` (warm brown ink) |
-| `--accent-cyan` (compat) → terracotta | `#d97757` | `#d97757` deepened |
-| `--accent-violet` (compat) → honey | `#d4a258` | `#d4a258` deepened |
-| `--rose` | `#c97b6e` | `#c97b6e` |
-| `--sage`, `--sage-deep` | `#7c9870` / `#5d7855` | same |
-| `--lavender` | `#9d8aa8` | same |
-| `--cream` | `#f5e6c8` | same |
-| Severity (5-level) | `crit/high/med/low/info` with darkened bg | full set with cream-tinted bg |
-| Shadows | brown-tinted not gray | brown-tinted, lighter alpha |
-| `--radius` | 14px | 14px |
-| `--radius-lg` (cards) | 22px | 22px |
-| Body bloom | radial pools (rose / sage / honey / lavender) | same, brighter tints |
+| Token                                 | Dark (warm wood)                              | Light (cream paper)           |
+| ------------------------------------- | --------------------------------------------- | ----------------------------- |
+| `--background`                        | `#2a2018`                                     | `#f5efe6`                     |
+| `--panel`                             | `#34281e`                                     | `#ede4d3`                     |
+| `--elevated`                          | `#3a2d22` (cardstock)                         | `#fffbf5` (paper)             |
+| `--foreground`                        | `#f5e6c8` (cream ink)                         | `#3a2e22` (warm brown ink)    |
+| `--accent-cyan` (compat) → terracotta | `#d97757`                                     | `#d97757` deepened            |
+| `--accent-violet` (compat) → honey    | `#d4a258`                                     | `#d4a258` deepened            |
+| `--rose`                              | `#c97b6e`                                     | `#c97b6e`                     |
+| `--sage`, `--sage-deep`               | `#7c9870` / `#5d7855`                         | same                          |
+| `--lavender`                          | `#9d8aa8`                                     | same                          |
+| `--cream`                             | `#f5e6c8`                                     | same                          |
+| Severity (5-level)                    | `crit/high/med/low/info` with darkened bg     | full set with cream-tinted bg |
+| Shadows                               | brown-tinted not gray                         | brown-tinted, lighter alpha   |
+| `--radius`                            | 14px                                          | 14px                          |
+| `--radius-lg` (cards)                 | 22px                                          | 22px                          |
+| Body bloom                            | radial pools (rose / sage / honey / lavender) | same, brighter tints          |
 
 **Typography:**
+
 - `@import` for Fraunces (serif display, opsz 9..144 weights 500/600/700) and Plus Jakarta Sans (UI, weights 400-700) and JetBrains Mono.
 - `font-sans` now Plus Jakarta Sans, new `font-serif` and `font-display` both Fraunces.
 - `h1/h2/h3` and `.font-display` and `.eyebrow` selectors in `@layer base` apply the serif treatment with `letter-spacing: -0.02em / -0.01em`.
 - Ambient clock + ambient quote upgraded to Fraunces in italic for that paper-room feel.
 
 **New utility classes (opt-in, in `@layer components`):**
+
 - `.cozy-card` — 22px radius, brown-tinted soft shadow, hover lifts to `--shadow-lift` and warms to cream border
 - `.cozy-pill` — 999px radius for chips
 - `.cozy-toast-success` — sage gradient pill
@@ -709,6 +778,7 @@ Source: `C:\Users\viper\projects\shopify-urbeauty-audit\theme-design.md` (the us
 - `.sev-pill.{crit,high,med,low,info}` — five-level severity gradients
 
 `app/tailwind.config.ts`:
+
 - New aliases under `accent.*`: `rose`, `terracotta`, `honey`, `sage`, `sage-deep`, `lavender`, `cream`. Existing `cyan/violet/copper/amber` keep working.
 - New top-level color groups: `crit/high/med/low/sev.info` (each a `{ DEFAULT, bg }` object) and `paper.{DEFAULT,soft,done}`.
 - New `borderRadius.xl` = `var(--radius-lg)` (22px), `borderRadius.lg` = `var(--radius)` (14px).
@@ -728,6 +798,7 @@ New module `src/features/assistant/`:
 - `index.ts` — barrel.
 
 **Wiring:**
+
 - `src/lib/hotkeys.ts` adds `HOTKEYS.ASSISTANT = 'Mod+J'`.
 - `src/stores/ui.ts` adds transient `assistantOpen` + `setAssistantOpen` (not persisted, matches the launcher/schedule pattern).
 - `src/App.tsx` mounts `<AssistantBarHost />` and registers the `Mod+J` hotkey.
@@ -736,23 +807,24 @@ New module `src/features/assistant/`:
 
 **Commands the user can type now:**
 
-| Type | Action |
-|---|---|
-| `create project tiger` | `projectRepo.create` + auto-switch via `setProjectId`, color hue derived from name hash |
-| `switch to project tiger` | resolves case-insensitive then substring, warns if not found |
-| `create chat called planning in tiger` | resolves project, creates chat, opens it |
-| `open 4 terminals` | creates 4 `terminal_sessions` rows (PTY runtime is future work) |
-| `open 4 terminals with claude code in tiger` | + `shell_command: 'claude code'` + `project_id` resolved |
-| `open claude in tiger` | shorthand for `count=1, command='claude'` |
-| `make a todo: ship the launcher tomorrow` | `taskRepo.create` with `due_at` parsed for today/tomorrow/weekday |
-| `schedule lunch with sam friday at 1pm` | delegates to existing `parseEventInput` → `eventRepo.create` |
-| `ambient on` / `ambient off` | toggles `ambientActive` |
-| `fullscreen` / `exit fullscreen` | toggles `chatFullscreen` |
-| `open settings` / `open palette` / `open launcher` / `open schedule` | corresponding modal opens |
+| Type                                                                 | Action                                                                                  |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `create project tiger`                                               | `projectRepo.create` + auto-switch via `setProjectId`, color hue derived from name hash |
+| `switch to project tiger`                                            | resolves case-insensitive then substring, warns if not found                            |
+| `create chat called planning in tiger`                               | resolves project, creates chat, opens it                                                |
+| `open 4 terminals`                                                   | creates 4 `terminal_sessions` rows (PTY runtime is future work)                         |
+| `open 4 terminals with claude code in tiger`                         | + `shell_command: 'claude code'` + `project_id` resolved                                |
+| `open claude in tiger`                                               | shorthand for `count=1, command='claude'`                                               |
+| `make a todo: ship the launcher tomorrow`                            | `taskRepo.create` with `due_at` parsed for today/tomorrow/weekday                       |
+| `schedule lunch with sam friday at 1pm`                              | delegates to existing `parseEventInput` → `eventRepo.create`                            |
+| `ambient on` / `ambient off`                                         | toggles `ambientActive`                                                                 |
+| `fullscreen` / `exit fullscreen`                                     | toggles `chatFullscreen`                                                                |
+| `open settings` / `open palette` / `open launcher` / `open schedule` | corresponding modal opens                                                               |
 
 Filler words like "please", "can you", "i want to" are stripped before matching. Quoted names (`create project "Tiger Eye"`) work.
 
 **Known limitations of the parser (intentional simplicity):**
+
 - Project resolution is fuzzy — substring matches; ambiguous names pick the first hit
 - Casual due dates only (`today`, `tomorrow`, weekday names) — full parsing for events
 - Terminal subsystem only writes the DB row; the actual PTY spawn is future work (B2 plan slice)
@@ -789,11 +861,11 @@ DEVLOG.md                                               — this entry
 
 ### Artifacts (regenerated)
 
-| File | Size | Use |
-|---|---|---|
-| `app/src-tauri/target/release/jarvis.exe` | 5.57 MB | Bare release binary |
-| `app/src-tauri/target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi` | 3.33 MB | Windows MSI installer |
-| `app/src-tauri/target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 2.67 MB | NSIS setup wizard |
+| File                                                                  | Size    | Use                   |
+| --------------------------------------------------------------------- | ------- | --------------------- |
+| `app/src-tauri/target/release/jarvis.exe`                             | 5.57 MB | Bare release binary   |
+| `app/src-tauri/target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi`  | 3.33 MB | Windows MSI installer |
+| `app/src-tauri/target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 2.67 MB | NSIS setup wizard     |
 
 ### What viper should test next
 
@@ -818,6 +890,7 @@ DEVLOG.md                                               — this entry
 **Actor:** opencode (claude) for viper, with 19 parallel sub-agents
 
 **User report driving the wave:**
+
 > "I want multiple actually-working terminals (real Windows terminal where I can run commands), open chat alongside terminals, Jarvis can do all of this. Use 15-25 sub-agents. Make it errorless. Add more UI effects, more pages. More API keys (Anthropic, OpenAI, DeepSeek, anything). Live AI benchmark from a real official source, must all be free. Agent .md / skill .md files the agent reads. App is called Jarvis. Inspired by BridgeMind: BridgeSpace 16 panel terminals, Kanban, Agent Manager, Session History, BridgeCode CLI, MCP, BridgeWard, BridgeSecurity, BridgeVoice, BridgeSpeak. Free unlimited app, opt-in $5/month with cheap built-in Jarvis (DeepSeek), BYOK for premium. Use Supabase for cloud DB."
 
 **Result:** V3 ships. Real PTY terminals, multi-pane grid up to 16, pages router with 7 routes, skills + agents Markdown loader, kanban, session history with replay, live benchmark page, +7 providers (19 total), Jarvis swarm roles (Scout/Builder/Reviewer), MCP-lite tool registry, celebration confetti, full Supabase scaffolding (schema + Edge Function + client UI). Typecheck clean. Both `.msi` and `.exe` regenerated.
@@ -841,6 +914,7 @@ DEVLOG.md                                               — this entry
 #### Real terminals (Slice 1 + 2 + 3)
 
 **Slice 1 — Tauri Rust PTY backend** (`app/src-tauri/src/terminal.rs`, ~280 lines)
+
 - New crate deps: `portable-pty = "0.8"`, `nanoid = "0.4"`
 - `TerminalState` = `Arc<Mutex<HashMap<String, PtyHandle>>>` managed by Tauri
 - 5 commands: `terminal_spawn` / `terminal_write` / `terminal_resize` / `terminal_kill` / `terminal_list`
@@ -852,6 +926,7 @@ DEVLOG.md                                               — this entry
 - `cargo check` → 2m 04s, zero warnings
 
 **Slice 2 — xterm.js frontend** (`src/features/terminals/TerminalView.tsx`, ~370 lines)
+
 - Deps added: `xterm`, `xterm-addon-fit`, `xterm-addon-web-links`
 - Cozy palette themed (copper cursor `#d97757`, cream foreground, warm wood background; light mode = paper bg + brown ink)
 - Lifecycle: spawn (or attach) on mount → wire `onData` to `terminal_write` → subscribe to `terminal://output|exit` filtered by sessionId → ResizeObserver re-fits + `terminal_resize`
@@ -859,6 +934,7 @@ DEVLOG.md                                               — this entry
 - Web/dev fallback: paper-soft "Terminal backend not available" card if `invoke('terminal_spawn')` rejects
 
 **Slice 3 — Multi-pane grid** (sub-agent returned empty — written by main agent)
+
 - `paneTree.ts`: immutable tree ops. `PaneNode` = `leaf | split` discriminated union. `splitPane` (capped at MAX_PANES=16), `closePane` (collapses single-child splits), `setRatio` (clamped 0.1–0.9), `findPane`, `countLeaves`, `updateLeaf`, `firstLeafId`
 - `TerminalGrid.tsx`: recursive renderer. Each leaf has a 24px chrome (command name + split-h / split-v / close). Splits get a 4px draggable gutter that calls `setRatio` on mousemove. Hover lights the gutter copper.
 - `TerminalsPage.tsx`: header with eyebrow + font-display title, toolbar with `count / 16` and Add/Reset buttons, full-bleed grid below. Persists tree shape (not session ids) to `localStorage.jarvis-terminal-pane-tree`.
@@ -869,18 +945,21 @@ The Tauri app at PID 45900 has live PTYs available now. xterm CSS bundles into `
 #### Skills + agents Markdown loader (Slice 5 + 6 + 7)
 
 **Slice 5 — loader** (sub-agent returned empty — written by main agent)
+
 - `parseFrontmatter.ts`: tiny YAML subset parser. Supports `key: value | 'string' | "string" | [a,b] | true|false | 123 | 1.5`. Tolerates Windows line endings. CSV split respects single/double quotes.
 - `loader.ts`: `loadAllSkills()` + `loadAllAgents()` use Vite's `import.meta.glob('/.jarvis/{skills,agents}/*.md', { query: '?raw', import: 'default', eager: true })`. Each file gets parsed into a `SkillManifest`. Sort by severity then name. Project-level loading deferred (needs `@tauri-apps/plugin-fs`).
 - `registry.ts`: singleton with `loadFromDisk` (idempotent, shares in-flight Promise), `list(kind?)`, `getAll`, `get`, `toggle`, `setEnabled` (alias), `subscribe`. Both `list/toggle` and `getAll/setEnabled` work — covers either naming convention.
 
 **Slice 6 — UI** (`SkillsPage.tsx`, `SkillCard.tsx`, `SkillDetail.tsx`)
+
 - Two-pane layout: 320px card rail + detail pane (collapses to single column under 768px with back button)
 - Cozy paper-cards with severity pills (.sev-pill from globals.css), kind chips (Bot/Sparkles), tag chips, Switch toggle
-- Inline markdown renderer (no dep): h1-h3, paragraphs, ordered/unordered lists, inline `code`, fenced ``` blocks, **bold**, *italic*. HTML-escapes input first.
+- Inline markdown renderer (no dep): h1-h3, paragraphs, ordered/unordered lists, inline `code`, fenced ``` blocks, **bold**, _italic_. HTML-escapes input first.
 - Search across title/name/tags/body. Tab filter `[All] [Skills] [Agents]`.
 - Empty state: "Drop `.md` files into `~/.jarvis/skills/`"
 
 **Slice 7 — built-in markdowns** (`app/.jarvis/skills/*.md`, `app/.jarvis/agents/*.md`)
+
 - 4 skills + 3 agents = 7 files, 60-150 lines each, ~17 KB total
 - `sentinel-prompt-defense.md` — Jarvis's BridgeWard-equivalent. Prompt-injection auditor. severity: high.
 - `watchtower-security.md` — BridgeSecurity-equivalent. OWASP/CWE scanner. severity: crit.
@@ -894,6 +973,7 @@ The Tauri app at PID 45900 has live PTYs available now. xterm CSS bundles into `
 #### Kanban (Slice 8)
 
 `features/kanban/{KanbanPage,KanbanColumn,KanbanCard,hooks,index}.tsx`
+
 - Three columns: Todo (`'open'`), In progress (`'in_progress'`), Done (`'done'`). Blocked + cancelled in an "Other" pop-out.
 - HTML5 drag-and-drop (no dep). Cards get `opacity` + copper-ring while dragging. Drop column gets `ring-1 ring-accent-copper`.
 - Optimistic UI: status flipped locally before dexie write resolves. Rolls back if write fails.
@@ -904,6 +984,7 @@ The Tauri app at PID 45900 has live PTYs available now. xterm CSS bundles into `
 #### Live benchmarks (Slice 9)
 
 `features/benchmarks/{BenchmarksPage,BarChart,benchmarkData,index}.tsx`
+
 - Pulls from `https://lmarena.ai/api/leaderboard` with 5s timeout. Falls back to a frozen 28-row snapshot in `benchmarkData.ts` (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro, Llama 3.1 70B/405B, Mistral Large, DeepSeek V3, Grok 2, Command-R+, Qwen 2.5 72B, etc.)
 - 30-min cache in `localStorage.jarvis-benchmark-cache`. "From snapshot" warning chip when in fallback mode.
 - Pure SVG horizontal bar chart with CI whisker bars. Bars colored: terracotta = proprietary, sage = open-source.
@@ -913,6 +994,7 @@ The Tauri app at PID 45900 has live PTYs available now. xterm CSS bundles into `
 #### Session history (Slice 10)
 
 `features/history/{HistoryPage,HistoryList,Replay,index}.tsx`
+
 - Two-pane: 320px chat list (capped 200) + replay pane.
 - Live query on `db.chats.where('workspace_id')` sorted by `updated_at desc`. Search across title + message body.
 - Replay scrubber: tick per message (capped 80), drag/click/keyboard seek, Space toggles play/pause, 0.5×/1×/2×/4× speed dropdown.
@@ -923,6 +1005,7 @@ The Tauri app at PID 45900 has live PTYs available now. xterm CSS bundles into `
 #### MCP-lite tool registry (Slice 13)
 
 `lib/mcp/{registry,builtins,index}.ts`
+
 - In-process `Map<string, ToolDef>` behind a `toolRegistry` singleton. Re-registering a name replaces (warns once via `console.warn`). `subscribe` notifies on every change.
 - Built-in tools registered at import time: `fs.read`, `fs.list`, `shell.run`, `clipboard.copy`, `voice.speak`, `route.set`, `notify`. Each wraps an existing capability and returns a friendly error rather than throwing.
 - `lib/mcp/registry.test.ts` — covers register/unregister, replace-warns, invoke success, invoke unknown rejects, subscribe fan-out. No Vitest config in repo yet so these are documentation-only.
@@ -937,6 +1020,7 @@ The Tauri app at PID 45900 has live PTYs available now. xterm CSS bundles into `
 Scout / Builder / Reviewer added to `getDefaultAgents()` in `features/agents/registry.ts`. Stored as `skills: ['role:scout' | 'role:builder' | 'role:reviewer']` since `Agent` type doesn't have a `role` field. AgentManager card top-right gets a gradient pill (sage / terracotta / lavender). Persona avatars added (`personas.ts` `ROLE_PERSONAS` map with hues 105/14/268).
 
 System prompts:
+
 - Scout (1903 chars) — read-only, produces JSON brief with file tree + entry points + recommended scope. Refuses to write code or call shell. Model: claude-3-5-haiku-latest.
 - Builder (1881 chars) — owns assigned file scope exclusively. Refuses to touch other files. Writes tests. Model: claude-3-5-sonnet-latest.
 - Reviewer (1861 chars) — read-only quality gate. Posts verdict (`approve` / `request_changes` / `reject`). Refuses to rubber-stamp. Model: gpt-4o-2024-11-20.
@@ -944,6 +1028,7 @@ System prompts:
 #### Celebration system (Slice 15)
 
 `features/celebrate/{celebrate,Confetti,index}.tsx`
+
 - Pure-canvas confetti (no dep). Particles: 80 default / 40 for kanban_done / 200 for big. Gravity 0.36, x-damp 0.995, vy ∈ [-14,-8]. 55% rectangles + 45% circles from cozy palette.
 - Origin per kind: bottom-center for project_created/kanban_done, bottom-right for terminal_success, top sweep for big.
 - `celebrate(kind, detail?)` fires a `CustomEvent('jarvis:celebrate')` + a `toast.success(headline, detail)`. Headlines:
@@ -963,6 +1048,7 @@ New `STEPS` array: `['welcome', 'persona', 'whats-new', 'providers', 'permission
 #### Jarvis Assistant route extension (Slice 19)
 
 `features/assistant/{intents,parse,execute}.ts`
+
 - New intent variant: `{ kind: 'navigate'; route: NavRoute }`
 - Two new regex patterns added before the existing `open settings/palette/launcher/schedule` block:
   - `^(?:open|go to|show|switch to)\s+(terminal(?:s)?|kanban|skills|benchmarks?|history|agents?|chat)$`
@@ -976,6 +1062,7 @@ New `STEPS` array: `['welcome', 'persona', 'whats-new', 'providers', 'permission
 `supabase/{schema,migrations/0001_init}.sql`, `supabase/functions/jarvis-proxy/index.ts`, `supabase/README.md`, `app/src/lib/supabase/{client,types}.ts`, `app/src/features/billing/HostedJarvis.tsx`
 
 **Schema:**
+
 - `profiles` — mirror of auth.users with `tier ∈ {free, plus, byok-only}`, `monthly_quota` (free=50, plus=1500, byok-only=∞)
 - `api_keys` — encrypted user keys (column provisioned for future Vault upgrade; README documents path)
 - `usage_log` — one row per proxied request with provider, model, token counts, cost, status, latency
@@ -983,6 +1070,7 @@ New `STEPS` array: `['welcome', 'persona', 'whats-new', 'providers', 'permission
 - 3 RLS policies (own profile, own keys, own usage) — `auth.uid() = id/user_id`
 
 **Edge Function (`jarvis-proxy`, Deno TS):**
+
 - Reads `Authorization: Bearer <jwt>`, calls `supabase.auth.getUser(jwt)`
 - Counts this month's `ok` usage. If `count >= monthly_quota` and tier ≠ `byok-only`, returns `429 { error: 'rate_limit', message, used, quota }`
 - Otherwise proxies to `https://api.deepseek.com/chat/completions` (OpenAI-compatible), streams via TransformStream
@@ -991,6 +1079,7 @@ New `STEPS` array: `['welcome', 'persona', 'whats-new', 'providers', 'permission
 - Pricing table: deepseek-chat $0.14/$0.28 per 1M, deepseek-reasoner $0.55/$2.19 (approximate, may drift)
 
 **Client (`HostedJarvis.tsx`):**
+
 - Settings panel showing tier + this-month usage progress bar
 - Sign-in / sign-out (Supabase Auth — magic link flow)
 - "Upgrade to Plus ($5/month)" — opens `VITE_STRIPE_CHECKOUT_URL` if set, otherwise toast "coming soon"
@@ -998,11 +1087,13 @@ New `STEPS` array: `['welcome', 'persona', 'whats-new', 'providers', 'permission
 - If `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` unset, renders setup card pointing at the README
 
 **README:**
+
 - 60-line walkthrough: `supabase init` → `link --project-ref` → `db push` → `secrets set DEEPSEEK_API_KEY=...` → `functions deploy jarvis-proxy` → paste URL+anon key into Jarvis Settings
 
 ### Cross-slice integration work (main agent)
 
 3 of 19 sub-agents returned empty results. Investigated and shipped the missing pieces:
+
 - **Slice 3 (terminal grid):** Sub-agent returned empty. Confirmed only Slice 2's TerminalView existed. Wrote `paneTree.ts` (~120 lines), `TerminalGrid.tsx` (~200 lines), `TerminalsPage.tsx` (~110 lines).
 - **Slice 5 (skills loader):** Sub-agent returned empty. Slice 6 (UI) had shipped but with broken imports. Wrote `parseFrontmatter.ts` (~85 lines), `loader.ts` (~120 lines), `registry.ts` (~110 lines), `index.ts` (barrel exporting `SkillsPage` for PageRouter).
 - **Slice 4 (PageRouter):** Sub-agent returned empty but had partially delivered: `ui.ts` got `route` + `setRoute`, `PageRouter.tsx` exists and is wired correctly with lazy + catch fallbacks. Missing: NavPane Workspace section, App.tsx swap. Added the Workspace section above Pinned with 7 route buttons (Chat / Terminals / Kanban / Skills / Benchmarks / History / Agents). Modified `App.tsx#ActiveCanvas` so non-chat routes delegate to PageRouter.
@@ -1119,37 +1210,37 @@ DEVLOG.md                                              this entry
 
 ### Sub-agent return summary
 
-| Slice | What | Status |
-|---|---|---|
-| 1 | Rust PTY backend | ✅ delivered |
-| 2 | xterm TerminalView | ✅ delivered |
-| 3 | Multi-pane terminal grid | ⚠️ empty return — written by main agent |
-| 4 | PageRouter + ui store + NavPane wiring | ⚠️ partial — completed by main agent |
-| 5 | Skills + agents Markdown loader | ⚠️ empty return — written by main agent |
-| 6 | Skills library page UI | ✅ delivered (waited on slice 5) |
-| 7 | Built-in skill markdowns | ✅ delivered |
-| 8 | Kanban page | ✅ delivered |
-| 9 | Live benchmark page | ✅ delivered |
-| 10 | Session history | ✅ delivered |
-| 11 | +7 providers | ✅ delivered |
-| 12 | Swarm roles (Scout/Builder/Reviewer) | ✅ delivered |
-| 13 | MCP-lite tool registry | ✅ delivered |
-| 14 | Onboarding refresh | ✅ delivered |
-| 15 | Celebration confetti | ✅ delivered |
-| 16 | Inspector V3 | ✅ delivered |
-| 17 | TopBar V3 | ✅ delivered |
-| 18 | Supabase scaffolding | ✅ delivered |
-| 19 | Assistant route commands | ✅ delivered |
+| Slice | What                                   | Status                                  |
+| ----- | -------------------------------------- | --------------------------------------- |
+| 1     | Rust PTY backend                       | ✅ delivered                            |
+| 2     | xterm TerminalView                     | ✅ delivered                            |
+| 3     | Multi-pane terminal grid               | ⚠️ empty return — written by main agent |
+| 4     | PageRouter + ui store + NavPane wiring | ⚠️ partial — completed by main agent    |
+| 5     | Skills + agents Markdown loader        | ⚠️ empty return — written by main agent |
+| 6     | Skills library page UI                 | ✅ delivered (waited on slice 5)        |
+| 7     | Built-in skill markdowns               | ✅ delivered                            |
+| 8     | Kanban page                            | ✅ delivered                            |
+| 9     | Live benchmark page                    | ✅ delivered                            |
+| 10    | Session history                        | ✅ delivered                            |
+| 11    | +7 providers                           | ✅ delivered                            |
+| 12    | Swarm roles (Scout/Builder/Reviewer)   | ✅ delivered                            |
+| 13    | MCP-lite tool registry                 | ✅ delivered                            |
+| 14    | Onboarding refresh                     | ✅ delivered                            |
+| 15    | Celebration confetti                   | ✅ delivered                            |
+| 16    | Inspector V3                           | ✅ delivered                            |
+| 17    | TopBar V3                              | ✅ delivered                            |
+| 18    | Supabase scaffolding                   | ✅ delivered                            |
+| 19    | Assistant route commands               | ✅ delivered                            |
 
 16 of 19 returned summaries; 3 returned empty (likely a transport-layer hiccup). Audit confirmed Slice 4 had partially landed (route store + PageRouter wired correctly) but didn't finish NavPane / App.tsx integration. Slices 3 and 5 had nothing on disk. Main agent shipped the missing pieces directly. Net: 19 of 19 functional.
 
 ### Artifacts (regenerated)
 
-| File | Size | Use |
-|---|---|---|
-| `app/src-tauri/target/release/jarvis.exe` | 6.00 MB | Bare release binary |
-| `app/src-tauri/target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi` | 3.71 MB | Windows MSI installer |
-| `app/src-tauri/target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 3.04 MB | NSIS setup wizard |
+| File                                                                  | Size    | Use                   |
+| --------------------------------------------------------------------- | ------- | --------------------- |
+| `app/src-tauri/target/release/jarvis.exe`                             | 6.00 MB | Bare release binary   |
+| `app/src-tauri/target/release/bundle/msi/Jarvis_0.1.0_x64_en-US.msi`  | 3.71 MB | Windows MSI installer |
+| `app/src-tauri/target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe` | 3.04 MB | NSIS setup wizard     |
 
 The size bumps (5.57 → 6.00 MB binary, +0.38 MB MSI) reflect the new Rust crates (portable-pty, nanoid + transitive deps) and the bundled xterm + 7 skill `.md` files in the web bundle.
 
@@ -1186,7 +1277,6 @@ The size bumps (5.57 → 6.00 MB binary, +0.38 MB MSI) reflect the new Rust crat
 - Stripe billing dashboard inside Settings
 - Mobile/PWA path (already documented)
 
-
 ---
 
 ## 2026-05-29 - V3 Session (Wave 5 -- phone-jarvis: real phone calls + in-app voice)
@@ -1195,7 +1285,7 @@ The size bumps (5.57 → 6.00 MB binary, +0.38 MB MSI) reflect the new Rust crat
 
 **Goal:** Take the planning docs in `phone-jarvis/docs/01-08` from architecture-on-paper to a **deployable cloud backend + wired Jarvis app**. User wants two transports working off the same Pipecat loop: **Path A** (real PSTN number via Twilio) and **Path C** (in-app WebRTC via LiveKit). Path B (local Ollama) was explicitly skipped because users on weak hardware cannot run a local LLM. Path C is the must-work path.
 
-**Result:** Cloud backend + Jarvis frontend code shipped end-to-end. Typecheck clean. Architecture lets a single Fly.io machine (~3/mo) serve unlimited users on Path C with their own BYOK Groq keys (free) and on Path A with the operator's Twilio number (.15/mo). All endpoints inert until secrets are set; no surprise  on deploy. Documented in `phone-jarvis/IMPLEMENTATION.md`.
+**Result:** Cloud backend + Jarvis frontend code shipped end-to-end. Typecheck clean. Architecture lets a single Fly.io machine (~3/mo) serve unlimited users on Path C with their own BYOK Groq keys (free) and on Path A with the operator's Twilio number (.15/mo). All endpoints inert until secrets are set; no surprise on deploy. Documented in `phone-jarvis/IMPLEMENTATION.md`.
 
 ---
 
@@ -1203,18 +1293,18 @@ The size bumps (5.57 → 6.00 MB binary, +0.38 MB MSI) reflect the new Rust crat
 
 User answered the open questions from the planning docs:
 
-| # | Question | Decision |
-|---|---|---|
-| 1 | Which transports? | **Path A + Path C** (skip B; "MAKE PATH C WORK") |
-| 2 | Cloud host | **Fly.io free tier**, `min_machines_running = 1` |
-| 3 | PSTN provider | **Twilio** ( trial covers months) |
-| 4 | Provider stacks | Path A premium (Deepgram + Claude Haiku + Cartesia) and Path C cost-conscious (Groq Whisper + Groq Llama + Cartesia). Per-user BYOK overrides operator defaults. |
-| 5 | PIN length | **6 digits, 3 strikes, 1h cooldown**. Caller-ID skip if number is on allowlist. |
-| 6 | Tool ACL | **Read-only by default. Full power only when user says unlock phrase mid-call.** Lock reverts at hangup. |
-| 7 | Outbound triggers | **Default off except manual + error-driven**. Per-category toggle in Settings. |
-| 8 | Voice | **Use existing PERSONA system** (Jarvis/Athena/Edge/Watson/HAL/Sage). |
-| 9 | Multi-user | **Yes from day one**, per-user auth via Supabase, per-user BYOK, per-user phone number. |
-| 10 | Backend lang | **Python** (Pipecat is Python-first). |
+| #   | Question          | Decision                                                                                                                                                         |
+| --- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Which transports? | **Path A + Path C** (skip B; "MAKE PATH C WORK")                                                                                                                 |
+| 2   | Cloud host        | **Fly.io free tier**, `min_machines_running = 1`                                                                                                                 |
+| 3   | PSTN provider     | **Twilio** ( trial covers months)                                                                                                                                |
+| 4   | Provider stacks   | Path A premium (Deepgram + Claude Haiku + Cartesia) and Path C cost-conscious (Groq Whisper + Groq Llama + Cartesia). Per-user BYOK overrides operator defaults. |
+| 5   | PIN length        | **6 digits, 3 strikes, 1h cooldown**. Caller-ID skip if number is on allowlist.                                                                                  |
+| 6   | Tool ACL          | **Read-only by default. Full power only when user says unlock phrase mid-call.** Lock reverts at hangup.                                                         |
+| 7   | Outbound triggers | **Default off except manual + error-driven**. Per-category toggle in Settings.                                                                                   |
+| 8   | Voice             | **Use existing PERSONA system** (Jarvis/Athena/Edge/Watson/HAL/Sage).                                                                                            |
+| 9   | Multi-user        | **Yes from day one**, per-user auth via Supabase, per-user BYOK, per-user phone number.                                                                          |
+| 10  | Backend lang      | **Python** (Pipecat is Python-first).                                                                                                                            |
 
 Cloud URL is set by the operator (me/viper) via `VITE_PHONE_JARVIS_CLOUD_URL`; end users do not touch it. Power users get an "Advanced -> Self-host" override in Settings (parked for now).
 
@@ -1222,23 +1312,23 @@ Cloud URL is set by the operator (me/viper) via `VITE_PHONE_JARVIS_CLOUD_URL`; e
 
 Wrote the FastAPI app from scratch. One Pipecat pipeline factory, three transports, one bridge registry.
 
-| File | Lines | Purpose |
-|---|---|---|
-| `main.py` | 95 | FastAPI app, mounts routers, daily audit prune |
-| `config.py` | 80 | Pydantic Settings, `.has_*` flags for inert handlers |
-| `pipeline.py` | 220 | Pipecat factory: STT -> LLM -> TTS, persona prompts, tool dispatch hook |
-| `auth.py` | 220 | PBKDF2 PIN, allowlist normaliser, Supabase JWKS verifier, in-memory PinTracker |
-| `bridge.py` | 200 | `BridgeRegistry` -- per-user WS sessions, in-flight tool-call futures |
-| `bridge_endpoint.py` | 90 | `WS /bridge` handshake + frame loop |
-| `twilio_handler.py` | 230 | `POST /twiml` + `WS /twilio/{sid}` -- Path A inbound |
-| `livekit_handler.py` | 175 | `POST /livekit/token` -- Path C; spawns the AI agent task |
-| `outbound.py` | 145 | `POST /outbound/call` -- Sage dials user; `/outbound/twiml` callback |
-| `supabase_client.py` | 30 | Service-role Supabase client (bypasses RLS) |
-| `audit.py` | 220 | JSONL audit logger, per-call + daily rollup, retention prune |
-| `Dockerfile` | 18 | Python 3.11 slim, uvicorn |
-| `fly.toml` | 30 | Always-on (no scale-to-zero -- inbound calls would 404) |
-| `requirements.txt` | 14 | Pipecat 0.0.50 + Twilio + LiveKit + Supabase + jose |
-| `.env.example` | 35 | Every secret with comments |
+| File                 | Lines | Purpose                                                                        |
+| -------------------- | ----- | ------------------------------------------------------------------------------ |
+| `main.py`            | 95    | FastAPI app, mounts routers, daily audit prune                                 |
+| `config.py`          | 80    | Pydantic Settings, `.has_*` flags for inert handlers                           |
+| `pipeline.py`        | 220   | Pipecat factory: STT -> LLM -> TTS, persona prompts, tool dispatch hook        |
+| `auth.py`            | 220   | PBKDF2 PIN, allowlist normaliser, Supabase JWKS verifier, in-memory PinTracker |
+| `bridge.py`          | 200   | `BridgeRegistry` -- per-user WS sessions, in-flight tool-call futures          |
+| `bridge_endpoint.py` | 90    | `WS /bridge` handshake + frame loop                                            |
+| `twilio_handler.py`  | 230   | `POST /twiml` + `WS /twilio/{sid}` -- Path A inbound                           |
+| `livekit_handler.py` | 175   | `POST /livekit/token` -- Path C; spawns the AI agent task                      |
+| `outbound.py`        | 145   | `POST /outbound/call` -- Sage dials user; `/outbound/twiml` callback           |
+| `supabase_client.py` | 30    | Service-role Supabase client (bypasses RLS)                                    |
+| `audit.py`           | 220   | JSONL audit logger, per-call + daily rollup, retention prune                   |
+| `Dockerfile`         | 18    | Python 3.11 slim, uvicorn                                                      |
+| `fly.toml`           | 30    | Always-on (no scale-to-zero -- inbound calls would 404)                        |
+| `requirements.txt`   | 14    | Pipecat 0.0.50 + Twilio + LiveKit + Supabase + jose                            |
+| `.env.example`       | 35    | Every secret with comments                                                     |
 
 Pipeline service selection is data-driven: `transport == "twilio"` plus `keys.deepgram` -> Deepgram; otherwise Groq. Same for LLM (Anthropic for Twilio, Groq for LiveKit). Cartesia for both TTS. Per-user BYOK overrides operator defaults.
 
@@ -1251,10 +1341,12 @@ Bridge auth: short-lived Supabase JWT verified against the project JWKS. No shar
 Installed `livekit-client@2.19.1`. Wrote two new modules and updated five existing files.
 
 **New: `lib/bridge/`** -- the long-lived WS to `/bridge`:
+
 - `BridgeClient.ts` (270 lines) -- exp-backoff reconnect (250ms..5s), 15s heartbeat, register frame with the live MCP tool catalog, tool dispatch into `toolRegistry.invoke()`, defense-in-depth confirm gate.
 - `useBridgeLifecycle.ts` (110 lines) -- React hook that mounts the bridge once Supabase signs in, swaps the JWT on refresh, tears down on sign-out.
 
 **New: `features/call/`** -- the in-app voice surface:
+
 - `store.ts` -- Zustand: status (idle/connecting/ringing/in-call/ending/error), transcript, mute, persona, awaitingConfirm, unlockActive.
 - `CallService.ts` -- LiveKit client wrapper. POSTs `/livekit/token` with the Supabase JWT, joins the per-user room, publishes mic, attaches remote audio to a hidden `<audio>` element, listens for transcript data messages.
 - `CallButton.tsx` -- standalone button (also a `CallTopBarButton` mirror inside `TopBar.tsx` so it inherits the no-drag region).
@@ -1262,6 +1354,7 @@ Installed `livekit-client@2.19.1`. Wrote two new modules and updated five existi
 - `outbound.ts` -- `fireOutboundCall(reason, ctx)` plus a window-event listener that POSTs to `/outbound/call` with cooldown throttle.
 
 **Updates:**
+
 - `stores/ui.ts` -- adds `callModalOpen` flag (transient).
 - `components/layout/TopBar.tsx` -- green/red Phone button next to the mic.
 - `features/settings/SettingsModal.tsx` -- new "Phone & Voice" tab.
@@ -1280,9 +1373,7 @@ Idempotent SQL on top of the existing hosted schema:
 
 ### 16:30 - Phase 4: Verification
 
-`
-npx tsc --noEmit  -> OK (clean)
-`
+`npx tsc --noEmit  -> OK (clean)`
 
 No new test runs this wave -- writing meaningful unit tests for the bridge + LiveKit transport requires a fixtures harness that's its own subproject. Listed in TODO.
 
@@ -1318,7 +1409,6 @@ Did **not** rebuild the Tauri MSI/EXE. The user will run `npx tauri build` when 
 - Twilio sub-account-per-user provisioning flow
 - Voice-id picker UI inside Phone & Voice settings (load Cartesia voices, preview, pick per persona)
 - `system.hangup` tool so Sage can end calls cleanly
-
 
 ---
 
@@ -1595,21 +1685,21 @@ Dispatched 28 sub-agents to inventory: existing UI/UX from the app codebase, tec
 
 Built `site/index.html` as a single self-contained HTML file (no external requests, all CSS inlined):
 
-| Section | Content |
-|---|---|
-| Hero | "Vibe coding for vibe coders. By a vibe coder." with install command + OS tabs |
-| Calling (hero card) | Phone-turn illustration with Sage dialog bubble, metrics (<800ms, $0, read-only) |
-| AI Calling (feature) | 3-card deep-dive: call from any phone, tap to call in-app, let Sage call you |
-| All-in-one workspace | 6 cards: council, code swarm, system prompts, research, memory, actions |
-| Council mode | 4-agent live canvas (Jarvis, Researcher, Coder, Critic) |
-| Model support | 18 providers in a 6-col grid (Anthropic, OpenAI, Google, Groq, Ollama, xAI, DeepSeek, Mistral, Cohere, Perplexity, Together, Fireworks, Replicate, Llama, OpenRouter, Hyperbolic, Novita, Lambda) |
-| Download | 3-step cards per OS (Win/Mac/Linux) with copy buttons |
-| Hotkeys table | 10 hotkeys (Mod+K/J/Space/Shift+A/L/T/B/Enter) |
-| Architecture | 6-card stack overview (Desktop, Runtime, Calling, Storage, Privacy, License) |
-| Changelog | v0.1.5, v0.1.4, v0.1.3 highlights + Next |
-| Community | GitHub + Discord + YouTube placeholders |
-| Maker letter | Warm brand story |
-| FAQ | 5 questions (coding, models, calling, offline, domain) |
+| Section              | Content                                                                                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hero                 | "Vibe coding for vibe coders. By a vibe coder." with install command + OS tabs                                                                                                                    |
+| Calling (hero card)  | Phone-turn illustration with Sage dialog bubble, metrics (<800ms, $0, read-only)                                                                                                                  |
+| AI Calling (feature) | 3-card deep-dive: call from any phone, tap to call in-app, let Sage call you                                                                                                                      |
+| All-in-one workspace | 6 cards: council, code swarm, system prompts, research, memory, actions                                                                                                                           |
+| Council mode         | 4-agent live canvas (Jarvis, Researcher, Coder, Critic)                                                                                                                                           |
+| Model support        | 18 providers in a 6-col grid (Anthropic, OpenAI, Google, Groq, Ollama, xAI, DeepSeek, Mistral, Cohere, Perplexity, Together, Fireworks, Replicate, Llama, OpenRouter, Hyperbolic, Novita, Lambda) |
+| Download             | 3-step cards per OS (Win/Mac/Linux) with copy buttons                                                                                                                                             |
+| Hotkeys table        | 10 hotkeys (Mod+K/J/Space/Shift+A/L/T/B/Enter)                                                                                                                                                    |
+| Architecture         | 6-card stack overview (Desktop, Runtime, Calling, Storage, Privacy, License)                                                                                                                      |
+| Changelog            | v0.1.5, v0.1.4, v0.1.3 highlights + Next                                                                                                                                                          |
+| Community            | GitHub + Discord + YouTube placeholders                                                                                                                                                           |
+| Maker letter         | Warm brand story                                                                                                                                                                                  |
+| FAQ                  | 5 questions (coding, models, calling, offline, domain)                                                                                                                                            |
 
 Design: cozy Claude-inspired palette (cream `#FAF6EE`, copper `#B5613A`, amber `#C58A3D`, sage `#6F8F66`). System serif/sans fonts. Noise texture overlay + radial bloom backgrounds. Scroll-reveal animations. Tab-switching install commands.
 
@@ -1659,11 +1749,11 @@ Design: cozy Claude-inspired palette (cream `#FAF6EE`, copper `#B5613A`, amber `
 
 ### URLs
 
-| Resource | URL |
-|---|---|
-| Repo | `https://github.com/Cookie774-GameDev/jarvis-one` |
+| Resource            | URL                                               |
+| ------------------- | ------------------------------------------------- |
+| Repo                | `https://github.com/Cookie774-GameDev/jarvis-one` |
 | GitHub Pages (live) | `https://cookie774-gamedev.github.io/jarvis-one/` |
-| Recommended domain | `vibejarvis.com` |
+| Recommended domain  | `vibejarvis.com`                                  |
 
 ### Notes
 
@@ -1717,31 +1807,37 @@ Design: cozy Claude-inspired palette (cream `#FAF6EE`, copper `#B5613A`, amber `
 - Windows Authenticode status remains `NotSigned` unless `WINDOWS_CERT_BASE64` or `WINDOWS_CERT_THUMBPRINT` is configured; Tauri updater signatures are present.
 - Windows artifacts are validated on this host. macOS/Linux packaging remains unverified on this Windows machine.
 
+## 2026-06-05 - v0.1.18 Zustand safeLocalStorage, Cloud Sync Integration, Voice Playback & Terminal Persistence
 
+**Actor:** Jarvis (Antigravity AI)
 
-## June 3, 2026 - Zustand safeLocalStorage & QuotaExceededError Mitigation (v0.1.18)
+**Goal:** Permanently resolve the fatal React error screen crash (`QuotaExceededError` on localStorage), wire custom tools and local mutations into cloud sync, stabilize voice dictation/playback/summon modals, enable automatic reattachment of live terminal sessions on reload, and suppress unwanted context menus during terminal right-drags and context map navigation.
 
-**Goal:** Permanently resolve the fatal React error screen crash: `QuotaExceededError: Failed to execute 'setItem' on 'Storage': Setting the value of 'jarvis-ui' exceeded the quota.`
+**Result:** Completed the local implementation pass and installed a local silent `0.1.18` build. Created `safeLocalStorage` to insulate React from quota writes, implemented transcript memory capping (max 10 sessions, 512 KB total, 32 KB/session), connected custom tool mutations to Supabase sync, stabilized terminal session lifecycle across reloads, refined audio cataloging/dictation, and silenced context menus on drag paths. App configuration bumped to `0.1.18`. Public updater packaging still requires the Tauri updater private key so fresh `.sig` files and `releases/latest.json` can be generated for the exact release artifacts.
 
-**Result:** Created a decoupled, robust persistence layer `safeLocalStorage` that prevents React crashes on quota errors and clears corrupted local storage keys. Implemented a strict capping and loop-free pruning strategy for terminal transcripts in `transcriptStore.ts` (max 10 sessions, max 512 KB total, max 32 KB per session). Configured lightweight `partialize` lists for `useUIStore`, `useAuthStore`, `useToolStore`, and `useTerminalSchedulerStore`. Added debug-gated diagnostics to track local storage sizes on startup, migration, and quota failure.
+### Changes Made:
 
-### Root causes found
+- **Zustand safeLocalStorage & Quota Mitigation**: Created `safeLocalStorage.ts` wrapper with error isolation and try-catch blocks to prevent React rendering crashes when localStorage is full. Configured `useUIStore`, `useAuthStore`, `useToolStore`, and `useTerminalSchedulerStore` to utilize it. Added loop-free transcript pruning directly inside state updates.
+- **Cloud Sync Integration**: Wired custom tools and local mutations to the Supabase sync queue. Custom tool creation/deletion now queues private account sync records; live cross-device verification is still pending against the production backend.
+- **Terminal Session & Reopen Lifecycle**: Fixed PTY session preservation on reload. Live terminal PTYs now automatically reattach to the correct frontend panes using stable project-scoped pane IDs. Saned orphan escape sequences and stabilized pane lifecycle tracking.
+- **Voice System & Summon Modal**: Upgraded the voice summon modal to stay open under active dictation, improved Groq audio playback replies, and secured voice terminal execution flows.
+- **UI & Context Menu Control**: Suppressed the default OS context menu during terminal right-click drags and across the cozy context map SVG canvas to prevent overlapping popup blocks. Polished voice summon bubbles and expanded the ambient music catalog with additional audio tracks.
+- **React Loop Hardening**: Fixed update-warning dialog close handling so intentional "Update Later" closes do not re-enter snooze logic, and fixed the ambient master toggle so it never writes `ambientActive: undefined`.
+- **General / Tools**: Added a preloaded Clock tool to allow timestamped scheduling, mapped mentioned agents (Scout, Builder, Reviewer) directly to their `.md` system prompts, and secured legacy API key migration paths.
 
-1. **Uncaught Quota Exceptions**: Zustand's default `persist` middleware performs direct synchronous `localStorage.setItem` writes inside React update cycles without try-catch blocks. When localStorage is full, these writes throw `QuotaExceededError`, which bubbles up and crashes the React render tree.
-2. **Terminal Transcripts Cache Bloat**: The debounced `jarvis-terminal-transcripts` key was growing without count or total size limits, eventually saturating the 5MB localStorage origin quota.
-3. **Corrupted Persisted State**: Deprecated or malformed JSON payloads in localStorage could trigger deserialization exceptions during store initialization.
+### Files Changed:
 
-### Files changed
+- `app/src/lib/persistence/safeLocalStorage.ts` - Decoupled state storage wrapper
+- `app/src/stores/ui.ts`, `app/src/stores/auth.ts`, `app/src/features/tools/toolStore.ts`, `app/src/features/terminals/terminalScheduler.ts`, `app/src/features/terminals/transcriptStore.ts` - integrated safeLocalStorage, partialize filters, and pruning limits
+- `app/src/features/whats-new/releases.ts` - bumped current version and prepended v0.1.18 notes
+- `package.json`, `app/package.json`, `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json` - bumped metadata version to `0.1.18`
+- `CHANGELOG.md` - appended version `0.1.18` changelog
+- `scripts/release-windows.ps1` - added updater signing key preflight and local `.tauri` key-file loading for production packaging
 
-- `app/src/lib/persistence/safeLocalStorage.ts` - [NEW] Decoupled state storage wrapper with error isolation, auto-eviction of transcripts on write failures, minimal UI fallbacks, corrupted JSON validation, and debug-gated diagnostics.
-- `app/src/stores/ui.ts` - configured `useUIStore` to use `safeLocalStorage` and version 1 migration, restricting persisted state to lightweight UI variables only.
-- `app/src/stores/auth.ts` - configured `useAuthStore` to utilize `safeLocalStorage`.
-- `app/src/features/tools/toolStore.ts` - configured `useToolStore` to utilize `safeLocalStorage`.
-- `app/src/features/terminals/terminalScheduler.ts` - configured `useTerminalSchedulerStore` to utilize `safeLocalStorage` and added `partialize` to prune history and limit messages.
-- `app/src/features/terminals/transcriptStore.ts` - added loop-free transcript pruning (max 10 sessions, max 512 KB total, max 32 KB per session) directly inside state update handlers, and added a try-catch handler for flush writes.
-
-### Verification
+### Verification:
 
 - `npm run typecheck` - passed.
 - `npm run build` - passed.
 - `cargo check` - passed.
+- Local silent NSIS install - passed with `%LOCALAPPDATA%\Jarvis One\jarvis.exe` reporting `ProductVersion=0.1.18`.
+- `npm run release:windows` - blocked until `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` is available for updater `.sig` generation.

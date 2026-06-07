@@ -12,15 +12,11 @@ import {
   Sparkles,
   HardDriveDownload,
   Accessibility as AccessibilityIcon,
+  Blocks,
   type LucideIcon,
 } from 'lucide-react';
 import { useUIStore } from '@/stores/ui';
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { Account } from './sections/Account';
 import { Providers } from './sections/Providers';
@@ -34,11 +30,13 @@ import { About } from './sections/About';
 import { Ambient } from './sections/Ambient';
 import { Accessibility } from './sections/Accessibility';
 import { Notifications } from './sections/Notifications';
+import { Plugins } from '@/features/plugins';
 
 type SettingsTab =
   | 'account'
   | 'plans'
   | 'providers'
+  | 'plugins'
   | 'localmodels'
   | 'appearance'
   | 'voice'
@@ -59,6 +57,7 @@ const TABS: TabDef[] = [
   { id: 'account', label: 'Account', icon: User2 },
   { id: 'plans', label: 'Plans', icon: Sparkles },
   { id: 'providers', label: 'Providers', icon: KeyRound },
+  { id: 'plugins', label: 'Plugins', icon: Blocks },
   { id: 'localmodels', label: 'Local Models', icon: HardDriveDownload },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'voice', label: 'Voice', icon: Mic },
@@ -112,9 +111,7 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
         }
       }}
     >
-      <DialogContent
-        className="max-w-6xl w-[min(1180px,94vw)] h-[min(760px,90vh)] p-0 flex flex-col overflow-hidden"
-      >
+      <DialogContent className="max-w-6xl w-[min(1180px,94vw)] h-[min(760px,90vh)] p-0 flex flex-col overflow-hidden">
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
           Configure your account, providers, appearance, voice, hotkeys, and telemetry.
@@ -125,7 +122,10 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
             <div className="px-4 py-4 shrink-0">
               <span className="text-ui-strong text-foreground">Settings</span>
             </div>
-            <nav className="flex-1 px-2 pb-2 flex flex-col gap-0.5 overflow-y-auto min-h-0" aria-label="Settings sections">
+            <nav
+              className="flex-1 px-2 pb-2 flex flex-col gap-0.5 overflow-y-auto min-h-0"
+              aria-label="Settings sections"
+            >
               {TABS.map((t) => {
                 const Icon = t.icon;
                 const active = tab === t.id;
@@ -160,6 +160,7 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
             {tab === 'account' && <Account />}
             {tab === 'plans' && <Plans />}
             {tab === 'providers' && <Providers />}
+            {tab === 'plugins' && <Plugins />}
             {tab === 'localmodels' && <LocalModels />}
             {tab === 'appearance' && <Appearance />}
             {tab === 'voice' && <Voice />}

@@ -11,10 +11,26 @@ function dueTime(dueAt: number): string {
 }
 
 export function ClockToolPanel() {
-  const scheduled = useClockStore((state) => state.scheduled());
-  const completed = useClockStore((state) => state.completed());
-  const cancel = useClockStore((state) => state.cancel);
-  const clearCompleted = useClockStore((state) => state.clearCompleted);
+  const entries = useClockStore((s) => s.entries);
+  const cancel = useClockStore((s) => s.cancel);
+  const clearCompleted = useClockStore((s) => s.clearCompleted);
+
+  const scheduled = React.useMemo(
+    () =>
+      entries
+        .filter((entry) => entry.status === 'scheduled')
+        .sort((a, b) => a.dueAt - b.dueAt),
+    [entries],
+  );
+
+  const completed = React.useMemo(
+    () =>
+      entries
+        .filter((entry) => entry.status !== 'scheduled')
+        .sort((a, b) => (b.firedAt ?? b.createdAt) - (a.firedAt ?? a.createdAt)),
+    [entries],
+  );
+
   const [minutes, setMinutes] = React.useState('25');
   const [label, setLabel] = React.useState('Focus timer');
   const [now, setNow] = React.useState(Date.now());
