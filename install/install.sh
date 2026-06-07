@@ -339,6 +339,65 @@ install_dmg() {
   warn "After the first 'Open', macOS remembers the trust for future updates."
 }
 
+install_terminal_launcher() {
+  local bin_dir="${HOME}/.jarvis/bin"
+  local launcher="${bin_dir}/Jarvis"
+  mkdir -p "$bin_dir"
+
+  cat > "$launcher" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ESC=$'\033'
+CYAN="${ESC}[38;5;51m"
+VIOLET="${ESC}[38;5;141m"
+DIM="${ESC}[2m"
+RESET="${ESC}[0m"
+
+printf "\n"
+printf "%b\n" "${CYAN}  ____.                     .__        ${RESET}"
+printf "%b\n" "${CYAN} |    |____ _________  ___|__| ______${RESET}"
+printf "%b\n" "${CYAN} |    \__  \\_  __ \\/  _ \\  |/  ___/${RESET}"
+printf "%b\n" "${CYAN} |    |/ __ \\|  | \\(  <_> ) |\\___ \\ ${RESET}"
+printf "%b\n" "${CYAN} |____(____  /__|   \\____/|__/____  >${RESET}"
+printf "%b\n" "${VIOLET}           \\/                     \\/ ${RESET}"
+printf "%b\n\n" "${DIM}  launching Jarvis One from your terminal${RESET}"
+
+case "$(uname -s)" in
+  Darwin*)
+    app="$HOME/Applications/Jarvis One.app"
+    [ -d "$app" ] || app="/Applications/Jarvis One.app"
+    [ -d "$app" ] || { echo "Jarvis One.app was not found." >&2; exit 1; }
+    open "$app"
+    ;;
+  Linux*)
+    target="$HOME/.local/bin/jarvis"
+    [ -x "$target" ] || target="/usr/local/bin/jarvis"
+    [ -x "$target" ] || target="/usr/bin/jarvis"
+    [ -x "$target" ] || { echo "Jarvis executable was not found." >&2; exit 1; }
+    nohup "$target" >/dev/null 2>&1 &
+    ;;
+  *)
+    echo "Unsupported operating system." >&2
+    exit 1
+    ;;
+esac
+EOF
+  chmod 0755 "$launcher"
+
+  local marker_start="# >>> Jarvis launcher >>>"
+  local marker_end="# <<< Jarvis launcher <<<"
+  local path_line='export PATH="$HOME/.jarvis/bin:$PATH"'
+  local profile
+  for profile in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zprofile" "$HOME/.zshrc"; do
+    if [ -f "$profile" ] && grep -Fq "$marker_start" "$profile"; then
+      continue
+    fi
+    printf "\n%s\n%s\n%s\n" "$marker_start" "$path_line" "$marker_end" >> "$profile"
+  done
+  export PATH="$bin_dir:$PATH"
+  ok "Terminal command ready: Jarvis"
+}
+
 launch_linux_app() {
   local runner=""
   if command -v jarvis >/dev/null 2>&1; then
@@ -492,6 +551,7 @@ esac
 
 printf "\n"
 ok "Jarvis installed."
+install_terminal_launcher
 
 # Auto-open Jarvis
 step "Auto-launching Jarvis One..."

@@ -28,6 +28,8 @@ JARVIS_DRYRUN=1 JARVIS_DOWNLOAD_DIR="$HOME/Jarvis-Tests/downloads" curl -fsSL ht
 
 The default one-line installers now use the user-scope path with no installer UI: Windows uses silent NSIS, macOS copies into `~/Applications`, and Linux installs an AppImage under `~/.local/bin/jarvis`. Set `JARVIS_SYSTEM=1` for system-wide macOS/Linux installs, or `$env:JARVIS_SILENT="0"` on Windows to force the interactive UI.
 
+The installer also adds a per-user `Jarvis` terminal command. Existing desktop installs repair this command automatically when the updated app starts. Open a new terminal after installation or update, then run `Jarvis`.
+
 Set `JARVIS_DOWNLOAD_DIR` when validating installers so all staged downloads stay in a known folder. Set `JARVIS_KEEP_DOWNLOAD=1` if you want the downloaded installer kept after a normal install for audit or checksum review.
 
 ## Direct Download

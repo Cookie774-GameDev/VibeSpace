@@ -224,6 +224,10 @@ function useBoot() {
         console.warn('Failed to hydrate API keys from secure storage:', err);
       }
 
+      void import('@tauri-apps/api/core')
+        .then(({ invoke }) => invoke('install_terminal_launcher'))
+        .catch((err) => console.warn('[launcher] terminal command setup failed', err));
+
       try {
         const { isSupabaseConfigured } = await import('@/lib/supabase/env');
         if (!isSupabaseConfigured()) {

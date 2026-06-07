@@ -34,6 +34,8 @@ irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/
 
 3. Jarvis installs silently by default, then auto-launches. You can also reopen it from the Start Menu.
 
+After installation, open a new terminal and run `Jarvis` to launch the desktop app with the Jarvis terminal intro.
+
 ### macOS 12+
 
 1. Open Terminal.
@@ -45,6 +47,8 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 
 3. Jarvis installs into `~/Applications` by default and auto-launches. You can also reopen it from `~/Applications`.
 
+After installation, open a new terminal and run `Jarvis`.
+
 ### Linux
 
 1. Open your terminal.
@@ -55,6 +59,8 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 ```
 
 3. Jarvis installs a user-local AppImage by default and auto-launches. You can also reopen it from your app menu.
+
+After installation, open a new terminal and run `Jarvis`.
 
 See [`DOWNLOAD.md`](DOWNLOAD.md) for dry-run checks, direct release filenames, checksum verification, and troubleshooting.
 
