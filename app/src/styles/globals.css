@@ -1230,3 +1230,114 @@
   @keyframes plan-glow-pulse { 0%, 50%, 100% { box-shadow: none; } }
   @keyframes plan-particle-float { 0%, 50%, 100% { transform: none; opacity: 0.6; } }
 }
+
+/* ============================================================
+   SLASH COMMAND PURPLE THEME
+   Premium purple/violet theme for slash commands and input tokens.
+   ============================================================ */
+
+/* Token pulse animation on insert */
+@keyframes token-insert-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(139, 92, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+  }
+}
+
+.jarvis-token-insert {
+  animation: token-insert-pulse 0.5s ease-out;
+}
+
+/* Slash command dropdown glow */
+@keyframes slash-dropdown-glow {
+  0%, 100% {
+    box-shadow:
+      0 8px 32px rgba(139, 92, 246, 0.15),
+      0 0 0 1px rgba(139, 92, 246, 0.1),
+      0 0 20px rgba(139, 92, 246, 0.1);
+  }
+  50% {
+    box-shadow:
+      0 8px 32px rgba(139, 92, 246, 0.2),
+      0 0 0 1px rgba(139, 92, 246, 0.15),
+      0 0 30px rgba(139, 92, 246, 0.15);
+  }
+}
+
+.jarvis-slash-dropdown {
+  animation: slash-dropdown-glow 3s ease-in-out infinite;
+}
+
+/* Selected command item shimmer */
+@keyframes slash-item-shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.jarvis-slash-item-selected {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(139, 92, 246, 0.1) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: slash-item-shimmer 2s ease-in-out infinite;
+}
+
+/* Input token hover glow */
+.jarvis-input-token:hover {
+  filter: brightness(1.1);
+  box-shadow:
+    0 0 12px rgba(139, 92, 246, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Input token focus state */
+.jarvis-input-token:focus-within {
+  outline: 2px solid rgba(139, 92, 246, 0.5);
+  outline-offset: 2px;
+}
+
+/* Keyboard shortcut badges in slash menu */
+.jarvis-kbd {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.15);
+  color: rgb(167, 139, 250);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+/* Purple gradient text for command labels */
+.jarvis-command-label {
+  background: linear-gradient(135deg, rgb(167, 139, 250) 0%, rgb(192, 132, 252) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Reduced motion for slash commands */
+@media (prefers-reduced-motion: reduce) {
+  .jarvis-token-insert,
+  .jarvis-slash-dropdown,
+  .jarvis-slash-item-selected {
+    animation: none;
+  }
+
+  .jarvis-slash-dropdown {
+    box-shadow:
+      0 8px 32px rgba(139, 92, 246, 0.15),
+      0 0 0 1px rgba(139, 92, 246, 0.1);
+  }
+}
