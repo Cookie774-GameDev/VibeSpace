@@ -82,6 +82,16 @@ npm install
 npm run release:windows
 ```
 
+`release:windows` requires a Tauri updater key outside the repository. Set
+`TAURI_SIGNING_PRIVATE_KEY_PATH` to the private key and keep its matching public
+key at the same path with a `.pub` suffix. The script rejects a pair that does
+not match `app/src-tauri/tauri.conf.json`.
+
+Tauri updater signatures protect silent updates from tampering. Public Windows
+distribution additionally requires Authenticode credentials through
+`WINDOWS_CERT_BASE64` or `WINDOWS_CERT_THUMBPRINT` to avoid shipping an
+untrusted executable.
+
 For cross-platform builds:
 
 ```powershell

@@ -14,7 +14,14 @@ const names = files.filter((f) => f.isFile()).map((f) => f.name);
 const versionPattern = escapeRegex(version);
 
 const platforms = {};
-await addPlatform('windows-x86_64', pick(names, [new RegExp(`^Jarvis( One)?_${versionPattern}_x64-setup\\.exe$`)]), names);
+await addPlatform(
+  'windows-x86_64',
+  pick(names, [
+    new RegExp(`^Jarvis-One-${versionPattern}-Windows-x64\\.exe$`),
+    new RegExp(`^Jarvis( One)?_${versionPattern}_x64-setup\\.exe$`),
+  ]),
+  names,
+);
 await addPlatform('darwin-aarch64', pick(names, [/\.app\.tar\.gz$/, /macOS.*\.tar\.gz$/i]), names);
 await addPlatform('linux-x86_64', pick(names, [/\.AppImage$/, /amd64.*\.AppImage$/i]), names);
 

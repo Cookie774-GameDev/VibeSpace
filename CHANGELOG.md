@@ -17,6 +17,15 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 - Plugin secrets are stored through the Tauri OS keychain bridge and are excluded from localStorage, terminal environment variables, prompts, and Supabase.
 - Added a Supabase trigger that rejects credential-shaped fields in plugin connection sync payloads.
 - Added scoped native HTTP permissions for implemented connector API hosts.
+- Windows release packaging now validates that the updater private key's sibling `.pub` file matches the public key embedded in Tauri config before building.
+- Removed local helper files that copied updater private-key material into the repository worktree.
+
+### Release
+
+- Generated updater-signed 0.1.20 NSIS/MSI artifacts, `latest.json`, and current-artifact SHA-256 checksums.
+- The updater manifest now targets the stable hyphenated GitHub asset name so release filename normalization cannot break downloads.
+- Verified a silent per-user NSIS upgrade from 0.1.19 to 0.1.20 and confirmed the relaunched executable reports version 0.1.20.
+- Windows Authenticode signing remains separate from Tauri updater signing and still requires `WINDOWS_CERT_BASE64` or `WINDOWS_CERT_THUMBPRINT`.
 
 ## [0.1.19] - 2026-06-06
 
