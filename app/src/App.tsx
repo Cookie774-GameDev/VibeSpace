@@ -32,7 +32,6 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { startNotificationLoop } from '@/features/tasks';
 import { startClockEngine } from '@/features/clock';
 import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
-import { GlowBorder } from '@/features/voice/GlowBorder';
 import { WakeWordHost } from '@/features/voice/WakeWordHost';
 import { ApiKeySaveBurst } from '@/features/settings/ApiKeySaveBurst';
 import { CallModal, startOutboundTrigger } from '@/features/call';
@@ -590,8 +589,7 @@ function WorkspaceRoot() {
       <WhatsNewHost />
       <UpdateWarningHost />
 
-      {/* Visual ambient effects */}
-      <GlowBorder />
+      {/* Visual ambient effects removed — clean UI */}
 
       {/* V3 — confetti + serif gradient toast on success milestones. */}
       <CelebrationHost />

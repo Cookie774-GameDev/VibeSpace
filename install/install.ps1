@@ -345,18 +345,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Jarvis.ps1" %*
 `$jarvisExe = '$($exePath.Replace("'", "''"))'
 `$esc = [char]27
 `$cyan = "`$esc[38;5;51m"
-`$violet = "`$esc[38;5;141m"
-`$pink = "`$esc[38;5;213m"
-`$blue = "`$esc[38;5;39m"
+`$cyanBright = "`$esc[38;5;87m"
+`$blue = "`$esc[38;5;33m"
+`$blueBright = "`$esc[38;5;39m"
 `$green = "`$esc[38;5;82m"
+`$greenDim = "`$esc[38;5;29m"
+`$white = "`$esc[38;5;255m"
 `$bold = "`$esc[1m"
 `$dim = "`$esc[2m"
 `$reset = "`$esc[0m"
+`$bgDark = "`$esc[48;5;17m"
 
 function Show-Header {
   Clear-Host
   Write-Host (`$cyan + '  JARVIS' + `$reset + `$dim + ' // TERMINAL INTELLIGENCE' + `$reset)
-  Write-Host (`$violet + '  --------------------------------------------------------' + `$reset)
+  Write-Host (`$blue + '  --------------------------------------------------------' + `$reset)
   Write-Host (`$dim + '  Workspace: ' + `$reset + (Get-Location).Path)
   Write-Host ''
 }
@@ -371,7 +374,7 @@ function Start-CodeAgent([string]`$requested, [string[]]`$agentArgs = @()) {
     `$target = @('claude', 'codex', 'opencode') | Where-Object { `$available -contains `$_ } | Select-Object -First 1
   }
   if (-not `$target -or -not (Get-Command `$target -ErrorAction SilentlyContinue)) {
-    Write-Host (`$pink + `$bold + '  No coding agent CLI was found.' + `$reset)
+    Write-Host (`$cyan + `$bold + '  No coding agent CLI was found.' + `$reset)
     Write-Host (`$dim + '  Install Claude Code, Codex, or OpenCode, then run Jarvis ultra again.' + `$reset)
     exit 1
   }
@@ -385,20 +388,90 @@ function Start-CodeAgent([string]`$requested, [string[]]`$agentArgs = @()) {
   exit `$LASTEXITCODE
 }
 
+function Show-BootSequence {
+  Clear-Host
+  Write-Host ''
+
+  `$logo = @(
+    '       ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗',
+    '       ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝',
+    '       ██║███████║██████╔╝██║   ██║██║███████╗',
+    '  ██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║',
+    '  ╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║',
+    '   ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝'
+  )
+  foreach (`$line in `$logo) {
+    Write-Host (`$cyan + `$bold + `$line + `$reset)
+    Start-Sleep -Milliseconds 35
+  }
+
+  Write-Host (`$cyanBright + '                        - ' + `$bold + 'ONE' + `$reset + `$cyanBright + ' -' + `$reset)
+  Start-Sleep -Milliseconds 60
+  Write-Host (`$blue + '            SYMBIOTE INTEGRATED INTELLIGENCE' + `$reset)
+  Write-Host ''
+  Write-Host (`$blueBright + '  ═══════════════════════════════════════════════════' + `$reset)
+  Write-Host ''
+
+  `$steps = @(
+    @('Initializing Symbiote Core', '100%'),
+    @('Loading memory maps',        '100%'),
+    @('Connecting voice link',      'OK'),
+    @('Preparing workspace',        'OK'),
+    @('Calibrating neural mesh',    'OK'),
+    @('System diagnostics',         'OK')
+  )
+
+  `$barFull = [string]::new([char]0x2588, 20)
+  foreach (`$step in `$steps) {
+    `$label = `$step[0].PadRight(34)
+    `$result = `$step[1]
+
+    Write-Host ('  ' + `$blueBright + '[' + `$cyanBright + [char]0x25A0 + `$blueBright + '] ' + `$reset) -NoNewline
+    Write-Host (`$white + `$label + `$reset) -NoNewline
+
+    `$segments = 20
+    for (`$i = 1; `$i -le `$segments; `$i++) {
+      `$filled = [string]::new([char]0x2588, `$i)
+      `$empty  = [string]::new([char]0x2591, (`$segments - `$i))
+      Write-Host ("`r  " + `$blueBright + '[' + `$cyanBright + [char]0x25A0 + `$blueBright + '] ' + `$reset + `$white + `$label + `$reset + `$cyan + `$filled + `$greenDim + `$empty + `$reset) -NoNewline
+      Start-Sleep -Milliseconds 8
+    }
+
+    Write-Host ("`r  " + `$blueBright + '[' + `$cyanBright + [char]0x25A0 + `$blueBright + '] ' + `$reset + `$white + `$label + `$cyan + `$barFull + '  ' + `$green + `$bold + `$result + `$reset)
+    Start-Sleep -Milliseconds 40
+  }
+
+  Write-Host ''
+  Write-Host (`$blueBright + '  ═══════════════════════════════════════════════════' + `$reset)
+  Write-Host ''
+
+  `$dotRow = `$cyan + '  '
+  for (`$d = 0; `$d -lt 40; `$d++) { `$dotRow += [char]0x25CF + ' ' }
+  `$dotRow += `$reset
+  Write-Host `$dotRow
+  Write-Host ''
+
+  Write-Host ('  ' + `$blueBright + `$bold + '  ' + [char]0x25C9 + '  JARVIS ONLINE' + `$reset)
+  Write-Host ('  ' + `$dim + '     All systems nominal.' + `$reset)
+  Write-Host ''
+  Write-Host ('  ' + `$cyanBright + 'Ready for your command.' + `$reset)
+  Write-Host ''
+}
+
 `$mode = if (`$args.Count -gt 0) { `$args[0].ToLowerInvariant() } else { '' }
 `$modeArgs = @(`$args | Select-Object -Skip 1)
 switch (`$mode) {
-  'app' { Start-Process -FilePath `$jarvisExe; exit 0 }
-  'open' { Start-Process -FilePath `$jarvisExe; exit 0 }
-  'code' { Start-CodeAgent 'code' `$modeArgs }
-  'ultra' { Start-CodeAgent 'ultra' `$modeArgs }
-  'claude' { Start-CodeAgent 'claude' `$modeArgs }
-  'codex' { Start-CodeAgent 'codex' `$modeArgs }
+  'app'      { Start-Process -FilePath `$jarvisExe; exit 0 }
+  'open'     { Start-Process -FilePath `$jarvisExe; exit 0 }
+  'code'     { Start-CodeAgent 'code' `$modeArgs }
+  'ultra'    { Start-CodeAgent 'ultra' `$modeArgs }
+  'claude'   { Start-CodeAgent 'claude' `$modeArgs }
+  'codex'    { Start-CodeAgent 'codex' `$modeArgs }
   'opencode' { Start-CodeAgent 'opencode' `$modeArgs }
   'help' {
     Show-Header
     Write-Host (`$bold + '  Commands' + `$reset)
-    Write-Host '    Jarvis app       Open Jarvis One'
+    Write-Host '    Jarvis           Launch Jarvis One'
     Write-Host '    Jarvis ultra     Start the best installed coding agent'
     Write-Host '    Jarvis claude    Start Claude Code here'
     Write-Host '    Jarvis codex     Start Codex here'
@@ -407,48 +480,7 @@ switch (`$mode) {
   }
 }
 
-Show-Header
-Write-Host (`$bold + '  Choose a mode' + `$reset)
-Write-Host (`$green + '    [1] ULTRA CODE' + `$reset + `$dim + '  best installed coding agent' + `$reset)
-Write-Host (`$cyan + '    [2] JARVIS ONE' + `$reset + `$dim + '  desktop AI workspace' + `$reset)
-Write-Host (`$violet + '    [3] CLAUDE CODE' + `$reset)
-Write-Host (`$blue + '    [4] CODEX' + `$reset)
-Write-Host (`$dim + '    [Q] Exit' + `$reset)
-Write-Host ''
-`$choice = (Read-Host '  jarvis').Trim().ToLowerInvariant()
-switch (`$choice) {
-  '1' { Start-CodeAgent 'ultra' }
-  'ultra' { Start-CodeAgent 'ultra' }
-  '2' { Start-Process -FilePath `$jarvisExe; exit 0 }
-  'app' { Start-Process -FilePath `$jarvisExe; exit 0 }
-  '3' { Start-CodeAgent 'claude' }
-  'claude' { Start-CodeAgent 'claude' }
-  '4' { Start-CodeAgent 'codex' }
-  'codex' { Start-CodeAgent 'codex' }
-  default { exit 0 }
-}
-
-Clear-Host
-`$frames = @(
-  @(`$cyan,   '[=                   ]', 'WAKING CORE'),
-  @(`$blue,   '[=====               ]', 'LINKING MODELS'),
-  @(`$violet, '[==========          ]', 'SYNCING MEMORY'),
-  @(`$pink,   '[===============     ]', 'ARMING INTERFACE'),
-  @(`$green,  '[====================]', 'SYSTEM ONLINE')
-)
-foreach (`$frame in `$frames) {
-  Write-Host "`r  " -NoNewline
-  Write-Host (`$frame[0] + `$frame[1] + `$reset + '  ' + `$bold + `$frame[2] + `$reset) -NoNewline
-  Start-Sleep -Milliseconds 110
-}
-Write-Host "`n"
-Write-Host (`$cyan + '  +--------------------------------------------------+' + `$reset)
-Write-Host (`$cyan + '  |' + `$reset + `$violet + `$bold + '              J  A  R  V  I  S    O  N  E           ' + `$reset + `$cyan + '|' + `$reset)
-Write-Host (`$blue + '  |' + `$reset + `$dim + '             INTELLIGENT DESKTOP SYSTEM             ' + `$reset + `$blue + '|' + `$reset)
-Write-Host (`$violet + '  +--------------------------------------------------+' + `$reset)
-Write-Host (`$pink + '       * ' + `$cyan + 'VOICE' + `$pink + ' * ' + `$blue + 'AGENTS' + `$pink + ' * ' + `$violet + 'MEMORY' + `$pink + ' * ' + `$green + 'AUTOMATION' + `$reset)
-Write-Host (`$green + `$bold + '    >> ACCESS GRANTED' + `$reset + `$dim + '  Launching your workspace...' + `$reset)
-Write-Host ''
+Show-BootSequence
 Start-Process -FilePath `$jarvisExe
 "@
     Set-Content -LiteralPath $cmdPath -Value $cmdLauncher -Encoding ASCII
