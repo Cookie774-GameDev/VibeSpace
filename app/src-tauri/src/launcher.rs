@@ -87,13 +87,13 @@ $violet = "$esc[38;5;141m"
 $dim = "$esc[2m"
 $reset = "$esc[0m"
 Write-Host ''
-Write-Host ($cyan + '  ____.                     .__        ' + $reset)
-Write-Host ($cyan + ' |    |____ _________  ___|__| ______' + $reset)
-Write-Host ($cyan + ' |    \__  \_  __ \/  _ \  |/  ___/' + $reset)
-Write-Host ($cyan + ' |    |/ __ \|  | \(  <_> ) |\___ \ ' + $reset)
-Write-Host ($cyan + ' |____(____  /__|   \____/|__/____  >' + $reset)
-Write-Host ($violet + '           \/                     \/' + $reset)
-Write-Host ($dim + '  launching Jarvis One from your terminal' + $reset)
+Write-Host ($cyan + '  +----------------------------------------+' + $reset)
+Write-Host ($cyan + '  |' + $reset + '                                        ' + $cyan + '|' + $reset)
+Write-Host ($cyan + '  |' + $reset + $violet + '              J A R V I S   O N E         ' + $cyan + '|' + $reset)
+Write-Host ($cyan + '  |' + $reset + $dim + '                 AI DESKTOP             ' + $cyan + '|' + $reset)
+Write-Host ($cyan + '  |' + $reset + '                                        ' + $cyan + '|' + $reset)
+Write-Host ($cyan + '  +----------------------------------------+' + $reset)
+Write-Host ($violet + '    STATUS' + $reset + $dim + '  Launching your workspace...' + $reset)
 Write-Host ''
 Start-Process -FilePath $jarvisExe
 "#
@@ -244,7 +244,8 @@ mod tests {
         ]);
 
         assert!(script.contains(r"$jarvisExe = 'C:\Users\Test\Programs\Jarvis One\jarvis.exe'"));
-        assert!(script.contains("launching Jarvis One from your terminal"));
+        assert!(script.contains("J A R V I S   O N E"));
+        assert!(script.contains("Launching your workspace..."));
         assert!(script.contains("Start-Process -FilePath $jarvisExe"));
         assert!(!script.contains(r"C:\\Users"));
         assert!(windows_cmd_launcher().contains(r#""%~dp0Jarvis.ps1""#));
