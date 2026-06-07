@@ -38,7 +38,7 @@ import {
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.23';
+export const CURRENT_VERSION = '0.1.24';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -80,6 +80,33 @@ export interface Release {
    */
   sections: ReleaseSection[];
 }
+
+const RELEASE_0_1_24: Release = {
+  version: '0.1.24',
+  date: '2026-06-07',
+  headline: 'Persistent Jarvis voice panel with live waveform',
+  summary:
+    'Hey Jarvis now opens a compact corner panel that stays available while you work. The panel shows Jarvis status, a microphone-reactive waveform, and a running You/Jarvis transcript.',
+  sections: [
+    {
+      kind: 'feature',
+      items: [
+        'Wake word opens a persistent top-right Jarvis card instead of a blocking bottom voice dialog.',
+        'Amber audio waveform reacts to microphone loudness while Jarvis is listening.',
+        'Scrollable voice transcript shows the full You/Jarvis conversation with live partial speech.',
+      ],
+    },
+    {
+      kind: 'improvement',
+      items: [
+        'Voice panel stays open until closed with the mini X button.',
+        'Jarvis pauses recognition while speaking and automatically resumes listening afterward.',
+        'Rapid speech-recognition final chunks are buffered into one voice request.',
+        'Slash command option pickers use the compact warm Jarvis styling.',
+      ],
+    },
+  ],
+};
 
 const RELEASE_0_1_23: Release = {
   version: '0.1.23',
@@ -230,6 +257,7 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  RELEASE_0_1_24,
   RELEASE_0_1_23,
   RELEASE_0_1_22,
   RELEASE_0_1_21,

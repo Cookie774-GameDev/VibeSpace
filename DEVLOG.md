@@ -1,3 +1,24 @@
+## 2026-06-07 - v0.1.24 Persistent Jarvis Voice Panel
+
+### Voice UI
+- Replaced the blocking voice dialog with a persistent top-right Jarvis card that opens from the wake word flow.
+- Matched the warm Jarvis visual language with an amber orb, ready/listening/speaking status, compact close button, and frosted dark panel.
+- Added a microphone-reactive waveform so louder input produces taller amber bars.
+- Added a scrollable You/Jarvis conversation transcript with live partial speech while recognition is still streaming.
+- Kept the panel alive through no-speech timeouts and routine recognition ends; it only closes when the user presses the mini X or toggles voice UI through existing app controls.
+
+### Voice Flow
+- Voice final results now create chat messages and dispatch spoken Jarvis replies directly from the panel.
+- Jarvis speech synthesis emits start/end lifecycle events so recognition pauses during spoken replies and resumes afterward.
+- Buffered rapid final transcript chunks into one utterance before sending, preventing duplicate or truncated voice requests.
+
+### Slash UI Carry-Forward
+- Kept the compact warm Jarvis option picker styling for terminal/context options so command panels match the app theme.
+
+**Verification:** `npm --prefix app run typecheck`, `npm --prefix app run test` (46 files / 212 tests), `npm --prefix app run build`, signed updater release pipeline `npm run release:windows`, local silent NSIS install, installed executable version check (`0.1.24`), and `releases/latest.json` check.
+
+---
+
 ## 2026-06-07 - v0.1.23 Compact Terminal-Style Slash Commands
 
 ### Slash Command UI Refinements

@@ -1,213 +1,335 @@
-import { useEffect } from 'react';
+import * as React from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Mic } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
+import { Bot, Mic, UserRound, X } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
-import { HOTKEYS } from '@/lib/hotkeys';
-import { cn, renderHotkey } from '@/lib/utils';
-import { Orb } from './Orb';
+import { cn } from '@/lib/utils';
+import { messageRepo } from '@/lib/db';
+import { useChatMessages } from '@/features/chat/hooks';
+import type { ChatId, Message } from '@/types';
 import type { VoiceState } from './store';
 import { useVoiceStore } from './store';
 import { VoiceService } from './VoiceService';
+import { SPEECH_SYNTHESIS_END_EVENT, SPEECH_SYNTHESIS_START_EVENT } from './speechSynthesis';
 import { PERSONAS } from './personas';
-
-/**
- * The voice modal: a bottom-anchored Dialog showcasing the orb, persona,
- * live transcript, and ambient session controls.
- *
- * Render once at the App root. The component is its own controller:
- *  - subscribes to `useUIStore.voiceModalOpen` to mount/unmount
- *  - drives `useUIStore.voiceListening` so the GlowBorder lights up
- *  - bridges VoiceService events into the voice store while open
- *  - hooks Cmd+Space (Mod+Space) to toggle, even from text inputs
- *
- * Lifecycle is owned by a single effect keyed on `open` so the listener
- * wiring, the listening state machine, and the GlowBorder flag rise and
- * fall as one unit. Closing the modal (Esc, overlay click, hotkey toggle,
- * or Tauri window close) tears everything down.
- */
+import { VoiceActivityWaveform } from './VoiceActivityWaveform';
 
 const STATE_LABEL: Record<VoiceState, string> = {
-  idle: 'Tap to speak',
+  idle: 'Ready',
   listening: 'Listening',
   thinking: 'Thinking',
   speaking: 'Speaking',
   error: 'Voice error',
 };
 
+function messageText(message: Message): string {
+  return message.parts
+    .filter(
+      (part): part is Extract<Message['parts'][number], { kind: 'text' }> => part.kind === 'text',
+    )
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+}
+
 export function VoiceModal() {
-  const open = useUIStore((s) => s.voiceModalOpen);
-  const setOpen = useUIStore((s) => s.setVoiceModalOpen);
-
-  const state = useVoiceStore((s) => s.state);
-  const partial = useVoiceStore((s) => s.partialTranscript);
-  const finals = useVoiceStore((s) => s.finalTranscript);
-  const persona = useVoiceStore((s) => s.persona);
-  const errorMessage = useVoiceStore((s) => s.errorMessage);
-
+  const open = useUIStore((state) => state.voiceModalOpen);
+  const setOpen = useUIStore((state) => state.setVoiceModalOpen);
+  const activeChatId = useUIStore((state) => state.activeChatId);
+  const messages = useChatMessages(open ? activeChatId : null);
+  const state = useVoiceStore((voice) => voice.state);
+  const partial = useVoiceStore((voice) => voice.partialTranscript);
+  const persona = useVoiceStore((voice) => voice.persona);
+  const errorMessage = useVoiceStore((voice) => voice.errorMessage);
+  const levelRef = React.useRef(0);
+  const transcriptRef = React.useRef<HTMLDivElement>(null);
+  const pendingUtteranceRef = React.useRef('');
+  const utteranceTimerRef = React.useRef<number | null>(null);
+  const speakingRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!open) return;
 
-    // Feature-detect first so the visual mic-state never lies about
-    // the engine. Pre-check audit (#1): on hosts without Web Speech
-    // we used to flip `voiceListening: true` and label the modal
-    // "Listening" even though startListening() bailed with an
-    // 'unsupported' error a tick later. Now we only light up the
-    // glow + state when the engine can actually run.
     const supported = VoiceService.isSupported();
     if (supported) {
       useUIStore.getState().setVoiceListening(true);
       useVoiceStore.getState().setState('listening');
+      VoiceService.startListening();
     } else {
-      useVoiceStore.getState().setState('error', 'Built-in speech recognition is not available in this runtime.');
+      useVoiceStore
+        .getState()
+        .setState('error', 'Speech recognition is unavailable in this runtime.');
     }
 
+    const restartListening = () => {
+      if (!useUIStore.getState().voiceModalOpen || speakingRef.current) return;
+      window.setTimeout(() => {
+        if (!useUIStore.getState().voiceModalOpen || speakingRef.current) return;
+        const started = VoiceService.startListening();
+        useUIStore.getState().setVoiceListening(started);
+        if (started) useVoiceStore.getState().setState('listening');
+      }, 180);
+    };
+
+    const flushUtterance = () => {
+      utteranceTimerRef.current = null;
+      const text = pendingUtteranceRef.current.trim();
+      pendingUtteranceRef.current = '';
+      const chatId = useUIStore.getState().activeChatId;
+      if (!text || !chatId) return;
+
+      useVoiceStore.getState().setState('thinking');
+      void messageRepo
+        .create({
+          chat_id: chatId as ChatId,
+          role: 'user',
+          parts: [{ kind: 'text', text }],
+        })
+        .then(() => {
+          window.dispatchEvent(
+            new CustomEvent('jarvis:send', {
+              detail: { chatId, text, speakReply: true },
+            }),
+          );
+        })
+        .catch((error) => {
+          toast.error(
+            'Voice message failed',
+            error instanceof Error ? error.message : 'Could not send.',
+          );
+          useVoiceStore.getState().setState('error', 'Could not send the voice message.');
+        });
+    };
+
     const offs = [
+      VoiceService.on('voice:start', () => {
+        useUIStore.getState().setVoiceListening(true);
+        useVoiceStore.getState().setState('listening');
+      }),
       VoiceService.on('voice:partial', ({ text }) => {
         useVoiceStore.getState().setPartialTranscript(text);
       }),
       VoiceService.on('voice:final', ({ text }) => {
         useVoiceStore.getState().pushFinalTranscript(text);
+        pendingUtteranceRef.current = `${pendingUtteranceRef.current} ${text}`.trim();
+        if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
+        utteranceTimerRef.current = window.setTimeout(flushUtterance, 550);
       }),
       VoiceService.on('voice:error', ({ kind, message }) => {
-        if (kind === 'unsupported') {
-          // Mirror to state so the modal shows the message inline,
-          // not just a fleeting toast.
-          useUIStore.getState().setVoiceListening(false);
-          useVoiceStore.getState().setState('error', message);
-          toast.info('Voice preview', message);
-        } else if (kind === 'no_speech' || kind === 'aborted') {
-          // Routine - the engine restarts itself; don't surface noise.
-        } else if (
+        if (kind === 'no_speech' || kind === 'aborted') {
+          restartListening();
+          return;
+        }
+        if (
           kind === 'permission_denied' ||
           kind === 'service_not_allowed' ||
           kind === 'audio_capture'
         ) {
-          // Terminal — VoiceService has already cleared wantsActive,
-          // so we just reflect that in the UI and let the user reopen
-          // the modal to retry once they've granted permission.
           useUIStore.getState().setVoiceListening(false);
           useVoiceStore.getState().setState('error', message);
-        } else {
-          useVoiceStore.getState().setState('error', message);
+          return;
         }
+        useVoiceStore.getState().setState('error', message);
       }),
-      VoiceService.on('voice:timeout', ({ reason }) => {
-        useUIStore.getState().setVoiceListening(false);
-        useVoiceStore.getState().setState('idle');
-        toast.info('Voice paused', reason);
-      }),
+      VoiceService.on('voice:timeout', () => restartListening()),
+      VoiceService.on('voice:end', () => restartListening()),
     ];
 
-    // Always attempt - VoiceService emits 'unsupported' if Web Speech is missing
-    // and the listener above converts that into a toast + error state.
-    if (supported) VoiceService.startListening();
+    const onSpeechStart = () => {
+      speakingRef.current = true;
+      VoiceService.stopListening();
+      useUIStore.getState().setVoiceListening(false);
+      useVoiceStore.getState().setState('speaking');
+    };
+    const onSpeechEnd = () => {
+      speakingRef.current = false;
+      restartListening();
+    };
+    window.addEventListener(SPEECH_SYNTHESIS_START_EVENT, onSpeechStart);
+    window.addEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
 
     return () => {
       offs.forEach((off) => off());
+      if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
+      utteranceTimerRef.current = null;
+      pendingUtteranceRef.current = '';
+      window.removeEventListener(SPEECH_SYNTHESIS_START_EVENT, onSpeechStart);
+      window.removeEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
       VoiceService.stopListening();
       useUIStore.getState().setVoiceListening(false);
       useVoiceStore.getState().setState('idle');
     };
   }, [open]);
 
-  const lastFinal = finals[finals.length - 1];
-  const liveText = partial.trim() || lastFinal?.text || '';
+  React.useEffect(() => {
+    if (!open || !navigator.mediaDevices?.getUserMedia) return;
+
+    let disposed = false;
+    let stream: MediaStream | null = null;
+    let audioContext: AudioContext | null = null;
+    let animationFrame = 0;
+
+    void navigator.mediaDevices
+      .getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      })
+      .then((nextStream) => {
+        if (disposed) {
+          nextStream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream = nextStream;
+        const AudioCtor =
+          window.AudioContext ??
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtor) return;
+        audioContext = new AudioCtor();
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.72;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+
+        const update = () => {
+          analyser.getByteFrequencyData(data);
+          let sum = 0;
+          for (const value of data) sum += value;
+          levelRef.current = Math.min(1, sum / Math.max(1, data.length) / 52);
+          animationFrame = window.requestAnimationFrame(update);
+        };
+        animationFrame = window.requestAnimationFrame(update);
+      })
+      .catch(() => {
+        levelRef.current = 0;
+      });
+
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(animationFrame);
+      stream?.getTracks().forEach((track) => track.stop());
+      if (audioContext) void audioContext.close().catch(() => undefined);
+      levelRef.current = 0;
+    };
+  }, [open]);
+
+  React.useEffect(() => {
+    const node = transcriptRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [messages, partial]);
+
+  if (!open) return null;
+
+  const transcript = messages
+    .filter(
+      (message) =>
+        message.role === 'user' || message.role === 'assistant' || message.role === 'agent',
+    )
+    .map((message) => ({ ...message, displayText: messageText(message) }))
+    .filter((message) => message.displayText);
+  const visibleTranscript = transcript.slice(-4);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent
-        className={cn(
-          'jarvis-voice-panel',
-          // Override the default top-1/2 centre with a bottom-anchored placement.
-          'top-auto bottom-12 translate-y-0',
-          // Wider feel than a standard dialog, but capped for ergonomics.
-          'max-w-[460px] w-[92vw] gap-0 overflow-hidden p-0',
-          // Frosted surface that lets the GlowBorder peek through.
-          'border-accent-cyan/25 bg-elevated/90 backdrop-blur-xl',
-          'data-[state=open]:animate-slide-up',
-        )}
-        hideClose
-        onPointerDownOutside={(event) => event.preventDefault()}
-        onInteractOutside={(event) => event.preventDefault()}
+    <AnimatePresence>
+      <motion.aside
+        initial={{ opacity: 0, x: 24, y: -8, scale: 0.96 }}
+        animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+        exit={{ opacity: 0, x: 20, scale: 0.97 }}
+        transition={{ type: 'spring', stiffness: 360, damping: 30 }}
+        className="fixed right-5 top-5 z-[90] w-[min(338px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-[#7b4717]/70 bg-[#251d16]/95 shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_rgba(255,214,149,0.06),0_0_30px_rgba(234,126,18,0.1)] backdrop-blur-xl"
+        aria-label="Jarvis voice session"
       >
-        {/* Required by Radix for screen readers; visually hidden. */}
-        <DialogTitle className="sr-only">Jarvis voice session</DialogTitle>
-        <DialogDescription className="sr-only">
-          Speak to Jarvis. Press Escape to close. {personaCfg.description}
-        </DialogDescription>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full text-[#b39b82]/65 transition-colors hover:bg-[#3a2b1f] hover:text-[#f4d6b1] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#f59e0b]/55"
+          aria-label="Close Jarvis voice session"
+          title="Close"
+        >
+          <X className="h-3 w-3" />
+        </button>
 
-        <div className="relative z-10 flex flex-col items-center gap-5 px-6 pb-6 pt-7">
-          <div className="jarvis-voice-orb-shell">
-            <Orb state={state} size={170} />
+        <div className="flex items-center gap-3 px-4 pb-2.5 pt-4">
+          <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-[#9b5d19]/80 bg-[#312016] shadow-[inset_0_0_13px_rgba(255,168,38,0.64),0_0_15px_rgba(250,142,14,0.72),0_0_28px_rgba(250,142,14,0.24)]">
+            <div className="absolute inset-1.5 rounded-full border border-[#ffd077]/70 shadow-[inset_0_0_7px_rgba(255,245,195,0.62)]" />
+            <div className="h-[34px] w-[34px] rounded-full bg-[radial-gradient(circle_at_38%_34%,#fff7cb_0%,#ffd45a_18%,#ff980f_48%,#cf6205_72%,#5b2300_100%)] shadow-[0_0_12px_rgba(255,167,31,0.92)]" />
           </div>
-
-          <div className="flex flex-col items-center gap-1 text-center">
-            <div className="text-metadata uppercase tracking-[0.34em] text-accent-cyan/80">Symbiote link</div>
-            <div className="text-ui-strong text-foreground tracking-tight">{personaCfg.name}</div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[21px] font-medium leading-6 text-[#f3eadf]">
+              {personaCfg.name}
+            </div>
             <div
               className={cn(
-                'text-secondary',
-                state === 'error' ? 'text-destructive' : 'text-muted-foreground',
+                'mt-0.5 flex items-center gap-1.5 text-[16px] leading-5',
+                state === 'error' ? 'text-[#ff7b63]' : 'text-[#cbbba8]',
               )}
-              aria-live="polite"
             >
-              {state === 'error' && errorMessage ? errorMessage : STATE_LABEL[state]}
+              <span
+                className={cn(
+                  'h-2.5 w-2.5 rounded-full',
+                  state === 'error'
+                    ? 'bg-[#ff6a55]'
+                    : 'bg-[#37d246] shadow-[0_0_8px_rgba(55,210,70,0.75)]',
+                )}
+              />
+              <span className="truncate">
+                {state === 'error' && errorMessage ? errorMessage : STATE_LABEL[state]}
+              </span>
             </div>
           </div>
-
-          {/* Live transcript area. Reserve a fixed minimum height so the modal
-              doesn't jump as text streams in. */}
-          <div className="min-h-[44px] w-full px-2 text-center text-body text-foreground/90">
-            <AnimatePresence mode="wait">
-              {liveText ? (
-                <motion.div
-                  key={liveText}
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.18, ease: 'easeOut' }}
-                  className="line-clamp-3"
-                >
-                  &ldquo;{liveText}&rdquo;
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="hint"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="text-secondary text-muted-foreground/70 italic"
-                >
-                  {personaCfg.tone}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          <div className="flex items-center gap-2 text-metadata text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Mic className="h-3 w-3" /> mic
-            </span>
-            <span className="opacity-50">·</span>
-            <span className="flex items-center gap-1.5">
-              <span className="kbd">Esc</span> close
-            </span>
-            <span className="opacity-50">·</span>
-            <span className="flex items-center gap-1.5">
-              <span className="kbd">{renderHotkey(HOTKEYS.PUSH_TO_TALK)}</span> toggle
-            </span>
+          <div className="mr-2 flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-full border border-[#6f5138]/65 bg-[#2b221b]/72 shadow-[inset_0_0_0_1px_rgba(255,210,153,0.04)]">
+            <Mic className="h-5 w-5 text-[#d9c4ac]" strokeWidth={1.8} />
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+
+        <div className="px-4 pb-2 pt-0">
+          <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
+        </div>
+
+        <div ref={transcriptRef} className="min-h-[66px] space-y-2 overflow-hidden px-4 pb-4 pt-0">
+          {transcript.length === 0 && !partial ? (
+            <div className="flex h-[58px] items-center justify-center text-center text-[14px] text-[#9f8d7a]">
+              {activeChatId
+                ? 'Listening for your first request.'
+                : 'Open a chat, then speak to Jarvis.'}
+            </div>
+          ) : null}
+          {visibleTranscript.map((message) => {
+            const user = message.role === 'user';
+            return (
+              <div
+                key={message.id}
+                className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[17px] leading-6"
+              >
+                <span
+                  className={cn(
+                    'flex h-[23px] w-[23px] items-center justify-center rounded-full border',
+                    user
+                      ? 'border-[#2e82dd]/80 text-[#3b8eea]'
+                      : 'border-[#f18a09]/80 text-[#f18a09]',
+                  )}
+                >
+                  {user ? <UserRound className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                </span>
+                <span className={cn('font-medium', user ? 'text-[#2f84df]' : 'text-[#f08a08]')}>
+                  {user ? 'You' : 'Jarvis:'}
+                </span>
+                <span className="min-w-0 truncate text-[#d8cbbd]">{message.displayText}</span>
+              </div>
+            );
+          })}
+          {partial ? (
+            <div className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[17px] leading-6">
+              <span className="flex h-[23px] w-[23px] items-center justify-center rounded-full border border-[#2e82dd]/80 text-[#3b8eea]">
+                <UserRound className="h-3.5 w-3.5" />
+              </span>
+              <span className="font-medium text-[#2f84df]">You</span>
+              <span className="min-w-0 truncate text-[#d8cbbd]/80">{partial}</span>
+            </div>
+          ) : null}
+        </div>
+      </motion.aside>
+    </AnimatePresence>
   );
 }

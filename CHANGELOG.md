@@ -2,6 +2,21 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.24] - 2026-06-07
+
+### Added
+
+- **Persistent corner Jarvis panel**: saying "Hey Jarvis" now opens a compact warm-dark Jarvis card in the top-right corner instead of a blocking bottom dialog.
+- **Live voice waveform**: the panel includes an amber audio waveform that reacts to microphone loudness while listening.
+- **Voice conversation transcript**: the panel shows the running You/Jarvis chat transcript and keeps live partial speech visible while you talk.
+
+### Improved
+
+- Jarvis voice sessions now stay open until closed with the mini X button.
+- Voice replies pause microphone recognition while Jarvis is speaking, then automatically resume listening.
+- Rapid speech-recognition final chunks are buffered into one user request before sending to chat.
+- Slash command option pickers now use the compact warm Jarvis style so they fit the app theme.
+
 ## [0.1.23] - 2026-06-07
 
 ### Added

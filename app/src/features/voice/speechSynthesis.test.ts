@@ -1,5 +1,11 @@
 import { afterEach, vi } from 'vitest';
-import { selectPersonaVoice, speakText, VOICE_PREVIEW_TEXT } from './speechSynthesis';
+import {
+  selectPersonaVoice,
+  speakText,
+  SPEECH_SYNTHESIS_END_EVENT,
+  SPEECH_SYNTHESIS_START_EVENT,
+  VOICE_PREVIEW_TEXT,
+} from './speechSynthesis';
 
 function voice(name: string, lang = 'en-US', extra: Partial<SpeechSynthesisVoice> = {}): SpeechSynthesisVoice {
   return {
@@ -52,6 +58,22 @@ describe('speech synthesis voice selection', () => {
 
     expect(spoken[0]?.text).toBe("Hi, how's your day doing? Jarvis is online.");
     expect((spoken[0]?.voice as SpeechSynthesisVoice | undefined)?.name).toContain('Ryan');
+  });
+
+  it('emits lifecycle events around spoken replies', async () => {
+    const events: string[] = [];
+    window.addEventListener(SPEECH_SYNTHESIS_START_EVENT, () => events.push('start'));
+    window.addEventListener(SPEECH_SYNTHESIS_END_EVENT, () => events.push('end'));
+    installSpeechMocks({
+      voices: [voice('Microsoft Ryan Online (Natural) - English (United Kingdom)', 'en-GB', { localService: false })],
+      onSpeak: (utterance) => {
+        queueMicrotask(() => utterance.onend?.({} as SpeechSynthesisEvent));
+      },
+    });
+
+    await speakText('Status report ready.', { persona: 'jarvis' });
+
+    expect(events).toEqual(['start', 'end']);
   });
 
   it('does not fail an older preview when a newer preview supersedes it', async () => {

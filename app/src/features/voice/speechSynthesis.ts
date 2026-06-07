@@ -27,6 +27,13 @@ const CANCELLATION_ERRORS = new Set(['interrupted', 'canceled', 'cancelled']);
 
 let activeSpeechRequestId = 0;
 
+export const SPEECH_SYNTHESIS_START_EVENT = 'jarvis:speech:start';
+export const SPEECH_SYNTHESIS_END_EVENT = 'jarvis:speech:end';
+
+function dispatchSpeechEvent(name: string): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(name));
+}
+
 function getSpeechSynthesis(): SpeechSynthesis | null {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
   return window.speechSynthesis;
@@ -130,6 +137,7 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
       settled = true;
       window.clearTimeout(timeout);
       window.clearInterval(keepAlive);
+      dispatchSpeechEvent(SPEECH_SYNTHESIS_END_EVENT);
       complete();
     };
     timeout = window.setTimeout(() => settle(resolve), fallbackMs);
@@ -148,6 +156,7 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
       }
       settle(() => reject(new Error(event.error || 'Speech synthesis failed.')));
     };
+    dispatchSpeechEvent(SPEECH_SYNTHESIS_START_EVENT);
     synthesis.speak(utterance);
     synthesis.resume();
     window.setTimeout(() => {
