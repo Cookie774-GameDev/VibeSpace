@@ -1,13 +1,28 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Mic, Bell, Check, X, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  type NotificationPermissionState,
+} from '@/lib/tauri';
 
 type PermStatus = 'unknown' | 'requesting' | 'granted' | 'denied' | 'unavailable';
 
 export function Permissions() {
   const [micStatus, setMicStatus] = useState<PermStatus>('unknown');
-  const [notifStatus, setNotifStatus] = useState<PermStatus>(() => readInitialNotifStatus());
+  const [notifStatus, setNotifStatus] = useState<PermStatus>('unknown');
+
+  useEffect(() => {
+    let active = true;
+    void getNotificationPermission().then((permission) => {
+      if (active) setNotifStatus(notificationPermissionToStatus(permission));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function requestMic() {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -25,19 +40,9 @@ export function Permissions() {
   }
 
   async function requestNotif() {
-    if (typeof Notification === 'undefined') {
-      setNotifStatus('unavailable');
-      return;
-    }
     setNotifStatus('requesting');
-    try {
-      const result = await Notification.requestPermission();
-      setNotifStatus(
-        result === 'granted' ? 'granted' : result === 'denied' ? 'denied' : 'unknown',
-      );
-    } catch {
-      setNotifStatus('denied');
-    }
+    const permission = await requestNotificationPermission();
+    setNotifStatus(notificationPermissionToStatus(permission));
   }
 
   return (
@@ -174,9 +179,9 @@ function StatusPill({ status }: { status: PermStatus }) {
   );
 }
 
-function readInitialNotifStatus(): PermStatus {
-  if (typeof Notification === 'undefined') return 'unavailable';
-  if (Notification.permission === 'granted') return 'granted';
-  if (Notification.permission === 'denied') return 'denied';
+function notificationPermissionToStatus(permission: NotificationPermissionState): PermStatus {
+  if (permission === 'unavailable') return 'unavailable';
+  if (permission === 'granted') return 'granted';
+  if (permission === 'denied') return 'denied';
   return 'unknown';
 }

@@ -41,6 +41,11 @@ import {
 import { MentionTypeahead } from './MentionTypeahead';
 import { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef } from './SlashCommandTypeahead';
 import { getChatDragKind, getChatDropPayload } from './dropPayload';
+import {
+  REAL_CHAT_PROVIDERS,
+  defaultModelForProvider,
+  getModelOptions,
+} from '@/lib/ai/models';
 
 export interface ComposerProps {
   chatId: ChatId | string;
@@ -59,27 +64,7 @@ const MAX_LINES = 8;
 const MIN_HEIGHT = MIN_LINES * LINE_HEIGHT + PADDING_Y;
 const MAX_HEIGHT = MAX_LINES * LINE_HEIGHT + PADDING_Y;
 
-const PROVIDERS: ProviderId[] = [
-  'anthropic',
-  'openai',
-  'google',
-  'xai',
-  'openrouter',
-  'groq',
-  'deepseek',
-  'mistral',
-  'together',
-  'ollama',
-  'cohere',
-  'perplexity',
-  'fireworks',
-  'replicate',
-  'hyperbolic',
-  'novita',
-  'lambda',
-  'mock',
-  'local',
-];
+const PROVIDERS: ProviderId[] = [...REAL_CHAT_PROVIDERS];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
@@ -110,6 +95,12 @@ type AudioContextCtor = typeof AudioContext;
 const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
 const STT_INACTIVITY_MS = 30_000;
 const STT_ACTIVITY_RMS = 0.015;
+const WINDOWS_FILE_PATH_RE =
+  /[A-Za-z]:\\[^\r\n<>:"|?*]+?\.(?:json|cs|ts|tsx|js|jsx|md|txt|html|css|scss|py|rs|go|java|cpp|c|h|hpp|xml|yaml|yml|toml|ini|sql)\b/gi;
+
+export function extractAbsoluteFilePaths(text: string): string[] {
+  return Array.from(new Set(text.match(WINDOWS_FILE_PATH_RE) ?? [])).slice(0, 8);
+}
 
 /**
  * Find an active "@xxx" mention being typed at the caret.
@@ -288,7 +279,11 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 
   const agents = useAgentStore((s) => s.agents);
   const provider = useAuthStore((s) => s.defaultProvider);
+  const selectedModels = useAuthStore((s) => s.selectedModels);
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
+  const setSelectedModel = useAuthStore((s) => s.setSelectedModel);
+  const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
 
   const clearAudioSilenceTimer = () => {
@@ -488,13 +483,24 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       return true;
     }
     if (cmd === 'model') {
-      const wanted = rest.toLowerCase() as ProviderId;
-      if (wanted && PROVIDERS.includes(wanted)) {
-        setDefaultProvider(wanted);
-        await addSystem(`Model provider changed to ${PROVIDER_LABELS[wanted]}.`);
-      } else {
-        await addSystem(`Available providers: ${PROVIDERS.join(', ')}.`);
+      if (!rest) {
+        setText('');
+        setModelPickerOpen(true);
+        return true;
       }
+      const [providerRaw, ...modelParts] = rest.split(/\s+/);
+      const wanted = providerRaw?.toLowerCase() as ProviderId;
+      if (!PROVIDERS.includes(wanted)) {
+        await addSystem(`Available AI providers: ${PROVIDERS.join(', ')}.`);
+        return true;
+      }
+      const wantedModel =
+        modelParts.join(' ').trim() ||
+        selectedModels[wanted] ||
+        defaultModelForProvider(wanted, defaultLocalModel);
+      setDefaultProvider(wanted);
+      setSelectedModel(wanted, wantedModel);
+      await addSystem(`AI model changed to ${PROVIDER_LABELS[wanted]} / ${wantedModel}.`);
       return true;
     }
     const routes: Record<string, string> = {
@@ -646,13 +652,16 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       });
 
       const mentionedAgentIds = extractMentionedAgentIds(trimmed, agents);
+      const messageFilePaths = Array.from(
+        new Set([...attachedFiles, ...extractAbsoluteFilePaths(trimmed)]),
+      ).slice(0, 8);
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
           detail: {
             chatId,
             text: trimmed || 'Attached context.',
             mentionedAgentIds,
-            filePaths: attachedFiles,
+            filePaths: messageFilePaths,
             terminalRefs: attachedTerminals,
             contextNodes: attachedContexts,
             speakReply: voiceReplyRequestedRef.current,
@@ -1297,7 +1306,13 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
               <div className="flex items-center gap-1 px-2 pb-2 pt-0.5">
                 <ModelPicker
                   provider={provider}
-                  onChange={setDefaultProvider}
+                  model={selectedModels[provider] || defaultModelForProvider(provider, defaultLocalModel)}
+                  open={modelPickerOpen}
+                  onOpenChange={setModelPickerOpen}
+                  onChange={(nextProvider, nextModel) => {
+                    setDefaultProvider(nextProvider);
+                    setSelectedModel(nextProvider, nextModel);
+                  }}
                 />
                 {composerSttEnabled && (
                   <Hint
@@ -1383,13 +1398,15 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 
 interface ModelPickerProps {
   provider: ProviderId;
-  onChange: (p: ProviderId) => void;
+  model: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChange: (provider: ProviderId, model: string) => void;
 }
 
-function ModelPicker({ provider, onChange }: ModelPickerProps) {
-  const [open, setOpen] = useState(false);
+function ModelPicker({ provider, model, open, onOpenChange, onChange }: ModelPickerProps) {
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -1399,7 +1416,7 @@ function ModelPicker({ provider, onChange }: ModelPickerProps) {
           aria-label="Choose model"
         >
           <Sparkles className="h-3.5 w-3.5 shrink-0" />
-          <span className="text-metadata">{PROVIDER_LABELS[provider]}</span>
+          <span className="text-metadata">{PROVIDER_LABELS[provider]} / {model}</span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
         </Button>
       </PopoverTrigger>
@@ -1410,28 +1427,38 @@ function ModelPicker({ provider, onChange }: ModelPickerProps) {
         className="w-[260px] p-1 bg-elevated text-foreground"
       >
         <div className="px-2 py-1 text-metadata text-muted-foreground uppercase tracking-wide">
-          Model provider
+          AI model
         </div>
         <ul className="flex flex-col max-h-[320px] overflow-y-auto scrollbar-hidden">
           {PROVIDERS.map((p) => (
-            <li key={p}>
-              <button
-                type="button"
-                onClick={() => {
-                  onChange(p);
-                  setOpen(false);
-                }}
-                className={cn(
-                  'flex w-full items-center justify-between rounded px-2 py-1.5 text-left',
-                  'text-body text-foreground hover:bg-muted transition-colors',
-                  p === provider && 'bg-muted',
-                )}
-              >
-                <span className="text-secondary">{PROVIDER_LABELS[p]}</span>
-                {p === provider && (
-                  <span className="text-metadata text-accent-copper">active</span>
-                )}
-              </button>
+            <li key={p} className="mb-1">
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {PROVIDER_LABELS[p]}
+              </div>
+              {getModelOptions(p).map((option) => {
+                const active = provider === p && model === option.id;
+                return (
+                  <button
+                    key={`${p}:${option.id}`}
+                    type="button"
+                    onClick={() => {
+                      onChange(p, option.id);
+                      onOpenChange(false);
+                    }}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded px-2 py-1.5 text-left',
+                      'text-body text-foreground hover:bg-muted transition-colors',
+                      active && 'bg-muted',
+                    )}
+                  >
+                    <span className="min-w-0">
+                      <span className="block text-secondary">{option.label}</span>
+                      <span className="block truncate text-[10px] text-muted-foreground">{option.id}</span>
+                    </span>
+                    {active && <span className="text-metadata text-accent-copper">active</span>}
+                  </button>
+                );
+              })}
             </li>
           ))}
         </ul>

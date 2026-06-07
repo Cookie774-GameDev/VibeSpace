@@ -32,6 +32,8 @@ interface AuthState {
   apiKeys: Partial<Record<ProviderId, string>>;
   /** Active provider for chat default */
   defaultProvider: ProviderId;
+  /** Selected model id per provider. */
+  selectedModels: Partial<Record<ProviderId, string>>;
 
   /**
    * Offline mode. When true, the router ignores every cloud provider and
@@ -64,6 +66,7 @@ interface AuthState {
   clearApiKey: (provider: ProviderId) => void;
   hydrateApiKeysFromVault: () => Promise<void>;
   setDefaultProvider: (p: ProviderId) => void;
+  setSelectedModel: (provider: ProviderId, model: string) => void;
   setPersona: (p: AuthState['personaPreset']) => void;
   setWorkspaceId: (id: WorkspaceId | null) => void;
   setProjectId: (id: ProjectId | null) => void;
@@ -119,6 +122,7 @@ export const useAuthStore = create<AuthState>()(
       cloudSession: null,
       apiKeys: {},
       defaultProvider: 'google',
+      selectedModels: {},
       offlineMode: false,
       defaultLocalModel: 'llama3.2',
       personaPreset: 'jarvis',
@@ -151,6 +155,10 @@ export const useAuthStore = create<AuthState>()(
         set((s) => ({ apiKeys: { ...s.apiKeys, ...secureKeys } }));
       },
       setDefaultProvider: (p) => set({ defaultProvider: p }),
+      setSelectedModel: (provider, model) =>
+        set((s) => ({
+          selectedModels: { ...s.selectedModels, [provider]: model.trim() },
+        })),
       setPersona: (p) => set({ personaPreset: p }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
       setProjectId: (id) => set({ projectId: id }),
@@ -172,6 +180,7 @@ export const useAuthStore = create<AuthState>()(
         projectId: s.projectId,
         apiKeys: persistedLocalApiKeys(s.apiKeys),
         defaultProvider: s.defaultProvider,
+        selectedModels: s.selectedModels,
         offlineMode: s.offlineMode,
         defaultLocalModel: s.defaultLocalModel,
         personaPreset: s.personaPreset,

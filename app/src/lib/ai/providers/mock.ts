@@ -16,34 +16,6 @@ import type { LLMProvider, LLMRequest, LLMResponse } from '../types';
 import { estimateInputTokens } from '../types';
 import { sleep } from '@/lib/utils';
 
-const ACKS = [
-  'Got it. ',
-  'Sure. ',
-  "Here's what I found: ",
-  'Looking into it. ',
-  'Quick take: ',
-  'Right. ',
-  'Understood. ',
-  'On it. ',
-];
-
-const PARAGRAPHS = [
-  "Based on the question, the most relevant context appears to be the recent project notes you shared. The pattern showing up is the same one we discussed last week - small surface, big leverage. I'd start by isolating the core change, validating it against your existing tests, and iterating from there. Worth a quick end-to-end check before you merge.",
-  'There are a few angles to consider here. The simplest path keeps the existing structure intact and layers a thin adapter where the new behaviour lives. That keeps the blast radius small. The trade-off is a small bit of indirection going forward. The alternative is a fuller refactor, which would be cleaner long-term but costs more now. I lean toward the adapter unless you have a specific reason to redesign.',
-  "Looking at the shape of this, my read is that you're trying to minimise friction while keeping the option to swap implementations later. That points at a strategy pattern with a small registry. You can ship the first concrete implementation now and add the others as needed without breaking callers.",
-  "Plain answer: yes, with a caveat. The approach works for the common case, but there's an edge case around concurrent updates that's worth handling now rather than later. A short lock or version field on the row keeps you out of trouble. Otherwise, ship it.",
-  "Two things to flag. First, this is solidly within scope - no architecture change needed. Second, the obvious implementation has a sneaky O(n^2) in the inner loop; swap the array for a Map keyed on id and you're back to linear. Want me to draft the patch?",
-];
-
-/** Cheap deterministic pick from an array based on a string. */
-function pick<T>(items: T[], seed: string): T {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = ((h * 31) + seed.charCodeAt(i)) | 0;
-  }
-  return items[Math.abs(h) % items.length] as T;
-}
-
 /** Extract a direct QA/code-word response contract from the system prompt. */
 function forcedSystemReply(systemPrompt: string): string | null {
   const prompt = systemPrompt.trim();
@@ -80,7 +52,10 @@ function forcedSystemReply(systemPrompt: string): string | null {
 function buildReply(userText: string, systemPrompt: string): string {
   const forced = forcedSystemReply(systemPrompt);
   if (forced) return forced;
-  return pick(ACKS, userText) + pick(PARAGRAPHS, userText);
+  if (/\b(?:what(?:'s| is) your name|who are you)\b/i.test(userText)) {
+    return 'I am Jarvis. I am currently running in demo mode, so configure a real provider and model for full AI responses.';
+  }
+  return 'Jarvis is currently using the mock demo provider, which cannot analyze this request reliably. Open the model picker, choose a configured real provider and model, then send the request again.';
 }
 
 /**

@@ -4,18 +4,11 @@ import type { Theme } from '@/types/common';
 import { safeLocalStorage, measureStorageSizes } from '@/lib/persistence/safeLocalStorage';
 
 export type AmbientTrack =
-  | 'calm-focus'
-  | 'calm-piano'
-  | 'soothing-rain'
-  | 'soothing-space'
-  | 'warm-hearth'
-  | 'deep-ocean'
-  | 'starlight'
-  | 'forest-rain'
-  | 'lofi-night'
-  | 'lofi-rain'
-  | 'rap-cipher'
-  | 'rap-instrumental';
+  | 'music-1'
+  | 'music-2'
+  | 'music-3'
+  | 'music-4'
+  | 'music-5';
 
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
 
@@ -267,7 +260,7 @@ const defaults: Pick<
   ambientActive: false,
   ambientThresholdMs: 5 * 60 * 1000,
   ambientDrone: false,
-  ambientTrack: 'calm-focus',
+  ambientTrack: 'music-1',
   ambientVolume: 55,
   ambientAlwaysPlay: false,
   chatFullscreen: false,

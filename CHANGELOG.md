@@ -2,6 +2,25 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-06-07
+
+### Added
+
+- Added a persistent provider/model picker; `/model` now opens it or accepts a provider and model directly.
+- Added automatic Windows file-path detection so referenced files are included in AI context.
+- Added a five-track hosted ambient playlist ready for public Cloudflare R2 URLs, with sequential repeat playback.
+
+### Fixed
+
+- Built-in Jarvis agents now honor the selected provider and model.
+- Real provider failures are surfaced instead of silently returning unrelated canned mock responses.
+- Mock mode clearly identifies itself and no longer pretends to analyze unavailable context.
+- Reminder channels, completion notifications, and desktop notification permission handling now behave correctly.
+
+### Release
+
+- Built and updater-signed Windows NSIS/MSI artifacts for the silent `0.1.21` update.
+
 ## [0.1.20] - 2026-06-06
 
 ### Added
@@ -20,11 +39,18 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 - Windows release packaging now validates that the updater private key's sibling `.pub` file matches the public key embedded in Tauri config before building.
 - Removed local helper files that copied updater private-key material into the repository worktree.
 
+### Fixed
+
+- Reminder delivery now respects each reminder's `banner` and `in_app` channels instead of always sending both surfaces.
+- Ordinary task edits no longer emit a false "Task done" notification; actual completion now emits it and closes scheduled reminders.
+- Notification permission checks now use the Tauri notification plugin on desktop, including the onboarding permission step.
+
 ### Release
 
 - Generated updater-signed 0.1.20 NSIS/MSI artifacts, `latest.json`, and current-artifact SHA-256 checksums.
 - The updater manifest now targets the stable hyphenated GitHub asset name so release filename normalization cannot break downloads.
 - Verified a silent per-user NSIS upgrade from 0.1.19 to 0.1.20 and confirmed the relaunched executable reports version 0.1.20.
+- Fixed the cross-platform GitHub Release workflow by adding the `tauri` npm script expected by `tauri-action`, switching dependency installation to `npm ci`, and adding an explicit updater-key secret preflight.
 - Windows Authenticode signing remains separate from Tauri updater signing and still requires `WINDOWS_CERT_BASE64` or `WINDOWS_CERT_THUMBPRINT`.
 
 ## [0.1.19] - 2026-06-06

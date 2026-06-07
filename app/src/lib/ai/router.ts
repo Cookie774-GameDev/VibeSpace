@@ -4,8 +4,7 @@
  *      transparent upgrade from `mock-default` to a real provider when keys
  *      are configured (Anthropic preferred, then OpenAI, then Google).
  *   2. Streams chunks through to the caller's onChunk.
- *   3. Falls back to the mock provider when a real provider errors *before*
- *      emitting any output, with a toast explaining the fallback.
+ *   3. Surfaces real-provider errors instead of disguising them as mock output.
  *   4. Updates the per-agent token + cost meter via `useAgentStore.addTokens`.
  *
  * Cancellation is honored throughout - if the caller's signal aborts mid-run,
@@ -19,11 +18,12 @@ import { toast } from '@/components/ui/toast';
 import { devConsole } from '@/features/dev-console';
 import type { LLMProvider, LLMRequest, LLMResponse, LLMStreamChunk, LLMMessage } from './types';
 import { mockProvider } from './providers/mock';
-import { anthropicProvider, ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
-import { openaiProvider, OPENAI_DEFAULT_MODEL } from './providers/openai';
-import { googleProvider, GOOGLE_DEFAULT_MODEL } from './providers/google';
-import { groqProvider, GROQ_DEFAULT_MODEL } from './providers/groq';
+import { anthropicProvider } from './providers/anthropic';
+import { openaiProvider } from './providers/openai';
+import { googleProvider } from './providers/google';
+import { groqProvider } from './providers/groq';
 import { ollamaProvider, OLLAMA_DEFAULT_MODEL } from './providers/ollama';
+import { defaultModelForProvider, isRealChatProvider } from './models';
 
 /**
  * All providers, keyed by their id.
@@ -64,22 +64,9 @@ const providers: Record<ProviderId, LLMProvider> = {
 };
 
 /** Default model name to use when promoting a mock-default agent to a real provider. */
-function defaultModelFor(p: ProviderId): string {
-  switch (p) {
-    case 'anthropic':
-      return ANTHROPIC_DEFAULT_MODEL;
-    case 'openai':
-      return OPENAI_DEFAULT_MODEL;
-    case 'google':
-      return GOOGLE_DEFAULT_MODEL;
-    case 'groq':
-      return GROQ_DEFAULT_MODEL;
-    case 'ollama':
-    case 'local':
-      return useAuthStore.getState().defaultLocalModel || OLLAMA_DEFAULT_MODEL;
-    default:
-      return 'mock-default';
-  }
+function selectedModelFor(p: ProviderId): string {
+  const auth = useAuthStore.getState();
+  return auth.selectedModels[p] || defaultModelForProvider(p, auth.defaultLocalModel);
 }
 
 /**
@@ -95,7 +82,7 @@ function defaultModelFor(p: ProviderId): string {
  *    Flash Lite is the Free-plan default and has the lowest signup friction
  *    (one click at aistudio.google.com/apikey, no card). If none, stay on mock.
  */
-function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; model: string } {
+export function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; model: string } {
   const auth = useAuthStore.getState();
 
   // Offline mode wins over everything: route all chat through the local
@@ -109,11 +96,24 @@ function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; model: 
   }
 
   const provId = agent.model.provider;
+  const pref = auth.defaultProvider;
+
+  if (agent.builtin && pref && pref !== 'local') {
+    if (pref === 'mock') {
+      return { provider: mockProvider, model: 'mock-default' };
+    }
+    if (isRealChatProvider(pref)) {
+      const p = providers[pref];
+      if (p?.isAvailable()) {
+        return { provider: p, model: selectedModelFor(pref) };
+      }
+    }
+  }
 
   if (provId !== 'mock' && provId !== 'local') {
     const p = providers[provId];
     if (p && p.isAvailable()) {
-      return { provider: p, model: agent.model.model };
+      return { provider: p, model: auth.selectedModels[provId] || agent.model.model };
     }
     // Configured for a real provider but key not set - quietly mock.
     return { provider: mockProvider, model: agent.model.model || 'mock-default' };
@@ -127,9 +127,8 @@ function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; model: 
     };
   }
 
-  const pref = auth.defaultProvider;
   const ordered: ProviderId[] = [];
-  if (pref && pref !== 'mock' && pref !== 'local') ordered.push(pref);
+  if (pref && pref !== 'mock' && pref !== 'local' && isRealChatProvider(pref)) ordered.push(pref);
   for (const p of ['google', 'groq', 'anthropic', 'openai'] as const) {
     if (!ordered.includes(p)) ordered.push(p);
   }
@@ -137,7 +136,7 @@ function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; model: 
   for (const id of ordered) {
     const p = providers[id];
     if (p?.isAvailable()) {
-      return { provider: p, model: defaultModelFor(id) };
+      return { provider: p, model: selectedModelFor(id) };
     }
   }
   return { provider: mockProvider, model: 'mock-default' };
@@ -201,33 +200,20 @@ export async function runAgent(req: {
     if (emittedAny) throw err;
 
     const reason = err instanceof Error ? err.message : String(err);
-    toast.warning(
-      `Provider ${provider.name} failed`,
-      `${reason.slice(0, 200)}. Using mock fallback.`,
-    );
+    toast.warning(`Provider ${provider.name} failed`, reason.slice(0, 240));
     devConsole.log({
       channel: 'ai',
       level: 'warn',
-      message: `AI fallback ${provider.id} → mock`,
+      message: `AI provider failed: ${provider.id}`,
       detail: {
         agent: req.agent.slug,
-        from: { provider: provider.id, model },
+        provider: provider.id,
+        model,
         reason: reason.slice(0, 500),
       },
     });
 
-    const fallbackAgent: Agent = {
-      ...req.agent,
-      model: { ...req.agent.model, provider: 'mock', model: 'mock-default' },
-    };
-    response = await mockProvider.run({
-      agent: fallbackAgent,
-      messages: req.messages,
-      signal: req.signal,
-      onChunk: wrappedOnChunk,
-      temperature: req.temperature,
-      max_output_tokens: req.max_output_tokens,
-    });
+    throw err;
   }
 
   // Update the per-agent token + cost meter. We do this once per completion,

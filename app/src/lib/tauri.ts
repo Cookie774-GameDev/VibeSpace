@@ -33,10 +33,7 @@ export const isTauri: boolean = isTauriRuntime;
  * pull in `@tauri-apps/api/core`. Always called inside an `if (isTauri)` guard
  * to avoid loading the module on web, but the inner try/catch is defensive.
  */
-async function tauriInvoke<T = unknown>(
-  cmd: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+async function tauriInvoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<T>(cmd, args);
 }
@@ -52,6 +49,53 @@ export interface NotifyOptions {
   fallbackToast?: boolean;
 }
 
+export type NotificationPermissionState = NotificationPermission | 'unavailable';
+
+function normalizeNotificationPermission(value: unknown): NotificationPermission {
+  if (value === 'granted' || value === 'denied') return value;
+  return 'default';
+}
+
+export async function getNotificationPermission(): Promise<NotificationPermissionState> {
+  if (isTauri) {
+    try {
+      const granted = await tauriInvoke<boolean | null>(
+        'plugin:notification|is_permission_granted',
+      );
+      return granted === true ? 'granted' : 'default';
+    } catch {
+      return 'unavailable';
+    }
+  }
+
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return 'unavailable';
+  }
+  return window.Notification.permission;
+}
+
+export async function requestNotificationPermission(): Promise<NotificationPermissionState> {
+  const current = await getNotificationPermission();
+  if (current === 'granted' || current === 'denied' || current === 'unavailable') {
+    return current;
+  }
+
+  if (isTauri) {
+    try {
+      const result = await tauriInvoke<string>('plugin:notification|request_permission');
+      return normalizeNotificationPermission(result);
+    } catch {
+      return 'unavailable';
+    }
+  }
+
+  try {
+    return await window.Notification.requestPermission();
+  } catch {
+    return 'denied';
+  }
+}
+
 /**
  * Send a user-facing notification. Routing:
  *   1. Native OS notification via `tauri-plugin-notification` (desktop).
@@ -65,15 +109,7 @@ export async function notify(
 ): Promise<void> {
   if (isTauri) {
     try {
-      const permissionState = await tauriInvoke<boolean | null>(
-        'plugin:notification|is_permission_granted',
-      );
-      let granted = permissionState === true;
-      if (!granted) {
-        const result = await tauriInvoke<string>('plugin:notification|request_permission');
-        granted = result === 'granted';
-      }
-      if (granted) {
+      if ((await requestNotificationPermission()) === 'granted') {
         await tauriInvoke('plugin:notification|notify', {
           options: { title, body, silent: options.silent ?? false },
         });
@@ -85,10 +121,7 @@ export async function notify(
     }
   } else if (typeof window !== 'undefined' && 'Notification' in window) {
     try {
-      let permission = window.Notification.permission;
-      if (permission === 'default') {
-        permission = await window.Notification.requestPermission();
-      }
+      const permission = await requestNotificationPermission();
       if (permission === 'granted') {
         new window.Notification(title, { body, silent: options.silent });
         return;
@@ -161,10 +194,7 @@ export async function registerGlobalHotkey(
 }
 
 /** Window-level fallback. Same parsing rules as `lib/hotkeys.ts`. */
-function registerWindowHotkey(
-  combo: string,
-  handler: GlobalHotkeyHandler,
-): UnregisterHotkey {
+function registerWindowHotkey(combo: string, handler: GlobalHotkeyHandler): UnregisterHotkey {
   if (typeof window === 'undefined') return () => {};
 
   const parts = combo.split('+').map((p) => p.trim().toLowerCase());
