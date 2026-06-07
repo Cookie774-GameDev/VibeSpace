@@ -10,5 +10,14 @@ export { ChatThread } from './ChatThread';
 export { Composer } from './Composer';
 export { EmptyChat } from './EmptyChat';
 export { InputToken, TokenList, type TokenType } from './InputToken';
-export { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef } from './SlashCommandTypeahead';
-export { SlashCommandOptionPicker, type SlashCommandOption } from './SlashCommandOptionPicker';
+export {
+  SlashCommandTypeahead,
+  SLASH_COMMANDS,
+  type SlashCommandDef,
+  type SlashCommandTypeaheadRef,
+} from './SlashCommandTypeahead';
+export {
+  SlashCommandOptionPicker,
+  type SlashCommandOption,
+  type SlashCommandOptionPickerRef,
+} from './SlashCommandOptionPicker';

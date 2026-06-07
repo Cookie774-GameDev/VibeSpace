@@ -1,8 +1,7 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { motion } from 'motion/react';
-import { Command } from 'cmdk';
 import { cn } from '@/lib/utils';
-import { Check, Loader2, AlertCircle, Network, Zap, type LucideIcon } from 'lucide-react';
+import { Check, Loader2, AlertCircle, Network, Terminal, Zap, type LucideIcon } from 'lucide-react';
 
 export interface SlashCommandOption {
   id: string;
@@ -24,177 +23,160 @@ export interface SlashCommandOptionPickerProps {
   onSelect: (option: SlashCommandOption) => void;
 }
 
-export function SlashCommandOptionPicker({
-  commandLabel,
-  commandIcon: CommandIcon = Zap,
-  options,
-  selectedId,
-  query,
-  loading = false,
-  error,
-  onHoverId,
-  onSelect,
-}: SlashCommandOptionPickerProps) {
-  const listRef = useRef<HTMLDivElement>(null);
+export interface SlashCommandOptionPickerRef {
+  moveUp: () => void;
+  moveDown: () => void;
+  selectCurrent: () => void;
+}
 
-  useEffect(() => {
-    if (!listRef.current || !selectedId) return;
-    const selected = listRef.current.querySelector(`[data-value="${selectedId}"]`);
-    selected?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [selectedId]);
+export const SlashCommandOptionPicker = forwardRef<SlashCommandOptionPickerRef, SlashCommandOptionPickerProps>(
+  function SlashCommandOptionPicker(
+    {
+      commandLabel,
+      commandIcon: CommandIcon = Zap,
+      options,
+      selectedId,
+      query,
+      loading = false,
+      error,
+      onHoverId,
+      onSelect,
+    },
+    ref,
+  ) {
+    const listRef = useRef<HTMLDivElement>(null);
 
-  const filteredOptions = query
-    ? options.filter(
-        (o) =>
-          o.label.toLowerCase().includes(query.toLowerCase()) ||
-          o.description?.toLowerCase().includes(query.toLowerCase()),
-      )
-    : options;
+    const filteredOptions = query
+      ? options.filter(
+          (o) =>
+            o.label.toLowerCase().includes(query.toLowerCase()) ||
+            o.description?.toLowerCase().includes(query.toLowerCase()),
+        )
+      : options;
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8, scale: 0.96 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 8, scale: 0.96 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-      className={cn(
-        'rounded-xl border border-violet-500/30 overflow-hidden',
-        'bg-panel/95 backdrop-blur-xl',
-        'shadow-[0_8px_32px_rgba(139,92,246,0.15),0_0_0_1px_rgba(139,92,246,0.1)]',
-      )}
-    >
-      <Command
-        shouldFilter={false}
-        value={selectedId}
-        onValueChange={() => {}}
-        className="outline-none"
-        loop
+    useImperativeHandle(ref, () => ({
+      moveUp: () => {
+        if (filteredOptions.length === 0) return;
+        const i = filteredOptions.findIndex((o) => o.id === selectedId);
+        const next = filteredOptions[(i - 1 + filteredOptions.length) % filteredOptions.length]!;
+        onHoverId?.(next.id);
+      },
+      moveDown: () => {
+        if (filteredOptions.length === 0) return;
+        const i = filteredOptions.findIndex((o) => o.id === selectedId);
+        const next = filteredOptions[(i + 1) % filteredOptions.length]!;
+        onHoverId?.(next.id);
+      },
+      selectCurrent: () => {
+        const option = filteredOptions.find((o) => o.id === selectedId) ?? filteredOptions[0];
+        if (option) onSelect(option);
+      },
+    }));
+
+    useEffect(() => {
+      if (!listRef.current || !selectedId) return;
+      const selected = listRef.current.querySelector(`[data-value="${selectedId}"]`);
+      selected?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, [selectedId]);
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 4, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 4, scale: 0.98 }}
+        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+        className={cn(
+          'w-[240px] rounded-lg border border-violet-500/40 overflow-hidden',
+          'bg-[#1a1625]/98 backdrop-blur-lg',
+          'shadow-[0_4px_20px_rgba(139,92,246,0.2)]',
+          'font-mono text-[11px]',
+        )}
       >
-        <div className="px-3 py-2 border-b border-violet-500/20">
-          <div className="flex items-center gap-2">
-            <div className="h-5 w-5 rounded-md bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
-              <CommandIcon className="h-3 w-3 text-white" />
-            </div>
-            <span className="text-secondary">
-              <span className="text-violet-400 font-mono">/{commandLabel}</span>
-              {query && (
-                <span className="text-muted-foreground ml-2">→ {query}</span>
-              )}
+        {/* Header */}
+        <div className="px-2 py-1.5 border-b border-violet-500/20 bg-violet-500/5">
+          <div className="flex items-center gap-1.5">
+            <CommandIcon className="h-3 w-3 text-violet-400" />
+            <span className="text-violet-300/80 text-[10px]">
+              /{commandLabel}
+              {query && <span className="text-violet-500/60 ml-1">→ {query}</span>}
             </span>
           </div>
         </div>
 
-        <Command.List ref={listRef} className="max-h-[280px] overflow-y-auto py-1">
+        {/* List */}
+        <div ref={listRef} className="max-h-[180px] overflow-y-auto py-0.5 scrollbar-hidden">
           {loading ? (
-            <div className="px-4 py-8 flex flex-col items-center gap-3">
-              <Loader2 className="h-6 w-6 text-violet-400 animate-spin" />
-              <p className="text-secondary text-muted-foreground">Loading options...</p>
+            <div className="px-2 py-4 flex flex-col items-center gap-2">
+              <Loader2 className="h-4 w-4 text-violet-400 animate-spin" />
+              <span className="text-violet-400/60 text-[10px]">Loading...</span>
             </div>
           ) : error ? (
-            <div className="px-4 py-6 flex flex-col items-center gap-3">
-              <div className="h-10 w-10 rounded-full bg-red-500/10 flex items-center justify-center">
-                <AlertCircle className="h-5 w-5 text-red-400" />
-              </div>
-              <p className="text-secondary text-red-400">{error}</p>
+            <div className="px-2 py-3 flex flex-col items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-red-400" />
+              <span className="text-red-400/80 text-[10px]">{error}</span>
             </div>
           ) : filteredOptions.length === 0 ? (
-            <Command.Empty className="px-4 py-6 text-center">
-              <div className="flex flex-col items-center gap-2">
-                <div className="h-10 w-10 rounded-full bg-violet-500/10 flex items-center justify-center">
-                  <Network className="h-5 w-5 text-violet-400" />
-                </div>
-                {options.length === 0 ? (
-                  <>
-                    <p className="text-secondary text-muted-foreground">No options available</p>
-                    <p className="text-metadata text-muted-foreground/60">
-                      Create some first in the relevant page
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-secondary text-muted-foreground">
-                    No options match <span className="font-mono text-violet-400">{query}</span>
-                  </p>
-                )}
-              </div>
-            </Command.Empty>
+            <div className="px-2 py-3 text-center">
+              {options.length === 0 ? (
+                <span className="text-violet-400/60 text-[10px]">No options available</span>
+              ) : (
+                <span className="text-violet-400/60 text-[10px]">No match for "{query}"</span>
+              )}
+            </div>
           ) : (
             filteredOptions.map((option) => {
-              const Icon = option.icon ?? Network;
+              const Icon = option.icon ?? (commandLabel === 'terminal' ? Terminal : Network);
               const isSelected = selectedId === option.id;
 
               return (
-                <Command.Item
+                <div
                   key={option.id}
-                  value={option.id}
                   data-value={option.id}
-                  onSelect={() => onSelect(option)}
+                  onClick={() => onSelect(option)}
                   onMouseEnter={() => onHoverId?.(option.id)}
                   className={cn(
-                    'flex items-center gap-3 px-3 py-2 mx-1.5 rounded-lg cursor-pointer',
-                    'transition-all duration-150',
+                    'flex items-center gap-2 px-2 py-1.5 mx-0.5 rounded cursor-pointer',
+                    'transition-all duration-100',
                     isSelected
-                      ? 'bg-gradient-to-r from-violet-500/20 to-purple-600/20 border border-violet-500/30'
-                      : 'hover:bg-violet-500/10 border border-transparent',
+                      ? 'bg-violet-500/25 text-violet-200'
+                      : 'text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200',
                   )}
                 >
-                  <div
-                    className={cn(
-                      'h-7 w-7 rounded-lg flex items-center justify-center shrink-0 transition-all',
-                      isSelected
-                        ? 'bg-gradient-to-br from-violet-500 to-purple-600 shadow-[0_0_12px_rgba(139,92,246,0.4)]'
-                        : 'bg-violet-500/10',
-                    )}
-                  >
-                    <Icon className={cn('h-3.5 w-3.5', isSelected ? 'text-white' : 'text-violet-400')} />
-                  </div>
+                  <Icon className={cn(
+                    'h-3 w-3 shrink-0',
+                    isSelected ? 'text-violet-400' : 'text-violet-500/50',
+                  )} />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className={cn(
-                        'text-secondary font-medium',
-                        isSelected ? 'text-foreground' : 'text-foreground/90',
-                      )}>
-                        {option.label}
-                      </span>
-                      {option.metadata && (
-                        <span className="text-metadata text-muted-foreground/60">
-                          {option.metadata}
-                        </span>
-                      )}
-                    </div>
+                    <span className="block truncate">{option.label}</span>
                     {option.description && (
-                      <p className="text-metadata text-muted-foreground truncate">
+                      <span className="block truncate text-[9px] text-violet-500/50">
                         {option.description}
-                      </p>
+                      </span>
                     )}
                   </div>
-                  {isSelected && (
-                    <Check className="h-4 w-4 text-violet-400 shrink-0" />
+                  {option.metadata && (
+                    <span className="text-[9px] text-violet-500/40 shrink-0">
+                      {option.metadata}
+                    </span>
                   )}
-                </Command.Item>
+                  {isSelected && (
+                    <Check className="h-3 w-3 text-violet-400 shrink-0" />
+                  )}
+                </div>
               );
             })
           )}
-        </Command.List>
-
-        <div className="px-3 py-2 border-t border-violet-500/20 flex items-center justify-between text-metadata text-muted-foreground/60">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 font-mono">↑↓</kbd>
-              navigate
-            </span>
-            <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 font-mono">↵</kbd>
-              select
-            </span>
-          </div>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 font-mono">esc</kbd>
-            close
-          </span>
         </div>
-      </Command>
-    </motion.div>
-  );
-}
+
+        {/* Footer */}
+        <div className="px-2 py-1 border-t border-violet-500/20 bg-violet-500/5 flex items-center gap-2 text-[9px] text-violet-500/50">
+          <span><kbd className="text-violet-400">↑↓</kbd> nav</span>
+          <span><kbd className="text-violet-400">↵</kbd> select</span>
+          <span className="ml-auto"><kbd className="text-violet-400">esc</kbd></span>
+        </div>
+      </motion.div>
+    );
+  },
+);
 
 export default SlashCommandOptionPicker;

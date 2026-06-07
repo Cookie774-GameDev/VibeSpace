@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Send, ChevronDown, Sparkles, Mic, MicOff, FileText, X, Network } from 'lucide-react';
+import { Send, ChevronDown, Sparkles, Mic, MicOff, FileText, X, Network, Terminal } from 'lucide-react';
 import {
   Button,
   Hint,
@@ -30,6 +30,7 @@ import {
   parseTerminalScheduleRequest,
   scheduleTerminalCommandFromChat,
 } from '@/features/terminals/terminalScheduler';
+import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import {
   CONTEXT_MIME,
   parseContextAttachment,
@@ -39,7 +40,9 @@ import {
   type ContextMapRecord,
 } from '@/features/context/tree';
 import { MentionTypeahead } from './MentionTypeahead';
-import { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef } from './SlashCommandTypeahead';
+import { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef, type SlashCommandTypeaheadRef } from './SlashCommandTypeahead';
+import { SlashCommandOptionPicker, type SlashCommandOption, type SlashCommandOptionPickerRef } from './SlashCommandOptionPicker';
+import { InputToken, TokenList } from './InputToken';
 import { getChatDragKind, getChatDropPayload } from './dropPayload';
 import {
   REAL_CHAT_PROVIDERS,
@@ -93,6 +96,13 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 
 type MentionContext = { start: number; query: string };
 type SlashContext = { start: number; query: string };
+type OptionPickerContext = { cmd: SlashCommandDef; query: string };
+
+interface ConfirmedCommand {
+  cmd: string;
+  value?: string;
+  label: string;
+}
 
 type AudioContextCtor = typeof AudioContext;
 
@@ -255,6 +265,9 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const [selectedSlug, setSelectedSlug] = useState<string>('');
   const [slashCtx, setSlashCtx] = useState<SlashContext | null>(null);
   const [selectedSlashCmd, setSelectedSlashCmd] = useState<string>('');
+  const [optionPickerCtx, setOptionPickerCtx] = useState<OptionPickerContext | null>(null);
+  const [selectedOptionId, setSelectedOptionId] = useState<string>('');
+  const [confirmedCommands, setConfirmedCommands] = useState<ConfirmedCommand[]>([]);
   const [sending, setSending] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [attachedTerminals, setAttachedTerminals] = useState<TerminalRef[]>([]);
@@ -266,6 +279,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const composerSttEnabled = useUIStore((s) => s.composerStt);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const slashTypeaheadRef = useRef<SlashCommandTypeaheadRef>(null);
+  const optionPickerRef = useRef<SlashCommandOptionPickerRef>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -287,8 +302,54 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const setSelectedModel = useAuthStore((s) => s.setSelectedModel);
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
+  const projectId = useAuthStore((s) => s.projectId);
+  const terminalSessions = useTerminalTranscriptStore((s) => s.sessions);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+
+  // Generate options for option picker based on current command
+  const optionPickerOptions = useMemo<SlashCommandOption[]>(() => {
+    if (!optionPickerCtx) return [];
+    const cmd = optionPickerCtx.cmd.cmd;
+
+    if (cmd === 'terminal') {
+      // Get list of active terminal sessions for the current project
+      const sessions = Object.values(terminalSessions)
+        .filter((s) => !projectId || s.projectId === projectId)
+        .sort((a, b) => b.lastWriteAt - a.lastWriteAt);
+      return sessions.map((s) => ({
+        id: s.sessionId,
+        label: s.command || s.agentSlug || s.paneId || 'Terminal',
+        description: s.agentSlug ? `Agent: ${s.agentSlug}` : undefined,
+        metadata: s.paneId ? `pane:${s.paneId.slice(0, 6)}` : undefined,
+      }));
+    }
+
+    if (cmd === 'contextmap') {
+      // Get list of context maps for the current project
+      const maps = projectId ? loadStoredContextMaps(projectId) : [];
+      const active = maps.filter((m: ContextMapRecord) => m.status !== 'deleted');
+      return active.map((m: ContextMapRecord) => ({
+        id: m.name ?? `map-${m.tree?.generatedAt ?? Date.now()}`,
+        label: m.name ?? 'Untitled',
+        description: `${(m.tree?.nodes ?? []).length} nodes`,
+        metadata: m.tree?.generatedAt ? new Date(m.tree.generatedAt).toLocaleDateString() : undefined,
+      }));
+    }
+
+    return [];
+  }, [optionPickerCtx, terminalSessions, projectId]);
+
+  // Keep selectedOptionId in sync when options change
+  useEffect(() => {
+    if (optionPickerOptions.length === 0) {
+      setSelectedOptionId('');
+      return;
+    }
+    if (!optionPickerOptions.some((o) => o.id === selectedOptionId)) {
+      setSelectedOptionId(optionPickerOptions[0]!.id);
+    }
+  }, [optionPickerOptions, selectedOptionId]);
 
   const clearAudioSilenceTimer = () => {
     if (audioSilenceTimerRef.current) clearInterval(audioSilenceTimerRef.current);
@@ -435,7 +496,31 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     const ta = textareaRef.current;
     const before = text.slice(0, slashCtx.start);
     const after = text.slice(ta.selectionStart);
-    const insert = cmd.takesArg ? `/${cmd.cmd} ` : `/${cmd.cmd} `;
+
+    // If command has options (like /terminal or /contextmap), show option picker
+    if (cmd.hasOptions && (cmd.cmd === 'terminal' || cmd.cmd === 'contextmap')) {
+      // Remove the typed slash command from text
+      setText(before + after);
+      setSlashCtx(null);
+      setOptionPickerCtx({ cmd, query: '' });
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+
+    // For commands without options, add as confirmed token
+    if (!cmd.takesArg) {
+      setText(before + after);
+      setSlashCtx(null);
+      setConfirmedCommands((cur) => [
+        ...cur.filter((c) => c.cmd !== cmd.cmd),
+        { cmd: cmd.cmd, label: `/${cmd.cmd}` },
+      ]);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+
+    // For commands that take args, insert into text
+    const insert = `/${cmd.cmd} `;
     const next = before + insert + after;
     setText(next);
     setSlashCtx(null);
@@ -446,6 +531,24 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       node.focus();
       node.setSelectionRange(pos, pos);
     });
+  };
+
+  const selectOption = (option: SlashCommandOption) => {
+    if (!optionPickerCtx) return;
+    const cmd = optionPickerCtx.cmd;
+
+    // Add as confirmed command token
+    setConfirmedCommands((cur) => [
+      ...cur.filter((c) => c.cmd !== cmd.cmd),
+      { cmd: cmd.cmd, value: option.id, label: `/${cmd.cmd}: ${option.label}` },
+    ]);
+    setOptionPickerCtx(null);
+    setSelectedOptionId('');
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const removeConfirmedCommand = (cmd: string) => {
+    setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== cmd));
   };
 
   const insertMention = (agent: Agent) => {
@@ -617,8 +720,49 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 
   const handleSend = async () => {
     const trimmed = text.trim();
-    if ((!trimmed && attachedFiles.length === 0 && attachedTerminals.length === 0 && attachedContexts.length === 0) || sending) return;
+    const hasConfirmedCommands = confirmedCommands.length > 0;
+    if ((!trimmed && attachedFiles.length === 0 && attachedTerminals.length === 0 && attachedContexts.length === 0 && !hasConfirmedCommands) || sending) return;
     if (await handleSlashCommand(trimmed)) return;
+
+    // Process confirmed commands before sending
+    for (const confirmed of confirmedCommands) {
+      if (confirmed.cmd === 'terminal' && confirmed.value) {
+        const session = terminalSessions[confirmed.value];
+        if (session) {
+          const ref: TerminalRef = {
+            sessionId: session.sessionId,
+            paneId: session.paneId ?? undefined,
+            projectId: session.projectId,
+            label: session.command || session.agentSlug || 'Terminal',
+            command: session.command ?? undefined,
+            agentSlug: session.agentSlug,
+          };
+          setAttachedTerminals((cur) => {
+            const key = terminalRefKey(ref);
+            return cur.some((t) => terminalRefKey(t) === key) ? cur : [...cur, ref];
+          });
+        }
+      } else if (confirmed.cmd === 'contextmap' && confirmed.value) {
+        const maps = projectId ? loadStoredContextMaps(projectId) : [];
+        const matched = maps.find((m: ContextMapRecord) => m.name === confirmed.value || (m.name ?? '').toLowerCase().includes((confirmed.value ?? '').toLowerCase()));
+        if (matched?.tree?.nodes?.[0]) {
+          const root = matched.tree.nodes[0];
+          const attachment: ContextAttachment = {
+            projectId: matched.projectId,
+            rootDir: matched.rootDir,
+            generatedAt: matched.tree?.generatedAt ?? Date.now(),
+            nodeId: root.id ?? `map:${matched.name}`,
+            title: matched.name ?? 'Context Map',
+            summary: matched.tree?.summary ?? '',
+            path: '',
+            kind: 'root',
+          };
+          setAttachedContexts((cur) => cur.some((c) => c.nodeId === attachment.nodeId) ? cur : [...cur, attachment]);
+        }
+      }
+    }
+    setConfirmedCommands([]);
+
     setSending(true);
     try {
       if (attachedTerminals.length > 0) {
@@ -706,6 +850,33 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       return;
     }
 
+    // Option picker navigation (highest priority when showing)
+    if (optionPickerCtx) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOptionPickerCtx(null);
+        setSelectedOptionId('');
+        return;
+      }
+      if (optionPickerOptions.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          optionPickerRef.current?.moveDown();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          optionPickerRef.current?.moveUp();
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          optionPickerRef.current?.selectCurrent();
+          return;
+        }
+      }
+    }
+
     // Slash command navigation (higher priority than mention)
     if (slashCtx) {
       if (e.key === 'Escape') {
@@ -716,23 +887,17 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       if (filteredSlashCommands.length > 0) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          const i = filteredSlashCommands.findIndex((c) => c.cmd === selectedSlashCmd);
-          const next = filteredSlashCommands[(i + 1 + filteredSlashCommands.length) % filteredSlashCommands.length]!;
-          setSelectedSlashCmd(next.cmd);
+          slashTypeaheadRef.current?.moveDown();
           return;
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          const i = filteredSlashCommands.findIndex((c) => c.cmd === selectedSlashCmd);
-          const baseI = i === -1 ? 0 : i;
-          const next = filteredSlashCommands[(baseI - 1 + filteredSlashCommands.length) % filteredSlashCommands.length]!;
-          setSelectedSlashCmd(next.cmd);
+          slashTypeaheadRef.current?.moveUp();
           return;
         }
         if (e.key === 'Enter' || e.key === 'Tab') {
           e.preventDefault();
-          const cmd = filteredSlashCommands.find((c) => c.cmd === selectedSlashCmd) ?? filteredSlashCommands[0];
-          if (cmd) insertSlashCommand(cmd);
+          slashTypeaheadRef.current?.selectCurrent();
           return;
         }
       }
@@ -773,7 +938,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     }
   };
 
-  const canSend = (text.trim().length > 0 || attachedFiles.length > 0 || attachedTerminals.length > 0 || attachedContexts.length > 0) && !sending;
+  const canSend = (text.trim().length > 0 || attachedFiles.length > 0 || attachedTerminals.length > 0 || attachedContexts.length > 0 || confirmedCommands.length > 0) && !sending;
 
   const addDroppedPath = useCallback((path: string) => {
     const clean = path.trim();
@@ -1193,11 +1358,12 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       )}
       <div className="px-3 py-2.5">
         <Popover
-          open={mentionCtx !== null || slashCtx !== null}
+          open={mentionCtx !== null || slashCtx !== null || optionPickerCtx !== null}
           onOpenChange={(open) => {
             if (!open) {
               setMentionCtx(null);
               setSlashCtx(null);
+              setOptionPickerCtx(null);
             }
           }}
         >
@@ -1259,51 +1425,55 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                   dragOver && 'bg-accent-copper/10 ring-1 ring-accent-copper/50',
                 )}
               />
+              {/* Confirmed command tokens (purple) */}
+              {confirmedCommands.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-2 pb-1">
+                  <TokenList>
+                    {confirmedCommands.map((cmd) => (
+                      <InputToken
+                        key={cmd.cmd}
+                        type="command"
+                        label={cmd.label}
+                        onRemove={() => removeConfirmedCommand(cmd.cmd)}
+                      />
+                    ))}
+                  </TokenList>
+                </div>
+              )}
               {attachedFiles.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 px-2 pb-1">
                   {attachedFiles.map((path) => (
-                    <span key={path} className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-border bg-paper-soft px-2 py-0.5 text-metadata text-foreground">
-                      <FileText className="h-3 w-3 text-accent-copper" />
-                      <span className="truncate font-mono">{path}</span>
-                      <button type="button" onClick={() => setAttachedFiles((cur) => cur.filter((p) => p !== path))} aria-label={`Remove ${path}`}>
-                        <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
-                      </button>
-                    </span>
+                    <InputToken
+                      key={path}
+                      type="file"
+                      label={path.split(/[/\\]/).pop() ?? path}
+                      sublabel={path.includes('/') || path.includes('\\') ? '...' : undefined}
+                      onRemove={() => setAttachedFiles((cur) => cur.filter((p) => p !== path))}
+                    />
                   ))}
                 </div>
               )}
               {attachedTerminals.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 px-2 pb-1">
                   {attachedTerminals.map((ref) => (
-                    <span key={terminalRefKey(ref)} className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-accent-copper/30 bg-accent-copper/10 px-2 py-0.5 text-metadata text-foreground">
-                      <Sparkles className="h-3 w-3 text-accent-copper" />
-                      <span className="truncate font-mono">terminal:{terminalRefLabel(ref)}</span>
-                      <button type="button" onClick={() => setAttachedTerminals((cur) => cur.filter((p) => terminalRefKey(p) !== terminalRefKey(ref)))} aria-label={`Remove terminal ${terminalRefLabel(ref)}`}>
-                        <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
-                      </button>
-                    </span>
+                    <InputToken
+                      key={terminalRefKey(ref)}
+                      type="terminal"
+                      label={terminalRefLabel(ref)}
+                      onRemove={() => setAttachedTerminals((cur) => cur.filter((p) => terminalRefKey(p) !== terminalRefKey(ref)))}
+                    />
                   ))}
                 </div>
               )}
               {attachedContexts.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 px-2 pb-1">
                   {attachedContexts.map((context) => (
-                    <span
+                    <InputToken
                       key={context.nodeId}
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.effectAllowed = 'copy';
-                        e.dataTransfer.setData(CONTEXT_MIME, serializeContextAttachment(context));
-                        e.dataTransfer.setData('text/plain', context.summary);
-                      }}
-                      className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-accent-copper/40 bg-accent-copper/10 px-2 py-0.5 text-metadata text-foreground shadow-[0_0_16px_hsl(var(--accent-copper)/0.12)]"
-                    >
-                      <Network className="h-3 w-3 text-accent-copper" />
-                      <span className="truncate">context:{context.title}</span>
-                      <button type="button" onClick={() => setAttachedContexts((cur) => cur.filter((item) => item.nodeId !== context.nodeId))} aria-label={`Remove context ${context.title}`}>
-                        <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
-                      </button>
-                    </span>
+                      type="contextmap"
+                      label={context.title}
+                      onRemove={() => setAttachedContexts((cur) => cur.filter((item) => item.nodeId !== context.nodeId))}
+                    />
                   ))}
                 </div>
               )}
@@ -1366,7 +1536,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             side="top"
             align="start"
             sideOffset={8}
-            className="w-[420px] p-0 max-h-[280px] overflow-hidden"
+            className="w-auto p-0 max-h-[280px] overflow-hidden bg-transparent border-none shadow-none"
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onInteractOutside={(e) => {
@@ -1376,8 +1546,20 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
               }
             }}
           >
-            {slashCtx !== null ? (
+            {optionPickerCtx !== null ? (
+              <SlashCommandOptionPicker
+                ref={optionPickerRef}
+                commandLabel={optionPickerCtx.cmd.cmd}
+                commandIcon={optionPickerCtx.cmd.icon}
+                options={optionPickerOptions}
+                selectedId={selectedOptionId}
+                query={optionPickerCtx.query}
+                onHoverId={setSelectedOptionId}
+                onSelect={selectOption}
+              />
+            ) : slashCtx !== null ? (
               <SlashCommandTypeahead
+                ref={slashTypeaheadRef}
                 commands={filteredSlashCommands}
                 selectedCmd={selectedSlashCmd}
                 query={slashCtx.query}
