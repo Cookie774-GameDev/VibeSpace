@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useMotionValue } from 'motion/react';
 import { Bot, Mic, UserRound, X } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
@@ -32,6 +32,124 @@ function messageText(message: Message): string {
     .trim();
 }
 
+function SymbioteOrb({ state }: { state: VoiceState }) {
+  const isSpeaking = state === 'speaking';
+  const isListening = state === 'listening';
+  const isThinking = state === 'thinking';
+
+  return (
+    <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center">
+      {/* Outer pulsing halo */}
+      <motion.div
+        className="absolute inset-[-6px] rounded-full"
+        style={{
+          background: 'radial-gradient(circle, rgba(255,167,31,0.4) 0%, rgba(207,98,5,0.15) 50%, transparent 70%)',
+          filter: 'blur(6px)',
+        }}
+        animate={{
+          scale: isSpeaking ? [1, 1.35, 1.1, 1.4, 1] : isListening ? [1, 1.15, 1] : [1, 1.08, 1],
+          opacity: isSpeaking ? [0.6, 1, 0.7, 1, 0.6] : isListening ? [0.5, 0.8, 0.5] : [0.3, 0.5, 0.3],
+        }}
+        transition={{
+          duration: isSpeaking ? 0.8 : isListening ? 2 : 3.5,
+          repeat: Infinity,
+          ease: 'easeInOut',
+        }}
+      />
+
+      {/* Orbiting ring */}
+      <motion.div
+        className="absolute inset-[-2px] rounded-full border border-accent-copper/40"
+        animate={{
+          rotate: 360,
+          scale: isSpeaking ? [1, 1.08, 0.95, 1.06, 1] : [1, 1.02, 1],
+        }}
+        transition={{
+          rotate: { duration: isSpeaking ? 2 : 8, repeat: Infinity, ease: 'linear' },
+          scale: { duration: isSpeaking ? 0.6 : 3, repeat: Infinity, ease: 'easeInOut' },
+        }}
+        style={{
+          boxShadow: 'inset 0 0 10px rgba(255,167,31,0.3)',
+        }}
+      />
+
+      {/* Second orbiting ring - counter rotation */}
+      <motion.div
+        className="absolute inset-[2px] rounded-full border border-accent-amber/25"
+        animate={{
+          rotate: -360,
+          scale: isSpeaking ? [1, 0.94, 1.05, 0.96, 1] : [1, 1.01, 1],
+        }}
+        transition={{
+          rotate: { duration: isSpeaking ? 3 : 12, repeat: Infinity, ease: 'linear' },
+          scale: { duration: isSpeaking ? 0.7 : 4, repeat: Infinity, ease: 'easeInOut' },
+        }}
+      />
+
+      {/* Core orb with symbiotic movement */}
+      <motion.div
+        className="relative h-[34px] w-[34px] rounded-full"
+        style={{
+          background: 'radial-gradient(circle at 38% 34%, #fff7cb 0%, #ffd45a 18%, #ff980f 48%, #cf6205 72%, #5b2300 100%)',
+          boxShadow: '0 0 12px rgba(255,167,31,0.92), 0 0 24px rgba(255,152,15,0.4)',
+        }}
+        animate={{
+          x: isSpeaking ? [0, 3, -2, 4, -3, 1, 0] : isThinking ? [0, 1, -1, 0] : 0,
+          y: isSpeaking ? [0, -2, 3, -4, 2, -1, 0] : isThinking ? [0, -1, 1, 0] : 0,
+          scale: isSpeaking
+            ? [1, 1.12, 0.93, 1.15, 0.95, 1.08, 1]
+            : isListening
+              ? [1, 1.06, 1]
+              : [1, 1.03, 1],
+        }}
+        transition={{
+          duration: isSpeaking ? 0.6 : isListening ? 2 : 4,
+          repeat: Infinity,
+          ease: 'easeInOut',
+        }}
+      >
+        {/* Inner specular highlight */}
+        <div
+          className="absolute rounded-full"
+          style={{
+            top: '14%',
+            left: '18%',
+            width: '38%',
+            height: '28%',
+            background: 'radial-gradient(ellipse at center, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.1) 60%, transparent 100%)',
+            filter: 'blur(2px)',
+          }}
+        />
+      </motion.div>
+
+      {/* Particle dots that orbit when speaking */}
+      {isSpeaking && (
+        <>
+          {[0, 1, 2, 3].map((i) => (
+            <motion.div
+              key={i}
+              className="absolute h-1 w-1 rounded-full bg-accent-amber"
+              style={{ boxShadow: '0 0 4px rgba(255,212,90,0.8)' }}
+              animate={{
+                x: [0, Math.cos((i * Math.PI) / 2) * 22, Math.cos((i * Math.PI) / 2 + 1) * 18, 0],
+                y: [0, Math.sin((i * Math.PI) / 2) * 22, Math.sin((i * Math.PI) / 2 + 1) * 18, 0],
+                opacity: [0, 1, 0.7, 0],
+                scale: [0.5, 1.2, 0.8, 0.5],
+              }}
+              transition={{
+                duration: 1.2,
+                repeat: Infinity,
+                delay: i * 0.3,
+                ease: 'easeInOut',
+              }}
+            />
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function VoiceModal() {
   const open = useUIStore((state) => state.voiceModalOpen);
   const setOpen = useUIStore((state) => state.setVoiceModalOpen);
@@ -47,6 +165,29 @@ export function VoiceModal() {
   const utteranceTimerRef = React.useRef<number | null>(null);
   const speakingRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
+
+  // Drag state
+  const dragX = useMotionValue(0);
+  const dragY = useMotionValue(0);
+  const isDragging = React.useRef(false);
+  const dragStart = React.useRef({ x: 0, y: 0, mx: 0, my: 0 });
+
+  const handleDragStart = React.useCallback((e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    isDragging.current = true;
+    dragStart.current = { x: dragX.get(), y: dragY.get(), mx: e.clientX, my: e.clientY };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }, [dragX, dragY]);
+
+  const handleDragMove = React.useCallback((e: React.PointerEvent) => {
+    if (!isDragging.current) return;
+    dragX.set(dragStart.current.x + (e.clientX - dragStart.current.mx));
+    dragY.set(dragStart.current.y + (e.clientY - dragStart.current.my));
+  }, [dragX, dragY]);
+
+  const handleDragEnd = React.useCallback(() => {
+    isDragging.current = false;
+  }, []);
 
   React.useEffect(() => {
     if (!open) return;
@@ -228,7 +369,7 @@ export function VoiceModal() {
     )
     .map((message) => ({ ...message, displayText: messageText(message) }))
     .filter((message) => message.displayText);
-  const visibleTranscript = transcript;
+  const visibleTranscript = transcript.slice(-2);
 
   return (
     <AnimatePresence>
@@ -237,62 +378,69 @@ export function VoiceModal() {
         animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
         exit={{ opacity: 0, x: 20, scale: 0.97 }}
         transition={{ type: 'spring', stiffness: 360, damping: 30 }}
+        style={{ x: dragX, y: dragY }}
         className="fixed right-5 top-5 z-[90] w-[min(338px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-border-mid/80 bg-elevated/95 shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_30px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
         aria-label="Jarvis voice session"
       >
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          aria-label="Close Jarvis voice session"
-          title="Close"
+        {/* Drag handle - the header area */}
+        <div
+          className="cursor-grab active:cursor-grabbing"
+          onPointerDown={handleDragStart}
+          onPointerMove={handleDragMove}
+          onPointerUp={handleDragEnd}
+          onPointerCancel={handleDragEnd}
         >
-          <X className="h-3 w-3" />
-        </button>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            aria-label="Close Jarvis voice session"
+            title="Close"
+          >
+            <X className="h-3 w-3" />
+          </button>
 
-        <div className="flex items-center gap-3 px-4 pb-2.5 pt-4">
-          <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-accent-copper/80 bg-background/70 shadow-[inset_0_0_13px_hsl(var(--accent-copper)/0.58),0_0_15px_hsl(var(--accent-copper)/0.7),0_0_28px_hsl(var(--accent-copper)/0.24)]">
-            <div className="absolute inset-1.5 rounded-full border border-accent-amber/70 shadow-[inset_0_0_7px_hsl(var(--accent-amber)/0.55)]" />
-            <div className="h-[34px] w-[34px] rounded-full bg-[radial-gradient(circle_at_38%_34%,#fff7cb_0%,#ffd45a_18%,#ff980f_48%,#cf6205_72%,#5b2300_100%)] shadow-[0_0_12px_rgba(255,167,31,0.92)]" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[21px] font-medium leading-6 text-foreground">
-              {personaCfg.name}
-            </div>
-            <div
-              className={cn(
-                'mt-0.5 flex items-center gap-1.5 text-[16px] leading-5',
-                state === 'error' ? 'text-destructive' : 'text-muted-foreground',
-              )}
-            >
-              <span
+          <div className="flex items-center gap-3 px-4 pb-2 pt-3.5">
+            <SymbioteOrb state={state} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[19px] font-medium leading-6 text-foreground">
+                {personaCfg.name}
+              </div>
+              <div
                 className={cn(
-                  'h-2.5 w-2.5 rounded-full',
-                  state === 'error'
-                    ? 'bg-destructive'
-                    : 'bg-success shadow-[0_0_8px_hsl(var(--success)/0.75)]',
+                  'mt-0.5 flex items-center gap-1.5 text-[14px] leading-4',
+                  state === 'error' ? 'text-destructive' : 'text-muted-foreground',
                 )}
-              />
-              <span className="truncate">
-                {state === 'error' && errorMessage ? errorMessage : STATE_LABEL[state]}
-              </span>
+              >
+                <span
+                  className={cn(
+                    'h-2 w-2 rounded-full',
+                    state === 'error'
+                      ? 'bg-destructive'
+                      : 'bg-success shadow-[0_0_8px_hsl(var(--success)/0.75)]',
+                  )}
+                />
+                <span className="truncate">
+                  {state === 'error' && errorMessage ? errorMessage : STATE_LABEL[state]}
+                </span>
+              </div>
             </div>
-          </div>
-          <div className="mr-2 flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60 shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04)]">
-            <Mic className="h-5 w-5 text-muted-foreground" strokeWidth={1.8} />
+            <div className="mr-2 flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60 shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04)]">
+              <Mic className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
+            </div>
           </div>
         </div>
 
-        <div className="px-4 pb-2 pt-0">
+        <div className="px-4 pb-1.5 pt-0">
           <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
         </div>
 
         <div
           ref={transcriptRef}
-          className="max-h-[190px] min-h-[66px] space-y-2 overflow-y-auto px-4 pb-4 pt-0"
+          className="max-h-[76px] min-h-[38px] space-y-1.5 overflow-y-auto px-4 pb-3 pt-0"
         >
           {transcript.length === 0 && !partial ? (
-            <div className="flex h-[58px] items-center justify-center text-center text-[14px] text-muted-foreground">
+            <div className="flex h-[34px] items-center justify-center text-center text-[13px] text-muted-foreground">
               {activeChatId
                 ? 'Listening for your first request.'
                 : 'Open a chat, then speak to Jarvis.'}
@@ -303,19 +451,19 @@ export function VoiceModal() {
             return (
               <div
                 key={message.id}
-                className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[15px] leading-6"
+                className="grid grid-cols-[22px_58px_1fr] items-center gap-1 text-[13px] leading-5"
               >
                 <span
                   className={cn(
-                    'flex h-[23px] w-[23px] items-center justify-center rounded-full border',
+                    'flex h-[20px] w-[20px] items-center justify-center rounded-full border',
                     user
                       ? 'border-info/80 text-info'
                       : 'border-accent-copper/80 text-accent-copper',
                   )}
                 >
-                  {user ? <UserRound className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                  {user ? <UserRound className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
                 </span>
-                <span className={cn('font-medium', user ? 'text-info' : 'text-accent-copper')}>
+                <span className={cn('text-[13px] font-medium', user ? 'text-info' : 'text-accent-copper')}>
                   {user ? 'You' : 'Jarvis:'}
                 </span>
                 <span className="min-w-0 truncate text-foreground/80">{message.displayText}</span>
@@ -323,11 +471,11 @@ export function VoiceModal() {
             );
           })}
           {partial ? (
-            <div className="grid grid-cols-[24px_66px_1fr] items-center gap-1.5 text-[15px] leading-6">
-              <span className="flex h-[23px] w-[23px] items-center justify-center rounded-full border border-info/80 text-info">
-                <UserRound className="h-3.5 w-3.5" />
+            <div className="grid grid-cols-[22px_58px_1fr] items-center gap-1 text-[13px] leading-5">
+              <span className="flex h-[20px] w-[20px] items-center justify-center rounded-full border border-info/80 text-info">
+                <UserRound className="h-3 w-3" />
               </span>
-              <span className="font-medium text-info">You</span>
+              <span className="text-[13px] font-medium text-info">You</span>
               <span className="min-w-0 truncate text-foreground/70">{partial}</span>
             </div>
           ) : null}
