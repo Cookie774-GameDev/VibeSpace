@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.26';
+export const CURRENT_VERSION = '0.1.27';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -68,6 +68,39 @@ export interface Release {
    */
   sections: ReleaseSection[];
 }
+
+const RELEASE_0_1_27: Release = {
+  version: '0.1.27',
+  date: '2026-06-08',
+  headline: 'Production build reliability and launch guardrails',
+  summary:
+    'Fixes the production build path so installers bundle frontend assets correctly instead of falling back to localhost. Launcher scripts now detect stale installs, missing bundles, and broken updates before opening the app.',
+  sections: [
+    {
+      kind: 'fix',
+      items: [
+        'Production builds now use the correct tauri:build command instead of raw cargo build --release, ensuring frontend assets are bundled into the installer.',
+        'Fixed the installed app showing localhost refused to connect because the executable was an unbundled raw binary with no embedded dist assets.',
+        'NSIS installer now extracts the full bundled app including embedded frontend resources instead of only the bare executable.',
+      ],
+    },
+    {
+      kind: 'improvement',
+      items: [
+        'Added launch-time guardrails: detect stale executables, missing bundled assets, failed updates, port conflicts, and dev-server readiness.',
+        'Added structured launch logging: mode (production/dev), exe path, version, build timestamp, server readiness, and release version.',
+        'Launcher now validates that the installed directory contains bundled resources and never opens a broken webview page.',
+      ],
+    },
+    {
+      kind: 'shipped',
+      items: [
+        'Bumped version to 0.1.27 across package.json, Cargo.toml, tauri.conf.json, and releases.ts.',
+        'Built and verified NSIS installer with correct bundled assets.',
+      ],
+    },
+  ],
+};
 
 const RELEASE_0_1_26: Release = {
   version: '0.1.26',
@@ -306,6 +339,7 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  RELEASE_0_1_27,
   RELEASE_0_1_26,
   RELEASE_0_1_25,
   RELEASE_0_1_24,

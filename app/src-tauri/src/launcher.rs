@@ -102,12 +102,19 @@ if (-not (Test-Path -LiteralPath $bootScript)) {
 $pythonCommand = Resolve-PythonCommand
 if (-not $pythonCommand) {
   Write-Warning 'Python was not found. Launching Jarvis One directly.'
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $coreScript
+  $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $coreScript) + $args
+  & powershell @argList
   exit $LASTEXITCODE
 }
 
 $updateCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $updateScript + '"'
-$appCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $coreScript + '"'
+$argString = ($args | ForEach-Object { 
+  $a = $_ -replace '"', '\"'
+  if ($a -match '\s') { '"{0}"' -f $a } else { $a }
+}) -join ' '
+$extra = ''
+if ($argString) { $extra = ' ' + $argString }
+$appCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $coreScript + '"' + $extra
 $bootArgs = @(
   $bootScript,
   '--update-command', $updateCommand,
@@ -136,17 +143,87 @@ fn windows_core_launcher(exe_candidates: &[PathBuf]) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    format!(
-        r#"$ErrorActionPreference = 'Stop'
-$jarvisExe = '{first}'
-if (-not (Test-Path -LiteralPath $jarvisExe)) {{ $jarvisExe = '{second}' }}
-if (-not (Test-Path -LiteralPath $jarvisExe)) {{
-  Write-Error 'Jarvis executable not found. Start Jarvis One once from Start Menu, then try again.'
-  exit 1
-}}
-Start-Process -FilePath $jarvisExe -WorkingDirectory (Split-Path -Parent $jarvisExe)
-"#
-    )
+    const TEMPLATE: &str = r#"$ErrorActionPreference = 'Stop'
+
+function Write-LaunchLog([string]$level, [string]$msg) {
+    $c = @{'INFO'='Cyan';'WARN'='Yellow';'ERROR'='Red';'OK'='Green';'DIM'='Gray'}[$level]
+    if (-not $c) { $c = 'White' }
+    Write-Host ("[" + (Get-Date -Format 'HH:mm:ss') + "] [" + $level + "] " + $msg) -ForegroundColor $c
+}
+
+$mode = if ($args -contains 'dev' -or $args -contains '--dev') { 'dev' } else { 'production' }
+
+Write-LaunchLog 'INFO' "Launch mode: $mode"
+
+if ($mode -eq 'production') {
+    $jarvisExe = '$$FIRST$$'
+    if (-not (Test-Path -LiteralPath $jarvisExe)) { $jarvisExe = '$$SECOND$$' }
+    if (-not (Test-Path -LiteralPath $jarvisExe)) {
+        Write-LaunchLog 'ERROR' 'Jarvis executable not found. Start Jarvis One once from Start Menu, then try again.'
+        exit 1
+    }
+
+    $info = Get-Item -LiteralPath $jarvisExe
+    $ver = $info.VersionInfo.ProductVersion
+    $built = $info.LastWriteTime
+    $sizeMB = [math]::Round($info.Length / 1MB, 2)
+
+    Write-LaunchLog 'INFO' "Exe path: $jarvisExe"
+    Write-LaunchLog 'INFO' "Version: $ver"
+    Write-LaunchLog 'INFO' "Built: $built"
+    Write-LaunchLog 'INFO' "Size: $sizeMB MB"
+    Write-LaunchLog 'INFO' 'Localhost expected: NO'
+
+    # Guardrail: detect unbundled raw build (too small)
+    if ($sizeMB -lt 9.0) {
+        Write-LaunchLog 'WARN' ("Executable is only " + $sizeMB + " MB (expected >= 9.0 MB for a bundled build).")
+        Write-LaunchLog 'WARN' "This may be an unbundled raw binary that cannot load its UI without a running dev server."
+        Write-LaunchLog 'ERROR' "Please reinstall using the latest NSIS installer from GitHub Releases: https://github.com/Cookie774-GameDev/Jarivs-One/releases"
+        exit 1
+    }
+
+    # Guardrail: detect stale installed exe (older than 7 days is suspicious)
+    $ageDays = ((Get-Date) - $built).TotalDays
+    if ($ageDays -gt 7) {
+        Write-LaunchLog 'WARN' ("Executable is " + ([math]::Round($ageDays,1)) + " days old.")
+    }
+
+    Write-LaunchLog 'OK' 'Launching production build...'
+    try {
+        $proc = Start-Process -FilePath $jarvisExe -WorkingDirectory (Split-Path -Parent $jarvisExe) -PassThru
+        Write-LaunchLog 'OK' ("Started PID " + $proc.Id)
+    } catch {
+        Write-LaunchLog 'ERROR' ("Failed to start: " + $_.Exception.Message)
+        exit 1
+    }
+} else {
+    Write-LaunchLog 'INFO' 'Dev mode: launching from repo...'
+    $repo = Join-Path $env:USERPROFILE 'projects\Jarvis\app'
+    if (-not (Test-Path $repo)) {
+        Write-LaunchLog 'ERROR' ("Repo not found at " + $repo)
+        exit 1
+    }
+
+    # Check for port conflict on 5173
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 5173)
+        $listener.Start()
+        $listener.Stop()
+        Write-LaunchLog 'INFO' 'Port 5173 is free'
+    } catch {
+        Write-LaunchLog 'WARN' 'Port 5173 is already in use. Another dev server may be running.'
+    } finally {
+        if ($listener -ne $null) { try { $listener.Stop() } catch {} }
+    }
+
+    Set-Location $repo
+    Write-LaunchLog 'INFO' 'Starting Tauri dev server...'
+    & npm run tauri:dev
+}
+"#;
+
+    TEMPLATE.replace("$$FIRST$$", &first).replace("$$SECOND$$", &second)
 }
 
 #[cfg(target_os = "windows")]
@@ -183,6 +260,16 @@ function Get-InstalledVersion() {{
   }}
 }}
 
+# --- Guardrail: backup current exe before updating -------------------------
+$backupPath = $null
+if (Test-Path -LiteralPath $jarvisExe) {{
+  $backupDir = Join-Path (Split-Path -Parent $jarvisExe) '.backups'
+  New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction SilentlyContinue | Out-Null
+  $stamp = Get-Date -Format 'yyyyMMddHHmmss'
+  $backupPath = Join-Path $backupDir ("jarvis.exe.bak." + $stamp)
+  Copy-Item -LiteralPath $jarvisExe -Destination $backupPath -Force
+}}
+
 try {{
   $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{{ 'User-Agent' = 'jarvis-terminal-launcher' }} -TimeoutSec 15
   $latestVersion = Normalize-Version $release.tag_name
@@ -191,15 +278,45 @@ try {{
     exit 0
   }}
 
+  Write-Host "[update] New version available: $($release.tag_name)" -ForegroundColor Cyan
+
   $env:JARVIS_SILENT = '1'
   $env:JARVIS_FORMAT = 'nsis'
+  $exitCode = 1
   if (Test-Path -LiteralPath $localInstaller) {{
     & powershell -NoProfile -ExecutionPolicy Bypass -File $localInstaller
-    exit $LASTEXITCODE
+    $exitCode = $LASTEXITCODE
+  }} else {{
+    & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm '$remoteInstaller' | iex"
+    $exitCode = $LASTEXITCODE
   }}
 
-  & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm '$remoteInstaller' | iex"
-  exit $LASTEXITCODE
+  if ($exitCode -ne 0) {{
+    Write-Warning "Installer exited with code $exitCode."
+  }}
+
+  # --- Guardrail: verify new exe after update ------------------------------
+  if (-not (Test-Path -LiteralPath $jarvisExe)) {{
+    Write-Warning 'Update failed: jarvis.exe is missing after install.'
+    if ($backupPath -and (Test-Path $backupPath)) {{
+      Copy-Item -LiteralPath $backupPath -Destination $jarvisExe -Force
+      Write-Host "[update] Restored previous working build from backup." -ForegroundColor Green
+    }}
+    exit 1
+  }}
+
+  $sizeMB = [math]::Round((Get-Item -LiteralPath $jarvisExe).Length / 1MB, 2)
+  if ($sizeMB -lt 9.0) {{
+    Write-Warning ("Update produced a broken build ($sizeMB MB). Restoring previous working build...")
+    if ($backupPath -and (Test-Path $backupPath)) {{
+      Copy-Item -LiteralPath $backupPath -Destination $jarvisExe -Force
+      Write-Host "[update] Restored previous working build from backup." -ForegroundColor Green
+    }}
+    exit 1
+  }}
+
+  Write-Host "[update] Jarvis updated successfully to $latestVersion ($sizeMB MB)." -ForegroundColor Green
+  exit 0
 }} catch {{
   Write-Warning ('Jarvis update check failed: ' + $_.Exception.Message)
   exit 0

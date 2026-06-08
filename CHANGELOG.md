@@ -2,6 +2,20 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.27] - 2026-06-08
+
+### Fixed
+
+- Fixed production build path: `tauri build` is now used instead of raw `cargo build --release`, ensuring the NSIS installer bundles frontend assets correctly.
+- Fixed installed app showing `localhost refused to connect` / `ERR_CONNECTION_REFUSED` because the executable was an unbundled raw binary with no embedded dist assets.
+- Fixed installer extraction so the full bundled application is installed, not just the bare executable.
+
+### Improved
+
+- Added launch-time guardrails in terminal launcher scripts: detect stale executables, missing bundled assets, failed updates, port conflicts, and dev-server readiness.
+- Added structured launch logging: mode (production/dev), exe path, version, build timestamp, server readiness, and release version.
+- Launcher now validates the install directory contains bundled resources and never opens a broken webview page.
+
 ## [0.1.26] - 2026-06-08
 
 ### Fixed
