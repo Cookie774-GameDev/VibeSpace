@@ -115,16 +115,25 @@ fn pick_default_shell(custom: Option<String>) -> String {
 }
 
 /// Returns true when `cmd` is a PowerShell variant that accepts
-/// `-NoLogo -NoProfile -NoExit`. We check the final path component
-/// so both bare names (`powershell.exe`) and full paths
-/// (`C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`)
-/// are recognised.
+/// `-NoLogo -NoProfile -NoExit`.
+///
+/// We strip surrounding quotes and extract the base executable name
+/// so all of these match: `powershell.exe`, `"powershell.exe"`,
+/// `powershell`, `pwsh.exe`, `pwsh`, and any full paths ending in
+/// a powershell/pwsh executable.
 fn is_powershell(cmd: &str) -> bool {
-    let name = std::path::Path::new(cmd)
+    let trimmed = cmd.trim();
+    // Strip surrounding double-quotes if present.
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(trimmed);
+    // Take only the executable name from a full path.
+    let name = std::path::Path::new(unquoted)
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(cmd);
-    let lower = name.to_lowercase();
+        .unwrap_or(unquoted);
+    let lower = name.to_ascii_lowercase();
     lower == "powershell.exe" || lower == "powershell" || lower == "pwsh.exe" || lower == "pwsh"
 }
 

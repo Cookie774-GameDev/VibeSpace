@@ -1,19 +1,19 @@
 /**
- * Terminal transcript store — keeps a ring buffer of recent PTY output
+ * Terminal transcript store â€” keeps a ring buffer of recent PTY output
  * per session, indexed by both session id and agent slug.
  *
  * Why this exists: a Jarvis "swarm" pane can be tagged with an agent
  * slug (e.g. `builder`) and run a CLI inside it (Claude Code, OpenCode).
- * When the user later messages the chat — "what did Claude just say?" —
+ * When the user later messages the chat â€” "what did Claude just say?" â€”
  * the AI runtime needs to know the answer without the user copy-
  * pasting. This store gives the runtime a clean text view of what's
  * been on each pane recently.
  *
  * Two indices are maintained because the consumers want different
  * answers:
- *   - by `sessionId`   → "what did this specific PTY emit lately?"
+ *   - by `sessionId`   â†’ "what did this specific PTY emit lately?"
  *     used by the pane chrome's tooltip + future replay UI.
- *   - by `agentSlug`   → "what did the Builder agent just do?"
+ *   - by `agentSlug`   â†’ "what did the Builder agent just do?"
  *     used by the AI runtime when resolving `@builder` in chat.
  *
  * Memory bound: each entry holds a single string capped at
@@ -23,7 +23,7 @@
  *
  * Lifecycle: TerminalView calls `appendOutput` on every
  * `terminal://output` event and `forgetSession` when it unmounts. The
- * store survives route changes — you can leave the Terminals page,
+ * store survives route changes â€” you can leave the Terminals page,
  * come back, and the captured context is still there until the PTY
  * is killed and re-spawned.
  */
@@ -37,7 +37,7 @@ import { create } from 'zustand';
 /**
  * Per-session cap. 32 KB is enough to hold the equivalent of ~500 lines
  * of compiler output or a typical Claude Code turn. Beyond that, older
- * bytes are dropped — long-running sessions still get a useful "last
+ * bytes are dropped â€” long-running sessions still get a useful "last
  * few minutes" window without ballooning memory.
  */
 export const MAX_BYTES_PER_SESSION = 32 * 1024;
@@ -50,7 +50,7 @@ const MAX_PENDING_ESCAPE_CHARS = 4096;
  * bytes off the front. Helps the LLM (and humans) understand that
  * what they're reading is a tail, not the full transcript.
  */
-const TRUNCATION_MARKER = '[…earlier output trimmed…]\n';
+const TRUNCATION_MARKER = '[â€¦earlier output trimmedâ€¦]\n';
 const TRANSCRIPT_STORAGE_DEBOUNCE_MS = 350;
 const TRANSCRIPT_STORAGE_KEY = 'jarvis-terminal-transcripts';
 const TRANSCRIPT_BACKUP_STORAGE_KEY = 'jarvis-terminal-transcripts-backup';
@@ -62,14 +62,14 @@ const TRANSCRIPT_BACKUP_STORAGE_KEY = 'jarvis-terminal-transcripts-backup';
 /**
  * Strip ANSI escape sequences (CSI, OSC, DCS, simple SGR) so the
  * stored transcript reads as plain text. The regex covers:
- *   \x1B[ ... letter   — CSI sequences (most colour/movement codes)
- *   \x1B] ... \x07     — OSC (window titles, hyperlinks)
- *   \x1B] ... \x1B\\   — OSC terminated with ST
- *   \x1BP ... \x1B\\   — DCS sequences
- *   \x1B (a-z)         — single-char escapes
+ *   \x1B[ ... letter   â€” CSI sequences (most colour/movement codes)
+ *   \x1B] ... \x07     â€” OSC (window titles, hyperlinks)
+ *   \x1B] ... \x1B\\   â€” OSC terminated with ST
+ *   \x1BP ... \x1B\\   â€” DCS sequences
+ *   \x1B (a-z)         â€” single-char escapes
  *
  * We also drop bare control characters except for newline, tab,
- * carriage return — those carry layout meaning that's useful in a
+ * carriage return â€” those carry layout meaning that's useful in a
  * transcript.
  */
 const ANSI_REGEX =
@@ -83,6 +83,8 @@ const ORPHAN_OSC_FRAGMENT = /(^|[\r\n])(?:\x1B)?\](?:\d{1,3}|[A-Za-z])(?:;[^\r\n
 const ORPHAN_DIGIT_REPEAT = /(?:^|[\r\n])(?:\[0)+\[?(?=$|[\r\n])/g;
 /** Legacy: orphan `[I` tab fragments from pre-NoProfile PSReadLine escape soup. */
 const ORPHAN_TAB_FRAGMENT = /(?:^|[\r\n])\[I(?=$|[\r\n])/g;
+/** Mid-line orphan `[0` repeats and `[I` fragments appearing after a PowerShell prompt (e.g. `PS C:...> [0[[0[`). */
+const ORPHAN_MIDLINE = /(>[^\S\r\n]*)((?:\[0|\[I)[^\r\n]*)(?=\s*$)/gm;
 
 /**
  * Bare control-character regex. Keeps `\n`, `\r`, `\t` because they
@@ -106,7 +108,7 @@ export function stripAnsi(input: string): string {
     .replace(ORPHAN_CSI_NO_PARAM_FRAGMENT, '$1')
     .replace(ORPHAN_OSC_FRAGMENT, '$1')
     .replace(ORPHAN_DIGIT_REPEAT, '\n')
-    .replace(ORPHAN_TAB_FRAGMENT, '')
+    .replace(ORPHAN_TAB_FRAGMENT, '').replace(ORPHAN_MIDLINE, '$1')
     .replace(CONTROL_CHARS, '');
 }
 
@@ -225,7 +227,7 @@ interface TranscriptState {
 
   /**
    * Re-tag a live session. The TerminalView calls this when the user
-   * picks a new agent role from the pane chrome dropdown — we want
+   * picks a new agent role from the pane chrome dropdown â€” we want
    * the existing transcript to flow under the new slug going forward
    * without losing the bytes already captured.
    */
@@ -600,3 +602,4 @@ export function getSessionsForAgent(
   matches.sort((a, b) => b.lastWriteAt - a.lastWriteAt);
   return matches;
 }
+

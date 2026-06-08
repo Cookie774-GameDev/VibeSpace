@@ -69,6 +69,13 @@ describe('stripAnsi', () => {
     expect(stripAnsi(']10;rgb:ee/ee/ee\nprompt')).toBe('prompt');
     expect(stripAnsi('value ]10;rgb: stays')).toBe('value ]10;rgb: stays');
   });
+
+  it('removes midline orphan fragments after PowerShell prompts', () => {
+    expect(stripAnsi('PS C:\\Users\\viper> [0\nnext')).toBe('PS C:\\Users\\viper> \nnext');
+    expect(stripAnsi('PS C:\\Users\\viper> [I\nnext')).toBe('PS C:\\Users\\viper> \nnext');
+    expect(stripAnsi('PS C:\\Users\\viper> [0[[0[0[0[\nnext')).toBe('PS C:\\Users\\viper> \nnext');
+    expect(stripAnsi('PS C:\\Users\\viper> [0[I\nnext')).toBe('PS C:\\Users\\viper> \nnext');
+  });
 });
 
 describe('terminalRestoreText', () => {
