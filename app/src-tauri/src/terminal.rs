@@ -121,6 +121,33 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn decode_terminal_bytes(pending_utf8: &mut Vec<u8>, chunk: &[u8]) -> Option<String> {
+    if chunk.is_empty() && pending_utf8.is_empty() {
+        return None;
+    }
+
+    let mut bytes = Vec::with_capacity(pending_utf8.len() + chunk.len());
+    if !pending_utf8.is_empty() {
+        bytes.extend_from_slice(pending_utf8);
+        pending_utf8.clear();
+    }
+    bytes.extend_from_slice(chunk);
+
+    match std::str::from_utf8(&bytes) {
+        Ok(text) => Some(text.to_string()),
+        Err(err) if err.error_len().is_none() => {
+            let valid_up_to = err.valid_up_to();
+            *pending_utf8 = bytes[valid_up_to..].to_vec();
+            if valid_up_to == 0 {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&bytes[..valid_up_to]).to_string())
+            }
+        }
+        Err(_) => Some(String::from_utf8_lossy(&bytes).to_string()),
+    }
+}
+
 /// Spawn a new PTY-backed child process and return its session id. The reader
 /// task is started in the background; subsequent output flows over the
 /// `terminal://output` event.
@@ -140,17 +167,21 @@ pub async fn terminal_spawn(
     let mut evicted_handles = Vec::new();
     {
         let mut map = state.0.lock().await;
-        let mut project_sessions: Vec<(String, u64)> = map.values()
+        let mut project_sessions: Vec<(String, u64)> = map
+            .values()
             .filter(|h| {
-                h.info.project_id == project_id 
-                && h.active.load(Ordering::SeqCst) 
-                && !h.deleted.load(Ordering::SeqCst)
+                h.info.project_id == project_id
+                    && h.active.load(Ordering::SeqCst)
+                    && !h.deleted.load(Ordering::SeqCst)
             })
             .map(|h| (h.info.session_id.clone(), h.info.started_at))
             .collect();
         println!(
             "[terminal] Spawning PTY. Active sessions for project {:?} (name: {:?}): {}/{}",
-            project_id, project_name, project_sessions.len(), MAX_TERMINAL_SESSIONS
+            project_id,
+            project_name,
+            project_sessions.len(),
+            MAX_TERMINAL_SESSIONS
         );
         if project_sessions.len() >= MAX_TERMINAL_SESSIONS {
             // Sort by started_at ascending (oldest first)
@@ -183,6 +214,13 @@ pub async fn terminal_spawn(
         .map_err(|e| format!("terminal: open pty failed: {e}"))?;
 
     let mut builder = CommandBuilder::new(&cmd_str);
+    #[cfg(target_os = "windows")]
+    {
+        builder.arg("-NoLogo");
+        builder.arg("-NoProfile");
+        builder.arg("-NoExit");
+        builder.env("JARVIS_EMBEDDED_TERMINAL", "1");
+    }
     let resolved_cwd = if let Some(c) = cwd {
         builder.cwd(&c);
         c
@@ -243,25 +281,32 @@ pub async fn terminal_spawn(
         let mut child = child;
         let mut reader = reader;
         let mut buf = [0u8; 4096];
+        let mut pending_utf8 = Vec::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    // Lossy UTF-8 — terminals frequently emit partial code
-                    // points across read boundaries; replacement chars are
-                    // acceptable because xterm.js will repaint on the next
-                    // chunk.
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = app_emit.emit(
-                        "terminal://output",
-                        OutputPayload {
-                            session_id: session_for_task.clone(),
-                            data,
-                        },
-                    );
+                    if let Some(data) = decode_terminal_bytes(&mut pending_utf8, &buf[..n]) {
+                        let _ = app_emit.emit(
+                            "terminal://output",
+                            OutputPayload {
+                                session_id: session_for_task.clone(),
+                                data,
+                            },
+                        );
+                    }
                 }
                 Err(_) => break,
             }
+        }
+        if let Some(data) = decode_terminal_bytes(&mut pending_utf8, &[]) {
+            let _ = app_emit.emit(
+                "terminal://output",
+                OutputPayload {
+                    session_id: session_for_task.clone(),
+                    data,
+                },
+            );
         }
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
         active_flag_for_task.store(false, Ordering::SeqCst);
@@ -401,9 +446,7 @@ pub async fn terminal_move(
 /// Snapshot of every active session — useful for restoring panes after a
 /// reload or for diagnostics in the UI.
 #[tauri::command]
-pub async fn terminal_list(
-    state: State<'_, TerminalState>,
-) -> Result<Vec<TerminalInfo>, String> {
+pub async fn terminal_list(state: State<'_, TerminalState>) -> Result<Vec<TerminalInfo>, String> {
     let map = state.0.lock().await;
     Ok(map
         .values()
@@ -443,4 +486,37 @@ pub async fn terminal_reconcile(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_terminal_bytes;
+
+    #[test]
+    fn decode_terminal_bytes_holds_split_utf8_until_complete() {
+        let mut pending = Vec::new();
+        let icon = "⚡".as_bytes();
+
+        assert_eq!(decode_terminal_bytes(&mut pending, &icon[..1]), None);
+        assert_eq!(
+            decode_terminal_bytes(&mut pending, &icon[1..]),
+            Some("⚡".to_string()),
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn decode_terminal_bytes_emits_valid_prefix_before_pending_tail() {
+        let mut pending = Vec::new();
+        let icon = "⚡".as_bytes();
+
+        assert_eq!(
+            decode_terminal_bytes(&mut pending, &[b'O', b'K', icon[0]]),
+            Some("OK".to_string()),
+        );
+        assert_eq!(
+            decode_terminal_bytes(&mut pending, &icon[1..]),
+            Some("⚡".to_string()),
+        );
+    }
 }
