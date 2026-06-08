@@ -263,6 +263,7 @@ export function gridDimensions(n: number): { cols: number; rows: number } {
   if (n === 4) return { cols: 2, rows: 2 };
   if (n <= 6) return { cols: 3, rows: 2 };
   if (n <= 8) return { cols: 4, rows: 2 };
+  if (n <= 9) return { cols: 3, rows: 3 };
   if (n <= 10) return { cols: 5, rows: 2 };
   if (n <= 12) return { cols: 4, rows: 3 };
   return { cols: 4, rows: 4 };
