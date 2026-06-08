@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { AnimatePresence, motion, useMotionValue } from 'motion/react';
-import { Bot, Mic, UserRound, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronUp, Mic, UserRound, X } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
@@ -32,120 +32,136 @@ function messageText(message: Message): string {
     .trim();
 }
 
-function SymbioteOrb({ state }: { state: VoiceState }) {
+const TENDRIL_SEEDS = [
+  { angle: 0, lenScale: 1.0, durationBase: 2.3, widthBase: 3 },
+  { angle: 45, lenScale: 0.85, durationBase: 2.7, widthBase: 2.5 },
+  { angle: 90, lenScale: 0.95, durationBase: 3.1, widthBase: 2 },
+  { angle: 135, lenScale: 0.75, durationBase: 2.9, widthBase: 3.5 },
+  { angle: 180, lenScale: 1.1, durationBase: 2.1, widthBase: 2.5 },
+  { angle: 225, lenScale: 0.9, durationBase: 3.3, widthBase: 2 },
+  { angle: 270, lenScale: 0.8, durationBase: 2.5, widthBase: 3 },
+  { angle: 315, lenScale: 1.05, durationBase: 2.8, widthBase: 2.5 },
+  { angle: 22, lenScale: 0.7, durationBase: 3.7, widthBase: 1.5 },
+  { angle: 67, lenScale: 0.65, durationBase: 4.1, widthBase: 1.5 },
+  { angle: 157, lenScale: 0.6, durationBase: 3.9, widthBase: 2 },
+  { angle: 247, lenScale: 0.75, durationBase: 4.3, widthBase: 1.5 },
+];
+
+function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number }) {
   const isSpeaking = state === 'speaking';
   const isListening = state === 'listening';
   const isThinking = state === 'thinking';
+  const active = isSpeaking || isListening || isThinking;
+
+  const coreSize = size * 0.7;
+  const half = size / 2;
 
   return (
-    <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center">
-      {/* Outer pulsing halo */}
+    <div
+      className="relative shrink-0"
+      style={{ width: size, height: size }}
+    >
+      {/* Ambient halo */}
       <motion.div
-        className="absolute inset-[-6px] rounded-full"
+        className="absolute rounded-full pointer-events-none"
         style={{
-          background: 'radial-gradient(circle, rgba(255,167,31,0.4) 0%, rgba(207,98,5,0.15) 50%, transparent 70%)',
-          filter: 'blur(6px)',
+          inset: -size * 0.2,
+          background: 'radial-gradient(circle, rgba(255,167,31,0.35) 0%, rgba(207,98,5,0.1) 50%, transparent 70%)',
+          filter: 'blur(5px)',
         }}
         animate={{
-          scale: isSpeaking ? [1, 1.35, 1.1, 1.4, 1] : isListening ? [1, 1.15, 1] : [1, 1.08, 1],
-          opacity: isSpeaking ? [0.6, 1, 0.7, 1, 0.6] : isListening ? [0.5, 0.8, 0.5] : [0.3, 0.5, 0.3],
+          scale: isSpeaking ? [1, 1.4, 1.1, 1.5, 1.2, 1] : isListening ? [1, 1.15, 1] : [1, 1.06, 1],
+          opacity: isSpeaking ? [0.5, 1, 0.6, 1, 0.5] : [0.3, 0.5, 0.3],
         }}
         transition={{
-          duration: isSpeaking ? 0.8 : isListening ? 2 : 3.5,
+          duration: isSpeaking ? 0.7 : 3.5,
           repeat: Infinity,
           ease: 'easeInOut',
         }}
       />
 
-      {/* Orbiting ring */}
-      <motion.div
-        className="absolute inset-[-2px] rounded-full border border-accent-copper/40"
-        animate={{
-          rotate: 360,
-          scale: isSpeaking ? [1, 1.08, 0.95, 1.06, 1] : [1, 1.02, 1],
-        }}
-        transition={{
-          rotate: { duration: isSpeaking ? 2 : 8, repeat: Infinity, ease: 'linear' },
-          scale: { duration: isSpeaking ? 0.6 : 3, repeat: Infinity, ease: 'easeInOut' },
-        }}
-        style={{
-          boxShadow: 'inset 0 0 10px rgba(255,167,31,0.3)',
-        }}
-      />
+      {/* Symbiote tendrils */}
+      {TENDRIL_SEEDS.map((seed, i) => {
+        const rad = (seed.angle * Math.PI) / 180;
+        const maxLen = half * seed.lenScale * (isSpeaking ? 1.6 : isListening ? 0.8 : 0.3);
+        const duration = seed.durationBase * (isSpeaking ? 0.35 : isListening ? 0.7 : 1);
+        const w = seed.widthBase * (isSpeaking ? 1.2 : 0.8);
+        const cx = half;
+        const cy = half;
+        const tipX1 = Math.cos(rad) * maxLen;
+        const tipY1 = Math.sin(rad) * maxLen;
+        const tipX2 = Math.cos(rad + 0.3) * maxLen * 0.6;
+        const tipY2 = Math.sin(rad + 0.3) * maxLen * 0.6;
+        const tipX3 = Math.cos(rad - 0.2) * maxLen * 0.85;
+        const tipY3 = Math.sin(rad - 0.2) * maxLen * 0.85;
 
-      {/* Second orbiting ring - counter rotation */}
-      <motion.div
-        className="absolute inset-[2px] rounded-full border border-accent-amber/25"
-        animate={{
-          rotate: -360,
-          scale: isSpeaking ? [1, 0.94, 1.05, 0.96, 1] : [1, 1.01, 1],
-        }}
-        transition={{
-          rotate: { duration: isSpeaking ? 3 : 12, repeat: Infinity, ease: 'linear' },
-          scale: { duration: isSpeaking ? 0.7 : 4, repeat: Infinity, ease: 'easeInOut' },
-        }}
-      />
+        return (
+          <motion.div
+            key={i}
+            className="absolute rounded-full"
+            style={{
+              left: cx,
+              top: cy,
+              width: w,
+              height: w,
+              background: 'radial-gradient(circle, #ff980f 0%, #cf6205 60%, #5b2300 100%)',
+              boxShadow: `0 0 ${w * 2}px rgba(255,152,15,${isSpeaking ? 0.7 : 0.3})`,
+              transformOrigin: 'center center',
+            }}
+            animate={{
+              x: [0, tipX1, tipX2, tipX3, 0],
+              y: [0, tipY1, tipY2, tipY3, 0],
+              scaleX: [1, isSpeaking ? 3.5 : 1.5, isSpeaking ? 2 : 1.2, isSpeaking ? 2.8 : 1.3, 1],
+              scaleY: [1, 0.6, 0.8, 0.5, 1],
+              opacity: active ? [0.15, 0.9, 0.5, 0.8, 0.15] : [0.05, 0.15, 0.05],
+              rotate: [0, seed.angle, seed.angle + 15, seed.angle - 10, 0],
+            }}
+            transition={{
+              duration,
+              repeat: Infinity,
+              ease: [0.42, 0, 0.58, 1],
+              delay: i * 0.13,
+            }}
+          />
+        );
+      })}
 
-      {/* Core orb with symbiotic movement */}
+      {/* Core orb - morphing border-radius for organic shape */}
       <motion.div
-        className="relative h-[34px] w-[34px] rounded-full"
+        className="absolute"
         style={{
+          width: coreSize,
+          height: coreSize,
+          left: (size - coreSize) / 2,
+          top: (size - coreSize) / 2,
           background: 'radial-gradient(circle at 38% 34%, #fff7cb 0%, #ffd45a 18%, #ff980f 48%, #cf6205 72%, #5b2300 100%)',
-          boxShadow: '0 0 12px rgba(255,167,31,0.92), 0 0 24px rgba(255,152,15,0.4)',
+          boxShadow: '0 0 10px rgba(255,167,31,0.9), 0 0 20px rgba(255,152,15,0.4)',
         }}
         animate={{
-          x: isSpeaking ? [0, 3, -2, 4, -3, 1, 0] : isThinking ? [0, 1, -1, 0] : 0,
-          y: isSpeaking ? [0, -2, 3, -4, 2, -1, 0] : isThinking ? [0, -1, 1, 0] : 0,
-          scale: isSpeaking
-            ? [1, 1.12, 0.93, 1.15, 0.95, 1.08, 1]
+          borderRadius: isSpeaking
+            ? ['50%', '42% 58% 55% 45% / 55% 42% 58% 45%', '58% 42% 45% 55% / 42% 55% 45% 58%', '45% 55% 50% 50% / 50% 45% 55% 50%', '50%']
             : isListening
-              ? [1, 1.06, 1]
-              : [1, 1.03, 1],
+              ? ['50%', '46% 54% 52% 48% / 52% 46% 54% 48%', '50%']
+              : ['50%', '48% 52% 50% 50% / 50% 48% 52% 50%', '50%'],
+          x: isSpeaking ? [0, 2, -1.5, 2.5, -2, 0] : 0,
+          y: isSpeaking ? [0, -1.5, 2, -2.5, 1, 0] : 0,
+          scale: isSpeaking ? [1, 1.08, 0.94, 1.1, 0.96, 1] : isListening ? [1, 1.04, 1] : [1, 1.02, 1],
         }}
         transition={{
-          duration: isSpeaking ? 0.6 : isListening ? 2 : 4,
+          duration: isSpeaking ? 0.8 : isListening ? 2.5 : 4,
           repeat: Infinity,
           ease: 'easeInOut',
         }}
       >
-        {/* Inner specular highlight */}
         <div
           className="absolute rounded-full"
           style={{
-            top: '14%',
-            left: '18%',
-            width: '38%',
-            height: '28%',
-            background: 'radial-gradient(ellipse at center, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.1) 60%, transparent 100%)',
-            filter: 'blur(2px)',
+            top: '12%', left: '16%', width: '36%', height: '26%',
+            background: 'radial-gradient(ellipse at center, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.08) 60%, transparent 100%)',
+            filter: 'blur(1.5px)',
           }}
         />
       </motion.div>
-
-      {/* Particle dots that orbit when speaking */}
-      {isSpeaking && (
-        <>
-          {[0, 1, 2, 3].map((i) => (
-            <motion.div
-              key={i}
-              className="absolute h-1 w-1 rounded-full bg-accent-amber"
-              style={{ boxShadow: '0 0 4px rgba(255,212,90,0.8)' }}
-              animate={{
-                x: [0, Math.cos((i * Math.PI) / 2) * 22, Math.cos((i * Math.PI) / 2 + 1) * 18, 0],
-                y: [0, Math.sin((i * Math.PI) / 2) * 22, Math.sin((i * Math.PI) / 2 + 1) * 18, 0],
-                opacity: [0, 1, 0.7, 0],
-                scale: [0.5, 1.2, 0.8, 0.5],
-              }}
-              transition={{
-                duration: 1.2,
-                repeat: Infinity,
-                delay: i * 0.3,
-                ease: 'easeInOut',
-              }}
-            />
-          ))}
-        </>
-      )}
     </div>
   );
 }
@@ -165,6 +181,7 @@ export function VoiceModal() {
   const utteranceTimerRef = React.useRef<number | null>(null);
   const speakingRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
+  const [showTranscript, setShowTranscript] = React.useState(false);
 
   // Drag state — right-click only, clamped to viewport
   const dragX = useMotionValue(0);
@@ -391,18 +408,18 @@ export function VoiceModal() {
     )
     .map((message) => ({ ...message, displayText: messageText(message) }))
     .filter((message) => message.displayText);
-  const visibleTranscript = transcript.slice(-2);
+  const visibleTranscript = transcript.slice(-3);
 
   return (
     <AnimatePresence>
       <motion.aside
         ref={panelRef}
-        initial={{ opacity: 0, x: 24, y: -8, scale: 0.96 }}
+        initial={{ opacity: 0, x: 16, y: -6, scale: 0.96 }}
         animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
-        exit={{ opacity: 0, x: 20, scale: 0.97 }}
+        exit={{ opacity: 0, x: 12, scale: 0.97 }}
         transition={{ type: 'spring', stiffness: 360, damping: 30 }}
         style={{ x: dragX, y: dragY }}
-        className="fixed right-5 top-5 z-[90] w-[min(338px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-border-mid/80 bg-elevated/95 shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_30px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
+        className="fixed right-3 top-3 z-[90] w-[178px] overflow-hidden rounded-[10px] border border-border-mid/80 bg-elevated/95 shadow-[0_12px_36px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_20px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
         aria-label="Jarvis voice session"
         onContextMenu={handleContextMenu}
       >
@@ -416,31 +433,31 @@ export function VoiceModal() {
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-label="Close Jarvis voice session"
             title="Close"
           >
-            <X className="h-3 w-3" />
+            <X className="h-2.5 w-2.5" />
           </button>
 
-          <div className="flex items-center gap-3 px-4 pb-2 pt-3.5">
-            <SymbioteOrb state={state} />
+          <div className="flex items-center gap-2 px-2.5 pb-1 pt-2.5">
+            <SymbioteOrb state={state} size={36} />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[19px] font-medium leading-6 text-foreground">
+              <div className="truncate text-[12px] font-medium leading-4 text-foreground">
                 {personaCfg.name}
               </div>
               <div
                 className={cn(
-                  'mt-0.5 flex items-center gap-1.5 text-[14px] leading-4',
+                  'mt-0.5 flex items-center gap-1 text-[10px] leading-3',
                   state === 'error' ? 'text-destructive' : 'text-muted-foreground',
                 )}
               >
                 <span
                   className={cn(
-                    'h-2 w-2 rounded-full',
+                    'h-1.5 w-1.5 rounded-full',
                     state === 'error'
                       ? 'bg-destructive'
-                      : 'bg-success shadow-[0_0_8px_hsl(var(--success)/0.75)]',
+                      : 'bg-success shadow-[0_0_6px_hsl(var(--success)/0.75)]',
                   )}
                 />
                 <span className="truncate">
@@ -448,61 +465,84 @@ export function VoiceModal() {
                 </span>
               </div>
             </div>
-            <div className="mr-2 flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60 shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04)]">
-              <Mic className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
+            <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60 shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04)]">
+              <Mic className="h-3 w-3 text-muted-foreground" strokeWidth={1.8} />
             </div>
           </div>
         </div>
 
-        <div className="px-4 pb-1.5 pt-0">
+        <div className="px-2.5 pb-1 pt-0">
           <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
         </div>
 
-        <div
-          ref={transcriptRef}
-          className="max-h-[76px] min-h-[38px] space-y-1.5 overflow-y-auto px-4 pb-3 pt-0"
+        {/* Transcript dropdown toggle */}
+        <button
+          type="button"
+          onClick={() => setShowTranscript((v) => !v)}
+          className="flex w-full items-center justify-center gap-1 border-t border-border-mid/50 px-2.5 py-1 text-[9px] text-muted-foreground/70 transition-colors hover:bg-muted/30 hover:text-muted-foreground"
         >
-          {transcript.length === 0 && !partial ? (
-            <div className="flex h-[34px] items-center justify-center text-center text-[13px] text-muted-foreground">
-              {activeChatId
-                ? 'Listening for your first request.'
-                : 'Open a chat, then speak to Jarvis.'}
-            </div>
-          ) : null}
-          {visibleTranscript.map((message) => {
-            const user = message.role === 'user';
-            return (
+          <span>Transcript</span>
+          {showTranscript
+            ? <ChevronUp className="h-2.5 w-2.5" />
+            : <ChevronDown className="h-2.5 w-2.5" />
+          }
+        </button>
+
+        <AnimatePresence>
+          {showTranscript && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: 'easeInOut' }}
+              className="overflow-hidden"
+            >
               <div
-                key={message.id}
-                className="grid grid-cols-[22px_58px_1fr] items-center gap-1 text-[13px] leading-5"
+                ref={transcriptRef}
+                className="max-h-[72px] space-y-1 overflow-y-auto px-2.5 pb-2 pt-1"
               >
-                <span
-                  className={cn(
-                    'flex h-[20px] w-[20px] items-center justify-center rounded-full border',
-                    user
-                      ? 'border-info/80 text-info'
-                      : 'border-accent-copper/80 text-accent-copper',
-                  )}
-                >
-                  {user ? <UserRound className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
-                </span>
-                <span className={cn('text-[13px] font-medium', user ? 'text-info' : 'text-accent-copper')}>
-                  {user ? 'You' : 'Jarvis:'}
-                </span>
-                <span className="min-w-0 truncate text-foreground/80">{message.displayText}</span>
+                {transcript.length === 0 && !partial ? (
+                  <div className="flex h-[24px] items-center justify-center text-center text-[9px] text-muted-foreground">
+                    {activeChatId ? 'Listening...' : 'Open a chat first.'}
+                  </div>
+                ) : null}
+                {visibleTranscript.map((message) => {
+                  const user = message.role === 'user';
+                  return (
+                    <div
+                      key={message.id}
+                      className="grid grid-cols-[14px_36px_1fr] items-center gap-0.5 text-[9px] leading-3.5"
+                    >
+                      <span
+                        className={cn(
+                          'flex h-[14px] w-[14px] items-center justify-center rounded-full border',
+                          user
+                            ? 'border-info/80 text-info'
+                            : 'border-accent-copper/80 text-accent-copper',
+                        )}
+                      >
+                        {user ? <UserRound className="h-2 w-2" /> : <Bot className="h-2 w-2" />}
+                      </span>
+                      <span className={cn('text-[9px] font-medium', user ? 'text-info' : 'text-accent-copper')}>
+                        {user ? 'You' : 'Jarvis:'}
+                      </span>
+                      <span className="min-w-0 truncate text-foreground/80">{message.displayText}</span>
+                    </div>
+                  );
+                })}
+                {partial ? (
+                  <div className="grid grid-cols-[14px_36px_1fr] items-center gap-0.5 text-[9px] leading-3.5">
+                    <span className="flex h-[14px] w-[14px] items-center justify-center rounded-full border border-info/80 text-info">
+                      <UserRound className="h-2 w-2" />
+                    </span>
+                    <span className="text-[9px] font-medium text-info">You</span>
+                    <span className="min-w-0 truncate text-foreground/70">{partial}</span>
+                  </div>
+                ) : null}
               </div>
-            );
-          })}
-          {partial ? (
-            <div className="grid grid-cols-[22px_58px_1fr] items-center gap-1 text-[13px] leading-5">
-              <span className="flex h-[20px] w-[20px] items-center justify-center rounded-full border border-info/80 text-info">
-                <UserRound className="h-3 w-3" />
-              </span>
-              <span className="text-[13px] font-medium text-info">You</span>
-              <span className="min-w-0 truncate text-foreground/70">{partial}</span>
-            </div>
-          ) : null}
-        </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.aside>
     </AnimatePresence>
   );
