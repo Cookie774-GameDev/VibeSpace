@@ -481,7 +481,7 @@ export function VoiceModal() {
             <X className="h-2.5 w-2.5" />
           </button>
 
-          <div className="relative z-[1] flex items-center gap-1.5 px-2 py-1">
+          <div className="relative z-[1] flex items-center gap-1.5 pl-2 pr-5 py-1">
             <button
               type="button"
               onClick={toggleListening}

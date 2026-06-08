@@ -214,13 +214,25 @@ export function TopBar() {
           type="button"
           onClick={() => setVoiceModalOpen(true)}
           aria-label="Open Jarvis voice panel"
-          className="jarvis-breadcrumb-trigger rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
+          className="jarvis-breadcrumb-trigger relative rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
         >
+          {voiceListening && (
+            <span
+              className="absolute inset-0 rounded-full animate-ping"
+              style={{
+                background: 'radial-gradient(circle at 38% 34%, #fff7cb 0%, #ffd45a 18%, #ff980f 48%, #cf6205 72%, #5b2300 100%)',
+                opacity: 0.4,
+              }}
+            />
+          )}
           <Avatar
             seed="jarvis-account"
             initials="J"
             size={compactChrome ? 16 : 20}
-            className="jarvis-breadcrumb-avatar shrink-0"
+            className={cn(
+              'jarvis-breadcrumb-avatar shrink-0 relative',
+              voiceListening && 'animate-pulse',
+            )}
           />
         </button>
         <span

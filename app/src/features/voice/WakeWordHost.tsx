@@ -183,36 +183,7 @@ export function WakeWordHost() {
     };
   }, [enabled, setVoiceModalOpen, voiceModalOpen]);
 
-  if (!enabled || voiceModalOpen) return null;
-
-  return (
-    <button
-      type="button"
-      onClick={() => setVoiceModalOpen(true)}
-      className="jarvis-wake-chip fixed bottom-4 right-4 z-[70] flex h-9 w-9 items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
-      aria-live="polite"
-      aria-label={status === 'listening' ? 'Wake word active. Click to open Jarvis.' : status === 'heard' ? 'Jarvis awake.' : 'Wake word indicator'}
-    >
-      <span className="relative flex h-7 w-7 items-center justify-center">
-        <span
-          className={cn(
-            'absolute inset-0 rounded-full',
-            status === 'listening' && 'animate-ping',
-          )}
-          style={{
-            background: 'radial-gradient(circle at 38% 34%, #fff7cb 0%, #ffd45a 18%, #ff980f 48%, #cf6205 72%, #5b2300 100%)',
-            opacity: status === 'listening' ? 0.4 : 0,
-          }}
-        />
-        <Avatar
-          seed="jarvis-voice-trigger"
-          initials="J"
-          size={26}
-          className="jarvis-wake-avatar relative animate-pulse"
-        />
-      </span>
-    </button>
-  );
+  return null;
 }
 
 function clearRestart(restartTimerRef: React.MutableRefObject<number | null>): void {
