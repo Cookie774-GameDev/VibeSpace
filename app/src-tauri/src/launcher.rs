@@ -83,15 +83,28 @@ fn windows_boot_python() -> &'static str {
 #[cfg(target_os = "windows")]
 fn windows_powershell_launcher() -> String {
     r#"$ErrorActionPreference = 'Stop'
+
+# Handle --help cleanly before anything else
+if ($args -contains '--help') {
+    Write-Host @"
+
+  Jarvis          Launch Jarvis One with cyberpunk boot animation.
+                  Checks for updates, installs if available, then opens the app.
+  Jarvis --help   Show this help message
+
+  After launching, press Ctrl+C inside the animation to stop it cleanly.
+"@ -ForegroundColor Cyan
+    exit 0
+}
+
 $binDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$bootScript = Join-Path $binDir 'jarvis_boot_forever.py'
 $coreScript = Join-Path $binDir 'JarvisCore.ps1'
 $updateScript = Join-Path $binDir 'JarvisUpdate.ps1'
 
-function Resolve-PythonCommand {
-  if (Get-Command python -ErrorAction SilentlyContinue) { return @('python') }
-  if (Get-Command py -ErrorAction SilentlyContinue) { return @('py', '-3') }
-  return $null
+# Use external boot animation if available; fall back to bundled copy
+$bootScript = Join-Path $env:USERPROFILE 'Jarvis-Terminal-Boot\jarvis-terminal-boot-forever-local\jarvis_boot_forever.py'
+if (-not (Test-Path -LiteralPath $bootScript)) {
+    $bootScript = Join-Path $binDir 'jarvis_boot_forever.py'
 }
 
 if (-not (Test-Path -LiteralPath $bootScript)) {
@@ -99,34 +112,47 @@ if (-not (Test-Path -LiteralPath $bootScript)) {
   exit 1
 }
 
-$pythonCommand = Resolve-PythonCommand
-if (-not $pythonCommand) {
-  Write-Warning 'Python was not found. Launching Jarvis One directly.'
-  $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $coreScript) + $args
-  & powershell @argList
-  exit $LASTEXITCODE
+# Safe Python detection
+$pythonExe = $null
+$pythonArgsPrefix = @()
+
+if (Get-Command py -ErrorAction SilentlyContinue) {
+    $pythonExe = 'py'
+    $pythonArgsPrefix = @('-3')
+} elseif (Get-Command python -ErrorAction SilentlyContinue) {
+    $pythonExe = 'python'
+} elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
+    $pythonExe = 'python3'
 }
 
+if (-not $pythonExe) {
+    Write-Host 'Python was not found. Install Python or add it to PATH.' -ForegroundColor Red
+    exit 1
+}
+
+# Build sub-commands for update and app launch (never call Jarvis recursively)
 $updateCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $updateScript + '"'
-$argString = ($args | ForEach-Object { 
+$argString = ($args | ForEach-Object {
   $a = $_ -replace '"', '\"'
   if ($a -match '\s') { '"{0}"' -f $a } else { $a }
 }) -join ' '
 $extra = ''
 if ($argString) { $extra = ' ' + $argString }
 $appCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $coreScript + '"' + $extra
+
 $bootArgs = @(
-  $bootScript,
-  '--update-command', $updateCommand,
+  '--update-command',        $updateCommand,
   '--ignore-update-failure',
-  '--app-command', $appCommand,
-  '--app-cwd', $env:USERPROFILE,
-  '--app-process-name', 'jarvis.exe',
-  '--launch-wait-seconds', '7',
-  '--timeout', '900',
+  '--app-command',           $appCommand,
+  '--app-cwd',               $env:USERPROFILE,
+  '--app-process-name',      'jarvis.exe',
+  '--launch-wait-seconds',   '7',
+  '--timeout',               '900',
   '--forever'
 )
-& $pythonCommand[0] @($pythonCommand | Select-Object -Skip 1) @bootArgs
+
+# Run the cyberpunk boot animation
+& $pythonExe @pythonArgsPrefix $bootScript @bootArgs
 exit $LASTEXITCODE
 "#
     .to_string()
