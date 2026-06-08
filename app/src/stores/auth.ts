@@ -59,6 +59,8 @@ interface AuthState {
   voiceEngine: VoiceEngine;
   /** Speak completed Jarvis replies, including normal typed conversations. */
   speakReplies: boolean;
+  /** When true, opening the voice panel immediately starts listening. */
+  voiceAutoListenOnOpen: boolean;
 
   /**
    * Subscription tier. Defaults to `free` for every install. The Stripe
@@ -83,6 +85,7 @@ interface AuthState {
   setVoicePreset: (p: VoicePresetId) => void;
   setVoiceEngine: (engine: VoiceEngine) => void;
   setSpeakReplies: (enabled: boolean) => void;
+  setVoiceAutoListenOnOpen: (enabled: boolean) => void;
   setWorkspaceId: (id: WorkspaceId | null) => void;
   setProjectId: (id: ProjectId | null) => void;
   setCloudSession: (s: AuthState['cloudSession']) => void;
@@ -144,6 +147,7 @@ export const useAuthStore = create<AuthState>()(
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
       speakReplies: true,
+      voiceAutoListenOnOpen: false,
       plan: 'free',
       telemetryOptIn: false,
 
@@ -181,6 +185,7 @@ export const useAuthStore = create<AuthState>()(
       setVoicePreset: (p) => set({ voicePreset: p }),
       setVoiceEngine: (engine) => set({ voiceEngine: engine }),
       setSpeakReplies: (enabled) => set({ speakReplies: enabled }),
+      setVoiceAutoListenOnOpen: (enabled) => set({ voiceAutoListenOnOpen: enabled }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
       setProjectId: (id) => set({ projectId: id }),
       setCloudSession: (s) => set({ cloudSession: s }),
@@ -208,6 +213,7 @@ export const useAuthStore = create<AuthState>()(
         voicePreset: s.voicePreset,
         voiceEngine: s.voiceEngine,
         speakReplies: s.speakReplies,
+        voiceAutoListenOnOpen: s.voiceAutoListenOnOpen,
         plan: s.plan,
         telemetryOptIn: s.telemetryOptIn,
       }),

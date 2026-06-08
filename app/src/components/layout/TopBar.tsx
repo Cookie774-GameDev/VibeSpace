@@ -112,6 +112,7 @@ export function TopBar() {
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
   const toggleInspector = useUIStore((s) => s.toggleInspector);
   const voiceListening = useUIStore((s) => s.voiceListening);
+  const setVoiceModalOpen = useUIStore((s) => s.setVoiceModalOpen);
   const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
   const toggleVoice = useUIStore((s) => s.toggleVoice);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
@@ -211,15 +212,15 @@ export function TopBar() {
       <div className="no-drag flex min-w-0 items-center gap-1.5">
         <button
           type="button"
-          onClick={() => setRoute('account')}
-          aria-label="Open account"
-          className="rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
+          onClick={() => setVoiceModalOpen(true)}
+          aria-label="Open Jarvis voice panel"
+          className="jarvis-breadcrumb-trigger rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
         >
           <Avatar
             seed="jarvis-account"
             initials="J"
             size={compactChrome ? 16 : 20}
-            className="shrink-0"
+            className="jarvis-breadcrumb-avatar shrink-0"
           />
         </button>
         <span

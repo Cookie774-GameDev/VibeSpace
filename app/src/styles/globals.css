@@ -775,6 +775,28 @@
   box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06);
 }
 
+.jarvis-voice-orb-button {
+  position: relative;
+  border: 1px solid transparent;
+  background: radial-gradient(circle, hsl(var(--accent-copper) / 0.06), transparent 72%);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.jarvis-voice-orb-button:hover,
+.jarvis-voice-orb-button.is-active {
+  border-color: hsl(var(--accent-copper) / 0.34);
+  box-shadow:
+    0 0 14px hsl(var(--accent-copper) / 0.22),
+    inset 0 0 14px hsl(var(--accent-copper) / 0.08);
+}
+
+.jarvis-voice-orb-button:active {
+  transform: scale(0.97);
+}
+
 .jarvis-voice-orb-shell {
   position: relative;
   border-radius: 9999px;
@@ -804,6 +826,19 @@
     0 0 12px hsl(var(--accent-copper) / 0.55),
     0 0 30px hsl(var(--accent-copper) / 0.22),
     inset 0 1px 0 hsl(0 0% 100% / 0.12);
+}
+
+.jarvis-wake-avatar {
+  box-shadow:
+    0 0 12px hsl(var(--accent-copper) / 0.48),
+    0 0 28px hsl(var(--accent-copper) / 0.18);
+}
+
+.jarvis-breadcrumb-trigger:hover .jarvis-breadcrumb-avatar,
+.jarvis-breadcrumb-trigger:focus-visible .jarvis-breadcrumb-avatar {
+  box-shadow:
+    0 0 10px hsl(var(--accent-copper) / 0.38),
+    0 0 20px hsl(var(--accent-copper) / 0.14);
 }
 
 .jarvis-symbiote-trigger {

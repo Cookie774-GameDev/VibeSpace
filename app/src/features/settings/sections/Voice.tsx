@@ -41,6 +41,8 @@ export function Voice() {
   const setVoiceEngine = useAuthStore((s) => s.setVoiceEngine);
   const speakReplies = useAuthStore((s) => s.speakReplies);
   const setSpeakReplies = useAuthStore((s) => s.setSpeakReplies);
+  const voiceAutoListenOnOpen = useAuthStore((s) => s.voiceAutoListenOnOpen);
+  const setVoiceAutoListenOnOpen = useAuthStore((s) => s.setVoiceAutoListenOnOpen);
   const [previewingVoice, setPreviewingVoice] = useState<VoicePresetId | null>(null);
   const [localVoiceStatus, setLocalVoiceStatus] = useState<LocalVoiceStatus>('idle');
   const [localVoiceNames, setLocalVoiceNames] = useState<string[]>([]);
@@ -170,7 +172,8 @@ export function Voice() {
         <div>
           <Label>Jarvis voice</Label>
           <p className="mt-1 text-metadata text-muted-foreground">
-            Used for previews, wake acknowledgement, voice chat, and spoken replies.
+            Used for previews, wake acknowledgement, voice chat, and spoken replies. These voices
+            use built-in system speech and do not require an API key.
           </p>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -197,6 +200,19 @@ export function Voice() {
             id="speak-replies-toggle"
             checked={speakReplies}
             onCheckedChange={setSpeakReplies}
+          />
+        </div>
+        <div className="flex max-w-xl items-start justify-between gap-4 rounded-md border border-border bg-panel p-3">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="voice-auto-listen-toggle">Start listening when the panel opens</Label>
+            <p className="text-metadata text-muted-foreground">
+              Turn this off so Jarvis stays idle until you click the symbiote orb yourself.
+            </p>
+          </div>
+          <Switch
+            id="voice-auto-listen-toggle"
+            checked={voiceAutoListenOnOpen}
+            onCheckedChange={setVoiceAutoListenOnOpen}
           />
         </div>
       </section>

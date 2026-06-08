@@ -146,8 +146,8 @@ describe('speech synthesis voice selection', () => {
     await speakText('Status report ready.');
 
     expect((spoken[0]?.voice as SpeechSynthesisVoice | undefined)?.name).toContain('Guy');
-    expect(spoken[0]?.rate).toBe(0.88);
-    expect(spoken[0]?.pitch).toBe(0.72);
+    expect(spoken[0]?.rate).toBe(0.84);
+    expect(spoken[0]?.pitch).toBe(0.66);
   });
 
   it('fails clearly when local mode has no installed voice', async () => {

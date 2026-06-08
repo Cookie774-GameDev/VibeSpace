@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useMotionValue } from 'motion/react';
 import { Bot, ChevronDown, ChevronUp, Mic, UserRound, X } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
+import { useAuthStore } from '@/stores/auth';
 import { cn } from '@/lib/utils';
 import { messageRepo } from '@/lib/db';
 import { useChatMessages } from '@/features/chat/hooks';
@@ -185,6 +186,7 @@ export function VoiceModal() {
   const open = useUIStore((state) => state.voiceModalOpen);
   const setOpen = useUIStore((state) => state.setVoiceModalOpen);
   const activeChatId = useUIStore((state) => state.activeChatId);
+  const voiceAutoListenOnOpen = useAuthStore((state) => state.voiceAutoListenOnOpen);
   const messages = useChatMessages(open ? activeChatId : null);
   const state = useVoiceStore((voice) => voice.state);
   const partial = useVoiceStore((voice) => voice.partialTranscript);
@@ -195,10 +197,11 @@ export function VoiceModal() {
   const pendingUtteranceRef = React.useRef('');
   const utteranceTimerRef = React.useRef<number | null>(null);
   const speakingRef = React.useRef(false);
+  const listeningArmedRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
   const [showTranscript, setShowTranscript] = React.useState(false);
 
-  // Drag state — right-click only, clamped to viewport
+  // Drag state — primary-button drag on the panel chrome, clamped to viewport
   const dragX = useMotionValue(0);
   const dragY = useMotionValue(0);
   const isDragging = React.useRef(false);
@@ -239,27 +242,53 @@ export function VoiceModal() {
     isDragging.current = false;
   }, []);
 
-  React.useEffect(() => {
-    if (!open) return;
+  const stopListening = React.useCallback((nextState: VoiceState = 'idle') => {
+    listeningArmedRef.current = false;
+    VoiceService.stopListening();
+    useUIStore.getState().setVoiceListening(false);
+    useVoiceStore.getState().setPartialTranscript('');
+    useVoiceStore.getState().setState(nextState);
+  }, []);
 
+  const startListening = React.useCallback(() => {
     const supported = VoiceService.isSupported();
-    if (supported) {
-      useUIStore.getState().setVoiceListening(true);
-      useVoiceStore.getState().setState('listening');
-      VoiceService.startListening();
-    } else {
+    if (!supported) {
+      useUIStore.getState().setVoiceListening(false);
       useVoiceStore
         .getState()
         .setState('error', 'Speech recognition is unavailable in this runtime.');
+      return false;
     }
+    listeningArmedRef.current = true;
+    const started = VoiceService.startListening();
+    useUIStore.getState().setVoiceListening(started);
+    if (started) {
+      useVoiceStore.getState().setState('listening');
+    } else {
+      listeningArmedRef.current = false;
+    }
+    return started;
+  }, []);
+
+  const toggleListening = React.useCallback(() => {
+    if (state === 'listening' || useUIStore.getState().voiceListening) {
+      stopListening('idle');
+      return;
+    }
+    startListening();
+  }, [startListening, state, stopListening]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    listeningArmedRef.current = voiceAutoListenOnOpen;
+    if (voiceAutoListenOnOpen) startListening();
+    else useVoiceStore.getState().setState('idle');
 
     const restartListening = () => {
-      if (!useUIStore.getState().voiceModalOpen || speakingRef.current) return;
+      if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
       window.setTimeout(() => {
-        if (!useUIStore.getState().voiceModalOpen || speakingRef.current) return;
-        const started = VoiceService.startListening();
-        useUIStore.getState().setVoiceListening(started);
-        if (started) useVoiceStore.getState().setState('listening');
+        if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
+        startListening();
       }, 180);
     };
 
@@ -345,13 +374,14 @@ export function VoiceModal() {
       if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
       utteranceTimerRef.current = null;
       pendingUtteranceRef.current = '';
+      listeningArmedRef.current = false;
       window.removeEventListener(SPEECH_SYNTHESIS_START_EVENT, onSpeechStart);
       window.removeEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
       VoiceService.stopListening();
       useUIStore.getState().setVoiceListening(false);
       useVoiceStore.getState().setState('idle');
     };
-  }, [open]);
+  }, [open, startListening, voiceAutoListenOnOpen]);
 
   React.useEffect(() => {
     if (!open || !navigator.mediaDevices?.getUserMedia) return;
@@ -452,7 +482,18 @@ export function VoiceModal() {
           </button>
 
           <div className="relative z-[1] flex items-center gap-1.5 px-2 py-1">
-            <SymbioteOrb state={state} size={30} />
+            <button
+              type="button"
+              onClick={toggleListening}
+              className={cn(
+                'jarvis-voice-orb-button flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/70',
+                (state === 'listening' || state === 'speaking') && 'is-active',
+              )}
+              aria-label={state === 'listening' ? 'Stop listening' : 'Start listening'}
+              title={state === 'listening' ? 'Stop listening' : 'Click to let Jarvis hear you'}
+            >
+              <SymbioteOrb state={state} size={30} />
+            </button>
             <div className="flex min-w-0 flex-col">
               <span className="truncate text-[11px] font-medium leading-4 text-foreground">
                 {personaCfg.name}

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { toast } from '@/components/ui/toast';
+import { Avatar } from '@/components/ui/avatar';
 import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
 import { containsWakePhrase, readWakeWordEnabled, WAKE_WORD_SETTING_EVENT } from './wakeWord';
@@ -203,12 +204,11 @@ export function WakeWordHost() {
             opacity: status === 'listening' ? 0.4 : 0,
           }}
         />
-        <span
-          className="relative h-6 w-6 rounded-full animate-pulse"
-          style={{
-            background: 'radial-gradient(circle at 38% 34%, #fff7cb 0%, #ffd45a 18%, #ff980f 48%, #cf6205 72%, #5b2300 100%)',
-            boxShadow: '0 0 10px rgba(255, 167, 31, 0.8), 0 0 20px rgba(255, 152, 15, 0.4)',
-          }}
+        <Avatar
+          seed="jarvis-voice-trigger"
+          initials="J"
+          size={26}
+          className="jarvis-wake-avatar relative animate-pulse"
         />
       </span>
     </button>
