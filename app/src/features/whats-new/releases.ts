@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.25';
+export const CURRENT_VERSION = '0.1.26';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -68,6 +68,31 @@ export interface Release {
    */
   sections: ReleaseSection[];
 }
+
+const RELEASE_0_1_26: Release = {
+  version: '0.1.26',
+  date: '2026-06-08',
+  headline: 'Safer terminal output, restore, and downloads',
+  summary:
+    'This update hardens terminal output handling so split ANSI and OSC control sequences do not get saved as visible text. Terminal restore now replays safe text snapshots, output floods are batched more smoothly, and the GitHub installer path moves to the newest release.',
+  sections: [
+    {
+      kind: 'fix',
+      items: [
+        'Fixed split ANSI/OSC terminal control sequences showing up as raw text such as [0m or ]10;rgb after restart.',
+        'Fixed terminal transcript restore so legacy corrupted palette fragments are stripped before replay.',
+        'Preserved split UTF-8 characters from the PTY backend instead of lossy-decoding each read independently.',
+      ],
+    },
+    {
+      kind: 'improvement',
+      items: [
+        'Batched terminal rendering and transcript capture per animation frame so heavy output stays smoother.',
+        'Prepared a new GitHub release version so the one-line installer downloads this current build instead of the older 0.1.25 release.',
+      ],
+    },
+  ],
+};
 
 const RELEASE_0_1_25: Release = {
   version: '0.1.25',
@@ -281,6 +306,7 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  RELEASE_0_1_26,
   RELEASE_0_1_25,
   RELEASE_0_1_24,
   RELEASE_0_1_23,

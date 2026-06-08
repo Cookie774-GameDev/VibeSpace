@@ -2,6 +2,20 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.26] - 2026-06-08
+
+### Fixed
+
+- Fixed split ANSI/OSC terminal control sequences being persisted as visible text, including raw fragments like `[0m` and `]10;rgb`.
+- Fixed terminal restore sanitization for legacy corrupted transcript snapshots before they are replayed into xterm.
+- Fixed PTY UTF-8 decoding so split multibyte characters are held across backend reads instead of lossy-decoded per chunk.
+- Fixed the GitHub download path by preparing a newer release version than the current `v0.1.25` latest release.
+
+### Improved
+
+- Batched terminal output rendering and transcript capture per animation frame to keep heavy output smoother without changing the terminal UI.
+- Preserved terminal transcript metadata and restore behavior while adding stronger control-sequence guardrails.
+
 ## [0.1.25] - 2026-06-07
 
 ### Added

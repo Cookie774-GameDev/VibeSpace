@@ -274,6 +274,8 @@ export function TerminalView({
     let resizeObserver: ResizeObserver | null = null;
     let mutationObserver: MutationObserver | null = null;
     let rafToken: number | null = null;
+    let outputRafToken: number | null = null;
+    let pendingOutput = '';
     let handleVisible: (() => void) | null = null;
 
     // RAF-coalesced resize. Multiple ResizeObserver fires inside the same
@@ -315,6 +317,34 @@ export function TerminalView({
       // xterm v5 exposes Terminal.options as a mutable proxy; assigning
       // a new theme triggers a redraw with the new palette.
       t.options.theme = pickTheme();
+    };
+
+    const flushTerminalOutput = () => {
+      outputRafToken = null;
+      if (!pendingOutput) return;
+      const data = pendingOutput;
+      pendingOutput = '';
+      const sid = sessionRef.current;
+      if (!sid) return;
+
+      try {
+        termRef.current?.write(data);
+      } catch (err) {
+        console.warn('[Jarvis] terminal render write failed:', err);
+      }
+
+      try {
+        useTerminalTranscriptStore.getState().appendOutput(sid, data);
+      } catch (err) {
+        console.warn('[Jarvis] terminal transcript append failed:', err);
+      }
+    };
+
+    const queueTerminalOutput = (data: string) => {
+      if (!data) return;
+      pendingOutput += data;
+      if (outputRafToken != null) return;
+      outputRafToken = requestAnimationFrame(flushTerminalOutput);
     };
 
     const init = async () => {
@@ -409,12 +439,10 @@ export function TerminalView({
             // Strip only clear screen and resets, but preserve cursor positioning and alternate screens sent during PTY startup
             data = data.replace(/\x1bc|\x1b\[!p|\x1b\[[0-9;]*J/g, '');
           }
-          termRef.current?.write(data);
-          // Mirror into the transcript store so the AI runtime (and
-          // any future "what did this pane just say?" UI) can read
-          // the recent output without re-parsing the xterm buffer.
-          // The store strips ANSI + bounds the size internally.
-          useTerminalTranscriptStore.getState().appendOutput(e.payload.sessionId, data);
+          // Mirror into xterm and the transcript store in one frame-batched
+          // write. This keeps output floods smooth without changing the
+          // terminal UI or command flow.
+          queueTerminalOutput(data);
         });
         if (cancelled) {
           u1();
@@ -627,6 +655,10 @@ export function TerminalView({
     return () => {
       cancelled = true;
       if (rafToken != null) cancelAnimationFrame(rafToken);
+      if (outputRafToken != null) {
+        cancelAnimationFrame(outputRafToken);
+        flushTerminalOutput();
+      }
       window.removeEventListener('resize', dispatchResize);
       if (handleVisible) {
         window.removeEventListener('jarvis:terminals:visible', handleVisible);

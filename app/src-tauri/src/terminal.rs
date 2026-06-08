@@ -114,6 +114,20 @@ fn pick_default_shell(custom: Option<String>) -> String {
     }
 }
 
+/// Returns true when `cmd` is a PowerShell variant that accepts
+/// `-NoLogo -NoProfile -NoExit`. We check the final path component
+/// so both bare names (`powershell.exe`) and full paths
+/// (`C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`)
+/// are recognised.
+fn is_powershell(cmd: &str) -> bool {
+    let name = std::path::Path::new(cmd)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(cmd);
+    let lower = name.to_lowercase();
+    lower == "powershell.exe" || lower == "powershell" || lower == "pwsh.exe" || lower == "pwsh"
+}
+
 fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -216,10 +230,12 @@ pub async fn terminal_spawn(
     let mut builder = CommandBuilder::new(&cmd_str);
     #[cfg(target_os = "windows")]
     {
-        builder.arg("-NoLogo");
-        builder.arg("-NoProfile");
-        builder.arg("-NoExit");
-        builder.env("JARVIS_EMBEDDED_TERMINAL", "1");
+        if is_powershell(&cmd_str) {
+            builder.arg("-NoLogo");
+            builder.arg("-NoProfile");
+            builder.arg("-NoExit");
+            builder.env("JARVIS_EMBEDDED_TERMINAL", "1");
+        }
     }
     let resolved_cwd = if let Some(c) = cwd {
         builder.cwd(&c);

@@ -43,6 +43,7 @@ import { create } from 'zustand';
 export const MAX_BYTES_PER_SESSION = 32 * 1024;
 export const MAX_PERSISTED_SESSIONS = 10;
 export const MAX_TOTAL_TRANSCRIPTS_SIZE_BYTES = 512 * 1024; // 512 KB
+const MAX_PENDING_ESCAPE_CHARS = 4096;
 
 /**
  * Truncation marker prefixed when the buffer is full and we drop
@@ -52,6 +53,7 @@ export const MAX_TOTAL_TRANSCRIPTS_SIZE_BYTES = 512 * 1024; // 512 KB
 const TRUNCATION_MARKER = '[…earlier output trimmed…]\n';
 const TRANSCRIPT_STORAGE_DEBOUNCE_MS = 350;
 const TRANSCRIPT_STORAGE_KEY = 'jarvis-terminal-transcripts';
+const TRANSCRIPT_BACKUP_STORAGE_KEY = 'jarvis-terminal-transcripts-backup';
 
 /* -------------------------------------------------------------------------- */
 /*  ANSI stripping                                                            */
@@ -76,6 +78,11 @@ const ANSI_REGEX =
 
 const ORPHAN_CSI_FRAGMENT = /\[(?:\??\d[\d;?]*|[;?][\d;?]*)[\x20-\x2F]*[A-Za-z]/g;
 const ORPHAN_CSI_NO_PARAM_FRAGMENT = /(^|[\r\n])\[(?:K|J|H|m)(?=$|[^\w])/g;
+const ORPHAN_OSC_FRAGMENT = /(^|[\r\n])(?:\x1B)?\](?:\d{1,3}|[A-Za-z])(?:;[^\r\n\x07]*)?(?:\x07|\r?\n|$)/g;
+/** Legacy: orphan `[0` digit-repeat fragments from pre-NoProfile ConPTY artefacts. */
+const ORPHAN_DIGIT_REPEAT = /(?:^|[\r\n])(?:\[0)+\[?(?=$|[\r\n])/g;
+/** Legacy: orphan `[I` tab fragments from pre-NoProfile PSReadLine escape soup. */
+const ORPHAN_TAB_FRAGMENT = /(?:^|[\r\n])\[I(?=$|[\r\n])/g;
 
 /**
  * Bare control-character regex. Keeps `\n`, `\r`, `\t` because they
@@ -97,9 +104,63 @@ export function stripAnsi(input: string): string {
     .replace(ANSI_REGEX, '')
     .replace(ORPHAN_CSI_FRAGMENT, '')
     .replace(ORPHAN_CSI_NO_PARAM_FRAGMENT, '$1')
+    .replace(ORPHAN_OSC_FRAGMENT, '$1')
+    .replace(ORPHAN_DIGIT_REPEAT, '\n')
+    .replace(ORPHAN_TAB_FRAGMENT, '')
     .replace(CONTROL_CHARS, '');
 }
 
+function splitTrailingIncompleteEscape(input: string): { complete: string; pendingEscape: string } {
+  const escIndex = input.lastIndexOf('\x1B');
+  if (escIndex < 0) return { complete: input, pendingEscape: '' };
+
+  const candidate = input.slice(escIndex);
+  if (candidate.includes('\n') || candidate.includes('\r')) {
+    return { complete: input, pendingEscape: '' };
+  }
+  if (candidate === '\x1B') {
+    return { complete: input.slice(0, escIndex), pendingEscape: candidate };
+  }
+
+  const kind = candidate[1];
+  if (kind === '[') {
+    const completeCsi = /^\x1B\[[\x30-\x3F]*[\x20-\x2F]*[\x40-\x7E]/.test(candidate);
+    return completeCsi
+      ? { complete: input, pendingEscape: '' }
+      : { complete: input.slice(0, escIndex), pendingEscape: candidate };
+  }
+
+  if (kind === ']') {
+    const hasTerminator = candidate.includes('\x07') || candidate.includes('\x1B\\');
+    return hasTerminator
+      ? { complete: input, pendingEscape: '' }
+      : { complete: input.slice(0, escIndex), pendingEscape: candidate };
+  }
+
+  if (kind === 'P') {
+    const hasTerminator = candidate.includes('\x1B\\');
+    return hasTerminator
+      ? { complete: input, pendingEscape: '' }
+      : { complete: input.slice(0, escIndex), pendingEscape: candidate };
+  }
+
+  return { complete: input, pendingEscape: '' };
+}
+
+function sanitizeTerminalOutputChunk(
+  raw: string,
+  pendingEscape = '',
+): { text: string; rawText: string; pendingEscape: string } {
+  const combined = `${pendingEscape}${raw}`;
+  const split = splitTrailingIncompleteEscape(combined);
+  const nextPending =
+    split.pendingEscape.length > MAX_PENDING_ESCAPE_CHARS ? '' : split.pendingEscape;
+  return {
+    text: stripAnsi(split.complete),
+    rawText: split.complete,
+    pendingEscape: nextPending,
+  };
+}
 export function terminalRestoreText(session: Partial<SessionTranscript> | null | undefined): string {
   const source =
     typeof session?.text === 'string' && session.text.length > 0
@@ -112,6 +173,7 @@ export function terminalRestoreText(session: Partial<SessionTranscript> | null |
 
   return safeSource
     .replace(/\x1B/g, '')
+    .replace(ORPHAN_DIGIT_REPEAT, '\n')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .split('\n')
@@ -142,6 +204,8 @@ export interface SessionTranscript {
   text: string;
   /** Raw transcript containing all escape codes for terminal state restoration. */
   rawText?: string;
+  /** Incomplete trailing ANSI/OSC control sequence waiting for the next PTY chunk. */
+  pendingEscape?: string;
   /** The currently typed draft input prompt line. */
   currentInput?: string;
   /** Wall-clock ms of the last appended chunk. */
@@ -262,11 +326,11 @@ export function pruneSessions(sessions: Record<string, SessionTranscript>): Reco
 const pendingStorageWrites = new Map<string, string>();
 let transcriptStorageTimer: ReturnType<typeof setTimeout> | null = null;
 
-function loadInitialSessions(): Record<string, SessionTranscript> {
-  if (typeof window === 'undefined') return {};
+export function deserializeTranscriptSessions(
+  raw: string | null,
+): Record<string, SessionTranscript> | null {
+  if (!raw) return null;
   try {
-    const raw = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY);
-    if (!raw) return {};
     const parsed = JSON.parse(raw);
     const sessions =
       parsed?.state?.sessions && typeof parsed.state.sessions === 'object'
@@ -286,8 +350,12 @@ function loadInitialSessions(): Record<string, SessionTranscript> {
         projectId: typeof session.projectId === 'string' ? session.projectId : null,
         agentSlug: typeof session.agentSlug === 'string' ? session.agentSlug : null,
         command: typeof session.command === 'string' ? session.command : null,
-        text: typeof session.text === 'string' ? session.text.slice(-MAX_BYTES_PER_SESSION) : '',
+        text:
+          typeof session.text === 'string'
+            ? stripAnsi(session.text).slice(-MAX_BYTES_PER_SESSION)
+            : '',
         rawText: typeof session.rawText === 'string' ? session.rawText.slice(-MAX_BYTES_PER_SESSION) : '',
+        pendingEscape: '',
         currentInput: typeof session.currentInput === 'string' ? session.currentInput.slice(-4096) : '',
         lastWriteAt: typeof session.lastWriteAt === 'number' ? session.lastWriteAt : Date.now(),
         bytesSeen: typeof session.bytesSeen === 'number' ? session.bytesSeen : 0,
@@ -295,8 +363,21 @@ function loadInitialSessions(): Record<string, SessionTranscript> {
     }
     return pruneSessions(next);
   } catch {
-    return {};
+    return null;
   }
+}
+
+function loadInitialSessions(): Record<string, SessionTranscript> {
+  if (typeof window === 'undefined') return {};
+  const primary = deserializeTranscriptSessions(
+    window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY),
+  );
+  if (primary) return primary;
+  return (
+    deserializeTranscriptSessions(
+      window.localStorage.getItem(TRANSCRIPT_BACKUP_STORAGE_KEY),
+    ) ?? {}
+  );
 }
 
 function flushTranscriptStorage(): void {
@@ -306,10 +387,14 @@ function flushTranscriptStorage(): void {
     transcriptStorageTimer = null;
   }
   try {
-    pendingStorageWrites.set(
-      TRANSCRIPT_STORAGE_KEY,
-      JSON.stringify({ sessions: useTerminalTranscriptStore.getState().sessions }),
-    );
+    const serialized = JSON.stringify({
+      sessions: useTerminalTranscriptStore.getState().sessions,
+    });
+    const current = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY);
+    if (current && current !== serialized && deserializeTranscriptSessions(current)) {
+      pendingStorageWrites.set(TRANSCRIPT_BACKUP_STORAGE_KEY, current);
+    }
+    pendingStorageWrites.set(TRANSCRIPT_STORAGE_KEY, serialized);
   } catch {
     // If serialization fails, skip this flush rather than blocking output.
   }
@@ -357,6 +442,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
               command: init.command ?? existing?.command ?? null,
               text: existing?.text ?? '',
               rawText: existing?.rawText ?? '',
+              pendingEscape: existing?.pendingEscape ?? '',
               currentInput: existing?.currentInput ?? '',
               lastWriteAt: existing?.lastWriteAt ?? Date.now(),
               bytesSeen: existing?.bytesSeen ?? 0,
@@ -381,16 +467,17 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
       },
 
       appendOutput: (sessionId, raw) => {
-        const cleaned = stripAnsi(raw);
         set((state) => {
           const cur = state.sessions[sessionId];
           if (!cur) return {};
+          const cleaned = sanitizeTerminalOutputChunk(raw, cur.pendingEscape);
           const nextSessions = {
             ...state.sessions,
             [sessionId]: {
               ...cur,
-              text: appendBounded(cur.text, cleaned),
-              rawText: appendBounded(cur.rawText ?? '', raw),
+              text: appendBounded(cur.text, cleaned.text),
+              rawText: appendBounded(cur.rawText ?? '', cleaned.rawText),
+              pendingEscape: cleaned.pendingEscape,
               bytesSeen: cur.bytesSeen + raw.length,
               lastWriteAt: Date.now(),
             },
@@ -453,6 +540,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
               ...cur,
               text: '',
               rawText: '',
+              pendingEscape: '',
               currentInput: '',
               bytesSeen: 0,
               lastWriteAt: Date.now(),
@@ -466,12 +554,14 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
       reset: () => {
         set({ sessions: {} });
         pendingStorageWrites.delete(TRANSCRIPT_STORAGE_KEY);
+        pendingStorageWrites.delete(TRANSCRIPT_BACKUP_STORAGE_KEY);
         if (transcriptStorageTimer) {
           clearTimeout(transcriptStorageTimer);
           transcriptStorageTimer = null;
         }
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(TRANSCRIPT_STORAGE_KEY);
+          window.localStorage.removeItem(TRANSCRIPT_BACKUP_STORAGE_KEY);
         }
       },
     })

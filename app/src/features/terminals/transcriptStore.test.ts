@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   MAX_BYTES_PER_SESSION,
+  deserializeTranscriptSessions,
   getSessionTranscript,
   getSessionsForAgent,
   stripAnsi,
@@ -61,6 +62,13 @@ describe('stripAnsi', () => {
     expect(stripAnsi('[0mready[999Ddone\n[?25hnext')).toBe('readydone\nnext');
     expect(stripAnsi('array [0] stays')).toBe('array [0] stays');
   });
+
+  it('removes orphan OSC palette fragments from split PTY chunks', () => {
+    expect(stripAnsi(']4;6;rgb:12/34/56\x07ready')).toBe('ready');
+    expect(stripAnsi('\x1B]4;6;rgb:12/34/56\x07ready')).toBe('ready');
+    expect(stripAnsi(']10;rgb:ee/ee/ee\nprompt')).toBe('prompt');
+    expect(stripAnsi('value ]10;rgb: stays')).toBe('value ]10;rgb: stays');
+  });
 });
 
 describe('terminalRestoreText', () => {
@@ -86,6 +94,17 @@ describe('terminalRestoreText', () => {
     expect(restored).not.toContain('[?25h');
   });
 
+  it('sanitizes legacy orphan OSC palette fragments from stored text', () => {
+    const restored = terminalRestoreText({
+      text: ']4;6;rgb:12/34/56\x07ready\n]10;rgb:ee/ee/ee\nprompt',
+    });
+
+    expect(restored).toBe('ready\r\nprompt');
+    expect(restored).not.toContain(']4;');
+    expect(restored).not.toContain(']10;');
+    expect(restored).not.toContain('rgb:');
+  });
+
   it('sanitizes legacy raw-only transcripts and caps replayed lines', () => {
     const rawText = Array.from({ length: 900 }, (_, i) => `\x1B[32mline-${i}\x1B[0m`).join('\n');
     const restored = terminalRestoreText({ rawText });
@@ -98,6 +117,28 @@ describe('terminalRestoreText', () => {
 });
 
 describe('transcript store persistence performance', () => {
+  it('can recover sessions from the last-known-good snapshot when primary JSON is corrupt', () => {
+    const backup = JSON.stringify({
+      sessions: {
+        pty_backup: {
+          sessionId: 'pty_backup',
+          paneId: 'pane_backup',
+          projectId: 'project_backup',
+          agentSlug: null,
+          command: 'powershell.exe',
+          text: 'restored output\n',
+          rawText: '',
+          currentInput: '',
+          lastWriteAt: 10,
+          bytesSeen: 16,
+        },
+      },
+    });
+
+    expect(deserializeTranscriptSessions('{broken json')).toBeNull();
+    expect(deserializeTranscriptSessions(backup)?.pty_backup?.text).toBe('restored output\n');
+  });
+
   it('debounces localStorage writes instead of flushing every output chunk', () => {
     vi.useFakeTimers();
     const store = useTerminalTranscriptStore.getState();
@@ -137,6 +178,28 @@ describe('transcript store — append + retrieve', () => {
     store.appendOutput('pty_seq', 'second\n');
     store.appendOutput('pty_seq', 'third\n');
     expect(getSessionTranscript('pty_seq')?.text).toBe('first\nsecond\nthird\n');
+  });
+
+  it('does not persist split CSI fragments as visible text', () => {
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_split_csi', { agentSlug: null });
+
+    store.appendOutput('pty_split_csi', '\x1B[');
+    store.appendOutput('pty_split_csi', '0mready\n');
+
+    expect(getSessionTranscript('pty_split_csi')?.text).toBe('ready\n');
+    expect(terminalRestoreText(getSessionTranscript('pty_split_csi'))).toBe('ready\r\n');
+  });
+
+  it('does not persist split OSC fragments as visible text', () => {
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_split_osc', { agentSlug: null });
+
+    store.appendOutput('pty_split_osc', '\x1B]4;6;rgb:12/34/');
+    store.appendOutput('pty_split_osc', '56\x07ready\n');
+
+    expect(getSessionTranscript('pty_split_osc')?.text).toBe('ready\n');
+    expect(terminalRestoreText(getSessionTranscript('pty_split_osc'))).toBe('ready\r\n');
   });
 
   it('still tracks bytesSeen for ANSI-only output that strips to empty', () => {

@@ -14,10 +14,16 @@ fn install_terminal_launcher_impl() -> Result<String, String> {
     fs::create_dir_all(&bin_dir).map_err(io_err)?;
 
     let exe_candidates = [
-        local_app_data.join("Programs").join("Jarvis One").join("jarvis.exe"),
+        local_app_data
+            .join("Programs")
+            .join("Jarvis One")
+            .join("jarvis.exe"),
         local_app_data.join("Jarvis One").join("jarvis.exe"),
     ];
-    write_windows_launcher_file(&bin_dir.join("jarvis_boot_forever.py"), windows_boot_python())?;
+    write_windows_launcher_file(
+        &bin_dir.join("jarvis_boot_forever.py"),
+        windows_boot_python(),
+    )?;
     write_windows_launcher_file(&bin_dir.join("Jarvis.cmd"), windows_cmd_launcher())?;
     write_windows_launcher_file(
         &bin_dir.join("JarvisCore.ps1"),
@@ -93,7 +99,7 @@ if (-not (Test-Path -LiteralPath $bootScript)) {
   exit 1
 }
 
-$pythonCommand = @(Resolve-PythonCommand)
+$pythonCommand = Resolve-PythonCommand
 if (-not $pythonCommand) {
   Write-Warning 'Python was not found. Launching Jarvis One directly.'
   & powershell -NoProfile -ExecutionPolicy Bypass -File $coreScript
@@ -113,9 +119,7 @@ $bootArgs = @(
   '--timeout', '900',
   '--forever'
 )
-$pythonExe = $pythonCommand[0]
-$pythonPrefix = @($pythonCommand | Select-Object -Skip 1)
-& $pythonExe @pythonPrefix @bootArgs
+& $pythonCommand[0] @($pythonCommand | Select-Object -Skip 1) @bootArgs
 exit $LASTEXITCODE
 "#
     .to_string()
