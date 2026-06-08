@@ -53,7 +53,7 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
   const isThinking = state === 'thinking';
   const active = isSpeaking || isListening || isThinking;
 
-  const coreSize = size * 0.7;
+  const coreSize = size * 0.65;
   const half = size / 2;
 
   return (
@@ -65,16 +65,20 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
       <motion.div
         className="absolute rounded-full pointer-events-none"
         style={{
-          inset: -size * 0.2,
-          background: 'radial-gradient(circle, rgba(255,167,31,0.35) 0%, rgba(207,98,5,0.1) 50%, transparent 70%)',
-          filter: 'blur(5px)',
+          inset: -size * 0.25,
+          background: 'radial-gradient(circle, rgba(255,167,31,0.4) 0%, rgba(207,98,5,0.15) 45%, transparent 70%)',
+          filter: 'blur(6px)',
         }}
         animate={{
-          scale: isSpeaking ? [1, 1.4, 1.1, 1.5, 1.2, 1] : isListening ? [1, 1.15, 1] : [1, 1.06, 1],
-          opacity: isSpeaking ? [0.5, 1, 0.6, 1, 0.5] : [0.3, 0.5, 0.3],
+          scale: isSpeaking
+            ? [1, 1.6, 1.15, 1.7, 1.3, 1.55, 1]
+            : isListening ? [1, 1.25, 1.08, 1.2, 1] : [1, 1.06, 1],
+          opacity: isSpeaking
+            ? [0.5, 1, 0.7, 1, 0.6, 0.9, 0.5]
+            : isListening ? [0.4, 0.7, 0.4] : [0.25, 0.4, 0.25],
         }}
         transition={{
-          duration: isSpeaking ? 0.7 : 3.5,
+          duration: isSpeaking ? 0.5 : isListening ? 2 : 3.5,
           repeat: Infinity,
           ease: 'easeInOut',
         }}
@@ -83,17 +87,19 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
       {/* Symbiote tendrils */}
       {TENDRIL_SEEDS.map((seed, i) => {
         const rad = (seed.angle * Math.PI) / 180;
-        const maxLen = half * seed.lenScale * (isSpeaking ? 1.6 : isListening ? 0.8 : 0.3);
-        const duration = seed.durationBase * (isSpeaking ? 0.35 : isListening ? 0.7 : 1);
-        const w = seed.widthBase * (isSpeaking ? 1.2 : 0.8);
+        const maxLen = half * seed.lenScale * (isSpeaking ? 2.2 : isListening ? 1.2 : isThinking ? 0.7 : 0.35);
+        const duration = seed.durationBase * (isSpeaking ? 0.22 : isListening ? 0.55 : isThinking ? 0.7 : 1);
+        const w = seed.widthBase * (isSpeaking ? 1.5 : isListening ? 1.1 : 0.8);
         const cx = half;
         const cy = half;
         const tipX1 = Math.cos(rad) * maxLen;
         const tipY1 = Math.sin(rad) * maxLen;
-        const tipX2 = Math.cos(rad + 0.3) * maxLen * 0.6;
-        const tipY2 = Math.sin(rad + 0.3) * maxLen * 0.6;
-        const tipX3 = Math.cos(rad - 0.2) * maxLen * 0.85;
-        const tipY3 = Math.sin(rad - 0.2) * maxLen * 0.85;
+        const tipX2 = Math.cos(rad + 0.4) * maxLen * 0.7;
+        const tipY2 = Math.sin(rad + 0.4) * maxLen * 0.7;
+        const tipX3 = Math.cos(rad - 0.3) * maxLen * 0.9;
+        const tipY3 = Math.sin(rad - 0.3) * maxLen * 0.9;
+        const tipX4 = Math.cos(rad + 0.15) * maxLen * 0.5;
+        const tipY4 = Math.sin(rad + 0.15) * maxLen * 0.5;
 
         return (
           <motion.div
@@ -105,22 +111,28 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
               width: w,
               height: w,
               background: 'radial-gradient(circle, #ff980f 0%, #cf6205 60%, #5b2300 100%)',
-              boxShadow: `0 0 ${w * 2}px rgba(255,152,15,${isSpeaking ? 0.7 : 0.3})`,
+              boxShadow: `0 0 ${w * 2.5}px rgba(255,152,15,${isSpeaking ? 0.85 : isListening ? 0.5 : 0.25})`,
               transformOrigin: 'center center',
             }}
             animate={{
-              x: [0, tipX1, tipX2, tipX3, 0],
-              y: [0, tipY1, tipY2, tipY3, 0],
-              scaleX: [1, isSpeaking ? 3.5 : 1.5, isSpeaking ? 2 : 1.2, isSpeaking ? 2.8 : 1.3, 1],
-              scaleY: [1, 0.6, 0.8, 0.5, 1],
-              opacity: active ? [0.15, 0.9, 0.5, 0.8, 0.15] : [0.05, 0.15, 0.05],
-              rotate: [0, seed.angle, seed.angle + 15, seed.angle - 10, 0],
+              x: [0, tipX1, tipX2, tipX4, tipX3, 0],
+              y: [0, tipY1, tipY2, tipY4, tipY3, 0],
+              scaleX: isSpeaking
+                ? [1, 5, 2.5, 4, 3, 1]
+                : isListening ? [1, 2.5, 1.5, 2, 1] : [1, 1.3, 1],
+              scaleY: isSpeaking
+                ? [1, 0.4, 0.7, 0.35, 0.6, 1]
+                : [1, 0.7, 1],
+              opacity: isSpeaking
+                ? [0.2, 1, 0.6, 0.9, 0.7, 0.2]
+                : isListening ? [0.1, 0.7, 0.3, 0.6, 0.1] : active ? [0.05, 0.2, 0.05] : [0.03, 0.1, 0.03],
+              rotate: [0, seed.angle, seed.angle + 20, seed.angle - 15, seed.angle + 8, 0],
             }}
             transition={{
               duration,
               repeat: Infinity,
               ease: [0.42, 0, 0.58, 1],
-              delay: i * 0.13,
+              delay: i * 0.09,
             }}
           />
         );
@@ -139,16 +151,18 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
         }}
         animate={{
           borderRadius: isSpeaking
-            ? ['50%', '42% 58% 55% 45% / 55% 42% 58% 45%', '58% 42% 45% 55% / 42% 55% 45% 58%', '45% 55% 50% 50% / 50% 45% 55% 50%', '50%']
+            ? ['50%', '38% 62% 58% 42% / 58% 38% 62% 42%', '62% 38% 42% 58% / 38% 58% 42% 62%', '42% 58% 52% 48% / 52% 42% 58% 48%', '55% 45% 48% 52% / 48% 55% 45% 52%', '50%']
             : isListening
-              ? ['50%', '46% 54% 52% 48% / 52% 46% 54% 48%', '50%']
-              : ['50%', '48% 52% 50% 50% / 50% 48% 52% 50%', '50%'],
-          x: isSpeaking ? [0, 2, -1.5, 2.5, -2, 0] : 0,
-          y: isSpeaking ? [0, -1.5, 2, -2.5, 1, 0] : 0,
-          scale: isSpeaking ? [1, 1.08, 0.94, 1.1, 0.96, 1] : isListening ? [1, 1.04, 1] : [1, 1.02, 1],
+              ? ['50%', '44% 56% 54% 46% / 54% 44% 56% 46%', '56% 44% 46% 54% / 44% 54% 46% 56%', '50%']
+              : ['50%', '47% 53% 51% 49% / 51% 47% 53% 49%', '50%'],
+          x: isSpeaking ? [0, 3, -2, 3.5, -2.5, 1, 0] : isListening ? [0, 1, -0.5, 0] : 0,
+          y: isSpeaking ? [0, -2, 3, -3.5, 2, -1, 0] : isListening ? [0, -0.5, 1, 0] : 0,
+          scale: isSpeaking
+            ? [1, 1.14, 0.88, 1.18, 0.92, 1.06, 1]
+            : isListening ? [1, 1.06, 0.97, 1] : [1, 1.02, 1],
         }}
         transition={{
-          duration: isSpeaking ? 0.8 : isListening ? 2.5 : 4,
+          duration: isSpeaking ? 0.55 : isListening ? 2 : 4,
           repeat: Infinity,
           ease: 'easeInOut',
         }}
@@ -419,11 +433,11 @@ export function VoiceModal() {
         exit={{ opacity: 0, x: 12, scale: 0.97 }}
         transition={{ type: 'spring', stiffness: 360, damping: 30 }}
         style={{ x: dragX, y: dragY }}
-        className="fixed right-3 top-3 z-[90] w-[178px] overflow-hidden rounded-[10px] border border-border-mid/80 bg-elevated/95 shadow-[0_12px_36px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_20px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
+        className="fixed right-3 top-3 z-[90] w-[320px] overflow-hidden rounded-[10px] border border-border-mid/80 bg-elevated/95 shadow-[0_12px_36px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_20px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
         aria-label="Jarvis voice session"
         onContextMenu={handleContextMenu}
       >
-        {/* Right-click drag handle */}
+        {/* Right-click drag handle — single compact row */}
         <div
           onPointerDown={handleDragStart}
           onPointerMove={handleDragMove}
@@ -433,22 +447,22 @@ export function VoiceModal() {
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="absolute right-1.5 top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-label="Close Jarvis voice session"
             title="Close"
           >
             <X className="h-2.5 w-2.5" />
           </button>
 
-          <div className="flex items-center gap-2 px-2.5 pb-1 pt-2.5">
-            <SymbioteOrb state={state} size={36} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[12px] font-medium leading-4 text-foreground">
+          <div className="flex items-center gap-2 px-2 py-1.5">
+            <SymbioteOrb state={state} size={34} />
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-[11px] font-medium leading-4 text-foreground">
                 {personaCfg.name}
-              </div>
-              <div
+              </span>
+              <span
                 className={cn(
-                  'mt-0.5 flex items-center gap-1 text-[10px] leading-3',
+                  'flex items-center gap-1 text-[9px] leading-3',
                   state === 'error' ? 'text-destructive' : 'text-muted-foreground',
                 )}
               >
@@ -457,34 +471,31 @@ export function VoiceModal() {
                     'h-1.5 w-1.5 rounded-full',
                     state === 'error'
                       ? 'bg-destructive'
-                      : 'bg-success shadow-[0_0_6px_hsl(var(--success)/0.75)]',
+                      : 'bg-success shadow-[0_0_5px_hsl(var(--success)/0.75)]',
                   )}
                 />
-                <span className="truncate">
-                  {state === 'error' && errorMessage ? errorMessage : STATE_LABEL[state]}
-                </span>
-              </div>
+                {state === 'error' && errorMessage ? errorMessage : STATE_LABEL[state]}
+              </span>
             </div>
-            <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60 shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04)]">
-              <Mic className="h-3 w-3 text-muted-foreground" strokeWidth={1.8} />
+            <div className="mx-auto min-w-0 flex-1">
+              <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
+            </div>
+            <div className="flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60">
+              <Mic className="h-2.5 w-2.5 text-muted-foreground" strokeWidth={1.8} />
             </div>
           </div>
-        </div>
-
-        <div className="px-2.5 pb-1 pt-0">
-          <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
         </div>
 
         {/* Transcript dropdown toggle */}
         <button
           type="button"
           onClick={() => setShowTranscript((v) => !v)}
-          className="flex w-full items-center justify-center gap-1 border-t border-border-mid/50 px-2.5 py-1 text-[9px] text-muted-foreground/70 transition-colors hover:bg-muted/30 hover:text-muted-foreground"
+          className="flex w-full items-center justify-center gap-1 border-t border-border-mid/40 px-2 py-0.5 text-[8px] text-muted-foreground/60 transition-colors hover:bg-muted/30 hover:text-muted-foreground"
         >
           <span>Transcript</span>
           {showTranscript
-            ? <ChevronUp className="h-2.5 w-2.5" />
-            : <ChevronDown className="h-2.5 w-2.5" />
+            ? <ChevronUp className="h-2 w-2" />
+            : <ChevronDown className="h-2 w-2" />
           }
         </button>
 
@@ -499,10 +510,10 @@ export function VoiceModal() {
             >
               <div
                 ref={transcriptRef}
-                className="max-h-[72px] space-y-1 overflow-y-auto px-2.5 pb-2 pt-1"
+                className="max-h-[60px] space-y-0.5 overflow-y-auto px-2 pb-1.5 pt-0.5"
               >
                 {transcript.length === 0 && !partial ? (
-                  <div className="flex h-[24px] items-center justify-center text-center text-[9px] text-muted-foreground">
+                  <div className="flex h-[20px] items-center justify-center text-center text-[8px] text-muted-foreground">
                     {activeChatId ? 'Listening...' : 'Open a chat first.'}
                   </div>
                 ) : null}
@@ -511,19 +522,19 @@ export function VoiceModal() {
                   return (
                     <div
                       key={message.id}
-                      className="grid grid-cols-[14px_36px_1fr] items-center gap-0.5 text-[9px] leading-3.5"
+                      className="grid grid-cols-[12px_32px_1fr] items-center gap-0.5 text-[8px] leading-3"
                     >
                       <span
                         className={cn(
-                          'flex h-[14px] w-[14px] items-center justify-center rounded-full border',
+                          'flex h-[12px] w-[12px] items-center justify-center rounded-full border',
                           user
                             ? 'border-info/80 text-info'
                             : 'border-accent-copper/80 text-accent-copper',
                         )}
                       >
-                        {user ? <UserRound className="h-2 w-2" /> : <Bot className="h-2 w-2" />}
+                        {user ? <UserRound className="h-1.5 w-1.5" /> : <Bot className="h-1.5 w-1.5" />}
                       </span>
-                      <span className={cn('text-[9px] font-medium', user ? 'text-info' : 'text-accent-copper')}>
+                      <span className={cn('text-[8px] font-medium', user ? 'text-info' : 'text-accent-copper')}>
                         {user ? 'You' : 'Jarvis:'}
                       </span>
                       <span className="min-w-0 truncate text-foreground/80">{message.displayText}</span>
@@ -531,11 +542,11 @@ export function VoiceModal() {
                   );
                 })}
                 {partial ? (
-                  <div className="grid grid-cols-[14px_36px_1fr] items-center gap-0.5 text-[9px] leading-3.5">
-                    <span className="flex h-[14px] w-[14px] items-center justify-center rounded-full border border-info/80 text-info">
-                      <UserRound className="h-2 w-2" />
+                  <div className="grid grid-cols-[12px_32px_1fr] items-center gap-0.5 text-[8px] leading-3">
+                    <span className="flex h-[12px] w-[12px] items-center justify-center rounded-full border border-info/80 text-info">
+                      <UserRound className="h-1.5 w-1.5" />
                     </span>
-                    <span className="text-[9px] font-medium text-info">You</span>
+                    <span className="text-[8px] font-medium text-info">You</span>
                     <span className="min-w-0 truncate text-foreground/70">{partial}</span>
                   </div>
                 ) : null}
