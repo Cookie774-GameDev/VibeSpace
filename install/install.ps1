@@ -626,7 +626,7 @@ if (-not (Test-Path -LiteralPath `$bootScript)) {
   exit 1
 }
 
-`$pythonCommand = @(Resolve-PythonCommand)
+`$pythonCommand = Resolve-PythonCommand
 if (-not `$pythonCommand) {
   Write-Warning 'Python was not found. Launching Jarvis One directly.'
   & powershell -NoProfile -ExecutionPolicy Bypass -File `$coreScript
@@ -646,9 +646,7 @@ if (-not `$pythonCommand) {
   '--timeout', '900',
   '--forever'
 )
-`$pythonExe = `$pythonCommand[0]
-`$pythonPrefix = @(`$pythonCommand | Select-Object -Skip 1)
-& `$pythonExe @pythonPrefix @bootArgs
+& `$pythonCommand[0] @(`$pythonCommand | Select-Object -Skip 1) @bootArgs
 exit `$LASTEXITCODE
 "@
 
@@ -661,7 +659,7 @@ exit `$LASTEXITCODE
     Set-Content -LiteralPath $corePath -Value $coreLauncher -Encoding UTF8
     Set-Content -LiteralPath $updatePath -Value $updateLauncher -Encoding UTF8
     Set-Content -LiteralPath $scriptPath -Value $psLauncher -Encoding UTF8
-    [IO.File]::WriteAllText($bootPath, $bootSource, (New-Object Text.UTF8Encoding($false)))
+    Set-Content -LiteralPath $bootPath -Value $bootSource -Encoding UTF8
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $entries = @($userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
