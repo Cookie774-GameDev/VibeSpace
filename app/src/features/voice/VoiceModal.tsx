@@ -166,14 +166,21 @@ export function VoiceModal() {
   const speakingRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
 
-  // Drag state
+  // Drag state — right-click only, clamped to viewport
   const dragX = useMotionValue(0);
   const dragY = useMotionValue(0);
   const isDragging = React.useRef(false);
   const dragStart = React.useRef({ x: 0, y: 0, mx: 0, my: 0 });
+  const panelRef = React.useRef<HTMLDivElement>(null);
+
+  const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+  }, []);
 
   const handleDragStart = React.useCallback((e: React.PointerEvent) => {
+    if (e.button !== 2) return;
     if ((e.target as HTMLElement).closest('button')) return;
+    e.preventDefault();
     isDragging.current = true;
     dragStart.current = { x: dragX.get(), y: dragY.get(), mx: e.clientX, my: e.clientY };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -181,8 +188,23 @@ export function VoiceModal() {
 
   const handleDragMove = React.useCallback((e: React.PointerEvent) => {
     if (!isDragging.current) return;
-    dragX.set(dragStart.current.x + (e.clientX - dragStart.current.mx));
-    dragY.set(dragStart.current.y + (e.clientY - dragStart.current.my));
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const rawX = dragStart.current.x + (e.clientX - dragStart.current.mx);
+    const rawY = dragStart.current.y + (e.clientY - dragStart.current.my);
+    const minX = -(rect.left - dragX.get() + rawX - rawX) + 8;
+    const maxX = vw - rect.width - (rect.left - dragX.get()) - 8;
+    const minY = -(rect.top - dragY.get()) + 8;
+    const maxY = vh - rect.height - (rect.top - dragY.get()) - 8;
+    const baseLeft = rect.left - dragX.get();
+    const baseTop = rect.top - dragY.get();
+    const clampedX = Math.max(-(baseLeft - 8), Math.min(rawX, vw - rect.width - baseLeft - 8));
+    const clampedY = Math.max(-(baseTop - 8), Math.min(rawY, vh - rect.height - baseTop - 8));
+    dragX.set(clampedX);
+    dragY.set(clampedY);
   }, [dragX, dragY]);
 
   const handleDragEnd = React.useCallback(() => {
@@ -374,6 +396,7 @@ export function VoiceModal() {
   return (
     <AnimatePresence>
       <motion.aside
+        ref={panelRef}
         initial={{ opacity: 0, x: 24, y: -8, scale: 0.96 }}
         animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
         exit={{ opacity: 0, x: 20, scale: 0.97 }}
@@ -381,10 +404,10 @@ export function VoiceModal() {
         style={{ x: dragX, y: dragY }}
         className="fixed right-5 top-5 z-[90] w-[min(338px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-border-mid/80 bg-elevated/95 shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_30px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
         aria-label="Jarvis voice session"
+        onContextMenu={handleContextMenu}
       >
-        {/* Drag handle - the header area */}
+        {/* Right-click drag handle */}
         <div
-          className="cursor-grab active:cursor-grabbing"
           onPointerDown={handleDragStart}
           onPointerMove={handleDragMove}
           onPointerUp={handleDragEnd}
