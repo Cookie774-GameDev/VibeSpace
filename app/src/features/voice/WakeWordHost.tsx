@@ -188,11 +188,11 @@ export function WakeWordHost() {
     <button
       type="button"
       onClick={() => setVoiceModalOpen(true)}
-      className="fixed bottom-4 right-4 z-[70] flex h-8 w-8 items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+      className="jarvis-wake-chip fixed bottom-4 right-4 z-[70] flex h-9 w-9 items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
       aria-live="polite"
       aria-label={status === 'listening' ? 'Wake word active. Click to open Jarvis.' : status === 'heard' ? 'Jarvis awake.' : 'Wake word indicator'}
     >
-      <span className="relative flex h-6 w-6 items-center justify-center">
+      <span className="relative flex h-7 w-7 items-center justify-center">
         <span
           className={cn(
             'absolute inset-0 rounded-full',

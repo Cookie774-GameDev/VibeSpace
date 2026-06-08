@@ -26,7 +26,6 @@ import { cn } from '@/lib/utils';
 import { testProviderKey } from '@/lib/ai/testKey';
 import { db, openDb } from '@/lib/db';
 import { summarizeLocalProviderUsage, type LocalUsageTotals } from '@/lib/usage/usageSummary';
-import { fireApiKeySaveBurstFromElement } from '../ApiKeySaveBurst';
 import { ProviderUsageCounter, type ProviderUsageData } from '../components/ProviderUsageCounter';
 
 interface ProviderRow {
@@ -434,7 +433,6 @@ function ProviderKeyRow({ row, value, onSave, onClear, usageData }: ProviderKeyR
     if (!trimmed) return;
     onSave(trimmed);
     setRevealed(false);
-    fireApiKeySaveBurstFromElement(inputRef.current);
     toast.success(`${row.name} key saved`, 'Stored locally on this device.');
   }
 
@@ -517,9 +515,7 @@ function ProviderKeyRow({ row, value, onSave, onClear, usageData }: ProviderKeyR
             : 'hsl(var(--border))',
       }}
       className={cn(
-        'relative rounded-lg border p-4 transition-all duration-300',
-        'bg-gradient-to-br',
-        row.color,
+        'jarvis-provider-key-card relative rounded-lg border p-4 transition-all duration-300',
         isSaved && 'shadow-[0_0_20px_-5px_hsl(var(--accent-copper)/0.2)]',
       )}
     >
@@ -586,7 +582,7 @@ function ProviderKeyRow({ row, value, onSave, onClear, usageData }: ProviderKeyR
 
         {/* Input row */}
         <div className="flex items-center gap-2">
-          <div className="relative flex-1" data-jarvis-rainbow="true">
+          <div className="relative flex-1" data-jarvis-rainbow="true" data-jarvis-api-key="true">
             <Input
               ref={inputRef}
               id={`key-${row.id}`}

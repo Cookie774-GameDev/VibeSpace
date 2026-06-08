@@ -110,8 +110,9 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
               top: cy,
               width: w,
               height: w,
-              background: 'radial-gradient(circle, #ff980f 0%, #cf6205 60%, #5b2300 100%)',
-              boxShadow: `0 0 ${w * 2.5}px rgba(255,152,15,${isSpeaking ? 0.85 : isListening ? 0.5 : 0.25})`,
+              background:
+                'radial-gradient(circle at 35% 30%, #4a4a48 0%, #111 28%, #020202 72%, #000 100%)',
+              boxShadow: `0 0 ${w * 1.8}px rgba(255,174,44,${isSpeaking ? 0.35 : isListening ? 0.2 : 0.08}), inset 0 0 ${w}px rgba(255,255,255,0.16)`,
               transformOrigin: 'center center',
             }}
             animate={{
@@ -204,12 +205,8 @@ export function VoiceModal() {
   const dragStart = React.useRef({ x: 0, y: 0, mx: 0, my: 0 });
   const panelRef = React.useRef<HTMLDivElement>(null);
 
-  const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-  }, []);
-
   const handleDragStart = React.useCallback((e: React.PointerEvent) => {
-    if (e.button !== 2) return;
+    if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     isDragging.current = true;
@@ -433,12 +430,12 @@ export function VoiceModal() {
         exit={{ opacity: 0, x: 12, scale: 0.97 }}
         transition={{ type: 'spring', stiffness: 360, damping: 30 }}
         style={{ x: dragX, y: dragY }}
-        className="fixed right-3 top-3 z-[90] w-[320px] overflow-hidden rounded-[10px] border border-border-mid/80 bg-elevated/95 shadow-[0_12px_36px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_20px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
+        className="jarvis-voice-panel fixed right-3 top-3 z-[90] w-[286px] overflow-hidden rounded-[9px] border border-white/10 bg-[#090909]/95 backdrop-blur-xl"
         aria-label="Jarvis voice session"
-        onContextMenu={handleContextMenu}
       >
-        {/* Right-click drag handle — single compact row */}
+        {/* Primary-button drag handle — single compact row */}
         <div
+          className="jarvis-voice-drag-row cursor-grab active:cursor-grabbing"
           onPointerDown={handleDragStart}
           onPointerMove={handleDragMove}
           onPointerUp={handleDragEnd}
@@ -454,8 +451,8 @@ export function VoiceModal() {
             <X className="h-2.5 w-2.5" />
           </button>
 
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <SymbioteOrb state={state} size={34} />
+          <div className="relative z-[1] flex items-center gap-1.5 px-2 py-1">
+            <SymbioteOrb state={state} size={30} />
             <div className="flex min-w-0 flex-col">
               <span className="truncate text-[11px] font-medium leading-4 text-foreground">
                 {personaCfg.name}
@@ -480,7 +477,7 @@ export function VoiceModal() {
             <div className="mx-auto min-w-0 flex-1">
               <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
             </div>
-            <div className="flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full border border-border bg-background/60">
+            <div className="jarvis-voice-mic flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full">
               <Mic className="h-2.5 w-2.5 text-muted-foreground" strokeWidth={1.8} />
             </div>
           </div>
@@ -490,7 +487,7 @@ export function VoiceModal() {
         <button
           type="button"
           onClick={() => setShowTranscript((v) => !v)}
-          className="flex w-full items-center justify-center gap-1 border-t border-border-mid/40 px-2 py-0.5 text-[8px] text-muted-foreground/60 transition-colors hover:bg-muted/30 hover:text-muted-foreground"
+          className="relative z-[1] flex w-full items-center justify-center gap-1 border-t border-white/[0.06] px-2 py-px text-[8px] text-muted-foreground/55 transition-colors hover:bg-white/[0.035] hover:text-muted-foreground"
         >
           <span>Transcript</span>
           {showTranscript

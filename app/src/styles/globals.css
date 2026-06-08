@@ -703,30 +703,31 @@
 .jarvis-voice-panel {
   isolation: isolate;
   box-shadow:
-    0 30px 90px hsl(0 0% 0% / 0.58),
-    0 0 70px hsl(var(--accent-cyan) / 0.18),
-    inset 0 1px 0 hsl(0 0% 100% / 0.08);
+    0 18px 48px hsl(0 0% 0% / 0.72),
+    0 0 28px hsl(var(--accent-copper) / 0.12),
+    inset 0 1px 0 hsl(0 0% 100% / 0.07),
+    inset 0 -12px 30px hsl(0 0% 0% / 0.55);
 }
 
 .jarvis-voice-panel::before {
   content: '';
   position: absolute;
-  inset: -42%;
+  inset: -65% -18%;
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse at 18% 18%, hsl(var(--accent-cyan) / 0.24) 0%, transparent 34%),
-    radial-gradient(ellipse at 80% 78%, hsl(var(--accent-violet) / 0.22) 0%, transparent 38%),
+    radial-gradient(ellipse at 18% 44%, hsl(var(--accent-copper) / 0.13) 0%, transparent 22%),
+    radial-gradient(ellipse at 83% 55%, hsl(0 0% 100% / 0.07) 0%, transparent 24%),
     conic-gradient(
-      from 210deg at 50% 52%,
+      from 210deg at 50% 50%,
       transparent 0deg,
-      hsl(var(--accent-cyan) / 0.16) 72deg,
-      transparent 132deg,
-      hsl(var(--accent-violet) / 0.15) 220deg,
+      hsl(0 0% 100% / 0.08) 58deg,
+      transparent 105deg,
+      hsl(var(--accent-copper) / 0.09) 202deg,
       transparent 360deg
     );
-  filter: blur(28px);
-  animation: jarvis-voice-tendril 8s ease-in-out infinite;
+  filter: blur(16px);
+  animation: jarvis-voice-tendril 6.8s ease-in-out infinite;
 }
 
 .jarvis-voice-panel::after {
@@ -736,10 +737,42 @@
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
-  border: 1px solid hsl(0 0% 100% / 0.06);
+  border: 1px solid hsl(var(--accent-copper) / 0.18);
   background:
-    linear-gradient(135deg, hsl(0 0% 100% / 0.055), transparent 34%),
-    radial-gradient(circle at 50% 0%, hsl(var(--accent-cyan) / 0.08), transparent 52%);
+    repeating-radial-gradient(
+      ellipse at 18% 50%,
+      transparent 0 8px,
+      hsl(0 0% 100% / 0.025) 9px 10px,
+      transparent 11px 17px
+    ),
+    linear-gradient(112deg, hsl(0 0% 100% / 0.055), transparent 28% 72%, hsl(0 0% 100% / 0.025));
+}
+
+.jarvis-voice-drag-row {
+  position: relative;
+  touch-action: none;
+}
+
+.jarvis-voice-drag-row::after {
+  content: '';
+  position: absolute;
+  inset: 2px 38px 2px 42px;
+  pointer-events: none;
+  opacity: 0.38;
+  background: repeating-linear-gradient(
+    104deg,
+    transparent 0 17px,
+    hsl(var(--accent-copper) / 0.13) 18px,
+    transparent 20px 29px
+  );
+  filter: blur(1px);
+  animation: jarvis-voice-tendril 4.8s ease-in-out infinite reverse;
+}
+
+.jarvis-voice-mic {
+  border: 1px solid hsl(var(--accent-copper) / 0.2);
+  background: radial-gradient(circle, hsl(var(--accent-copper) / 0.08), hsl(0 0% 0% / 0.5));
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06);
 }
 
 .jarvis-voice-orb-shell {
@@ -767,9 +800,45 @@
 
 .jarvis-wake-chip {
   box-shadow:
-    0 18px 55px hsl(0 0% 0% / 0.42),
-    0 0 34px hsl(var(--accent-cyan) / 0.16),
+    0 12px 32px hsl(0 0% 0% / 0.58),
+    0 0 12px hsl(var(--accent-copper) / 0.55),
+    0 0 30px hsl(var(--accent-copper) / 0.22),
+    inset 0 1px 0 hsl(0 0% 100% / 0.12);
+}
+
+.jarvis-symbiote-trigger {
+  overflow: visible;
+  border: 1px solid hsl(var(--accent-copper) / 0.22);
+  background:
+    radial-gradient(circle at 50% 52%, hsl(var(--accent-copper) / 0.18), transparent 45%),
+    linear-gradient(145deg, hsl(0 0% 10% / 0.9), hsl(0 0% 2% / 0.98));
+  color: hsl(var(--accent-amber));
+  box-shadow:
+    0 0 8px hsl(var(--accent-copper) / 0.3),
+    0 0 20px hsl(var(--accent-copper) / 0.12),
     inset 0 1px 0 hsl(0 0% 100% / 0.08);
+}
+
+.jarvis-symbiote-trigger:hover,
+.jarvis-symbiote-trigger.is-active {
+  color: hsl(var(--accent-amber));
+  border-color: hsl(var(--accent-copper) / 0.48);
+  background:
+    radial-gradient(circle at 50% 52%, hsl(var(--accent-copper) / 0.28), transparent 52%),
+    linear-gradient(145deg, hsl(0 0% 12% / 0.96), hsl(0 0% 1%));
+  box-shadow:
+    0 0 10px hsl(var(--accent-amber) / 0.5),
+    0 0 28px hsl(var(--accent-copper) / 0.24),
+    inset 0 1px 0 hsl(0 0% 100% / 0.11);
+}
+
+.jarvis-provider-key-card {
+  background:
+    radial-gradient(circle at 10% 0%, hsl(var(--accent-copper) / 0.055), transparent 38%),
+    linear-gradient(145deg, hsl(var(--panel) / 0.94), hsl(var(--background) / 0.88));
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.025),
+    0 12px 28px hsl(0 0% 0% / 0.12);
 }
 
 .ambient-root {
@@ -1053,17 +1122,13 @@
 }
 
 [data-theme-preference='system'] [data-jarvis-rainbow='true']::before {
-  background: conic-gradient(
-    from var(--jarvis-rainbow-angle),
-    hsl(270 82% 64%),
-    hsl(322 84% 62%),
-    hsl(29 96% 58%),
-    hsl(190 78% 52%),
-    hsl(270 82% 64%)
+  background: linear-gradient(
+    135deg,
+    hsl(var(--accent-copper) / 0.74),
+    hsl(var(--accent-amber) / 0.5),
+    hsl(var(--accent-copper) / 0.74)
   );
-  animation:
-    jarvis-rainbow-spin 18s linear infinite,
-    jarvis-rainbow-pulse 4.5s ease-in-out infinite;
+  animation: jarvis-rainbow-pulse 4.5s ease-in-out infinite;
 }
 
 [data-theme='jarvis'] [data-jarvis-rainbow='true']::before {
