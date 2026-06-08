@@ -498,6 +498,184 @@ Start-Process -FilePath `$jarvisExe
     Write-Ok 'Terminal command ready: Jarvis'
 }
 
+function Get-TerminalBootSource {
+    param(
+        [string]$VersionHint
+    )
+
+    $localBoot = Join-Path $PSScriptRoot '..\tools\terminal_boot\jarvis_boot_forever.py'
+    if (Test-Path -LiteralPath $localBoot) {
+        return Get-Content -LiteralPath $localBoot -Raw -Encoding UTF8
+    }
+
+    $headers = @{ 'User-Agent' = 'jarvis-installer' }
+    $urls = @()
+    if ($VersionHint) {
+        $urls += "https://raw.githubusercontent.com/$JarvisRepo/v$VersionHint/tools/terminal_boot/jarvis_boot_forever.py"
+    }
+    $urls += "https://raw.githubusercontent.com/$JarvisRepo/main/tools/terminal_boot/jarvis_boot_forever.py"
+
+    foreach ($url in $urls) {
+        try {
+            return (Invoke-WebRequest -Uri $url -UseBasicParsing -Headers $headers -TimeoutSec 15).Content
+        } catch {
+            continue
+        }
+    }
+
+    throw 'Unable to retrieve jarvis_boot_forever.py.'
+}
+
+function Backup-LauncherFile ($path) {
+    if (-not (Test-Path -LiteralPath $path)) {
+        return
+    }
+    $stamp = Get-Date -Format 'yyyyMMddHHmmss'
+    Copy-Item -LiteralPath $path -Destination "$path.bak.$stamp" -Force
+}
+
+function Install-TerminalLauncherForever ($exePath) {
+    $binDir = Join-Path $env:USERPROFILE '.jarvis\bin'
+    $cmdPath = Join-Path $binDir 'Jarvis.cmd'
+    $scriptPath = Join-Path $binDir 'Jarvis.ps1'
+    $corePath = Join-Path $binDir 'JarvisCore.ps1'
+    $updatePath = Join-Path $binDir 'JarvisUpdate.ps1'
+    $bootPath = Join-Path $binDir 'jarvis_boot_forever.py'
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+
+    $versionHint = ''
+    try {
+        $versionHint = (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
+    } catch {
+        $versionHint = ''
+    }
+    $bootSource = Get-TerminalBootSource -VersionHint $versionHint
+
+    $cmdLauncher = @'
+@echo off
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Jarvis.ps1" %*
+'@
+    $coreLauncher = @"
+`$ErrorActionPreference = 'Stop'
+`$jarvisExe = '$($exePath.Replace("'", "''"))'
+if (-not (Test-Path -LiteralPath `$jarvisExe)) {
+  Write-Error 'Jarvis executable not found. Reinstall Jarvis One and try again.'
+  exit 1
+}
+Start-Process -FilePath `$jarvisExe -WorkingDirectory (Split-Path -Parent `$jarvisExe)
+"@
+    $updateLauncher = @"
+`$ErrorActionPreference = 'Stop'
+`$jarvisExe = '$($exePath.Replace("'", "''"))'
+`$repo = '$JarvisRepo'
+`$localInstaller = Join-Path `$env:USERPROFILE 'projects\Jarvis\install\install.ps1'
+`$remoteInstaller = "https://raw.githubusercontent.com/`$repo/main/install/install.ps1"
+
+function Normalize-Version([string]`$value) {
+  if ([string]::IsNullOrWhiteSpace(`$value)) { return [version]'0.0.0' }
+  `$clean = (`$value -replace '^v', '') -replace '[^0-9\.].*$', ''
+  try { return [version]`$clean } catch { return [version]'0.0.0' }
+}
+
+function Get-InstalledVersion() {
+  if (-not (Test-Path -LiteralPath `$jarvisExe)) { return [version]'0.0.0' }
+  try {
+    return Normalize-Version ((Get-Item -LiteralPath `$jarvisExe).VersionInfo.ProductVersion)
+  } catch {
+    return [version]'0.0.0'
+  }
+}
+
+try {
+  `$release = Invoke-RestMethod -Uri "https://api.github.com/repos/`$repo/releases/latest" -Headers @{ 'User-Agent' = 'jarvis-terminal-launcher' } -TimeoutSec 15
+  `$latestVersion = Normalize-Version `$release.tag_name
+  `$installedVersion = Get-InstalledVersion
+  if (`$latestVersion -le `$installedVersion) {
+    exit 0
+  }
+
+  `$env:JARVIS_SILENT = '1'
+  `$env:JARVIS_FORMAT = 'nsis'
+  if (Test-Path -LiteralPath `$localInstaller) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File `$localInstaller
+    exit `$LASTEXITCODE
+  }
+
+  & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm '`$remoteInstaller' | iex"
+  exit `$LASTEXITCODE
+} catch {
+  Write-Warning ('Jarvis update check failed: ' + `$_.Exception.Message)
+  exit 0
+}
+"@
+    $psLauncher = @"
+`$ErrorActionPreference = 'Stop'
+`$binDir = Split-Path -Parent `$MyInvocation.MyCommand.Path
+`$bootScript = Join-Path `$binDir 'jarvis_boot_forever.py'
+`$coreScript = Join-Path `$binDir 'JarvisCore.ps1'
+`$updateScript = Join-Path `$binDir 'JarvisUpdate.ps1'
+
+function Resolve-PythonCommand {
+  if (Get-Command python -ErrorAction SilentlyContinue) { return @('python') }
+  if (Get-Command py -ErrorAction SilentlyContinue) { return @('py', '-3') }
+  return `$null
+}
+
+if (-not (Test-Path -LiteralPath `$bootScript)) {
+  Write-Error 'Jarvis terminal boot script is missing. Reinstall the Jarvis launcher.'
+  exit 1
+}
+
+`$pythonCommand = @(Resolve-PythonCommand)
+if (-not `$pythonCommand) {
+  Write-Warning 'Python was not found. Launching Jarvis One directly.'
+  & powershell -NoProfile -ExecutionPolicy Bypass -File `$coreScript
+  exit `$LASTEXITCODE
+}
+
+`$updateCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + `$updateScript + '"'
+`$appCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + `$coreScript + '"'
+`$bootArgs = @(
+  `$bootScript,
+  '--update-command', `$updateCommand,
+  '--ignore-update-failure',
+  '--app-command', `$appCommand,
+  '--app-cwd', `$env:USERPROFILE,
+  '--app-process-name', 'jarvis.exe',
+  '--launch-wait-seconds', '7',
+  '--timeout', '900',
+  '--forever'
+)
+`$pythonExe = `$pythonCommand[0]
+`$pythonPrefix = @(`$pythonCommand | Select-Object -Skip 1)
+& `$pythonExe @pythonPrefix @bootArgs
+exit `$LASTEXITCODE
+"@
+
+    Backup-LauncherFile $cmdPath
+    Backup-LauncherFile $scriptPath
+    Backup-LauncherFile $corePath
+    Backup-LauncherFile $updatePath
+    Backup-LauncherFile $bootPath
+    Set-Content -LiteralPath $cmdPath -Value $cmdLauncher -Encoding ASCII
+    Set-Content -LiteralPath $corePath -Value $coreLauncher -Encoding UTF8
+    Set-Content -LiteralPath $updatePath -Value $updateLauncher -Encoding UTF8
+    Set-Content -LiteralPath $scriptPath -Value $psLauncher -Encoding UTF8
+    [IO.File]::WriteAllText($bootPath, $bootSource, (New-Object Text.UTF8Encoding($false)))
+
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries = @($userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not ($entries | Where-Object { $_.Trim().Equals($binDir, [StringComparison]::OrdinalIgnoreCase) })) {
+        $updatedPath = (@($entries) + $binDir) -join ';'
+        [Environment]::SetEnvironmentVariable('Path', $updatedPath, 'User')
+    }
+    if (-not (($env:Path -split ';') | Where-Object { $_.Trim().Equals($binDir, [StringComparison]::OrdinalIgnoreCase) })) {
+        $env:Path = "$binDir;$env:Path"
+    }
+    Write-Ok 'Terminal command ready: Jarvis'
+    return $scriptPath
+}
+
 # --- Main -----------------------------------------------------------------
 Write-Banner
 
@@ -591,9 +769,15 @@ if ($exit -eq 0) {
     # legacy %LOCALAPPDATA%\Jarvis One path.
     $exePath = Get-InstalledJarvisExe
     if ($exePath -and (Test-Path -LiteralPath $exePath)) {
-        Install-TerminalLauncher -exePath $exePath
-        Write-Step "Auto-launching Jarvis One..."
-        Start-Process -FilePath $exePath
+        $launcherScript = Install-TerminalLauncherForever -exePath $exePath
+        Write-Step "Auto-launching Jarvis terminal..."
+        Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            $launcherScript
+        )
     } else {
         Write-Warn "Could not locate installed jarvis.exe to auto-launch."
     }
