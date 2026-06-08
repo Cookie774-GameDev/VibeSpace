@@ -782,7 +782,6 @@ if ($exit -eq 0) {
     
     Write-Host ""
     Write-Host "  Launch with:" -ForegroundColor Cyan
-    Write-Host "      type 'Jarvis' to start Jarvis"
     Write-Host "      Start menu -> Jarvis One"
     Write-Host "      or: & `"`$env:LOCALAPPDATA\Programs\Jarvis One\jarvis.exe`""
     Write-Host ""
