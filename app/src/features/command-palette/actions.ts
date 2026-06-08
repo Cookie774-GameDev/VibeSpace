@@ -293,6 +293,17 @@ const STATIC_ACTIONS: Action[] = [
     },
   },
   {
+    id: 'theme-jarvis',
+    label: 'Jarvis Core',
+    icon: Palette,
+    page: 'theme',
+    keywords: ['orange', 'black', 'reference'],
+    perform: ({ closePalette }) => {
+      useUIStore.getState().setTheme('jarvis');
+      closePalette();
+    },
+  },
+  {
     id: 'theme-system',
     label: 'System',
     icon: Monitor,

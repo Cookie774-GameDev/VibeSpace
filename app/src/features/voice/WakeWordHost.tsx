@@ -1,18 +1,11 @@
 import * as React from 'react';
-import { Mic, Sparkles } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
+import { Avatar } from '@/components/ui/avatar';
 import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
-import {
-  containsWakePhrase,
-  readWakeWordEnabled,
-  WAKE_WORD_SETTING_EVENT,
-} from './wakeWord';
-import {
-  VOICE_EXCLUSIVE_START_EVENT,
-  VOICE_EXCLUSIVE_STOP_EVENT,
-} from './VoiceService';
+import { containsWakePhrase, readWakeWordEnabled, WAKE_WORD_SETTING_EVENT } from './wakeWord';
+import { VOICE_EXCLUSIVE_START_EVENT, VOICE_EXCLUSIVE_STOP_EVENT } from './VoiceService';
+import { speakText, VOICE_ACKNOWLEDGEMENT_TEXT } from './speechSynthesis';
 
 interface SpeechRecognitionAlternative {
   transcript: string;
@@ -125,7 +118,11 @@ export function WakeWordHost() {
       recognition.lang = 'en-US';
       recognition.onresult = (event) => {
         const transcripts: string[] = [];
-        for (let resultIndex = event.resultIndex; resultIndex < event.results.length; resultIndex += 1) {
+        for (
+          let resultIndex = event.resultIndex;
+          resultIndex < event.results.length;
+          resultIndex += 1
+        ) {
           const result = event.results[resultIndex];
           const alternative = result[0];
           if (alternative?.transcript) transcripts.push(alternative.transcript);
@@ -136,6 +133,14 @@ export function WakeWordHost() {
         toast.success('Hey Jarvis heard', 'Opening voice.');
         stopRecognition(recognitionRef);
         setVoiceModalOpen(true);
+        window.setTimeout(() => {
+          void speakText(VOICE_ACKNOWLEDGEMENT_TEXT).catch((err) => {
+            toast.warning(
+              'Voice acknowledgement unavailable',
+              err instanceof Error ? err.message : 'Jarvis could not play the acknowledgement.',
+            );
+          });
+        }, 140);
       };
       recognition.onerror = (event) => {
         const blocked =
@@ -180,57 +185,33 @@ export function WakeWordHost() {
 
   if (!enabled || voiceModalOpen) return null;
 
-  const statusCopy: Record<WakeStatus, { title: string; body: string; tone: string }> = {
-    listening: {
-      title: 'Wake word active',
-      body: 'Say "Jarvis" or "Hey Jarvis"',
-      tone: 'border-accent-cyan/35 bg-background/70 text-accent-cyan shadow-[0_0_30px_hsl(var(--accent-cyan)/0.18)]',
-    },
-    heard: {
-      title: 'Jarvis awake',
-      body: 'Opening voice',
-      tone: 'border-success/45 bg-success/10 text-success shadow-[0_0_34px_hsl(var(--success)/0.18)]',
-    },
-    unsupported: {
-      title: 'Wake unavailable',
-      body: 'Use Shift+Tab or Mod+Space',
-      tone: 'border-warning/40 bg-warning/10 text-warning',
-    },
-    blocked: {
-      title: 'Mic blocked',
-      body: 'Allow microphone access',
-      tone: 'border-destructive/40 bg-destructive/10 text-destructive',
-    },
-  };
-  const copy = statusCopy[status];
-
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
       onClick={() => setVoiceModalOpen(true)}
-      className={cn(
-        'fixed bottom-4 right-4 z-[70] h-auto overflow-hidden rounded-full border px-3 py-2 backdrop-blur-xl',
-        'jarvis-wake-chip',
-        'before:pointer-events-none before:absolute before:inset-0 before:rounded-full before:bg-[radial-gradient(circle_at_30%_20%,hsl(var(--accent-cyan)/0.28),transparent_42%),radial-gradient(circle_at_78%_90%,hsl(var(--accent-violet)/0.22),transparent_46%)]',
-        'after:pointer-events-none after:absolute after:inset-px after:rounded-full after:border after:border-white/5',
-        'hover:bg-elevated/80 focus-visible:ring-2 focus-visible:ring-ring',
-        copy.tone,
-      )}
+      className="jarvis-wake-chip fixed bottom-4 right-4 z-[70] flex h-9 w-9 items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
       aria-live="polite"
-      aria-label={`${copy.title}. ${copy.body}`}
+      aria-label={status === 'listening' ? 'Wake word active. Click to open Jarvis.' : status === 'heard' ? 'Jarvis awake.' : 'Wake word indicator'}
     >
-      <span className="relative z-10 flex h-8 w-8 items-center justify-center rounded-full bg-background/65 shadow-[inset_0_0_14px_hsl(var(--accent-cyan)/0.22)]">
-        {status === 'heard' ? <Sparkles className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-        {status === 'listening' ? (
-          <span className="absolute inset-0 rounded-full border border-accent-cyan/50 animate-ping" />
-        ) : null}
+      <span className="relative flex h-7 w-7 items-center justify-center">
+        <span
+          className={cn(
+            'absolute inset-0 rounded-full',
+            status === 'listening' && 'animate-ping',
+          )}
+          style={{
+            background: 'radial-gradient(circle at 38% 34%, #fff7cb 0%, #ffd45a 18%, #ff980f 48%, #cf6205 72%, #5b2300 100%)',
+            opacity: status === 'listening' ? 0.4 : 0,
+          }}
+        />
+        <Avatar
+          seed="jarvis-voice-trigger"
+          initials="J"
+          size={26}
+          className="jarvis-wake-avatar relative animate-pulse"
+        />
       </span>
-      <span className="relative z-10 flex flex-col items-start leading-tight">
-        <span className="text-metadata font-semibold uppercase tracking-wide">{copy.title}</span>
-        <span className="text-xs text-foreground/80">{copy.body}</span>
-      </span>
-    </Button>
+    </button>
   );
 }
 
@@ -240,7 +221,9 @@ function clearRestart(restartTimerRef: React.MutableRefObject<number | null>): v
   restartTimerRef.current = null;
 }
 
-function stopRecognition(recognitionRef: React.MutableRefObject<WakeSpeechRecognition | null>): void {
+function stopRecognition(
+  recognitionRef: React.MutableRefObject<WakeSpeechRecognition | null>,
+): void {
   const recognition = recognitionRef.current;
   if (!recognition) return;
   recognitionRef.current = null;

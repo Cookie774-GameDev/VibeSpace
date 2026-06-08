@@ -22,7 +22,7 @@
  *   - useIdleDetection() to flip ambient mode on inactivity (V2)
  */
 import * as React from 'react';
-import { useUIStore } from '@/stores/ui';
+import { applyThemeToDocument, useUIStore } from '@/stores/ui';
 import { useAgentStore } from '@/stores/agents';
 import { AuthGate } from '@/features/auth';
 import { AppShell } from '@/components/layout';
@@ -32,7 +32,6 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { startNotificationLoop } from '@/features/tasks';
 import { startClockEngine } from '@/features/clock';
 import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
-import { GlowBorder } from '@/features/voice/GlowBorder';
 import { WakeWordHost } from '@/features/voice/WakeWordHost';
 import { ApiKeySaveBurst } from '@/features/settings/ApiKeySaveBurst';
 import { CallModal, startOutboundTrigger } from '@/features/call';
@@ -78,9 +77,7 @@ type SupabaseSessionLike = {
  * own internal skeletons handle empty/loading states better than a
  * generic spinner would.
  */
-const ChatView = React.lazy(() =>
-  import('@/features/chat').then((m) => ({ default: m.ChatView })),
-);
+const ChatView = React.lazy(() => import('@/features/chat').then((m) => ({ default: m.ChatView })));
 const CouncilView = React.lazy(() =>
   import('@/features/council').then((m) => ({ default: m.CouncilView })),
 );
@@ -127,7 +124,7 @@ function applyCloudSession(session: SupabaseSessionLike): void {
 
 /**
  * Renders the right canvas based on `useUIStore.route` (V3) and
-  * `chatMode` (V2). For non-`chat` routes (terminal / kanban / context /
+ * `chatMode` (V2). For non-`chat` routes (terminal / kanban / context /
  * benchmarks / history / agents) we delegate to `<PageRouter />`.
  *
  * For the `chat` route we keep the existing council bootstrap so
@@ -233,8 +230,10 @@ function useBoot() {
         if (!isSupabaseConfigured()) {
           applyCloudSession(null);
         } else {
-          const [{ getSupabaseClient }, { processCloudPull, processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop }] =
-            await Promise.all([import('@/lib/supabase/client'), import('@/lib/sync')]);
+          const [
+            { getSupabaseClient },
+            { processCloudPull, processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop },
+          ] = await Promise.all([import('@/lib/supabase/client'), import('@/lib/sync')]);
           if (cancelled) return;
           const supa = getSupabaseClient();
           if (supa) {
@@ -486,6 +485,22 @@ function AssistantBarHost() {
   return <AssistantBar open={open} onOpenChange={setOpen} />;
 }
 
+function ThemeHost() {
+  const theme = useUIStore((state) => state.theme);
+
+  React.useEffect(() => {
+    applyThemeToDocument(theme);
+    if (theme !== 'system' || typeof window.matchMedia !== 'function') return;
+
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = () => applyThemeToDocument('system');
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, [theme]);
+
+  return null;
+}
+
 /**
  * Inner shell - rendered after AuthGate has confirmed local user + seeding.
  */
@@ -501,7 +516,11 @@ function WorkspaceRoot() {
       onResult: (ok, info) => {
         if (ok) {
           toast.info('Outbound call queued', `Reason: ${info.reason}`);
-        } else if (info.error && info.error !== 'cooldown' && info.error !== 'cloud_not_configured') {
+        } else if (
+          info.error &&
+          info.error !== 'cooldown' &&
+          info.error !== 'cloud_not_configured'
+        ) {
           // Quiet failures we don't want to spam the user about
           // (cooldown is normal during a crash burst; cloud-not-configured
           // is the user's setup problem already surfaced in Settings).
@@ -528,7 +547,7 @@ function WorkspaceRoot() {
           : allChats.filter((c) => !c.project_id);
         const existing = filtered.length;
         const title = `New chat ${existing + 1}`;
-        
+
         const chat = await chatRepo.create({
           workspace_id: workspaceId,
           project_id: projectId ?? undefined,
@@ -570,8 +589,7 @@ function WorkspaceRoot() {
       <WhatsNewHost />
       <UpdateWarningHost />
 
-      {/* Visual ambient effects */}
-      <GlowBorder />
+      {/* Visual ambient effects removed — clean UI */}
 
       {/* V3 — confetti + serif gradient toast on success milestones. */}
       <CelebrationHost />
@@ -620,6 +638,7 @@ function WorkspaceRoot() {
 export function App() {
   return (
     <ErrorBoundary>
+      <ThemeHost />
       <AuthGate>
         <WorkspaceRoot />
       </AuthGate>

@@ -34,5 +34,9 @@ export {
   OLLAMA_DEFAULT_BASE,
   ollamaBaseUrl,
   listOllamaModels,
+  listOllamaModelInfo,
   isOllamaReachable,
+  waitForOllamaReachable,
+  pullOllamaModel,
 } from './providers/ollama';
+export type { OllamaModelInfo, OllamaPullProgress } from './providers/ollama';

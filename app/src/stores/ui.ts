@@ -3,12 +3,25 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Theme } from '@/types/common';
 import { safeLocalStorage, measureStorageSizes } from '@/lib/persistence/safeLocalStorage';
 
-export type AmbientTrack =
-  | 'music-1'
-  | 'music-2'
-  | 'music-3'
-  | 'music-4'
-  | 'music-5';
+export type ResolvedTheme = Exclude<Theme, 'system'>;
+
+export function resolveTheme(theme: Theme, prefersDark?: boolean): ResolvedTheme {
+  if (theme !== 'system') return theme;
+  const dark =
+    prefersDark ??
+    (typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches);
+  return dark ? 'dark' : 'light';
+}
+
+export function applyThemeToDocument(theme: Theme): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.setAttribute('data-theme', resolveTheme(theme));
+  document.documentElement.setAttribute('data-theme-preference', theme);
+}
+
+export type AmbientTrack = 'music-1' | 'music-2' | 'music-3' | 'music-4' | 'music-5';
 
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
 
@@ -312,11 +325,14 @@ export const useUIStore = create<UIState>()(
         })),
       setChatMode: (mode) => set({ chatMode: mode }),
       setTheme: (t) => {
-        document.documentElement.setAttribute('data-theme', t === 'system' ? 'dark' : t);
+        applyThemeToDocument(t);
         set({ theme: t });
       },
       finishOnboarding: () => set({ onboardingComplete: true }),
-      resetUI: () => set(defaults),
+      resetUI: () => {
+        applyThemeToDocument(defaults.theme);
+        set(defaults);
+      },
 
       // V2
       setAmbient: (v) =>
@@ -348,7 +364,8 @@ export const useUIStore = create<UIState>()(
       setAssistantOpen: (v) => set({ assistantOpen: v }),
       setWhatsNewOpen: (v) => set({ whatsNewOpen: v }),
       setComposerStt: (v) => set({ composerStt: v }),
-      setDefaultTerminalFontSize: (v) => set({ defaultTerminalFontSize: Math.max(1, Math.min(100, v)) }),
+      setDefaultTerminalFontSize: (v) =>
+        set({ defaultTerminalFontSize: Math.max(1, Math.min(100, v)) }),
       setNotificationMaster: (v) => set({ notificationMaster: v }),
       setDoneNotification: (key, enabled) =>
         set((s) => ({
@@ -379,8 +396,7 @@ export const useUIStore = create<UIState>()(
           wellnessDurationMs: null,
         }),
       setActionsPaletteOpen: (v) => set({ actionsPaletteOpen: v }),
-      toggleActionsPalette: () =>
-        set((s) => ({ actionsPaletteOpen: !s.actionsPaletteOpen })),
+      toggleActionsPalette: () => set((s) => ({ actionsPaletteOpen: !s.actionsPaletteOpen })),
     }),
     {
       name: 'jarvis-ui',
@@ -390,11 +406,28 @@ export const useUIStore = create<UIState>()(
         if (version < 1) {
           console.info(`[useUIStore] Migrating persisted state from version ${version} to 1`);
           const safeKeys = [
-            'navOpen', 'inspectorOpen', 'activeChatId', 'activeAgentId', 'route',
-            'navSectionsCollapsed', 'chatMode', 'theme', 'density', 'onboardingComplete',
-            'ambient', 'ambientThresholdMs', 'ambientDrone', 'ambientTrack', 'ambientVolume',
-            'ambientAlwaysPlay', 'composerStt', 'defaultTerminalFontSize', 'notificationMaster',
-            'doneNotifications', 'aiCompletionCue', 'lastSeenWhatsNewVersion'
+            'navOpen',
+            'inspectorOpen',
+            'activeChatId',
+            'activeAgentId',
+            'route',
+            'navSectionsCollapsed',
+            'chatMode',
+            'theme',
+            'density',
+            'onboardingComplete',
+            'ambient',
+            'ambientThresholdMs',
+            'ambientDrone',
+            'ambientTrack',
+            'ambientVolume',
+            'ambientAlwaysPlay',
+            'composerStt',
+            'defaultTerminalFontSize',
+            'notificationMaster',
+            'doneNotifications',
+            'aiCompletionCue',
+            'lastSeenWhatsNewVersion',
           ];
           const migrated: Record<string, any> = {};
           if (persistedState && typeof persistedState === 'object') {

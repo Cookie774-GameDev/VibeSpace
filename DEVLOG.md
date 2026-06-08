@@ -1,6 +1,62 @@
+## 2026-06-07 - v0.1.25 Jarvis Core Voice, Theme, and Local Models
+
+### Voice
+
+- Added five persisted spoken voice profiles independent from the conversational persona.
+- Normal typed chat replies now use the selected voice when "Speak Jarvis replies" is enabled.
+- Wake-word activation speaks a short selected-voice acknowledgement before the persistent panel continues listening.
+- Added local-only voice selection, installed voice detection, and a Windows Speech settings handoff for installing voice packs.
+
+### Local Models
+
+- Reworked Settings -> Local Models around real Ollama status, native install detection, hidden daemon start, and live `/api/pull` progress.
+- Added a practical model catalog with direct in-app downloads and automatic default-model selection after a pull completes.
+- Confirmed fully local chat routing overrides cloud providers when offline/local mode is enabled.
+
+### Theme and Settings
+
+- Added Jarvis Core as a new optional black/orange full-app theme while keeping Dark, Light, and System.
+- Fixed System theme resolution so it follows the OS preference instead of always forcing dark.
+- Restyled slash command panels and option pickers to inherit app theme tokens.
+- Provider cards now show real locally recorded monthly usage instead of placeholder data.
+
+### Release Infrastructure
+
+- Fixed the updater manifest generator to skip unsigned platform archives instead of failing the whole release job when Windows updater signatures exist.
+- Added focused regression tests for voice selection, local routing, Ollama pull progress, provider usage, theme resolution, and release manifests.
+
+**Verification:** targeted Vitest suite (26 tests), `npm --prefix app run typecheck`, `cargo check --manifest-path app/src-tauri/Cargo.toml`, and `npm run test:release-manifest`.
+
+---
+
+## 2026-06-07 - v0.1.24 Persistent Jarvis Voice Panel
+
+### Voice UI
+
+- Replaced the blocking voice dialog with a persistent top-right Jarvis card that opens from the wake word flow.
+- Matched the warm Jarvis visual language with an amber orb, ready/listening/speaking status, compact close button, and frosted dark panel.
+- Added a microphone-reactive waveform so louder input produces taller amber bars.
+- Added a scrollable You/Jarvis conversation transcript with live partial speech while recognition is still streaming.
+- Kept the panel alive through no-speech timeouts and routine recognition ends; it only closes when the user presses the mini X or toggles voice UI through existing app controls.
+
+### Voice Flow
+
+- Voice final results now create chat messages and dispatch spoken Jarvis replies directly from the panel.
+- Jarvis speech synthesis emits start/end lifecycle events so recognition pauses during spoken replies and resumes afterward.
+- Buffered rapid final transcript chunks into one utterance before sending, preventing duplicate or truncated voice requests.
+
+### Slash UI Carry-Forward
+
+- Kept the compact warm Jarvis option picker styling for terminal/context options so command panels match the app theme.
+
+**Verification:** `npm --prefix app run typecheck`, `npm --prefix app run test` (46 files / 212 tests), `npm --prefix app run build`, signed updater release pipeline `npm run release:windows`, local silent NSIS install, installed executable version check (`0.1.24`), and `releases/latest.json` check.
+
+---
+
 ## 2026-06-07 - v0.1.23 Compact Terminal-Style Slash Commands
 
 ### Slash Command UI Refinements
+
 - Redesigned slash command dropdown from 420px to 240px with terminal-style monospace font.
 - Made option items smaller and more compact with a dark violet theme.
 - Confirmed slash commands now display as removable purple pill tokens in the input area.
@@ -10,12 +66,14 @@
 - Option picker dynamically loads terminals from transcript store filtered by project ID.
 
 ### API Key Settings (from earlier in session)
+
 - Premium API key settings with colorful surge animation on save.
 - 21 AI providers with Azure OpenAI, AWS Bedrock, Cerebras, and Hugging Face.
 - Provider usage counters showing tokens, cost, and last-used timestamp.
 - Masked key previews with show/hide toggle and copy button.
 
 ### Other Fixes
+
 - Fixed terminal coding modes so trailing arguments pass through to Claude Code, Codex, or OpenCode.
 - Split the in-app update history into correct 0.1.21, 0.1.22, and 0.1.23 entries.
 - macOS installer CI uses stable `macos-13` runner for reliable x64 builds.

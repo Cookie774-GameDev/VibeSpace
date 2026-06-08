@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import type { Agent, Message } from '@/types';
 import type { AgentId, ChatId, MessageId } from '@/types/common';
+import { useAuthStore } from '@/stores/auth';
 
 const mocks = vi.hoisted(() => ({
   runAgent: vi.fn(),
@@ -65,6 +66,11 @@ function agent(id: string, slug: string, systemPrompt: string): Agent {
 describe('startRuntimeListener agent routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({
+      speakReplies: false,
+      voicePreset: 'jarvis-prime',
+      voiceEngine: 'system',
+    });
     mocks.runAgent.mockResolvedValue({
       text: 'APPLE',
       usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
@@ -102,13 +108,17 @@ describe('startRuntimeListener agent routing', () => {
       updateMessage: vi.fn(async () => undefined),
     });
 
-    window.dispatchEvent(new CustomEvent('jarvis:send', {
-      detail: { chatId, text: 'what is the code word?' },
-    }));
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: { chatId, text: 'what is the code word?' },
+      }),
+    );
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     expect(mocks.runAgent.mock.calls[0][0].agent.id).toBe(apple.id);
-    expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain('Always answer with APPLE.');
+    expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain(
+      'Always answer with APPLE.',
+    );
 
     stop();
   });
@@ -141,13 +151,17 @@ describe('startRuntimeListener agent routing', () => {
       updateMessage: vi.fn(async () => undefined),
     });
 
-    window.dispatchEvent(new CustomEvent('jarvis:send', {
-      detail: { chatId, text: '@apple what is the code word?', mentionedAgentIds: [apple.id] },
-    }));
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: { chatId, text: '@apple what is the code word?', mentionedAgentIds: [apple.id] },
+      }),
+    );
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     expect(mocks.runAgent.mock.calls[0][0].agent.id).toBe(apple.id);
-    expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain('Always answer with APPLE.');
+    expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain(
+      'Always answer with APPLE.',
+    );
 
     stop();
   });
@@ -168,7 +182,8 @@ describe('startRuntimeListener agent routing', () => {
 
     const stop = startRuntimeListener({
       getAgentById: (id) => (id === apple.id ? apple : id === jarvis.id ? jarvis : null),
-      getAgentBySlug: (slug) => (slug === 'apple-agent' ? apple : slug === 'jarvis' ? jarvis : null),
+      getAgentBySlug: (slug) =>
+        slug === 'apple-agent' ? apple : slug === 'jarvis' ? jarvis : null,
       getAgentForChat: vi.fn(async () => jarvis),
       getMessages: vi.fn(async () => [userMessage]),
       appendMessage: vi.fn(async (msg) => ({
@@ -180,18 +195,27 @@ describe('startRuntimeListener agent routing', () => {
       updateMessage: vi.fn(async () => undefined),
     });
 
-    window.dispatchEvent(new CustomEvent('jarvis:send', {
-      detail: { chatId, text: '@apple-agent what is the code word?' },
-    }));
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: { chatId, text: '@apple-agent what is the code word?' },
+      }),
+    );
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     expect(mocks.runAgent.mock.calls[0][0].agent.id).toBe(apple.id);
-    expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain('Always answer with APPLE.');
+    expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain(
+      'Always answer with APPLE.',
+    );
 
     stop();
   });
 
-  it('speaks final prose for voice-originated sends', async () => {
+  it('speaks final prose for normal sends when spoken replies are enabled', async () => {
+    useAuthStore.setState({
+      speakReplies: true,
+      voicePreset: 'atlas',
+      voiceEngine: 'local',
+    });
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_voice' as ChatId;
     const placeholderId = 'msg_voice_assistant' as MessageId;
@@ -230,14 +254,20 @@ describe('startRuntimeListener agent routing', () => {
       updateMessage: vi.fn(async () => undefined),
     });
 
-    window.dispatchEvent(new CustomEvent('jarvis:send', {
-      detail: { chatId, text: 'tell me the plan', speakReply: true },
-    }));
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: { chatId, text: 'tell me the plan' },
+      }),
+    );
 
     await vi.waitFor(() => expect(mocks.speakText).toHaveBeenCalledTimes(1));
-    expect(mocks.speakText).toHaveBeenCalledWith('Here is the plan.', expect.objectContaining({
-      persona: expect.any(String),
-    }));
+    expect(mocks.speakText).toHaveBeenCalledWith(
+      'Here is the plan.',
+      expect.objectContaining({
+        voicePreset: 'atlas',
+        engine: 'local',
+      }),
+    );
 
     stop();
   });

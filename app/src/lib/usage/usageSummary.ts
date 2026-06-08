@@ -7,11 +7,13 @@ export interface UsageSummaryInput {
   providerLabel: string;
 }
 
-interface LocalUsageTotals {
+export interface LocalUsageTotals {
   inputTokens: number;
   outputTokens: number;
+  cachedTokens: number;
   costUsd: number;
   calls: number;
+  lastUsed: number | null;
 }
 
 interface LiveOpenAiUsage {
@@ -52,27 +54,48 @@ async function getLocalUsage(provider: ProviderId): Promise<LocalUsageTotals> {
   await openDb();
   const start = monthStartMs();
   const messages = await db.messages.toArray();
+  return summarizeLocalProviderUsage(messages, provider, start);
+}
 
+export function summarizeLocalProviderUsage(
+  messages: Array<{
+    created_at: number;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_tokens?: number;
+      cache_write_tokens?: number;
+      cost_usd?: number;
+      provider?: ProviderId;
+    };
+  }>,
+  provider: ProviderId,
+  sinceMs = monthStartMs(),
+): LocalUsageTotals {
   return messages.reduce<LocalUsageTotals>(
     (totals, message) => {
-      if (message.created_at < start) return totals;
+      if (message.created_at < sinceMs) return totals;
       const usage = message.usage;
       if (!usage) return totals;
       if (usage.provider && usage.provider !== provider) return totals;
 
       totals.inputTokens += usage.input_tokens ?? 0;
       totals.outputTokens += usage.output_tokens ?? 0;
+      totals.cachedTokens += (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
       totals.costUsd += usage.cost_usd ?? 0;
       totals.calls += 1;
+      totals.lastUsed = Math.max(totals.lastUsed ?? 0, message.created_at);
       return totals;
     },
-    { inputTokens: 0, outputTokens: 0, costUsd: 0, calls: 0 },
+    { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0, calls: 0, lastUsed: null },
   );
 }
 
-function sumOpenAiUsageBucket(payload: unknown): Pick<LiveOpenAiUsage, 'inputTokens' | 'outputTokens' | 'requests'> {
+function sumOpenAiUsageBucket(
+  payload: unknown,
+): Pick<LiveOpenAiUsage, 'inputTokens' | 'outputTokens' | 'requests'> {
   const buckets = Array.isArray((payload as { data?: unknown[] })?.data)
-    ? ((payload as { data: unknown[] }).data)
+    ? (payload as { data: unknown[] }).data
     : [];
 
   let inputTokens = 0;
@@ -81,7 +104,7 @@ function sumOpenAiUsageBucket(payload: unknown): Pick<LiveOpenAiUsage, 'inputTok
 
   for (const bucket of buckets) {
     const results = Array.isArray((bucket as { results?: unknown[] })?.results)
-      ? ((bucket as { results: unknown[] }).results)
+      ? (bucket as { results: unknown[] }).results
       : [];
     for (const result of results) {
       const row = result as Record<string, unknown>;
@@ -96,7 +119,7 @@ function sumOpenAiUsageBucket(payload: unknown): Pick<LiveOpenAiUsage, 'inputTok
 
 function sumOpenAiCosts(payload: unknown): number | null {
   const buckets = Array.isArray((payload as { data?: unknown[] })?.data)
-    ? ((payload as { data: unknown[] }).data)
+    ? (payload as { data: unknown[] }).data
     : [];
 
   let total = 0;
@@ -104,7 +127,7 @@ function sumOpenAiCosts(payload: unknown): number | null {
 
   for (const bucket of buckets) {
     const results = Array.isArray((bucket as { results?: unknown[] })?.results)
-      ? ((bucket as { results: unknown[] }).results)
+      ? (bucket as { results: unknown[] }).results
       : [];
     for (const result of results) {
       const row = result as Record<string, unknown>;
@@ -131,7 +154,9 @@ async function fetchOpenAiLiveUsage(apiKey: string): Promise<LiveOpenAiUsage> {
 
   const headers = { Authorization: `Bearer ${apiKey}` };
   const [usageRes, costRes] = await Promise.all([
-    fetch(`https://api.openai.com/v1/organization/usage/completions?${params.toString()}`, { headers }),
+    fetch(`https://api.openai.com/v1/organization/usage/completions?${params.toString()}`, {
+      headers,
+    }),
     fetch(`https://api.openai.com/v1/organization/costs?${params.toString()}`, { headers }),
   ]);
 

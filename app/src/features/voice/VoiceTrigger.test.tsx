@@ -47,4 +47,12 @@ describe('VoiceTrigger', () => {
     fireEvent.pointerUp(button, { button: 0, pointerId: 2 });
     expect(button.getAttribute('aria-pressed')).toBe('false');
   });
+
+  it('uses the symbiote glow treatment while idle', () => {
+    render(<ControlledVoiceTrigger />);
+
+    expect(screen.getByRole('button', { name: /start voice session/i }).className).toContain(
+      'jarvis-symbiote-trigger',
+    );
+  });
 });

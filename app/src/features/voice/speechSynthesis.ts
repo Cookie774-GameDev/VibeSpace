@@ -1,12 +1,17 @@
-import type { PersonaPreset } from '@/types/common';
+import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
+import { useAuthStore } from '@/stores/auth';
 import { PERSONAS } from './personas';
+import { DEFAULT_VOICE_PRESET, getVoiceProfile } from './voiceProfiles';
 
 export const VOICE_PREVIEW_TEXT = "Hi, how's your day doing? Jarvis is online.";
+export const VOICE_ACKNOWLEDGEMENT_TEXT = 'Ready.';
 const VOICE_LOAD_TIMEOUT_MS = 2_500;
 const SPEECH_KEEPALIVE_MS = 4_000;
 
 export interface SpeakTextOptions {
   persona?: PersonaPreset;
+  voicePreset?: VoicePresetId;
+  engine?: VoiceEngine;
   rate?: number;
   pitch?: number;
   volume?: number;
@@ -27,6 +32,13 @@ const CANCELLATION_ERRORS = new Set(['interrupted', 'canceled', 'cancelled']);
 
 let activeSpeechRequestId = 0;
 
+export const SPEECH_SYNTHESIS_START_EVENT = 'jarvis:speech:start';
+export const SPEECH_SYNTHESIS_END_EVENT = 'jarvis:speech:end';
+
+function dispatchSpeechEvent(name: string): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(name));
+}
+
 function getSpeechSynthesis(): SpeechSynthesis | null {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
   return window.speechSynthesis;
@@ -41,7 +53,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function voiceScore(voice: SpeechSynthesisVoice, persona: PersonaPreset, lang?: string): number {
+function baseVoiceScore(voice: SpeechSynthesisVoice, lang?: string): number {
   const haystack = `${voice.name} ${voice.voiceURI} ${voice.lang}`.toLowerCase();
   let score = 0;
   if (lang && voice.lang.toLowerCase().startsWith(lang.toLowerCase().slice(0, 2))) score += 12;
@@ -51,28 +63,88 @@ function voiceScore(voice: SpeechSynthesisVoice, persona: PersonaPreset, lang?: 
   for (const hint of QUALITY_HINTS) {
     if (haystack.includes(hint)) score += 6;
   }
+  return score;
+}
+
+function voiceScore(voice: SpeechSynthesisVoice, persona: PersonaPreset, lang?: string): number {
+  const haystack = `${voice.name} ${voice.voiceURI} ${voice.lang}`.toLowerCase();
+  let score = baseVoiceScore(voice, lang);
   PREFERRED_VOICE_NAMES[persona].forEach((name, index) => {
     if (haystack.includes(name)) score += 20 - index;
   });
   return score;
 }
 
+function profileVoiceScore(
+  voice: SpeechSynthesisVoice,
+  profileId: VoicePresetId,
+  lang?: string,
+): number {
+  const profile = getVoiceProfile(profileId);
+  const haystack = `${voice.name} ${voice.voiceURI} ${voice.lang}`.toLowerCase();
+  let score = baseVoiceScore(voice, lang);
+  profile.preferredNames.forEach((name, index) => {
+    if (haystack.includes(name)) score += 22 - index;
+  });
+  return score;
+}
+
+function candidateVoices(
+  voices: readonly SpeechSynthesisVoice[],
+  engine: VoiceEngine = 'system',
+): SpeechSynthesisVoice[] {
+  return engine === 'local' ? voices.filter((voice) => voice.localService) : [...voices];
+}
+
 export function selectPersonaVoice(
   voices: readonly SpeechSynthesisVoice[],
   persona: PersonaPreset = 'jarvis',
-  options: Pick<SpeakTextOptions, 'lang' | 'voiceName'> = {},
+  options: Pick<SpeakTextOptions, 'lang' | 'voiceName' | 'engine'> = {},
 ): SpeechSynthesisVoice | undefined {
-  if (voices.length === 0) return undefined;
+  const candidates = candidateVoices(voices, options.engine);
+  if (candidates.length === 0) return undefined;
   if (options.voiceName) {
     const requested = options.voiceName.toLowerCase();
-    const exact = voices.find((voice) => voice.name.toLowerCase() === requested);
+    const exact = candidates.find((voice) => voice.name.toLowerCase() === requested);
     if (exact) return exact;
-    const partial = voices.find((voice) => voice.name.toLowerCase().includes(requested));
+    const partial = candidates.find((voice) => voice.name.toLowerCase().includes(requested));
     if (partial) return partial;
   }
-  return [...voices].sort(
+  return candidates.sort(
     (a, b) => voiceScore(b, persona, options.lang) - voiceScore(a, persona, options.lang),
   )[0];
+}
+
+export function selectVoiceProfileVoice(
+  voices: readonly SpeechSynthesisVoice[],
+  preset: VoicePresetId = DEFAULT_VOICE_PRESET,
+  options: Pick<SpeakTextOptions, 'lang' | 'voiceName' | 'engine'> = {},
+): SpeechSynthesisVoice | undefined {
+  const candidates = candidateVoices(voices, options.engine);
+  if (candidates.length === 0) return undefined;
+  if (options.voiceName) {
+    const requested = options.voiceName.toLowerCase();
+    const exact = candidates.find((voice) => voice.name.toLowerCase() === requested);
+    if (exact) return exact;
+    const partial = candidates.find((voice) => voice.name.toLowerCase().includes(requested));
+    if (partial) return partial;
+  }
+  return candidates.sort(
+    (a, b) =>
+      profileVoiceScore(b, preset, options.lang) - profileVoiceScore(a, preset, options.lang),
+  )[0];
+}
+
+export async function getInstalledSpeechVoices(
+  engine: VoiceEngine = 'system',
+): Promise<SpeechSynthesisVoice[]> {
+  const voices = await getVoices();
+  return candidateVoices(voices, engine);
+}
+
+export async function isLocalSpeechAvailable(): Promise<boolean> {
+  const voices = await getInstalledSpeechVoices('local');
+  return voices.length > 0;
 }
 
 async function getVoices(): Promise<SpeechSynthesisVoice[]> {
@@ -107,17 +179,37 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
   if (requestId !== activeSpeechRequestId) return;
 
-  const persona = options.persona ?? 'jarvis';
+  const state = useAuthStore.getState();
+  const engine = options.engine ?? state.voiceEngine ?? 'system';
+  const preset = options.voicePreset ?? state.voicePreset ?? DEFAULT_VOICE_PRESET;
+  const persona = options.persona ?? state.personaPreset ?? 'jarvis';
+  const useVoiceProfile = options.voicePreset !== undefined || options.persona === undefined;
+  const profile = getVoiceProfile(preset);
   const personaVoice = PERSONAS[persona]?.voice;
   const voices = await getVoices();
   if (requestId !== activeSpeechRequestId) return;
 
-  const selectedVoice = selectPersonaVoice(voices, persona, options);
+  const selectedVoice = useVoiceProfile
+    ? selectVoiceProfileVoice(voices, preset, { ...options, engine })
+    : selectPersonaVoice(voices, persona, { ...options, engine });
+  if (engine === 'local' && !selectedVoice) {
+    throw new Error(
+      'No installed local system voice was found. Install a Windows speech voice pack or switch Voice Engine to System.',
+    );
+  }
   const utterance = new SpeechSynthesisUtterance(trimmed);
   utterance.voice = selectedVoice ?? null;
   utterance.lang = options.lang ?? selectedVoice?.lang ?? 'en-US';
-  utterance.rate = clamp(options.rate ?? personaVoice?.rate ?? 1, 0.7, 1.3);
-  utterance.pitch = clamp(options.pitch ?? personaVoice?.pitch ?? 1, 0.6, 1.4);
+  utterance.rate = clamp(
+    options.rate ?? (useVoiceProfile ? profile.rate : personaVoice?.rate) ?? 1,
+    0.7,
+    1.3,
+  );
+  utterance.pitch = clamp(
+    options.pitch ?? (useVoiceProfile ? profile.pitch : personaVoice?.pitch) ?? 1,
+    0.6,
+    1.4,
+  );
   utterance.volume = clamp(options.volume ?? 1, 0, 1);
 
   await new Promise<void>((resolve, reject) => {
@@ -130,6 +222,7 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
       settled = true;
       window.clearTimeout(timeout);
       window.clearInterval(keepAlive);
+      dispatchSpeechEvent(SPEECH_SYNTHESIS_END_EVENT);
       complete();
     };
     timeout = window.setTimeout(() => settle(resolve), fallbackMs);
@@ -148,6 +241,7 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
       }
       settle(() => reject(new Error(event.error || 'Speech synthesis failed.')));
     };
+    dispatchSpeechEvent(SPEECH_SYNTHESIS_START_EVENT);
     synthesis.speak(utterance);
     synthesis.resume();
     window.setTimeout(() => {
@@ -158,6 +252,13 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   });
 }
 
-export function speakPersonaPreview(persona: PersonaPreset, text = VOICE_PREVIEW_TEXT): Promise<void> {
+export function speakPersonaPreview(
+  persona: PersonaPreset,
+  text = VOICE_PREVIEW_TEXT,
+): Promise<void> {
   return speakText(text, { persona });
+}
+
+export function speakVoicePreview(preset: VoicePresetId, text = VOICE_PREVIEW_TEXT): Promise<void> {
+  return speakText(text, { voicePreset: preset });
 }

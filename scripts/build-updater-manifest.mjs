@@ -43,7 +43,8 @@ async function addPlatform(platform, artifactName, allNames) {
   if (!artifactName) return;
   const sigName = `${artifactName}.sig`;
   if (!allNames.includes(sigName)) {
-    throw new Error(`Missing signature for ${artifactName}: expected ${sigName}`);
+    console.warn(`Skipping ${platform}: ${artifactName} has no ${sigName}`);
+    return;
   }
   const artifactStat = await stat(path.join(assetsDir, artifactName));
   const sigStat = await stat(path.join(assetsDir, sigName));

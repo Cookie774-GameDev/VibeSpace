@@ -2,6 +2,43 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.25] - 2026-06-07
+
+### Added
+
+- **Jarvis Core theme**: added an optional black/orange full-app theme based on the supplied Jarvis references while keeping Dark, Light, and System themes available.
+- **Five spoken voices**: added persisted Jarvis Prime, Aurora, Atlas, Nova, and Sentinel voice profiles independent from conversational persona.
+- **Spoken normal replies**: completed Jarvis replies can now speak aloud in normal typed chat, not only voice-originated sends.
+- **Ollama in-app downloads**: Local Models can detect/start Ollama, pull models with live progress, auto-register installed models, and select completed pulls.
+- **Local voice install handoff**: Local-only voice mode detects installed system voices and opens Windows Speech settings to install voice packs.
+
+### Improved
+
+- Slash command menus and option pickers now inherit app theme tokens instead of fixed purple/brown styling.
+- The mini Jarvis panel is token-aware, more microphone-reactive, and scrolls the full You/Jarvis transcript.
+- Provider cards show real locally recorded monthly usage totals instead of placeholder counters.
+- System theme now resolves from the OS preference and has a distinct API-key input glow.
+
+### Fixed
+
+- Release manifest generation now skips unsigned platform archives instead of failing the whole job when signed Windows updater assets exist.
+- Added regression coverage for Ollama pull progress, fully local routing, voice persistence, theme resolution, provider usage aggregation, and updater manifests.
+
+## [0.1.24] - 2026-06-07
+
+### Added
+
+- **Persistent corner Jarvis panel**: saying "Hey Jarvis" now opens a compact warm-dark Jarvis card in the top-right corner instead of a blocking bottom dialog.
+- **Live voice waveform**: the panel includes an amber audio waveform that reacts to microphone loudness while listening.
+- **Voice conversation transcript**: the panel shows the running You/Jarvis chat transcript and keeps live partial speech visible while you talk.
+
+### Improved
+
+- Jarvis voice sessions now stay open until closed with the mini X button.
+- Voice replies pause microphone recognition while Jarvis is speaking, then automatically resume listening.
+- Rapid speech-recognition final chunks are buffered into one user request before sending to chat.
+- Slash command option pickers now use the compact warm Jarvis style so they fit the app theme.
+
 ## [0.1.23] - 2026-06-07
 
 ### Added

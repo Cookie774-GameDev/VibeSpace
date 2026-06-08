@@ -1,7 +1,19 @@
-import { afterEach, vi } from 'vitest';
-import { selectPersonaVoice, speakText, VOICE_PREVIEW_TEXT } from './speechSynthesis';
+import { afterEach, beforeEach, vi } from 'vitest';
+import { useAuthStore } from '@/stores/auth';
+import {
+  selectPersonaVoice,
+  selectVoiceProfileVoice,
+  speakText,
+  SPEECH_SYNTHESIS_END_EVENT,
+  SPEECH_SYNTHESIS_START_EVENT,
+  VOICE_PREVIEW_TEXT,
+} from './speechSynthesis';
 
-function voice(name: string, lang = 'en-US', extra: Partial<SpeechSynthesisVoice> = {}): SpeechSynthesisVoice {
+function voice(
+  name: string,
+  lang = 'en-US',
+  extra: Partial<SpeechSynthesisVoice> = {},
+): SpeechSynthesisVoice {
   return {
     name,
     lang,
@@ -13,6 +25,13 @@ function voice(name: string, lang = 'en-US', extra: Partial<SpeechSynthesisVoice
 }
 
 describe('speech synthesis voice selection', () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      voicePreset: 'jarvis-prime',
+      voiceEngine: 'system',
+    });
+  });
+
   afterEach(() => {
     Reflect.deleteProperty(window, 'speechSynthesis');
     Reflect.deleteProperty(globalThis, 'SpeechSynthesisUtterance');
@@ -20,28 +39,64 @@ describe('speech synthesis voice selection', () => {
   });
 
   it('prefers a high-quality persona-matched voice', () => {
-    const selected = selectPersonaVoice([
-      voice('Generic English'),
-      voice('Microsoft Ryan Online (Natural) - English (United Kingdom)', 'en-GB', { localService: false }),
-      voice('Spanish Voice', 'es-ES'),
-    ], 'jarvis');
+    const selected = selectPersonaVoice(
+      [
+        voice('Generic English'),
+        voice('Microsoft Ryan Online (Natural) - English (United Kingdom)', 'en-GB', {
+          localService: false,
+        }),
+        voice('Spanish Voice', 'es-ES'),
+      ],
+      'jarvis',
+    );
 
     expect(selected?.name).toContain('Ryan');
   });
 
   it('honors an explicit voice name before persona scoring', () => {
-    const selected = selectPersonaVoice([
-      voice('Microsoft Ryan Online (Natural)'),
-      voice('Samantha'),
-    ], 'jarvis', { voiceName: 'Samantha' });
+    const selected = selectPersonaVoice(
+      [voice('Microsoft Ryan Online (Natural)'), voice('Samantha')],
+      'jarvis',
+      { voiceName: 'Samantha' },
+    );
 
     expect(selected?.name).toBe('Samantha');
+  });
+
+  it('selects the best voice for a persisted voice profile', () => {
+    const selected = selectVoiceProfileVoice(
+      [
+        voice('Samantha'),
+        voice('Microsoft Guy Online (Natural)', 'en-US', { localService: false }),
+        voice('Generic English'),
+      ],
+      'atlas',
+    );
+
+    expect(selected?.name).toContain('Guy');
+  });
+
+  it('filters out online voices in local-only mode', () => {
+    const selected = selectVoiceProfileVoice(
+      [
+        voice('Microsoft Ryan Online (Natural)', 'en-GB', { localService: false }),
+        voice('David Desktop', 'en-US', { localService: true }),
+      ],
+      'jarvis-prime',
+      { engine: 'local' },
+    );
+
+    expect(selected?.name).toBe('David Desktop');
   });
 
   it('uses the selected persona voice and resolves when playback ends', async () => {
     const spoken: MockUtterance[] = [];
     installSpeechMocks({
-      voices: [voice('Microsoft Ryan Online (Natural) - English (United Kingdom)', 'en-GB', { localService: false })],
+      voices: [
+        voice('Microsoft Ryan Online (Natural) - English (United Kingdom)', 'en-GB', {
+          localService: false,
+        }),
+      ],
       onSpeak: (utterance) => {
         spoken.push(utterance);
         queueMicrotask(() => utterance.onend?.({} as SpeechSynthesisEvent));
@@ -52,6 +107,58 @@ describe('speech synthesis voice selection', () => {
 
     expect(spoken[0]?.text).toBe("Hi, how's your day doing? Jarvis is online.");
     expect((spoken[0]?.voice as SpeechSynthesisVoice | undefined)?.name).toContain('Ryan');
+  });
+
+  it('emits lifecycle events around spoken replies', async () => {
+    const events: string[] = [];
+    window.addEventListener(SPEECH_SYNTHESIS_START_EVENT, () => events.push('start'));
+    window.addEventListener(SPEECH_SYNTHESIS_END_EVENT, () => events.push('end'));
+    installSpeechMocks({
+      voices: [
+        voice('Microsoft Ryan Online (Natural) - English (United Kingdom)', 'en-GB', {
+          localService: false,
+        }),
+      ],
+      onSpeak: (utterance) => {
+        queueMicrotask(() => utterance.onend?.({} as SpeechSynthesisEvent));
+      },
+    });
+
+    await speakText('Status report ready.', { persona: 'jarvis' });
+
+    expect(events).toEqual(['start', 'end']);
+  });
+
+  it('uses persisted voice profile tuning for normal speech', async () => {
+    useAuthStore.setState({
+      voicePreset: 'atlas',
+      voiceEngine: 'system',
+    });
+    const spoken: MockUtterance[] = [];
+    installSpeechMocks({
+      voices: [voice('Microsoft Guy Online (Natural)', 'en-US', { localService: false })],
+      onSpeak: (utterance) => {
+        spoken.push(utterance);
+        queueMicrotask(() => utterance.onend?.({} as SpeechSynthesisEvent));
+      },
+    });
+
+    await speakText('Status report ready.');
+
+    expect((spoken[0]?.voice as SpeechSynthesisVoice | undefined)?.name).toContain('Guy');
+    expect(spoken[0]?.rate).toBe(0.84);
+    expect(spoken[0]?.pitch).toBe(0.66);
+  });
+
+  it('fails clearly when local mode has no installed voice', async () => {
+    installSpeechMocks({
+      voices: [voice('Microsoft Ryan Online (Natural)', 'en-GB', { localService: false })],
+      onSpeak: vi.fn(),
+    });
+
+    await expect(speakText('Status report ready.', { engine: 'local' })).rejects.toThrow(
+      'No installed local system voice was found',
+    );
   });
 
   it('does not fail an older preview when a newer preview supersedes it', async () => {

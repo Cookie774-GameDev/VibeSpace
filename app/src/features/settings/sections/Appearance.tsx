@@ -1,4 +1,4 @@
-import { Monitor, Moon, Sun } from 'lucide-react';
+import { Cpu, Monitor, Moon, Sun } from 'lucide-react';
 import { useUIStore } from '@/stores/ui';
 import type { Theme } from '@/types/common';
 import { Label } from '@/components/ui/label';
@@ -6,6 +6,7 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 
 const THEMES: { id: Theme; label: string; icon: typeof Sun }[] = [
+  { id: 'jarvis', label: 'Jarvis Core', icon: Cpu },
   { id: 'dark', label: 'Dark', icon: Moon },
   { id: 'light', label: 'Light', icon: Sun },
   { id: 'system', label: 'System', icon: Monitor },
@@ -34,13 +35,13 @@ export function Appearance() {
       <header>
         <h2 className="text-page-title text-foreground">Appearance</h2>
         <p className="text-secondary text-muted-foreground mt-1">
-          Voltage runs OLED-dark by default. Adjust to taste.
+          Pick the app skin without replacing the existing themes.
         </p>
       </header>
 
       <section className="flex flex-col gap-3">
         <Label>Theme</Label>
-        <div className="grid grid-cols-3 gap-2 max-w-md">
+        <div className="grid grid-cols-2 gap-2 max-w-md">
           {THEMES.map((t) => {
             const Icon = t.icon;
             const selected = theme === t.id;
@@ -58,19 +59,21 @@ export function Appearance() {
                     : 'border-border',
                 )}
               >
-                <Icon className={cn('h-5 w-5', selected ? 'text-accent-cyan' : 'text-muted-foreground')} />
-                <span className={cn('text-ui-strong', selected ? 'text-foreground' : 'text-muted-foreground')}>
+                <Icon
+                  className={cn('h-5 w-5', selected ? 'text-accent-cyan' : 'text-muted-foreground')}
+                />
+                <span
+                  className={cn(
+                    'text-ui-strong',
+                    selected ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
                   {t.label}
                 </span>
               </button>
             );
           })}
         </div>
-        {theme === 'light' && (
-          <p className="text-metadata text-warning">
-            Light theme is provisional - V1 ships dark-only. Some panels may render rough.
-          </p>
-        )}
       </section>
 
       <Separator />
@@ -94,7 +97,12 @@ export function Appearance() {
                     : 'border-border',
                 )}
               >
-                <span className={cn('text-ui-strong', selected ? 'text-foreground' : 'text-muted-foreground')}>
+                <span
+                  className={cn(
+                    'text-ui-strong',
+                    selected ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
                   {d.label}
                 </span>
                 <span className="text-metadata text-muted-foreground">{d.description}</span>
