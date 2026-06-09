@@ -31,6 +31,33 @@ export type { SpeakTextOptions } from './speechSynthesis';
 export { IntentClassifier, classify } from './IntentClassifier';
 export type { Intent, VoiceIntent, VoiceSlots } from './IntentClassifier';
 
+// TTS (speaking) subsystem — voice subscription system
+export { TtsService } from './TtsService';
+export type { SpeakOptions, VoiceUsageSnapshot, TtsStatus } from './TtsService';
+export { ModelManager, resolveModelPath, detectOS } from './modelManager';
+export type { ModelManifest, ModelStatus, DownloadProgress, OS } from './modelManager';
+export {
+  cleanTextForSpeech,
+  chunkText,
+  prepareForSpeech,
+  looksLikeRawData,
+} from './textCleanup';
+export {
+  VOICE_PLANS,
+  VOICE_PROVIDERS,
+  VOICE_PRESETS,
+  DEFAULT_VOICE_TTS_PRESET,
+  usageCopy,
+  FALLBACK_MESSAGES,
+  COST_PER_SECOND_USD,
+} from './voicePlans';
+export type {
+  VoicePlanId,
+  VoiceProviderId,
+  VoiceTtsPreset,
+  VoicePresetDef,
+} from './voicePlans';
+
 // Stores
 export { useVoiceStore } from './store';
 export type { VoiceState, FinalTranscript } from './store';
