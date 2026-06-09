@@ -133,9 +133,38 @@ ModelManager (`app/src/features/voice/modelManager.ts`) resolves the OS path:
 
 It fetches the public manifest from `model-manifest`, downloads with progress,
 verifies SHA-256 checksums, resumes partial downloads, and repairs corrupt
-files. The heavy work runs in Rust (Tauri commands `kokoro_*`) so the UI never
-freezes. **Pending:** the Rust `kokoro.rs` commands and a published model
-release asset (see "Remaining manual setup").
+files. The heavy work runs in Rust (`src-tauri/src/kokoro.rs`, Tauri commands
+`kokoro_*`) so the UI never freezes.
+
+**Rust module status:** `kokoro.rs` is implemented and compiles (`cargo check`
+clean). It does real path resolution, download-with-progress (`kokoro:progress`
+events), SHA-256 verification, resume, and repair. `kokoro_speak` currently
+returns a structured `engine_not_available` error and `kokoro_status` reports
+`ready=false`, because the ONNX inference runtime + model weights are **not
+bundled yet** — so the app falls back to system TTS automatically. To make local
+audio actually play: wire an ONNX runtime (e.g. the `ort` crate) into
+`kokoro_speak`, and publish the Kokoro release asset with real checksums.
+
+**Wiring note:** at the time of writing, `src-tauri/lib.rs` and `Cargo.toml` had
+concurrent uncommitted changes from a separate local-model (Ollama) feature, so
+the Kokoro registration was kept out of the voice commit to avoid entangling
+that work. To activate `kokoro.rs`, ensure these lines are present (already
+applied in the working tree and verified with `cargo check`):
+
+```rust
+// lib.rs
+mod kokoro;
+// ...in invoke_handler:
+kokoro::kokoro_model_path, kokoro::kokoro_check_installed,
+kokoro::kokoro_verify_checksums, kokoro::kokoro_status, kokoro::kokoro_warmup,
+kokoro::kokoro_download, kokoro::kokoro_resume_download, kokoro::kokoro_repair,
+kokoro::kokoro_delete_corrupt, kokoro::kokoro_speak, kokoro::kokoro_stop,
+```
+
+```toml
+# Cargo.toml [dependencies]
+sha2 = "0.10"
+```
 
 ## Testing
 

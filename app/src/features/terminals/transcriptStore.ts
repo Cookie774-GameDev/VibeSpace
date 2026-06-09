@@ -50,7 +50,7 @@ const MAX_PENDING_ESCAPE_CHARS = 4096;
  * bytes off the front. Helps the LLM (and humans) understand that
  * what they're reading is a tail, not the full transcript.
  */
-const TRUNCATION_MARKER = '[â€¦earlier output trimmedâ€¦]\n';
+const TRUNCATION_MARKER = '[…earlier output trimmed…]\n';
 const TRANSCRIPT_STORAGE_DEBOUNCE_MS = 350;
 const TRANSCRIPT_STORAGE_KEY = 'jarvis-terminal-transcripts';
 const TRANSCRIPT_BACKUP_STORAGE_KEY = 'jarvis-terminal-transcripts-backup';
