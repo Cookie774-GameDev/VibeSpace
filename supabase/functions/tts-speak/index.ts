@@ -142,20 +142,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // 3. Rate limit (sliding 60s window)
-  const windowStart = new Date(Math.floor(Date.now() / RATE_WINDOW_MS) * RATE_WINDOW_MS).toISOString();
-  const { data: rl } = await admin
-    .from('voice_rate_limits')
-    .upsert({ user_id: userId, window_start: windowStart }, { onConflict: 'user_id,window_start' })
-    .select('request_count')
-    .maybeSingle();
-  const { data: rlInc } = await admin.rpc('increment_rate_limit', {
+  // 3. Rate limit (atomic increment over a sliding 60s window)
+  const windowStart = new Date(
+    Math.floor(Date.now() / RATE_WINDOW_MS) * RATE_WINDOW_MS,
+  ).toISOString();
+  const { data: rlData, error: rlErr } = await admin.rpc('voice_rate_limit_hit', {
     p_user_id: userId,
     p_window_start: windowStart,
     p_chars: text.length,
-  }).maybeSingle?.() ?? { data: null };
-  // Fallback if RPC absent: best-effort count check
-  if (rl && typeof rl.request_count === 'number' && rl.request_count >= RATE_MAX_REQUESTS) {
+    p_max_requests: RATE_MAX_REQUESTS,
+  });
+  if (!rlErr && (rlData as { limited?: boolean } | null)?.limited) {
     return json({ error: 'rate_limited' }, 429, origin);
   }
 

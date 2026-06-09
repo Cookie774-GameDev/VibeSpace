@@ -28,6 +28,22 @@ import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
 import { speakText } from '@/features/voice/speechSynthesis';
+
+/**
+ * Read the user's selected Cloud Voice provider from local settings. Returns
+ * the provider id only when it's a metered cloud provider (OpenAI / Deepgram /
+ * ElevenLabs); otherwise null so the caller keeps the system-voice path.
+ * Safe in non-browser/test contexts (returns null).
+ */
+function readSelectedCloudVoiceProvider(): string | null {
+  try {
+    const v = globalThis.localStorage?.getItem('jarvis.voice.cloudProvider');
+    if (v === 'openai_tts' || v === 'deepgram_tts' || v === 'elevenlabs_tts') return v;
+    return null;
+  } catch {
+    return null;
+  }
+}
 import {
   getProjectContextBlock,
   getProjectContextTreeBlock,
@@ -596,17 +612,36 @@ export function startRuntimeListener(
       if (detail.speakReply || voiceSettings.speakReplies) {
         const speechText = textToSpeechOutput(finalText);
         if (speechText) {
-          void speakText(speechText, {
-            voicePreset: voiceSettings.voicePreset,
-            engine: voiceSettings.voiceEngine,
-          }).catch((speechErr) => {
-            devConsole.log({
-              channel: 'ai',
-              level: 'warn',
-              message: `Voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
-              detail: { agent: agent.slug, textChars: speechText.length },
+          // If the user explicitly selected a metered cloud voice (OpenAI /
+          // Deepgram / ElevenLabs) in Cloud Voice settings, route the reply
+          // through TtsService so it uses that provider with automatic
+          // fallback to local/system voice. Otherwise keep the lightweight
+          // system-voice path unchanged.
+          const cloudProvider = readSelectedCloudVoiceProvider();
+          if (cloudProvider) {
+            void import('@/features/voice/TtsService')
+              .then(({ TtsService }) => TtsService.speak(speechText))
+              .catch((speechErr) => {
+                devConsole.log({
+                  channel: 'ai',
+                  level: 'warn',
+                  message: `Cloud voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+                  detail: { agent: agent.slug, textChars: speechText.length },
+                });
+              });
+          } else {
+            void speakText(speechText, {
+              voicePreset: voiceSettings.voicePreset,
+              engine: voiceSettings.voiceEngine,
+            }).catch((speechErr) => {
+              devConsole.log({
+                channel: 'ai',
+                level: 'warn',
+                message: `Voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+                detail: { agent: agent.slug, textChars: speechText.length },
+              });
             });
-          });
+          }
         }
       }
     } catch (err) {

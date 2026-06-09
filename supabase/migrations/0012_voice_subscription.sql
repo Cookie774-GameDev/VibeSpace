@@ -193,6 +193,27 @@ end;
 $$;
 revoke all on function public.settle_voice_seconds(uuid, integer, integer) from public, anon, authenticated;
 
+-- Atomic rate-limit increment for a sliding window (service role only).
+-- Upserts the per-user/window counter and reports whether the limit is exceeded.
+create or replace function public.voice_rate_limit_hit(
+  p_user_id uuid, p_window_start timestamptz, p_chars integer, p_max_requests integer
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_count integer;
+begin
+  insert into public.voice_rate_limits (user_id, window_start, request_count, total_chars)
+  values (p_user_id, p_window_start, 1, greatest(coalesce(p_chars, 0), 0))
+  on conflict (user_id, window_start) do update
+    set request_count = public.voice_rate_limits.request_count + 1,
+        total_chars = public.voice_rate_limits.total_chars + greatest(coalesce(p_chars, 0), 0),
+        updated_at = now()
+  returning request_count into v_count;
+  return jsonb_build_object('count', v_count, 'limited', v_count > p_max_requests);
+end;
+$$;
+revoke all on function public.voice_rate_limit_hit(uuid, timestamptz, integer, integer) from public, anon, authenticated;
+
 create index if not exists voice_usage_user_id_idx on public.voice_usage (user_id);
 create index if not exists voice_events_user_id_idx on public.voice_events (user_id);
 create index if not exists voice_events_created_at_idx on public.voice_events (created_at desc);
