@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { ProviderId } from '@/types';
 import { ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
 import { GOOGLE_DEFAULT_MODEL } from './providers/google';
@@ -38,8 +39,44 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   { provider: 'mock', id: 'mock-default', label: 'Mock demo' },
 ];
 
+// ── Dynamic Ollama model discovery ──────────────────────────────────────
+// Discovered models are synced from LocalModels.tsx (after scan) and
+// from useBoot() (on app start) so downloaded models immediately appear
+// in the chat composer's ModelPicker without requiring a restart.
+
+let _discoveredOllama: string[] = [];
+let _discoveredListeners: Array<() => void> = [];
+
+/** Replace the set of discovered Ollama model names. Call after each scan. */
+export function syncDiscoveredOllamaModels(models: string[]): void {
+  _discoveredOllama = [...new Set(models)];
+  _discoveredListeners.forEach((fn) => fn());
+}
+
+/** React hook: returns current discovered Ollama models as ModelOption[]. */
+export function useOllamaModelOptions(): ModelOption[] {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const listener = () => bump((n) => n + 1);
+    _discoveredListeners.push(listener);
+    return () => {
+      _discoveredListeners = _discoveredListeners.filter((l) => l !== listener);
+    };
+  }, []);
+  return _discoveredOllama
+    .filter((name) => !CHAT_MODEL_OPTIONS.some((o) => o.id === name))
+    .map((name) => ({ provider: 'ollama' as const, id: name, label: name }));
+}
+
 export function getModelOptions(provider: ProviderId): readonly ModelOption[] {
-  return CHAT_MODEL_OPTIONS.filter((option) => option.provider === provider);
+  const base = CHAT_MODEL_OPTIONS.filter((option) => option.provider === provider);
+  if (provider === 'ollama' || provider === 'local') {
+    const extra = _discoveredOllama
+      .filter((name) => !base.some((o) => o.id === name))
+      .map((name) => ({ provider: 'ollama' as const, id: name, label: name }));
+    return [...base, ...extra];
+  }
+  return base;
 }
 
 export function defaultModelForProvider(provider: ProviderId, localModel = OLLAMA_DEFAULT_MODEL): string {

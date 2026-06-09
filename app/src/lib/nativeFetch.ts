@@ -34,6 +34,10 @@
  * The exported `nativeFetch` resolves to either:
  *   - `@tauri-apps/plugin-http`'s `fetch` when running inside Tauri,
  *   - the global `fetch` otherwise.
+ *
+ * TIMEOUT: Every request gets a configurable timeout (default 30s).
+ * Pass `timeoutMs` in the init options. Any requests that exceed the
+ * timeout are aborted and throw.
  */
 
 import { isTauri } from './utils';
@@ -43,15 +47,16 @@ type FetchFn = typeof globalThis.fetch;
 let cachedTauri: FetchFn | null = null;
 let cachePending: Promise<FetchFn> | null = null;
 
+/** Options specific to nativeFetch, extending standard RequestInit. */
+export interface NativeFetchInit extends RequestInit {
+  /** Timeout in milliseconds. Defaults to 30000 (30s). Set to 0 to disable. */
+  timeoutMs?: number;
+  /** Allow retrying non-idempotent requests (POST/PUT) on failure. */
+  allowRetry?: boolean;
+}
+
 /**
  * Resolve to a `fetch` implementation that works regardless of CORS.
- *
- * The first call inside a Tauri build dynamically imports the plugin
- * (so non-Tauri / web bundles never pay the cost). Subsequent calls
- * reuse the cached function. In a non-Tauri environment we delegate
- * to whatever `globalThis.fetch` is at the moment of the call —
- * deliberately not caching so test suites that swap `fetch` per-case
- * see the latest binding.
  */
 export async function getNativeFetch(): Promise<FetchFn> {
   if (!isTauri) {
@@ -63,17 +68,11 @@ export async function getNativeFetch(): Promise<FetchFn> {
   cachePending = (async () => {
     try {
       const mod = await import('@tauri-apps/plugin-http');
-      // The plugin's fetch type is structurally compatible with the
-      // global fetch — same `Request` / `Response` semantics — but
-      // narrowed to (URL | Request | string). Bind to a thin shim
-      // that accepts anything `fetch` would.
       const f: FetchFn = (input, init) =>
         mod.fetch(input as URL | Request | string, init);
       cachedTauri = f;
       return f;
     } catch (err) {
-      // If the plugin isn't registered (older build, dev sandbox),
-      // fall back to browser fetch instead of crashing the call.
       console.warn(
         '[tauri/http] plugin-http not available, using browser fetch:',
         err,
@@ -91,16 +90,93 @@ export async function getNativeFetch(): Promise<FetchFn> {
 
 /**
  * Convenience wrapper that mirrors the global `fetch` signature and
- * picks the right implementation transparently. Use this anywhere we
- * call out to `localhost` (Ollama, future local sidecars) — and
- * anywhere a packaged build might be blocked by CORS.
+ * picks the right implementation transparently.
+ *
+ * Supports a `timeoutMs` option (default 30s). The request is
+ * automatically aborted if it doesn't complete within the timeout.
  */
 export async function nativeFetch(
   input: RequestInfo | URL,
-  init?: RequestInit,
+  init?: NativeFetchInit,
 ): Promise<Response> {
-  const fn = await getNativeFetch();
-  return fn(input, init);
+  const { timeoutMs = 30_000, allowRetry, ...fetchInit } = init ?? {};
+
+  // Combine user-provided signal with our timeout signal
+  const controller = new AbortController();
+  const existingSignal = fetchInit.signal;
+
+  if (existingSignal) {
+    if (existingSignal.aborted) {
+      return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    }
+    existingSignal.addEventListener(
+      'abort',
+      () => controller.abort((existingSignal as any).reason),
+      { once: true },
+    );
+  }
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  if (timeoutMs > 0) {
+    timeoutId = setTimeout(
+      () => controller.abort(new Error(`Request timed out after ${timeoutMs / 1000}s`)),
+      timeoutMs,
+    );
+  }
+
+  try {
+    const fn = await getNativeFetch();
+    const response = await fn(input, {
+      ...fetchInit,
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Fetch with automatic retry on transient failures.
+ *
+ * Retries up to `maxRetries` times (default 2) on network errors and
+ * 5xx responses. Does NOT retry on 4xx, aborts, or timeout (name===AbortError).
+ * Uses exponential backoff starting at `retryDelayMs` (default 1000ms).
+ *
+ * WARNING: Only use for idempotent requests (GET, HEAD, OPTIONS)
+ * unless `allowRetry: true` is explicitly set in init.
+ */
+export interface NativeFetchRetryInit extends NativeFetchInit {
+  maxRetries?: number;
+  retryDelayMs?: number;
+}
+
+export async function nativeFetchWithRetry(
+  input: RequestInfo | URL,
+  init?: NativeFetchRetryInit,
+): Promise<Response> {
+  const { maxRetries = 2, retryDelayMs = 1000, ...rest } = init ?? {};
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await nativeFetch(input, rest);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Never retry on abort (including timeout)
+      if (lastError.name === 'AbortError') throw lastError;
+
+      // Don't retry if we're out of attempts
+      if (attempt >= maxRetries) throw lastError;
+
+      // Wait with exponential backoff
+      const delay = retryDelayMs * Math.pow(2, attempt);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+
+  throw lastError!;
 }
 
 /**

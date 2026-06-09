@@ -203,76 +203,75 @@ function useBoot() {
     let stopSyncLoop: (() => void) | undefined;
     let stopCloudAuth: (() => void) | undefined;
     let cancelled = false;
+    const errors: string[] = [];
+
+    function addError(label: string, err: unknown): void {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[boot] ${label}:`, msg);
+      errors.push(`${label}: ${msg}`);
+    }
+
+    function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+      return Promise.race([
+        promise,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Timed out after ${ms/1000}s`)), ms)),
+      ]).catch((err) => { addError(label, err); throw err; });
+    }
 
     (async () => {
-      // 1) Open IndexedDB. Seeding happens inside AuthGate before we mount.
-      try {
-        await openDb();
-      } catch (err) {
-        console.error('Failed to open Jarvis DB:', err);
-        toast.error('Storage error', 'Could not open local database. Some features may not work.');
-      }
+      // Phase 1: storage & keys
+      try { await withTimeout(openDb(), 10_000, 'openDb'); } catch { /* degraded */ }
 
       if (cancelled) return;
 
-      try {
-        await useAuthStore.getState().hydrateApiKeysFromVault();
-      } catch (err) {
-        console.warn('Failed to hydrate API keys from secure storage:', err);
-      }
+      try { await withTimeout(useAuthStore.getState().hydrateApiKeysFromVault(), 5_000, 'hydrateKeys'); } catch { /* fallback to localStorage */ }
 
       void import('@tauri-apps/api/core')
         .then(({ invoke }) => invoke('install_terminal_launcher'))
         .catch((err) => console.warn('[launcher] terminal command setup failed', err));
 
+      // Phase 2: Supabase (non-blocking, fire-and-forget)
       try {
-        const { isSupabaseConfigured } = await import('@/lib/supabase/env');
+        const { isSupabaseConfigured } = await withTimeout(
+          import('@/lib/supabase/env').then((m) => m), 5_000, 'supabaseCheck',
+        ).catch(() => ({ isSupabaseConfigured: () => false }));
         if (!isSupabaseConfigured()) {
           applyCloudSession(null);
         } else {
-          const [
-            { getSupabaseClient },
-            { processCloudPull, processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop },
-          ] = await Promise.all([import('@/lib/supabase/client'), import('@/lib/sync')]);
-          if (cancelled) return;
-          const supa = getSupabaseClient();
-          if (supa) {
-            void supa.auth.getSession().then(({ data }) => {
-              if (!cancelled) applyCloudSession(data.session as SupabaseSessionLike);
-            });
-            const sub = supa.auth.onAuthStateChange((_event, session) => {
-              if (cancelled) return;
-              applyCloudSession(session as SupabaseSessionLike);
-              if (session?.user?.id) {
-                void retrySyncErrors()
-                  .then(() => processSyncQueue())
-                  .then(() => processCloudPull())
-                  .catch((err) => console.warn('[sync] immediate flush failed:', err));
-              }
-            });
-            stopCloudAuth = () => sub.data.subscription.unsubscribe();
+          const supabaseModules = await withTimeout(
+            Promise.all([import('@/lib/supabase/client'), import('@/lib/sync')]), 15_000, 'supabaseImport',
+          ).catch(() => null);
+          if (supabaseModules && !cancelled) {
+            const [{ getSupabaseClient }, { processCloudPull, processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop }] = supabaseModules;
+            const supa = getSupabaseClient();
+            if (supa) {
+              void supa.auth.getSession().then(({ data }) => { if (!cancelled) applyCloudSession(data.session as SupabaseSessionLike); });
+              const sub = supa.auth.onAuthStateChange((_event, session) => {
+                if (cancelled) return;
+                applyCloudSession(session as SupabaseSessionLike);
+                if (session?.user?.id) {
+                  void retrySyncErrors().then(() => processSyncQueue()).then(() => processCloudPull()).catch((err) => console.warn('[sync] immediate flush failed:', err));
+                }
+              });
+              stopCloudAuth = () => sub.data.subscription.unsubscribe();
+            }
+            await retrySyncErrors().catch((err) => console.warn('[sync] retrySyncErrors failed:', err));
+            void processCloudPull().catch((err) => console.warn('[sync] initial pull failed:', err));
+            void pruneSyncQueue().catch((err) => console.warn('[sync] prune failed:', err));
+            if (!cancelled) stopSyncLoop = startSyncLoop();
           }
-
-          await retrySyncErrors();
-          void processCloudPull().catch((err) => console.warn('[sync] initial pull failed:', err));
-          void pruneSyncQueue().catch((err) => console.warn('[sync] prune failed:', err));
-          if (!cancelled) stopSyncLoop = startSyncLoop();
         }
-      } catch (err) {
-        console.warn('Failed to start cloud sync lifecycle:', err);
-      }
+      } catch { /* Supabase unavailable, app works offline */ }
 
-      // 2) Register persisted agents into the in-memory agent store so custom
-      //    system prompts, cloned agents, and provider choices survive relaunch.
+      // Phase 3: agent registration
       try {
-        const persistedAgents = await agentRepo.list();
+        const persistedAgents = await withTimeout(agentRepo.list(), 10_000, 'agentRepo');
         registerMany(persistedAgents.length > 0 ? persistedAgents : getDefaultAgents());
-      } catch (err) {
-        console.error('Failed to register persisted agents:', err);
+      } catch {
         registerMany(getDefaultAgents());
       }
 
-      // 3) Wire the AI runtime to the chat composer events.
+      // Phase 4: runtime listener
       stopRuntime = startRuntimeListener({
         getAgentById: (id) => useAgentStore.getState().agents[id] ?? null,
         getAgentBySlug: (slug) => {
@@ -302,31 +301,25 @@ function useBoot() {
         },
       });
 
-      // 4) Start the smart-reminder notification loop. The loop is idempotent
-      //    because each scheduled reminder has a fired/dismissed status guard.
-      try {
-        stopNotifications = startNotificationLoop();
-      } catch (err) {
-        console.error('Failed to start notification loop:', err);
-      }
+      // Phase 5: background loops
+      try { stopNotifications = startNotificationLoop(); } catch (err) { console.error('Failed to start notification loop:', err); }
+      try { stopClock = startClockEngine(); } catch (err) { console.error('Failed to start clock engine:', err); }
+      try { stopTerminalScheduler = initTerminalScheduler(); } catch (err) { console.error('Failed to start terminal scheduler:', err); }
 
-      try {
-        stopClock = startClockEngine();
-      } catch (err) {
-        console.error('Failed to start clock engine:', err);
-      }
+      // Phase 6: Ollama model discovery (non-blocking)
+      void import('@/lib/ai').then(({ listOllamaModels, syncDiscoveredOllamaModels, isOllamaReachable }) =>
+        isOllamaReachable().then((connected: boolean) => {
+          if (!connected || cancelled) return;
+          return listOllamaModels().then((models: string[]) => {
+            if (!cancelled) syncDiscoveredOllamaModels(models);
+          });
+        })
+      ).catch((err) => console.warn('[boot] Ollama model discovery failed:', err));
 
-      // 5) Re-arm durable scheduled terminal messages. These are stored in
-      //    localStorage so a delayed "send this terminal ..." request survives
-      //    route changes and full app restarts.
-      try {
-        stopTerminalScheduler = initTerminalScheduler();
-      } catch (err) {
-        console.error('Failed to start terminal scheduler:', err);
+      // Report accumulated errors
+      if (errors.length > 0 && !cancelled) {
+        toast.warning(`${errors.length} startup issue${errors.length>1?'s':''}`, errors.slice(0,3).join('; ') + (errors.length>3 ? ` (+${errors.length-3} more)` : ''));
       }
-
-      // 6) Desktop auto-update checks are now managed globally via the
-      //    <UpdateWarningHost /> component mounted at the layout level.
     })();
 
     return () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -17,10 +17,12 @@ import {
   ollamaBaseUrl,
   OLLAMA_DEFAULT_BASE,
   pullOllamaModel,
+  validateModelName,
   waitForOllamaReachable,
   type OllamaModelInfo,
   type OllamaPullProgress,
 } from '@/lib/ai';
+import { syncDiscoveredOllamaModels } from '@/lib/ai/models';
 import { getNativeOllamaStatus, startNativeOllama, type NativeOllamaStatus } from '@/lib/tauri';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -41,6 +43,39 @@ interface CatalogModel {
 
 interface PullState extends OllamaPullProgress {
   model: string;
+}
+
+// ── Module-level download state (survives tab switches) ────────────────
+// Because React state is local to the component instance, switching tabs
+// would lose the download progress. We store it in a module-level Map
+// and use useSyncExternalStore to subscribe the component.
+
+type DownloadStatus = 'downloading' | 'done' | 'error';
+
+interface DownloadEntry {
+  status: DownloadStatus;
+  progress: PullState | null;
+  error?: string;
+  abortController?: AbortController;
+}
+
+const _downloads = new Map<string, DownloadEntry>();
+let _downloadListeners: Array<() => void> = [];
+
+function notifyDownloadListeners() {
+  const ls = _downloadListeners;
+  for (let i = 0; i < ls.length; i++) ls[i]!();
+}
+
+function getDownloadSnapshot(): ReadonlyMap<string, DownloadEntry> {
+  return _downloads;
+}
+
+function subscribeToDownloads(cb: () => void): () => void {
+  _downloadListeners.push(cb);
+  return () => {
+    _downloadListeners = _downloadListeners.filter((l) => l !== cb);
+  };
 }
 
 const MODEL_CATALOG: readonly CatalogModel[] = [
@@ -89,6 +124,56 @@ const MODEL_CATALOG: readonly CatalogModel[] = [
   },
 ] as const;
 
+/**
+ * Map raw error messages to user-friendly explanations.
+ */
+function userFacingDownloadError(err: unknown): string {
+  if (!(err instanceof Error)) return 'Download failed: unknown error.';
+  const msg = err.message;
+
+  if (msg.includes('Invalid model name'))
+    return msg; // already friendly from validateModelName
+  if (msg.includes('net::ERR_CONNECTION_REFUSED') || msg.includes('Failed to fetch'))
+    return 'Cannot reach Ollama. Make sure it is running (ollama serve).';
+  if (msg.includes('timed out'))
+    return 'Download timed out. Check your internet connection and try again.';
+  if (msg.includes('size exceeded') || msg.includes('maximum allowed'))
+    return 'Download exceeds the maximum allowed size. Try a smaller model.';
+  if (msg.includes('AbortError') || msg.includes('aborted'))
+    return 'Download was cancelled.';
+  if (msg.includes('404') || msg.includes('not found'))
+    return 'Model not found in the Ollama registry. Check the model name.';
+  if (msg.includes('insufficient') || msg.includes('disk') || msg.includes('space'))
+    return 'Not enough disk space to download this model. Free up space and try again.';
+  if (msg.includes('verification failed'))
+    return 'Download completed but the model could not be verified. Try re-scanning or re-downloading.';
+  if (msg.includes('Could not reach Ollama'))
+    return 'Ollama became unreachable during download. Check that the service is still running.';
+  if (msg.includes('Ollama pull failed'))
+    return `Ollama reported an error: ${msg.slice(0, 200)}`;
+
+  return `Download failed: ${msg.slice(0, 200)}`;
+}
+
+/**
+ * Check available browser storage for a low-disk-space warning.
+ * Returns true if there's at least 10 GB available.
+ */
+async function hasEnoughDiskSpace(): Promise<{ ok: boolean; availableBytes: number | null }> {
+  try {
+    if (typeof navigator !== 'undefined' && 'storage' in navigator) {
+      const estimate = await navigator.storage.estimate();
+      if (estimate.quota && estimate.usage !== undefined) {
+        const available = estimate.quota - estimate.usage;
+        return { ok: available > 10_000_000_000, availableBytes: available };
+      }
+    }
+  } catch {
+    // Storage API not available (e.g., older WebView)
+  }
+  return { ok: true, availableBytes: null }; // can't check, assume ok
+}
+
 export function LocalModels() {
   const offlineMode = useAuthStore((state) => state.offlineMode);
   const setOfflineMode = useAuthStore((state) => state.setOfflineMode);
@@ -107,7 +192,9 @@ export function LocalModels() {
   const [starting, setStarting] = useState(false);
   const [pullState, setPullState] = useState<PullState | null>(null);
   const autoStartAttemptedRef = useRef(false);
-  const pullAbortRef = useRef<AbortController | null>(null);
+
+  // Module-level download store (survives tab switches)
+  const downloadMap = useSyncExternalStore(subscribeToDownloads, getDownloadSnapshot);
 
   useEffect(() => {
     setBaseDraft(storedBase || OLLAMA_DEFAULT_BASE);
@@ -145,11 +232,16 @@ export function LocalModels() {
         setReachable(connected);
         if (!connected) {
           setInstalled([]);
+          syncDiscoveredOllamaModels([]);
           return;
         }
 
         const models = await listOllamaModelInfo();
         setInstalled(models);
+
+        // Sync discovered models for the chat ModelPicker
+        syncDiscoveredOllamaModels(models.map((m) => m.name));
+
         const currentDefault = useAuthStore.getState().defaultLocalModel;
         if (models.length > 0 && !isModelInstalled(models, currentDefault)) {
           setDefaultLocalModel(models[0].name);
@@ -163,8 +255,16 @@ export function LocalModels() {
 
   useEffect(() => {
     void scan();
-    return () => pullAbortRef.current?.abort();
-  }, [scan]);
+    // Cancel any in-progress download when component unmounts
+    return () => {
+      for (const [, entry] of _downloads) {
+        if (entry.status === 'downloading' && entry.abortController) {
+          entry.abortController.abort();
+        }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function saveBase() {
     const trimmed = baseDraft.trim() || OLLAMA_DEFAULT_BASE;
@@ -220,32 +320,97 @@ export function LocalModels() {
       return;
     }
 
+    // Validate model name before proceeding
+    try {
+      validateModelName(model);
+    } catch (err) {
+      toast.error('Invalid model name', err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    // Duplicate download guard
+    const existing = _downloads.get(model);
+    if (existing?.status === 'downloading') {
+      toast.info('Already downloading', `${model} is currently being downloaded.`);
+      return;
+    }
+
+    // One-at-a-time guard
+    for (const [name, entry] of _downloads) {
+      if (entry.status === 'downloading') {
+        toast.warning('Download in progress', `${name} is downloading. Wait for it to finish.`);
+        return;
+      }
+    }
+
+    // Low disk space warning (non-blocking)
+    const diskCheck = await hasEnoughDiskSpace();
+    if (!diskCheck.ok) {
+      toast.warning(
+        'Low disk space',
+        'Your available storage is low. The download may fail if space runs out.',
+      );
+    }
+
     const controller = new AbortController();
-    pullAbortRef.current?.abort();
-    pullAbortRef.current = controller;
+    _downloads.set(model, {
+      status: 'downloading',
+      progress: { model, status: 'Starting download' },
+      abortController: controller,
+    });
+    notifyDownloadListeners();
     setPullState({ model, status: 'Starting download' });
 
     try {
       await pullOllamaModel(
         model,
-        (progress) => setPullState({ model, ...progress }),
+        (progress) => {
+          const next: PullState = { model, ...progress };
+          _downloads.set(model, {
+            status: progress.done ? 'done' : 'downloading',
+            progress: next,
+            abortController: controller,
+          });
+          notifyDownloadListeners();
+          setPullState(next);
+        },
         controller.signal,
       );
+      _downloads.set(model, {
+        status: 'done',
+        progress: { model, status: 'success', done: true, percent: 100 },
+      });
+      notifyDownloadListeners();
       setDefaultLocalModel(model);
       toast.success('Model ready', `${model} is installed and selected.`);
       await scan(false);
     } catch (err) {
-      if ((err as Error)?.name !== 'AbortError') {
-        toast.error(
-          'Model download failed',
-          err instanceof Error ? err.message : 'Ollama could not download this model.',
-        );
+      if ((err as Error)?.name === 'AbortError') {
+        _downloads.delete(model);
+      } else {
+        const friendly = userFacingDownloadError(err);
+        _downloads.set(model, {
+          status: 'error',
+          progress: null,
+          error: friendly,
+        });
+        toast.error('Model download failed', friendly);
       }
+      notifyDownloadListeners();
     } finally {
-      if (pullAbortRef.current === controller) pullAbortRef.current = null;
       setPullState(null);
     }
   }
+
+  // Derive active pull state from module-level store or local state
+  const activePull: PullState | null =
+    pullState ??
+    (() => {
+      for (const [, entry] of downloadMap) {
+        if (entry.status === 'downloading' && entry.progress) return entry.progress;
+      }
+      return null;
+    })();
 
   const connected = reachable === true;
   const notInstalled = reachable === false && nativeStatus.installed === false;
@@ -491,14 +656,22 @@ export function LocalModels() {
           </p>
         </div>
 
-        {pullState ? (
-          <PullProgressCard state={pullState} onCancel={() => pullAbortRef.current?.abort()} />
+        {activePull ? (
+          <PullProgressCard state={activePull} onCancel={() => {
+            for (const [, entry] of _downloads) {
+              if (entry.status === 'downloading' && entry.abortController) {
+                entry.abortController.abort();
+              }
+            }
+          }} />
         ) : null}
 
         <div className="grid max-w-2xl gap-2">
           {MODEL_CATALOG.map((model) => {
             const modelInstalled = isModelInstalled(installed, model.name);
-            const pullingThisModel = pullState?.model === model.name;
+            const dlEntry = downloadMap.get(model.name);
+            const pullingThisModel = dlEntry?.status === 'downloading';
+            const downloadFailed = dlEntry?.status === 'error';
             return (
               <div
                 key={model.name}
@@ -518,8 +691,17 @@ export function LocalModels() {
                         Installed
                       </Badge>
                     ) : null}
+                    {downloadFailed ? (
+                      <Badge variant="warning">
+                        <AlertTriangle className="h-3 w-3" />
+                        Failed
+                      </Badge>
+                    ) : null}
                   </div>
                   <p className="mt-1 text-metadata text-muted-foreground">{model.blurb}</p>
+                  {downloadFailed && dlEntry?.error ? (
+                    <p className="mt-1 text-metadata text-red-400">{dlEntry.error}</p>
+                  ) : null}
                 </div>
                 {modelInstalled ? (
                   <Button
@@ -538,10 +720,10 @@ export function LocalModels() {
                     size="sm"
                     className="shrink-0"
                     onClick={() => void downloadModel(model.name)}
-                    disabled={!connected || pullState !== null}
+                    disabled={!connected || pullingThisModel}
                   >
                     <Download className={cn('h-3.5 w-3.5', pullingThisModel && 'animate-pulse')} />
-                    {pullingThisModel ? 'Downloading' : 'Download'}
+                    {pullingThisModel ? 'Downloading' : downloadFailed ? 'Retry' : 'Download'}
                   </Button>
                 )}
               </div>

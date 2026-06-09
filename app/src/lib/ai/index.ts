@@ -38,5 +38,15 @@ export {
   isOllamaReachable,
   waitForOllamaReachable,
   pullOllamaModel,
+  validateModelName,
 } from './providers/ollama';
 export type { OllamaModelInfo, OllamaPullProgress } from './providers/ollama';
+
+export {
+  CHAT_MODEL_OPTIONS,
+  getModelOptions,
+  defaultModelForProvider,
+  isRealChatProvider,
+  syncDiscoveredOllamaModels,
+  useOllamaModelOptions,
+} from './models';

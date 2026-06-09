@@ -38,23 +38,33 @@ describe('ollama provider utilities', () => {
         modifiedAt: '2026-06-07T10:00:00Z',
       },
     ]);
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:11434/api/tags', {
-      signal: undefined,
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:11434/api/tags',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it('streams pull progress and reports percent complete', async () => {
     const progress: string[] = [];
     const percents: number[] = [];
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        ndjsonResponse([
-          { status: 'pulling manifest' },
-          { status: 'downloading', completed: 50, total: 100 },
-          { status: 'success' },
-        ]),
-      );
+    // Mock that returns NDJSON for pull AND a model list for verification
+    const fetchMock = vi.fn().mockImplementation((url: string, _init?: RequestInit) => {
+      if (url.includes('/api/pull')) {
+        return Promise.resolve(
+          ndjsonResponse([
+            { status: 'pulling manifest' },
+            { status: 'downloading', completed: 50, total: 100 },
+            { status: 'success' },
+          ]),
+        );
+      }
+      if (url.includes('/api/tags')) {
+        return Promise.resolve(
+          jsonResponse({ models: [{ name: 'llama3.2', size: 2_000_000_000 }] }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ models: [] }));
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     await pullOllamaModel('llama3.2', (event) => {
@@ -69,7 +79,7 @@ describe('ollama provider utilities', () => {
       expect.objectContaining({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model: 'llama3.2', stream: true }),
+        body: JSON.stringify({ name: 'llama3.2', stream: true }),
       }),
     );
   });
