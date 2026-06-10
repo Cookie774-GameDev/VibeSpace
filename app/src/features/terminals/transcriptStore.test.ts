@@ -17,8 +17,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   MAX_BYTES_PER_SESSION,
   deserializeTranscriptSessions,
+  flushTranscriptStorage,
   getSessionTranscript,
   getSessionsForAgent,
+  loadInitialSessions,
   stripAnsi,
   terminalRestoreText,
   useTerminalTranscriptStore,
@@ -363,5 +365,92 @@ describe('transcript store — lifecycle', () => {
     expect(getSessionTranscript('pty_project_new')?.projectId).toBe('proj_a');
     expect(getSessionTranscript('pty_project_new')?.paneId).toBe('pane_project');
     expect(getSessionTranscript('pty_project_new')?.text).toBe('owned output\n');
+  });
+});
+
+
+describe('transcript persistence durability', () => {
+  const KEY = 'jarvis-terminal-transcripts';
+  const BACKUP = 'jarvis-terminal-transcripts-backup';
+
+  const validSnapshot = (id: string, text: string) =>
+    JSON.stringify({
+      sessions: {
+        [id]: {
+          sessionId: id,
+          paneId: null,
+          projectId: null,
+          agentSlug: null,
+          command: null,
+          text,
+          rawText: '',
+          currentInput: '',
+          lastWriteAt: 42,
+          bytesSeen: text.length,
+        },
+      },
+    });
+
+  beforeEach(() => {
+    useTerminalTranscriptStore.getState().reset(); // also clears both storage keys
+  });
+
+  it('restores from backup when the primary transcript is empty', () => {
+    window.localStorage.setItem(KEY, JSON.stringify({ sessions: {} }));
+    window.localStorage.setItem(BACKUP, validSnapshot('pty_b', 'kept output\n'));
+    const loaded = loadInitialSessions();
+    expect(loaded.pty_b?.text).toBe('kept output\n');
+  });
+
+  it('restores from backup when the primary transcript is missing', () => {
+    window.localStorage.removeItem(KEY);
+    window.localStorage.setItem(BACKUP, validSnapshot('pty_c', 'recovered\n'));
+    expect(loadInitialSessions().pty_c?.text).toBe('recovered\n');
+  });
+
+  it('prefers the primary when it has sessions (backup is only a fallback)', () => {
+    window.localStorage.setItem(KEY, validSnapshot('pty_primary', 'fresh\n'));
+    window.localStorage.setItem(BACKUP, validSnapshot('pty_old', 'stale\n'));
+    const loaded = loadInitialSessions();
+    expect(loaded.pty_primary?.text).toBe('fresh\n');
+    expect(loaded.pty_old).toBeUndefined();
+  });
+
+  it('never overwrites a valid saved transcript with empty state on flush', () => {
+    // Simulate the dangerous case: durable history exists on disk, but the
+    // in-memory store is empty (e.g. panes unmounted on app close).
+    window.localStorage.setItem(KEY, validSnapshot('pty_v', 'precious history\n'));
+    expect(Object.keys(useTerminalTranscriptStore.getState().sessions)).toHaveLength(0);
+
+    flushTranscriptStorage();
+
+    const after = window.localStorage.getItem(KEY);
+    expect(after).not.toBeNull();
+    expect(deserializeTranscriptSessions(after)?.pty_v?.text).toBe('precious history\n');
+  });
+
+  it('persists an intentional per-session clear (entry kept, transcript emptied)', () => {
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_clear', { agentSlug: null });
+    store.appendOutput('pty_clear', 'some output\n');
+    store.clearSessionTranscript('pty_clear');
+
+    flushTranscriptStorage();
+
+    const persisted = deserializeTranscriptSessions(window.localStorage.getItem(KEY));
+    expect(persisted?.pty_clear).toBeTruthy();
+    expect(persisted?.pty_clear?.text).toBe('');
+  });
+
+  it('an intentional full reset wipes persisted transcripts', () => {
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_wipe', { agentSlug: null });
+    store.appendOutput('pty_wipe', 'output\n');
+    flushTranscriptStorage();
+    expect(window.localStorage.getItem(KEY)).not.toBeNull();
+
+    store.reset();
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+    expect(window.localStorage.getItem(BACKUP)).toBeNull();
   });
 });

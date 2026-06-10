@@ -72,6 +72,7 @@ export function TabStrip() {
 
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const projectId = useAuthStore((s) => s.projectId) as ProjectId | null;
+  const setProjectId = useAuthStore((s) => s.setProjectId);
 
   // Live projection — same shape the nav sidebar uses, just trimmed
   // for the tab strip's narrow bar.
@@ -115,20 +116,50 @@ export function TabStrip() {
     }
   }, [projectId, activeChatId, setActiveChat]);
 
-  // Detect when the active id falls outside the projected list (e.g.
-  // the user switched projects). Clear the active id so the canvas
-  // shows its empty state instead of silently keeping a hidden tab
-  // selected.
+  // Reconcile the active chat against the current project's tab list.
+  //
+  // The active chat can legitimately belong to a *different* project — e.g.
+  // the user clicked "Open in Chat" from History, or jumped via the command
+  // palette. The tab list here is project-scoped, so such a chat won't appear
+  // in `tabs`. Previously we bumped `activeChatId` to `tabs[0]` in that case,
+  // which looked like "Open in Chat opened a different/new chat" (the reported
+  // bug). Instead: only bump when the chat is truly gone (deleted). If it still
+  // exists in another project, switch to that project so it stays selected.
   React.useEffect(() => {
     if (!activeChatId) {
       if (tabs.length > 0) setActiveChat(tabs[0].id);
       return;
     }
-    const stillThere = tabs.some((t) => t.id === activeChatId);
-    if (!stillThere) {
-      setActiveChat(tabs[0]?.id ?? null);
-    }
-  }, [tabs, activeChatId, setActiveChat]);
+    if (tabs.some((t) => t.id === activeChatId)) return;
+
+    let cancelled = false;
+    void (async () => {
+      let chat: Chat | undefined;
+      try {
+        chat = await chatRepo.getById(activeChatId as ChatId);
+      } catch {
+        chat = undefined;
+      }
+      if (cancelled) return;
+      if (!chat) {
+        // The chat was actually deleted — fall back to the first tab.
+        setActiveChat(tabs[0]?.id ?? null);
+        return;
+      }
+      const chatProject = (chat.project_id ?? null) as ProjectId | null;
+      if (chatProject !== projectId) {
+        // Align the workspace to the chat's project so its tab is in scope.
+        // Pre-seed per-project memory so the project-switch handler keeps THIS
+        // chat active rather than restoring a previously-remembered one.
+        projectChatMemory.set(projectMemoryKey(chatProject), activeChatId as ChatId);
+        setProjectId(chatProject);
+      }
+      // Same project but outside the capped recent list: keep it (no bump).
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tabs, activeChatId, projectId, setActiveChat, setProjectId]);
 
   const handleSelect = React.useCallback(
     (id: ChatId) => {

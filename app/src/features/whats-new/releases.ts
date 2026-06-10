@@ -342,35 +342,28 @@ export const RELEASES: readonly Release[] = [
   {
     version: '0.1.28',
     date: '2026-06-10',
-    headline: 'Voice subscriptions, metered cloud voice, and sturdier terminal history',
+    headline: 'Sturdier terminal history and reliable "Open in Chat"',
     summary:
-      'Adds a secure voice/messaging/calling subscription system routed through Supabase Edge Functions (company keys stay server-side), with automatic fallback to local/system voice. Also hardens terminal history persistence so it is not lost to transient empty states.',
+      'Reliability release. Terminal history is now protected from accidental loss, opening a past conversation restores that exact chat, and groundwork for an optional voice/subscription system has landed (not yet active — it requires account setup).',
     sections: [
-      {
-        kind: 'feature',
-        items: [
-          'Voice provider architecture (Kokoro local, OpenAI/Deepgram/ElevenLabs cloud, system fallback) with text cleanup, sentence chunking, and an automatic fallback chain.',
-          'Metered cloud voice, AI messaging, and AI calling with server-enforced per-plan budgets (Starter/Pro/Ultra) and friendly credits/minutes display.',
-          'Stripe subscription checkout + billing portal with server-side price mapping and signature-verified, idempotent webhooks.',
-        ],
-      },
       {
         kind: 'improvement',
         items: [
-          'Terminal history persistence is more durable: an empty or transient state can no longer overwrite a valid saved transcript, and restore falls back to the last-known-good backup.',
+          'Terminal history is far more durable: an empty or transient state can no longer overwrite a valid saved transcript, and restore falls back to the last-known-good backup after restarts, updates, or unexpected exits.',
         ],
       },
       {
         kind: 'fix',
         items: [
-          'Fixed a terminal transcript truncation marker that rendered as garbled characters.',
+          'History → "Open in Chat" now reopens the exact selected conversation (even across projects) instead of starting a new empty chat.',
+          'Fixed a terminal transcript truncation marker that could render as garbled characters.',
         ],
       },
       {
         kind: 'known',
         items: [
-          'Local Kokoro audio falls back to system voice until the local model runtime/asset is published.',
-          'Cloud voice, messaging, and calling require their provider keys + database migration to be configured before they are active.',
+          'Groundwork only (not yet enabled): an optional metered voice/messaging/calling subscription system has been added behind the scenes. It does nothing until provider keys, billing, and the database are configured — local and system voice are unaffected.',
+          'Local Kokoro neural voice is not generating audio yet; the assistant falls back to the system voice until the model runtime/asset ships.',
         ],
       },
     ],

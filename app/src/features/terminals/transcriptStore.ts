@@ -369,7 +369,7 @@ export function deserializeTranscriptSessions(
   }
 }
 
-function loadInitialSessions(): Record<string, SessionTranscript> {
+export function loadInitialSessions(): Record<string, SessionTranscript> {
   if (typeof window === 'undefined') return {};
   const primary = deserializeTranscriptSessions(
     window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY),
@@ -388,7 +388,7 @@ function loadInitialSessions(): Record<string, SessionTranscript> {
   return primary ?? backup ?? {};
 }
 
-function flushTranscriptStorage(): void {
+export function flushTranscriptStorage(): void {
   if (typeof window === 'undefined') return;
   if (transcriptStorageTimer) {
     clearTimeout(transcriptStorageTimer);
