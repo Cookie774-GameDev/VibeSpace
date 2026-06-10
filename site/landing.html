@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jarvis One — The AI workspace for every model, agent, voice &amp; task</title>
+    <meta
+      name="description"
+      content="Jarvis One is a cozy, local-first, all-in-one AI workspace: 21+ model providers, agent councils, voice, calling, coding terminals, tasks and memory — in one calm desktop app."
+    />
+    <style>
+      :root {
+        --bg: #0a0b0e;
+        --bg-2: #0e1014;
+        --panel: #14161d;
+        --panel-2: #181b23;
+        --border: #262a33;
+        --fg: #f2efe9;
+        --muted: #9aa1ad;
+        --copper: #d68a4e;
+        --copper-soft: #e8a96b;
+        --cyan: #34d6e6;
+        --purple: #a472f0;
+        --radius: 16px;
+        --maxw: 1140px;
+        --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--fg); line-height: 1.6; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+      a { color: inherit; text-decoration: none; }
+      h1, h2, h3 { line-height: 1.1; letter-spacing: -0.02em; margin: 0; }
+
+      .bg-orbs { position: fixed; inset: 0; z-index: -2; overflow: hidden; pointer-events: none; }
+      .orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.5; }
+      .orb.p { width: 520px; height: 520px; background: radial-gradient(circle, rgba(164,114,240,0.55), transparent 70%); top: -160px; right: -120px; animation: float1 16s ease-in-out infinite; }
+      .orb.c { width: 460px; height: 460px; background: radial-gradient(circle, rgba(52,214,230,0.4), transparent 70%); top: 40%; left: -160px; animation: float2 20s ease-in-out infinite; }
+      .orb.o { width: 420px; height: 420px; background: radial-gradient(circle, rgba(214,138,78,0.35), transparent 70%); bottom: -160px; right: 18%; animation: float1 22s ease-in-out infinite reverse; }
+      @keyframes float1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-40px,40px) scale(1.08); } }
+      @keyframes float2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(50px,-30px) scale(1.12); } }
+
+      #cursor-glow { position: fixed; width: 480px; height: 480px; border-radius: 50%; z-index: -1; background: radial-gradient(circle, rgba(164,114,240,0.10), transparent 60%); transform: translate(-50%, -50%); pointer-events: none; transition: opacity .3s; opacity: 0; }
+
+      .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+      nav { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(14px); background: rgba(10, 11, 14, 0.72); border-bottom: 1px solid transparent; transition: border-color .3s, background .3s; }
+      nav.scrolled { border-bottom-color: var(--border); }
+      .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+      .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; }
+      .nav-links { display: flex; gap: 28px; align-items: center; }
+      .nav-links a { color: var(--muted); font-size: 14px; font-weight: 500; transition: color .2s; }
+      .nav-links a:hover { color: var(--fg); }
+      @media (max-width: 760px) { .nav-links a:not(.btn) { display: none; } }
+
+      .jmark { position: relative; width: 38px; height: 38px; flex: none; display: grid; place-items: center; border-radius: 50%; background: linear-gradient(145deg, #b985ff, #7c4ddb 55%, #5a32b0); color: #fff; font-weight: 800; font-size: 19px; box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset; }
+      .jmark::before { content: ""; position: absolute; inset: -6px; border-radius: 50%; z-index: -1; background: radial-gradient(circle, rgba(164,114,240,0.7), rgba(52,214,230,0.35) 55%, transparent 72%); filter: blur(4px); animation: jpulse 2.4s ease-in-out infinite; }
+      .jmark.lg { width: 132px; height: 132px; font-size: 64px; border-radius: 34px; }
+      .jmark.lg::before { inset: -16px; border-radius: 50%; }
+      @keyframes jpulse { 0%,100% { opacity: .4; transform: scale(.9); } 50% { opacity: .95; transform: scale(1.12); } }
+
+      .btn { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; padding: 11px 20px; border-radius: 999px; font-weight: 600; font-size: 14px; border: 1px solid var(--border); background: var(--panel-2); color: var(--fg); transition: transform .15s, box-shadow .2s, border-color .2s, background .2s; }
+      .btn:hover { transform: translateY(-2px); }
+      .btn.primary { background: linear-gradient(135deg, var(--copper), var(--copper-soft)); color: #1a1206; border-color: transparent; box-shadow: 0 8px 26px -8px rgba(214,138,78,0.6); }
+      .btn.primary:hover { box-shadow: 0 14px 34px -8px rgba(214,138,78,0.75); }
+      .btn.ghost:hover { border-color: var(--purple); color: #fff; }
+
+      header.hero { position: relative; padding: 96px 0 72px; text-align: center; }
+      .eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 26px; padding: 7px 16px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--copper-soft); border: 1px solid rgba(214,138,78,0.3); background: rgba(214,138,78,0.08); }
+      .hero h1 { font-size: clamp(38px, 7vw, 76px); font-weight: 800; margin: 18px 0 0; }
+      .hero h1 .grad { background: linear-gradient(120deg, var(--purple), var(--cyan) 60%, var(--copper-soft)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+      .hero p.lead { max-width: 640px; margin: 22px auto 0; color: var(--muted); font-size: clamp(16px, 2.4vw, 20px); }
+      .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 36px; }
+      .platforms { margin-top: 26px; color: var(--muted); font-size: 13px; letter-spacing: .04em; }
+      .platforms b { color: var(--fg); }
+
+      .mock { margin: 64px auto 0; max-width: 960px; border-radius: 18px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); box-shadow: 0 40px 120px -40px rgba(124,77,219,0.45), 0 0 0 1px rgba(255,255,255,0.02) inset; }
+      .mock-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+      .dot { width: 11px; height: 11px; border-radius: 50%; }
+      .mock-body { display: grid; grid-template-columns: 180px 1fr; min-height: 320px; }
+      .mock-side { border-right: 1px solid var(--border); padding: 16px 12px; background: var(--bg-2); }
+      .side-item { height: 11px; border-radius: 6px; margin: 0 0 14px; background: linear-gradient(90deg, var(--border), transparent); }
+      .side-item.active { background: linear-gradient(90deg, var(--purple), transparent); }
+      .mock-main { padding: 22px; }
+      .term { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; color: #c8cdd6; background: #0c0e12; border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-height: 240px; }
+      .term .pr { color: var(--cyan); }
+      .term .ok { color: #7ee0a8; }
+      .term .muted { color: var(--muted); }
+      .cursor { display: inline-block; width: 8px; height: 15px; background: var(--copper); vertical-align: -2px; animation: blink 1.1s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      section { padding: 84px 0; }
+      .sec-head { text-align: center; max-width: 640px; margin: 0 auto 52px; }
+      .sec-head h2 { font-size: clamp(28px, 4.5vw, 44px); font-weight: 800; }
+      .sec-head p { color: var(--muted); margin-top: 14px; font-size: 17px; }
+      .kicker { color: var(--copper-soft); font-weight: 700; font-size: 13px; letter-spacing: .16em; text-transform: uppercase; }
+
+      .grid { display: grid; gap: 18px; }
+      .g3 { grid-template-columns: repeat(3, 1fr); }
+      @media (max-width: 900px) { .g3 { grid-template-columns: repeat(2, 1fr); } }
+      @media (max-width: 560px) { .g3 { grid-template-columns: 1fr; } }
+
+      .card { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; transition: transform .2s, border-color .2s, box-shadow .25s; }
+      .card:hover { transform: translateY(-4px); border-color: rgba(164,114,240,0.45); box-shadow: 0 18px 40px -22px rgba(164,114,240,0.5); }
+      .card .ico { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font-size: 22px; margin-bottom: 14px; background: rgba(52,214,230,0.10); border: 1px solid rgba(52,214,230,0.25); }
+      .card h3 { font-size: 18px; font-weight: 700; }
+      .card p { color: var(--muted); font-size: 14.5px; margin: 8px 0 0; }
+
+      .chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 900px; margin: 0 auto; }
+      .chip { padding: 9px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--muted); border: 1px solid var(--border); background: var(--panel); transition: all .2s; cursor: default; }
+      .chip:hover { color: #fff; border-color: var(--purple); transform: translateY(-2px); }
+
+      .price-grid { grid-template-columns: repeat(4, 1fr); }
+      @media (max-width: 980px) { .price-grid { grid-template-columns: repeat(2, 1fr); } }
+      @media (max-width: 520px) { .price-grid { grid-template-columns: 1fr; } }
+      .plan { display: flex; flex-direction: column; }
+      .plan.feat { border-color: var(--copper); box-shadow: 0 0 0 1px var(--copper), 0 24px 60px -30px rgba(214,138,78,0.6); position: relative; }
+      .plan.feat::after { content: "Most popular"; position: absolute; top: -11px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, var(--copper), var(--copper-soft)); color: #1a1206; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 999px; letter-spacing: .04em; }
+      .plan .pname { font-weight: 700; font-size: 15px; color: var(--copper-soft); letter-spacing: .04em; }
+      .plan .pprice { font-size: 40px; font-weight: 800; margin: 8px 0 2px; }
+      .plan .pprice span { font-size: 15px; font-weight: 500; color: var(--muted); }
+      .plan ul { list-style: none; padding: 0; margin: 18px 0 0; flex: 1; }
+      .plan li { color: var(--muted); font-size: 14px; padding: 7px 0 7px 24px; position: relative; }
+      .plan li::before { content: "✓"; position: absolute; left: 0; color: var(--cyan); font-weight: 700; }
+      .plan .btn { width: 100%; justify-content: center; margin-top: 20px; }
+
+      .keys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; max-width: 720px; margin: 0 auto; }
+      @media (max-width: 560px) { .keys { grid-template-columns: 1fr; } }
+      .keyrow { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+      .keyrow span { color: var(--muted); font-size: 14px; }
+      kbd { font-family: var(--font); font-size: 12px; font-weight: 600; color: var(--fg); background: var(--panel-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 3px 8px; }
+
+      .cta-band { text-align: center; border-radius: 28px; padding: 64px 28px; margin: 0 24px; background: radial-gradient(circle at 30% 20%, rgba(164,114,240,0.22), transparent 55%), radial-gradient(circle at 80% 80%, rgba(52,214,230,0.16), transparent 50%), var(--panel); border: 1px solid var(--border); }
+      .cta-band h2 { font-size: clamp(26px, 4vw, 40px); font-weight: 800; }
+      .cta-band p { color: var(--muted); margin: 14px auto 0; max-width: 520px; }
+      .code-pill { display: inline-flex; align-items: center; gap: 10px; margin-top: 26px; font-family: ui-monospace, monospace; font-size: 13.5px; color: #cdd3dc; background: #0c0e12; border: 1px solid var(--border); padding: 12px 16px; border-radius: 12px; max-width: 100%; flex-wrap: wrap; }
+      .copybtn { cursor: pointer; color: var(--copper-soft); font-weight: 600; background: none; border: none; font-size: 13px; }
+
+      footer { border-top: 1px solid var(--border); padding: 40px 0; color: var(--muted); font-size: 13.5px; }
+      .foot-inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+
+      .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+      .reveal.in { opacity: 1; transform: none; }
+      @media (prefers-reduced-motion: reduce) {
+        .reveal { opacity: 1; transform: none; transition: none; }
+        .orb, .jmark::before, .cursor { animation: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-orbs"><div class="orb p"></div><div class="orb c"></div><div class="orb o"></div></div>
+    <div id="cursor-glow"></div>
+
+    <nav id="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href="#top"><span class="jmark">J</span> Jarvis One</a>
+        <div class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#models">Models</a>
+          <a href="#voice">Voice &amp; Calling</a>
+          <a href="#pricing">Pricing</a>
+          <a class="btn primary" href="#download">Download</a>
+        </div>
+      </div>
+    </nav>
+
+    <header class="hero" id="top">
+      <div class="wrap">
+        <div class="jmark lg" style="margin: 0 auto 8px;">J</div>
+        <div style="margin-top:10px"><span class="eyebrow">⚡ Vibe coding for vibe coders</span></div>
+        <h1>The AI workspace for<br /><span class="grad">every model, agent, voice &amp; task</span></h1>
+        <p class="lead">
+          Jarvis One is a cozy, local-first desktop app that brings AI chat, agent councils, voice
+          calling, coding terminals, memory and tasks into one calm workspace. Stop juggling seven
+          AI apps — ship from one.
+        </p>
+        <div class="hero-cta">
+          <a class="btn primary" href="#download">⬇ Download for Windows</a>
+          <a class="btn ghost" href="https://github.com/Cookie774-GameDev/Jarivs-One" target="_blank" rel="noopener">★ Star on GitHub</a>
+        </div>
+        <p class="platforms">Local-first · BYOK · <b>Windows</b> · <b>macOS</b> · <b>Linux</b></p>
+
+        <div class="mock reveal">
+          <div class="mock-bar">
+            <span class="dot" style="background:#ff5f57"></span>
+            <span class="dot" style="background:#febc2e"></span>
+            <span class="dot" style="background:#28c840"></span>
+            <span style="margin-left:10px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:8px"><span class="jmark" style="width:18px;height:18px;font-size:10px">J</span> Workspace / New chat</span>
+          </div>
+          <div class="mock-body">
+            <div class="mock-side">
+              <div class="side-item active"></div>
+              <div class="side-item"></div>
+              <div class="side-item"></div>
+              <div class="side-item" style="width:70%"></div>
+              <div class="side-item" style="width:85%"></div>
+            </div>
+            <div class="mock-main"><div class="term" id="term"></div></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <div class="kicker">One calm workspace</div>
+          <h2>Everything your AI day needs</h2>
+          <p>Chat, agents, voice, terminals, tasks and memory — designed to feel cozy, not cluttered.</p>
+        </div>
+        <div class="grid g3">
+          <div class="card reveal"><div class="ico">💬</div><h3>Multi-model chat</h3><p>Talk to any model with persistent threads, slash commands and project context.</p></div>
+          <div class="card reveal"><div class="ico">🧠</div><h3>Agent council</h3><p>Run multiple specialized agents in parallel and synthesize their answers.</p></div>
+          <div class="card reveal"><div class="ico">🎙️</div><h3>Voice &amp; calling</h3><p>Talk to Jarvis in-app or over the phone with natural neural voices.</p></div>
+          <div class="card reveal"><div class="ico">⌨️</div><h3>Coding terminals</h3><p>Real PTY shells in a tile grid — with durable history that survives restarts.</p></div>
+          <div class="card reveal"><div class="ico">✅</div><h3>Tasks &amp; Kanban</h3><p>Capture todos, schedule reminders and track work visually.</p></div>
+          <div class="card reveal"><div class="ico">🗂️</div><h3>Memory &amp; context</h3><p>Context that persists across sessions, scoped to projects and agents.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="models" style="background:var(--bg-2)">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <div class="kicker">BYOK-first</div>
+          <h2>21+ model providers, your keys</h2>
+          <p>Bring your own key — it never leaves your device. Or run fully offline with Ollama.</p>
+        </div>
+        <div class="chips reveal">
+          <span class="chip">Anthropic</span><span class="chip">OpenAI</span><span class="chip">Google Gemini</span>
+          <span class="chip">Groq</span><span class="chip">Cerebras</span><span class="chip">Fireworks</span>
+          <span class="chip">Together AI</span><span class="chip">DeepSeek</span><span class="chip">Mistral</span>
+          <span class="chip">Cohere</span><span class="chip">Perplexity</span><span class="chip">xAI</span>
+          <span class="chip">OpenRouter</span><span class="chip">Replicate</span><span class="chip">Hugging Face</span>
+          <span class="chip">Azure OpenAI</span><span class="chip">AWS Bedrock</span><span class="chip">Ollama · offline</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="voice">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <div class="kicker">It speaks</div>
+          <h2>A voice you can talk to</h2>
+          <p>Free local voices for everyone, with optional premium cloud voices on paid plans — and automatic fallback so it always works.</p>
+        </div>
+        <div class="grid g3">
+          <div class="card reveal"><div class="ico" style="background:rgba(164,114,240,0.12);border-color:rgba(164,114,240,0.3)">🟣</div><h3>Jarvis &amp; Friday</h3><p>Free local presets — calm British-inspired Jarvis and fast tactical Friday. No key required.</p></div>
+          <div class="card reveal"><div class="ico" style="background:rgba(214,138,78,0.12);border-color:rgba(214,138,78,0.3)">✨</div><h3>Premium cloud voice</h3><p>Best-in-class neural voices on paid plans, metered and private — routed through a secure backend.</p></div>
+          <div class="card reveal"><div class="ico">📞</div><h3>AI calling</h3><p>Dial in or have Jarvis call you for deadlines and alerts, with per-plan minutes.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pricing" style="background:var(--bg-2)">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <div class="kicker">Simple &amp; honest</div>
+          <h2>Plans that scale with you</h2>
+          <p>Free forever for local + BYOK. Paid plans add company-powered AI messages, calling and premium voice.</p>
+        </div>
+        <div class="grid price-grid">
+          <div class="card plan reveal">
+            <div class="pname">FREE</div>
+            <div class="pprice">$0</div>
+            <ul><li>Local Jarvis &amp; Friday voice</li><li>All 21+ BYOK providers</li><li>Terminals, tasks, memory</li><li>Fully offline with Ollama</li></ul>
+            <a class="btn ghost" href="#download">Get started</a>
+          </div>
+          <div class="card plan reveal">
+            <div class="pname">STARTER</div>
+            <div class="pprice">$10<span>/mo</span></div>
+            <ul><li>2,500 AI message credits</li><li>25 AI call minutes</li><li>Premium cloud voice</li><li>Unlimited local voice</li></ul>
+            <a class="btn ghost" href="#download">Choose Starter</a>
+          </div>
+          <div class="card plan feat reveal">
+            <div class="pname">PRO</div>
+            <div class="pprice">$50<span>/mo</span></div>
+            <ul><li>12,500 AI message credits</li><li>125 AI call minutes</li><li>Premium cloud voice</li><li>Priority routing</li></ul>
+            <a class="btn primary" href="#download">Choose Pro</a>
+          </div>
+          <div class="card plan reveal">
+            <div class="pname">ULTRA</div>
+            <div class="pprice">$100<span>/mo</span></div>
+            <ul><li>25,000 AI message credits</li><li>250 AI call minutes</li><li>Premium cloud voice</li><li>Everything, maxed out</li></ul>
+            <a class="btn ghost" href="#download">Choose Ultra</a>
+          </div>
+        </div>
+        <p style="text-align:center;color:var(--muted);font-size:13px;margin-top:22px">Local voice is always free &amp; unlimited. Cloud features auto-fall-back to local when quota runs out.</p>
+      </div>
+    </section>
+
+    <section id="hotkeys">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <div class="kicker">Keyboard-first</div>
+          <h2>Fly through your workspace</h2>
+        </div>
+        <div class="keys reveal">
+          <div class="keyrow"><span>Command palette</span><kbd>Mod + K</kbd></div>
+          <div class="keyrow"><span>Jarvis assistant</span><kbd>Mod + J</kbd></div>
+          <div class="keyrow"><span>Voice push-to-talk</span><kbd>Mod + Space</kbd></div>
+          <div class="keyrow"><span>Settings</span><kbd>Mod + ,</kbd></div>
+          <div class="keyrow"><span>Quick launcher</span><kbd>Mod + Shift + L</kbd></div>
+          <div class="keyrow"><span>Actions palette</span><kbd>Mod + Shift + A</kbd></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="download">
+      <div class="cta-band reveal">
+        <div class="jmark lg" style="margin:0 auto 18px">J</div>
+        <h2>Ship from one calm workspace</h2>
+        <p>Install Jarvis One and bring every model, agent, voice and task under one roof.</p>
+        <div class="hero-cta" style="margin-top:26px">
+          <a class="btn primary" href="https://github.com/Cookie774-GameDev/Jarivs-One/releases" target="_blank" rel="noopener">⬇ Download latest release</a>
+          <a class="btn ghost" href="https://github.com/Cookie774-GameDev/Jarivs-One" target="_blank" rel="noopener">View source</a>
+        </div>
+        <div class="code-pill">
+          <code id="install-cmd">irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex</code>
+          <button class="copybtn" id="copy">Copy</button>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap foot-inner">
+        <div class="brand" style="font-size:15px"><span class="jmark" style="width:28px;height:28px;font-size:14px">J</span> Jarvis One</div>
+        <div>Built with 🧡 for vibe coders · Apache-2.0</div>
+        <div><a href="https://github.com/Cookie774-GameDev/Jarivs-One" target="_blank" rel="noopener" style="color:var(--copper-soft)">GitHub ↗</a></div>
+      </div>
+    </footer>
+
+    <script>
+      const nav = document.getElementById("nav");
+      addEventListener("scroll", () => nav.classList.toggle("scrolled", scrollY > 12), { passive: true });
+
+      const glow = document.getElementById("cursor-glow");
+      if (matchMedia("(pointer:fine)").matches) {
+        addEventListener("pointermove", (e) => { glow.style.opacity = "1"; glow.style.left = e.clientX + "px"; glow.style.top = e.clientY + "px"; });
+      }
+
+      const io = new IntersectionObserver(
+        (entries) => entries.forEach((en) => en.isIntersecting && en.target.classList.add("in")),
+        { threshold: 0.12 }
+      );
+      document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+
+      document.getElementById("copy").addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(document.getElementById("install-cmd").textContent.trim());
+          const b = document.getElementById("copy"); b.textContent = "Copied!";
+          setTimeout(() => (b.textContent = "Copy"), 1400);
+        } catch {}
+      });
+
+      const lines = [
+        { t: "$ ", cmd: "jarvis", cls: "pr" },
+        { t: "  Booting Jarvis One…", cls: "muted" },
+        { t: "  ✓ 21 model providers ready", cls: "ok" },
+        { t: "  ✓ Local voice: Jarvis · Friday", cls: "ok" },
+        { t: "  ✓ Terminal history restored", cls: "ok" },
+        { t: "$ ", cmd: "build the future", cls: "pr" },
+        { t: "  ↳ On it. Spinning up the council…", cls: "muted" },
+      ];
+      const term = document.getElementById("term");
+      let li = 0, started = false;
+      function typeLine() {
+        if (li >= lines.length) { const c = document.createElement("span"); c.className = "cursor"; term.appendChild(c); return; }
+        const ln = lines[li++];
+        const div = document.createElement("div");
+        div.innerHTML = '<span class="' + (ln.cls || "") + '">' + ln.t + "</span>";
+        term.appendChild(div);
+        if (ln.cmd) {
+          let i = 0; const span = document.createElement("span"); div.appendChild(span);
+          const tick = setInterval(() => { span.textContent += ln.cmd[i++]; if (i >= ln.cmd.length) { clearInterval(tick); setTimeout(typeLine, 320); } }, 42);
+        } else { setTimeout(typeLine, 360); }
+      }
+      const heroIo = new IntersectionObserver((e) => { if (e[0].isIntersecting && !started) { started = true; typeLine(); } });
+      heroIo.observe(term);
+    </script>
+  </body>
+</html>
