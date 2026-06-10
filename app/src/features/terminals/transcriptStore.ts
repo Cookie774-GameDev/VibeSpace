@@ -374,12 +374,18 @@ function loadInitialSessions(): Record<string, SessionTranscript> {
   const primary = deserializeTranscriptSessions(
     window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY),
   );
-  if (primary) return primary;
-  return (
-    deserializeTranscriptSessions(
-      window.localStorage.getItem(TRANSCRIPT_BACKUP_STORAGE_KEY),
-    ) ?? {}
+  const backup = deserializeTranscriptSessions(
+    window.localStorage.getItem(TRANSCRIPT_BACKUP_STORAGE_KEY),
   );
+  const primaryCount = primary ? Object.keys(primary).length : 0;
+  const backupCount = backup ? Object.keys(backup).length : 0;
+  // Never let an empty/missing primary shadow a good backup. If the primary
+  // was evicted under quota pressure or written empty during a transient boot
+  // state, fall back to the last-known-good backup so terminal history is not
+  // lost. Prefer whichever snapshot actually has sessions.
+  if (primaryCount > 0) return primary as Record<string, SessionTranscript>;
+  if (backupCount > 0) return backup as Record<string, SessionTranscript>;
+  return primary ?? backup ?? {};
 }
 
 function flushTranscriptStorage(): void {
@@ -389,11 +395,21 @@ function flushTranscriptStorage(): void {
     transcriptStorageTimer = null;
   }
   try {
-    const serialized = JSON.stringify({
-      sessions: useTerminalTranscriptStore.getState().sessions,
-    });
+    const sessions = useTerminalTranscriptStore.getState().sessions;
+    const serialized = JSON.stringify({ sessions });
+    const isEmpty = Object.keys(sessions).length === 0;
     const current = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY);
-    if (current && current !== serialized && deserializeTranscriptSessions(current)) {
+    const currentParsed = deserializeTranscriptSessions(current);
+    const currentCount = currentParsed ? Object.keys(currentParsed).length : 0;
+    // GUARD: never overwrite a non-empty saved transcript with an empty one.
+    // Prevents an early-boot/transient-empty in-memory state from wiping
+    // durable terminal history. (User intentionally clearing goes through a
+    // separate explicit path, not this debounced flush.)
+    if (isEmpty && currentCount > 0) {
+      return;
+    }
+    // Preserve last-known-good in the backup slot before overwriting primary.
+    if (current && current !== serialized && currentCount > 0) {
       pendingStorageWrites.set(TRANSCRIPT_BACKUP_STORAGE_KEY, current);
     }
     pendingStorageWrites.set(TRANSCRIPT_STORAGE_KEY, serialized);

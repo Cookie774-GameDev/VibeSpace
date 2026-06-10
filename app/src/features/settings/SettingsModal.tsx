@@ -10,7 +10,6 @@ import {
   Moon,
   Bell,
   Sparkles,
-  Volume2,
   HardDriveDownload,
   Accessibility as AccessibilityIcon,
   Blocks,
@@ -25,7 +24,6 @@ import { LocalModels } from './sections/LocalModels';
 import { Plans } from './sections/Plans';
 import { Appearance } from './sections/Appearance';
 import { Voice } from './sections/Voice';
-import { CloudVoice } from './sections/CloudVoice';
 import { PhoneVoice } from './sections/PhoneVoice';
 import { Hotkeys } from './sections/Hotkeys';
 import { About } from './sections/About';
@@ -42,7 +40,6 @@ type SettingsTab =
   | 'localmodels'
   | 'appearance'
   | 'voice'
-  | 'cloudvoice'
   | 'phone'
   | 'ambient'
   | 'notifications'
@@ -64,7 +61,6 @@ const TABS: TabDef[] = [
   { id: 'localmodels', label: 'Local Models', icon: HardDriveDownload },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'voice', label: 'Voice', icon: Mic },
-  { id: 'cloudvoice', label: 'Cloud Voice', icon: Volume2 },
   { id: 'phone', label: 'Phone & Voice', icon: Phone },
   { id: 'ambient', label: 'Ambient', icon: Moon },
   { id: 'notifications', label: 'Notifications', icon: Bell },
@@ -168,7 +164,6 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
             {tab === 'localmodels' && <LocalModels />}
             {tab === 'appearance' && <Appearance />}
             {tab === 'voice' && <Voice />}
-            {tab === 'cloudvoice' && <CloudVoice />}
             {tab === 'phone' && <PhoneVoice />}
             {tab === 'ambient' && <Ambient />}
             {tab === 'notifications' && <Notifications />}

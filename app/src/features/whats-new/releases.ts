@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.27';
+export const CURRENT_VERSION = '0.1.28';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,42 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.28',
+    date: '2026-06-10',
+    headline: 'Voice subscriptions, metered cloud voice, and sturdier terminal history',
+    summary:
+      'Adds a secure voice/messaging/calling subscription system routed through Supabase Edge Functions (company keys stay server-side), with automatic fallback to local/system voice. Also hardens terminal history persistence so it is not lost to transient empty states.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Voice provider architecture (Kokoro local, OpenAI/Deepgram/ElevenLabs cloud, system fallback) with text cleanup, sentence chunking, and an automatic fallback chain.',
+          'Metered cloud voice, AI messaging, and AI calling with server-enforced per-plan budgets (Starter/Pro/Ultra) and friendly credits/minutes display.',
+          'Stripe subscription checkout + billing portal with server-side price mapping and signature-verified, idempotent webhooks.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Terminal history persistence is more durable: an empty or transient state can no longer overwrite a valid saved transcript, and restore falls back to the last-known-good backup.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Fixed a terminal transcript truncation marker that rendered as garbled characters.',
+        ],
+      },
+      {
+        kind: 'known',
+        items: [
+          'Local Kokoro audio falls back to system voice until the local model runtime/asset is published.',
+          'Cloud voice, messaging, and calling require their provider keys + database migration to be configured before they are active.',
+        ],
+      },
+    ],
+  },
   RELEASE_0_1_27,
   RELEASE_0_1_26,
   RELEASE_0_1_25,
