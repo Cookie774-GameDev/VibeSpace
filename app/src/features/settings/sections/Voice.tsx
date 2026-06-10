@@ -32,6 +32,14 @@ import { readWakeWordEnabled, setWakeWordEnabled } from '@/features/voice/wakeWo
 type MicStatus = 'idle' | 'testing' | 'ok' | 'denied' | 'unavailable';
 type LocalVoiceStatus = 'idle' | 'checking' | 'ready' | 'missing' | 'unsupported';
 
+/**
+ * The two free local voice presets surfaced in Settings — Jarvis and Friday.
+ * Derived from the shared VOICE_PROFILES list so selection/preview/persistence
+ * stay intact; we just don't surface the extra technical profiles in the UI.
+ */
+const FREE_VOICE_PRESET_IDS: readonly VoicePresetId[] = ['jarvis-prime', 'aurora'];
+const FREE_VOICE_PRESETS = VOICE_PROFILES.filter((p) => FREE_VOICE_PRESET_IDS.includes(p.id));
+
 export function Voice() {
   const persona = useAuthStore((s) => s.personaPreset);
   const setPersona = useAuthStore((s) => s.setPersona);
@@ -172,12 +180,13 @@ export function Voice() {
         <div>
           <Label>Jarvis voice</Label>
           <p className="mt-1 text-metadata text-muted-foreground">
-            Used for previews, wake acknowledgement, voice chat, and spoken replies. These voices
-            use built-in system speech and do not require an API key.
+            Two free local presets — Jarvis and Friday. Used for previews, wake acknowledgement,
+            voice chat, and spoken replies. These voices use built-in system speech and do not
+            require an API key. Premium cloud voices (OpenAI) unlock on a paid plan.
           </p>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {VOICE_PROFILES.map((profile) => (
+        <div className="grid grid-cols-2 gap-2">
+          {FREE_VOICE_PRESETS.map((profile) => (
             <VoiceCard
               key={profile.id}
               profile={profile}
