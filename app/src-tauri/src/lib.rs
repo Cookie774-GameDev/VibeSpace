@@ -47,6 +47,7 @@ mod credentials;
 mod launcher;
 mod local_ai;
 mod kokoro;
+mod ollama_http;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -182,6 +183,9 @@ pub fn run() {
             kokoro::kokoro_delete_corrupt,
             kokoro::kokoro_speak,
             kokoro::kokoro_stop,
+            ollama_http::ollama_list_models,
+            ollama_http::ollama_pull_model,
+            ollama_http::ollama_chat_stream,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

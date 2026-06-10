@@ -31,6 +31,7 @@ import { estimateCost, estimateInputTokens } from '../types';
 import { useAuthStore } from '@/stores/auth';
 import { parseSSE } from './sse';
 import { nativeFetch } from '@/lib/nativeFetch';
+import { isTauri } from '@/lib/utils';
 
 /** Default Ollama base URL. Configurable via auth store `apiKeys.ollama`. */
 export const OLLAMA_DEFAULT_BASE = 'http://127.0.0.1:11434';
@@ -156,6 +157,19 @@ export async function listOllamaModels(signal?: AbortSignal): Promise<string[]> 
 }
 
 export async function listOllamaModelInfo(signal?: AbortSignal): Promise<OllamaModelInfo[]> {
+  // In packaged Tauri builds, go through the Rust reqwest command (no Origin
+  // header → Ollama never 403s). Browser fetch is only used in the dev server.
+  if (isTauri) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const models = await invoke<Array<{ name: string; size?: number; modifiedAt?: string }>>(
+        'ollama_list_models',
+      );
+      return (models ?? []).map((m) => ({ name: m.name, size: m.size, modifiedAt: m.modifiedAt }));
+    } catch {
+      return [];
+    }
+  }
   try {
     const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/tags`, { signal, timeoutMs: 15_000, headers: ollamaHeaders() });
     if (!res.ok) return [];
@@ -435,6 +449,73 @@ export async function pullOllamaModel(
     return;
   }
 
+  // Packaged Tauri build: pull through the Rust reqwest command (no Origin
+  // header → Ollama never 403s). Progress arrives via 'ollama:pull-progress'.
+  if (isTauri) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const { listen } = await import('@tauri-apps/api/event');
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let unlisten: (() => void) | null = null;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (unlisten) unlisten();
+        signal?.removeEventListener('abort', onAbort);
+        fn();
+      };
+      const onAbort = () => finish(() => reject(new DOMException('Aborted by user', 'AbortError')));
+      signal?.addEventListener('abort', onAbort, { once: true });
+      void listen<{
+        status: string;
+        total?: number;
+        completed?: number;
+        percent?: number;
+        done: boolean;
+        error?: string;
+      }>('ollama:pull-progress', (event) => {
+        if (settled) return;
+        const p = event.payload;
+        if (p.error) {
+          finish(() => reject(new Error(`Ollama pull failed: ${p.error}`)));
+          return;
+        }
+        onProgress?.({
+          status: p.status,
+          total: p.total ?? undefined,
+          completed: p.completed ?? undefined,
+          percent: p.percent ?? undefined,
+          done: p.done,
+        });
+        if (p.done) finish(() => resolve());
+      }).then((un) => {
+        if (settled) {
+          un();
+          return;
+        }
+        unlisten = un;
+        // Start the pull only after the listener is attached (no missed events).
+        invoke('ollama_pull_model', { model: name }).catch((err) =>
+          finish(() => reject(err instanceof Error ? err : new Error(String(err)))),
+        );
+      });
+    });
+
+    // Verification: confirm the model now appears installed.
+    const installedNow = await listOllamaModels();
+    const norm = name.trim().toLowerCase();
+    if (
+      !installedNow.some(
+        (n) => n.trim().toLowerCase() === norm || n.trim().toLowerCase().startsWith(`${norm}:`),
+      )
+    ) {
+      throw new Error(
+        `Download completed but "${name}" was not found in the installed list. Try re-scanning or re-downloading.`,
+      );
+    }
+    return;
+  }
+
   // Create a composite abort controller that combines user signal + timeout
   const composite = new AbortController();
   const timeoutId = setTimeout(
@@ -643,6 +724,78 @@ export const ollamaProvider: LLMProvider = {
       { role: 'system' as const, content: req.agent.system_prompt },
       ...req.messages.filter((m) => m.role !== 'system'),
     ];
+
+    // Packaged Tauri build: stream chat through the Rust reqwest command (no
+    // Origin header → Ollama never 403s). Deltas arrive on a per-request event.
+    if (isTauri) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { listen } = await import('@tauri-apps/api/event');
+      const requestId =
+        globalThis.crypto?.randomUUID?.() ??
+        `chat_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      let acc = '';
+      let first = true;
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let unlisten: (() => void) | null = null;
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          if (unlisten) unlisten();
+          req.signal?.removeEventListener('abort', onAbort);
+          fn();
+        };
+        const onAbort = () =>
+          finish(() => reject(new DOMException('Aborted by user', 'AbortError')));
+        req.signal?.addEventListener('abort', onAbort, { once: true });
+        void listen<{ delta: string; done: boolean; error?: string }>(
+          `ollama:chat:${requestId}`,
+          (event) => {
+            if (settled) return;
+            const d = event.payload;
+            if (d.error) {
+              finish(() => reject(new Error(`Ollama: ${d.error}`)));
+              return;
+            }
+            if (d.delta) {
+              acc += d.delta;
+              req.onChunk?.({ delta: d.delta, first });
+              first = false;
+            }
+            if (d.done) finish(() => resolve());
+          },
+        ).then((un) => {
+          if (settled) {
+            un();
+            return;
+          }
+          unlisten = un;
+          invoke('ollama_chat_stream', {
+            requestId,
+            model,
+            messages,
+            temperature: req.temperature ?? req.agent.temperature ?? 0.7,
+          }).catch((err) =>
+            finish(() => reject(err instanceof Error ? err : new Error(String(err)))),
+          );
+        });
+      });
+      if (req.signal?.aborted) throw new DOMException('Aborted by user', 'AbortError');
+      req.onChunk?.({ delta: '', done: true });
+      const inTok = estimateInputTokens(messages.map((m) => m.content).join('\n'));
+      const outTok = estimateInputTokens(acc);
+      return {
+        text: acc,
+        usage: {
+          input_tokens: inTok,
+          output_tokens: outTok,
+          cost_usd: estimateCost('ollama', model, inTok, outTok),
+        },
+        provider: 'ollama',
+        model,
+        finish_reason: undefined,
+      };
+    }
 
     const body = {
       model,
