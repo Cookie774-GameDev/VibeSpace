@@ -93,7 +93,9 @@ describe('ollama provider utilities', () => {
       'http://127.0.0.1:11434/api/pull',
       expect.objectContaining({
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        // Origin is pinned to a loopback value so Ollama does not 403 the
+        // packaged WebView's tauri://localhost origin.
+        headers: { Origin: 'http://127.0.0.1:11434', 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'llama3.2', stream: true }),
       }),
     );

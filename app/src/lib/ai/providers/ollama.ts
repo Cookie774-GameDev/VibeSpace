@@ -113,6 +113,24 @@ function resolvedOllamaBaseUrl(): string {
 }
 
 /**
+ * Headers for every Ollama request.
+ *
+ * We pin an `Origin` that Ollama accepts (loopback). In a packaged Tauri
+ * build the WebView origin is `tauri://localhost` (or `tauri.localhost` on
+ * macOS), which Ollama's default origin allow-list rejects with a blanket
+ * `403 Forbidden` on every route — breaking pulls, `/api/tags`, and chat.
+ * The native HTTP bridge (reqwest) forwards that origin, so we override it
+ * here with a loopback origin Ollama always permits. This keeps local models
+ * fully silent — no `OLLAMA_ORIGINS` env var or user setup required.
+ *
+ * Browser `fetch` (the dev build) treats `Origin` as a forbidden header and
+ * silently ignores it, so setting it unconditionally is safe in both paths.
+ */
+function ollamaHeaders(extra?: Record<string, string>): Record<string, string> {
+  return { Origin: 'http://127.0.0.1:11434', ...(extra ?? {}) };
+}
+
+/**
  * Validate a model name against the allowed pattern. Must be called
  * before any Ollama API call that uses a user-provided model name.
  * Throws with a user-friendly message on rejection.
@@ -139,7 +157,7 @@ export async function listOllamaModels(signal?: AbortSignal): Promise<string[]> 
 
 export async function listOllamaModelInfo(signal?: AbortSignal): Promise<OllamaModelInfo[]> {
   try {
-    const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/tags`, { signal, timeoutMs: 15_000 });
+    const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/tags`, { signal, timeoutMs: 15_000, headers: ollamaHeaders() });
     if (!res.ok) return [];
     const data = await res.json().catch(() => null);
     const models = data?.models;
@@ -165,6 +183,7 @@ export async function isOllamaReachable(signal?: AbortSignal): Promise<boolean> 
     const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/version`, {
       signal,
       timeoutMs: 5_000,
+      headers: ollamaHeaders(),
     });
     return res.ok;
   } catch {
@@ -328,7 +347,7 @@ async function cleanupPartialModel(name: string): Promise<void> {
   try {
     await nativeFetch(`${resolvedOllamaBaseUrl()}/api/delete`, {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
+      headers: ollamaHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ name }),
       timeoutMs: 30_000,
     });
@@ -438,7 +457,7 @@ export async function pullOllamaModel(
 
       const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/pull`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: ollamaHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({ name, stream: true }),
         signal: composite.signal,
         timeoutMs: DOWNLOAD_TIMEOUT_MS,
@@ -638,7 +657,7 @@ export const ollamaProvider: LLMProvider = {
     try {
       res = await nativeFetch(`${base}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: ollamaHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify(body),
         signal: req.signal,
         timeoutMs: 120_000,
