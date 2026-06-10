@@ -12,18 +12,24 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
 import {
+  assertAllowedOllamaEndpoint,
+  ensureOllamaReadySilent,
   isOllamaReachable,
   listOllamaModelInfo,
   ollamaBaseUrl,
   OLLAMA_DEFAULT_BASE,
   pullOllamaModel,
   validateModelName,
-  waitForOllamaReachable,
+  type OllamaEnsureStatus,
   type OllamaModelInfo,
   type OllamaPullProgress,
 } from '@/lib/ai';
 import { syncDiscoveredOllamaModels } from '@/lib/ai/models';
-import { getNativeOllamaStatus, startNativeOllama, type NativeOllamaStatus } from '@/lib/tauri';
+import {
+  getNativeOllamaStatus,
+  openOllamaTroubleshooting,
+  type NativeOllamaStatus,
+} from '@/lib/tauri';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,9 +52,6 @@ interface PullState extends OllamaPullProgress {
 }
 
 // ── Module-level download state (survives tab switches) ────────────────
-// Because React state is local to the component instance, switching tabs
-// would lose the download progress. We store it in a module-level Map
-// and use useSyncExternalStore to subscribe the component.
 
 type DownloadStatus = 'downloading' | 'done' | 'error';
 
@@ -124,15 +127,11 @@ const MODEL_CATALOG: readonly CatalogModel[] = [
   },
 ] as const;
 
-/**
- * Map raw error messages to user-friendly explanations.
- */
 function userFacingDownloadError(err: unknown): string {
   if (!(err instanceof Error)) return 'Download failed: unknown error.';
   const msg = err.message;
 
-  if (msg.includes('Invalid model name'))
-    return msg; // already friendly from validateModelName
+  if (msg.includes('Invalid model name')) return msg;
   if (msg.includes('net::ERR_CONNECTION_REFUSED') || msg.includes('Failed to fetch'))
     return 'Cannot reach Ollama. Make sure it is running (ollama serve).';
   if (msg.includes('timed out'))
@@ -155,10 +154,6 @@ function userFacingDownloadError(err: unknown): string {
   return `Download failed: ${msg.slice(0, 200)}`;
 }
 
-/**
- * Check available browser storage for a low-disk-space warning.
- * Returns true if there's at least 10 GB available.
- */
 async function hasEnoughDiskSpace(): Promise<{ ok: boolean; availableBytes: number | null }> {
   try {
     if (typeof navigator !== 'undefined' && 'storage' in navigator) {
@@ -169,10 +164,67 @@ async function hasEnoughDiskSpace(): Promise<{ ok: boolean; availableBytes: numb
       }
     }
   } catch {
-    // Storage API not available (e.g., older WebView)
+    /* not available */
   }
-  return { ok: true, availableBytes: null }; // can't check, assume ok
+  return { ok: true, availableBytes: null };
 }
+
+// ── Unified Ollama bootstrap ────────────────────────────────────────────
+// This is the core fix. Every Download button call goes through this
+// single pipeline: detect install → start if needed → wait (120s) → pull.
+
+interface BootstrapState {
+  phase: 'idle' | 'detecting' | 'starting' | 'waiting' | 'ready' | 'error' | 'not_installed';
+  statusMsg: string;
+  error?: string;
+}
+
+let _bootstrapState: BootstrapState = { phase: 'idle', statusMsg: '' };
+let _bootstrapListeners: Array<() => void> = [];
+function notifyBootstrap() { _bootstrapListeners.forEach((fn) => fn()); }
+
+function subscribeToBootstrap(cb: () => void): () => void {
+  _bootstrapListeners.push(cb);
+  return () => { _bootstrapListeners = _bootstrapListeners.filter((l) => l !== cb); };
+}
+function getBootstrapSnapshot(): BootstrapState { return _bootstrapState; }
+
+function mapEnsureStatus(status: OllamaEnsureStatus): BootstrapState {
+  const phase =
+    status.phase === 'not_installed'
+      ? 'not_installed'
+      : status.phase === 'ready'
+        ? 'ready'
+        : status.phase === 'error'
+          ? 'error'
+          : status.phase === 'starting'
+            ? 'starting'
+            : status.phase === 'waiting'
+              ? 'waiting'
+              : 'detecting';
+
+  return {
+    phase,
+    statusMsg: status.statusMsg,
+    error: status.ready ? undefined : status.detail || undefined,
+  };
+}
+
+async function ensureOllamaReady(signal?: AbortSignal): Promise<boolean> {
+  _bootstrapState = { phase: 'detecting', statusMsg: 'Checking Ollama installation…' };
+  notifyBootstrap();
+
+  const status = await ensureOllamaReadySilent(signal, (next) => {
+    _bootstrapState = mapEnsureStatus(next);
+    notifyBootstrap();
+  });
+
+  _bootstrapState = mapEnsureStatus(status);
+  notifyBootstrap();
+  return status.ready;
+}
+
+// ── Component ────────────────────────────────────────────────────────────
 
 export function LocalModels() {
   const offlineMode = useAuthStore((state) => state.offlineMode);
@@ -184,17 +236,14 @@ export function LocalModels() {
 
   const [baseDraft, setBaseDraft] = useState(storedBase || OLLAMA_DEFAULT_BASE);
   const [reachable, setReachable] = useState<boolean | null>(null);
-  const [nativeStatus, setNativeStatus] = useState<NativeOllamaStatus>({
-    installed: null,
-  });
+  const [nativeStatus, setNativeStatus] = useState<NativeOllamaStatus>({ installed: null });
   const [installed, setInstalled] = useState<OllamaModelInfo[]>([]);
   const [scanning, setScanning] = useState(false);
-  const [starting, setStarting] = useState(false);
   const [pullState, setPullState] = useState<PullState | null>(null);
   const autoStartAttemptedRef = useRef(false);
 
-  // Module-level download store (survives tab switches)
   const downloadMap = useSyncExternalStore(subscribeToDownloads, getDownloadSnapshot);
+  const bootstrap = useSyncExternalStore(subscribeToBootstrap, getBootstrapSnapshot);
 
   useEffect(() => {
     setBaseDraft(storedBase || OLLAMA_DEFAULT_BASE);
@@ -211,22 +260,9 @@ export function LocalModels() {
         setNativeStatus(status);
 
         let connected = initiallyReachable;
-        if (
-          !connected &&
-          autoStart &&
-          status.installed === true &&
-          !autoStartAttemptedRef.current
-        ) {
+        if (!connected && autoStart && status.installed === true && !autoStartAttemptedRef.current) {
           autoStartAttemptedRef.current = true;
-          setStarting(true);
-          try {
-            await startNativeOllama();
-            connected = await waitForOllamaReachable();
-          } catch {
-            connected = false;
-          } finally {
-            setStarting(false);
-          }
+          connected = await ensureOllamaReady();
         }
 
         setReachable(connected);
@@ -238,8 +274,6 @@ export function LocalModels() {
 
         const models = await listOllamaModelInfo();
         setInstalled(models);
-
-        // Sync discovered models for the chat ModelPicker
         syncDiscoveredOllamaModels(models.map((m) => m.name));
 
         const currentDefault = useAuthStore.getState().defaultLocalModel;
@@ -255,7 +289,6 @@ export function LocalModels() {
 
   useEffect(() => {
     void scan();
-    // Cancel any in-progress download when component unmounts
     return () => {
       for (const [, entry] of _downloads) {
         if (entry.status === 'downloading' && entry.abortController) {
@@ -268,6 +301,12 @@ export function LocalModels() {
 
   function saveBase() {
     const trimmed = baseDraft.trim() || OLLAMA_DEFAULT_BASE;
+    try {
+      assertAllowedOllamaEndpoint(trimmed);
+    } catch (err) {
+      toast.error('Invalid Ollama endpoint', err instanceof Error ? err.message : String(err));
+      return;
+    }
     setApiKey('ollama', trimmed);
     autoStartAttemptedRef.current = false;
     toast.success('Local endpoint saved', trimmed);
@@ -296,31 +335,14 @@ export function LocalModels() {
     );
   }
 
-  async function startDaemon() {
-    setStarting(true);
-    try {
-      await startNativeOllama();
-      const connected = await waitForOllamaReachable();
-      if (!connected) throw new Error('Ollama did not become reachable within 12 seconds.');
-      toast.success('Ollama started', 'The local model service is connected.');
-      await scan(false);
-    } catch (err) {
-      toast.error(
-        'Could not start Ollama',
-        err instanceof Error ? err.message : 'The local service did not start.',
-      );
-    } finally {
-      setStarting(false);
-    }
-  }
-
+  /**
+   * Full pipeline: ensure Ollama is running, then download the model.
+   * This is the function called by every Download button. It handles
+   * the entire lifecycle — the user never has to manually start Ollama
+   * or check connectivity first.
+   */
   async function downloadModel(model: string) {
-    if (!reachable) {
-      toast.warning('Ollama is not connected', 'Start Ollama before downloading a model.');
-      return;
-    }
-
-    // Validate model name before proceeding
+    // Validate model name
     try {
       validateModelName(model);
     } catch (err) {
@@ -328,14 +350,14 @@ export function LocalModels() {
       return;
     }
 
-    // Duplicate download guard
+    // Guard: already downloading this exact model
     const existing = _downloads.get(model);
     if (existing?.status === 'downloading') {
       toast.info('Already downloading', `${model} is currently being downloaded.`);
       return;
     }
 
-    // One-at-a-time guard
+    // Guard: another model is downloading
     for (const [name, entry] of _downloads) {
       if (entry.status === 'downloading') {
         toast.warning('Download in progress', `${name} is downloading. Wait for it to finish.`);
@@ -343,7 +365,7 @@ export function LocalModels() {
       }
     }
 
-    // Low disk space warning (non-blocking)
+    // Disk check
     const diskCheck = await hasEnoughDiskSpace();
     if (!diskCheck.ok) {
       toast.warning(
@@ -352,14 +374,37 @@ export function LocalModels() {
       );
     }
 
+    // Step 1: bootstrap Ollama if needed
     const controller = new AbortController();
     _downloads.set(model, {
       status: 'downloading',
-      progress: { model, status: 'Starting download' },
+      progress: { model, status: 'Preparing…' },
       abortController: controller,
     });
     notifyDownloadListeners();
-    setPullState({ model, status: 'Starting download' });
+    setPullState({ model, status: 'Preparing…' });
+
+    const ready = await ensureOllamaReady(controller.signal);
+    if (!ready) {
+      const errMsg = _bootstrapState.error || 'Ollama is not running.';
+      _downloads.set(model, { status: 'error', progress: null, error: errMsg });
+      notifyDownloadListeners();
+      setPullState(null);
+      toast.error('Ollama not available', errMsg);
+      return;
+    }
+
+    // Update reachable state now that Ollama is ready
+    setReachable(true);
+
+    // Step 2: download
+    _downloads.set(model, {
+      status: 'downloading',
+      progress: { model, status: 'Starting download…' },
+      abortController: controller,
+    });
+    notifyDownloadListeners();
+    setPullState({ model, status: 'Starting download…' });
 
     try {
       await pullOllamaModel(
@@ -389,11 +434,7 @@ export function LocalModels() {
         _downloads.delete(model);
       } else {
         const friendly = userFacingDownloadError(err);
-        _downloads.set(model, {
-          status: 'error',
-          progress: null,
-          error: friendly,
-        });
+        _downloads.set(model, { status: 'error', progress: null, error: friendly });
         toast.error('Model download failed', friendly);
       }
       notifyDownloadListeners();
@@ -402,7 +443,6 @@ export function LocalModels() {
     }
   }
 
-  // Derive active pull state from module-level store or local state
   const activePull: PullState | null =
     pullState ??
     (() => {
@@ -413,8 +453,22 @@ export function LocalModels() {
     })();
 
   const connected = reachable === true;
-  const notInstalled = reachable === false && nativeStatus.installed === false;
+  const notInstalled = reachable === false && (nativeStatus.installed === false || bootstrap.phase === 'not_installed');
   const canStart = reachable === false && nativeStatus.installed === true;
+  const busy = bootstrap.phase === 'detecting' || bootstrap.phase === 'starting' || bootstrap.phase === 'waiting';
+  const anyDownloading = activePull !== null;
+
+  async function handleOpenTroubleshooting() {
+    try {
+      await openOllamaTroubleshooting();
+      toast.info('Opened Ollama troubleshooting', 'Use this only if silent startup failed.');
+    } catch (err) {
+      toast.error(
+        'Could not open Ollama',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -443,10 +497,7 @@ export function LocalModels() {
             )}
           />
           <div className="min-w-0">
-            <Label
-              htmlFor="offline-toggle"
-              className="cursor-pointer text-ui-strong text-foreground"
-            >
+            <Label htmlFor="offline-toggle" className="cursor-pointer text-ui-strong text-foreground">
               Fully local chat
             </Label>
             <p className="mt-0.5 text-metadata text-muted-foreground">
@@ -469,7 +520,7 @@ export function LocalModels() {
           <div>
             <h3 className="text-ui-strong text-foreground">Ollama connection</h3>
             <p className="text-metadata text-muted-foreground">
-              Jarvis reconnects automatically and can start an installed desktop service.
+              Jarvis starts Ollama automatically when you download a model.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -477,44 +528,52 @@ export function LocalModels() {
               reachable={reachable}
               installed={nativeStatus.installed}
               scanning={scanning}
-              starting={starting}
+              busy={busy}
+              bootstrapStatus={bootstrap.statusMsg}
             />
-            {canStart ? (
+            {canStart && !busy ? (
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => void startDaemon()}
-                disabled={starting}
+                onClick={() => { ensureOllamaReady().then((ok) => { if (ok) { setReachable(true); void scan(false); } }); }}
+                disabled={busy}
               >
                 <Play className="h-3.5 w-3.5" />
-                Start Ollama
+                Start silently
               </Button>
             ) : null}
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => {
-                autoStartAttemptedRef.current = false;
-                void scan();
-              }}
-              disabled={scanning || starting}
+              onClick={() => { autoStartAttemptedRef.current = false; void scan(); }}
+              disabled={scanning || busy}
               aria-label="Re-scan Ollama"
             >
-              <RefreshCw className={cn('h-3.5 w-3.5', (scanning || starting) && 'animate-spin')} />
+              <RefreshCw className={cn('h-3.5 w-3.5', (scanning || busy) && 'animate-spin')} />
             </Button>
           </div>
         </div>
+
+        {/* Bootstrap status banner */}
+        {busy ? (
+          <div className="rounded-md border border-accent-cyan/25 bg-accent-cyan/5 px-3 py-2">
+            <p className="text-metadata text-accent-cyan">{bootstrap.statusMsg}</p>
+          </div>
+        ) : bootstrap.phase === 'error' ? (
+          <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+            <p className="text-metadata text-warning">{bootstrap.statusMsg}</p>
+            {bootstrap.error ? <p className="mt-1 text-secondary text-muted-foreground">{bootstrap.error}</p> : null}
+            <Button variant="secondary" size="sm" className="mt-2" onClick={() => void handleOpenTroubleshooting()}>
+              Open troubleshooting
+            </Button>
+          </div>
+        ) : null}
 
         <div className="flex items-center gap-2">
           <Input
             value={baseDraft}
             onChange={(event) => setBaseDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                saveBase();
-              }
-            }}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); saveBase(); } }}
             placeholder={OLLAMA_DEFAULT_BASE}
             className="font-mono"
             spellCheck={false}
@@ -551,9 +610,9 @@ export function LocalModels() {
           </div>
         ) : null}
 
-        {reachable === false && nativeStatus.installed !== false ? (
+        {reachable === false && nativeStatus.installed !== false && bootstrap.phase === 'idle' ? (
           <p className="text-metadata text-muted-foreground">
-            Could not reach {ollamaBaseUrl()}. Start the service, verify the endpoint, then re-scan.
+            Could not reach {ollamaBaseUrl()}. Press Start Ollama or click Download on any model.
           </p>
         ) : null}
 
@@ -568,17 +627,12 @@ export function LocalModels() {
         <div>
           <h3 className="text-ui-strong text-foreground">Installed models</h3>
           <p className="text-secondary text-muted-foreground">
-            Jarvis automatically registers downloaded models and uses the selected one for local
-            chat.
+            Downloaded models appear here and in the Jarvis chat model selector automatically.
           </p>
         </div>
 
         {installed.length > 0 ? (
-          <div
-            role="radiogroup"
-            aria-label="Installed local models"
-            className="grid max-w-xl gap-2"
-          >
+          <div role="radiogroup" aria-label="Installed local models" className="grid max-w-xl gap-2">
             {installed.map((model) => {
               const selected = sameModel(defaultLocalModel, model.name);
               return (
@@ -596,25 +650,15 @@ export function LocalModels() {
                       : 'border-border',
                   )}
                 >
-                  <span
-                    className={cn(
-                      'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
-                      selected
-                        ? 'border-transparent bg-accent-gradient'
-                        : 'border-border-mid bg-background',
-                    )}
-                  >
+                  <span className={cn(
+                    'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
+                    selected ? 'border-transparent bg-accent-gradient' : 'border-border-mid bg-background',
+                  )}>
                     {selected ? <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} /> : null}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-ui-strong text-foreground">
-                      {model.name}
-                    </span>
-                    {model.size ? (
-                      <span className="text-metadata text-muted-foreground">
-                        {formatBytes(model.size)}
-                      </span>
-                    ) : null}
+                    <span className="block truncate font-mono text-ui-strong text-foreground">{model.name}</span>
+                    {model.size ? <span className="text-metadata text-muted-foreground">{formatBytes(model.size)}</span> : null}
                   </span>
                   {selected ? <Badge variant="success">Selected</Badge> : null}
                 </button>
@@ -623,9 +667,7 @@ export function LocalModels() {
           </div>
         ) : (
           <p className="text-metadata text-muted-foreground">
-            {connected
-              ? 'No models are installed yet. Download one from the catalog below.'
-              : 'Connect Ollama to detect installed models.'}
+            {connected ? 'No models yet. Download one below.' : 'Start Ollama or click Download on any model.'}
           </p>
         )}
 
@@ -652,16 +694,14 @@ export function LocalModels() {
             Model catalog
           </h3>
           <p className="text-secondary text-muted-foreground">
-            Download directly in Jarvis with live Ollama progress. Model sizes are approximate.
+            Click Download — Jarvis handles starting Ollama, pulling the model, and registering it automatically.
           </p>
         </div>
 
         {activePull ? (
           <PullProgressCard state={activePull} onCancel={() => {
             for (const [, entry] of _downloads) {
-              if (entry.status === 'downloading' && entry.abortController) {
-                entry.abortController.abort();
-              }
+              if (entry.status === 'downloading' && entry.abortController) entry.abortController.abort();
             }
           }} />
         ) : null}
@@ -686,16 +726,10 @@ export function LocalModels() {
                     <Badge variant={model.recommended ? 'accent' : 'outline'}>{model.label}</Badge>
                     <Badge variant="outline">{model.size}</Badge>
                     {modelInstalled ? (
-                      <Badge variant="success">
-                        <Check className="h-3 w-3" />
-                        Installed
-                      </Badge>
+                      <Badge variant="success"><Check className="h-3 w-3" />Installed</Badge>
                     ) : null}
                     {downloadFailed ? (
-                      <Badge variant="warning">
-                        <AlertTriangle className="h-3 w-3" />
-                        Failed
-                      </Badge>
+                      <Badge variant="warning"><AlertTriangle className="h-3 w-3" />Failed</Badge>
                     ) : null}
                   </div>
                   <p className="mt-1 text-metadata text-muted-foreground">{model.blurb}</p>
@@ -720,7 +754,7 @@ export function LocalModels() {
                     size="sm"
                     className="shrink-0"
                     onClick={() => void downloadModel(model.name)}
-                    disabled={!connected || pullingThisModel}
+                    disabled={anyDownloading || busy}
                   >
                     <Download className={cn('h-3.5 w-3.5', pullingThisModel && 'animate-pulse')} />
                     {pullingThisModel ? 'Downloading' : downloadFailed ? 'Retry' : 'Download'}
@@ -748,23 +782,18 @@ function ConnectionBadge({
   reachable,
   installed,
   scanning,
-  starting,
+  busy,
+  bootstrapStatus,
 }: {
   reachable: boolean | null;
   installed: boolean | null;
   scanning: boolean;
-  starting: boolean;
+  busy: boolean;
+  bootstrapStatus?: string;
 }) {
-  if (starting) return <Badge variant="outline">Starting...</Badge>;
-  if (scanning || reachable === null) return <Badge variant="outline">Checking...</Badge>;
-  if (reachable) {
-    return (
-      <Badge variant="success">
-        <Check className="h-3 w-3" />
-        Connected
-      </Badge>
-    );
-  }
+  if (busy) return <Badge variant="outline">{bootstrapStatus || 'Working…'}</Badge>;
+  if (scanning || reachable === null) return <Badge variant="outline">Checking…</Badge>;
+  if (reachable) return <Badge variant="success"><Check className="h-3 w-3" />Ollama ready</Badge>;
   if (installed === false) return <Badge variant="warning">Not installed</Badge>;
   if (installed === true) return <Badge variant="warning">Installed, stopped</Badge>;
   return <Badge variant="outline">Not connected</Badge>;
@@ -780,25 +809,15 @@ function PullProgressCard({ state, onCancel }: { state: PullState; onCancel: () 
           <p className="truncate text-metadata text-muted-foreground">{state.status}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {percent !== null ? (
-            <span className="text-metadata font-semibold text-accent-cyan">{percent}%</span>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onCancel}
-            aria-label="Cancel model download"
-          >
+          {percent !== null ? <span className="text-metadata font-semibold text-accent-cyan">{percent}%</span> : null}
+          <Button variant="ghost" size="icon-sm" onClick={onCancel} aria-label="Cancel model download">
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
         <div
-          className={cn(
-            'h-full rounded-full bg-accent-gradient transition-[width] duration-300',
-            percent === null && 'animate-pulse',
-          )}
+          className={cn('h-full rounded-full bg-accent-gradient transition-[width] duration-300', percent === null && 'animate-pulse')}
           style={{ width: percent === null ? '18%' : `${percent}%` }}
         />
       </div>
@@ -812,10 +831,7 @@ function PullProgressCard({ state, onCancel }: { state: PullState; onCancel: () 
 }
 
 function normalizeModelName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/:latest$/, '');
+  return name.trim().toLowerCase().replace(/:latest$/, '');
 }
 
 function sameModel(left: string, right: string): boolean {

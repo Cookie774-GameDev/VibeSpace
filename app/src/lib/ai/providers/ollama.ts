@@ -33,7 +33,9 @@ import { parseSSE } from './sse';
 import { nativeFetch } from '@/lib/nativeFetch';
 
 /** Default Ollama base URL. Configurable via auth store `apiKeys.ollama`. */
-export const OLLAMA_DEFAULT_BASE = 'http://localhost:11434';
+export const OLLAMA_DEFAULT_BASE = 'http://127.0.0.1:11434';
+
+const ALLOWED_OLLAMA_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 /** Default local model used when promoting a mock/local-default agent. */
 export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
@@ -69,11 +71,45 @@ export interface OllamaPullProgress {
   done?: boolean;
 }
 
+export interface OllamaEnsureStatus {
+  ready: boolean;
+  apiReachable: boolean;
+  installed: boolean;
+  version?: string | null;
+  phase: string;
+  detail?: string | null;
+  statusMsg: string;
+}
+
 /** Resolve the configured base URL, trimming any trailing slash. */
 export function ollamaBaseUrl(): string {
   const raw = useAuthStore.getState().apiKeys.ollama?.trim();
   const base = raw && raw.length > 0 ? raw : OLLAMA_DEFAULT_BASE;
   return base.replace(/\/+$/, '');
+}
+
+/** Restrict Ollama endpoints to loopback hosts unless advanced mode is added later. */
+export function assertAllowedOllamaEndpoint(base: string): void {
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    throw new Error('Invalid Ollama URL.');
+  }
+
+  if (url.protocol !== 'http:') {
+    throw new Error('Ollama must use http on localhost.');
+  }
+
+  if (!ALLOWED_OLLAMA_HOSTS.has(url.hostname.toLowerCase())) {
+    throw new Error('Only localhost Ollama endpoints are allowed by default.');
+  }
+}
+
+function resolvedOllamaBaseUrl(): string {
+  const base = ollamaBaseUrl();
+  assertAllowedOllamaEndpoint(base);
+  return base;
 }
 
 /**
@@ -103,7 +139,7 @@ export async function listOllamaModels(signal?: AbortSignal): Promise<string[]> 
 
 export async function listOllamaModelInfo(signal?: AbortSignal): Promise<OllamaModelInfo[]> {
   try {
-    const res = await nativeFetch(`${ollamaBaseUrl()}/api/tags`, { signal, timeoutMs: 15_000 });
+    const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/tags`, { signal, timeoutMs: 15_000 });
     if (!res.ok) return [];
     const data = await res.json().catch(() => null);
     const models = data?.models;
@@ -123,10 +159,13 @@ export async function listOllamaModelInfo(signal?: AbortSignal): Promise<OllamaM
   }
 }
 
-/** Quick reachability probe for the local daemon. */
+/** Quick reachability probe for the local daemon via /api/version. */
 export async function isOllamaReachable(signal?: AbortSignal): Promise<boolean> {
   try {
-    const res = await nativeFetch(`${ollamaBaseUrl()}/api/tags`, { signal, timeoutMs: 10_000 });
+    const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/version`, {
+      signal,
+      timeoutMs: 5_000,
+    });
     return res.ok;
   } catch {
     return false;
@@ -134,17 +173,150 @@ export async function isOllamaReachable(signal?: AbortSignal): Promise<boolean> 
 }
 
 export async function waitForOllamaReachable(
-  timeoutMs = 12_000,
-  intervalMs = 600,
+  timeoutMs = 120_000,
+  intervalMs = 1500,
   signal?: AbortSignal,
+  onStatus?: (msg: string) => void,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
+  let lastMsg = '';
   while (Date.now() < deadline) {
     if (signal?.aborted) return false;
+    const elapsed = timeoutMs - (deadline - Date.now());
+    const elapsedSec = Math.round(elapsed / 1000);
+    const msg = `Waiting for Ollama… (${elapsedSec}s / ${Math.round(timeoutMs / 1000)}s)`;
+    if (msg !== lastMsg && onStatus) {
+      lastMsg = msg;
+      onStatus(msg);
+    }
     if (await isOllamaReachable(signal)) return true;
     await new Promise<void>((resolve) => window.setTimeout(resolve, intervalMs));
   }
   return false;
+}
+
+function bootstrapStatusMessage(phase: string, detail?: string | null): string {
+  switch (phase) {
+    case 'ready':
+      return 'Ollama ready';
+    case 'starting':
+      return 'Starting Ollama silently…';
+    case 'waiting':
+      return detail || 'Waiting for Ollama API…';
+    case 'not_installed':
+      return 'Install Ollama to use local models.';
+    case 'error':
+      return detail || 'Could not connect to Ollama';
+    default:
+      return detail || 'Checking Ollama…';
+  }
+}
+
+/**
+ * Ensure Ollama is installed, the background server is running, and the API
+ * responds on /api/version. Uses the native backend in Tauri for silent
+ * `ollama serve` startup; falls back to API polling on web.
+ */
+export async function ensureOllamaReadySilent(
+  signal?: AbortSignal,
+  onStatus?: (status: OllamaEnsureStatus) => void,
+): Promise<OllamaEnsureStatus> {
+  if (signal?.aborted) {
+    const aborted: OllamaEnsureStatus = {
+      ready: false,
+      apiReachable: false,
+      installed: false,
+      phase: 'error',
+      detail: 'Cancelled.',
+      statusMsg: 'Cancelled.',
+    };
+    onStatus?.(aborted);
+    return aborted;
+  }
+
+  const emit = (status: OllamaEnsureStatus) => {
+    onStatus?.(status);
+  };
+
+  const initiallyReachable = await isOllamaReachable(signal);
+  if (initiallyReachable) {
+    const ready: OllamaEnsureStatus = {
+      ready: true,
+      apiReachable: true,
+      installed: true,
+      phase: 'ready',
+      detail: 'Ollama API is reachable.',
+      statusMsg: bootstrapStatusMessage('ready'),
+    };
+    emit(ready);
+    return ready;
+  }
+
+  const { isTauri, ensureNativeOllamaReady, getNativeOllamaStatus } = await import('@/lib/tauri');
+
+  if (isTauri) {
+    emit({
+      ready: false,
+      apiReachable: false,
+      installed: true,
+      phase: 'starting',
+      statusMsg: bootstrapStatusMessage('starting'),
+    });
+
+    const native = await ensureNativeOllamaReady(resolvedOllamaBaseUrl());
+    const status: OllamaEnsureStatus = {
+      ready: native.ready,
+      apiReachable: native.apiReachable,
+      installed: native.installed,
+      version: native.version,
+      phase: native.phase,
+      detail: native.detail,
+      statusMsg: bootstrapStatusMessage(native.phase, native.detail),
+    };
+    emit(status);
+    return status;
+  }
+
+  const installStatus = await getNativeOllamaStatus();
+  emit({
+    ready: false,
+    apiReachable: false,
+    installed: installStatus.installed ?? false,
+    phase: 'waiting',
+    statusMsg: bootstrapStatusMessage('waiting'),
+  });
+
+  const ready = await waitForOllamaReachable(120_000, 1500, signal, (msg) => {
+    emit({
+      ready: false,
+      apiReachable: false,
+      installed: installStatus.installed ?? false,
+      phase: 'waiting',
+      detail: msg,
+      statusMsg: msg,
+    });
+  });
+
+  const finalStatus: OllamaEnsureStatus = ready
+    ? {
+        ready: true,
+        apiReachable: true,
+        installed: true,
+        phase: 'ready',
+        detail: 'Ollama API is reachable.',
+        statusMsg: bootstrapStatusMessage('ready'),
+      }
+    : {
+        ready: false,
+        apiReachable: false,
+        installed: installStatus.installed ?? false,
+        phase: 'error',
+        detail: `Could not reach Ollama at ${resolvedOllamaBaseUrl()} after 120 seconds.`,
+        statusMsg: bootstrapStatusMessage('error'),
+      };
+
+  emit(finalStatus);
+  return finalStatus;
 }
 
 /**
@@ -154,7 +326,7 @@ export async function waitForOllamaReachable(
  */
 async function cleanupPartialModel(name: string): Promise<void> {
   try {
-    await nativeFetch(`${ollamaBaseUrl()}/api/delete`, {
+    await nativeFetch(`${resolvedOllamaBaseUrl()}/api/delete`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -231,6 +403,19 @@ export async function pullOllamaModel(
   validateModelName(model);
   const name = model.trim();
 
+  const alreadyInstalled = await listOllamaModels(signal);
+  const normalized = name.trim().toLowerCase();
+  if (
+    alreadyInstalled.some(
+      (installedName) =>
+        installedName.trim().toLowerCase() === normalized ||
+        installedName.trim().toLowerCase().startsWith(`${normalized}:`),
+    )
+  ) {
+    onProgress?.({ status: 'success', done: true, percent: 100 });
+    return;
+  }
+
   // Create a composite abort controller that combines user signal + timeout
   const composite = new AbortController();
   const timeoutId = setTimeout(
@@ -251,7 +436,7 @@ export async function pullOllamaModel(
     await withRetry(async (attempt) => {
       if (composite.signal.aborted) throw new DOMException('Aborted by user', 'AbortError');
 
-      const res = await nativeFetch(`${ollamaBaseUrl()}/api/pull`, {
+      const res = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/pull`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name, stream: true }),
@@ -408,11 +593,32 @@ export const ollamaProvider: LLMProvider = {
   },
 
   async run(req: LLMRequest): Promise<LLMResponse> {
-    const base = ollamaBaseUrl();
+    const base = resolvedOllamaBaseUrl();
     const model =
       req.agent.model.model || useAuthStore.getState().defaultLocalModel || OLLAMA_DEFAULT_MODEL;
 
     validateModelName(model);
+
+    const ready = await ensureOllamaReadySilent(req.signal);
+    if (!ready.ready) {
+      throw new Error(
+        ready.detail ||
+          'Could not connect to Ollama. Open Local Models to download a model or start the service.',
+      );
+    }
+
+    const installed = await listOllamaModels(req.signal);
+    const normalized = model.trim().toLowerCase();
+    const modelExists = installed.some(
+      (name) =>
+        name.trim().toLowerCase() === normalized ||
+        name.trim().toLowerCase().startsWith(`${normalized}:`),
+    );
+    if (!modelExists) {
+      throw new Error(
+        `Local model "${model}" is not installed. Open Settings → Local Models and download it.`,
+      );
+    }
 
     const messages = [
       { role: 'system' as const, content: req.agent.system_prompt },

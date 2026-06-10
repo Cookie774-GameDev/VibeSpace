@@ -28,6 +28,8 @@ tauri-plugin-single-instance = "2"
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sha2 = "0.10"
 
 # PTY terminal backend (slice 1 of Wave 4 â€” multi-pane terminal grid).
 # `portable-pty` gives us a single API across ConPTY (Windows 10 1809+) and

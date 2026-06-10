@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { _resetNativeFetchForTests } from '@/lib/nativeFetch';
-import { listOllamaModelInfo, pullOllamaModel } from './ollama';
+import { listOllamaModelInfo, pullOllamaModel, isOllamaReachable } from './ollama';
 
 describe('ollama provider utilities', () => {
   beforeEach(() => {
     useAuthStore.setState({
-      apiKeys: { ollama: 'http://localhost:11434' },
+      apiKeys: { ollama: 'http://127.0.0.1:11434' },
     });
     _resetNativeFetchForTests(null);
   });
@@ -39,7 +39,18 @@ describe('ollama provider utilities', () => {
       },
     ]);
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:11434/api/tags',
+      'http://127.0.0.1:11434/api/tags',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('checks reachability via /api/version', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"version":"0.6.0"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(isOllamaReachable()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:11434/api/version',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -47,7 +58,7 @@ describe('ollama provider utilities', () => {
   it('streams pull progress and reports percent complete', async () => {
     const progress: string[] = [];
     const percents: number[] = [];
-    // Mock that returns NDJSON for pull AND a model list for verification
+    let tagCalls = 0;
     const fetchMock = vi.fn().mockImplementation((url: string, _init?: RequestInit) => {
       if (url.includes('/api/pull')) {
         return Promise.resolve(
@@ -59,6 +70,10 @@ describe('ollama provider utilities', () => {
         );
       }
       if (url.includes('/api/tags')) {
+        tagCalls += 1;
+        if (tagCalls === 1) {
+          return Promise.resolve(jsonResponse({ models: [] }));
+        }
         return Promise.resolve(
           jsonResponse({ models: [{ name: 'llama3.2', size: 2_000_000_000 }] }),
         );
@@ -75,7 +90,7 @@ describe('ollama provider utilities', () => {
     expect(progress).toEqual(['pulling manifest', 'downloading', 'success']);
     expect(percents).toEqual([50]);
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:11434/api/pull',
+      'http://127.0.0.1:11434/api/pull',
       expect.objectContaining({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -84,10 +99,31 @@ describe('ollama provider utilities', () => {
     );
   });
 
+  it('skips pull when the model is already installed', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/tags')) {
+        return Promise.resolve(jsonResponse({ models: [{ name: 'llama3.2:latest' }] }));
+      }
+      return Promise.resolve(jsonResponse({ models: [] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const progress: string[] = [];
+    await pullOllamaModel('llama3.2', (event) => progress.push(event.status));
+
+    expect(progress).toEqual(['success']);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/pull'))).toBe(false);
+  });
+
   it('surfaces pull errors from Ollama', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(ndjsonResponse([{ error: 'model not found' }])),
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/api/tags')) {
+          return Promise.resolve(jsonResponse({ models: [] }));
+        }
+        return Promise.resolve(ndjsonResponse([{ error: 'model not found' }]));
+      }),
     );
 
     await expect(pullOllamaModel('missing-model')).rejects.toThrow('model not found');

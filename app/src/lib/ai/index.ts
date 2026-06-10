@@ -36,11 +36,13 @@ export {
   listOllamaModels,
   listOllamaModelInfo,
   isOllamaReachable,
+  ensureOllamaReadySilent,
+  assertAllowedOllamaEndpoint,
   waitForOllamaReachable,
   pullOllamaModel,
   validateModelName,
 } from './providers/ollama';
-export type { OllamaModelInfo, OllamaPullProgress } from './providers/ollama';
+export type { OllamaModelInfo, OllamaPullProgress, OllamaEnsureStatus } from './providers/ollama';
 
 export {
   CHAT_MODEL_OPTIONS,

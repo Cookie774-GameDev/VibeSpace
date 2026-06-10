@@ -14,11 +14,6 @@
  */
 
 import { isTauri as isTauriRuntime } from './utils';
-// Static import so Vite can bundle `toast` into the same chunk as the
-// rest of the UI primitives. Earlier this file `await import`-ed it from
-// inside `notify()` to avoid eagerly loading the toast module, but every
-// other call site already imports `toast` statically — the dynamic import
-// just defeated chunk consolidation and produced a build warning.
 import { toast } from '@/components/ui/toast';
 
 /** Runtime detection. Re-exported here so feature modules can import a single thing. */
@@ -115,7 +110,6 @@ export async function notify(
         });
         return;
       }
-      // Permission denied -> fall through to the in-app toast below.
     } catch (err) {
       console.warn('[tauri] notification failed, falling back', err);
     }
@@ -131,8 +125,6 @@ export async function notify(
     }
   }
 
-  // Last resort: in-app toast. Imported statically at the top of the
-  // file so Vite keeps it on the same chunk as every other UI consumer.
   if (options.fallbackToast !== false) {
     try {
       toast.info(title, body);
@@ -146,14 +138,6 @@ export async function notify(
 /*  Tray badge                                                                */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Set the unread badge count on the system tray icon.
- *
- * Currently a no-op placeholder. Tray icon support is wired in a later
- * milestone (`tauri::tray::TrayIconBuilder` from the Rust side); when that
- * lands this will issue a custom invoke command. The signature is stable so
- * call sites can adopt it now.
- */
 export async function setTrayBadge(count: number): Promise<void> {
   if (!isTauri) return;
   if (import.meta.env.DEV) {
@@ -169,31 +153,13 @@ export async function setTrayBadge(count: number): Promise<void> {
 export type GlobalHotkeyHandler = () => void;
 export type UnregisterHotkey = () => Promise<void> | void;
 
-/**
- * Register a global hotkey.
- *
- * In Tauri this is meant to be OS-wide via `tauri-plugin-global-shortcut`.
- * That plugin is not yet registered in lib.rs (deferred to the voice/orb
- * milestone), so for V1 we always fall back to a window-level listener.
- * The signature is stable so we can swap implementations without churn.
- *
- * Combo grammar matches `lib/hotkeys.ts`: `Mod` is Cmd on macOS / Ctrl
- * elsewhere, plus optional `Shift`, `Alt`/`Option`, and a final key.
- *
- * @returns an unregister function.
- */
 export async function registerGlobalHotkey(
   combo: string,
   handler: GlobalHotkeyHandler,
 ): Promise<UnregisterHotkey> {
-  // TODO(global-shortcut): once `tauri-plugin-global-shortcut` is registered
-  // in lib.rs and the JS package is added, route through:
-  //   await tauriInvoke('plugin:globalShortcut|register', { shortcuts: [combo] })
-  //   plus a `globalShortcut://triggered` event listener.
   return registerWindowHotkey(combo, handler);
 }
 
-/** Window-level fallback. Same parsing rules as `lib/hotkeys.ts`. */
 function registerWindowHotkey(combo: string, handler: GlobalHotkeyHandler): UnregisterHotkey {
   if (typeof window === 'undefined') return () => {};
 
@@ -238,6 +204,22 @@ export interface NativeOllamaStatus {
   detail?: string | null;
 }
 
+export interface NativeOllamaRunningStatus {
+  running: boolean;
+  pids: number[];
+  listeningPort11434: boolean;
+  detail?: string | null;
+}
+
+export interface NativeOllamaEnsureResult {
+  ready: boolean;
+  apiReachable: boolean;
+  installed: boolean;
+  version?: string | null;
+  phase: string;
+  detail?: string | null;
+}
+
 export async function getNativeOllamaStatus(): Promise<NativeOllamaStatus> {
   if (!isTauri) {
     return {
@@ -256,11 +238,57 @@ export async function getNativeOllamaStatus(): Promise<NativeOllamaStatus> {
   }
 }
 
+export async function isOllamaProcessRunning(): Promise<NativeOllamaRunningStatus> {
+  if (!isTauri) {
+    return { running: false, pids: [], listeningPort11434: false, detail: 'Not in Tauri runtime' };
+  }
+  try {
+    return await tauriInvoke<NativeOllamaRunningStatus>('is_ollama_running');
+  } catch {
+    return { running: false, pids: [], listeningPort11434: false, detail: 'Command failed' };
+  }
+}
+
 export async function startNativeOllama(): Promise<void> {
   if (!isTauri) {
     throw new Error('Starting Ollama automatically is only available in the desktop app.');
   }
   await tauriInvoke('ollama_start');
+}
+
+export async function ensureNativeOllamaReady(
+  baseUrl?: string,
+): Promise<NativeOllamaEnsureResult> {
+  if (!isTauri) {
+    return {
+      ready: false,
+      apiReachable: false,
+      installed: false,
+      phase: 'error',
+      detail: 'Native Ollama startup is only available in the desktop app.',
+    };
+  }
+
+  try {
+    return await tauriInvoke<NativeOllamaEnsureResult>('ensure_ollama_ready', {
+      baseUrl: baseUrl ?? null,
+    });
+  } catch (err) {
+    return {
+      ready: false,
+      apiReachable: false,
+      installed: false,
+      phase: 'error',
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function openOllamaTroubleshooting(): Promise<void> {
+  if (!isTauri) {
+    throw new Error('Ollama troubleshooting is only available in the desktop app.');
+  }
+  await tauriInvoke('open_ollama_troubleshooting');
 }
 
 export async function openSystemSpeechSettings(): Promise<void> {

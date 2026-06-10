@@ -46,6 +46,7 @@ mod terminal;
 mod credentials;
 mod launcher;
 mod local_ai;
+mod kokoro;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -166,7 +167,21 @@ pub fn run() {
             launcher::install_terminal_launcher,
             local_ai::ollama_installation_status,
             local_ai::ollama_start,
+            local_ai::ensure_ollama_ready,
+            local_ai::is_ollama_running,
+            local_ai::open_ollama_troubleshooting,
             local_ai::open_system_speech_settings,
+            kokoro::kokoro_model_path,
+            kokoro::kokoro_check_installed,
+            kokoro::kokoro_verify_checksums,
+            kokoro::kokoro_status,
+            kokoro::kokoro_warmup,
+            kokoro::kokoro_download,
+            kokoro::kokoro_resume_download,
+            kokoro::kokoro_repair,
+            kokoro::kokoro_delete_corrupt,
+            kokoro::kokoro_speak,
+            kokoro::kokoro_stop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
