@@ -609,7 +609,11 @@ export function startRuntimeListener(
         derivePaneTitle(finalText) || 'The AI response is complete.',
       );
       const voiceSettings = useAuthStore.getState();
-      if (detail.speakReply || voiceSettings.speakReplies) {
+      // Jarvis speaks ONLY when summoned by voice (clicking the J / voice panel,
+      // or dictating into the composer) — never for plain typed messages.
+      // `detail.speakReply` is true only for voice-initiated sends; the global
+      // "speak replies" toggle can additionally mute even those.
+      if (detail.speakReply && voiceSettings.speakReplies) {
         const speechText = textToSpeechOutput(finalText);
         if (speechText) {
           // If the user explicitly selected a metered cloud voice (OpenAI /

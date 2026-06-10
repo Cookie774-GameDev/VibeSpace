@@ -2,6 +2,7 @@ import * as React from 'react';
 import {
   Search,
   Mic,
+  Bot,
   Settings,
   PanelLeft,
   CalendarDays,
@@ -228,15 +229,19 @@ export function TopBar() {
               }}
             />
           )}
-          <Avatar
-            seed="jarvis-account"
-            initials="J"
-            size={compactChrome ? 16 : 20}
+          <span
             className={cn(
-              'jarvis-breadcrumb-avatar shrink-0 relative z-[1]',
+              'jarvis-bot-mark shrink-0 relative z-[1] grid place-items-center rounded-full',
+              compactChrome ? 'h-4 w-4' : 'h-5 w-5',
               voiceListening && 'animate-pulse',
             )}
-          />
+          >
+            <Bot
+              className={compactChrome ? 'h-2.5 w-2.5' : 'h-3.5 w-3.5'}
+              strokeWidth={2.4}
+              aria-hidden
+            />
+          </span>
         </button>
         <span
           className={cn(

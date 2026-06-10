@@ -256,7 +256,7 @@ describe('startRuntimeListener agent routing', () => {
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {
-        detail: { chatId, text: 'tell me the plan' },
+        detail: { chatId, text: 'tell me the plan', speakReply: true },
       }),
     );
 
@@ -268,6 +268,46 @@ describe('startRuntimeListener agent routing', () => {
         engine: 'local',
       }),
     );
+
+    stop();
+  });
+
+  it('does NOT speak a plain typed send even when speak-replies is enabled', async () => {
+    useAuthStore.setState({ speakReplies: true, voicePreset: 'atlas', voiceEngine: 'local' });
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_typed' as ChatId;
+    const placeholderId = 'msg_typed_assistant' as MessageId;
+    const userMessage: Message = {
+      id: 'msg_typed_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: 'hello' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.runAgent.mockResolvedValueOnce({
+      text: 'Hello there.',
+      usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
+      provider: 'mock',
+      model: 'mock-default',
+    });
+    const stop = startRuntimeListener({
+      getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+      getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => [userMessage]),
+      appendMessage: vi.fn(async (msg) => ({ ...msg, id: placeholderId, created_at: 2, updated_at: 2 })),
+      updateMessage: vi.fn(async () => undefined),
+    });
+
+    // No speakReply flag → plain typed message → must stay silent.
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello' } }),
+    );
+
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mocks.speakText).not.toHaveBeenCalled();
 
     stop();
   });

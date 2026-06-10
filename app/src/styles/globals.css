@@ -1793,14 +1793,23 @@
 .jarvis-j-glow {
   background: radial-gradient(
     circle,
-    hsl(265 85% 62% / 0.6) 0%,
-    hsl(258 80% 58% / 0.4) 40%,
-    hsl(190 90% 55% / 0.28) 62%,
+    hsl(45 96% 62% / 0.65) 0%,
+    hsl(42 92% 56% / 0.45) 42%,
+    hsl(38 90% 50% / 0.28) 62%,
     transparent 74%
   );
   filter: blur(2px);
   animation: jarvisJGlow 2.4s ease-in-out infinite;
   will-change: opacity, transform;
+}
+
+/* Sleek gold Jarvis robot mark — high-contrast dark icon on a gold gradient. */
+.jarvis-bot-mark {
+  background: linear-gradient(145deg, #ffe7a3, #f5c33b 46%, #cf971b);
+  color: #2a1c02;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.18) inset,
+    0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 @media (prefers-reduced-motion: reduce) {
