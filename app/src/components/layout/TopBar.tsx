@@ -216,6 +216,9 @@ export function TopBar() {
           aria-label="Open Jarvis voice panel"
           className="jarvis-breadcrumb-trigger relative rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
         >
+          {/* Always-on Jarvis halo — soft purple→cyan pulse so the activation
+              point reads as "alive". Intensifies into a ping while listening. */}
+          <span aria-hidden className="jarvis-j-glow pointer-events-none absolute -inset-1 rounded-full" />
           {voiceListening && (
             <span
               className="absolute inset-0 rounded-full animate-ping"
@@ -230,7 +233,7 @@ export function TopBar() {
             initials="J"
             size={compactChrome ? 16 : 20}
             className={cn(
-              'jarvis-breadcrumb-avatar shrink-0 relative',
+              'jarvis-breadcrumb-avatar shrink-0 relative z-[1]',
               voiceListening && 'animate-pulse',
             )}
           />

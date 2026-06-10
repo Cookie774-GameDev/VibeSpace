@@ -20,19 +20,20 @@ interface SignInDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type Mode = 'magic' | 'password';
+type Mode = 'signin' | 'signup' | 'magic';
 
 /**
- * Lightweight Supabase sign-in form. Two modes:
- *   - magic: email-only, calls signInWithOtp
- *   - password: email + password
+ * Lightweight Supabase auth form. Three modes:
+ *   - signin: email + password (existing account)
+ *   - signup: email + password (create a new account)
+ *   - magic:  email-only, calls signInWithOtp
  *
  * Gracefully degrades when the Supabase client isn't configured.
  */
 export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [mode, setMode] = useState<Mode>('magic');
+  const [mode, setMode] = useState<Mode>('signin');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,8 +53,12 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
       setError('Enter your email to continue.');
       return;
     }
-    if (mode === 'password' && !password) {
+    if (mode !== 'magic' && !password) {
       setError('Enter a password.');
+      return;
+    }
+    if (mode === 'signup' && password.length < 8) {
+      setError('Use at least 8 characters for your password.');
       return;
     }
 
@@ -70,6 +75,21 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
         const { error: e } = await client.auth.signInWithOtp({ email: email.trim() });
         if (e) throw e;
         toast.success('Magic link sent', `Check ${email.trim()} to finish signing in.`);
+        onOpenChange(false);
+        reset();
+      } else if (mode === 'signup') {
+        const { data, error: e } = await client.auth.signUp({
+          email: email.trim(),
+          password,
+        });
+        if (e) throw e;
+        // When email confirmation is required, Supabase returns a user with no
+        // active session. Tell the user to confirm; otherwise they're in.
+        if (data?.session) {
+          toast.success('Account created', 'You are signed in. Cloud sync is enabled.');
+        } else {
+          toast.success('Check your email', `Confirm ${email.trim()} to finish creating your account.`);
+        }
         onOpenChange(false);
         reset();
       } else {
@@ -108,11 +128,14 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
         </DialogHeader>
 
         <div className="flex items-center gap-1 rounded-md bg-muted p-0.5 self-start">
+          <ModeButton current={mode} value="signin" onSelect={setMode}>
+            Sign in
+          </ModeButton>
+          <ModeButton current={mode} value="signup" onSelect={setMode}>
+            Create account
+          </ModeButton>
           <ModeButton current={mode} value="magic" onSelect={setMode}>
             Magic link
-          </ModeButton>
-          <ModeButton current={mode} value="password" onSelect={setMode}>
-            Password
           </ModeButton>
         </div>
 
@@ -136,13 +159,13 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
             />
           </div>
 
-          {mode === 'password' && (
+          {mode !== 'magic' && (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="signin-password">Password</Label>
               <Input
                 id="signin-password"
                 type="password"
-                autoComplete="current-password"
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                 placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -182,6 +205,8 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
                 <Mail className="h-3.5 w-3.5" />
                 Send magic link
               </>
+            ) : mode === 'signup' ? (
+              <>Create account</>
             ) : (
               <>Sign in</>
             )}
@@ -252,5 +277,9 @@ type SupabaseLikeClient = {
       email: string;
       password: string;
     }) => Promise<{ error: { message: string } | null }>;
+    signUp: (opts: {
+      email: string;
+      password: string;
+    }) => Promise<{ data: { session: unknown | null } | null; error: { message: string } | null }>;
   };
 };

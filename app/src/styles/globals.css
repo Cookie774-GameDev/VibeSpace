@@ -1771,3 +1771,41 @@
       0 0 0 1px hsl(var(--accent-copper) / 0.12);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Jarvis "J" activation glow — a soft purple→cyan halo that breathes around
+   the breadcrumb avatar so the activation point feels alive. Pure
+   opacity/transform animation (GPU-composited, cheap). Disabled under
+   prefers-reduced-motion.
+   --------------------------------------------------------------------------- */
+@keyframes jarvisJGlow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.12);
+  }
+}
+
+.jarvis-j-glow {
+  background: radial-gradient(
+    circle,
+    hsl(265 85% 62% / 0.6) 0%,
+    hsl(258 80% 58% / 0.4) 40%,
+    hsl(190 90% 55% / 0.28) 62%,
+    transparent 74%
+  );
+  filter: blur(2px);
+  animation: jarvisJGlow 2.4s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jarvis-j-glow {
+    animation: none;
+    opacity: 0.5;
+  }
+}

@@ -245,7 +245,17 @@ function useBoot() {
             const [{ getSupabaseClient }, { processCloudPull, processSyncQueue, pruneSyncQueue, retrySyncErrors, startSyncLoop }] = supabaseModules;
             const supa = getSupabaseClient();
             if (supa) {
-              void supa.auth.getSession().then(({ data }) => { if (!cancelled) applyCloudSession(data.session as SupabaseSessionLike); });
+              void supa.auth.getSession().then(({ data }) => {
+                if (cancelled) return;
+                applyCloudSession(data.session as SupabaseSessionLike);
+                // Startup routing: when cloud auth is configured but no one is
+                // signed in, open the Account page so the user can sign up /
+                // sign in. When signed in, the persisted last route is restored
+                // automatically (route is persisted in the UI store).
+                if (!data.session) {
+                  useUIStore.getState().setRoute('account');
+                }
+              });
               const sub = supa.auth.onAuthStateChange((_event, session) => {
                 if (cancelled) return;
                 applyCloudSession(session as SupabaseSessionLike);
