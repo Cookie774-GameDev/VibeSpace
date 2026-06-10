@@ -132,6 +132,66 @@ begin
   raise notice 'OK: atomic quota reservation enforces limits';
 end $$;
 
+-- ── 7. message/call tables: RLS enabled + service-role-only rate limits ──────
+do $$
+declare
+  t text;
+  tables text[] := array['message_usage','message_events','message_rate_limits',
+                         'call_usage','call_events','call_rate_limits',
+                         'subscription_plan_limits'];
+begin
+  foreach t in array tables loop
+    if not exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname='public' and c.relname=t and c.relrowsecurity
+    ) then
+      raise exception 'RLS NOT enabled on public.%', t;
+    end if;
+  end loop;
+  raise notice 'OK: RLS enabled on message/call/plan tables';
+end $$;
+
+-- ── 8. plan limits seeded with the friendly credits/minutes ──────────────────
+do $$
+declare v public.subscription_plan_limits%rowtype;
+begin
+  select * into v from public.subscription_plan_limits where plan='starter';
+  if v.message_credits <> 2500 or v.call_minutes <> 25 then
+    raise exception 'starter limits wrong: % credits, % min', v.message_credits, v.call_minutes;
+  end if;
+  select * into v from public.subscription_plan_limits where plan='ultra';
+  if v.message_credits <> 25000 or v.call_minutes <> 250 then
+    raise exception 'ultra limits wrong';
+  end if;
+  raise notice 'OK: subscription_plan_limits seeded correctly';
+end $$;
+
+-- ── 9. message/call budget reserve enforces limits ───────────────────────────
+do $$
+declare
+  uid uuid := gen_random_uuid();
+  res jsonb;
+begin
+  insert into auth.users (id, email) values (uid, 'rls-mc@example.com') on conflict do nothing;
+  perform public.sync_message_call_usage_for_user(uid, 'starter');
+
+  res := public.reserve_message_budget(uid, 0.01);
+  if (res->>'ok')::boolean is not true then raise exception 'msg reserve in-budget failed: %', res; end if;
+  res := public.reserve_message_budget(uid, 999);
+  if (res->>'ok')::boolean is true then raise exception 'msg reserve over-budget succeeded'; end if;
+
+  res := public.reserve_call_budget(uid, 0.01);
+  if (res->>'ok')::boolean is not true then raise exception 'call reserve in-budget failed: %', res; end if;
+  res := public.reserve_call_budget(uid, 999);
+  if (res->>'ok')::boolean is true then raise exception 'call reserve over-budget succeeded'; end if;
+
+  perform public.sync_message_call_usage_for_user(uid, 'free');
+  res := public.reserve_message_budget(uid, 0.01);
+  if (res->>'reason') <> 'no_message_budget' then raise exception 'free msg should have no budget, got %', res->>'reason'; end if;
+
+  raise notice 'OK: message/call budgets enforce limits';
+end $$;
+
 rollback; -- discard the throwaway auth.users row + usage
 
 \echo 'All RLS / quota verification checks passed.'
