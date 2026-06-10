@@ -14,9 +14,11 @@ export interface VoicePlanInfo {
   id: VoicePlanId;
   label: string;
   priceUsd: number;
-  cloudBudgetUsd: number;
-  /** Derived monthly cloud seconds (budget / cost-per-second). */
-  cloudSeconds: number;
+  /** Shared call/voice budget (USD/month). Cloud voice + AI calling draw from
+   *  this single bucket — there is no separate voice-only budget. */
+  callVoiceBudgetUsd: number;
+  /** Cloud voice seconds available IF the whole call/voice budget went to voice. */
+  cloudSecondsMax: number;
 }
 
 function seconds(budget: number): number {
@@ -24,10 +26,10 @@ function seconds(budget: number): number {
 }
 
 export const VOICE_PLANS: Record<VoicePlanId, VoicePlanInfo> = {
-  free: { id: 'free', label: 'Free', priceUsd: 0, cloudBudgetUsd: 0, cloudSeconds: 0 },
-  starter: { id: 'starter', label: 'Starter', priceUsd: 10, cloudBudgetUsd: 2, cloudSeconds: seconds(2) },
-  pro: { id: 'pro', label: 'Pro', priceUsd: 50, cloudBudgetUsd: 10, cloudSeconds: seconds(10) },
-  ultra: { id: 'ultra', label: 'Ultra', priceUsd: 100, cloudBudgetUsd: 20, cloudSeconds: seconds(20) },
+  free: { id: 'free', label: 'Free', priceUsd: 0, callVoiceBudgetUsd: 0, cloudSecondsMax: 0 },
+  starter: { id: 'starter', label: 'Starter', priceUsd: 10, callVoiceBudgetUsd: 2.5, cloudSecondsMax: seconds(2.5) },
+  pro: { id: 'pro', label: 'Pro', priceUsd: 50, callVoiceBudgetUsd: 12.5, cloudSecondsMax: seconds(12.5) },
+  ultra: { id: 'ultra', label: 'Ultra', priceUsd: 100, callVoiceBudgetUsd: 25, cloudSecondsMax: seconds(25) },
 };
 
 // ─── Voice providers (independent of chat providers) ─────────────────────────

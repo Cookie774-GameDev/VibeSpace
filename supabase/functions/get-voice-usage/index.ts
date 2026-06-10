@@ -25,28 +25,34 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  // Cloud voice draws from the SHARED call/voice budget (call_usage), so report
+  // remaining from there. COST_PER_SECOND_USD converts dollars -> seconds.
   const { data: usage } = await admin
-    .from('voice_usage')
-    .select('plan, provider, monthly_seconds_limit, monthly_seconds_used, reset_date')
+    .from('call_usage')
+    .select('plan, monthly_budget_usd, used_usd')
     .eq('user_id', userId)
     .maybeSingle();
 
   const plan = usage?.plan ?? 'free';
-  const limit = usage?.monthly_seconds_limit ?? 0;
-  const used = usage?.monthly_seconds_used ?? 0;
-  const remaining = Math.max(0, limit - used);
+  const budget = Number(usage?.monthly_budget_usd ?? 0);
+  const used = Number(usage?.used_usd ?? 0);
+  const remainingUsd = Math.max(0, budget - used);
+  const COST_PER_SECOND_USD = 0.00025;
+  const limit = Math.floor(budget / COST_PER_SECOND_USD);
+  const usedSecs = Math.floor(used / COST_PER_SECOND_USD);
+  const remaining = Math.floor(remainingUsd / COST_PER_SECOND_USD);
 
   return json(
     {
       plan,
       subscription_status: plan === 'free' ? 'free' : 'active',
-      provider: usage?.provider ?? 'kokoro_local',
+      provider: 'shared_call_voice',
       monthly_seconds_limit: limit,
-      monthly_seconds_used: used,
+      monthly_seconds_used: usedSecs,
       remaining_seconds: remaining,
-      reset_date: usage?.reset_date ?? null,
+      reset_date: null,
       local_voice_available: true,
-      cloud_voice_available: limit > 0 && remaining > 0,
+      cloud_voice_available: budget > 0 && remainingUsd > 0,
     },
     200,
     origin,

@@ -1,4 +1,5 @@
-// @ts-nocheck
+// @ts-nocheck — Supabase Deno runtime (URL imports + Deno globals); not type-checked
+// by the app's Node tsc. See supabase/functions/README.md.
 // tts-speak: secure cloud TTS proxy.
 //
 // Flow:
@@ -18,6 +19,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.46.2';
 import {
   APPROVED_PRESETS,
   APPROVED_PROVIDERS,
+  COST_PER_SECOND_USD,
   estimateSeconds,
   json,
   MAX_TTS_CHARS,
@@ -156,19 +158,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ error: 'rate_limited' }, 429, origin);
   }
 
-  // 4. Atomic quota reservation
+  // 4. Atomic quota reservation against the SHARED call/voice budget (USD).
+  // Cloud voice and AI calling draw from one bucket per the plan model, so we
+  // reserve in dollars (seconds * cost-per-second) via reserve_call_budget.
   const estSecs = estimateSeconds(text.length);
+  const estCostUsd = estSecs * COST_PER_SECOND_USD;
   const { data: reservation, error: reserveErr } = await admin
-    .rpc('reserve_voice_seconds', { p_user_id: userId, p_estimate_secs: estSecs });
+    .rpc('reserve_call_budget', { p_user_id: userId, p_estimate_usd: estCostUsd });
   if (reserveErr) return json({ error: 'usage_unavailable' }, 500, origin);
-  const reserved = reservation as { ok: boolean; reason?: string; remaining?: number } | null;
+  const reserved = reservation as { ok: boolean; reason?: string; remaining_usd?: number } | null;
   if (!reserved?.ok) {
-    // Quota gone / no plan -> client falls back to Kokoro.
+    // Budget gone / free plan -> client falls back to Kokoro/system voice.
     await admin.from('voice_events').insert({
       user_id: userId, provider, voice_preset: preset, text_chars: text.length,
-      estimated_seconds: estSecs, status: 'blocked', error_code: reserved?.reason ?? 'quota',
+      estimated_seconds: estSecs, status: 'blocked', error_code: reserved?.reason ?? 'budget',
     });
-    return json({ error: 'quota_exceeded', reason: reserved?.reason ?? 'quota', fallback: 'kokoro_local' }, 402, origin);
+    return json({ error: 'quota_exceeded', reason: reserved?.reason ?? 'budget', fallback: 'kokoro_local' }, 402, origin);
   }
 
   // 5. Call provider
@@ -179,7 +184,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     else audio = await callElevenLabs(text, preset);
   } catch (e) {
     // Release the reservation and record a safe error (no provider secret leak).
-    await admin.rpc('settle_voice_seconds', { p_user_id: userId, p_reserved: estSecs, p_actual: 0 });
+    await admin.rpc('settle_call_budget', {
+      p_user_id: userId, p_reserved: estCostUsd, p_actual: 0, p_seconds: 0,
+    });
     const code = (e as Error).message?.startsWith('provider') ? (e as Error).message : 'provider_failed';
     await admin.from('voice_events').insert({
       user_id: userId, provider, voice_preset: preset, text_chars: text.length,
@@ -188,18 +195,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ error: 'cloud_unavailable', fallback: 'kokoro_local' }, 502, origin);
   }
 
-  // 6. Settle + event. Actual seconds ~ estimate (provider doesn't return duration cheaply).
+  // 6. Settle actual usage (dollars + seconds) and record the event.
   const actualSecs = estSecs;
+  const actualCostUsd = actualSecs * COST_PER_SECOND_USD;
+  await admin.rpc('settle_call_budget', {
+    p_user_id: userId, p_reserved: estCostUsd, p_actual: actualCostUsd, p_seconds: actualSecs,
+  });
   await admin.from('voice_events').insert({
     user_id: userId, provider, voice_preset: preset, text_chars: text.length,
     estimated_seconds: estSecs, actual_seconds: actualSecs,
-    estimated_cost_usd: actualSecs * 0.00025, status: 'ok',
+    estimated_cost_usd: actualCostUsd, status: 'ok',
   });
 
-  // 7. Return audio
+  // 7. Return audio. remaining_seconds derived from the shared call/voice budget.
+  const remainingSeconds =
+    typeof reserved.remaining_usd === 'number'
+      ? Math.max(0, Math.floor(reserved.remaining_usd / COST_PER_SECOND_USD))
+      : null;
   return json(
     { audio: bufToB64(audio), mime: 'audio/mpeg', provider, preset, seconds: actualSecs,
-      remaining_seconds: reserved.remaining ?? null },
+      remaining_seconds: remainingSeconds },
     200,
     origin,
   );

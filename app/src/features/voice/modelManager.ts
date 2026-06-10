@@ -141,7 +141,14 @@ class ModelManagerImpl {
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) return null;
-      this.manifestCache = (await res.json()) as ModelManifest;
+      const manifest = (await res.json()) as ModelManifest & { status?: string };
+      // The server reports status:'unavailable' until a real model asset is
+      // published. Treat that as "no model" so we fall back to system TTS
+      // instead of trying to download placeholder files.
+      if (manifest.status === 'unavailable' || !manifest.files || manifest.files.length === 0) {
+        return null;
+      }
+      this.manifestCache = manifest;
       return this.manifestCache;
     } catch {
       return null;
