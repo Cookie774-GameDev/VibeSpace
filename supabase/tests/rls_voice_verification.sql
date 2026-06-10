@@ -72,8 +72,8 @@ begin
                    where n.nspname='public' and p.proname=fn) then
       raise exception 'RPC % missing', fn;
     end if;
-    if has_function_privilege('authenticated', format('public.%I(uuid,integer)', fn), 'EXECUTE')
-       and fn = 'reserve_voice_seconds' then
+    if fn = 'reserve_voice_seconds'
+       and has_function_privilege('authenticated', 'public.reserve_voice_seconds(uuid,integer)', 'EXECUTE') then
       raise exception 'reserve_voice_seconds is EXECUTABLE by authenticated (should be revoked)';
     end if;
   end loop;
@@ -83,14 +83,16 @@ end $$;
 -- ── 5. Plan→budget→seconds math matches the documented cost model ─────────────
 do $$
 begin
-  if public.voice_seconds_for_budget(public.voice_budget_for_plan('starter')) <> 8000 then
-    raise exception 'starter seconds != 8000';
+  -- After 0014, voice draws from the shared call/voice budget:
+  -- starter $2.50 -> 10000s, pro $12.50 -> 50000s, ultra $25 -> 100000s.
+  if public.voice_seconds_for_budget(public.voice_budget_for_plan('starter')) <> 10000 then
+    raise exception 'starter seconds != 10000';
   end if;
-  if public.voice_seconds_for_budget(public.voice_budget_for_plan('pro')) <> 40000 then
-    raise exception 'pro seconds != 40000';
+  if public.voice_seconds_for_budget(public.voice_budget_for_plan('pro')) <> 50000 then
+    raise exception 'pro seconds != 50000';
   end if;
-  if public.voice_seconds_for_budget(public.voice_budget_for_plan('ultra')) <> 80000 then
-    raise exception 'ultra seconds != 80000';
+  if public.voice_seconds_for_budget(public.voice_budget_for_plan('ultra')) <> 100000 then
+    raise exception 'ultra seconds != 100000';
   end if;
   if public.voice_seconds_for_budget(public.voice_budget_for_plan('free')) <> 0 then
     raise exception 'free seconds != 0';
