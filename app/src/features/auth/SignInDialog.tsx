@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Mail, Loader2, AlertTriangle } from 'lucide-react';
 import {
   Dialog,
@@ -18,6 +18,8 @@ import { getSupabaseClient } from '@/lib/supabase/client';
 interface SignInDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Which tab to open on. Defaults to 'signin'. */
+  initialMode?: Mode;
 }
 
 type Mode = 'signin' | 'signup' | 'magic';
@@ -30,12 +32,20 @@ type Mode = 'signin' | 'signup' | 'magic';
  *
  * Gracefully degrades when the Supabase client isn't configured.
  */
-export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
+export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [mode, setMode] = useState<Mode>('signin');
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'signin');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Open on the requested tab each time the dialog is shown.
+  useEffect(() => {
+    if (open) {
+      setMode(initialMode ?? 'signin');
+      setError(null);
+    }
+  }, [open, initialMode]);
 
   const NOT_CONFIGURED =
     'Jarvis Cloud is not configured in this build. Install the official Jarvis-One release, or ask the build maintainer to configure the app backend.';
@@ -120,10 +130,11 @@ export function SignInDialog({ open, onOpenChange }: SignInDialogProps) {
     >
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Sign in to Jarvis Cloud</DialogTitle>
+          <DialogTitle>{mode === 'signup' ? 'Create your account' : 'Sign in'}</DialogTitle>
           <DialogDescription>
-            Optional. Enables sync, billing, and Jarvis Call through the Jarvis-One app backend.
-            You can keep using Jarvis fully offline without it.
+            {mode === 'signup'
+              ? 'Create a Jarvis account to save your workspace and manage your plan across devices.'
+              : 'Welcome back. Sign in to access your account, plan, and synced workspace.'}
           </DialogDescription>
         </DialogHeader>
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Mail, User2, Cloud, Copy, Check } from 'lucide-react';
+import { Mail, User2, Copy, Check, LogIn, LogOut, UserPlus } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
+import { getSupabaseClient } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,11 +19,29 @@ export function Account() {
   const setDisplayName = useAuthStore((s) => s.setDisplayName);
   const localUserId = useAuthStore((s) => s.localUserId);
   const cloudSession = useAuthStore((s) => s.cloudSession);
+  const setCloudSession = useAuthStore((s) => s.setCloudSession);
 
   const [signInOpen, setSignInOpen] = useState(false);
+  const [signInMode, setSignInMode] = useState<'signin' | 'signup'>('signin');
   const [copied, setCopied] = useState(false);
 
   const cloudEmail = cloudSession?.email;
+
+  function openAuth(mode: 'signin' | 'signup') {
+    setSignInMode(mode);
+    setSignInOpen(true);
+  }
+
+  async function handleSignOut() {
+    try {
+      const client = getSupabaseClient();
+      await client?.auth.signOut();
+    } catch {
+      /* ignore network errors on sign-out */
+    }
+    setCloudSession(null);
+    toast.success('Signed out', 'You have been signed out of your account.');
+  }
 
   function copyId() {
     if (!localUserId) return;
@@ -88,18 +107,17 @@ export function Account() {
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between max-w-md gap-3">
           <div className="flex flex-col gap-1">
-            <Label className="flex items-center gap-2">
-              <Cloud className="h-3.5 w-3.5" />
-              Cloud sync
-            </Label>
+            <Label>Account</Label>
             <p className="text-metadata text-muted-foreground">
-              Optional. Sync history and todos across devices through Jarvis Cloud.
+              {cloudSession
+                ? 'You are signed in.'
+                : 'Sign in or create an account to save your workspace and plan.'}
             </p>
           </div>
           {cloudSession ? (
             <Badge variant="success">Signed in</Badge>
           ) : (
-            <Badge variant="outline">Local only</Badge>
+            <Badge variant="outline">Signed out</Badge>
           )}
         </div>
 
@@ -110,18 +128,28 @@ export function Account() {
           </div>
         )}
 
-        <div>
-          <Button
-            variant={cloudSession ? 'outline' : 'accent'}
-            size="sm"
-            onClick={() => setSignInOpen(true)}
-          >
-            {cloudSession ? 'Manage session' : 'Sign in to Jarvis Cloud'}
-          </Button>
+        <div className="flex flex-wrap gap-2">
+          {cloudSession ? (
+            <Button variant="outline" size="sm" onClick={handleSignOut}>
+              <LogOut className="h-3.5 w-3.5 mr-1.5" />
+              Sign out
+            </Button>
+          ) : (
+            <>
+              <Button variant="accent" size="sm" onClick={() => openAuth('signin')}>
+                <LogIn className="h-3.5 w-3.5 mr-1.5" />
+                Sign in
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => openAuth('signup')}>
+                <UserPlus className="h-3.5 w-3.5 mr-1.5" />
+                Create account
+              </Button>
+            </>
+          )}
         </div>
       </section>
 
-      <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} />
+      <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} initialMode={signInMode} />
     </div>
   );
 }
