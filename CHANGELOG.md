@@ -2,6 +2,13 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.29] - 2026-06-11
+
+### Fixed
+
+- Fixed Settings → Plans card grid overlapping and clipping prices, badges, and "Current Plan" labels inside the settings modal.
+- Pointed the Tauri updater manifest URL at the `Jarivs-One` GitHub release channel so silent updates resolve the same artifacts as manual downloads.
+
 ## [0.1.27] - 2026-06-08
 
 ### Fixed

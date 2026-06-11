@@ -76,7 +76,7 @@ export function Plans() {
   };
 
   return (
-    <div className={cn('relative -m-4 flex flex-col gap-6 overflow-hidden rounded-[28px] p-4', PLAN_PAGE_BACKGROUNDS[activePlanId])}>
+    <div className={cn('relative -m-4 flex flex-col gap-6 rounded-[28px] p-4', PLAN_PAGE_BACKGROUNDS[activePlanId])}>
       {/* Dynamic Aurora Header */}
       <header className="relative overflow-hidden rounded-2xl border border-border bg-slate-950 p-6 shadow-2xl">
         {/* Animated Aurora backgrounds */}
@@ -97,8 +97,8 @@ export function Plans() {
         </div>
       </header>
 
-      {/* Grid containing the 4 tier cards */}
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+      {/* Auto-fit grid: ~2 cols in the settings modal; never squeeze 4 cols into ~900px */}
+      <div className="grid gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr))]">
         {PLAN_ORDER.map((id) => (
           <PlanCard
             key={id}
@@ -172,24 +172,27 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
         <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-cyan-500 to-teal-400 z-10" />
 
         <div className="relative flex flex-col gap-5 h-full z-10">
-          <header className="flex items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2.5">
-              {/* Icon slot */}
-              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-cyan-500/20 bg-cyan-950/40 shadow-soft">
-                <Zap className="h-5 w-5 text-cyan-400" />
+          <header className="space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                {/* Icon slot */}
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-cyan-500/20 bg-cyan-950/40 shadow-soft">
+                  <Zap className="h-5 w-5 text-cyan-400" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-display text-page-title text-foreground">{plan.label}</h3>
+                  <p className="mt-1 text-secondary text-muted-foreground leading-snug">
+                    {plan.tagline}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-display text-page-title text-foreground">{plan.label}</h3>
-                <p className="mt-1 text-secondary text-muted-foreground leading-tight">
-                  {plan.tagline}
-                </p>
-              </div>
+              <span className="shrink-0 whitespace-nowrap font-display text-page-title text-cyan-400">Free</span>
             </div>
-            
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className="font-display text-page-title text-cyan-400">Free</span>
-              {isCurrent && <Badge variant="success">Current Plan</Badge>}
-            </div>
+            {isCurrent && (
+              <Badge variant="success" className="whitespace-nowrap">
+                Current Plan
+              </Badge>
+            )}
           </header>
 
           <Separator className="bg-cyan-500/10" />
@@ -241,27 +244,32 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
         <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-accent-copper to-rose-400 z-10" />
 
         <div className="relative flex flex-col gap-5 h-full z-10">
-          <header className="flex items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2.5">
-              {/* Icon slot with Orbit animation */}
-              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-accent-copper/30 bg-accent-copper/10 shadow-soft">
-                {/* Rotating Ring */}
-                <div className="absolute -inset-1 rounded-full border border-dashed border-accent-copper/40 animate-[plan-ring-orbit_8s_linear_infinite]" />
-                <Orbit className="h-5 w-5 text-accent-copper relative z-10" />
+          <header className="space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                {/* Icon slot with Orbit animation */}
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-accent-copper/30 bg-accent-copper/10 shadow-soft">
+                  {/* Rotating Ring */}
+                  <div className="absolute -inset-1 rounded-full border border-dashed border-accent-copper/40 animate-[plan-ring-orbit_8s_linear_infinite]" />
+                  <Orbit className="h-5 w-5 text-accent-copper relative z-10" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-display text-page-title text-foreground">{plan.label}</h3>
+                  <p className="mt-1 text-secondary text-muted-foreground leading-snug">
+                    {plan.tagline}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-display text-page-title text-foreground">{plan.label}</h3>
-                <p className="mt-1 text-secondary text-muted-foreground leading-tight">
-                  {plan.tagline}
-                </p>
+              <div className="shrink-0 whitespace-nowrap text-right">
+                <span className="font-display text-page-title text-accent-copper">${plan.priceUsd}</span>
+                <span className="block text-[10px] text-muted-foreground font-sans">/mo</span>
               </div>
             </div>
-            
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className="font-display text-page-title text-accent-copper">${plan.priceUsd}</span>
-              <span className="text-[10px] text-muted-foreground font-sans mt-[-4px]">/mo</span>
-              {isCurrent && <Badge variant="success">Current Plan</Badge>}
-            </div>
+            {isCurrent && (
+              <Badge variant="success" className="whitespace-nowrap">
+                Current Plan
+              </Badge>
+            )}
           </header>
 
           <Separator className="bg-accent-copper/10" />
@@ -317,29 +325,34 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
 
         {/* Card Inner Content */}
         <div className="relative flex flex-col h-full w-full rounded-[23px] bg-elevated/95 p-5 z-20 gap-5">
-          <header className="flex items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2.5">
-              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-yellow-500/30 bg-amber-500/10 shadow-soft">
-                <Sparkles className="h-5 w-5 text-amber-400 animate-pulse" />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <h3 className="font-display text-page-title text-foreground">{plan.label}</h3>
-                  <Badge className="bg-gradient-to-r from-yellow-500 to-amber-600 text-white border-none font-semibold text-[8px] tracking-wide uppercase px-1.5 py-0.5 animate-pulse">
-                    Popular
-                  </Badge>
+          <header className="space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-yellow-500/30 bg-amber-500/10 shadow-soft">
+                  <Sparkles className="h-5 w-5 text-amber-400 animate-pulse" />
                 </div>
-                <p className="mt-1 text-secondary text-muted-foreground leading-tight">
-                  {plan.tagline}
-                </p>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                    <h3 className="font-display text-page-title text-foreground">{plan.label}</h3>
+                    <Badge className="whitespace-nowrap bg-gradient-to-r from-yellow-500 to-amber-600 text-white border-none font-semibold text-[8px] tracking-wide uppercase px-1.5 py-0.5 animate-pulse">
+                      Popular
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-secondary text-muted-foreground leading-snug">
+                    {plan.tagline}
+                  </p>
+                </div>
+              </div>
+              <div className="shrink-0 whitespace-nowrap text-right">
+                <span className="font-display text-page-title text-amber-500">${plan.priceUsd}</span>
+                <span className="block text-[10px] text-muted-foreground font-sans">/mo</span>
               </div>
             </div>
-            
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className="font-display text-page-title text-amber-500">${plan.priceUsd}</span>
-              <span className="text-[10px] text-muted-foreground font-sans mt-[-4px]">/mo</span>
-              {isCurrent && <Badge variant="success">Current Plan</Badge>}
-            </div>
+            {isCurrent && (
+              <Badge variant="success" className="whitespace-nowrap">
+                Current Plan
+              </Badge>
+            )}
           </header>
 
           <Separator className="bg-yellow-500/10" />
@@ -409,29 +422,34 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
 
           {/* Content overlay */}
           <div className="relative flex flex-col h-full w-full z-10 gap-5">
-            <header className="flex items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2.5">
-                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-purple-500/40 bg-purple-900/30 shadow-[0_0_15px_rgba(168,85,247,0.3)]">
-                  <Crown className="h-5 w-5 text-purple-300 animate-bounce" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h3 className="font-display text-page-title text-white tracking-tight">{plan.label}</h3>
-                    <Badge className="bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-600 text-white border-none font-semibold text-[8px] tracking-wide uppercase px-1.5 py-0.5 animate-[plan-shimmer-text_3s_linear_infinite] bg-[length:200%_auto]">
-                      Ultimate
-                    </Badge>
+            <header className="space-y-2">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-purple-500/40 bg-purple-900/30 shadow-[0_0_15px_rgba(168,85,247,0.3)]">
+                    <Crown className="h-5 w-5 text-purple-300 animate-bounce" />
                   </div>
-                  <p className="mt-1 text-secondary text-slate-300 leading-tight">
-                    {plan.tagline}
-                  </p>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                      <h3 className="font-display text-page-title text-white tracking-tight">{plan.label}</h3>
+                      <Badge className="whitespace-nowrap bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-600 text-white border-none font-semibold text-[8px] tracking-wide uppercase px-1.5 py-0.5 animate-[plan-shimmer-text_3s_linear_infinite] bg-[length:200%_auto]">
+                        Ultimate
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-secondary text-slate-300 leading-snug">
+                      {plan.tagline}
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0 whitespace-nowrap text-right">
+                  <span className="font-display text-page-title text-purple-300 animate-[plan-shimmer-text_4s_linear_infinite] bg-gradient-to-r from-purple-300 via-pink-200 to-indigo-200 bg-clip-text text-transparent bg-[length:200%_auto]">${plan.priceUsd}</span>
+                  <span className="block text-[10px] text-slate-400 font-sans">/mo</span>
                 </div>
               </div>
-              
-              <div className="flex flex-col items-end gap-1 shrink-0">
-                <span className="font-display text-page-title text-purple-300 animate-[plan-shimmer-text_4s_linear_infinite] bg-gradient-to-r from-purple-300 via-pink-200 to-indigo-200 bg-clip-text text-transparent bg-[length:200%_auto]">${plan.priceUsd}</span>
-                <span className="text-[10px] text-slate-400 font-sans mt-[-4px]">/mo</span>
-                {isCurrent && <Badge className="bg-purple-500/20 text-purple-300 border border-purple-500/40">Current Plan</Badge>}
-              </div>
+              {isCurrent && (
+                <Badge className="whitespace-nowrap bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                  Current Plan
+                </Badge>
+              )}
             </header>
 
             <Separator className="bg-purple-500/20" />

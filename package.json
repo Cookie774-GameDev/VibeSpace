@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "private": true,
   "description": "Jarvis - the AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant.",
   "license": "Apache-2.0",

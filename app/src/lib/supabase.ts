@@ -1,5 +1,5 @@
 /**
- * Supabase client singleton for Jarvis V1.
+ * Supabase client singleton for VibeSpace.
  *
  * Cloud sync is optional. If `VITE_SUPABASE_URL` or `VITE_SUPABASE_ANON_KEY`
  * are missing or invalid, this module returns `null` from
@@ -62,7 +62,7 @@ export function getSupabaseClient(): SupabaseClient | null {
       },
       global: {
         headers: {
-          'x-client-info': 'jarvis-desktop/0.1.0',
+          'x-client-info': 'vibespace-desktop/0.1.29',
         },
       },
     });

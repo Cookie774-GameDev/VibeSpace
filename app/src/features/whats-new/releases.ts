@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.28';
+export const CURRENT_VERSION = '0.1.29';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,22 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.29',
+    date: '2026-06-11',
+    headline: 'Settings Plans layout no longer overlaps or clips text',
+    summary:
+      'Fixes the four-tier Plans grid in Settings so cards get enough width inside the modal, with prices and badges fully visible.',
+    sections: [
+      {
+        kind: 'fix',
+        items: [
+          'Settings → Plans no longer squeezes four columns into the modal width; cards use an auto-fit grid with a sensible minimum width.',
+          'Plan card headers were reworked so prices, "Current Plan", "Popular", and "Ultimate" badges are not clipped at the edges.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.28',
     date: '2026-06-10',
