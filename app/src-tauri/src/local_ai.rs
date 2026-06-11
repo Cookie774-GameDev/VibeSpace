@@ -57,6 +57,9 @@ fn startup_mutex() -> &'static Mutex<()> {
 }
 
 fn hidden_command(executable: &Path) -> Command {
+    // `mut` is only needed on Windows for creation_flags; cfg the binding so
+    // the unix build doesn't warn about an unused `mut`.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut command = Command::new(executable);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -575,17 +578,20 @@ pub fn is_ollama_running() -> OllamaRunningStatus {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let pids: Vec<u32> = stdout.lines().filter_map(|l| l.trim().parse().ok()).collect();
+                // Compute before the struct literal: `pids` is moved into the
+                // `pids` field, so later fields can't borrow it (E0382).
+                let detail = if api_reachable {
+                    Some("Ollama API responded on /api/version.".into())
+                } else if pids.is_empty() {
+                    Some("No Ollama serve process found".into())
+                } else {
+                    None
+                };
                 OllamaRunningStatus {
                     running: api_reachable || !pids.is_empty(),
                     pids,
                     listening_port_11434: api_reachable,
-                    detail: if api_reachable {
-                        Some("Ollama API responded on /api/version.".into())
-                    } else if pids.is_empty() {
-                        Some("No Ollama serve process found".into())
-                    } else {
-                        None
-                    },
+                    detail,
                 }
             }
             _ => OllamaRunningStatus {
