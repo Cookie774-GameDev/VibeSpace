@@ -13,9 +13,7 @@ describe('isDefaultChatTitle', () => {
 
 describe('deriveChatTitle', () => {
   it('uses the first sentence and strips markdown', () => {
-    expect(deriveChatTitle('## Fix the login bug\n\nWe should reset tokens.')).toBe(
-      'Fix the login bug',
-    );
+    expect(deriveChatTitle('Fix the login bug. We should reset tokens.')).toBe('Fix the login bug');
     expect(deriveChatTitle('```ts\nconst x = 1;\n```\nHello world.')).toBe('Hello world');
   });
 

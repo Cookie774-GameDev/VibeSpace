@@ -2,6 +2,28 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.30] - 2026-06-11
+
+### Added
+
+- Streaming voice during AI chat replies (incremental TTS while tokens stream).
+- Unified `voiceRouter` for Kokoro local neural voice and system TTS across Settings, voice panel, and runtime.
+- Chat lifecycle helper — always ensures an active conversation on boot.
+- Plugin activation flow, provider registry, and curated local Ollama model catalog.
+- VibeSpace landing site (`landing/`) for vibespaceos.com.
+- Strict Tauri Content Security Policy for the desktop WebView.
+
+### Improved
+
+- Debounced Zustand UI persistence to reduce localStorage writes.
+- Ollama install hardening and Local Models settings polish.
+- Real provider usage summary in Settings → Providers.
+
+### Fixed
+
+- Production builds ignore blanket `VITE_JARVIS_ADMIN` toggles; release CI clears admin env vars.
+- Scrubbed personal filesystem paths from public docs and tests.
+
 ## [0.1.29] - 2026-06-11
 
 ### Fixed

@@ -67,12 +67,27 @@ if (-not (Test-Path -LiteralPath $ReleasesDir)) {
 $nsisDir = Join-Path $BundleDir 'nsis'
 $msiDir  = Join-Path $BundleDir 'msi'
 
-# Tauri-canonical filenames as written by the bundler.
-$nsisName = "Jarvis One_${Version}_x64-setup.exe"
-$msiName  = "Jarvis One_${Version}_x64_en-US.msi"
+# Tauri-canonical filenames as written by the bundler (productName may be Jarvis One or VibeSpace).
+function Resolve-BundleArtifact {
+  param([string]$Dir, [string[]]$Patterns)
+  if (-not (Test-Path -LiteralPath $Dir)) { return $null }
+  foreach ($pattern in $Patterns) {
+    $hit = Get-ChildItem -LiteralPath $Dir -Filter $pattern -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+  }
+  return $null
+}
 
-$nsisSrc = Join-Path $nsisDir $nsisName
-$msiSrc  = Join-Path $msiDir  $msiName
+$nsisSrc = Resolve-BundleArtifact $nsisDir @(
+  "VibeSpace_${Version}_x64-setup.exe",
+  "Jarvis One_${Version}_x64-setup.exe"
+)
+$msiSrc = Resolve-BundleArtifact $msiDir @(
+  "VibeSpace_${Version}_x64_en-US.msi",
+  "Jarvis One_${Version}_x64_en-US.msi"
+)
+$nsisName = if ($nsisSrc) { Split-Path -Leaf $nsisSrc } else { "VibeSpace_${Version}_x64-setup.exe" }
+$msiName  = if ($msiSrc)  { Split-Path -Leaf $msiSrc }  else { "VibeSpace_${Version}_x64_en-US.msi" }
 $friendlyNsisName = "Jarvis-One-${Version}-Windows-x64.exe"
 $friendlyMsiName = "Jarvis-One-${Version}-Windows-x64.msi"
 $script:UpdaterSigningPasswordIsBlank = $false
@@ -219,10 +234,11 @@ Write-Host ""
 if (-not $SkipBuild) {
   Initialize-UpdaterSigningKey
 
-  foreach ($staleSig in @("$nsisSrc.sig", "$msiSrc.sig")) {
-    if (Test-Path -LiteralPath $staleSig) {
-      Remove-Item -LiteralPath $staleSig -Force
-      Write-Warn "Removed stale pre-build updater signature: $staleSig"
+  foreach ($dir in @($nsisDir, $msiDir)) {
+    if (-not (Test-Path -LiteralPath $dir)) { continue }
+    Get-ChildItem -LiteralPath $dir -Filter '*.sig' -File -ErrorAction SilentlyContinue | ForEach-Object {
+      Remove-Item -LiteralPath $_.FullName -Force
+      Write-Warn "Removed stale pre-build updater signature: $($_.Name)"
     }
   }
 
@@ -261,10 +277,31 @@ if (-not $SkipBuild) {
     Pop-Location
   }
   Write-Ok 'Build complete'
+  $nsisSrc = Resolve-BundleArtifact $nsisDir @(
+    "VibeSpace_${Version}_x64-setup.exe",
+    "Jarvis One_${Version}_x64-setup.exe"
+  )
+  $msiSrc = Resolve-BundleArtifact $msiDir @(
+    "VibeSpace_${Version}_x64_en-US.msi",
+    "Jarvis One_${Version}_x64_en-US.msi"
+  )
+  if (-not $nsisSrc) { throw "NSIS installer not found under $nsisDir after build." }
+  $nsisName = Split-Path -Leaf $nsisSrc
+  if ($msiSrc) { $msiName = Split-Path -Leaf $msiSrc }
   Invoke-UpdaterSignature -ArtifactPath $nsisSrc
-  Invoke-UpdaterSignature -ArtifactPath $msiSrc
+  if ($msiSrc) { Invoke-UpdaterSignature -ArtifactPath $msiSrc }
 } else {
   Write-Warn 'Skipping build (-SkipBuild)'
+  $nsisSrc = Resolve-BundleArtifact $nsisDir @(
+    "VibeSpace_${Version}_x64-setup.exe",
+    "Jarvis One_${Version}_x64-setup.exe"
+  )
+  $msiSrc = Resolve-BundleArtifact $msiDir @(
+    "VibeSpace_${Version}_x64_en-US.msi",
+    "Jarvis One_${Version}_x64_en-US.msi"
+  )
+  if ($nsisSrc) { $nsisName = Split-Path -Leaf $nsisSrc }
+  if ($msiSrc) { $msiName = Split-Path -Leaf $msiSrc }
 }
 
 # --- 2. Locate built artifacts ---------------------------------------------

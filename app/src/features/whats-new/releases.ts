@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.29';
+export const CURRENT_VERSION = '0.1.30';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,47 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.30',
+    date: '2026-06-11',
+    headline: 'Voice routing, chat lifecycle, security hardening, and VibeSpace landing',
+    summary:
+      'Major quality release: streaming voice during AI replies, unified Kokoro/system TTS routing, always-ready chat on boot, plugin activation, local Ollama catalog, Tauri CSP, and the VibeSpace marketing site.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Streaming voice speaks AI replies incrementally while tokens arrive (Kokoro or system fallback).',
+          'Unified voice router — Settings, voice panel, and chat runtime share one TTS path.',
+          'Chat lifecycle ensures an active conversation is always ready on boot.',
+          'Plugin activation flow with provider registry and curated local Ollama model catalog.',
+          'VibeSpace landing site shipped under landing/ (vibespaceos.com).',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Debounced UI state persistence reduces localStorage churn during navigation.',
+          'Ollama install hardening and improved Local Models settings.',
+          'Provider usage summary shows real monthly consumption in Settings.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Production builds ignore blanket admin bypass flags; release CI clears them.',
+          'Strict Content Security Policy added to the Tauri WebView.',
+          'Personal filesystem paths scrubbed from public docs and tests.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets Jarvis-One-0.1.30-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.29',
     date: '2026-06-11',

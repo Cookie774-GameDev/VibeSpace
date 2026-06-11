@@ -18,7 +18,8 @@ await addPlatform(
   'windows-x86_64',
   pick(names, [
     new RegExp(`^Jarvis-One-${versionPattern}-Windows-x64\\.exe$`),
-    new RegExp(`^Jarvis( One)?_${versionPattern}_x64-setup\\.exe$`),
+    new RegExp(`^VibeSpace-${versionPattern}-Windows-x64\\.exe$`),
+    new RegExp(`^(Jarvis One|VibeSpace)_${versionPattern}_x64-setup\\.exe$`),
   ]),
   names,
 );
