@@ -7,7 +7,7 @@ const version = required(args.version, '--version');
 const assetsDir = path.resolve(required(args.assetsDir ?? args['assets-dir'], '--assets-dir'));
 const baseUrl = required(args.baseUrl ?? args['base-url'], '--base-url').replace(/\/$/, '');
 const outfile = path.resolve(args.outfile ?? path.join(assetsDir, 'latest.json'));
-const notes = args.notes ?? `Jarvis ${version}`;
+const notes = args.notes ?? `VibeSpace ${version}`;
 
 const files = await readdir(assetsDir, { withFileTypes: true });
 const names = files.filter((f) => f.isFile()).map((f) => f.name);
@@ -17,9 +17,10 @@ const platforms = {};
 await addPlatform(
   'windows-x86_64',
   pick(names, [
-    new RegExp(`^Jarvis-One-${versionPattern}-Windows-x64\\.exe$`),
     new RegExp(`^VibeSpace-${versionPattern}-Windows-x64\\.exe$`),
-    new RegExp(`^(Jarvis One|VibeSpace)_${versionPattern}_x64-setup\\.exe$`),
+    new RegExp(`^VibeSpace_${versionPattern}_x64-setup\\.exe$`),
+    new RegExp(`^Jarvis-One-${versionPattern}-Windows-x64\\.exe$`),
+    new RegExp(`^Jarvis One_${versionPattern}_x64-setup\\.exe$`),
   ]),
   names,
 );

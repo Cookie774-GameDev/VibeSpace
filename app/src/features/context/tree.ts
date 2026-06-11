@@ -573,7 +573,7 @@ export async function generateProjectContextTree(options: GenerateContextOptions
   const fileWrite = await writeTextFile(mapPath, JSON.stringify({
     schema: 'jarvis.context-map',
     schemaVersion: 1,
-    description: 'Generated Jarvis One project context map. Drag this file into Jarvis chat or terminals as project context.',
+    description: 'Generated VibeSpace project context map. Drag this file into Jarvis chat or terminals as project context.',
     tree,
   }, null, 2));
   if (!fileWrite.ok) {
@@ -837,7 +837,7 @@ function buildProviderPrompt(rootDir: string, files: ScannedContextFile[]): stri
     file.content,
   ].join('\n')).join('\n\n');
   return clamp([
-    'Create a project Context map for Jarvis One. Return strict JSON only, no markdown.',
+    'Create a project Context map for VibeSpace. Return strict JSON only, no markdown.',
     'The map should help an AI quickly choose the right subsystem and files without rereading the whole repository.',
     'Preserve project structure. Group by domain, feature, service, or package. Include important files as leaf nodes.',
     'Use short, plain-English summaries. Explain what each area or file is for; do not quote source code or write jargon-heavy implementation notes.',

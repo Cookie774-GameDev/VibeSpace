@@ -42,7 +42,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return twiml('You have been unsubscribed. Reply START to opt back in.');
   }
   if (bodyText === 'HELP') {
-    return twiml('Jarvis One messaging. Reply STOP to unsubscribe.');
+    return twiml('VibeSpace messaging. Reply STOP to unsubscribe.');
   }
 
   // Record inbound message (no LLM reply here — kept minimal & safe).

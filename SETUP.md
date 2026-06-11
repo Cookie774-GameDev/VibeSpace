@@ -74,7 +74,7 @@ For code-signing, Jarvis Call, account/admin setup, and production release gates
 
 ## Jarvis Cloud app backend
 
-Official Jarvis-One installers are built with the app's Supabase project and call backend already configured. End users should not create or connect their own Supabase project.
+Official VibeSpace installers are built with the app's Supabase project and call backend already configured. End users should not create or connect their own Supabase project.
 
 Source maintainers or fork builders can wire a separate backend for development:
 

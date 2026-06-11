@@ -1,6 +1,6 @@
 # VibeSpace on Supabase
 
-Postgres + auth + edge functions backing the VibeSpace desktop app (formerly Jarivs-One).
+Postgres + auth + edge functions backing the VibeSpace desktop app (formerly VibeSpace).
 
 ## Layout
 
@@ -37,7 +37,7 @@ The desktop app's `app/.env.local` points at the live VibeSpace backend:
 project_ref:  tipeobvisjqvpbzcpckh
 url:          https://tipeobvisjqvpbzcpckh.supabase.co
 region:       us-east-1
-display_name: VibeSpace (rename the Supabase dashboard project from Jarivs-One when convenient)
+display_name: VibeSpace (rename the Supabase dashboard project from VibeSpace when convenient)
 ```
 
 Required client env vars in `app/.env.local`:

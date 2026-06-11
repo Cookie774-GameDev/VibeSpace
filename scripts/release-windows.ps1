@@ -8,7 +8,7 @@
   1. Runs `npm run tauri:build` (unless -SkipBuild). This produces an NSIS
      setup .exe and an MSI inside app\src-tauri\target\release\bundle\.
   2. Copies them into releases\ with two filenames each:
-       - The Tauri-canonical name (Jarvis One_<v>_x64-setup.exe) so install.ps1
+       - The Tauri-canonical name (VibeSpace_<v>_x64-setup.exe) so install.ps1
          keeps working when published to GitHub Releases.
        - A friendly name (Jarvis-<v>-Windows-x64.exe) for direct downloads.
      Matching updater signatures are generated and copied too.
@@ -67,7 +67,7 @@ if (-not (Test-Path -LiteralPath $ReleasesDir)) {
 $nsisDir = Join-Path $BundleDir 'nsis'
 $msiDir  = Join-Path $BundleDir 'msi'
 
-# Tauri-canonical filenames as written by the bundler (productName may be Jarvis One or VibeSpace).
+# Tauri-canonical filenames as written by the bundler (productName is VibeSpace).
 function Resolve-BundleArtifact {
   param([string]$Dir, [string[]]$Patterns)
   if (-not (Test-Path -LiteralPath $Dir)) { return $null }
@@ -88,8 +88,8 @@ $msiSrc = Resolve-BundleArtifact $msiDir @(
 )
 $nsisName = if ($nsisSrc) { Split-Path -Leaf $nsisSrc } else { "VibeSpace_${Version}_x64-setup.exe" }
 $msiName  = if ($msiSrc)  { Split-Path -Leaf $msiSrc }  else { "VibeSpace_${Version}_x64_en-US.msi" }
-$friendlyNsisName = "Jarvis-One-${Version}-Windows-x64.exe"
-$friendlyMsiName = "Jarvis-One-${Version}-Windows-x64.msi"
+$friendlyNsisName = "VibeSpace-${Version}-Windows-x64.exe"
+$friendlyMsiName = "VibeSpace-${Version}-Windows-x64.msi"
 $script:UpdaterSigningPasswordIsBlank = $false
 
 # --- Pretty output ---------------------------------------------------------
@@ -279,11 +279,11 @@ if (-not $SkipBuild) {
   Write-Ok 'Build complete'
   $nsisSrc = Resolve-BundleArtifact $nsisDir @(
     "VibeSpace_${Version}_x64-setup.exe",
-    "Jarvis One_${Version}_x64-setup.exe"
+    "VibeSpace_${Version}_x64-setup.exe"
   )
   $msiSrc = Resolve-BundleArtifact $msiDir @(
     "VibeSpace_${Version}_x64_en-US.msi",
-    "Jarvis One_${Version}_x64_en-US.msi"
+    "VibeSpace_${Version}_x64_en-US.msi"
   )
   if (-not $nsisSrc) { throw "NSIS installer not found under $nsisDir after build." }
   $nsisName = Split-Path -Leaf $nsisSrc
@@ -294,11 +294,11 @@ if (-not $SkipBuild) {
   Write-Warn 'Skipping build (-SkipBuild)'
   $nsisSrc = Resolve-BundleArtifact $nsisDir @(
     "VibeSpace_${Version}_x64-setup.exe",
-    "Jarvis One_${Version}_x64-setup.exe"
+    "VibeSpace_${Version}_x64-setup.exe"
   )
   $msiSrc = Resolve-BundleArtifact $msiDir @(
     "VibeSpace_${Version}_x64_en-US.msi",
-    "Jarvis One_${Version}_x64_en-US.msi"
+    "VibeSpace_${Version}_x64_en-US.msi"
   )
   if ($nsisSrc) { $nsisName = Split-Path -Leaf $nsisSrc }
   if ($msiSrc) { $msiName = Split-Path -Leaf $msiSrc }
@@ -380,7 +380,7 @@ if (Test-Path -LiteralPath $manifestScript) {
   & node $manifestScript `
     --version $Version `
     --assets-dir $ReleasesDir `
-    --base-url "https://github.com/Cookie774-GameDev/Jarivs-One/releases/download/v$Version" `
+    --base-url "https://github.com/Cookie774-GameDev/VibeSpace/releases/download/v$Version" `
     --outfile $manifestPath
   if ($LASTEXITCODE -ne 0) {
     throw "updater manifest generation failed with exit code $LASTEXITCODE"
@@ -406,7 +406,7 @@ $releaseFiles = $releaseFiles |
 # artifacts for manual testing, but those should not be checksummed or uploaded
 # with the current GitHub release.
 $lines = @()
-$lines += "# SHA-256 checksums for Jarvis One $Version (Windows x64)"
+$lines += "# SHA-256 checksums for VibeSpace $Version (Windows x64)"
 $lines += "# Generated $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
 $lines += ""
 

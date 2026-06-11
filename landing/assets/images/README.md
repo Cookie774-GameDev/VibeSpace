@@ -8,7 +8,7 @@ replace the generated visuals.
 
 ```
 logo.png            →  square app logo (used in navbar/footer if present)
-hero-preview.png    →  real screenshot of the Jarvis One desktop app
+hero-preview.png    →  real screenshot of the VibeSpace desktop app
 og-cover.png        →  1200x630 social share image (Open Graph / Twitter card)
 favicon.png         →  browser tab icon
 ```

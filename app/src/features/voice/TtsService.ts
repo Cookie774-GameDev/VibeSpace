@@ -151,7 +151,7 @@ class TtsServiceImpl {
   // ── speaking ─────────────────────────────────────────────────────────────────
   async testVoice(preset?: VoiceTtsPreset): Promise<void> {
     const p = preset ?? this.preset;
-    await this.speak(`This is the ${p} voice for Jarvis One.`, { preset: p, raw: true });
+    await this.speak(`This is the ${p} voice for VibeSpace.`, { preset: p, raw: true });
   }
 
   async speak(text: string, options: SpeakOptions = {}): Promise<void> {

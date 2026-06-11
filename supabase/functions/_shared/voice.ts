@@ -1,4 +1,4 @@
-// Shared helpers for Jarvis-One voice/subscription Edge Functions.
+// Shared helpers for VibeSpace voice/subscription Edge Functions.
 // Deno runtime (Supabase Edge Functions). Not bundled into the desktop app.
 
 export const COST_PER_SECOND_USD = 0.00025; // ~$0.015/min, OpenAI gpt-4o-mini-tts

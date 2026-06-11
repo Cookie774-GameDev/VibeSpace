@@ -14,7 +14,7 @@
 #     profile builds on developer machines.
 #
 # Setup checklist (one-time):
-#   1. Push the repo to GitHub: `git remote add origin git@github.com:Cookie774-GameDev/jarvis-one.git`
+#   1. Push the repo to GitHub: `git remote add origin git@github.com:Cookie774-GameDev/VibeSpace.git`
 #      then `git push -u origin main`.
 #   2. (Optional) Add code-signing secrets so binaries don't trigger
 #      SmartScreen / Gatekeeper warnings:
@@ -143,11 +143,11 @@ jobs:
         with:
           projectPath: app
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: 'Jarvis One ${{ github.event.inputs.tag || github.ref_name }}'
+          releaseName: 'VibeSpace ${{ github.event.inputs.tag || github.ref_name }}'
           # Pull release notes from releases/RELEASE_NOTES_<version>.md when present;
           # tauri-action falls back to the tag message when the file is missing.
           releaseBody: |
-            ## Jarvis One ${{ github.event.inputs.tag || github.ref_name }}
+            ## VibeSpace ${{ github.event.inputs.tag || github.ref_name }}
 
             See the matching `releases/RELEASE_NOTES_<version>.md` file in this tag for the full changelog.
 
@@ -203,7 +203,7 @@ jobs:
               --assets-dir assets \
               --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
               --outfile assets/latest.json \
-              --notes "Jarvis One $VERSION"
+              --notes "VibeSpace $VERSION"
           else
             echo "No updater signatures found; latest.json not generated."
           fi
@@ -211,8 +211,8 @@ jobs:
       - name: Compute hashes
         run: |
           cd assets
-          if compgen -G "Jarvis*" > /dev/null; then
-            sha256sum Jarvis* | tee SHA256SUMS.txt
+          if compgen -G "VibeSpace*" > /dev/null; then
+            sha256sum VibeSpace* Jarvis* 2>/dev/null | tee SHA256SUMS.txt
           else
             echo "No assets to hash; skipping." | tee SHA256SUMS.txt
           fi

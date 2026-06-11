@@ -9,7 +9,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
-const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://cookie774-gamedev.github.io/Jarivs-One';
+const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://cookie774-gamedev.github.io/VibeSpace';
 
 Deno.serve(async (req: Request): Promise<Response> => {
   const origin = req.headers.get('origin');

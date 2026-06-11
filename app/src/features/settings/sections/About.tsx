@@ -121,7 +121,7 @@ export function About() {
       <header>
         <h2 className="text-page-title text-foreground">About</h2>
         <p className="text-secondary text-muted-foreground mt-1">
-          Jarvis One - your local-first council of agents.
+          VibeSpace - your local-first council of agents.
         </p>
       </header>
 

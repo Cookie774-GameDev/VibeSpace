@@ -29,7 +29,7 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 ### Fixed
 
 - Fixed Settings → Plans card grid overlapping and clipping prices, badges, and "Current Plan" labels inside the settings modal.
-- Pointed the Tauri updater manifest URL at the `Jarivs-One` GitHub release channel so silent updates resolve the same artifacts as manual downloads.
+- Pointed the Tauri updater manifest URL at the `VibeSpace` GitHub release channel so silent updates resolve the same artifacts as manual downloads.
 
 ## [0.1.27] - 2026-06-08
 
@@ -280,7 +280,7 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 - Plans page icons are vertically centered and the page background now reflects the active or admin-effective tier.
 - Ambient audio retries playback after user gestures so browser audio policy does not leave the soundscape muted.
 - Windows release staging rebuilds `0.1.15` updater-signed NSIS/MSI artifacts and refreshes `releases/latest.json` plus `SHA256SUMS.txt`.
-- GitHub CI now treats Vitest as required, and the release workflow references the `Jarivs-One` repo, Jarvis One release names, and Tauri updater signing secrets.
+- GitHub CI now treats Vitest as required, and the release workflow references the `VibeSpace` repo, VibeSpace release names, and Tauri updater signing secrets.
 - Windows Authenticode signing now has a Tauri `signCommand` hook through `scripts/sign-windows.ps1`, so certificate signing happens before updater `.sig` generation when signing env vars are configured.
 
 ### Fixed
@@ -291,7 +291,7 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 - Jarvis Call entitlement gating now applies from every top-bar entry point while active calls can always hang up.
 - Centralized duplicate global hotkey handlers so toggles like nav, voice, palette, and settings do not fire twice.
 - `install/install.ps1` now reports Windows Application Control/SmartScreen policy blocks with concrete Authenticode signing guidance.
-- Settings About and What's New now match version `0.1.15` and point at the `Cookie774-GameDev/Jarivs-One` release channel.
+- Settings About and What's New now match version `0.1.15` and point at the `Cookie774-GameDev/VibeSpace` release channel.
 
 ### Known
 
@@ -464,7 +464,7 @@ All notable changes to Jarvis are documented here. Format follows [Keep a Change
 
 ### Changed
 
-- Official brand name upgraded to **Jarvis One** across `tauri.conf.json`, `package.json`, and `Cargo.toml`.
+- Official brand name upgraded to **VibeSpace** across `tauri.conf.json`, `package.json`, and `Cargo.toml`.
 - Fully automatic silent background updates: configured installer for silent background installations (`installMode: quiet`).
 - Windows UAC admin prompt bypass: configured NSIS installer with `installMode: currentUser` to install in `%LOCALAPPDATA%` to bypass administrator elevation requests.
 

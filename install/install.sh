@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Jarvis - Linux / macOS Terminal Installer
 # Usage:    curl -fsSL https://jarvis.app/install.sh | bash
-# Or:       curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
-# GitHub:   wget -qO- https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
+# Or:       curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
+# GitHub:   wget -qO- https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
 #
 # Optional environment variables:
 #   JARVIS_VERSION="0.1.20"    pin to a version (default: latest published GitHub release)
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 # --- Constants ----------------------------------------------------------------
-JARVIS_REPO="Cookie774-GameDev/Jarivs-One"
+JARVIS_REPO="Cookie774-GameDev/VibeSpace"
 JARVIS_API="https://api.github.com/repos/${JARVIS_REPO}/releases"
 JARVIS_DL="https://github.com/${JARVIS_REPO}/releases/download"
 
@@ -188,7 +188,7 @@ get_latest_version() {
       ok "Latest version: $tag" >&2
       printf "%s" "$tag"
     else
-      fail "No published Jarvis One GitHub Release was found. Publish a release with installer assets, or set JARVIS_VERSION/JARVIS_LOCAL for controlled testing."
+      fail "No published VibeSpace GitHub Release was found. Publish a release with installer assets, or set JARVIS_VERSION/JARVIS_LOCAL for controlled testing."
       exit 1
     fi
   fi
@@ -198,14 +198,14 @@ get_latest_version() {
 asset_pattern() {
   local os="$1" arch="$2" format="$3"
   case "$os/$format" in
-    linux/deb)      printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.deb$' ;;
-    linux/rpm)      printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64).*\.rpm$' ;;
-    linux/appimage) printf '%s' '(^|/).*(jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.AppImage$' ;;
+    linux/deb)      printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.deb$' ;;
+    linux/rpm)      printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64).*\.rpm$' ;;
+    linux/appimage) printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.AppImage$' ;;
     macos/dmg)
       if [ "$arch" = "aarch64" ]; then
-        printf '%s' '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64).*\.dmg$'
+        printf '%s' '(^|/).*(VibeSpace|Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64).*\.dmg$'
       else
-        printf '%s' '(^|/).*(Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64).*\.dmg$'
+        printf '%s' '(^|/).*(VibeSpace|Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64).*\.dmg$'
       fi
       ;;
     *) return 1 ;;
@@ -263,7 +263,7 @@ resolve_download_url() {
         printf "    OS:           macOS\n"
         printf "    Architecture: %s\n" "$arch"
         printf "    Version:      v%s\n" "$version"
-        printf "    Expected:     Jarvis One_%s_%s.dmg\n" "$version" "$([ "$arch" = "aarch64" ] && echo "aarch64" || echo "x64")"
+        printf "    Expected:     VibeSpace_%s_%s.dmg\n" "$version" "$([ "$arch" = "aarch64" ] && echo "aarch64" || echo "x64")"
         printf "\n"
         printf "  ${CYAN}Possible fixes:${RESET}\n"
         printf "    1. Wait for the release to complete (CI may still be building)\n"
@@ -335,7 +335,7 @@ install_appimage() {
   cat > "$desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Jarvis One
+Name=VibeSpace
 Comment=The AI workspace for every model, agent, voice and task
 Exec=jarvis %U
 Icon=jarvis
@@ -428,9 +428,9 @@ printf "%b\n\n" "${GREEN}${BOLD}    >> ACCESS GRANTED${RESET}${DIM}  Launching y
 
 case "$(uname -s)" in
   Darwin*)
-    app="$HOME/Applications/Jarvis One.app"
-    [ -d "$app" ] || app="/Applications/Jarvis One.app"
-    [ -d "$app" ] || { echo "Jarvis One.app was not found." >&2; exit 1; }
+    app="$HOME/Applications/VibeSpace.app"
+    [ -d "$app" ] || app="/Applications/VibeSpace.app"
+    [ -d "$app" ] || { echo "VibeSpace.app was not found." >&2; exit 1; }
     open "$app"
     ;;
   Linux*)
@@ -466,8 +466,8 @@ launch_linux_app() {
   local runner=""
   if command -v jarvis >/dev/null 2>&1; then
     runner="jarvis"
-  elif command -v jarvis-one >/dev/null 2>&1; then
-    runner="jarvis-one"
+  elif command -v VibeSpace >/dev/null 2>&1; then
+    runner="VibeSpace"
   fi
 
   if [ -n "$runner" ]; then
@@ -482,15 +482,15 @@ launch_linux_app() {
   if command -v gtk-launch >/dev/null 2>&1; then
     if [ -n "${SUDO_USER:-}" ]; then
       sudo -u "$SUDO_USER" gtk-launch jarvis.desktop >/dev/null 2>&1 || \
-      sudo -u "$SUDO_USER" gtk-launch "Jarvis One" >/dev/null 2>&1 || true
+      sudo -u "$SUDO_USER" gtk-launch "VibeSpace" >/dev/null 2>&1 || true
     else
       gtk-launch jarvis.desktop >/dev/null 2>&1 || \
-      gtk-launch "Jarvis One" >/dev/null 2>&1 || true
+      gtk-launch "VibeSpace" >/dev/null 2>&1 || true
     fi
     return 0
   fi
 
-  warn "Installed successfully, but no launcher command was found. Open Jarvis One from your apps menu."
+  warn "Installed successfully, but no launcher command was found. Open VibeSpace from your apps menu."
   return 0
 }
 
@@ -504,10 +504,10 @@ get_local_installer() {
     *) fail "Local install not supported on $os"; exit 1 ;;
   esac
   case "$format" in
-    deb)      find "$base/deb"      \( -name 'Jarvis One_*_amd64.deb' -o -name 'Jarvis-One-*.deb' -o -name 'jarvis_*_amd64.deb' \) 2>/dev/null | head -n1 ;;
-    rpm)      find "$base/rpm"      \( -name 'Jarvis One-*.x86_64.rpm' -o -name 'Jarvis-One-*.rpm' -o -name 'jarvis-*.x86_64.rpm' \) 2>/dev/null | head -n1 ;;
-    appimage) find "$base/appimage" \( -name 'Jarvis One_*_amd64.AppImage' -o -name 'Jarvis-One-*.AppImage' -o -name 'jarvis_*_amd64.AppImage' \) 2>/dev/null | head -n1 ;;
-    dmg)      find "$base/dmg"      \( -name 'Jarvis One_*.dmg' -o -name 'Jarvis-One-*.dmg' -o -name 'Jarvis_*.dmg' \) 2>/dev/null | head -n1 ;;
+    deb)      find "$base/deb"      \( -name 'VibeSpace_*_amd64.deb' -o -name 'VibeSpace-*.deb' -o -name 'jarvis_*_amd64.deb' \) 2>/dev/null | head -n1 ;;
+    rpm)      find "$base/rpm"      \( -name 'VibeSpace-*.x86_64.rpm' -o -name 'VibeSpace-*.rpm' -o -name 'jarvis-*.x86_64.rpm' \) 2>/dev/null | head -n1 ;;
+    appimage) find "$base/appimage" \( -name 'VibeSpace_*_amd64.AppImage' -o -name 'VibeSpace-*.AppImage' -o -name 'jarvis_*_amd64.AppImage' \) 2>/dev/null | head -n1 ;;
+    dmg)      find "$base/dmg"      \( -name 'VibeSpace_*.dmg' -o -name 'VibeSpace-*.dmg' -o -name 'Jarvis_*.dmg' \) 2>/dev/null | head -n1 ;;
   esac
 }
 
@@ -618,13 +618,13 @@ ok "Jarvis installed."
 install_terminal_launcher
 
 # Auto-open Jarvis
-step "Auto-launching Jarvis One..."
+step "Auto-launching VibeSpace..."
 case "$OS" in
   macos)
     if [ -n "${SUDO_USER:-}" ]; then
-      sudo -u "$SUDO_USER" open -a "Jarvis One"
+      sudo -u "$SUDO_USER" open -a "VibeSpace"
     else
-      open -a "Jarvis One"
+      open -a "VibeSpace"
     fi
     ;;
   linux)
@@ -635,7 +635,7 @@ esac
 printf "\n  ${CYAN}Launch:${RESET}\n"
 case "$OS" in
   linux) printf "      jarvis    (or use your apps menu)\n" ;;
-  macos) printf "      open -a \"Jarvis One\"\n" ;;
+  macos) printf "      open -a \"VibeSpace\"\n" ;;
 esac
 printf "\n  ${DIM}Voice push-to-talk:${RESET}  Cmd/Ctrl + Space\n"
 printf "  ${DIM}Command palette:${RESET}     Cmd/Ctrl + K\n\n"

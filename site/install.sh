@@ -6,4 +6,4 @@ if ! command -v bash >/dev/null 2>&1; then
   echo "Jarvis installer requires bash. Install bash or run the Windows PowerShell installer." >&2
   exit 1
 fi
-curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash

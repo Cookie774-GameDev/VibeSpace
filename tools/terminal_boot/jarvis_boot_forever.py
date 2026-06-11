@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Jarvis One FOREVER terminal boot launcher
+VibeSpace FOREVER terminal boot launcher
 - Keeps loading bars animating while update/start commands run.
 - After the app is considered open, switches to JARVIS ONLINE.
 - Can keep the online animations running forever until Ctrl+C.
@@ -237,20 +237,20 @@ def wait_for_ready(
 ) -> None:
     start = time.time()
     min_end = start + max(0.0, launch_wait_seconds)
-    state.label = "launching Jarvis One"
+    state.label = "launching VibeSpace"
     while True:
         now = time.time()
         if ready_file and os.path.exists(os.path.expandvars(os.path.expanduser(ready_file))):
             state.done = True
-            state.label = "Jarvis One ready"
+            state.label = "VibeSpace ready"
             return
         if process_name and process_running_windows(process_name) and now >= min_end:
             state.done = True
-            state.label = "Jarvis One detected"
+            state.label = "VibeSpace detected"
             return
         if not process_name and not ready_file and now >= min_end:
             state.done = True
-            state.label = "Jarvis One launch handoff complete"
+            state.label = "VibeSpace launch handoff complete"
             return
         if timeout > 0 and now - start >= timeout:
             state.done = True
@@ -267,10 +267,10 @@ def stage_worker(args: argparse.Namespace, state: StageState) -> None:
         time.sleep(2.5)
         state.label = "applying latest build"
         time.sleep(1.8)
-        state.label = "opening Jarvis One"
+        state.label = "opening VibeSpace"
         time.sleep(max(1.0, args.launch_wait_seconds))
         state.done = True
-        state.label = "Jarvis One ready"
+        state.label = "VibeSpace ready"
         return
 
     if args.update_command:
@@ -283,7 +283,7 @@ def stage_worker(args: argparse.Namespace, state: StageState) -> None:
             return
 
     if args.app_command:
-        start_shell(args.app_command, args.app_cwd, state, "opening Jarvis One")
+        start_shell(args.app_command, args.app_cwd, state, "opening VibeSpace")
         if state.failed:
             state.done = True
             return
@@ -448,7 +448,7 @@ def render_screen(state: StageState, frame: int, online: bool, forever: bool) ->
     ready_color = RED if state.failed else PURPLE
     ready_line = rgb(AMBER, "─" * 34) + rgb(ready_color, f" ●  {ready}  ● ", bold=True) + rgb(AMBER, "─" * 34)
     lines.append(center(ready_line, width))
-    footer = READY_TEXT if online else "Loading bars will continue until Jarvis One opens. Press Ctrl+C to stop."
+    footer = READY_TEXT if online else "Loading bars will continue until VibeSpace opens. Press Ctrl+C to stop."
     if forever and online:
         footer += "  Online animation is running forever."
     lines.append(rgb(CYAN if not state.failed else RED, footer, bold=True))
@@ -482,7 +482,7 @@ def animate_until_done(state: StageState, args: argparse.Namespace) -> None:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Jarvis One forever terminal boot launcher")
+    parser = argparse.ArgumentParser(description="VibeSpace forever terminal boot launcher")
     parser.add_argument("--demo", action="store_true", help="Run a fake update/open demo")
     parser.add_argument("--forever", action="store_true", help="Keep online animations running forever after Jarvis opens")
     parser.add_argument("--hold", type=float, default=3.0, help="Seconds to keep online animation if not using --forever")
@@ -493,7 +493,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--ignore-update-failure", action="store_true", help="Continue launching even if update command fails")
     parser.add_argument("--app-command", default="", help="Command to launch the real Jarvis app. Do NOT set this to Jarvis or it will recurse.")
     parser.add_argument("--app-cwd", default="", help="Working directory for update/app commands")
-    parser.add_argument("--app-process-name", default="", help="Windows process name to wait for, example Jarvis-One.exe")
+    parser.add_argument("--app-process-name", default="", help="Windows process name to wait for, example VibeSpace.exe")
     parser.add_argument("--ready-file", default="", help="File path created by the app when fully loaded")
     parser.add_argument("--launch-wait-seconds", type=float, default=5.0, help="Minimum seconds to animate after launching app")
     parser.add_argument("--timeout", type=float, default=60.0, help="Max seconds to wait for process/ready-file. 0 = no timeout")

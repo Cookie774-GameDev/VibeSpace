@@ -778,8 +778,8 @@ The `release-windows.ps1` script:
 ### Release Artifacts
 | File | Size |
 |---|---|
-| `Jarvis One_0.1.14_x64_en-US.msi` | ~5.94 MB |
-| `Jarvis One_0.1.14_x64-setup.exe` | ~4.87 MB |
+| `VibeSpace_0.1.14_x64_en-US.msi` | ~5.94 MB |
+| `VibeSpace_0.1.14_x64-setup.exe` | ~4.87 MB |
 | `.sig` (updater signature for each) | |
 | `latest.json` | Updater manifest |
 | `SHA256SUMS.txt` | Checksums |

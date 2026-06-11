@@ -197,7 +197,7 @@ export function UpdateWarningHost() {
             Automatic update alert
           </DialogTitle>
           <DialogDescription className="mt-2 text-secondary leading-relaxed text-muted-foreground">
-            A signed update for Jarvis One v{targetVersion} is staged and ready. Jarvis will restart and apply it in:
+            A signed update for VibeSpace v{targetVersion} is staged and ready. Jarvis will restart and apply it in:
           </DialogDescription>
 
           <div className="my-6 flex flex-col items-center justify-center rounded-lg border border-border/60 bg-background/50 p-4">

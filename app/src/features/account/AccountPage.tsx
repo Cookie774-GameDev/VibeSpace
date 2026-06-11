@@ -40,7 +40,7 @@ export function AccountPage() {
 
   const openUpgrade = async () => {
     if (!nextTier) {
-      toast.info('Top tier active', 'You already have access to every Jarvis One feature.');
+      toast.info('Top tier active', 'You already have access to every VibeSpace feature.');
       return;
     }
     const checkoutUrl = getCheckoutUrl(nextTier);
@@ -66,7 +66,7 @@ export function AccountPage() {
                 <ShieldCheck className="h-3.5 w-3.5" />
                 Account Center
               </div>
-              <h1 className="font-display text-hero text-white">Jarvis One account</h1>
+              <h1 className="font-display text-hero text-white">VibeSpace account</h1>
               <p className="mt-2 max-w-2xl text-secondary leading-relaxed text-slate-300">
                 Sign in, review billing and usage, and verify admin access from one production surface.
               </p>

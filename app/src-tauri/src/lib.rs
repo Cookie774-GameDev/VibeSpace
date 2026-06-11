@@ -110,7 +110,7 @@ pub fn run() {
             let tray_menu = tauri::menu::Menu::with_items(
                 app,
                 &[
-                    &tauri::menu::MenuItem::with_id(app, "show", "Show Jarvis One", true, None::<&str>).unwrap(),
+                    &tauri::menu::MenuItem::with_id(app, "show", "Show VibeSpace", true, None::<&str>).unwrap(),
                     &tauri::menu::MenuItem::with_id(app, "exit", "Exit", true, None::<&str>).unwrap(),
                 ],
             )?;

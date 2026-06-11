@@ -16,6 +16,11 @@ fn install_terminal_launcher_impl() -> Result<String, String> {
     let exe_candidates = [
         local_app_data
             .join("Programs")
+            .join("VibeSpace")
+            .join("jarvis.exe"),
+        local_app_data.join("VibeSpace").join("jarvis.exe"),
+        local_app_data
+            .join("Programs")
             .join("Jarvis One")
             .join("jarvis.exe"),
         local_app_data.join("Jarvis One").join("jarvis.exe"),
@@ -88,7 +93,7 @@ fn windows_powershell_launcher() -> String {
 if ($args -contains '--help') {
     Write-Host @"
 
-  Jarvis          Launch Jarvis One with cyberpunk boot animation.
+  Jarvis          Launch VibeSpace with cyberpunk boot animation.
                   Checks for updates, installs if available, then opens the app.
   Jarvis --help   Show this help message
 
@@ -185,7 +190,7 @@ if ($mode -eq 'production') {
     $jarvisExe = '$$FIRST$$'
     if (-not (Test-Path -LiteralPath $jarvisExe)) { $jarvisExe = '$$SECOND$$' }
     if (-not (Test-Path -LiteralPath $jarvisExe)) {
-        Write-LaunchLog 'ERROR' 'Jarvis executable not found. Start Jarvis One once from Start Menu, then try again.'
+        Write-LaunchLog 'ERROR' 'Jarvis executable not found. Start VibeSpace once from Start Menu, then try again.'
         exit 1
     }
 
@@ -204,7 +209,7 @@ if ($mode -eq 'production') {
     if ($sizeMB -lt 9.0) {
         Write-LaunchLog 'WARN' ("Executable is only " + $sizeMB + " MB (expected >= 9.0 MB for a bundled build).")
         Write-LaunchLog 'WARN' "This may be an unbundled raw binary that cannot load its UI without a running dev server."
-        Write-LaunchLog 'ERROR' "Please reinstall using the latest NSIS installer from GitHub Releases: https://github.com/Cookie774-GameDev/Jarivs-One/releases"
+        Write-LaunchLog 'ERROR' "Please reinstall using the latest NSIS installer from GitHub Releases: https://github.com/Cookie774-GameDev/VibeSpace/releases"
         exit 1
     }
 
@@ -267,7 +272,7 @@ fn windows_update_launcher(exe_candidates: &[PathBuf]) -> String {
         r#"$ErrorActionPreference = 'Stop'
 $jarvisExe = '{first}'
 if (-not (Test-Path -LiteralPath $jarvisExe)) {{ $jarvisExe = '{second}' }}
-$repo = 'Cookie774-GameDev/Jarivs-One'
+$repo = 'Cookie774-GameDev/VibeSpace'
 $localInstaller = Join-Path $env:USERPROFILE 'projects\Jarvis\install\install.ps1'
 $remoteInstaller = "https://raw.githubusercontent.com/$repo/main/install/install.ps1"
 
@@ -453,12 +458,12 @@ printf "%b\n" "${PINK}       * ${CYAN}VOICE${PINK} * ${BLUE}AGENTS${PINK} * ${VI
 printf "%b\n\n" "${GREEN}${BOLD}    >> ACCESS GRANTED${RESET}${DIM}  Launching your workspace...${RESET}"
 
 if [ "$(uname -s)" = "Darwin" ]; then
-  APP_PATH="$HOME/Applications/Jarvis One.app"
+  APP_PATH="$HOME/Applications/VibeSpace.app"
   if [ ! -d "$APP_PATH" ]; then
-    APP_PATH="/Applications/Jarvis One.app"
+    APP_PATH="/Applications/VibeSpace.app"
   fi
   if [ ! -d "$APP_PATH" ]; then
-    echo "Jarvis One.app not found. Launch Jarvis once from Finder, then try again." >&2
+    echo "VibeSpace.app not found. Launch Jarvis once from Finder, then try again." >&2
     exit 1
   fi
   open "$APP_PATH"
@@ -535,16 +540,16 @@ mod tests {
     #[test]
     fn windows_launcher_uses_boot_wrapper_without_recursion() {
         let core = windows_core_launcher(&[
-            PathBuf::from(r"C:\Users\Test\Programs\Jarvis One\jarvis.exe"),
-            PathBuf::from(r"C:\Users\Test\Jarvis One\jarvis.exe"),
+            PathBuf::from(r"C:\Users\Test\Programs\VibeSpace\jarvis.exe"),
+            PathBuf::from(r"C:\Users\Test\VibeSpace\jarvis.exe"),
         ]);
         let update = windows_update_launcher(&[
-            PathBuf::from(r"C:\Users\Test\Programs\Jarvis One\jarvis.exe"),
-            PathBuf::from(r"C:\Users\Test\Jarvis One\jarvis.exe"),
+            PathBuf::from(r"C:\Users\Test\Programs\VibeSpace\jarvis.exe"),
+            PathBuf::from(r"C:\Users\Test\VibeSpace\jarvis.exe"),
         ]);
         let script = windows_powershell_launcher();
 
-        assert!(core.contains(r"$jarvisExe = 'C:\Users\Test\Programs\Jarvis One\jarvis.exe'"));
+        assert!(core.contains(r"$jarvisExe = 'C:\Users\Test\Programs\VibeSpace\jarvis.exe'"));
         assert!(core.contains("Start-Process -FilePath $jarvisExe"));
         assert!(update.contains("releases/latest"));
         assert!(update.contains("install\\install.ps1"));

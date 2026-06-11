@@ -1,12 +1,12 @@
-# Demo Videos — Drop Your Jarvis One Recordings Here
+# Demo Videos — Drop Your VibeSpace Recordings Here
 
 The landing page (`../../index.html`) loads three demo videos from THIS folder.
-Replace these placeholders with your real Jarvis One screen recordings.
+Replace these placeholders with your real VibeSpace screen recordings.
 
 ## Expected filenames (exact)
 
 ```
-jarvis-demo-1.mp4   →  "Jarvis One App Walkthrough"
+jarvis-demo-1.mp4   →  "VibeSpace App Walkthrough"
 jarvis-demo-2.mp4   →  "Voice + Chat Demo"
 jarvis-demo-3.mp4   →  "Local Models & Plugins Preview"
 ```

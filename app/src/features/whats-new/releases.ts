@@ -241,7 +241,7 @@ const RELEASE_0_1_22: Release = {
     {
       kind: 'feature',
       items: [
-        'Run `Jarvis` with no arguments to choose Ultra Code, Jarvis One, Claude Code, or Codex from the terminal.',
+        'Run `Jarvis` with no arguments to choose Ultra Code, VibeSpace, Claude Code, or Codex from the terminal.',
         'Run `Jarvis ultra` to launch the strongest installed coding agent in the current working directory.',
         'Added direct `Jarvis app`, `Jarvis claude`, `Jarvis codex`, `Jarvis opencode`, and `Jarvis help` modes.',
       ],
@@ -375,7 +375,7 @@ export const RELEASES: readonly Release[] = [
       {
         kind: 'shipped',
         items: [
-          'Silent updater manifest targets Jarvis-One-0.1.30-Windows-x64.exe on GitHub Releases.',
+          'Silent updater manifest targets VibeSpace-0.1.30-Windows-x64.exe on GitHub Releases.',
         ],
       },
     ],
@@ -795,7 +795,7 @@ export const RELEASES: readonly Release[] = [
         items: [
           'Groq STT now records and uploads a real WAV file to Whisper instead of relying on fragile WebM blobs that Groq can reject as invalid media.',
           'Terminal references dragged into chat now carry stable pane metadata and resolve transcripts by pane or session so Jarvis actually receives terminal context.',
-          'The installer and About panel now reflect the current Jarvis One update details more accurately.',
+          'The installer and About panel now reflect the current VibeSpace update details more accurately.',
         ],
       },
       {
@@ -819,7 +819,7 @@ export const RELEASES: readonly Release[] = [
     headline:
       'Workspace restore, better dictation, recursive files, terminal references, and more commands',
     summary:
-      'Jarvis One now restores the active chat, route, project files, terminal layouts, and terminal transcripts after closing or updating. Dictation can use Groq Whisper for faster, more accurate transcription, Files now shows an expandable project tree, and terminal panes can be dragged into chat as context.',
+      'VibeSpace now restores the active chat, route, project files, terminal layouts, and terminal transcripts after closing or updating. Dictation can use Groq Whisper for faster, more accurate transcription, Files now shows an expandable project tree, and terminal panes can be dragged into chat as context.',
     sections: [
       {
         kind: 'feature',
@@ -847,7 +847,7 @@ export const RELEASES: readonly Release[] = [
     date: '2026-06-01',
     headline: 'Files workspace, chat attachments, terminal drops, and slash commands',
     summary:
-      'Jarvis One now has a first-class Files route for browsing and editing project files without leaving the app. Files can be dragged into chat or directly onto a terminal pane, and attached files are included in the model prompt alongside the project context and Jarvis system prompt.',
+      'VibeSpace now has a first-class Files route for browsing and editing project files without leaving the app. Files can be dragged into chat or directly onto a terminal pane, and attached files are included in the model prompt alongside the project context and Jarvis system prompt.',
     sections: [
       {
         kind: 'feature',
@@ -872,9 +872,9 @@ export const RELEASES: readonly Release[] = [
     version: '0.1.6',
     date: '2026-06-01',
     headline:
-      'Fully automatic silent updates, renamed to Jarvis One, and per-project terminal limit',
+      'Fully automatic silent updates, renamed to VibeSpace, and per-project terminal limit',
     summary:
-      'Welcome to Jarvis One! This update introduces a fully automatic and silent background updater that runs without UAC elevation warnings or manual confirmation prompts, along with terminal limits that are now scoped to 10 sessions per project rather than globally.',
+      'Welcome to VibeSpace! This update introduces a fully automatic and silent background updater that runs without UAC elevation warnings or manual confirmation prompts, along with terminal limits that are now scoped to 10 sessions per project rather than globally.',
     sections: [
       {
         kind: 'feature',
@@ -885,7 +885,7 @@ export const RELEASES: readonly Release[] = [
       {
         kind: 'improvement',
         items: [
-          'Official brand name upgrade: the application has been renamed to Jarvis One.',
+          'Official brand name upgrade: the application has been renamed to VibeSpace.',
           'Fully automatic silent background updater. The updater now runs completely silently in the background with zero user interaction.',
           'Windows UAC admin prompt bypass. The installer has been configured to run in per-user space under Local AppData, allowing background updates to install without UAC warnings.',
         ],

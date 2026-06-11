@@ -88,16 +88,16 @@ struct DownloadProgress {
 }
 
 /// OS-stable Kokoro model directory.
-///   Windows: %APPDATA%/Jarvis-One/models/kokoro
-///   macOS:   ~/Library/Application Support/Jarvis-One/models/kokoro
-///   Linux:   ~/.local/share/Jarvis-One/models/kokoro
+///   Windows: %APPDATA%/VibeSpace/models/kokoro
+///   macOS:   ~/Library/Application Support/VibeSpace/models/kokoro
+///   Linux:   ~/.local/share/VibeSpace/models/kokoro
 fn model_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let base = std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        base.join("Jarvis-One").join("models").join("kokoro")
+        base.join("VibeSpace").join("models").join("kokoro")
     }
     #[cfg(target_os = "macos")]
     {
@@ -106,7 +106,7 @@ fn model_dir() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."));
         home.join("Library")
             .join("Application Support")
-            .join("Jarvis-One")
+            .join("VibeSpace")
             .join("models")
             .join("kokoro")
     }
@@ -117,7 +117,7 @@ fn model_dir() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."));
         home.join(".local")
             .join("share")
-            .join("Jarvis-One")
+            .join("VibeSpace")
             .join("models")
             .join("kokoro")
     }

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Authenticode-sign a Windows build artifact for Jarvis One.
+  Authenticode-sign a Windows build artifact for VibeSpace.
 
 .DESCRIPTION
   Intended for Tauri's bundle.windows.signCommand hook so Authenticode
@@ -28,7 +28,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Write-SignInfo($Message) {
-  Write-Host "[Jarvis signing] $Message"
+  Write-Host "[VibeSpace signing] $Message"
 }
 
 function Find-SignTool {
@@ -77,7 +77,7 @@ if (-not $hasPfx -and -not $hasThumbprint) {
 
 $signtool = Find-SignTool
 $timestampUrl = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
-$description = if ($env:WINDOWS_SIGN_DESCRIPTION) { $env:WINDOWS_SIGN_DESCRIPTION } else { 'Jarvis One' }
+$description = if ($env:WINDOWS_SIGN_DESCRIPTION) { $env:WINDOWS_SIGN_DESCRIPTION } else { 'VibeSpace' }
 $commonArgs = @(
   'sign',
   '/fd', 'SHA256',

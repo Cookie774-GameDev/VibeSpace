@@ -12,10 +12,10 @@
 - Debounced UI state persistence; Ollama install hardening; real provider usage in Settings.
 
 ### Assets
-- **Windows x64 NSIS installer**: `Jarvis-One-0.1.30-Windows-x64.exe`
+- **Windows x64 NSIS installer**: `VibeSpace-0.1.30-Windows-x64.exe`
 - **Silent updater**: `latest.json` on GitHub Releases
 
 ### Install (one line)
 ```powershell
-irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex
 ```
