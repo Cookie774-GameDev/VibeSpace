@@ -366,8 +366,38 @@ function useDesktopReopenLifecycle() {
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
+    // When the app is closed (hidden to tray) or torn down, stop any in-flight
+    // speech so Jarvis does not keep talking in the background.
+    const stopAllSpeech = () => {
+      try {
+        window.speechSynthesis?.cancel();
+      } catch {
+        /* ignore */
+      }
+      void import('@/features/voice/speechSynthesis')
+        .then((m) => m.stopSpeech())
+        .catch(() => {});
+      void import('@/features/voice/TtsService')
+        .then((m) => m.TtsService.stop())
+        .catch(() => {});
+    };
+    window.addEventListener('pagehide', stopAllSpeech);
+
     let disposed = false;
     let unlistenReopen: (() => void) | null = null;
+    let unlistenHide: (() => void) | null = null;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen('jarvis:before-hide', () => stopAllSpeech()),
+      )
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenHide = unlisten;
+      })
+      .catch(() => {});
     void import('@tauri-apps/api/event')
       .then(({ listen }) =>
         listen<{ reason?: string }>('jarvis:reopen', (event) => {
@@ -388,7 +418,9 @@ function useDesktopReopenLifecycle() {
     return () => {
       disposed = true;
       unlistenReopen?.();
+      unlistenHide?.();
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pagehide', stopAllSpeech);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, []);

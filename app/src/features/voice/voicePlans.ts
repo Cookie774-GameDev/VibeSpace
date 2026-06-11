@@ -71,16 +71,16 @@ export interface VoicePresetDef {
 export const VOICE_PRESETS: Record<VoiceTtsPreset, VoicePresetDef> = {
   jarvis: {
     id: 'jarvis',
-    label: 'Jarvis',
-    kokoroVoice: 'bm_daniel',
-    speed: 0.94, // 0.92-0.96
+    label: 'Jarvis Classic',
+    kokoroVoice: 'bm_george',
+    speed: 0.92,
     description: 'Calm, clean, British-inspired futuristic AI assistant.',
   },
   friday: {
     id: 'friday',
     label: 'Friday',
     kokoroVoice: 'bf_emma',
-    speed: 1.05, // 1.02-1.08
+    speed: 0.98,
     description: 'Clear, tactical, fast female AI assistant.',
   },
 };

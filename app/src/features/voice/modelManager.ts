@@ -89,27 +89,37 @@ export function detectOS(platform: string): OS {
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 /**
- * Canonical Kokoro-82M v1.0 ONNX assets (thewh1teagle/kokoro-onnx release).
- * SHA-256 values were computed locally from the downloaded files, so checksum
- * verification is real — not a placeholder. ~325 MB + ~27 MB, downloaded once.
+ * Minimal Kokoro-82M v1.0 asset set: the int8 dynamic-quantized ONNX model
+ * (~88 MB — the smallest variant that is stable on the static CPU onnxruntime;
+ * the q8f16 variant crashes there) plus ONLY the two voices Jarvis-One ships
+ * (bm_george, bf_emma — ~0.5 MB each, raw float32). SHA-256 values were
+ * computed locally from the real files. Total download ≈ 89 MB.
  */
+const KOKORO_HF = 'https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main';
 const DEFAULT_KOKORO_MANIFEST: ModelManifest = {
   model: 'kokoro-82m',
-  version: '1.0',
+  version: '1.0-q8',
   runtime: 'onnx',
   files: [
     {
-      name: 'kokoro-v1.0.onnx',
-      url: 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx',
-      sha256: '7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5',
-      size_bytes: 325532387,
+      name: 'model_quantized.onnx',
+      url: `${KOKORO_HF}/onnx/model_quantized.onnx`,
+      sha256: 'fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478',
+      size_bytes: 92361116,
       required: true,
     },
     {
-      name: 'voices-v1.0.bin',
-      url: 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin',
-      sha256: 'bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d',
-      size_bytes: 28214398,
+      name: 'bm_george.bin',
+      url: `${KOKORO_HF}/voices/bm_george.bin`,
+      sha256: 'c4b235a4c1f2cd3b939fed08b899ce9385638b763f7b73a59616c4fc9bd6c9bc',
+      size_bytes: 522240,
+      required: true,
+    },
+    {
+      name: 'bf_emma.bin',
+      url: `${KOKORO_HF}/voices/bf_emma.bin`,
+      sha256: '669fe0647f9dd04fcab92f1439a40eeb4c8b4ab1f82e4996fe3d918ce4a63b73',
+      size_bytes: 522240,
       required: true,
     },
   ],

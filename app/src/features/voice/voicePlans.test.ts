@@ -32,16 +32,14 @@ describe('VOICE_PLANS cost model', () => {
 });
 
 describe('VOICE_PRESETS', () => {
-  it('maps Jarvis to bm_daniel and Friday to bf_emma', () => {
-    expect(VOICE_PRESETS.jarvis.kokoroVoice).toBe('bm_daniel');
+  it('maps Jarvis to bm_george and Friday to bf_emma', () => {
+    expect(VOICE_PRESETS.jarvis.kokoroVoice).toBe('bm_george');
     expect(VOICE_PRESETS.friday.kokoroVoice).toBe('bf_emma');
   });
 
-  it('keeps speeds in the plan-specified ranges', () => {
-    expect(VOICE_PRESETS.jarvis.speed).toBeGreaterThanOrEqual(0.92);
-    expect(VOICE_PRESETS.jarvis.speed).toBeLessThanOrEqual(0.96);
-    expect(VOICE_PRESETS.friday.speed).toBeGreaterThanOrEqual(1.02);
-    expect(VOICE_PRESETS.friday.speed).toBeLessThanOrEqual(1.08);
+  it('uses the configured Kokoro speeds', () => {
+    expect(VOICE_PRESETS.jarvis.speed).toBeCloseTo(0.92, 2);
+    expect(VOICE_PRESETS.friday.speed).toBeCloseTo(0.98, 2);
   });
 });
 

@@ -89,15 +89,37 @@ export function Voice() {
   }
 
   async function previewVoice(nextVoice: VoicePresetId) {
-    if (!isSpeechSynthesisSupported()) {
-      toast.warning(
-        'Voice preview unavailable',
-        'Speech synthesis is not available in this runtime.',
-      );
-      return;
-    }
     setPreviewingVoice(nextVoice);
     try {
+      // When the Kokoro engine is selected, preview with the actual Kokoro
+      // neural voice (mapped: Aurora -> Friday/bf_emma, otherwise Jarvis/bm_george).
+      if (voiceEngine === 'kokoro') {
+        const { kokoroLocalProvider } = await import('@/features/voice/providers/kokoroLocal');
+        if (!(await kokoroLocalProvider.isAvailable())) {
+          const ok = await ModelManager.ensureKokoroReady((p) =>
+            setKokoroPercent(Math.max(0, Math.min(100, Math.round(p.percent)))),
+          );
+          if (!ok || !(await kokoroLocalProvider.isAvailable())) {
+            toast.warning('Kokoro not ready', 'Download the Kokoro model first, then preview.');
+            return;
+          }
+        }
+        const preset = nextVoice === 'aurora' ? 'friday' : 'jarvis';
+        const controller = new AbortController();
+        await kokoroLocalProvider.speakChunk('Hello, I am Jarvis. Systems are online.', {
+          preset,
+          signal: controller.signal,
+          volume: 1,
+        });
+        return;
+      }
+      if (!isSpeechSynthesisSupported()) {
+        toast.warning(
+          'Voice preview unavailable',
+          'Speech synthesis is not available in this runtime.',
+        );
+        return;
+      }
       await speakVoicePreview(nextVoice);
     } catch (err) {
       toast.error(

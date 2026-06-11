@@ -48,6 +48,20 @@ export function isSpeechSynthesisSupported(): boolean {
   return getSpeechSynthesis() !== null && typeof SpeechSynthesisUtterance !== 'undefined';
 }
 
+/**
+ * Immediately stop any in-progress Web Speech playback and invalidate any
+ * pending speak loop. Used when the app is closing/hiding so Jarvis does not
+ * keep talking in the background.
+ */
+export function stopSpeech(): void {
+  activeSpeechRequestId += 1;
+  try {
+    getSpeechSynthesis()?.cancel();
+  } catch {
+    /* ignore */
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));

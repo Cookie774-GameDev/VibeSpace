@@ -140,6 +140,11 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use tauri::Emitter as _;
+                // The window only hides to tray (process stays alive), so the
+                // WebView keeps any in-flight speech playing. Tell the frontend
+                // to stop all TTS before we hide.
+                let _ = window.emit("jarvis:before-hide", ());
                 println!("[lifecycle] hiding main window; background service remains alive");
                 if let Err(err) = window.hide() {
                     eprintln!("[lifecycle] failed to hide main window: {err}");

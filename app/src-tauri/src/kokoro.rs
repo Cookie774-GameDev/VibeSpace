@@ -248,7 +248,7 @@ mod engine {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::Cursor;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Mutex, OnceLock};
 
     const SAMPLE_RATE: u32 = 24_000;
@@ -311,54 +311,113 @@ mod engine {
         })
     }
 
-    /// Locate the ONNX model + voices blob inside the model dir, tolerant of
-    /// exact filenames so a manifest rename does not break us.
-    fn find_assets() -> Result<(PathBuf, PathBuf), String> {
+    /// The ONNX model file. The smallest `.onnx` wins, so a quantized q8f16
+    /// model is preferred over a large fp32 one if both happen to be present.
+    fn find_model() -> Result<PathBuf, String> {
         let dir = model_dir();
-        let mut model = None;
-        let mut voices = None;
+        let mut best: Option<(PathBuf, u64)> = None;
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for e in entries.flatten() {
                 let name = e.file_name().to_string_lossy().to_lowercase();
-                if name.ends_with(".part") {
+                if name.ends_with(".part") || !name.ends_with(".onnx") {
                     continue;
                 }
-                if name.ends_with(".onnx") {
-                    model = Some(e.path());
-                } else if name.ends_with(".bin") || name.ends_with(".npz") {
-                    voices = Some(e.path());
+                let size = e.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
+                if best.as_ref().map(|(_, b)| size < *b).unwrap_or(true) {
+                    best = Some((e.path(), size));
                 }
             }
         }
-        match (model, voices) {
-            (Some(m), Some(v)) => Ok((m, v)),
-            _ => Err("model_not_installed".to_string()),
+        best.map(|(p, _)| p)
+            .ok_or_else(|| "model_not_installed".to_string())
+    }
+
+    /// Cheap presence check used by status polling — never creates an ONNX
+    /// session (which is slow), just confirms a model + a voice file exist.
+    fn assets_present() -> bool {
+        if find_model().is_err() {
+            return false;
         }
+        if let Ok(entries) = std::fs::read_dir(model_dir()) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_lowercase();
+                if name.ends_with(".part") || name.ends_with(".onnx") {
+                    continue;
+                }
+                if name.ends_with(".bin") || name.ends_with(".npz") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Load every voice in the model dir: raw little-endian f32 `.bin` files
+    /// (one per voice, ~0.5 MB) and/or a combined NPZ archive. Handles both.
+    fn load_voices(model_path: &Path) -> HashMap<String, Vec<f32>> {
+        use std::io::Read;
+        let mut voices: HashMap<String, Vec<f32>> = HashMap::new();
+        let Ok(entries) = std::fs::read_dir(model_dir()) else {
+            return voices;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path == *model_path {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            let lname = name.to_lowercase();
+            if lname.ends_with(".part") || !(lname.ends_with(".bin") || lname.ends_with(".npz")) {
+                continue;
+            }
+            // NPZ archives begin with the ZIP magic "PK"; raw voices are floats.
+            let mut magic = [0u8; 2];
+            let is_npz = File::open(&path)
+                .and_then(|mut f| f.read_exact(&mut magic))
+                .map(|_| &magic == b"PK")
+                .unwrap_or(false);
+            if is_npz {
+                if let Ok(file) = File::open(&path) {
+                    if let Ok(mut npz) = NpzReader::new(file) {
+                        if let Ok(names) = npz.names() {
+                            for n in names {
+                                let arr: ArrayD<f32> = match npz.by_name(&n) {
+                                    Ok(a) => a,
+                                    Err(_) => continue,
+                                };
+                                let flat: Vec<f32> = arr.iter().copied().collect();
+                                if flat.len() >= STYLE_DIM {
+                                    voices.insert(n.trim_end_matches(".npy").to_string(), flat);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                if bytes.len() >= STYLE_DIM * 4 && bytes.len() % 4 == 0 {
+                    let floats: Vec<f32> = bytes
+                        .chunks_exact(4)
+                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect();
+                    let stem = name
+                        .rsplit_once('.')
+                        .map(|(s, _)| s.to_string())
+                        .unwrap_or(name);
+                    voices.insert(stem, floats);
+                }
+            }
+        }
+        voices
     }
 
     impl KokoroEngine {
         fn load() -> Result<KokoroEngine, String> {
-            let (model_path, voices_path) = find_assets()?;
+            let model_path = find_model()?;
             let session = Session::builder()
                 .map_err(err)?
                 .commit_from_file(&model_path)
                 .map_err(err)?;
-
-            let file = File::open(&voices_path).map_err(err)?;
-            let mut npz = NpzReader::new(file).map_err(err)?;
-            let names = npz.names().map_err(err)?;
-            let mut voices: HashMap<String, Vec<f32>> = HashMap::new();
-            for name in names {
-                let arr: ArrayD<f32> = match npz.by_name(&name) {
-                    Ok(a) => a,
-                    Err(_) => continue,
-                };
-                let flat: Vec<f32> = arr.iter().copied().collect();
-                if flat.len() >= STYLE_DIM {
-                    let key = name.trim_end_matches(".npy").to_string();
-                    voices.insert(key, flat);
-                }
-            }
+            let voices = load_voices(&model_path);
             if voices.is_empty() {
                 return Err("no_voices_loaded".to_string());
             }
@@ -374,8 +433,8 @@ mod engine {
                 return requested.to_string();
             }
             let mapped = match requested.to_lowercase().as_str() {
-                "jarvis" => "bm_daniel",
-                "friday" => "bf_emma",
+                "jarvis" | "jarvis-prime" | "jarvis classic" => "bm_george",
+                "friday" | "aurora" => "bf_emma",
                 _ => "",
             };
             if !mapped.is_empty() && self.voices.contains_key(mapped) {
@@ -490,19 +549,11 @@ mod engine {
         }
     }
 
-    /// True when the model is installed AND a session can actually be created.
+    /// True when the model + a voice file are present on disk. Cheap by design:
+    /// it does NOT create the ONNX session (that happens lazily on first speak
+    /// and is cached), so frequent status polling never stalls the app.
     pub fn ready() -> bool {
-        let mut slot = match ENGINE.lock() {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        if slot.is_none() {
-            match KokoroEngine::load() {
-                Ok(e) => *slot = Some(e),
-                Err(_) => return false,
-            }
-        }
-        slot.is_some()
+        assets_present()
     }
 
     /// Synthesize speech, returning (base64 wav, mime). Errors -> caller falls back.
@@ -543,27 +594,28 @@ mod engine {
         // cleanly when the model is not present so CI without weights passes.
         #[test]
         fn synthesizes_test_phrase_when_model_present() {
-            if super::find_assets().is_err() {
+            if super::find_model().is_err() {
                 eprintln!("kokoro model not installed locally — skipping real synth test");
                 return;
             }
-            let (b64, mime) =
-                super::speak("Hello, I am Jarvis. Systems are online.", "jarvis", 1.0)
-                    .expect("kokoro synthesis should succeed when the model is installed");
-            assert_eq!(mime, "audio/wav");
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(&b64)
-                .expect("speak() must return valid base64");
-            // WAV header (44 bytes) + at least ~0.5s of 16-bit mono @ 24 kHz.
-            let min_len = 44 + 24_000;
-            assert!(
-                bytes.len() > min_len,
-                "audio too short: {} bytes (expected > {})",
-                bytes.len(),
-                min_len
-            );
-            let secs = (bytes.len() as f64 - 44.0) / 2.0 / 24_000.0;
-            println!("KOKORO_OK bytes={} (~{:.2}s of audio)", bytes.len(), secs);
+            let phrase = "Hello, I am Jarvis. Systems are online.";
+            for (label, voice) in [("jarvis/bm_george", "jarvis"), ("friday/bf_emma", "friday")] {
+                let (b64, mime) = super::speak(phrase, voice, 1.0)
+                    .unwrap_or_else(|e| panic!("kokoro synthesis failed for {label}: {e}"));
+                assert_eq!(mime, "audio/wav");
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&b64)
+                    .expect("speak() must return valid base64");
+                let min_len = 44 + 24_000;
+                assert!(
+                    bytes.len() > min_len,
+                    "audio too short for {label}: {} bytes (expected > {})",
+                    bytes.len(),
+                    min_len
+                );
+                let secs = (bytes.len() as f64 - 44.0) / 2.0 / 24_000.0;
+                println!("KOKORO_OK {label} bytes={} (~{:.2}s)", bytes.len(), secs);
+            }
         }
     }
 }
