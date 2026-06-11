@@ -123,7 +123,7 @@
     <section class="hero" id="home">
       <div class="hero__content reveal">
         <span class="pill pill--soft hero__eyebrow">
-          <span class="dot dot--live"></span> Now in early access · v0.1.28
+          <span class="dot dot--live"></span> Now in early access · v0.1.31
         </span>
         <h1 class="hero__title">
           Meet <span class="grad-text">VibeSpace</span> —<br />
@@ -592,16 +592,10 @@
         </div>
 
         <!-- =============================================================== -->
-        <!--  INSTALL COMMANDS · "Coming soon" while the app is private.     -->
-        <!--  TO LAUNCH (one step): delete the class "is-coming-soon" from   -->
-        <!--  the #installArea div below. That hides the ribbon + lock and   -->
-        <!--  makes everything fully active. Everything else already works.  -->
-        <!--  Before launch, host the install scripts at                     -->
-        <!--  https://vibespaceos.com/install.ps1  and  /install.sh          -->
-        <!--  (or change the commands below to your final URLs).             -->
+        <!--  INSTALL COMMANDS · LIVE. Commands fetch the canonical          -->
+        <!--  installers from the VibeSpace GitHub repo (main branch).       -->
         <!-- =============================================================== -->
-        <div class="install is-coming-soon" id="installArea">
-          <span class="install__ribbon">Coming soon</span>
+        <div class="install" id="installArea">
 
           <div class="install__tabs" role="tablist" aria-label="Choose your operating system">
             <button type="button" class="install__tab is-active" data-os="win" role="tab"><svg class="ico" aria-hidden="true"><use href="#i-windows"></use></svg> Windows</button>
@@ -612,21 +606,21 @@
           <div class="install__panels">
             <div class="install__panel is-active" data-os="win">
               <div class="cmd">
-                <code class="cmd__code">irm https://vibespaceos.com/install.ps1 | iex</code>
+                <code class="cmd__code">irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex</code>
                 <button type="button" class="cmd__copy" aria-label="Copy command">Copy</button>
               </div>
               <p class="install__hint muted">Run in <strong>PowerShell</strong> on Windows 10/11.</p>
             </div>
             <div class="install__panel" data-os="mac" hidden>
               <div class="cmd">
-                <code class="cmd__code">curl -fsSL https://vibespaceos.com/install.sh | bash</code>
+                <code class="cmd__code">curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash</code>
                 <button type="button" class="cmd__copy" aria-label="Copy command">Copy</button>
               </div>
               <p class="install__hint muted">Run in <strong>Terminal</strong> on macOS 12+.</p>
             </div>
             <div class="install__panel" data-os="linux" hidden>
               <div class="cmd">
-                <code class="cmd__code">curl -fsSL https://vibespaceos.com/install.sh | bash</code>
+                <code class="cmd__code">curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash</code>
                 <button type="button" class="cmd__copy" aria-label="Copy command">Copy</button>
               </div>
               <p class="install__hint muted">Run in your <strong>shell</strong> — .deb, .rpm &amp; AppImage supported.</p>
@@ -635,22 +629,18 @@
         </div>
 
         <div class="download__actions">
-          <!-- DIRECT DOWNLOAD · disabled until launch. AT LAUNCH replace this <span> with:
-               <a class="btn btn--primary btn--lg magnetic" href="REAL_RELEASE_URL"> ...icon... Download for Windows </a>
-               Current real build URL kept for launch:
-               https://github.com/Cookie774-GameDev/VibeSpace/releases/download/v0.1.28/VibeSpace-0.1.28-Windows-x64.exe -->
-          <span class="btn btn--primary btn--lg is-disabled" role="button" aria-disabled="true">
+          <!-- DIRECT DOWNLOAD · always points at the newest GitHub release. -->
+          <a class="btn btn--primary btn--lg magnetic" href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest" target="_blank" rel="noopener noreferrer">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Download for Windows
-            <span class="soon-tag">Coming soon</span>
-          </span>
+          </a>
           <!-- EDIT: point this at your setup guide / docs when ready -->
           <a class="btn btn--ghost btn--lg" href="https://github.com/Cookie774-GameDev/VibeSpace/blob/main/DOWNLOAD.md">View Setup Guide</a>
           <!-- EDIT: swap for a newsletter/Discord link when ready -->
           <a class="btn btn--ghost btn--lg" href="#contact">Join Updates</a>
         </div>
 
-        <p class="download__meta muted">Desktop app for Windows · macOS · Linux. Public release coming soon.</p>
+        <p class="download__meta muted">Desktop app for Windows · macOS · Linux. Current release: <strong>v0.1.31</strong>.</p>
 
         <div class="grid grid--reqs">
           <div class="req"><span class="req__icon"><svg class="ico" aria-hidden="true"><use href="#i-windows"></use></svg></span><span class="req__title">Windows 10/11</span><span class="req__sub muted">64-bit desktop install</span></div>

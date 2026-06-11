@@ -10,10 +10,10 @@ releases/
   .gitignore                        binary blocklist (tracked)
   SHA256SUMS.txt                    generated hashes (gitignored)
   latest.json                       Tauri updater manifest (gitignored)
-  VibeSpace_0.1.20_x64-setup.exe   Tauri NSIS installer name (gitignored)
-  VibeSpace_0.1.20_x64_en-US.msi   Tauri MSI installer name (gitignored)
-  VibeSpace-0.1.20-Windows-x64.exe friendly NSIS copy (gitignored)
-  VibeSpace-0.1.20-Windows-x64.msi friendly MSI copy (gitignored)
+  VibeSpace_0.1.31_x64-setup.exe   Tauri NSIS installer name (gitignored)
+  VibeSpace_0.1.31_x64_en-US.msi   Tauri MSI installer name (gitignored)
+  VibeSpace-0.1.31-Windows-x64.exe friendly NSIS copy (gitignored)
+  VibeSpace-0.1.31-Windows-x64.msi friendly MSI copy (gitignored)
 ```
 
 ## Building Windows Installers
@@ -50,16 +50,16 @@ The canonical remote is `Cookie774-GameDev/VibeSpace`.
 
 ```powershell
 # 1. Tag the release.
-git tag v0.1.20
-git push origin v0.1.20
+git tag v0.1.31
+git push origin v0.1.31
 
 # 2. Upload binaries via gh CLI when publishing manually.
-gh release create v0.1.20 `
-  releases\VibeSpace*0.1.20* `
+gh release create v0.1.31 `
+  releases\VibeSpace*0.1.31* `
   releases\latest.json `
   releases\SHA256SUMS.txt `
-  --title "VibeSpace 0.1.20" `
-  --notes-file releases\RELEASE_NOTES_0.1.20.md
+  --title "VibeSpace 0.1.31" `
+  --notes-file releases\RELEASE_NOTES_0.1.31.md
 ```
 
 After publishing, end users can install with one line:

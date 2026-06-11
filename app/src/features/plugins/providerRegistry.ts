@@ -124,10 +124,13 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
     tags: ['ai', 'llm', 'google', 'api_key'],
     setupSteps: ['Open Google AI Studio.', 'Create an API key.', 'Paste and test.'],
     supportedFeatures: ['model routing', 'multimodal'],
-    httpTest: {
-      url: 'https://generativelanguage.googleapis.com/v1beta/models?key={{api_key}}',
-      accountLabelPath: 'models.0.displayName',
-    },
+    // Key travels in the x-goog-api-key header, never the URL (keeps it out of logs).
+    httpTest: apiKeyHeaderTest(
+      'https://generativelanguage.googleapis.com/v1beta/models',
+      'x-goog-api-key',
+      'api_key',
+      'models.0.displayName',
+    ),
     tools: [readTool('models_context', 'List Gemini models.')],
   },
   perplexity: {

@@ -2,6 +2,33 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.31] - 2026-06-11
+
+### Security
+
+- New `0015_protect_billing_columns` migration: clients can no longer change `profiles.tier`, `monthly_quota`, or `stripe_customer_id`; only the Stripe webhook (service role) manages billing state. Verified live: a simulated authenticated self-upgrade to `ultra` is silently reverted.
+- New `0016_fix_function_search_path` and `0017_advisor_hardening` migrations: pinned `search_path` on all remaining public functions, indexed the `subscription_events.user_id` foreign key, and rebuilt the `plan_limits_read` RLS policy without per-row `auth.role()` re-evaluation. Supabase security advisors now report no unaddressed database findings.
+- Google Gemini API keys now travel in the `x-goog-api-key` header instead of `?key=` URL query params (chat streaming, key validation, context tree, and the plugin connection probe), so keys can never leak into request logs.
+- DevConsole fetch logging now redacts sensitive query params (`key`, `token`, `signature`, etc.) before storing URLs.
+- Added a dedicated `message_rate_limit_hit` RPC and wired `message-complete` to it (and to actually enforce 429s) instead of borrowing the voice rate-limit window.
+- Legacy `jarvis-proxy` edge function CORS tightened from `*` to the desktop app origin allow-list.
+- Tightened `.gitignore` so `.env.production` / `.env.development` (without `.local`) can never be committed; also ignores local databases and `.tmp-*` scratch files now.
+
+### Fixed
+
+- Restored the canonical Windows installer `install/install.ps1`, rebranded to the `Cookie774-GameDev/VibeSpace` repository with `VibeSpace_*` asset names (legacy `Jarvis One_*` names still match for old releases).
+- `Jarvis` terminal launcher scripts now check all VibeSpace and legacy Jarvis One install paths before launching or updating, instead of only the first two.
+- `install/install.sh` fallback download URLs now use `VibeSpace_*` Tauri bundle names; `JARVIS_ARCH` override is now actually honored.
+- `twilio-message-webhook` looked up a nonexistent `profiles.phone` column; inbound SMS users are now resolved via `phone_settings.user_phone_number`.
+- Settings → About now shows the real installed app version and a current release timeline instead of a hardcoded `v0.1.20`.
+- Subscription tier shown in the app now syncs from the server-managed `profiles.tier` on sign-in and session restore.
+
+### Improved
+
+- Ultra plan card galaxy restored to full strength: brighter nebula core, drifting conic-gradient swirl, and two counter-rotating star layers — all GPU-friendly CSS that honors `prefers-reduced-motion`.
+- All plan page backdrops gained slightly richer gradients with no layout changes.
+- vibespaceos.com landing page updated to v0.1.31 with live install commands and an active Download button pointing at GitHub Releases.
+
 ## [0.1.30] - 2026-06-11
 
 ### Added

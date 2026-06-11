@@ -197,11 +197,14 @@ async function testGoogle(
   // Hitting `/v1beta/models` validates the key without spending tokens.
   // The list is small (a few KB) and Google routes 401 / 403 there
   // consistently with the streamGenerateContent endpoint we use for chat.
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(
-    key,
-  )}`;
+  // Key travels in the `x-goog-api-key` header so it never lands in URLs/logs.
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models';
   try {
-    const res = await timedFetch(url, { method: 'GET', signal });
+    const res = await timedFetch(url, {
+      method: 'GET',
+      headers: { 'x-goog-api-key': key },
+      signal,
+    });
     if (res.ok) return { kind: 'ok', provider: 'google' };
     const body = await res.text().catch(() => '');
     return {

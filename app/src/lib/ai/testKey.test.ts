@@ -97,15 +97,15 @@ describe('testProviderKey', () => {
   });
 
   describe('Google', () => {
-    it('encodes the key as a query parameter', async () => {
+    it('sends the key via the x-goog-api-key header, never in the URL', async () => {
       fetchMock.mockResolvedValueOnce(okResponse({ models: [] }));
       const result = await testProviderKey('google', 'AIza-test/with+chars');
       expect(result.kind).toBe('ok');
-      const [url] = fetchMock.mock.calls[0]!;
-      expect(typeof url).toBe('string');
-      expect(url as string).toContain('?key=');
-      // The key must be URI-encoded — `/` and `+` should not appear raw.
-      expect(url as string).toContain(encodeURIComponent('AIza-test/with+chars'));
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+      expect(url as string).not.toContain('key=');
+      const headers = (init as RequestInit | undefined)?.headers as Record<string, string>;
+      expect(headers['x-goog-api-key']).toBe('AIza-test/with+chars');
     });
   });
 

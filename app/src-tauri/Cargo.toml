@@ -1,6 +1,6 @@
 [package]
 name = "jarvis"
-version = "0.1.30"
+version = "0.1.31"
 description = "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant."
 authors = ["Jarvis"]
 edition = "2021"

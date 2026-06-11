@@ -58,10 +58,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // Rate limit
   const windowStart = new Date(Math.floor(Date.now() / RATE_WINDOW_MS) * RATE_WINDOW_MS).toISOString();
-  const { data: rl } = await admin.rpc('voice_rate_limit_hit', {
+  const { data: rl, error: rlErr } = await admin.rpc('message_rate_limit_hit', {
     p_user_id: userId, p_window_start: windowStart, p_chars: promptChars, p_max_requests: RATE_MAX,
   });
-  // Reuse the voice rate-limit RPC table? message has its own; fall back gracefully.
+  // Dedicated message-window RPC (0015) so message traffic no longer consumes the voice window.
+  if (!rlErr && (rl as { limited?: boolean } | null)?.limited) {
+    return json({ error: 'rate_limited' }, 429, origin);
+  }
 
   // Reserve budget from an estimate (~prompt tokens + assumed completion).
   const estPromptTokens = Math.ceil(promptChars / 4);

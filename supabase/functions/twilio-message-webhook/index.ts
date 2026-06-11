@@ -49,14 +49,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('id')
-    .eq('phone', from)
+  // Phone numbers live in phone_settings (profiles has no phone column).
+  const { data: settings } = await admin
+    .from('phone_settings')
+    .select('user_id')
+    .eq('user_phone_number', from)
     .maybeSingle();
-  if (profile?.id) {
+  if (settings?.user_id) {
     await admin.rpc('record_usage_event', {
-      p_kind: 'message', p_user_id: profile.id,
+      p_kind: 'message', p_user_id: settings.user_id,
       p_payload: { provider: 'twilio', model: 'sms-inbound', status: 'ok' },
     });
   }

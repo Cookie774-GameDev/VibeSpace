@@ -164,15 +164,19 @@ exit $LASTEXITCODE
 }
 
 #[cfg(target_os = "windows")]
+fn powershell_candidate_array(exe_candidates: &[PathBuf]) -> String {
+    // Render every candidate path as a quoted PowerShell array element so the
+    // generated scripts try VibeSpace and legacy Jarvis One install paths.
+    exe_candidates
+        .iter()
+        .map(|p| format!("'{}'", p.to_string_lossy().replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(target_os = "windows")]
 fn windows_core_launcher(exe_candidates: &[PathBuf]) -> String {
-    let first = exe_candidates
-        .first()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let second = exe_candidates
-        .get(1)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let candidates = powershell_candidate_array(exe_candidates);
 
     const TEMPLATE: &str = r#"$ErrorActionPreference = 'Stop'
 
@@ -187,9 +191,12 @@ $mode = if ($args -contains 'dev' -or $args -contains '--dev') { 'dev' } else { 
 Write-LaunchLog 'INFO' "Launch mode: $mode"
 
 if ($mode -eq 'production') {
-    $jarvisExe = '$$FIRST$$'
-    if (-not (Test-Path -LiteralPath $jarvisExe)) { $jarvisExe = '$$SECOND$$' }
-    if (-not (Test-Path -LiteralPath $jarvisExe)) {
+    $jarvisCandidates = @($$CANDIDATES$$)
+    $jarvisExe = $null
+    foreach ($candidate in $jarvisCandidates) {
+        if (Test-Path -LiteralPath $candidate) { $jarvisExe = $candidate; break }
+    }
+    if (-not $jarvisExe) {
         Write-LaunchLog 'ERROR' 'Jarvis executable not found. Start VibeSpace once from Start Menu, then try again.'
         exit 1
     }
@@ -254,24 +261,25 @@ if ($mode -eq 'production') {
 }
 "#;
 
-    TEMPLATE.replace("$$FIRST$$", &first).replace("$$SECOND$$", &second)
+    TEMPLATE.replace("$$CANDIDATES$$", &candidates)
 }
 
 #[cfg(target_os = "windows")]
 fn windows_update_launcher(exe_candidates: &[PathBuf]) -> String {
+    let candidates = powershell_candidate_array(exe_candidates);
     let first = exe_candidates
         .first()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let second = exe_candidates
-        .get(1)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
     format!(
         r#"$ErrorActionPreference = 'Stop'
-$jarvisExe = '{first}'
-if (-not (Test-Path -LiteralPath $jarvisExe)) {{ $jarvisExe = '{second}' }}
+$jarvisCandidates = @({candidates})
+$jarvisExe = $null
+foreach ($candidate in $jarvisCandidates) {{
+  if (Test-Path -LiteralPath $candidate) {{ $jarvisExe = $candidate; break }}
+}}
+if (-not $jarvisExe) {{ $jarvisExe = '{first}' }}
 $repo = 'Cookie774-GameDev/VibeSpace'
 $localInstaller = Join-Path $env:USERPROFILE 'projects\Jarvis\install\install.ps1'
 $remoteInstaller = "https://raw.githubusercontent.com/$repo/main/install/install.ps1"
@@ -451,7 +459,7 @@ do
 done
 printf "\n\n"
 printf "%b\n" "${CYAN}  +--------------------------------------------------+${RESET}"
-printf "%b\n" "${CYAN}  |${RESET}${VIOLET}${BOLD}              J  A  R  V  I  S    O  N  E           ${RESET}${CYAN}|${RESET}"
+printf "%b\n" "${CYAN}  |${RESET}${VIOLET}${BOLD}            V  I  B  E  S  P  A  C  E             ${RESET}${CYAN}|${RESET}"
 printf "%b\n" "${BLUE}  |${RESET}${DIM}             INTELLIGENT DESKTOP SYSTEM             ${RESET}${BLUE}|${RESET}"
 printf "%b\n" "${VIOLET}  +--------------------------------------------------+${RESET}"
 printf "%b\n" "${PINK}       * ${CYAN}VOICE${PINK} * ${BLUE}AGENTS${PINK} * ${VIOLET}MEMORY${PINK} * ${GREEN}AUTOMATION${RESET}"
@@ -549,8 +557,11 @@ mod tests {
         ]);
         let script = windows_powershell_launcher();
 
-        assert!(core.contains(r"$jarvisExe = 'C:\Users\Test\Programs\VibeSpace\jarvis.exe'"));
+        assert!(core.contains(r"'C:\Users\Test\Programs\VibeSpace\jarvis.exe'"));
+        assert!(core.contains(r"'C:\Users\Test\VibeSpace\jarvis.exe'"));
+        assert!(core.contains("$jarvisCandidates = @("));
         assert!(core.contains("Start-Process -FilePath $jarvisExe"));
+        assert!(update.contains(r"'C:\Users\Test\VibeSpace\jarvis.exe'"));
         assert!(update.contains("releases/latest"));
         assert!(update.contains("install\\install.ps1"));
         assert!(script.contains("jarvis_boot_forever.py"));

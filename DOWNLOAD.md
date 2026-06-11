@@ -1,4 +1,4 @@
-# Download VibeSpace
+﻿# Download VibeSpace
 
 Install VibeSpace like a normal desktop app. The one-line installers pull the latest GitHub Release from `Cookie774-GameDev/VibeSpace`.
 
@@ -8,7 +8,7 @@ Install VibeSpace like a normal desktop app. The one-line installers pull the la
 | macOS 12+ | DMG | `curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh \| bash` |
 | Linux | `.deb`, `.rpm`, or AppImage | `curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh \| bash` |
 
-Current staged release: `v0.1.20`. macOS and Linux filenames can vary by Tauri target, so `install/install.sh` resolves matching release assets from GitHub before falling back to the standard VibeSpace filename patterns.
+Current staged release: `v0.1.31`. macOS and Linux filenames can vary by Tauri target, so `install/install.sh` resolves matching release assets from GitHub before falling back to the standard VibeSpace filename patterns.
 
 ## Release Status
 
@@ -39,23 +39,23 @@ Grab installers from the [Releases page] and compare them against `SHA256SUMS.tx
 [Releases page]: https://github.com/Cookie774-GameDev/VibeSpace/releases
 
 ```text
-Windows:  VibeSpace_0.1.20_x64-setup.exe
-Windows:  VibeSpace_0.1.20_x64_en-US.msi
-Windows:  VibeSpace-0.1.20-Windows-x64.exe
-Windows:  VibeSpace-0.1.20-Windows-x64.msi
-macOS:    VibeSpace_0.1.20_aarch64.dmg
-macOS:    VibeSpace_0.1.20_x64.dmg
-Linux:    VibeSpace_0.1.20_amd64.deb
-Linux:    VibeSpace-0.1.20-1.x86_64.rpm
-Linux:    VibeSpace_0.1.20_amd64.AppImage
+Windows:  VibeSpace_0.1.31_x64-setup.exe
+Windows:  VibeSpace_0.1.31_x64_en-US.msi
+Windows:  VibeSpace-0.1.31-Windows-x64.exe
+Windows:  VibeSpace-0.1.31-Windows-x64.msi
+macOS:    VibeSpace_0.1.31_aarch64.dmg
+macOS:    VibeSpace_0.1.31_x64.dmg
+Linux:    VibeSpace_0.1.31_amd64.deb
+Linux:    VibeSpace-0.1.31-1.x86_64.rpm
+Linux:    VibeSpace_0.1.31_amd64.AppImage
 ```
 
 ```powershell
-Get-FileHash -Algorithm SHA256 '.\VibeSpace_0.1.20_x64-setup.exe'
+Get-FileHash -Algorithm SHA256 '.\VibeSpace_0.1.31_x64-setup.exe'
 ```
 
 ```bash
-sha256sum 'VibeSpace_0.1.20_amd64.deb'
+sha256sum 'VibeSpace_0.1.31_amd64.deb'
 ```
 
 ## What Gets Installed

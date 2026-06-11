@@ -1,7 +1,8 @@
 /**
  * Google Gemini client with streaming.
  *
- * Endpoint: POST https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:streamGenerateContent?key={KEY}&alt=sse
+ * Endpoint: POST https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:streamGenerateContent?alt=sse
+ * Auth: `x-goog-api-key` header (never the `?key=` query param, which leaks into logs).
  * Docs: https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent
  *
  * Gemini's API uses `?alt=sse` to opt into Server-Sent Events. Without it,
@@ -70,11 +71,13 @@ export const googleProvider: LLMProvider = {
       },
     };
 
-    const url = `${API_BASE}/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+    // Send the key via header instead of `?key=` so it never appears in
+    // URLs (DevConsole fetch log, proxies, browser devtools network tab).
+    const url = `${API_BASE}/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify(body),
       signal: req.signal,
     });

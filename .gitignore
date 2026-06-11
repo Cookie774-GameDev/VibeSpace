@@ -20,9 +20,12 @@ target/
 
 # Environment
 .env
+.env.*
 .env.local
+.env.development
 .env.development.local
 .env.test.local
+.env.production
 .env.production.local
 .env.*.local
 !.env.example
@@ -69,6 +72,14 @@ coverage/
 *~
 *.bak
 *.tmp
+
+# Local scratch / temp working files (never commit)
+.tmp-*
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
 
 # Local Jarvis app data (when running)
 ~/.jarvis/

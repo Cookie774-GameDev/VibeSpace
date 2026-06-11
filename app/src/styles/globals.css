@@ -1553,11 +1553,11 @@
 @keyframes plan-lensing-pulse {
   0%,
   100% {
-    opacity: 0.15;
+    opacity: 0.3;
     transform: scale(1);
   }
   50% {
-    opacity: 0.35;
+    opacity: 0.65;
     transform: scale(1.05);
   }
 }
@@ -1602,6 +1602,92 @@
   }
 }
 
+/* ── Ultra tier galaxy layers ──
+ * Pure transform/opacity animations so they stay GPU-composited.
+ * Two counter-rotating star layers + a blurred nebula swirl give the
+ * "moving galaxy" depth without canvas or JS.
+ */
+.plan-ultra-stars {
+  position: absolute;
+  top: -20%;
+  left: -20%;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.95;
+  will-change: transform;
+  animation: plan-galaxy-rotate 90s linear infinite;
+  box-shadow:
+    80px 145px #fff,
+    178px 320px #fff,
+    340px 130px rgba(255, 255, 255, 0.85),
+    410px 280px #fff,
+    450px 180px rgba(255, 255, 255, 0.7),
+    190px 440px #fff,
+    380px 490px rgba(255, 255, 255, 0.9),
+    140px 550px #fff,
+    420px 590px #fff,
+    210px 620px rgba(255, 255, 255, 0.8),
+    60px 260px rgba(216, 180, 254, 0.9),
+    300px 60px #fff,
+    500px 90px rgba(255, 255, 255, 0.75),
+    250px 210px rgba(191, 219, 254, 0.9),
+    520px 360px #fff,
+    100px 400px rgba(255, 255, 255, 0.8),
+    330px 380px #fff,
+    470px 470px rgba(232, 121, 249, 0.85),
+    50px 520px #fff,
+    560px 240px rgba(255, 255, 255, 0.7);
+}
+
+.plan-ultra-stars--far {
+  width: 1.5px;
+  height: 1.5px;
+  opacity: 0.65;
+  animation:
+    plan-galaxy-rotate 150s linear infinite reverse,
+    plan-star-twinkle 7s ease-in-out infinite;
+  box-shadow:
+    120px 90px #fff,
+    220px 250px rgba(255, 255, 255, 0.6),
+    360px 200px #fff,
+    440px 340px rgba(255, 255, 255, 0.55),
+    160px 380px #fff,
+    280px 460px rgba(255, 255, 255, 0.65),
+    90px 580px #fff,
+    480px 560px rgba(255, 255, 255, 0.6),
+    540px 140px #fff,
+    30px 330px rgba(255, 255, 255, 0.55),
+    260px 600px #fff,
+    390px 40px rgba(255, 255, 255, 0.6),
+    580px 430px #fff,
+    200px 160px rgba(255, 255, 255, 0.5),
+    320px 310px #fff;
+}
+
+.plan-ultra-nebula {
+  position: absolute;
+  inset: -40%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.9;
+  filter: blur(22px);
+  will-change: transform;
+  background: conic-gradient(
+    from 90deg at 50% 50%,
+    transparent 0deg,
+    rgba(168, 85, 247, 0.5) 70deg,
+    transparent 140deg,
+    rgba(59, 130, 246, 0.4) 220deg,
+    transparent 290deg,
+    rgba(236, 72, 153, 0.32) 330deg,
+    transparent 360deg
+  );
+  animation: plan-galaxy-rotate 55s linear infinite reverse;
+}
+
 @media (prefers-reduced-motion: reduce) {
   @keyframes plan-galaxy-rotate {
     from,
@@ -1627,7 +1713,7 @@
     0%,
     50%,
     100% {
-      opacity: 0.2;
+      opacity: 0.4;
       transform: none;
     }
   }

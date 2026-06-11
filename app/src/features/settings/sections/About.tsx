@@ -17,6 +17,8 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/toast';
 import { isTauri } from '@/lib/utils';
+import { getAppVersion } from '@/lib/tauri';
+import { CURRENT_VERSION } from '@/features/whats-new/releases';
 import {
   checkForAppUpdate,
   getAutoUpdateEnabled,
@@ -25,7 +27,7 @@ import {
   type UpdateResult,
 } from '@/lib/updates';
 
-const VERSION = import.meta.env.VITE_APP_VERSION || '0.1.0';
+const VERSION = import.meta.env.VITE_APP_VERSION || CURRENT_VERSION;
 
 const LINKS: { label: string; href: string; icon: typeof BookOpen }[] = [
   {
@@ -54,9 +56,21 @@ export function About() {
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [totalBytes, setTotalBytes] = useState<number | undefined>();
+  const [installedVersion, setInstalledVersion] = useState(VERSION);
 
   useEffect(() => {
     setAutoUpdate(getAutoUpdateEnabled());
+    if (isTauri) {
+      // Prefer the real installed binary version (from Cargo.toml/tauri.conf)
+      // over the compile-time fallback so About never shows a stale number.
+      void getAppVersion()
+        .then((v) => {
+          if (v) setInstalledVersion(v);
+        })
+        .catch(() => {
+          /* keep fallback */
+        });
+    }
   }, []);
 
   const setAutoUpdateEnabled = (v: boolean) => {
@@ -126,7 +140,7 @@ export function About() {
       </header>
 
       <section className="grid grid-cols-2 gap-4 max-w-md">
-        <KV label="Version" value={VERSION} />
+        <KV label="Version" value={installedVersion} />
         <KV label="License" value="Apache-2.0" />
         <KV label="Build" value={isTauri ? 'Tauri desktop' : 'Web preview'} />
         <KV label="Channel" value={import.meta.env.DEV ? 'dev' : 'stable'} />
@@ -138,25 +152,26 @@ export function About() {
           <div className="relative">
             <div className="absolute -left-[21.5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-accent-copper bg-panel" />
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-foreground text-secondary">v0.1.20 (Latest)</span>
-              <span className="text-metadata text-muted-foreground font-mono">June 6, 2026</span>
+              <span className="font-semibold text-foreground text-secondary">v0.1.31 (Latest)</span>
+              <span className="text-metadata text-muted-foreground font-mono">June 11, 2026</span>
             </div>
             <p className="text-secondary text-muted-foreground mt-1 leading-relaxed">
-              Secure Plugins in Settings with a 353-service catalog, OS-keychain credentials, tested
-              GitHub/Figma/Supabase/Shopify/Slack connectors, metadata-only cloud sync, and
-              controlled terminal capability context.
+              Production hardening: restored Windows one-line installer, server-side subscription
+              tier protection, brighter Ultra galaxy visuals, and updater/launcher repairs across
+              VibeSpace and legacy install paths.
             </p>
           </div>
 
           <div className="relative">
             <div className="absolute -left-[21.5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-border/80 bg-panel" />
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-foreground text-secondary">v0.1.14</span>
-              <span className="text-metadata text-muted-foreground font-mono">June 2, 2026</span>
+              <span className="font-semibold text-foreground text-secondary">v0.1.30</span>
+              <span className="text-metadata text-muted-foreground font-mono">June 11, 2026</span>
             </div>
             <p className="text-secondary text-muted-foreground mt-1 leading-relaxed">
-              Context maps, file routing, done-notification controls, slash commands, command-parser
-              suggestions, STT optimization, and terminal project-switch stabilization.
+              Streaming voice during AI replies, unified Kokoro/system TTS routing, plugin
+              activation with the local Ollama catalog, strict Tauri CSP, and the VibeSpace
+              landing site.
             </p>
           </div>
 

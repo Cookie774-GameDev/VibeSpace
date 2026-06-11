@@ -32,11 +32,28 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'deepseek-reasoner': { input: 0.55, output: 2.19 },
 };
 
-const corsHeaders = {
-  'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type',
-  'access-control-allow-methods': 'POST, OPTIONS',
-};
+// Restrictive CORS, matching _shared/voice.ts: only the desktop app's
+// origins are allowed (never `*` — this endpoint spends platform budget).
+const ALLOWED_ORIGINS = new Set<string>([
+  'tauri://localhost',
+  'http://localhost:1420',
+  'http://localhost:5173',
+  'https://tauri.localhost',
+]);
+
+function corsHeadersFor(origin: string | null): Record<string, string> {
+  const allow = origin && ALLOWED_ORIGINS.has(origin) ? origin : 'tauri://localhost';
+  return {
+    'access-control-allow-origin': allow,
+    'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type',
+    'access-control-allow-methods': 'POST, OPTIONS',
+    'vary': 'Origin',
+  };
+}
+
+// Refreshed per-request. Concurrent interleaving can only ever swap one
+// allow-listed origin for another, so this stays safe under load.
+let corsHeaders: Record<string, string> = corsHeadersFor(null);
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -46,6 +63,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
+  corsHeaders = corsHeadersFor(req.headers.get('origin'));
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }

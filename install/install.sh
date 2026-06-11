@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Jarvis - Linux / macOS Terminal Installer
-# Usage:    curl -fsSL https://jarvis.app/install.sh | bash
-# Or:       curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
-# GitHub:   wget -qO- https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
+# VibeSpace (Jarvis) - Linux / macOS Terminal Installer
+# Usage:    curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
+# Or:       wget -qO- https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
 #
 # Optional environment variables:
-#   JARVIS_VERSION="0.1.20"    pin to a version (default: latest published GitHub release)
-#   JARVIS_CHANNEL="stable"    stable | nightly (default: stable)
-#   JARVIS_FORMAT=""           linux: deb | rpm | appimage  (default: appimage for zero-touch user installs)
+#   JARVIS_VERSION="0.1.31"    pin to a version (default: latest published GitHub release)
+#   JARVIS_FORMAT=""           linux: deb | rpm | appimage  (default: appimage for zero-touch user installs;
+#                              set deb/rpm explicitly to use your package manager — those need sudo)
 #                              macOS: dmg (the only option)
 #   JARVIS_PREFIX=""           install prefix (default: ~/.local for Linux AppImage user installs)
 #   JARVIS_LOCAL="1"           install from a local Jarvis build (developer mode)
@@ -44,6 +43,7 @@ banner() {
   printf "%b\n" "${CYAN}  _  | |/ _\` | '__\\ \\ / / / __| ${VIOLET}  for every model,${RESET}"
   printf "%b\n" "${CYAN} | |_| | (_| | |   \\ V /| \\__ \\ ${VIOLET}  agent, voice & task${RESET}"
   printf "%b\n" "${CYAN}  \\___/ \\__,_|_|    \\_/ |_|___/ ${RESET}"
+  printf "%b\n" "${VIOLET}  V I B E S P A C E ${RESET}${DIM} (terminal command: Jarvis)${RESET}"
   printf "%b\n" "${DIM}                                  https://github.com/${JARVIS_REPO}${RESET}"
   printf "%b\n\n" "${CYAN}------------------------------------------------------------${RESET}"
 }
@@ -68,22 +68,14 @@ detect_os() {
 }
 
 detect_arch() {
-  case "$(uname -m)" in
+  # Allow an explicit override (e.g. JARVIS_ARCH=aarch64 to install the arm64
+  # build under Rosetta-reporting shells).
+  local raw="${JARVIS_ARCH:-$(uname -m)}"
+  case "$raw" in
     x86_64|amd64) echo "x86_64" ;;
     aarch64|arm64) echo "aarch64" ;;
-    *) fail "Unsupported architecture: $(uname -m)"; exit 1 ;;
+    *) fail "Unsupported architecture: $raw"; exit 1 ;;
   esac
-}
-
-detect_linux_format() {
-  # Prefer native package manager if available, else AppImage.
-  if command -v dpkg >/dev/null 2>&1 && command -v apt >/dev/null 2>&1; then
-    echo "deb"
-  elif command -v rpm >/dev/null 2>&1 && (command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1); then
-    echo "rpm"
-  else
-    echo "appimage"
-  fi
 }
 
 require_cmd() {
@@ -213,16 +205,19 @@ asset_pattern() {
 }
 
 download_url() {
+  # Canonical Tauri bundle names for productName "VibeSpace". The GitHub API
+  # asset matching above handles legacy "Jarvis One" releases; these fallbacks
+  # only fire when the API is unreachable.
   local version="$1" os="$2" arch="$3" format="$4"
   case "$os/$format" in
-    linux/deb)      printf "%s/v%s/Jarvis%%20One_%s_amd64.deb" "$JARVIS_DL" "$version" "$version" ;;
-    linux/rpm)      printf "%s/v%s/Jarvis%%20One-%s-1.x86_64.rpm" "$JARVIS_DL" "$version" "$version" ;;
-    linux/appimage) printf "%s/v%s/Jarvis%%20One_%s_amd64.AppImage" "$JARVIS_DL" "$version" "$version" ;;
+    linux/deb)      printf "%s/v%s/VibeSpace_%s_amd64.deb" "$JARVIS_DL" "$version" "$version" ;;
+    linux/rpm)      printf "%s/v%s/VibeSpace-%s-1.x86_64.rpm" "$JARVIS_DL" "$version" "$version" ;;
+    linux/appimage) printf "%s/v%s/VibeSpace_%s_amd64.AppImage" "$JARVIS_DL" "$version" "$version" ;;
     macos/dmg)
       if [ "$arch" = "aarch64" ]; then
-        printf "%s/v%s/Jarvis%%20One_%s_aarch64.dmg" "$JARVIS_DL" "$version" "$version"
+        printf "%s/v%s/VibeSpace_%s_aarch64.dmg" "$JARVIS_DL" "$version" "$version"
       else
-        printf "%s/v%s/Jarvis%%20One_%s_x64.dmg" "$JARVIS_DL" "$version" "$version"
+        printf "%s/v%s/VibeSpace_%s_x64.dmg" "$JARVIS_DL" "$version" "$version"
       fi
       ;;
     *) fail "No installer for ${os}/${format}"; exit 1 ;;

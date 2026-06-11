@@ -34,10 +34,11 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 
 const PLAN_PAGE_BACKGROUNDS: Record<PlanId, string> = {
-  free: 'bg-[radial-gradient(circle_at_top_left,rgba(6,182,212,0.10),transparent_34%),linear-gradient(180deg,rgba(8,47,73,0.10),transparent)]',
-  starter: 'bg-[radial-gradient(circle_at_top_left,rgba(217,119,87,0.16),transparent_34%),linear-gradient(180deg,rgba(120,53,15,0.10),transparent)]',
-  pro: 'bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.18),transparent_34%),linear-gradient(180deg,rgba(146,64,14,0.12),transparent)]',
-  ultra: 'bg-[radial-gradient(circle_at_center,rgba(88,28,135,0.28),transparent_42%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.18),transparent_34%),linear-gradient(180deg,rgba(15,23,42,0.45),transparent)]',
+  free: 'bg-[radial-gradient(circle_at_top_left,rgba(6,182,212,0.18),transparent_40%),radial-gradient(circle_at_bottom_right,rgba(20,184,166,0.1),transparent_36%),linear-gradient(180deg,rgba(8,47,73,0.14),transparent)]',
+  starter: 'bg-[radial-gradient(circle_at_top_left,rgba(217,119,87,0.25),transparent_40%),radial-gradient(circle_at_bottom_right,rgba(251,146,60,0.1),transparent_36%),linear-gradient(180deg,rgba(120,53,15,0.14),transparent)]',
+  pro: 'bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.28),transparent_40%),radial-gradient(circle_at_bottom_right,rgba(252,211,77,0.12),transparent_36%),linear-gradient(180deg,rgba(146,64,14,0.16),transparent)]',
+  ultra:
+    'bg-[radial-gradient(circle_at_center,rgba(124,58,237,0.5),transparent_50%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.32),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(236,72,153,0.22),transparent_40%),linear-gradient(180deg,rgba(15,23,42,0.6),transparent)]',
 };
 
 export function Plans() {
@@ -400,25 +401,24 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
         
         {/* Black Hole Cosmic Inner Container */}
         <div className="relative flex flex-col h-full w-full rounded-[22px] overflow-hidden p-5 z-20 gap-5 text-white bg-slate-950/95">
-          {/* Rotating Deep Galaxy Gradient Background */}
-          <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,rgba(88,28,135,0.45)_0%,rgba(15,23,42,0.95)_60%,#030712_100%)] animate-[plan-galaxy-rotate_35s_linear_infinite] z-0" />
-          
-          {/* Concentric Lensing Rings */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 rounded-full border border-purple-500/20 blur-[2px] animate-[plan-lensing-pulse_7s_ease-in-out_infinite] pointer-events-none z-0" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 rounded-full border border-blue-500/10 blur-[4px] animate-[plan-lensing-pulse_11s_ease-in-out_infinite_1.5s] pointer-events-none z-0" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 rounded-full border border-indigo-500/5 blur-[8px] animate-[plan-lensing-pulse_15s_ease-in-out_infinite_3s] pointer-events-none z-0" />
+          {/* Rotating Deep Galaxy Gradient Background.
+              The bright lobe sits OFF-CENTER (38% 32%) on purpose: a centered
+              radial gradient is rotation-invariant, so the old version looked
+              static. Off-center, the 35s spin visibly sweeps the galactic
+              core around the card. */}
+          <div className="absolute -inset-[35%] pointer-events-none bg-[radial-gradient(ellipse_at_38%_32%,rgba(168,85,247,0.72)_0%,rgba(124,58,237,0.52)_20%,rgba(88,28,135,0.42)_42%,rgba(15,23,42,0.88)_68%,#030712_100%)] animate-[plan-galaxy-rotate_35s_linear_infinite] will-change-transform z-0" />
 
-          {/* Star dots using rotating pseudo element */}
-          <div className="absolute -inset-[50%] opacity-40 pointer-events-none animate-[plan-galaxy-rotate_100s_linear_infinite]" style={{
-            boxShadow: `
-              80px 145px #fff, 178px 320px #fff, 340px 130px rgba(255,255,255,0.7), 410px 280px #fff, 
-              450px 180px rgba(255,255,255,0.5), 190px 440px #fff, 380px 490px rgba(255,255,255,0.8), 
-              140px 550px #fff, 420px 590px #fff, 210px 620px rgba(255,255,255,0.6)
-            `,
-            width: '2px',
-            height: '2px',
-            borderRadius: '50%'
-          }} />
+          {/* Drifting nebula swirl */}
+          <div className="plan-ultra-nebula" />
+
+          {/* Concentric Lensing Rings */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 rounded-full border-2 border-purple-400/55 blur-[2px] animate-[plan-lensing-pulse_7s_ease-in-out_infinite] pointer-events-none z-0" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 rounded-full border-2 border-blue-400/40 blur-[4px] animate-[plan-lensing-pulse_11s_ease-in-out_infinite_1.5s] pointer-events-none z-0" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 rounded-full border border-indigo-400/30 blur-[6px] animate-[plan-lensing-pulse_15s_ease-in-out_infinite_3s] pointer-events-none z-0" />
+
+          {/* Counter-rotating star field layers */}
+          <div className="plan-ultra-stars" />
+          <div className="plan-ultra-stars plan-ultra-stars--far" />
 
           {/* Content overlay */}
           <div className="relative flex flex-col h-full w-full z-10 gap-5">

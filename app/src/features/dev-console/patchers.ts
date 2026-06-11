@@ -156,6 +156,7 @@ function patchFetch(): () => void {
           ? input.href
           : input.url;
     const method = (init?.method ?? 'GET').toUpperCase();
+    const safeUrl = redactUrl(url);
     try {
       const res = await original(input, init);
       const dur = Date.now() - start;
@@ -165,7 +166,7 @@ function patchFetch(): () => void {
         message: `${method} ${shortUrl(url)} → ${res.status}`,
         durationMs: dur,
         detail: {
-          url,
+          url: safeUrl,
           method,
           status: res.status,
           statusText: res.statusText,
@@ -185,7 +186,7 @@ function patchFetch(): () => void {
         }`,
         durationMs: dur,
         detail: {
-          url,
+          url: safeUrl,
           method,
           error:
             err instanceof Error
@@ -200,6 +201,43 @@ function patchFetch(): () => void {
   return () => {
     window.fetch = original;
   };
+}
+
+/**
+ * Query params that may carry credentials. Their values are replaced
+ * with `[redacted]` before the URL is stored in the DevConsole feed so
+ * an exported log can never contain an API key or token.
+ */
+const SENSITIVE_QUERY_PARAMS = new Set([
+  'key',
+  'apikey',
+  'api_key',
+  'api-key',
+  'token',
+  'access_token',
+  'auth',
+  'authorization',
+  'signature',
+  'sig',
+  'secret',
+  'client_secret',
+  'password',
+]);
+
+function redactUrl(url: string): string {
+  try {
+    const u = new URL(url, typeof window !== 'undefined' ? window.location.href : 'http://x');
+    let changed = false;
+    for (const name of [...u.searchParams.keys()]) {
+      if (SENSITIVE_QUERY_PARAMS.has(name.toLowerCase())) {
+        u.searchParams.set(name, '[redacted]');
+        changed = true;
+      }
+    }
+    return changed ? u.toString() : url;
+  } catch {
+    return url;
+  }
 }
 
 function shortUrl(url: string): string {

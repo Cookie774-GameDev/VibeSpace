@@ -124,6 +124,33 @@ function applyCloudSession(session: SupabaseSessionLike): void {
     email: session.user?.email ?? '',
     expires_at: session.expires_at ?? 0,
   });
+  void syncPlanFromProfile(userId);
+}
+
+/**
+ * Pull the server-managed subscription tier into the local auth store so the
+ * Plans/Account UI reflects Stripe state after sign-in and app restarts.
+ * Fire-and-forget: failures leave the locally persisted plan untouched.
+ */
+async function syncPlanFromProfile(userId: string): Promise<void> {
+  try {
+    const { getSupabaseClient } = await import('@/lib/supabase/client');
+    const supa = getSupabaseClient();
+    if (!supa) return;
+    const { data, error } = await supa
+      .from('profiles')
+      .select('tier')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error || !data?.tier) return;
+    const tier = data.tier === 'byok-only' ? 'free' : data.tier;
+    if (tier === 'free' || tier === 'starter' || tier === 'pro' || tier === 'ultra') {
+      const store = useAuthStore.getState();
+      if (store.plan !== tier) store.setPlan(tier);
+    }
+  } catch (err) {
+    console.warn('[billing] plan sync skipped:', err);
+  }
 }
 
 /**

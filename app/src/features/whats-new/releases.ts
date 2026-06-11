@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.30';
+export const CURRENT_VERSION = '0.1.31';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,38 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.31',
+    date: '2026-06-11',
+    headline: 'Production hardening: installer repair, billing security, and a brighter Ultra galaxy',
+    summary:
+      'Security and stability release. The Windows one-line installer is restored and rebranded for VibeSpace, subscription tiers can no longer be self-upgraded without billing, and the Ultra plan card gets its animated galaxy back at full strength.',
+    sections: [
+      {
+        kind: 'fix',
+        items: [
+          'Restored the Windows install/install.ps1 one-line installer; it now downloads VibeSpace_* release assets from the correct repository.',
+          'The Jarvis terminal launcher now finds installs under both VibeSpace and legacy Jarvis One folders before launching or updating.',
+          'macOS/Linux installer fallback URLs now match the VibeSpace release asset names.',
+          'Settings → About shows the real installed app version instead of a stale hardcoded roadmap entry.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Ultra plan card galaxy background is back at full strength: brighter nebula core, drifting color swirl, and two counter-rotating star layers (GPU-friendly, honors reduced-motion).',
+          'All plan page backdrops gained slightly richer gradients without layout changes.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Server-side migration locks subscription tier and quota columns so they can only change through Stripe webhooks.',
+          'Silent updater manifest targets VibeSpace-0.1.31-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.30',
     date: '2026-06-11',
