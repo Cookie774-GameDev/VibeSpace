@@ -88,7 +88,7 @@ export class CallService {
     // 1. Auth
     const supa = getSupabaseClient();
     if (!supa) {
-      store.setStatus('error', 'Jarvis Cloud is not configured in this build');
+      store.setStatus('error', 'VibeSpace Cloud is not configured in this build');
       return;
     }
     let jwt: string | undefined;

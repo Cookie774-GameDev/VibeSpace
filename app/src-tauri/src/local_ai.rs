@@ -1,5 +1,6 @@
 use reqwest::blocking::Client;
 use serde::Serialize;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -15,6 +16,9 @@ const DEFAULT_OLLAMA_BASE: &str = "http://127.0.0.1:11434";
 const API_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const INSTALL_WAIT_TIMEOUT: Duration = Duration::from_secs(600);
+const INSTALL_POLL_INTERVAL: Duration = Duration::from_secs(3);
+const OLLAMA_WINDOWS_INSTALLER_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
 
 static STARTUP_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 static SERVE_CHILD: Mutex<Option<Child>> = Mutex::new(None);
@@ -133,6 +137,24 @@ fn ollama_cli_candidates() -> Vec<PathBuf> {
         push(pf.join("Ollama").join("ollama.exe"));
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        push(PathBuf::from("/usr/local/bin/ollama"));
+        push(PathBuf::from("/opt/homebrew/bin/ollama"));
+        if let Some(home) = std::env::var_os("HOME") {
+            push(PathBuf::from(home).join(".ollama").join("bin").join("ollama"));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        push(PathBuf::from("/usr/bin/ollama"));
+        push(PathBuf::from("/usr/local/bin/ollama"));
+        if let Some(home) = std::env::var_os("HOME") {
+            push(PathBuf::from(home).join(".ollama").join("bin").join("ollama"));
+        }
+    }
+
     candidates
 }
 
@@ -237,6 +259,119 @@ fn port_11434_listening() -> bool {
     }
 }
 
+#[cfg(windows)]
+fn install_ollama_windows() -> Result<(), String> {
+    let winget = hidden_command(Path::new("winget"))
+        .args([
+            "install",
+            "-e",
+            "--id",
+            "Ollama.Ollama",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    if winget.map(|status| status.success()).unwrap_or(false) {
+        return Ok(());
+    }
+
+    let installer_path = std::env::temp_dir().join("OllamaSetup.exe");
+    let client = Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|err| format!("Could not prepare Ollama installer download: {err}"))?;
+
+    let mut response = client
+        .get(OLLAMA_WINDOWS_INSTALLER_URL)
+        .send()
+        .map_err(|err| format!("Could not download Ollama installer: {err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Ollama installer download failed with HTTP {}",
+            response.status().as_u16()
+        ));
+    }
+
+    let mut file = std::fs::File::create(&installer_path)
+        .map_err(|err| format!("Could not write Ollama installer: {err}"))?;
+    std::io::copy(&mut response, &mut file)
+        .map_err(|err| format!("Could not save Ollama installer: {err}"))?;
+    file.flush()
+        .map_err(|err| format!("Could not finalize Ollama installer: {err}"))?;
+
+    let status = hidden_command(&installer_path)
+        .arg("/SILENT")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|err| format!("Could not run Ollama installer: {err}"))?;
+
+    if !status.success() {
+        return Err(format!(
+            "Ollama installer exited with status {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_ollama_unix() -> Result<(), String> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("curl -fsSL https://ollama.com/install.sh | sh")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|err| format!("Could not run Ollama install script: {err}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        format!(
+            "Ollama install script exited with status {}",
+            output.status.code().unwrap_or(-1)
+        )
+    } else {
+        stderr
+    })
+}
+
+fn install_ollama_silent() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        return install_ollama_windows();
+    }
+    #[cfg(not(windows))]
+    {
+        return install_ollama_unix();
+    }
+}
+
+fn wait_for_ollama_cli_after_install() -> Result<(PathBuf, String), String> {
+    let deadline = Instant::now() + INSTALL_WAIT_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(found) = find_ollama_cli() {
+            return Ok(found);
+        }
+        std::thread::sleep(INSTALL_POLL_INTERVAL);
+    }
+    Err(
+        "Ollama install finished but the CLI was not detected yet. Restart Jarvis and try again."
+            .to_string(),
+    )
+}
+
 fn start_ollama_serve_silent(executable: &Path) -> Result<(), String> {
     if port_11434_listening() {
         return Ok(());
@@ -316,15 +451,33 @@ fn ensure_ollama_ready_internal(base_url: Option<String>) -> OllamaEnsureResult 
 
     let (executable, version) = match find_ollama_cli() {
         Ok(found) => found,
-        Err(detail) => {
-            return OllamaEnsureResult {
-                ready: false,
-                api_reachable: false,
-                installed: false,
-                version: None,
-                phase: "not_installed".to_string(),
-                detail: Some(detail),
-            };
+        Err(initial_detail) => {
+            if let Err(install_err) = install_ollama_silent() {
+                return OllamaEnsureResult {
+                    ready: false,
+                    api_reachable: false,
+                    installed: false,
+                    version: None,
+                    phase: "not_installed".to_string(),
+                    detail: Some(format!(
+                        "{initial_detail} Automatic install failed: {install_err}"
+                    )),
+                };
+            }
+
+            match wait_for_ollama_cli_after_install() {
+                Ok(found) => found,
+                Err(detail) => {
+                    return OllamaEnsureResult {
+                        ready: false,
+                        api_reachable: false,
+                        installed: false,
+                        version: None,
+                        phase: "error".to_string(),
+                        detail: Some(detail),
+                    };
+                }
+            }
         }
     };
 

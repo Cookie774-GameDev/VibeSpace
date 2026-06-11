@@ -32,7 +32,7 @@ describe('plugin.call action', () => {
       ),
     ).resolves.toEqual({
       ok: true,
-      summary: 'Jarvis Mock Connector.ping completed.',
+      summary: 'VibeSpace Mock Connector.ping completed.',
       data: {
         ok: true,
         pluginId: 'mock-connector',
@@ -62,7 +62,7 @@ describe('plugin.call action', () => {
     );
     expect(result).toEqual({
       ok: false,
-      error: 'Jarvis Mock Connector terminal access is disabled.',
+      error: 'VibeSpace Mock Connector terminal access is disabled.',
     });
   });
 });

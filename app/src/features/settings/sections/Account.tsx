@@ -12,7 +12,7 @@ import { SignInDialog } from '@/features/auth/SignInDialog';
 
 /**
  * Account section - identity, cloud session, and the sign-in entry point.
- * Local-first: localUserId always exists. Cloud is opt-in via Jarvis Cloud.
+ * Local-first: localUserId always exists. Cloud is opt-in via VibeSpace Cloud.
  */
 export function Account() {
   const displayName = useAuthStore((s) => s.displayName);

@@ -213,7 +213,11 @@ pub fn ollama_chat_stream(
             "model": name,
             "messages": messages,
             "stream": true,
-            "options": { "temperature": temp }
+            "keep_alive": "10m",
+            "options": {
+                "temperature": temp,
+                "num_ctx": 8192
+            }
         })
         .to_string();
         let resp = match client

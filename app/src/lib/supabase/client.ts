@@ -1,5 +1,5 @@
 /**
- * Typed Supabase client for the hosted Jarvis tier.
+ * Typed Supabase client for the VibeSpace Cloud tier.
  *
  * Wraps the existing untyped singleton in `@/lib/supabase` so the auth
  * session, storage adapter, and headers stay in one place. Adding a second

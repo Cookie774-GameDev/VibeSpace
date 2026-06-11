@@ -13,18 +13,20 @@ import {
 import { useAuthStore } from '@/stores/auth';
 import {
   assertAllowedOllamaEndpoint,
+  connectLocalModelToChat,
   ensureOllamaReadySilent,
   isOllamaReachable,
   listOllamaModelInfo,
+  LOCAL_MODEL_CATALOG,
   ollamaBaseUrl,
   OLLAMA_DEFAULT_BASE,
   pullOllamaModel,
+  syncDiscoveredOllamaModels,
   validateModelName,
   type OllamaEnsureStatus,
   type OllamaModelInfo,
   type OllamaPullProgress,
 } from '@/lib/ai';
-import { syncDiscoveredOllamaModels } from '@/lib/ai/models';
 import {
   getNativeOllamaStatus,
   openOllamaTroubleshooting,
@@ -38,14 +40,6 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
-
-interface CatalogModel {
-  name: string;
-  size: string;
-  label: string;
-  blurb: string;
-  recommended?: boolean;
-}
 
 interface PullState extends OllamaPullProgress {
   model: string;
@@ -81,59 +75,13 @@ function subscribeToDownloads(cb: () => void): () => void {
   };
 }
 
-const MODEL_CATALOG: readonly CatalogModel[] = [
-  {
-    name: 'qwen3:0.6b',
-    size: '523 MB',
-    label: 'Smallest',
-    blurb: 'Very fast basic chat for constrained devices.',
-  },
-  {
-    name: 'gemma3:1b',
-    size: '815 MB',
-    label: 'Fast',
-    blurb: 'Compact multilingual assistant for quick everyday replies.',
-  },
-  {
-    name: 'llama3.2:1b',
-    size: '1.3 GB',
-    label: 'Low memory',
-    blurb: 'Reliable lightweight assistant for summaries and rewriting.',
-  },
-  {
-    name: 'llama3.2',
-    size: '2.0 GB',
-    label: 'Recommended',
-    blurb: 'Balanced 3B default with tool use and strong instruction following.',
-    recommended: true,
-  },
-  {
-    name: 'qwen3:4b',
-    size: '2.5 GB',
-    label: 'Reasoning',
-    blurb: 'Stronger reasoning, coding, and multilingual work.',
-  },
-  {
-    name: 'gemma3',
-    size: '3.3 GB',
-    label: 'Vision',
-    blurb: 'Capable 4B text-and-image model with a large context window.',
-  },
-  {
-    name: 'qwen3:8b',
-    size: '5.2 GB',
-    label: 'High quality',
-    blurb: 'Higher-quality local reasoning for machines with more memory.',
-  },
-] as const;
-
 function userFacingDownloadError(err: unknown): string {
   if (!(err instanceof Error)) return 'Download failed: unknown error.';
   const msg = err.message;
 
   if (msg.includes('Invalid model name')) return msg;
   if (msg.includes('net::ERR_CONNECTION_REFUSED') || msg.includes('Failed to fetch'))
-    return 'Cannot reach Ollama. Make sure it is running (ollama serve).';
+    return 'Jarvis is still preparing Ollama. Wait a moment and try again.';
   if (msg.includes('timed out'))
     return 'Download timed out. Check your internet connection and try again.';
   if (msg.includes('size exceeded') || msg.includes('maximum allowed'))
@@ -174,7 +122,15 @@ async function hasEnoughDiskSpace(): Promise<{ ok: boolean; availableBytes: numb
 // single pipeline: detect install → start if needed → wait (120s) → pull.
 
 interface BootstrapState {
-  phase: 'idle' | 'detecting' | 'starting' | 'waiting' | 'ready' | 'error' | 'not_installed';
+  phase:
+    | 'idle'
+    | 'detecting'
+    | 'installing'
+    | 'starting'
+    | 'waiting'
+    | 'ready'
+    | 'error'
+    | 'not_installed';
   statusMsg: string;
   error?: string;
 }
@@ -197,11 +153,13 @@ function mapEnsureStatus(status: OllamaEnsureStatus): BootstrapState {
         ? 'ready'
         : status.phase === 'error'
           ? 'error'
-          : status.phase === 'starting'
-            ? 'starting'
-            : status.phase === 'waiting'
-              ? 'waiting'
-              : 'detecting';
+          : status.phase === 'installing'
+            ? 'installing'
+            : status.phase === 'starting'
+              ? 'starting'
+              : status.phase === 'waiting'
+                ? 'waiting'
+                : 'detecting';
 
   return {
     phase,
@@ -314,8 +272,8 @@ export function LocalModels() {
   }
 
   function pickModel(name: string) {
-    setDefaultLocalModel(name);
-    toast.success('Default local model set', name);
+    connectLocalModelToChat(name);
+    toast.success('Local model active', `${name} is now used in chat.`);
   }
 
   function handleToggleOffline(enabled: boolean) {
@@ -426,8 +384,8 @@ export function LocalModels() {
         progress: { model, status: 'success', done: true, percent: 100 },
       });
       notifyDownloadListeners();
-      setDefaultLocalModel(model);
-      toast.success('Model ready', `${model} is installed and selected.`);
+      connectLocalModelToChat(model);
+      toast.success('Model ready', `${model} is installed and active in chat.`);
       await scan(false);
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') {
@@ -455,7 +413,11 @@ export function LocalModels() {
   const connected = reachable === true;
   const notInstalled = reachable === false && (nativeStatus.installed === false || bootstrap.phase === 'not_installed');
   const canStart = reachable === false && nativeStatus.installed === true;
-  const busy = bootstrap.phase === 'detecting' || bootstrap.phase === 'starting' || bootstrap.phase === 'waiting';
+  const busy =
+    bootstrap.phase === 'detecting' ||
+    bootstrap.phase === 'installing' ||
+    bootstrap.phase === 'starting' ||
+    bootstrap.phase === 'waiting';
   const anyDownloading = activePull !== null;
 
   async function handleOpenTroubleshooting() {
@@ -590,22 +552,15 @@ export function LocalModels() {
           </Button>
         </div>
 
-        {notInstalled ? (
+        {notInstalled && !busy ? (
           <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
             <div>
-              <p className="text-ui-strong text-foreground">Ollama is not installed</p>
+              <p className="text-ui-strong text-foreground">Ollama is not installed yet</p>
               <p className="text-metadata text-muted-foreground">
-                Install the official Windows app, reopen Jarvis, and it will connect automatically.
+                Click Download on any catalog model. Jarvis installs Ollama silently, pulls the
+                model, and connects it to chat automatically.
               </p>
-              <a
-                href="https://ollama.com/download/windows"
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-flex items-center gap-1 text-metadata font-medium text-accent-copper hover:underline"
-              >
-                Download Ollama <ExternalLink className="h-3 w-3" />
-              </a>
             </div>
           </div>
         ) : null}
@@ -671,18 +626,6 @@ export function LocalModels() {
           </p>
         )}
 
-        <div className="flex max-w-xl items-center gap-2">
-          <Input
-            value={defaultLocalModel}
-            onChange={(event) => setDefaultLocalModel(event.target.value)}
-            placeholder="llama3.2"
-            className="font-mono"
-            spellCheck={false}
-            autoComplete="off"
-            aria-label="Default local model name"
-          />
-          <span className="shrink-0 text-metadata text-muted-foreground">custom model</span>
-        </div>
       </section>
 
       <Separator />
@@ -707,7 +650,7 @@ export function LocalModels() {
         ) : null}
 
         <div className="grid max-w-2xl gap-2">
-          {MODEL_CATALOG.map((model) => {
+          {LOCAL_MODEL_CATALOG.map((model) => {
             const modelInstalled = isModelInstalled(installed, model.name);
             const dlEntry = downloadMap.get(model.name);
             const pullingThisModel = dlEntry?.status === 'downloading';
@@ -765,14 +708,6 @@ export function LocalModels() {
           })}
         </div>
 
-        <a
-          href="https://ollama.com/library"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex w-fit items-center gap-1 text-metadata font-medium text-accent-copper hover:underline"
-        >
-          Browse the full Ollama library <ExternalLink className="h-3 w-3" />
-        </a>
       </section>
     </div>
   );

@@ -212,14 +212,14 @@ export function PhoneVoice() {
 
     if (!userId) {
       if (!options.silentLocal) {
-        toast.info('Saved locally', 'Phone settings will sync when Jarvis Cloud sign-in is available.');
+        toast.info('Saved locally', 'Phone settings will sync when VibeSpace Cloud sign-in is available.');
       }
       return;
     }
     const supa = getSupabaseClient();
     if (!supa) {
       if (!options.silentLocal) {
-        toast.info('Saved locally', 'Jarvis Cloud is not configured in this build.');
+        toast.info('Saved locally', 'VibeSpace Cloud is not configured in this build.');
       }
       return;
     }
@@ -363,7 +363,7 @@ function CloudCard({
             <div>
               <p className="font-medium mb-1">Jarvis Call cloud is not configured</p>
               <p className="text-amber-500/80">
-                Official Jarvis-One releases include the call backend. This build is missing that
+                Official VibeSpace releases include the call backend. This build is missing that
                 backend URL, so phone calls and SMS stay disabled until a maintainer configures it.
               </p>
             </div>
@@ -421,7 +421,7 @@ function PinCard({
     if (!userId) return;
     const supa = getSupabaseClient();
     if (!supa) {
-      toast.error('Jarvis Cloud is not configured in this build.');
+      toast.error('VibeSpace Cloud is not configured in this build.');
       return;
     }
     if (!valid) {

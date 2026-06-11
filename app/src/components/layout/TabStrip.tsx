@@ -148,9 +148,17 @@ export function TabStrip() {
       return;
     }
 
-    // Otherwise the active CHAT changed (e.g. "Open in Chat" from History or a
-    // command-palette jump) to a chat in another project — align the workspace
-    // to that chat's project so its tab is in scope.
+    if (!chatChanged) {
+      // Stale cross-project selection (e.g. chats still loading after a project
+      // switch). Stay in the current project — never yank the user back to the
+      // chat's owning project unless they explicitly opened that chat.
+      setActiveChat(tabs[0]?.id ?? null);
+      return;
+    }
+
+    // The active CHAT changed (e.g. "Open in Chat" from History or a command-
+    // palette jump) to a chat in another project — align the workspace to that
+    // chat's project so its tab is in scope.
     let cancelled = false;
     void (async () => {
       let chat: Chat | undefined;

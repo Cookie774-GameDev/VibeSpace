@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { PLUGIN_CATALOG, validatePluginCatalog } from './catalog';
+import { PLUGIN_CATALOG, catalogStats, validatePluginCatalog } from './catalog';
 
 describe('plugin catalog', () => {
-  it('contains at least 200 schema-valid unique entries', () => {
-    expect(PLUGIN_CATALOG.length).toBeGreaterThanOrEqual(200);
+  it('contains 353 schema-valid unique entries', () => {
+    expect(PLUGIN_CATALOG.length).toBe(353);
     expect(validatePluginCatalog()).toEqual([]);
     expect(new Set(PLUGIN_CATALOG.map((plugin) => plugin.id)).size).toBe(PLUGIN_CATALOG.length);
   });
@@ -14,5 +14,17 @@ describe('plugin catalog', () => {
       expect.arrayContaining(['github', 'figma', 'supabase', 'shopify', 'slack', 'mock-connector']),
     );
     expect(implemented.every((plugin) => plugin.tools.length > 0)).toBe(true);
+  });
+
+  it('reports catalog coverage stats', () => {
+    const stats = catalogStats();
+    expect(stats).toEqual({
+      total: 353,
+      implemented: 6,
+      configurable: 37,
+      needsCredentials: 310,
+      blocked: 0,
+      withHttpTest: 42,
+    });
   });
 });

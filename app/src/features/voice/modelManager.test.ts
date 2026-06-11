@@ -2,19 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { detectOS, resolveModelPath } from './modelManager';
 
 describe('resolveModelPath', () => {
-  it('uses %APPDATA%/Jarvis-One/models/kokoro on Windows', () => {
+  it('uses %APPDATA%/VibeSpace/models/kokoro on Windows', () => {
     const p = resolveModelPath('windows', { APPDATA: 'C:\\Users\\viper\\AppData\\Roaming' });
-    expect(p).toBe('C:\\Users\\viper\\AppData\\Roaming\\Jarvis-One\\models\\kokoro');
+    expect(p).toBe('C:\\Users\\viper\\AppData\\Roaming\\VibeSpace\\models\\kokoro');
   });
 
   it('uses ~/Library/Application Support on macOS', () => {
     const p = resolveModelPath('macos', { HOME: '/Users/viper' });
-    expect(p).toBe('/Users/viper/Library/Application Support/Jarvis-One/models/kokoro');
+    expect(p).toBe('/Users/viper/Library/Application Support/VibeSpace/models/kokoro');
   });
 
   it('uses ~/.local/share on Linux', () => {
     const p = resolveModelPath('linux', { HOME: '/home/viper' });
-    expect(p).toBe('/home/viper/.local/share/Jarvis-One/models/kokoro');
+    expect(p).toBe('/home/viper/.local/share/VibeSpace/models/kokoro');
   });
 });
 

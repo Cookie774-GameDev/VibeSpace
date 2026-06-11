@@ -1,7 +1,8 @@
 import { nativeFetch } from '@/lib/nativeFetch';
 import { getPluginManifest } from './catalog';
 import { getPluginCredential } from './credentials';
-import type { PluginTestResult } from './types';
+import type { PluginHttpTest, PluginManifest, PluginTestResult } from './types';
+import { isConnectableStatus } from './types';
 
 type CredentialMap = Record<string, string>;
 
@@ -25,85 +26,144 @@ function readableError(status: number, body: string): string {
     : `Connection rejected with HTTP ${status}.`;
 }
 
-async function requestJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
-  const response = await nativeFetch(url, { ...init, signal: AbortSignal.timeout(12_000) });
-  const body = await response.text();
-  if (!response.ok) throw new Error(readableError(response.status, body));
-  if (!body.trim()) return {};
-  try {
-    return JSON.parse(body) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
 function required(values: CredentialMap, key: string, label: string): string {
   const value = values[key]?.trim();
   if (!value) throw new Error(`${label} is required.`);
   return value;
 }
 
+function normalizeStoreDomain(raw: string): string {
+  const store = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(store)) {
+    throw new Error('Use the permanent store domain, for example your-store.myshopify.com.');
+  }
+  return store;
+}
+
+function substitute(template: string, values: CredentialMap, manifest: PluginManifest): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+    if (key === 'store') return normalizeStoreDomain(required(values, 'store', 'Store domain'));
+    if (key === 'basic_email_key') {
+      const email = required(values, 'email', 'Account email');
+      const apiKey = required(values, 'api_key', 'Management API key');
+      return btoa(`${email}:${apiKey}`);
+    }
+    const field = manifest.fields.find((candidate) => candidate.id === key);
+    return required(values, key, field?.label ?? key);
+  });
+}
+
+function readPath(data: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, segment) => {
+    if (current == null || typeof current !== 'object') return undefined;
+    const match = /^(\w+)\[(\d+)\]$/.exec(segment);
+    if (match) {
+      const [, prop, index] = match;
+      const list = (current as Record<string, unknown>)[prop];
+      return Array.isArray(list) ? list[Number(index)] : undefined;
+    }
+    return (current as Record<string, unknown>)[segment];
+  }, data);
+}
+
+async function requestProbe(
+  url: string,
+  init: RequestInit,
+  acceptEmpty?: boolean,
+): Promise<{ data: Record<string, unknown>; hostname?: string }> {
+  const response = await nativeFetch(url, { ...init, signal: AbortSignal.timeout(12_000) });
+  const body = await response.text();
+  if (!response.ok && !acceptEmpty) throw new Error(readableError(response.status, body));
+  if (!body.trim()) {
+    return { data: {}, hostname: safeHostname(url) };
+  }
+  try {
+    return { data: JSON.parse(body) as Record<string, unknown>, hostname: safeHostname(url) };
+  } catch {
+    if (acceptEmpty && response.ok) return { data: {}, hostname: safeHostname(url) };
+    throw new Error('Provider returned a non-JSON response.');
+  }
+}
+
+function safeHostname(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+async function runHttpTest(
+  manifest: PluginManifest,
+  values: CredentialMap,
+  test: PluginHttpTest,
+): Promise<PluginTestResult> {
+  const url = substitute(test.url, values, manifest);
+  const headers: Record<string, string> = {};
+  for (const [header, value] of Object.entries(test.headers ?? {})) {
+    headers[header] = substitute(value, values, manifest);
+  }
+  const init: RequestInit = {
+    method: test.method ?? 'GET',
+    headers,
+  };
+  if (test.body) init.body = substitute(test.body, values, manifest);
+
+  const { data, hostname } = await requestProbe(url, init, test.acceptEmpty);
+
+  if (Object.prototype.hasOwnProperty.call(data, 'ok') && data.ok !== true) {
+    throw new Error(String(data.error ?? 'Provider rejected the credentials.'));
+  }
+
+  let accountLabel: string | undefined;
+  if (test.accountLabelPath) {
+    const value = readPath(data, test.accountLabelPath);
+    if (value != null && value !== '') accountLabel = String(value);
+  }
+  if (!accountLabel && hostname) accountLabel = hostname;
+  return { ok: true, accountLabel: accountLabel ?? manifest.provider };
+}
+
+function manualSetupResult(manifest: PluginManifest): PluginTestResult {
+  return {
+    ok: false,
+    error:
+      manifest.authType === 'oauth'
+        ? 'Manual Setup Required: complete OAuth authorization in the provider console, then return and test again.'
+        : 'Manual Setup Required: credentials saved. Complete provider setup using the official link, then test when automated validation is available.',
+  };
+}
+
 export async function testPluginConnection(pluginId: string): Promise<PluginTestResult> {
   try {
-    const values = await credentialsFor(pluginId);
-    switch (pluginId) {
-      case 'mock-connector':
-        return { ok: true, accountLabel: 'Local test connector' };
-      case 'github': {
-        const data = await requestJson('https://api.github.com/user', {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            Authorization: `Bearer ${required(values, 'token', 'Personal access token')}`,
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-        });
-        return { ok: true, accountLabel: String(data.login ?? 'GitHub account') };
-      }
-      case 'figma': {
-        const data = await requestJson('https://api.figma.com/v1/me', {
-          headers: { 'X-Figma-Token': required(values, 'token', 'Personal access token') },
-        });
-        return { ok: true, accountLabel: String(data.email ?? data.handle ?? 'Figma account') };
-      }
-      case 'supabase': {
-        const url = required(values, 'url', 'Project URL').replace(/\/+$/, '');
-        const key = required(values, 'key', 'Project API key');
-        new URL(url);
-        await requestJson(`${url}/rest/v1/`, {
-          headers: { apikey: key, Authorization: `Bearer ${key}` },
-        });
-        return { ok: true, accountLabel: new URL(url).hostname };
-      }
-      case 'shopify': {
-        const rawStore = required(values, 'store', 'Store domain');
-        const store = rawStore.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-        if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(store)) {
-          throw new Error('Use the permanent store domain, for example your-store.myshopify.com.');
-        }
-        const data = await requestJson(`https://${store}/admin/api/2026-04/shop.json`, {
-          headers: {
-            'X-Shopify-Access-Token': required(values, 'token', 'Admin API access token'),
-          },
-        });
-        const shop =
-          data.shop && typeof data.shop === 'object' ? (data.shop as Record<string, unknown>) : {};
-        return { ok: true, accountLabel: String(shop.name ?? store) };
-      }
-      case 'slack': {
-        const token = required(values, 'token', 'Slack token');
-        const data = await requestJson('https://slack.com/api/auth.test', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-        });
-        if (data.ok !== true) throw new Error(String(data.error ?? 'Slack rejected the token.'));
-        return { ok: true, accountLabel: String(data.team ?? data.user ?? 'Slack workspace') };
-      }
-      default:
-        return { ok: false, error: 'This catalog entry does not have a live connector yet.' };
+    const manifest = getPluginManifest(pluginId);
+    if (!manifest) return { ok: false, error: 'Unknown plugin.' };
+
+    if (pluginId === 'mock-connector' || manifest.authType === 'none') {
+      return { ok: true, accountLabel: 'Local test connector' };
     }
+
+    const values = await credentialsFor(pluginId);
+    for (const field of manifest.fields) {
+      if (field.required && !values[field.id]?.trim()) {
+        throw new Error(`${field.label} is required.`);
+      }
+    }
+
+    if (manifest.httpTest) {
+      return await runHttpTest(manifest, values, manifest.httpTest);
+    }
+
+    if (
+      manifest.status === 'needs_credentials' ||
+      manifest.status === 'blocked' ||
+      manifest.authType === 'oauth' ||
+      manifest.authType === 'service_account'
+    ) {
+      return manualSetupResult(manifest);
+    }
+
+    return { ok: false, error: 'This catalog entry does not have a live connector yet.' };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -114,7 +174,12 @@ export async function callPluginTool(
   toolName: string,
 ): Promise<Record<string, unknown>> {
   const manifest = getPluginManifest(pluginId);
-  if (!manifest || manifest.status !== 'implemented') throw new Error('Plugin is not implemented.');
+  if (!manifest || !isConnectableStatus(manifest.status)) {
+    throw new Error('Plugin is not available.');
+  }
+  if (manifest.status === 'needs_credentials' || manifest.status === 'blocked') {
+    throw new Error('Plugin requires manual setup before tools can run.');
+  }
   const tool = manifest.tools.find((candidate) => candidate.name === toolName);
   if (!tool) throw new Error(`Unknown plugin tool: ${toolName}`);
   if (pluginId === 'mock-connector' && toolName === 'ping') {

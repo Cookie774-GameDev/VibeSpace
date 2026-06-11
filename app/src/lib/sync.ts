@@ -1,5 +1,5 @@
 /**
- * Sync queue + skeleton sync loop for Jarvis V1.
+ * Sync queue + skeleton sync loop for VibeSpace.
  *
  * Cloud sync is optional. When a Supabase client is configured and signed
  * in, the loop drains the local `sync_queue` table and pushes mutations to

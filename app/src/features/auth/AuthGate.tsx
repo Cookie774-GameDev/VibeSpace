@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { nanoid } from 'nanoid';
+import { useOllamaModelOptions } from '@/lib/ai/models';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { Onboarding } from '@/features/onboarding';
@@ -41,11 +42,14 @@ export function AuthGate({ children }: AuthGateProps) {
   const apiKeys = useAuthStore((s) => s.apiKeys);
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const onboardingComplete = useUIStore((s) => s.onboardingComplete);
+  const localModelOptions = useOllamaModelOptions();
 
-  // Has the user connected a model yet? Either a real cloud provider key
-  // or offline (local) mode satisfies the gate.
+  // Has the user connected a model yet? Cloud key, offline mode, or an
+  // installed local Ollama model all satisfy the gate.
   const hasModelAccess =
-    offlineMode || REAL_PROVIDER_KEYS.some((id) => !!apiKeys[id]);
+    offlineMode ||
+    localModelOptions.length > 0 ||
+    REAL_PROVIDER_KEYS.some((id) => !!apiKeys[id]);
 
   // 1. Generate a stable local user id on first run.
   useEffect(() => {

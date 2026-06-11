@@ -22,7 +22,7 @@
  *
  * Persistence: Zustand `persist` middleware keyed by `jarvis-tools`.
  * Mutations are also mirrored into the local sync queue so signed-in users
- * can carry custom tools through Jarvis Cloud's app sync records.
+ * can carry custom tools through VibeSpace Cloud's app sync records.
  */
 
 import { create } from 'zustand';
@@ -282,7 +282,7 @@ interface ToolStoreState {
   /** Delete a tool by slug. */
   remove: (slug: string) => void;
 
-  /** Queue the current tool state into private Jarvis Cloud account sync. */
+  /** Queue the current tool state into private VibeSpace Cloud account sync. */
   publish: (slug: string) => Promise<ActionResult>;
 
   /** Bulk import (used by the "Import JSON" UI). Returns count added. */
@@ -412,7 +412,7 @@ export const useToolStore = create<ToolStoreState>()(
         enqueueToolSync('update', tool);
         return {
           ok: true,
-          summary: 'Queued for Jarvis Cloud account sync.',
+          summary: 'Queued for VibeSpace Cloud account sync.',
           data: { slug },
         };
       },

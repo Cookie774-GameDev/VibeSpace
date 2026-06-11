@@ -64,16 +64,16 @@ export function resolveModelPath(
   switch (os) {
     case 'windows': {
       const base = env.APPDATA ?? `${env.HOME ?? 'C:\\Users\\Default'}\\AppData\\Roaming`;
-      return join(base, 'Jarvis-One', 'models', 'kokoro');
+      return join(base, 'VibeSpace', 'models', 'kokoro');
     }
     case 'macos': {
       const home = env.HOME ?? '/Users/Shared';
-      return join(home, 'Library', 'Application Support', 'Jarvis-One', 'models', 'kokoro');
+      return join(home, 'Library', 'Application Support', 'VibeSpace', 'models', 'kokoro');
     }
     case 'linux':
     default: {
       const home = env.HOME ?? '/root';
-      return join(home, '.local', 'share', 'Jarvis-One', 'models', 'kokoro');
+      return join(home, '.local', 'share', 'VibeSpace', 'models', 'kokoro');
     }
   }
 }
@@ -91,7 +91,7 @@ type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T
 /**
  * Minimal Kokoro-82M v1.0 asset set: the int8 dynamic-quantized ONNX model
  * (~88 MB — the smallest variant that is stable on the static CPU onnxruntime;
- * the q8f16 variant crashes there) plus ONLY the two voices Jarvis-One ships
+ * the q8f16 variant crashes there) plus ONLY the two voices VibeSpace ships
  * (bm_george, bf_emma — ~0.5 MB each, raw float32). SHA-256 values were
  * computed locally from the real files. Total download ≈ 89 MB.
  */

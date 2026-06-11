@@ -48,7 +48,7 @@ export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogPr
   }, [open, initialMode]);
 
   const NOT_CONFIGURED =
-    'Jarvis Cloud is not configured in this build. Install the official Jarvis-One release, or ask the build maintainer to configure the app backend.';
+    'VibeSpace Cloud is not configured in this build. Install the official VibeSpace release, or ask the build maintainer to configure the app backend.';
 
   function reset() {
     setEmail('');

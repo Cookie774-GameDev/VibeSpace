@@ -1,12 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import {
   REAL_CHAT_PROVIDERS,
   defaultModelForProvider,
+  getAccessibleModelOptions,
+  getAccessibleProviders,
   getModelOptions,
   isRealChatProvider,
+  syncDiscoveredOllamaModels,
 } from './models';
 
 describe('chat model catalog', () => {
+  beforeEach(() => {
+    syncDiscoveredOllamaModels([]);
+  });
+
   it('only advertises providers with working chat adapters', () => {
     expect(REAL_CHAT_PROVIDERS).toEqual([
       'google',
@@ -20,13 +27,29 @@ describe('chat model catalog', () => {
     expect(isRealChatProvider('openrouter')).toBe(false);
   });
 
-  it('provides selectable model ids for each advertised provider', () => {
-    for (const provider of REAL_CHAT_PROVIDERS) {
-      expect(getModelOptions(provider).length, provider).toBeGreaterThan(0);
-    }
+  it('filters chat models to installed local models and configured API keys', () => {
+    const apiKeys = { google: 'test-key', mock: 'mock-skip-sentinel' };
+    syncDiscoveredOllamaModels(['llama3.2']);
+
+    expect(getAccessibleProviders(apiKeys, false)).toEqual([
+      'google',
+      'mock',
+      'ollama',
+      'local',
+    ]);
+    expect(getAccessibleModelOptions('ollama', apiKeys, false)).toEqual([
+      { provider: 'ollama', id: 'llama3.2', label: 'llama3.2' },
+    ]);
+    expect(getAccessibleModelOptions('google', apiKeys, false).length).toBeGreaterThan(0);
+    expect(getAccessibleModelOptions('openai', apiKeys, false)).toEqual([]);
   });
 
-  it('uses the configured local model as the local default', () => {
+  it('uses the configured local model as the local default when installed', () => {
+    syncDiscoveredOllamaModels(['qwen2.5:3b']);
     expect(defaultModelForProvider('ollama', 'qwen2.5:3b')).toBe('qwen2.5:3b');
+  });
+
+  it('returns empty ollama options until models are discovered', () => {
+    expect(getModelOptions('ollama')).toEqual([]);
   });
 });

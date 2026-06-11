@@ -62,6 +62,7 @@ import {
   DEFAULT_FONT_SIZE,
 } from './PaneToolbar';
 import { TerminalContextMenu } from './TerminalContextMenu';
+import { clearTerminalSession } from './terminalClear';
 import { toast } from '@/components/ui/toast';
 import { useTerminalTranscriptStore } from './transcriptStore';
 import {
@@ -751,7 +752,7 @@ function Tile({
   const handleClear = () => {
     const sid = leaf.sessionId;
     if (!sid) return;
-    invoke('terminal_write', { sessionId: sid, data: '\x0c' }).catch(() => {});
+    clearTerminalSession(sid, leaf.id);
   };
 
   const handleSplit = (direction: 'col' | 'row') => {
@@ -1059,8 +1060,8 @@ function Tile({
       }}
       title="Right-drag to move, drop into chat, or move to a project"
     >
-      <div className="flex h-7 shrink-0 items-center justify-between gap-1 border-b border-border bg-paper-soft px-1.5">
-        <div className="flex min-w-0 items-center gap-1">
+      <div className="flex h-7 shrink-0 items-center gap-1 border-b border-border bg-paper-soft px-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <AgentRolePicker
             agentSlug={leaf.agentSlug ?? null}
             onChange={onAgentChange}
@@ -1088,12 +1089,12 @@ function Tile({
               }}
               autoFocus
               onFocus={(e) => e.currentTarget.select()}
-              className="h-5 w-32 rounded border border-accent-copper/60 bg-paper px-1 font-display text-metadata text-foreground outline-none focus:ring-1 focus:ring-accent-copper/50"
+              className="h-5 min-w-0 flex-1 rounded border border-accent-copper/60 bg-paper px-1 font-display text-metadata text-foreground outline-none focus:ring-1 focus:ring-accent-copper/50"
             />
           ) : (
             <span
               className={cn(
-                'truncate text-metadata cursor-text select-text',
+                'min-w-0 flex-1 truncate text-metadata cursor-text select-text',
                 labelHasName
                   ? 'font-display text-foreground'
                   : 'font-mono text-muted-foreground',
@@ -1110,13 +1111,14 @@ function Tile({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-0.5">
+        <div className="flex shrink-0 items-center gap-0.5">
           <ConnectedFilesButton
             files={leaf.connectedFiles ?? []}
             onChange={onConnectedFilesChange}
           />
           <PaneToolbar
             sessionId={leaf.sessionId}
+            paneId={leaf.id}
             fontSize={fontSize}
             isFullscreen={isFullscreen}
             canFullscreen={canFullscreen}

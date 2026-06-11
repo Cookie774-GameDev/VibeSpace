@@ -27,9 +27,11 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/toast';
 import { PLUGIN_CATALOG } from './catalog';
 import { deletePluginCredential, setPluginCredential } from './credentials';
+import { pluginSearchBlob } from './providerRegistry';
 import { testPluginConnection } from './runtime';
 import { usePluginStore } from './store';
 import type { PluginConnection, PluginManifest } from './types';
+import { isConnectableStatus } from './types';
 
 type Filter = 'all' | 'available' | 'connected' | 'planned';
 
@@ -39,6 +41,23 @@ const STATUS_LABELS = {
   needs_setup: 'Needs setup',
   error: 'Error',
 } as const;
+
+function defaultConnectionState(plugin: PluginManifest): PluginConnection['state'] {
+  if (plugin.status === 'needs_credentials' || plugin.status === 'blocked') return 'needs_setup';
+  return isConnectableStatus(plugin.status) ? 'not_connected' : 'needs_setup';
+}
+
+function statusBadgeLabel(plugin: PluginManifest, connectionState: PluginConnection['state']): string {
+  if (plugin.status === 'needs_credentials' || plugin.status === 'blocked') {
+    if (connectionState === 'connected') return STATUS_LABELS.connected;
+    if (connectionState === 'error') return STATUS_LABELS.error;
+    return 'Manual Setup Required';
+  }
+  if (plugin.status === 'configurable' && connectionState === 'needs_setup') {
+    return 'Manual Setup Required';
+  }
+  return STATUS_LABELS[connectionState];
+}
 
 export function Plugins() {
   const connections = usePluginStore((state) => state.connections);
@@ -51,15 +70,18 @@ export function Plugins() {
     const needle = query.trim().toLowerCase();
     return PLUGIN_CATALOG.filter((plugin) => {
       const connection = connections[plugin.id];
-      if (filter === 'available' && plugin.status !== 'implemented') return false;
-      if (filter === 'connected' && connection?.state !== 'connected') return false;
-      if (filter === 'planned' && plugin.status !== 'planned') return false;
-      return (
-        !needle ||
-        plugin.name.toLowerCase().includes(needle) ||
-        plugin.description.toLowerCase().includes(needle) ||
-        plugin.category.toLowerCase().includes(needle)
-      );
+      const connectionState = connection?.state ?? defaultConnectionState(plugin);
+      if (filter === 'available' && !isConnectableStatus(plugin.status)) return false;
+      if (filter === 'connected' && connectionState !== 'connected') return false;
+      if (
+        filter === 'planned' &&
+        plugin.status !== 'needs_credentials' &&
+        plugin.status !== 'blocked'
+      ) {
+        return false;
+      }
+      if (!needle) return true;
+      return pluginSearchBlob(plugin, connectionState).includes(needle);
     });
   }, [connections, filter, query]);
 
@@ -115,9 +137,8 @@ export function Plugins() {
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
         {visible.map((plugin) => {
           const connection = connections[plugin.id];
-          const connectionState =
-            connection?.state ??
-            (plugin.status === 'implemented' ? 'not_connected' : 'needs_setup');
+          const connectionState = connection?.state ?? defaultConnectionState(plugin);
+          const badgeLabel = statusBadgeLabel(plugin, connectionState);
           return (
             <Card key={plugin.id} data-testid={`plugin-card-${plugin.id}`}>
               <CardHeader className="pb-3">
@@ -139,12 +160,12 @@ export function Plugins() {
                         ? 'success'
                         : connectionState === 'error'
                           ? 'destructive'
-                          : plugin.status === 'planned'
+                          : badgeLabel === 'Manual Setup Required'
                             ? 'outline'
                             : 'warning'
                     }
                   >
-                    {plugin.status === 'planned' ? 'Planned' : STATUS_LABELS[connectionState]}
+                    {badgeLabel}
                   </Badge>
                 </div>
               </CardHeader>
@@ -181,7 +202,7 @@ export function Plugins() {
                     type="button"
                     size="sm"
                     variant={connection?.state === 'connected' ? 'outline' : 'default'}
-                    disabled={plugin.status !== 'implemented'}
+                    disabled={!isConnectableStatus(plugin.status)}
                     onClick={() => setSelected(plugin)}
                   >
                     {connection?.state === 'connected' ? (
@@ -235,6 +256,7 @@ function PluginSetupDialog({
 
   const activePlugin = plugin;
   const configuredFields = new Set(connection?.configuredFields ?? []);
+  const hasAutomatedTest = Boolean(activePlugin.httpTest) || activePlugin.authType === 'none';
 
   async function connect() {
     setError('');
@@ -254,13 +276,18 @@ function PluginSetupDialog({
       const configured = activePlugin.fields
         .filter((field) => Boolean(draft[field.id]?.trim()) || configuredFields.has(field.id))
         .map((field) => field.id);
+      const nextState: PluginConnection['state'] = result.ok
+        ? 'connected'
+        : hasAutomatedTest
+          ? 'error'
+          : 'needs_setup';
       const next: PluginConnection = {
         pluginId: activePlugin.id,
-        state: result.ok ? 'connected' : 'error',
+        state: nextState,
         enabled: result.ok ? (connection?.enabled ?? true) : false,
         enabledProjectIds: connection?.enabledProjectIds ?? ['*'],
         accountLabel: result.accountLabel,
-        error: result.error,
+        error: result.ok ? undefined : result.error,
         lastTestedAt: Date.now(),
         configuredFields: configured,
         updatedAt: Date.now(),
@@ -268,6 +295,12 @@ function PluginSetupDialog({
       upsertConnection(next);
       if (!result.ok) {
         setError(result.error ?? 'Connection test failed.');
+        if (!hasAutomatedTest && configured.length > 0) {
+          toast.info(
+            `${activePlugin.name} credentials saved`,
+            'Manual Setup Required — finish provider setup, then test again.',
+          );
+        }
         return;
       }
       setDraft({});
@@ -305,6 +338,40 @@ function PluginSetupDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
+          <div>
+            <p className="text-metadata uppercase tracking-wide text-muted-foreground mb-1">
+              What this plugin does
+            </p>
+            <p className="text-secondary text-muted-foreground">{plugin.description}</p>
+            <p className="mt-1 text-metadata text-muted-foreground">
+              Provider: {plugin.provider} · Auth: {plugin.authType.replace(/_/g, ' ')}
+            </p>
+          </div>
+
+          {plugin.setupSteps.length > 0 && (
+            <div>
+              <p className="text-metadata uppercase tracking-wide text-muted-foreground mb-1">
+                Setup steps
+              </p>
+              <ol className="list-decimal pl-5 text-secondary text-muted-foreground space-y-1">
+                {plugin.setupSteps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {plugin.credentialUrl && (
+            <a
+              className="inline-flex items-center gap-1 text-secondary text-accent-cyan hover:underline"
+              href={plugin.credentialUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Get credentials from {plugin.provider} <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+
           {plugin.fields.map((field) => (
             <div key={field.id} className="flex flex-col gap-1.5">
               <Label htmlFor={`plugin-${plugin.id}-${field.id}`}>{field.label}</Label>
@@ -333,6 +400,10 @@ function PluginSetupDialog({
                 No credentials are required.
               </span>
             </div>
+          )}
+
+          {plugin.limitations && (
+            <p className="text-metadata text-muted-foreground">{plugin.limitations}</p>
           )}
 
           <div>
@@ -386,7 +457,7 @@ function PluginSetupDialog({
             </Button>
             <Button type="button" disabled={testing} onClick={() => void connect()}>
               {testing && <Loader2 className="h-4 w-4 animate-spin" />}
-              {connection ? 'Test and save' : 'Connect'}
+              {connection ? 'Test Connection' : 'Connect'}
             </Button>
           </div>
         </DialogFooter>

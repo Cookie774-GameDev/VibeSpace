@@ -83,7 +83,7 @@ export async function sendOutboundMessage(
 
   const { getSupabaseClient } = await import('@/lib/supabase/client');
   const supa = getSupabaseClient();
-  if (!supa) return { ok: false, error: 'Jarvis Cloud is not configured in this build.' };
+  if (!supa) return { ok: false, error: 'VibeSpace Cloud is not configured in this build.' };
 
   const { data } = await supa.auth.getSession();
   const jwt = data.session?.access_token;

@@ -13,10 +13,9 @@
  * `ChromeBtn` so hover treatment stays identical across modes.
  */
 import * as React from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Maximize2, Minimize2, Type, Eraser, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useTerminalTranscriptStore } from './transcriptStore';
+import { clearTerminalSession } from './terminalClear';
 
 /**
  * Font size cycle order. Expanded range from 10 to 20 to allow richer
@@ -39,6 +38,8 @@ interface PaneToolbarProps {
    * flight; the button then no-ops silently.
    */
   sessionId: string | null | undefined;
+  /** Pane id — used to route clear events when session ids are still syncing. */
+  paneId?: string;
   /** Current font size in px (used in the tooltip + as cycle input). */
   fontSize: number;
   /** True when this pane is the page-level fullscreened one. */
@@ -55,6 +56,7 @@ interface PaneToolbarProps {
 
 export function PaneToolbar({
   sessionId,
+  paneId,
   fontSize,
   isFullscreen,
   canFullscreen,
@@ -99,20 +101,7 @@ export function PaneToolbar({
     e.stopPropagation();
     if (!sessionId) return;
 
-    // 1. Dispatch custom event to visually clear xterm in TerminalView
-    window.dispatchEvent(
-      new CustomEvent('jarvis:terminal:clear', {
-        detail: { sessionId },
-      })
-    );
-
-    // 2. Clear transcript store
-    useTerminalTranscriptStore.getState().clearSessionTranscript(sessionId);
-
-    // 3. Write ^L (\x0c) to PTY
-    invoke('terminal_write', { sessionId, data: '\x0c' }).catch(() => {
-      /* backend torn down -- nothing to do */
-    });
+    clearTerminalSession(sessionId, paneId);
 
     if (resetTimerRef.current) {
       clearTimeout(resetTimerRef.current);

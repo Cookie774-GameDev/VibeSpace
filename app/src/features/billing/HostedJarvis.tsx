@@ -90,7 +90,7 @@ function SetupCard() {
           Hosted Jarvis isn&apos;t available in this build
         </CardTitle>
         <CardDescription>
-          Official Jarvis-One releases include the app backend configuration.
+          Official VibeSpace releases include the app backend configuration.
           This build is missing it, so Jarvis stays local-only with BYOK keys.
         </CardDescription>
       </CardHeader>
@@ -210,7 +210,7 @@ function SignInCard({ client }: { client: TypedSupabaseClient }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Sign in to Jarvis Cloud</CardTitle>
+        <CardTitle>Sign in to VibeSpace Cloud</CardTitle>
         <CardDescription>
           We&apos;ll email a single-use magic link. No password needed.
         </CardDescription>

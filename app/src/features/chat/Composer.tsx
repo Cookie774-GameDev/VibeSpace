@@ -46,8 +46,10 @@ import { InputToken, TokenList } from './InputToken';
 import { getChatDragKind, getChatDropPayload } from './dropPayload';
 import {
   REAL_CHAT_PROVIDERS,
+  selectLocalModelForChat,
   defaultModelForProvider,
-  getModelOptions,
+  getAccessibleModelOptions,
+  getAccessibleProviders,
 } from '@/lib/ai/models';
 
 export interface ComposerProps {
@@ -302,10 +304,35 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const setSelectedModel = useAuthStore((s) => s.setSelectedModel);
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
+  const apiKeys = useAuthStore((s) => s.apiKeys);
+  const offlineMode = useAuthStore((s) => s.offlineMode);
   const projectId = useAuthStore((s) => s.projectId);
   const terminalSessions = useTerminalTranscriptStore((s) => s.sessions);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+
+  const accessibleProviders = useMemo(
+    () => getAccessibleProviders(apiKeys, offlineMode),
+    [apiKeys, offlineMode],
+  );
+
+  useEffect(() => {
+    if (accessibleProviders.length === 0) return;
+    if (!accessibleProviders.includes(provider)) {
+      const nextProvider = accessibleProviders[0]!;
+      setDefaultProvider(nextProvider);
+      setSelectedModel(
+        nextProvider,
+        defaultModelForProvider(nextProvider, defaultLocalModel),
+      );
+    }
+  }, [
+    accessibleProviders,
+    provider,
+    defaultLocalModel,
+    setDefaultProvider,
+    setSelectedModel,
+  ]);
 
   // Generate options for option picker based on current command
   const optionPickerOptions = useMemo<SlashCommandOption[]>(() => {
@@ -1486,6 +1513,9 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                   onChange={(nextProvider, nextModel) => {
                     setDefaultProvider(nextProvider);
                     setSelectedModel(nextProvider, nextModel);
+                    if (nextProvider === 'ollama' || nextProvider === 'local') {
+                      selectLocalModelForChat(nextModel);
+                    }
                   }}
                 />
                 {composerSttEnabled && (
@@ -1591,6 +1621,14 @@ interface ModelPickerProps {
 }
 
 function ModelPicker({ provider, model, open, onOpenChange, onChange }: ModelPickerProps) {
+  const apiKeys = useAuthStore((s) => s.apiKeys);
+  const offlineMode = useAuthStore((s) => s.offlineMode);
+  const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
+  const providers = useMemo(
+    () => getAccessibleProviders(apiKeys, offlineMode),
+    [apiKeys, offlineMode],
+  );
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
@@ -1616,12 +1654,20 @@ function ModelPicker({ provider, model, open, onOpenChange, onChange }: ModelPic
           AI model
         </div>
         <ul className="flex flex-col max-h-[320px] overflow-y-auto scrollbar-hidden">
-          {PROVIDERS.map((p) => (
+          {providers.length === 0 ? (
+            <li className="px-2 py-2 text-secondary text-muted-foreground">
+              Add an API key in Settings or download a local model to chat.
+            </li>
+          ) : null}
+          {providers.map((p) => {
+            const options = getAccessibleModelOptions(p, apiKeys, offlineMode, defaultLocalModel);
+            if (options.length === 0) return null;
+            return (
             <li key={p} className="mb-1">
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {PROVIDER_LABELS[p]}
               </div>
-              {getModelOptions(p).map((option) => {
+              {options.map((option) => {
                 const active = provider === p && model === option.id;
                 return (
                   <button
@@ -1646,7 +1692,8 @@ function ModelPicker({ provider, model, open, onOpenChange, onChange }: ModelPic
                 );
               })}
             </li>
-          ))}
+            );
+          })}
         </ul>
       </PopoverContent>
     </Popover>

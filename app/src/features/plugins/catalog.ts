@@ -1,3 +1,4 @@
+import { buildCatalogEntry } from './providerRegistry';
 import type { PluginManifest, PluginStatus } from './types';
 
 const token = (id: string, label: string, placeholder: string, help?: string) => ({
@@ -18,10 +19,11 @@ const text = (id: string, label: string, placeholder: string, help?: string) => 
   required: true,
 });
 
-const IMPLEMENTED: PluginManifest[] = [
+const IMPLEMENTED_BASE: PluginManifest[] = [
   {
     id: 'github',
     name: 'GitHub',
+    provider: 'GitHub',
     description: 'Repositories, issues, pull requests, actions, and authenticated account context.',
     category: 'Developer Tools',
     authType: 'token',
@@ -30,12 +32,20 @@ const IMPLEMENTED: PluginManifest[] = [
         'token',
         'Personal access token',
         'github_pat_...',
-        'Use a fine-grained token with only the repositories and permissions Jarvis needs.',
+        'Use a fine-grained token with only the repositories and permissions VibeSpace needs.',
       ),
     ],
     status: 'implemented',
-    docsUrl: 'https://github.com/settings/personal-access-tokens',
-    help: 'Create a fine-grained personal access token. Jarvis tests it against the authenticated-user endpoint and never exposes it to terminals.',
+    docsUrl: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
+    credentialUrl: 'https://github.com/settings/personal-access-tokens',
+    help: 'Create a fine-grained personal access token. VibeSpace tests it against the authenticated-user endpoint and never exposes it to terminals.',
+    tags: ['developer tools', 'git', 'token', 'repositories'],
+    setupSteps: [
+      'Open GitHub Settings → Developer settings → Personal access tokens.',
+      'Create a fine-grained token with the repositories you need.',
+      'Paste the token here and run Test Connection.',
+    ],
+    supportedFeatures: ['repositories', 'issues', 'pull requests', 'actions'],
     tools: [
       {
         name: 'identity',
@@ -48,10 +58,20 @@ const IMPLEMENTED: PluginManifest[] = [
         readOnly: true,
       },
     ],
+    httpTest: {
+      url: 'https://api.github.com/user',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: 'Bearer {{token}}',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      accountLabelPath: 'login',
+    },
   },
   {
     id: 'figma',
     name: 'Figma',
+    provider: 'Figma',
     description: 'Design files, components, comments, variables, and design-system context.',
     category: 'Design',
     authType: 'token',
@@ -65,7 +85,15 @@ const IMPLEMENTED: PluginManifest[] = [
     ],
     status: 'implemented',
     docsUrl: 'https://www.figma.com/developers/api#access-tokens',
+    credentialUrl: 'https://www.figma.com/developers/api#access-tokens',
     help: 'Use a Figma personal access token. The connection test reads only the current user profile.',
+    tags: ['design', 'token', 'components'],
+    setupSteps: [
+      'Open Figma → Settings → Security → Personal access tokens.',
+      'Generate a token and paste it here.',
+      'Run Test Connection.',
+    ],
+    supportedFeatures: ['design files', 'components', 'comments'],
     tools: [
       {
         name: 'identity',
@@ -78,10 +106,16 @@ const IMPLEMENTED: PluginManifest[] = [
         readOnly: true,
       },
     ],
+    httpTest: {
+      url: 'https://api.figma.com/v1/me',
+      headers: { 'X-Figma-Token': '{{token}}' },
+      accountLabelPath: 'email',
+    },
   },
   {
     id: 'supabase',
     name: 'Supabase',
+    provider: 'Supabase',
     description: 'Database, authentication, storage, edge functions, and project API context.',
     category: 'Databases',
     authType: 'api_key',
@@ -96,7 +130,15 @@ const IMPLEMENTED: PluginManifest[] = [
     ],
     status: 'implemented',
     docsUrl: 'https://supabase.com/docs/guides/api/api-keys',
-    help: 'Enter the project URL and an API key. Jarvis calls the REST root to validate the pair.',
+    credentialUrl: 'https://supabase.com/dashboard/project/_/settings/api-keys',
+    help: 'Enter the project URL and an API key. VibeSpace calls the REST root to validate the pair.',
+    tags: ['database', 'auth', 'storage', 'api_key'],
+    setupSteps: [
+      'Open your Supabase project → Settings → API.',
+      'Copy the project URL and publishable/anon key.',
+      'Paste both values and test.',
+    ],
+    supportedFeatures: ['database', 'auth', 'storage', 'edge functions'],
     tools: [
       {
         name: 'connection_info',
@@ -109,10 +151,16 @@ const IMPLEMENTED: PluginManifest[] = [
         readOnly: true,
       },
     ],
+    httpTest: {
+      url: '{{url}}/rest/v1/',
+      headers: { apikey: '{{key}}', Authorization: 'Bearer {{key}}' },
+      acceptEmpty: true,
+    },
   },
   {
     id: 'shopify',
     name: 'Shopify',
+    provider: 'Shopify',
     description: 'Store catalog, orders, customers, themes, and Admin API context.',
     category: 'Ecommerce',
     authType: 'token',
@@ -128,7 +176,15 @@ const IMPLEMENTED: PluginManifest[] = [
     status: 'implemented',
     docsUrl:
       'https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/generate-app-access-tokens-admin',
+    credentialUrl: 'https://admin.shopify.com/store/settings/apps/development',
     help: 'Enter the permanent myshopify.com domain and a custom-app Admin API token.',
+    tags: ['ecommerce', 'token', 'orders'],
+    setupSteps: [
+      'Create a custom app in the Shopify admin.',
+      'Install it and copy the Admin API access token.',
+      'Enter store domain and token, then test.',
+    ],
+    supportedFeatures: ['catalog', 'orders', 'customers'],
     tools: [
       { name: 'shop_identity', description: 'Read connected shop identity.', readOnly: true },
       {
@@ -137,10 +193,16 @@ const IMPLEMENTED: PluginManifest[] = [
         readOnly: true,
       },
     ],
+    httpTest: {
+      url: 'https://{{store}}/admin/api/2026-04/shop.json',
+      headers: { 'X-Shopify-Access-Token': '{{token}}' },
+      accountLabelPath: 'shop.name',
+    },
   },
   {
     id: 'slack',
     name: 'Slack',
+    provider: 'Slack',
     description: 'Workspace, channels, messages, users, and collaboration context.',
     category: 'Communication',
     authType: 'token',
@@ -154,7 +216,15 @@ const IMPLEMENTED: PluginManifest[] = [
     ],
     status: 'implemented',
     docsUrl: 'https://api.slack.com/authentication/token-types',
-    help: 'Enter a Slack bot or user token. Jarvis validates it with auth.test.',
+    credentialUrl: 'https://api.slack.com/apps',
+    help: 'Enter a Slack bot or user token. VibeSpace validates it with auth.test.',
+    tags: ['messaging', 'collaboration', 'token'],
+    setupSteps: [
+      'Create a Slack app at api.slack.com/apps.',
+      'Install it to your workspace and copy the bot token.',
+      'Paste the token and test.',
+    ],
+    supportedFeatures: ['channels', 'messages', 'users'],
     tools: [
       {
         name: 'identity',
@@ -167,16 +237,29 @@ const IMPLEMENTED: PluginManifest[] = [
         readOnly: true,
       },
     ],
+    httpTest: {
+      method: 'POST',
+      url: 'https://slack.com/api/auth.test',
+      headers: {
+        Authorization: 'Bearer {{token}}',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      accountLabelPath: 'team',
+    },
   },
   {
     id: 'mock-connector',
-    name: 'Jarvis Mock Connector',
+    name: 'VibeSpace Mock Connector',
+    provider: 'VibeSpace',
     description: 'Deterministic local connector for testing plugin setup and tool dispatch.',
     category: 'Developer Tools',
     authType: 'none',
     fields: [],
     status: 'implemented',
     help: 'No credentials required. Use this connector to verify the plugin runtime without network access.',
+    tags: ['developer tools', 'local', 'testing'],
+    setupSteps: ['Click Connect — no credentials are required.'],
+    supportedFeatures: ['local testing'],
     tools: [
       { name: 'ping', description: 'Return a deterministic local response.', readOnly: true },
       { name: 'list_tools', description: 'List this connector manifest tools.', readOnly: true },
@@ -561,33 +644,15 @@ const CATALOG_GROUPS: Record<string, string[]> = {
   Files: ['Dropbox', 'Box', 'Egnyte', 'ShareFile', 'Nextcloud', 'pCloud', 'Sync.com', 'WeTransfer'],
 };
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
-}
+const implementedIds = new Set(IMPLEMENTED_BASE.map((plugin) => plugin.id));
 
-const implementedIds = new Set(IMPLEMENTED.map((plugin) => plugin.id));
-
-const PLANNED: PluginManifest[] = Object.entries(CATALOG_GROUPS).flatMap(([category, names]) =>
+const GENERATED: PluginManifest[] = Object.entries(CATALOG_GROUPS).flatMap(([category, names]) =>
   names
-    .map((name) => ({ name, id: slugify(name) }))
-    .filter(({ id }) => !implementedIds.has(id))
-    .map(({ name, id }) => ({
-      id,
-      name,
-      description: `${name} connector for authenticated context and MCP-style tools.`,
-      category,
-      authType: 'oauth' as const,
-      fields: [],
-      status: 'planned' as PluginStatus,
-      help: 'Catalog entry only. Connection and tool execution are not enabled in this release.',
-      tools: [],
-    })),
+    .map((name) => buildCatalogEntry(name, category))
+    .filter((plugin) => !implementedIds.has(plugin.id)),
 );
 
-export const PLUGIN_CATALOG: readonly PluginManifest[] = [...IMPLEMENTED, ...PLANNED];
+export const PLUGIN_CATALOG: readonly PluginManifest[] = [...IMPLEMENTED_BASE, ...GENERATED];
 
 export function getPluginManifest(id: string): PluginManifest | undefined {
   return PLUGIN_CATALOG.find((plugin) => plugin.id === id);
@@ -597,7 +662,16 @@ export function validatePluginCatalog(catalog = PLUGIN_CATALOG): string[] {
   const errors: string[] = [];
   const ids = new Set<string>();
   for (const plugin of catalog) {
-    if (!plugin.id || !plugin.name || !plugin.description || !plugin.category || !plugin.help) {
+    if (
+      !plugin.id ||
+      !plugin.name ||
+      !plugin.description ||
+      !plugin.category ||
+      !plugin.provider ||
+      !plugin.help ||
+      plugin.setupSteps.length === 0 ||
+      plugin.tags.length === 0
+    ) {
       errors.push(`${plugin.id || '<missing-id>'}: missing required metadata`);
     }
     if (ids.has(plugin.id)) errors.push(`${plugin.id}: duplicate id`);
@@ -611,6 +685,28 @@ export function validatePluginCatalog(catalog = PLUGIN_CATALOG): string[] {
     if (plugin.status === 'implemented' && plugin.tools.length === 0) {
       errors.push(`${plugin.id}: implemented plugin has no tools`);
     }
+    if (plugin.status === 'planned') {
+      errors.push(`${plugin.id}: legacy planned status is not allowed`);
+    }
+    if (
+      (plugin.status === 'implemented' || plugin.status === 'configurable') &&
+      !plugin.httpTest &&
+      plugin.authType !== 'none'
+    ) {
+      errors.push(`${plugin.id}: connectable plugin missing httpTest`);
+    }
   }
   return errors;
+}
+
+export function catalogStats(catalog = PLUGIN_CATALOG) {
+  const byStatus = (status: PluginStatus) => catalog.filter((p) => p.status === status).length;
+  return {
+    total: catalog.length,
+    implemented: byStatus('implemented'),
+    configurable: byStatus('configurable'),
+    needsCredentials: byStatus('needs_credentials'),
+    blocked: byStatus('blocked'),
+    withHttpTest: catalog.filter((p) => Boolean(p.httpTest)).length,
+  };
 }

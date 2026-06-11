@@ -30,17 +30,17 @@ const VERSION = import.meta.env.VITE_APP_VERSION || '0.1.0';
 const LINKS: { label: string; href: string; icon: typeof BookOpen }[] = [
   {
     label: 'Documentation',
-    href: 'https://github.com/Cookie774-GameDev/Jarivs-One#readme',
+    href: 'https://github.com/Cookie774-GameDev/VibeSpace#readme',
     icon: BookOpen,
   },
   {
     label: 'Downloads',
-    href: 'https://github.com/Cookie774-GameDev/Jarivs-One/blob/main/DOWNLOAD.md',
+    href: 'https://github.com/Cookie774-GameDev/VibeSpace/blob/main/DOWNLOAD.md',
     icon: Shield,
   },
   {
     label: 'License',
-    href: 'https://github.com/Cookie774-GameDev/Jarivs-One/blob/main/LICENSE',
+    href: 'https://github.com/Cookie774-GameDev/VibeSpace/blob/main/LICENSE',
     icon: ScrollText,
   },
 ];

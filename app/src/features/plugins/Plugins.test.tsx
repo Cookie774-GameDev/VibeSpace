@@ -22,7 +22,7 @@ describe('Plugins settings page', () => {
 
   it('connects and disconnects the local mock connector', async () => {
     render(<Plugins />);
-    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'Jarvis Mock' } });
+    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'Mock Connector' } });
     const card = screen.getByTestId('plugin-card-mock-connector');
     fireEvent.click(within(card).getByRole('button', { name: /^connect$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));

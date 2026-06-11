@@ -47,8 +47,14 @@ export type { OllamaModelInfo, OllamaPullProgress, OllamaEnsureStatus } from './
 export {
   CHAT_MODEL_OPTIONS,
   getModelOptions,
+  getAccessibleProviders,
+  getAccessibleModelOptions,
+  connectLocalModelToChat,
+  selectLocalModelForChat,
+  getDiscoveredOllamaModels,
   defaultModelForProvider,
   isRealChatProvider,
   syncDiscoveredOllamaModels,
   useOllamaModelOptions,
 } from './models';
+export { LOCAL_MODEL_CATALOG } from './localModelCatalog';

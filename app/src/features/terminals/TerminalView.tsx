@@ -277,6 +277,7 @@ export function TerminalView({
     let outputRafToken: number | null = null;
     let pendingOutput = '';
     let handleVisible: (() => void) | null = null;
+    let onClear: ((e: Event) => void) | null = null;
 
     // RAF-coalesced resize. Multiple ResizeObserver fires inside the same
     // animation frame collapse to a single fit() + IPC. Without this,
@@ -615,6 +616,25 @@ export function TerminalView({
       window.addEventListener('resize', dispatchResize);
       window.addEventListener('jarvis:terminals:visible', handleVisible);
 
+      onClear = (e: Event) => {
+        if (cancelled) return;
+        const detail = (e as CustomEvent<{ sessionId: string; paneId?: string }>).detail;
+        if (!detail?.sessionId) return;
+        const sid = sessionRef.current;
+        const matchesPane = detail.paneId != null && detail.paneId === paneId;
+        const matchesSession = detail.sessionId === sid;
+        if (!matchesPane && !matchesSession) return;
+        ignoreClearsUntilRef.current = 0;
+        pendingOutput = '';
+        if (outputRafToken != null) {
+          cancelAnimationFrame(outputRafToken);
+          outputRafToken = null;
+        }
+        term?.clear();
+        term?.scrollToTop();
+      };
+      window.addEventListener('jarvis:terminal:clear', onClear);
+
       // Theme follower -- re-skin xterm whenever the app toggles dark/light.
       mutationObserver = new MutationObserver((muts) => {
         for (const m of muts) {
@@ -663,6 +683,7 @@ export function TerminalView({
       if (handleVisible) {
         window.removeEventListener('jarvis:terminals:visible', handleVisible);
       }
+      if (onClear) window.removeEventListener('jarvis:terminal:clear', onClear);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       unlistenOutput?.();
@@ -740,18 +761,6 @@ export function TerminalView({
     return () =>
       window.removeEventListener('jarvis:terminal:write-text', onWriteText as EventListener);
   }, [paneId]);
-
-  useEffect(() => {
-    const onClear = (e: Event) => {
-      const detail = (e as CustomEvent<{ sessionId: string }>).detail;
-      if (detail?.sessionId === activeSessionId) {
-        ignoreClearsUntilRef.current = 0; // reset ignore window on manual clear
-        termRef.current?.clear();
-      }
-    };
-    window.addEventListener('jarvis:terminal:clear', onClear as EventListener);
-    return () => window.removeEventListener('jarvis:terminal:clear', onClear as EventListener);
-  }, [activeSessionId]);
 
   useEffect(() => {
     dictatingRef.current = dictating;

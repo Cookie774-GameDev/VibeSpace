@@ -228,16 +228,25 @@ export async function waitForOllamaReachable(
   return false;
 }
 
+let readyCache: { at: number; status: OllamaEnsureStatus } | null = null;
+const READY_CACHE_MS = 20_000;
+
+export function invalidateOllamaReadyCache(): void {
+  readyCache = null;
+}
+
 function bootstrapStatusMessage(phase: string, detail?: string | null): string {
   switch (phase) {
     case 'ready':
       return 'Ollama ready';
+    case 'installing':
+      return 'Installing Ollama silently…';
     case 'starting':
       return 'Starting Ollama silently…';
     case 'waiting':
       return detail || 'Waiting for Ollama API…';
     case 'not_installed':
-      return 'Install Ollama to use local models.';
+      return 'Preparing Ollama for local models…';
     case 'error':
       return detail || 'Could not connect to Ollama';
     default:
@@ -254,6 +263,15 @@ export async function ensureOllamaReadySilent(
   signal?: AbortSignal,
   onStatus?: (status: OllamaEnsureStatus) => void,
 ): Promise<OllamaEnsureStatus> {
+  if (
+    readyCache &&
+    readyCache.status.ready &&
+    Date.now() - readyCache.at < READY_CACHE_MS
+  ) {
+    onStatus?.(readyCache.status);
+    return readyCache.status;
+  }
+
   if (signal?.aborted) {
     const aborted: OllamaEnsureStatus = {
       ready: false,
@@ -281,6 +299,7 @@ export async function ensureOllamaReadySilent(
       detail: 'Ollama API is reachable.',
       statusMsg: bootstrapStatusMessage('ready'),
     };
+    readyCache = { at: Date.now(), status: ready };
     emit(ready);
     return ready;
   }
@@ -288,12 +307,13 @@ export async function ensureOllamaReadySilent(
   const { isTauri, ensureNativeOllamaReady, getNativeOllamaStatus } = await import('@/lib/tauri');
 
   if (isTauri) {
+    const installStatus = await getNativeOllamaStatus();
     emit({
       ready: false,
       apiReachable: false,
-      installed: true,
-      phase: 'starting',
-      statusMsg: bootstrapStatusMessage('starting'),
+      installed: installStatus.installed ?? false,
+      phase: installStatus.installed ? 'starting' : 'installing',
+      statusMsg: bootstrapStatusMessage(installStatus.installed ? 'starting' : 'installing'),
     });
 
     const native = await ensureNativeOllamaReady(resolvedOllamaBaseUrl());
@@ -306,6 +326,7 @@ export async function ensureOllamaReadySilent(
       detail: native.detail,
       statusMsg: bootstrapStatusMessage(native.phase, native.detail),
     };
+    if (status.ready) readyCache = { at: Date.now(), status };
     emit(status);
     return status;
   }
@@ -348,6 +369,7 @@ export async function ensureOllamaReadySilent(
         statusMsg: bootstrapStatusMessage('error'),
       };
 
+  if (finalStatus.ready) readyCache = { at: Date.now(), status: finalStatus };
   emit(finalStatus);
   return finalStatus;
 }
@@ -801,8 +823,10 @@ export const ollamaProvider: LLMProvider = {
       model,
       messages,
       stream: true,
+      keep_alive: '10m',
       options: {
         temperature: req.temperature ?? req.agent.temperature ?? 0.7,
+        num_ctx: 8192,
       },
     };
 

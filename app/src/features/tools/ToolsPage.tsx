@@ -8,7 +8,7 @@
  *   - The actions palette (Mod+Shift+A) so you can fire it manually.
  *   - The Jarvis system-prompt addendum so the AI can propose it.
  *
- * Tool mutations are mirrored into Jarvis Cloud account sync when signed in.
+ * Tool mutations are mirrored into VibeSpace Cloud account sync when signed in.
  * Public tool publishing remains separate from private account sync.
  */
 
@@ -537,7 +537,7 @@ function ToolCard({ tool, onEdit, onRun }: ToolCardProps) {
         </div>
         <span
           className="text-metadata uppercase tracking-wide text-muted-foreground/70"
-          title="Queued for Jarvis Cloud account sync when signed in"
+          title="Queued for VibeSpace Cloud account sync when signed in"
         >
           <Cloud className="mr-1 inline h-3 w-3" />
           sync
@@ -697,7 +697,7 @@ export function ToolsPage() {
         <div className="rounded-md border border-border bg-elevated px-3 py-2 mb-6 flex items-start gap-2">
           <Cloud className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
           <div className="text-secondary text-muted-foreground leading-relaxed">
-            <span className="text-foreground font-medium">Jarvis Cloud sync</span>{' '}
+            <span className="text-foreground font-medium">VibeSpace Cloud sync</span>{' '}
             now queues private custom-tool changes for your account when signed in.
             Export / Import still works for manual backups and offline moves.
           </div>
@@ -771,7 +771,7 @@ export function ToolsPage() {
           <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <p>
             Tools are stored locally under <span className="font-mono">jarvis-tools</span>{' '}
-            and mirrored into the local sync queue for signed-in Jarvis Cloud accounts.
+            and mirrored into the local sync queue for signed-in VibeSpace Cloud accounts.
           </p>
         </div>
       </div>

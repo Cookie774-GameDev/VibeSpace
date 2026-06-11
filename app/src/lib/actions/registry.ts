@@ -804,8 +804,11 @@ const PLUGIN_ACTIONS: ActionDef[] = [
       ]);
       const manifest = getPluginManifest(pluginId);
       const connection = usePluginStore.getState().connections[pluginId];
-      if (!manifest || manifest.status !== 'implemented') {
-        return fail(`Plugin ${pluginId} is not implemented.`);
+      if (
+        !manifest ||
+        (manifest.status !== 'implemented' && manifest.status !== 'configurable')
+      ) {
+        return fail(`Plugin ${pluginId} is not available for tool calls.`);
       }
       if (!connection || connection.state !== 'connected') {
         return fail(`${manifest.name} is not connected.`);
