@@ -13,7 +13,7 @@
     "test:ui": "vitest --ui",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build --features kokoro"
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.1.3",

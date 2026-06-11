@@ -19,6 +19,7 @@ import {
   speakVoicePreview,
 } from '@/features/voice/speechSynthesis';
 import { VOICE_PROFILES, type VoiceProfile } from '@/features/voice/voiceProfiles';
+import { ModelManager } from '@/features/voice/modelManager';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -31,6 +32,7 @@ import { readWakeWordEnabled, setWakeWordEnabled } from '@/features/voice/wakeWo
 
 type MicStatus = 'idle' | 'testing' | 'ok' | 'denied' | 'unavailable';
 type LocalVoiceStatus = 'idle' | 'checking' | 'ready' | 'missing' | 'unsupported';
+type KokoroStatus = 'idle' | 'downloading' | 'ready' | 'testing' | 'error';
 
 /**
  * The two free local voice presets surfaced in Settings — Jarvis and Friday.
@@ -54,6 +56,9 @@ export function Voice() {
   const [previewingVoice, setPreviewingVoice] = useState<VoicePresetId | null>(null);
   const [localVoiceStatus, setLocalVoiceStatus] = useState<LocalVoiceStatus>('idle');
   const [localVoiceNames, setLocalVoiceNames] = useState<string[]>([]);
+  const [kokoroStatus, setKokoroStatus] = useState<KokoroStatus>('idle');
+  const [kokoroPercent, setKokoroPercent] = useState(0);
+  const [kokoroError, setKokoroError] = useState<string | null>(null);
 
   const [wakeWord, setWakeWord] = useState<boolean>(() => readWakeWordEnabled());
   function toggleWake(v: boolean) {
@@ -149,6 +154,65 @@ export function Voice() {
   function chooseVoiceEngine(engine: VoiceEngine) {
     setVoiceEngine(engine);
     if (engine === 'local') void checkLocalVoices(false);
+    if (engine === 'kokoro') void downloadKokoro();
+  }
+
+  async function downloadKokoro() {
+    setKokoroError(null);
+    const ready = await ModelManager.status();
+    if (ready.ready) {
+      setKokoroStatus('ready');
+      return;
+    }
+    setKokoroStatus('downloading');
+    setKokoroPercent(0);
+    const ok = await ModelManager.ensureKokoroReady((p) =>
+      setKokoroPercent(Math.max(0, Math.min(100, Math.round(p.percent)))),
+    );
+    const status = await ModelManager.status();
+    if (ok && status.ready) {
+      setKokoroStatus('ready');
+    } else if (ok && !status.ready) {
+      setKokoroStatus('error');
+      setKokoroError(
+        'Model downloaded, but the neural runtime is not available in this build. Using the Windows Natural voice.',
+      );
+    } else {
+      setKokoroStatus('error');
+      setKokoroError('Download failed. Check your connection and try again.');
+    }
+  }
+
+  async function testKokoro() {
+    setKokoroError(null);
+    setKokoroStatus('testing');
+    try {
+      const { kokoroLocalProvider } = await import('@/features/voice/providers/kokoroLocal');
+      if (!(await kokoroLocalProvider.isAvailable())) {
+        const ok = await ModelManager.ensureKokoroReady((p) =>
+          setKokoroPercent(Math.max(0, Math.min(100, Math.round(p.percent)))),
+        );
+        if (!ok || !(await kokoroLocalProvider.isAvailable())) {
+          setKokoroStatus('error');
+          setKokoroError('Kokoro is not ready yet. Download the model, then test again.');
+          return;
+        }
+      }
+      const preset = voicePreset === 'aurora' ? 'friday' : 'jarvis';
+      const controller = new AbortController();
+      await kokoroLocalProvider.speakChunk('Hello, I am Jarvis. Systems are online.', {
+        preset,
+        signal: controller.signal,
+        volume: 1,
+      });
+      setKokoroStatus('ready');
+      toast.success('Kokoro voice', 'Played the test phrase with the local neural voice.');
+    } catch (err) {
+      setKokoroStatus('error');
+      const msg = err instanceof Error ? err.message : 'Kokoro synthesis failed.';
+      setKokoroError(`${msg} The Windows Natural voice will be used instead.`);
+      toast.error('Kokoro test failed', msg);
+    }
   }
 
   async function installLocalVoice() {
@@ -234,7 +298,7 @@ export function Voice() {
             this device.
           </p>
         </div>
-        <div className="grid max-w-xl grid-cols-2 gap-2">
+        <div className="grid max-w-xl grid-cols-3 gap-2">
           <VoiceEngineCard
             engine="system"
             selected={voiceEngine === 'system'}
@@ -250,6 +314,14 @@ export function Voice() {
             description="Never use an online speech voice"
             icon={<HardDrive className="h-4 w-4" />}
             onSelect={() => chooseVoiceEngine('local')}
+          />
+          <VoiceEngineCard
+            engine="kokoro"
+            selected={voiceEngine === 'kokoro'}
+            title="Kokoro"
+            description="Local neural voice (downloads once)"
+            icon={<AudioLines className="h-4 w-4" />}
+            onSelect={() => chooseVoiceEngine('kokoro')}
           />
         </div>
         {voiceEngine === 'local' ? (
@@ -302,6 +374,54 @@ export function Voice() {
                 {localVoiceNames.join(', ')}
               </p>
             ) : null}
+          </div>
+        ) : null}
+        {voiceEngine === 'kokoro' ? (
+          <div className="max-w-xl rounded-md border border-border bg-panel p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <KokoroStatusBadge status={kokoroStatus} percent={kokoroPercent} />
+                <span className="text-metadata text-muted-foreground">
+                  Kokoro-82M neural voice · ~340 MB · downloads once
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void downloadKokoro()}
+                  disabled={kokoroStatus === 'downloading' || kokoroStatus === 'ready'}
+                >
+                  <Download
+                    className={cn('h-3.5 w-3.5', kokoroStatus === 'downloading' && 'animate-pulse')}
+                  />
+                  {kokoroStatus === 'ready'
+                    ? 'Downloaded'
+                    : kokoroStatus === 'downloading'
+                      ? `Downloading ${kokoroPercent}%`
+                      : 'Download model'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void testKokoro()}
+                  disabled={kokoroStatus === 'downloading' || kokoroStatus === 'testing'}
+                >
+                  <Play className={cn('h-3.5 w-3.5', kokoroStatus === 'testing' && 'animate-pulse')} />
+                  Test Kokoro voice
+                </Button>
+              </div>
+            </div>
+            {kokoroError ? (
+              <p className="mt-2 text-metadata text-warning">{kokoroError}</p>
+            ) : (
+              <p className="mt-2 text-metadata text-muted-foreground">
+                If Kokoro is unavailable, Jarvis automatically falls back to the Windows Natural
+                voice — it never blocks chat.
+              </p>
+            )}
           </div>
         ) : null}
       </section>
@@ -501,6 +621,21 @@ function VoiceEngineCard({
       </span>
     </button>
   );
+}
+
+function KokoroStatusBadge({ status, percent }: { status: KokoroStatus; percent: number }) {
+  const config: Record<
+    KokoroStatus,
+    { label: string; variant: 'outline' | 'success' | 'warning' }
+  > = {
+    idle: { label: 'Not downloaded', variant: 'outline' },
+    downloading: { label: `Downloading ${percent}%`, variant: 'outline' },
+    ready: { label: 'Ready', variant: 'success' },
+    testing: { label: 'Testing', variant: 'outline' },
+    error: { label: 'Unavailable', variant: 'warning' },
+  };
+  const item = config[status];
+  return <Badge variant={item.variant}>{item.label}</Badge>;
 }
 
 function LocalVoiceStatusBadge({ status }: { status: LocalVoiceStatus }) {

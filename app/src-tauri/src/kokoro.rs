@@ -228,6 +228,346 @@ fn download_file(app: &tauri::AppHandle, file: &ManifestFile, dir: &Path) -> Res
     Ok(())
 }
 
+// ─── Real Kokoro-82M inference (feature = "kokoro") ────────────────────────────
+//
+// Pipeline (mirrors the canonical thewh1teagle/kokoro-onnx reference):
+//   text --misaki(pure-Rust G2P)--> phonemes --vocab--> token ids
+//   input_ids = [0, ...ids, 0]; style = voices[name][len(ids)] (256-d);
+//   ort session.run -> f32 waveform @ 24 kHz -> 16-bit WAV -> base64.
+//
+// Every fallible step returns Err (never panics); callers degrade to the
+// Windows Natural system voice. No secrets are ever logged.
+#[cfg(feature = "kokoro")]
+mod engine {
+    use super::model_dir;
+    use base64::Engine as _;
+    use ndarray::ArrayD;
+    use ndarray_npy::NpzReader;
+    use ort::session::Session;
+    use ort::value::Tensor;
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::io::Cursor;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    const SAMPLE_RATE: u32 = 24_000;
+    const MAX_PHONEME_LENGTH: usize = 510;
+    const STYLE_DIM: usize = 256;
+
+    static ENGINE: Mutex<Option<KokoroEngine>> = Mutex::new(None);
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum SpeedDtype {
+        F32,
+        I64,
+        I32,
+    }
+
+    struct KokoroEngine {
+        session: Session,
+        /// voice name -> flat row-major style table (len = rows * 256).
+        voices: HashMap<String, Vec<f32>>,
+        /// Cached working (token_input_is_ids, speed dtype) once a run succeeds.
+        combo: Option<(bool, SpeedDtype)>,
+    }
+
+    fn err<E: std::fmt::Display>(e: E) -> String {
+        e.to_string()
+    }
+
+    /// Kokoro phoneme -> token id (the n_token=178 vocab from the model config).
+    fn vocab() -> &'static HashMap<char, i64> {
+        static V: OnceLock<HashMap<char, i64>> = OnceLock::new();
+        V.get_or_init(|| {
+            let pairs: &[(char, i64)] = &[
+                (';', 1), (':', 2), (',', 3), ('.', 4), ('!', 5), ('?', 6),
+                ('\u{2014}', 9), ('\u{2026}', 10), ('"', 11), ('(', 12), (')', 13),
+                ('\u{201C}', 14), ('\u{201D}', 15), (' ', 16), ('\u{0303}', 17),
+                ('\u{02A3}', 18), ('\u{02A5}', 19), ('\u{02A6}', 20), ('\u{02A8}', 21),
+                ('\u{1D5D}', 22), ('\u{AB67}', 23), ('A', 24), ('I', 25), ('O', 31),
+                ('Q', 33), ('S', 35), ('T', 36), ('W', 39), ('Y', 41), ('\u{1D4A}', 42),
+                ('a', 43), ('b', 44), ('c', 45), ('d', 46), ('e', 47), ('f', 48),
+                ('h', 50), ('i', 51), ('j', 52), ('k', 53), ('l', 54), ('m', 55),
+                ('n', 56), ('o', 57), ('p', 58), ('q', 59), ('r', 60), ('s', 61),
+                ('t', 62), ('u', 63), ('v', 64), ('w', 65), ('x', 66), ('y', 67),
+                ('z', 68), ('\u{0251}', 69), ('\u{0250}', 70), ('\u{0252}', 71),
+                ('\u{00E6}', 72), ('\u{03B2}', 75), ('\u{0254}', 76), ('\u{0255}', 77),
+                ('\u{00E7}', 78), ('\u{0256}', 80), ('\u{00F0}', 81), ('\u{02A4}', 82),
+                ('\u{0259}', 83), ('\u{025A}', 85), ('\u{025B}', 86), ('\u{025C}', 87),
+                ('\u{025F}', 90), ('\u{0261}', 92), ('\u{0265}', 99), ('\u{0268}', 101),
+                ('\u{026A}', 102), ('\u{029D}', 103), ('\u{026F}', 110), ('\u{0270}', 111),
+                ('\u{014B}', 112), ('\u{0273}', 113), ('\u{0272}', 114), ('\u{0274}', 115),
+                ('\u{00F8}', 116), ('\u{0278}', 118), ('\u{03B8}', 119), ('\u{0153}', 120),
+                ('\u{0279}', 123), ('\u{027E}', 125), ('\u{027B}', 126), ('\u{0281}', 128),
+                ('\u{027D}', 129), ('\u{0282}', 130), ('\u{0283}', 131), ('\u{0288}', 132),
+                ('\u{02A7}', 133), ('\u{028A}', 135), ('\u{028B}', 136), ('\u{028C}', 138),
+                ('\u{0263}', 139), ('\u{0264}', 140), ('\u{03C7}', 142), ('\u{028E}', 143),
+                ('\u{0292}', 147), ('\u{0294}', 148), ('\u{02C8}', 156), ('\u{02CC}', 157),
+                ('\u{02D0}', 158), ('\u{02B0}', 162), ('\u{02B2}', 164), ('\u{2193}', 169),
+                ('\u{2192}', 171), ('\u{2197}', 172), ('\u{2198}', 173), ('\u{1D7B}', 177),
+            ];
+            pairs.iter().copied().collect()
+        })
+    }
+
+    /// Locate the ONNX model + voices blob inside the model dir, tolerant of
+    /// exact filenames so a manifest rename does not break us.
+    fn find_assets() -> Result<(PathBuf, PathBuf), String> {
+        let dir = model_dir();
+        let mut model = None;
+        let mut voices = None;
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_lowercase();
+                if name.ends_with(".part") {
+                    continue;
+                }
+                if name.ends_with(".onnx") {
+                    model = Some(e.path());
+                } else if name.ends_with(".bin") || name.ends_with(".npz") {
+                    voices = Some(e.path());
+                }
+            }
+        }
+        match (model, voices) {
+            (Some(m), Some(v)) => Ok((m, v)),
+            _ => Err("model_not_installed".to_string()),
+        }
+    }
+
+    impl KokoroEngine {
+        fn load() -> Result<KokoroEngine, String> {
+            let (model_path, voices_path) = find_assets()?;
+            let session = Session::builder()
+                .map_err(err)?
+                .commit_from_file(&model_path)
+                .map_err(err)?;
+
+            let file = File::open(&voices_path).map_err(err)?;
+            let mut npz = NpzReader::new(file).map_err(err)?;
+            let names = npz.names().map_err(err)?;
+            let mut voices: HashMap<String, Vec<f32>> = HashMap::new();
+            for name in names {
+                let arr: ArrayD<f32> = match npz.by_name(&name) {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                };
+                let flat: Vec<f32> = arr.iter().copied().collect();
+                if flat.len() >= STYLE_DIM {
+                    let key = name.trim_end_matches(".npy").to_string();
+                    voices.insert(key, flat);
+                }
+            }
+            if voices.is_empty() {
+                return Err("no_voices_loaded".to_string());
+            }
+            Ok(KokoroEngine {
+                session,
+                voices,
+                combo: None,
+            })
+        }
+
+        fn resolve_voice(&self, requested: &str) -> String {
+            if self.voices.contains_key(requested) {
+                return requested.to_string();
+            }
+            let mapped = match requested.to_lowercase().as_str() {
+                "jarvis" => "bm_daniel",
+                "friday" => "bf_emma",
+                _ => "",
+            };
+            if !mapped.is_empty() && self.voices.contains_key(mapped) {
+                return mapped.to_string();
+            }
+            if self.voices.contains_key("af_heart") {
+                return "af_heart".to_string();
+            }
+            self.voices.keys().next().cloned().unwrap_or_default()
+        }
+
+        fn synth(&mut self, text: &str, voice: &str, speed: f32) -> Result<Vec<f32>, String> {
+            // Phonemize with misaki (pure Rust, US English) — Kokoro's own G2P.
+            let g2p = misaki_rs::G2P::new(misaki_rs::Language::EnglishUS);
+            let (phonemes, _tokens) = g2p
+                .g2p(text)
+                .map_err(|e| format!("phonemize_failed: {e:?}"))?;
+            let v = vocab();
+            let mut ids: Vec<i64> = phonemes.chars().filter_map(|c| v.get(&c).copied()).collect();
+            if ids.len() > MAX_PHONEME_LENGTH {
+                ids.truncate(MAX_PHONEME_LENGTH);
+            }
+            if ids.is_empty() {
+                return Err("empty_phonemes".to_string());
+            }
+            let token_len = ids.len();
+
+            let voice_name = self.resolve_voice(voice);
+            let flat = self
+                .voices
+                .get(&voice_name)
+                .ok_or_else(|| "voice_not_found".to_string())?
+                .clone();
+            let rows = flat.len() / STYLE_DIM;
+            let idx = token_len.min(rows.saturating_sub(1));
+            let style = flat[idx * STYLE_DIM..idx * STYLE_DIM + STYLE_DIM].to_vec();
+
+            let mut input_ids: Vec<i64> = Vec::with_capacity(token_len + 2);
+            input_ids.push(0);
+            input_ids.extend_from_slice(&ids);
+            input_ids.push(0);
+
+            self.run(input_ids, style, speed.clamp(0.5, 2.0))
+        }
+
+        fn run(&mut self, ids: Vec<i64>, style: Vec<f32>, speed: f32) -> Result<Vec<f32>, String> {
+            let n = ids.len();
+            let candidates: Vec<(bool, SpeedDtype)> = match self.combo {
+                Some(c) => vec![c],
+                None => vec![
+                    (true, SpeedDtype::F32),
+                    (true, SpeedDtype::I64),
+                    (true, SpeedDtype::I32),
+                    (false, SpeedDtype::F32),
+                    (false, SpeedDtype::I64),
+                    (false, SpeedDtype::I32),
+                ],
+            };
+            let mut last_err = "inference_failed".to_string();
+            for (is_ids, dtype) in candidates {
+                let input_ids = Tensor::from_array(([1usize, n], ids.clone())).map_err(err)?;
+                let style_t =
+                    Tensor::from_array(([1usize, STYLE_DIM], style.clone())).map_err(err)?;
+                let run_result = match (is_ids, dtype) {
+                    (true, SpeedDtype::F32) => {
+                        let s = Tensor::from_array(([1usize], vec![speed])).map_err(err)?;
+                        self.session.run(ort::inputs!["input_ids" => input_ids, "style" => style_t, "speed" => s])
+                    }
+                    (true, SpeedDtype::I64) => {
+                        let s = Tensor::from_array(([1usize], vec![speed.round() as i64])).map_err(err)?;
+                        self.session.run(ort::inputs!["input_ids" => input_ids, "style" => style_t, "speed" => s])
+                    }
+                    (true, SpeedDtype::I32) => {
+                        let s = Tensor::from_array(([1usize], vec![speed.round() as i32])).map_err(err)?;
+                        self.session.run(ort::inputs!["input_ids" => input_ids, "style" => style_t, "speed" => s])
+                    }
+                    (false, SpeedDtype::F32) => {
+                        let s = Tensor::from_array(([1usize], vec![speed])).map_err(err)?;
+                        self.session.run(ort::inputs!["tokens" => input_ids, "style" => style_t, "speed" => s])
+                    }
+                    (false, SpeedDtype::I64) => {
+                        let s = Tensor::from_array(([1usize], vec![speed.round() as i64])).map_err(err)?;
+                        self.session.run(ort::inputs!["tokens" => input_ids, "style" => style_t, "speed" => s])
+                    }
+                    (false, SpeedDtype::I32) => {
+                        let s = Tensor::from_array(([1usize], vec![speed.round() as i32])).map_err(err)?;
+                        self.session.run(ort::inputs!["tokens" => input_ids, "style" => style_t, "speed" => s])
+                    }
+                };
+                match run_result {
+                    Ok(outputs) => {
+                        let output = match outputs.iter().next() {
+                            Some(o) => o,
+                            None => {
+                                last_err = "no_output".to_string();
+                                continue;
+                            }
+                        };
+                        let (_shape, data) =
+                            output.1.try_extract_tensor::<f32>().map_err(err)?;
+                        if data.is_empty() {
+                            return Err("empty_audio".to_string());
+                        }
+                        let out = data.to_vec();
+                        self.combo = Some((is_ids, dtype));
+                        return Ok(out);
+                    }
+                    Err(e) => last_err = e.to_string(),
+                }
+            }
+            Err(last_err)
+        }
+    }
+
+    /// True when the model is installed AND a session can actually be created.
+    pub fn ready() -> bool {
+        let mut slot = match ENGINE.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if slot.is_none() {
+            match KokoroEngine::load() {
+                Ok(e) => *slot = Some(e),
+                Err(_) => return false,
+            }
+        }
+        slot.is_some()
+    }
+
+    /// Synthesize speech, returning (base64 wav, mime). Errors -> caller falls back.
+    pub fn speak(text: &str, voice: &str, speed: f32) -> Result<(String, String), String> {
+        let mut slot = ENGINE.lock().map_err(|_| "engine_lock".to_string())?;
+        if slot.is_none() {
+            *slot = Some(KokoroEngine::load()?);
+        }
+        let engine = slot.as_mut().ok_or_else(|| "engine_unavailable".to_string())?;
+        let samples = engine.synth(text, voice, speed)?;
+
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut writer = hound::WavWriter::new(cursor, spec).map_err(err)?;
+            for &s in &samples {
+                let val = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                writer.write_sample(val).map_err(err)?;
+            }
+            writer.finalize().map_err(err)?;
+        }
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+        Ok((b64, "audio/wav".to_string()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use base64::Engine as _;
+
+        // Runs the FULL pipeline (load model + voices, misaki phonemize, ort
+        // inference, WAV encode) against a locally-installed model. Skips
+        // cleanly when the model is not present so CI without weights passes.
+        #[test]
+        fn synthesizes_test_phrase_when_model_present() {
+            if super::find_assets().is_err() {
+                eprintln!("kokoro model not installed locally — skipping real synth test");
+                return;
+            }
+            let (b64, mime) =
+                super::speak("Hello, I am Jarvis. Systems are online.", "jarvis", 1.0)
+                    .expect("kokoro synthesis should succeed when the model is installed");
+            assert_eq!(mime, "audio/wav");
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&b64)
+                .expect("speak() must return valid base64");
+            // WAV header (44 bytes) + at least ~0.5s of 16-bit mono @ 24 kHz.
+            let min_len = 44 + 24_000;
+            assert!(
+                bytes.len() > min_len,
+                "audio too short: {} bytes (expected > {})",
+                bytes.len(),
+                min_len
+            );
+            let secs = (bytes.len() as f64 - 44.0) / 2.0 / 24_000.0;
+            println!("KOKORO_OK bytes={} (~{:.2}s of audio)", bytes.len(), secs);
+        }
+    }
+}
+
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -285,12 +625,14 @@ pub fn kokoro_verify_checksums() -> ChecksumResult {
 #[tauri::command]
 pub fn kokoro_status() -> ModelStatus {
     let installed = kokoro_check_installed().installed;
-    // `ready` stays false until an ONNX runtime + weights are wired, so the
-    // frontend falls back to system TTS instead of pretending audio works.
-    ModelStatus {
-        installed,
-        ready: false,
-    }
+    // `ready` is true only when the feature is compiled in AND a session can be
+    // created from the installed weights. Otherwise the frontend falls back to
+    // the Windows Natural system voice instead of pretending audio works.
+    #[cfg(feature = "kokoro")]
+    let ready = installed && engine::ready();
+    #[cfg(not(feature = "kokoro"))]
+    let ready = false;
+    ModelStatus { installed, ready }
 }
 
 #[tauri::command]
@@ -357,11 +699,19 @@ pub struct SpeakResult {
 }
 
 #[tauri::command]
-pub fn kokoro_speak(_text: String, _voice: String, _speed: f32) -> Result<SpeakResult, String> {
-    // ONNX runtime + Kokoro weights not bundled yet: return a structured error
-    // that the frontend maps to an automatic system-TTS fallback. Do NOT fake
-    // audio output.
-    Err("engine_not_available".to_string())
+pub fn kokoro_speak(text: String, voice: String, speed: f32) -> Result<SpeakResult, String> {
+    #[cfg(feature = "kokoro")]
+    {
+        let (audio, mime) = engine::speak(&text, &voice, speed)?;
+        Ok(SpeakResult { audio, mime })
+    }
+    // When the Kokoro feature is not compiled in, return a structured error the
+    // frontend maps to an automatic Windows Natural fallback. Never fake audio.
+    #[cfg(not(feature = "kokoro"))]
+    {
+        let _ = (text, voice, speed);
+        Err("engine_not_available".to_string())
+    }
 }
 
 #[tauri::command]

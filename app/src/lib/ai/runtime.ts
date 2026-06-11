@@ -633,6 +633,23 @@ export function startRuntimeListener(
                   detail: { agent: agent.slug, textChars: speechText.length },
                 });
               });
+          } else if (voiceSettings.voiceEngine === 'kokoro') {
+            // Local Kokoro neural voice. TtsService runs the kokoro_local
+            // provider and transparently falls back to the Windows Natural
+            // system voice if the model is missing/unready or inference fails.
+            const ttsPreset = voiceSettings.voicePreset === 'aurora' ? 'friday' : 'jarvis';
+            void import('@/features/voice/TtsService')
+              .then(({ TtsService }) =>
+                TtsService.speak(speechText, { provider: 'kokoro_local', preset: ttsPreset }),
+              )
+              .catch((speechErr) => {
+                devConsole.log({
+                  channel: 'ai',
+                  level: 'warn',
+                  message: `Kokoro voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+                  detail: { agent: agent.slug, textChars: speechText.length },
+                });
+              });
           } else {
             void speakText(speechText, {
               voicePreset: voiceSettings.voicePreset,

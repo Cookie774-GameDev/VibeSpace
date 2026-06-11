@@ -53,8 +53,14 @@ export type PersonaPreset = 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal';
 /** Persisted spoken-voice profiles. Independent from the conversational persona. */
 export type VoicePresetId = 'jarvis-prime' | 'aurora' | 'atlas' | 'nova' | 'sentinel';
 
-/** System may use any OS/browser voice; local restricts playback to installed voices. */
-export type VoiceEngine = 'system' | 'local';
+/**
+ * Spoken voice engine:
+ *  - 'system': any OS/browser voice (Windows Natural / online enhanced) — default.
+ *  - 'local':  restricts playback to locally-installed system voices.
+ *  - 'kokoro': local Kokoro-82M neural TTS (downloads once); falls back to
+ *              the Windows Natural system voice if unavailable.
+ */
+export type VoiceEngine = 'system' | 'local' | 'kokoro';
 
 /**
  * Provider IDs we know about.

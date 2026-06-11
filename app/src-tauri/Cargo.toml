@@ -36,6 +36,12 @@ sha2 = "0.10"
 # the Unix forkpty path; `nanoid` is used for short opaque session ids.
 portable-pty = "0.8"
 nanoid = "0.4"
+ort = { version = "2.0.0-rc.9", features = ["ndarray"], optional = true }
+misaki-rs = { version = "0.3.0", default-features = false, optional = true }
+hound = { version = "3.5.1", optional = true }
+ndarray = { version = "0.16", optional = true }
+ndarray-npy = { version = "0.9.1", default-features = false, features = ["npz", "compressed_npz"], optional = true }
+base64 = { version = "0.22", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
@@ -63,3 +69,11 @@ lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true
+
+[features]
+# Real Kokoro-82M local neural TTS: ONNX Runtime (`ort`) + pure-Rust misaki G2P.
+# OFF by default so the stable build is byte-for-byte unaffected and pulls none
+# of these native deps. The release build opts in with `--features kokoro`.
+# When the feature is off, `kokoro_speak` returns `engine_not_available` and the
+# app falls back to the Windows Natural voice — never a crash.
+kokoro = ["dep:ort", "dep:misaki-rs", "dep:hound", "dep:ndarray", "dep:ndarray-npy", "dep:base64"]

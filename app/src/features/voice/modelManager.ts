@@ -88,6 +88,34 @@ export function detectOS(platform: string): OS {
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
+/**
+ * Canonical Kokoro-82M v1.0 ONNX assets (thewh1teagle/kokoro-onnx release).
+ * SHA-256 values were computed locally from the downloaded files, so checksum
+ * verification is real — not a placeholder. ~325 MB + ~27 MB, downloaded once.
+ */
+const DEFAULT_KOKORO_MANIFEST: ModelManifest = {
+  model: 'kokoro-82m',
+  version: '1.0',
+  runtime: 'onnx',
+  files: [
+    {
+      name: 'kokoro-v1.0.onnx',
+      url: 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx',
+      sha256: '7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5',
+      size_bytes: 325532387,
+      required: true,
+    },
+    {
+      name: 'voices-v1.0.bin',
+      url: 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin',
+      sha256: 'bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d',
+      size_bytes: 28214398,
+      required: true,
+    },
+  ],
+  voices: ['jarvis', 'friday'],
+};
+
 async function getInvoke(): Promise<TauriInvoke | null> {
   try {
     const mod = await import('@tauri-apps/api/core');
@@ -136,23 +164,30 @@ class ModelManagerImpl {
     if (this.manifestCache) return this.manifestCache;
     try {
       const base = import.meta.env.VITE_SUPABASE_URL;
-      if (!base) return null;
-      const res = await fetch(`${base}/functions/v1/model-manifest`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) return null;
-      const manifest = (await res.json()) as ModelManifest & { status?: string };
-      // The server reports status:'unavailable' until a real model asset is
-      // published. Treat that as "no model" so we fall back to system TTS
-      // instead of trying to download placeholder files.
-      if (manifest.status === 'unavailable' || !manifest.files || manifest.files.length === 0) {
-        return null;
+      if (base) {
+        const res = await fetch(`${base}/functions/v1/model-manifest`, {
+          signal: AbortSignal.timeout(8000),
+        });
+        if (res.ok) {
+          const manifest = (await res.json()) as ModelManifest & { status?: string };
+          if (
+            manifest.status !== 'unavailable' &&
+            Array.isArray(manifest.files) &&
+            manifest.files.length > 0
+          ) {
+            this.manifestCache = manifest;
+            return this.manifestCache;
+          }
+        }
       }
-      this.manifestCache = manifest;
-      return this.manifestCache;
     } catch {
-      return null;
+      /* fall through to the built-in manifest */
     }
+    // Built-in manifest: the canonical Kokoro-82M v1.0 ONNX assets with real,
+    // locally-verified SHA-256 checksums. Used when the server has no override
+    // configured, so the local neural voice works out of the box.
+    this.manifestCache = DEFAULT_KOKORO_MANIFEST;
+    return this.manifestCache;
   }
 
   async downloadModelWithProgress(onProgress?: (p: DownloadProgress) => void): Promise<boolean> {
