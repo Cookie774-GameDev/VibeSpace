@@ -125,13 +125,32 @@ export function TabStrip() {
   // which looked like "Open in Chat opened a different/new chat" (the reported
   // bug). Instead: only bump when the chat is truly gone (deleted). If it still
   // exists in another project, switch to that project so it stays selected.
+  const prevProjectIdRef = React.useRef(projectId);
+  const prevActiveChatRef = React.useRef(activeChatId);
   React.useEffect(() => {
+    const projectChanged = prevProjectIdRef.current !== projectId;
+    const chatChanged = prevActiveChatRef.current !== activeChatId;
+    prevProjectIdRef.current = projectId;
+    prevActiveChatRef.current = activeChatId;
+
     if (!activeChatId) {
       if (tabs.length > 0) setActiveChat(tabs[0].id);
       return;
     }
     if (tabs.some((t) => t.id === activeChatId)) return;
 
+    // The active chat is NOT in the current project's tab list.
+    if (projectChanged && !chatChanged) {
+      // The user deliberately switched PROJECT (the active chat didn't change).
+      // Don't drag them back to the old chat's project — select a chat that
+      // belongs to the project they just opened instead.
+      setActiveChat(tabs[0]?.id ?? null);
+      return;
+    }
+
+    // Otherwise the active CHAT changed (e.g. "Open in Chat" from History or a
+    // command-palette jump) to a chat in another project — align the workspace
+    // to that chat's project so its tab is in scope.
     let cancelled = false;
     void (async () => {
       let chat: Chat | undefined;
@@ -148,13 +167,11 @@ export function TabStrip() {
       }
       const chatProject = (chat.project_id ?? null) as ProjectId | null;
       if (chatProject !== projectId) {
-        // Align the workspace to the chat's project so its tab is in scope.
         // Pre-seed per-project memory so the project-switch handler keeps THIS
         // chat active rather than restoring a previously-remembered one.
         projectChatMemory.set(projectMemoryKey(chatProject), activeChatId as ChatId);
         setProjectId(chatProject);
       }
-      // Same project but outside the capped recent list: keep it (no bump).
     })();
     return () => {
       cancelled = true;

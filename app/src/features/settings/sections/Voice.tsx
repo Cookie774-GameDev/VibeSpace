@@ -404,7 +404,7 @@ export function Voice() {
               <div className="flex items-center gap-2">
                 <KokoroStatusBadge status={kokoroStatus} percent={kokoroPercent} />
                 <span className="text-metadata text-muted-foreground">
-                  Kokoro-82M neural voice · ~340 MB · downloads once
+                  Kokoro-82M neural voice · ~82 MB · downloads once
                 </span>
               </div>
               <div className="flex items-center gap-2">

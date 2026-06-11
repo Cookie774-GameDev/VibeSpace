@@ -27,7 +27,11 @@ import { getPluginContextBlock } from '@/features/plugins';
 import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
-import { speakText } from '@/features/voice/speechSynthesis';
+import {
+  speakText,
+  SPEECH_SYNTHESIS_START_EVENT,
+  SPEECH_SYNTHESIS_END_EVENT,
+} from '@/features/voice/speechSynthesis';
 
 /**
  * Read the user's selected Cloud Voice provider from local settings. Returns
@@ -622,22 +626,13 @@ export function startRuntimeListener(
           // fallback to local/system voice. Otherwise keep the lightweight
           // system-voice path unchanged.
           const cloudProvider = readSelectedCloudVoiceProvider();
-          if (cloudProvider) {
-            void import('@/features/voice/TtsService')
-              .then(({ TtsService }) => TtsService.speak(speechText))
-              .catch((speechErr) => {
-                devConsole.log({
-                  channel: 'ai',
-                  level: 'warn',
-                  message: `Cloud voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
-                  detail: { agent: agent.slug, textChars: speechText.length },
-                });
-              });
-          } else if (voiceSettings.voiceEngine === 'kokoro') {
-            // Local Kokoro neural voice. TtsService runs the kokoro_local
-            // provider and transparently falls back to the Windows Natural
-            // system voice if the model is missing/unready or inference fails.
+          if (voiceSettings.voiceEngine === 'kokoro') {
+            // Local Kokoro neural voice. Emit the same speech-start/end events
+            // Web Speech uses so the voice panel pauses the mic while Jarvis
+            // talks and resumes after. TtsService falls back to the Windows
+            // Natural voice only if Kokoro is genuinely unavailable.
             const ttsPreset = voiceSettings.voicePreset === 'aurora' ? 'friday' : 'jarvis';
+            window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT));
             void import('@/features/voice/TtsService')
               .then(({ TtsService }) =>
                 TtsService.speak(speechText, { provider: 'kokoro_local', preset: ttsPreset }),
@@ -647,6 +642,20 @@ export function startRuntimeListener(
                   channel: 'ai',
                   level: 'warn',
                   message: `Kokoro voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+                  detail: { agent: agent.slug, textChars: speechText.length },
+                });
+              })
+              .finally(() => {
+                window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
+              });
+          } else if (cloudProvider) {
+            void import('@/features/voice/TtsService')
+              .then(({ TtsService }) => TtsService.speak(speechText))
+              .catch((speechErr) => {
+                devConsole.log({
+                  channel: 'ai',
+                  level: 'warn',
+                  message: `Cloud voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
                   detail: { agent: agent.slug, textChars: speechText.length },
                 });
               });

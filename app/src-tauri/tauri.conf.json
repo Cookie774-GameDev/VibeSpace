@@ -21,7 +21,8 @@
         "minHeight": 600,
         "decorations": true,
         "resizable": true,
-        "transparent": false
+        "transparent": false,
+        "additionalBrowserArgs": "--js-flags=--max-old-space-size=4096 --disable-renderer-backgrounding"
       }
     ],
     "security": {

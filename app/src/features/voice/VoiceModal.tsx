@@ -380,6 +380,15 @@ export function VoiceModal() {
       VoiceService.stopListening();
       useUIStore.getState().setVoiceListening(false);
       useVoiceStore.getState().setState('idle');
+      // Closing the voice panel must silence any in-flight reply audio too —
+      // Web Speech, the local Kokoro player, and any cloud TTS.
+      try {
+        window.speechSynthesis?.cancel();
+      } catch {
+        /* ignore */
+      }
+      void import('./speechSynthesis').then((m) => m.stopSpeech()).catch(() => {});
+      void import('./TtsService').then((m) => m.TtsService.stop()).catch(() => {});
     };
   }, [open, startListening, voiceAutoListenOnOpen]);
 
