@@ -156,6 +156,12 @@ export async function getInstalledSpeechVoices(
   return candidateVoices(voices, engine);
 }
 
+/** Warm the OS voice list so the first preview/reply is not blocked on voiceschanged. */
+export async function preloadSpeechVoices(engine: VoiceEngine = 'system'): Promise<void> {
+  const voices = await getVoices();
+  candidateVoices(voices, engine);
+}
+
 export async function isLocalSpeechAvailable(): Promise<boolean> {
   const voices = await getInstalledSpeechVoices('local');
   return voices.length > 0;
@@ -273,6 +279,11 @@ export function speakPersonaPreview(
   return speakText(text, { persona });
 }
 
-export function speakVoicePreview(preset: VoicePresetId, text = VOICE_PREVIEW_TEXT): Promise<void> {
-  return speakText(text, { voicePreset: preset });
+export function speakVoicePreview(
+  preset: VoicePresetId,
+  text = VOICE_PREVIEW_TEXT,
+  engine?: VoiceEngine,
+): Promise<void> {
+  const resolvedEngine = engine ?? useAuthStore.getState().voiceEngine ?? 'system';
+  return speakText(text, { voicePreset: preset, engine: resolvedEngine });
 }

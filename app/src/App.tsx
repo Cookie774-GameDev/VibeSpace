@@ -31,7 +31,7 @@ import { PageRouter } from '@/components/layout/PageRouter';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { startNotificationLoop } from '@/features/tasks';
 import { startClockEngine } from '@/features/clock';
-import { CommandPalette, useGlobalHotkeys } from '@/features/command-palette';
+import { useGlobalHotkeys } from '@/features/command-palette';
 import { WakeWordHost } from '@/features/voice/WakeWordHost';
 import { ApiKeySaveBurst } from '@/features/settings/ApiKeySaveBurst';
 import { CallModal, startOutboundTrigger } from '@/features/call';
@@ -86,6 +86,9 @@ const SettingsModal = React.lazy(() =>
 );
 const VoiceModal = React.lazy(() =>
   import('@/features/voice/VoiceModal').then((m) => ({ default: m.VoiceModal })),
+);
+const CommandPalette = React.lazy(() =>
+  import('@/features/command-palette').then((m) => ({ default: m.CommandPalette })),
 );
 const LauncherDialog = React.lazy(() =>
   import('@/features/launcher').then((m) => ({ default: m.LauncherDialog })),
@@ -505,7 +508,12 @@ function GlobalHotkeysHost() {
 function LauncherDialogHost() {
   const open = useUIStore((s) => s.launcherOpen);
   const setOpen = useUIStore((s) => s.setLauncherOpen);
-  return <LauncherDialog open={open} onOpenChange={setOpen} />;
+  if (!open) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <LauncherDialog open={open} onOpenChange={setOpen} />
+    </React.Suspense>
+  );
 }
 
 /**
@@ -517,7 +525,62 @@ function LauncherDialogHost() {
 function AssistantBarHost() {
   const open = useUIStore((s) => s.assistantOpen);
   const setOpen = useUIStore((s) => s.setAssistantOpen);
-  return <AssistantBar open={open} onOpenChange={setOpen} />;
+  if (!open) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <AssistantBar open={open} onOpenChange={setOpen} />
+    </React.Suspense>
+  );
+}
+
+function CommandPaletteHost() {
+  const open = useUIStore((s) => s.paletteOpen);
+  if (!open) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <CommandPalette />
+    </React.Suspense>
+  );
+}
+
+function SettingsModalHost() {
+  const open = useUIStore((s) => s.settingsOpen);
+  if (!open) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <SettingsModal />
+    </React.Suspense>
+  );
+}
+
+function VoiceModalHost() {
+  const open = useUIStore((s) => s.voiceModalOpen);
+  if (!open) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <VoiceModal />
+    </React.Suspense>
+  );
+}
+
+function ActionsPaletteHost() {
+  const open = useUIStore((s) => s.actionsPaletteOpen);
+  if (!open) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ActionsPalette />
+    </React.Suspense>
+  );
+}
+
+function WellnessBreakHost() {
+  const active = useUIStore((s) => s.wellnessActive);
+  if (!active) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <WellnessBreak />
+    </React.Suspense>
+  );
 }
 
 function ThemeHost() {
@@ -611,10 +674,10 @@ function WorkspaceRoot() {
         <ActiveCanvas />
       </AppShell>
 
-      {/* Modal layer */}
-      <CommandPalette />
-      <SettingsModal />
-      <VoiceModal />
+      {/* Modal layer — mount only while open to avoid idle store subscriptions */}
+      <CommandPaletteHost />
+      <SettingsModalHost />
+      <VoiceModalHost />
       <WakeWordHost />
       <React.Suspense fallback={null}>
         <CallModal />
@@ -639,12 +702,12 @@ function WorkspaceRoot() {
       {/* V3 — wellness break overlay (20-20-20 eye break). Sits at z-80
           so it covers ambient + every route, but stays below toasts so
           the completion confirmation can shine through. */}
-      <WellnessBreak />
+      <WellnessBreakHost />
 
       {/* V3 — actions palette (Mod+Shift+A). Direct user invocation of
           built-in actions and saved custom tools. Sibling to the
           AI-proposed approval cards rendered inline in chat bubbles. */}
-      <ActionsPalette />
+      <ActionsPaletteHost />
 
       {/* Toast outlet */}
       <JarvisContextMenu />

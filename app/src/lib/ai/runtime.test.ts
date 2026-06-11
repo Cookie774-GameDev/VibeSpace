@@ -8,7 +8,11 @@ const mocks = vi.hoisted(() => ({
   chatGetById: vi.fn(),
   notifyDone: vi.fn(),
   devLog: vi.fn(),
-  speakText: vi.fn(),
+  streamingSession: {
+    onDelta: vi.fn(),
+    onComplete: vi.fn(async () => undefined),
+    stop: vi.fn(),
+  },
 }));
 
 vi.mock('./router', () => ({
@@ -28,8 +32,8 @@ vi.mock('@/lib/notifications', () => ({
   notifyDone: mocks.notifyDone,
 }));
 
-vi.mock('@/features/voice/speechSynthesis', () => ({
-  speakText: mocks.speakText,
+vi.mock('@/features/voice/streamingVoice', () => ({
+  createStreamingVoiceSession: () => mocks.streamingSession,
 }));
 
 vi.mock('@/features/terminals/agentContext', () => ({
@@ -66,6 +70,9 @@ function agent(id: string, slug: string, systemPrompt: string): Agent {
 describe('startRuntimeListener agent routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.streamingSession.onDelta.mockClear();
+    mocks.streamingSession.onComplete.mockClear();
+    mocks.streamingSession.stop.mockClear();
     useAuthStore.setState({
       speakReplies: false,
       voicePreset: 'jarvis-prime',
@@ -260,14 +267,11 @@ describe('startRuntimeListener agent routing', () => {
       }),
     );
 
-    await vi.waitFor(() => expect(mocks.speakText).toHaveBeenCalledTimes(1));
-    expect(mocks.speakText).toHaveBeenCalledWith(
-      'Here is the plan.',
-      expect.objectContaining({
-        voicePreset: 'atlas',
-        engine: 'local',
-      }),
+    await vi.waitFor(() => expect(mocks.streamingSession.onComplete).toHaveBeenCalledTimes(1));
+    expect(mocks.streamingSession.onComplete).toHaveBeenCalledWith(
+      expect.stringContaining('Here is the plan.'),
     );
+    expect(mocks.streamingSession.onDelta).toHaveBeenCalled();
 
     stop();
   });
@@ -307,7 +311,7 @@ describe('startRuntimeListener agent routing', () => {
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 50));
-    expect(mocks.speakText).not.toHaveBeenCalled();
+    expect(mocks.streamingSession.onComplete).not.toHaveBeenCalled();
 
     stop();
   });

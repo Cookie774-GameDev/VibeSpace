@@ -4,6 +4,8 @@ import {
   cleanTextForSpeech,
   looksLikeRawData,
   prepareForSpeech,
+  pullNewSpeechSegments,
+  pullRemainingSpeech,
 } from './textCleanup';
 
 describe('cleanTextForSpeech', () => {
@@ -84,6 +86,23 @@ describe('prepareForSpeech', () => {
     expect(out.length).toBeGreaterThan(1);
     out.forEach((c) => expect(c.length).toBeLessThanOrEqual(100));
     expect(out.join(' ')).not.toContain('#');
+  });
+});
+
+describe('pullNewSpeechSegments', () => {
+  it('returns only newly completed sentences from streamed text', () => {
+    const first = pullNewSpeechSegments('Hello there. How are', 0);
+    expect(first.segments).toEqual(['Hello there.']);
+    const second = pullNewSpeechSegments('Hello there. How are you today?', first.nextSpokenCleanLength);
+    expect(second.segments).toEqual(['How are you today?']);
+  });
+});
+
+describe('pullRemainingSpeech', () => {
+  it('speaks the tail without a closing delimiter at stream end', () => {
+    const partial = pullNewSpeechSegments('Hello there. Still going', 0);
+    const tail = pullRemainingSpeech('Hello there. Still going strong', partial.nextSpokenCleanLength);
+    expect(tail.remainder).toBe('Still going strong');
   });
 });
 

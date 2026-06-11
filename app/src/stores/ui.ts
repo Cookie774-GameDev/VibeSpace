@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Theme } from '@/types/common';
+import { createDebouncedStateStorage } from '@/lib/persistence/debouncedStateStorage';
 import { safeLocalStorage, measureStorageSizes } from '@/lib/persistence/safeLocalStorage';
+
+const debouncedUiStorage = createDebouncedStateStorage(safeLocalStorage);
 
 export type ResolvedTheme = Exclude<Theme, 'system'>;
 
@@ -400,7 +403,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'jarvis-ui',
-      storage: createJSONStorage(() => safeLocalStorage),
+      storage: createJSONStorage(() => debouncedUiStorage),
       version: 1,
       migrate: (persistedState: any, version: number) => {
         if (version < 1) {
@@ -447,7 +450,6 @@ export const useUIStore = create<UIState>()(
         inspectorOpen: s.inspectorOpen,
         activeChatId: s.activeChatId,
         activeAgentId: s.activeAgentId,
-        route: s.route,
         navSectionsCollapsed: s.navSectionsCollapsed,
         chatMode: s.chatMode,
         theme: s.theme,

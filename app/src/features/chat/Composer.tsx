@@ -68,6 +68,9 @@ const MIN_LINES = 1;
 const MAX_LINES = 8;
 const MIN_HEIGHT = MIN_LINES * LINE_HEIGHT + PADDING_Y;
 const MAX_HEIGHT = MAX_LINES * LINE_HEIGHT + PADDING_Y;
+const COMPOSER_IDLE_TERMINAL_SESSIONS = {} as ReturnType<
+  typeof useTerminalTranscriptStore.getState
+>['sessions'];
 
 const PROVIDERS: ProviderId[] = [...REAL_CHAT_PROVIDERS];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
@@ -307,7 +310,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const apiKeys = useAuthStore((s) => s.apiKeys);
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const projectId = useAuthStore((s) => s.projectId);
-  const terminalSessions = useTerminalTranscriptStore((s) => s.sessions);
+  const terminalPickerActive = optionPickerCtx?.cmd.cmd === 'terminal';
+  const terminalSessions = useTerminalTranscriptStore((s) =>
+    terminalPickerActive ? s.sessions : COMPOSER_IDLE_TERMINAL_SESSIONS,
+  );
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
 
@@ -738,7 +744,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
         await addSystem(`Attached file: ${rest}`);
         return true;
       }
-      await addSystem('Use /file <absolute path> to attach a file. Example: /file C:\\Users\\viper\\projects\\app.tsx\nOr drag files from the left panel into the chat.');
+      await addSystem('Use /file <absolute path> to attach a file. Example: /file C:\\Users\\you\\projects\\app.tsx\nOr drag files from the left panel into the chat.');
       return true;
     }
     await addSystem(`Unknown slash command: /${cmd}. Try /help.`);
@@ -754,7 +760,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     // Process confirmed commands before sending
     for (const confirmed of confirmedCommands) {
       if (confirmed.cmd === 'terminal' && confirmed.value) {
-        const session = terminalSessions[confirmed.value];
+        const session = useTerminalTranscriptStore.getState().sessions[confirmed.value];
         if (session) {
           const ref: TerminalRef = {
             sessionId: session.sessionId,

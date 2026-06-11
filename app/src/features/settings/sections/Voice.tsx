@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   Mic,
   MicOff,
@@ -13,11 +13,17 @@ import {
 import { useAuthStore } from '@/stores/auth';
 import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
 import { PERSONAS } from '@/features/onboarding/steps/personas-data';
+import { getInstalledSpeechVoices, isSpeechSynthesisSupported } from '@/features/voice/speechSynthesis';
 import {
-  getInstalledSpeechVoices,
-  isSpeechSynthesisSupported,
-  speakVoicePreview,
-} from '@/features/voice/speechSynthesis';
+  previewVoiceWithSettings,
+  stopAllVoiceOutput,
+  warmVoiceEngine,
+} from '@/features/voice/voiceRouter';
+import {
+  effectivePlan,
+  isAdminIdentity,
+  planAllowsVoiceWithAdmin,
+} from '@/lib/entitlements';
 import { VOICE_PROFILES, type VoiceProfile } from '@/features/voice/voiceProfiles';
 import { ModelManager } from '@/features/voice/modelManager';
 import { Badge } from '@/components/ui/badge';
@@ -53,6 +59,13 @@ export function Voice() {
   const setSpeakReplies = useAuthStore((s) => s.setSpeakReplies);
   const voiceAutoListenOnOpen = useAuthStore((s) => s.voiceAutoListenOnOpen);
   const setVoiceAutoListenOnOpen = useAuthStore((s) => s.setVoiceAutoListenOnOpen);
+  const plan = useAuthStore((s) => s.plan);
+  const email = useAuthStore((s) => s.email);
+  const cloudEmail = useAuthStore((s) => s.cloudSession?.email);
+  const localUserId = useAuthStore((s) => s.localUserId);
+  const admin = isAdminIdentity({ email, cloudEmail, localUserId });
+  const activePlan = effectivePlan(plan, admin);
+  const canUseSystemVoice = planAllowsVoiceWithAdmin(activePlan, admin);
   const [previewingVoice, setPreviewingVoice] = useState<VoicePresetId | null>(null);
   const [localVoiceStatus, setLocalVoiceStatus] = useState<LocalVoiceStatus>('idle');
   const [localVoiceNames, setLocalVoiceNames] = useState<string[]>([]);
@@ -67,6 +80,16 @@ export function Voice() {
   }
 
   const [micStatus, setMicStatus] = useState<MicStatus>('idle');
+
+  useEffect(() => {
+    void warmVoiceEngine(voiceEngine);
+  }, [voiceEngine]);
+
+  useEffect(() => {
+    if (!canUseSystemVoice && voiceEngine === 'system') {
+      setVoiceEngine('local');
+    }
+  }, [canUseSystemVoice, voiceEngine, setVoiceEngine]);
 
   async function testMic() {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -88,39 +111,11 @@ export function Voice() {
     }
   }
 
-  async function previewVoice(nextVoice: VoicePresetId) {
+  async function previewVoice(nextVoice: VoicePresetId, engine: VoiceEngine = voiceEngine) {
     setPreviewingVoice(nextVoice);
     try {
-      // When the Kokoro engine is selected, preview with the actual Kokoro
-      // neural voice (mapped: Aurora -> Friday/bf_emma, otherwise Jarvis/bm_george).
-      if (voiceEngine === 'kokoro') {
-        const { kokoroLocalProvider } = await import('@/features/voice/providers/kokoroLocal');
-        if (!(await kokoroLocalProvider.isAvailable())) {
-          const ok = await ModelManager.ensureKokoroReady((p) =>
-            setKokoroPercent(Math.max(0, Math.min(100, Math.round(p.percent)))),
-          );
-          if (!ok || !(await kokoroLocalProvider.isAvailable())) {
-            toast.warning('Kokoro not ready', 'Download the Kokoro model first, then preview.');
-            return;
-          }
-        }
-        const preset = nextVoice === 'aurora' ? 'friday' : 'jarvis';
-        const controller = new AbortController();
-        await kokoroLocalProvider.speakChunk('Hello, I am Jarvis. Systems are online.', {
-          preset,
-          signal: controller.signal,
-          volume: 1,
-        });
-        return;
-      }
-      if (!isSpeechSynthesisSupported()) {
-        toast.warning(
-          'Voice preview unavailable',
-          'Speech synthesis is not available in this runtime.',
-        );
-        return;
-      }
-      await speakVoicePreview(nextVoice);
+      stopAllVoiceOutput();
+      await previewVoiceWithSettings(nextVoice, engine);
     } catch (err) {
       toast.error(
         'Voice preview failed',
@@ -174,7 +169,14 @@ export function Voice() {
   }
 
   function chooseVoiceEngine(engine: VoiceEngine) {
+    if (engine === 'system' && !canUseSystemVoice) {
+      toast.info('System voice requires a paid plan', 'Local and Kokoro stay available on Spark.');
+      return;
+    }
+    stopAllVoiceOutput();
     setVoiceEngine(engine);
+    void warmVoiceEngine(engine);
+    void previewVoice(voicePreset, engine);
     if (engine === 'local') void checkLocalVoices(false);
     if (engine === 'kokoro') void downloadKokoro();
   }
@@ -194,6 +196,7 @@ export function Voice() {
     const status = await ModelManager.status();
     if (ok && status.ready) {
       setKokoroStatus('ready');
+      void warmVoiceEngine('kokoro');
     } else if (ok && !status.ready) {
       setKokoroStatus('error');
       setKokoroError(
@@ -209,24 +212,8 @@ export function Voice() {
     setKokoroError(null);
     setKokoroStatus('testing');
     try {
-      const { kokoroLocalProvider } = await import('@/features/voice/providers/kokoroLocal');
-      if (!(await kokoroLocalProvider.isAvailable())) {
-        const ok = await ModelManager.ensureKokoroReady((p) =>
-          setKokoroPercent(Math.max(0, Math.min(100, Math.round(p.percent)))),
-        );
-        if (!ok || !(await kokoroLocalProvider.isAvailable())) {
-          setKokoroStatus('error');
-          setKokoroError('Kokoro is not ready yet. Download the model, then test again.');
-          return;
-        }
-      }
-      const preset = voicePreset === 'aurora' ? 'friday' : 'jarvis';
-      const controller = new AbortController();
-      await kokoroLocalProvider.speakChunk('Hello, I am Jarvis. Systems are online.', {
-        preset,
-        signal: controller.signal,
-        volume: 1,
-      });
+      stopAllVoiceOutput();
+      await previewVoiceWithSettings(voicePreset, 'kokoro');
       setKokoroStatus('ready');
       toast.success('Kokoro voice', 'Played the test phrase with the local neural voice.');
     } catch (err) {
@@ -277,7 +264,10 @@ export function Voice() {
               key={profile.id}
               profile={profile}
               selected={voicePreset === profile.id}
-              onSelect={() => setVoicePreset(profile.id)}
+              onSelect={() => {
+                setVoicePreset(profile.id);
+                void previewVoice(profile.id);
+              }}
               onPreview={() => void previewVoice(profile.id)}
               previewing={previewingVoice === profile.id}
             />
@@ -325,8 +315,13 @@ export function Voice() {
             engine="system"
             selected={voiceEngine === 'system'}
             title="System"
-            description="Best installed or enhanced voice"
+            description={
+              canUseSystemVoice
+                ? 'Best installed or enhanced voice'
+                : 'Paid plan required (Orbit+)'
+            }
             icon={<Volume2 className="h-4 w-4" />}
+            disabled={!canUseSystemVoice}
             onSelect={() => chooseVoiceEngine('system')}
           />
           <VoiceEngineCard
@@ -609,6 +604,7 @@ interface VoiceEngineCardProps {
   title: string;
   description: string;
   icon: ReactNode;
+  disabled?: boolean;
   onSelect: () => void;
 }
 
@@ -618,17 +614,20 @@ function VoiceEngineCard({
   title,
   description,
   icon,
+  disabled = false,
   onSelect,
 }: VoiceEngineCardProps) {
   return (
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabled}
       aria-pressed={selected}
       data-engine={engine}
       className={cn(
         'flex items-start gap-3 rounded-md border bg-panel p-3 text-left transition-colors',
         'hover:bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        disabled && 'cursor-not-allowed opacity-60 hover:bg-panel',
         selected
           ? 'border-accent-cyan/50 shadow-[0_0_0_1px_hsl(var(--accent-cyan)/0.35)]'
           : 'border-border',

@@ -6,7 +6,7 @@ import { TopBar } from './TopBar';
 import { NavPane } from './NavPane';
 import { Inspector } from './Inspector';
 import { TabStrip } from './TabStrip';
-import { ActivityStrip } from './ActivityStrip';
+import { CouncilActivityStrip } from './ActivityStrip';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -33,6 +33,7 @@ interface AppShellProps {
  */
 export function AppShell({ children }: AppShellProps) {
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
+  const chatMode = useUIStore((s) => s.chatMode);
 
   return (
     <MotionConfig
@@ -54,7 +55,7 @@ export function AppShell({ children }: AppShellProps) {
               >
                 {children}
               </main>
-              <ActivityStrip />
+              {chatMode === 'council' && <CouncilActivityStrip />}
             </div>
 
             <AnimatePresence initial={false}>

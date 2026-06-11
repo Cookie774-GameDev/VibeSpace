@@ -39,17 +39,17 @@ interface AuthGateProps {
 export function AuthGate({ children }: AuthGateProps) {
   const localUserId = useAuthStore((s) => s.localUserId);
   const setLocalUser = useAuthStore((s) => s.setLocalUser);
-  const apiKeys = useAuthStore((s) => s.apiKeys);
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const onboardingComplete = useUIStore((s) => s.onboardingComplete);
   const localModelOptions = useOllamaModelOptions();
+  const hasProviderKeyAccess = useAuthStore((s) =>
+    REAL_PROVIDER_KEYS.some((id) => !!s.apiKeys[id]),
+  );
 
   // Has the user connected a model yet? Cloud key, offline mode, or an
   // installed local Ollama model all satisfy the gate.
   const hasModelAccess =
-    offlineMode ||
-    localModelOptions.length > 0 ||
-    REAL_PROVIDER_KEYS.some((id) => !!apiKeys[id]);
+    offlineMode || localModelOptions.length > 0 || hasProviderKeyAccess;
 
   // 1. Generate a stable local user id on first run.
   useEffect(() => {

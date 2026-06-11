@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   User2,
   KeyRound,
@@ -18,19 +18,26 @@ import {
 import { useUIStore } from '@/stores/ui';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { Account } from './sections/Account';
-import { Providers } from './sections/Providers';
-import { LocalModels } from './sections/LocalModels';
-import { Plans } from './sections/Plans';
-import { Appearance } from './sections/Appearance';
-import { Voice } from './sections/Voice';
-import { PhoneVoice } from './sections/PhoneVoice';
-import { Hotkeys } from './sections/Hotkeys';
-import { About } from './sections/About';
-import { Ambient } from './sections/Ambient';
-import { Accessibility } from './sections/Accessibility';
-import { Notifications } from './sections/Notifications';
-import { Plugins } from '@/features/plugins';
+
+const Account = lazy(() => import('./sections/Account').then((m) => ({ default: m.Account })));
+const Providers = lazy(() => import('./sections/Providers').then((m) => ({ default: m.Providers })));
+const LocalModels = lazy(() =>
+  import('./sections/LocalModels').then((m) => ({ default: m.LocalModels })),
+);
+const Plans = lazy(() => import('./sections/Plans').then((m) => ({ default: m.Plans })));
+const Appearance = lazy(() => import('./sections/Appearance').then((m) => ({ default: m.Appearance })));
+const Voice = lazy(() => import('./sections/Voice').then((m) => ({ default: m.Voice })));
+const PhoneVoice = lazy(() => import('./sections/PhoneVoice').then((m) => ({ default: m.PhoneVoice })));
+const Hotkeys = lazy(() => import('./sections/Hotkeys').then((m) => ({ default: m.Hotkeys })));
+const About = lazy(() => import('./sections/About').then((m) => ({ default: m.About })));
+const Ambient = lazy(() => import('./sections/Ambient').then((m) => ({ default: m.Ambient })));
+const Accessibility = lazy(() =>
+  import('./sections/Accessibility').then((m) => ({ default: m.Accessibility })),
+);
+const Notifications = lazy(() =>
+  import('./sections/Notifications').then((m) => ({ default: m.Notifications })),
+);
+const Plugins = lazy(() => import('@/features/plugins').then((m) => ({ default: m.Plugins })));
 
 type SettingsTab =
   | 'account'
@@ -72,6 +79,26 @@ const TABS: TabDef[] = [
 interface SettingsModalProps {
   /** Optional initial tab. Defaults to 'account' on each open. */
   initialTab?: SettingsTab;
+}
+
+function SettingsTabPanel({ tab }: { tab: SettingsTab }) {
+  return (
+    <Suspense fallback={null}>
+      {tab === 'account' && <Account />}
+      {tab === 'plans' && <Plans />}
+      {tab === 'providers' && <Providers />}
+      {tab === 'plugins' && <Plugins />}
+      {tab === 'localmodels' && <LocalModels />}
+      {tab === 'appearance' && <Appearance />}
+      {tab === 'voice' && <Voice />}
+      {tab === 'phone' && <PhoneVoice />}
+      {tab === 'ambient' && <Ambient />}
+      {tab === 'notifications' && <Notifications />}
+      {tab === 'accessibility' && <Accessibility />}
+      {tab === 'hotkeys' && <Hotkeys />}
+      {tab === 'about' && <About />}
+    </Suspense>
+  );
 }
 
 /**
@@ -157,19 +184,7 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
           </aside>
 
           <main className="overflow-y-auto px-6 py-6 min-h-0">
-            {tab === 'account' && <Account />}
-            {tab === 'plans' && <Plans />}
-            {tab === 'providers' && <Providers />}
-            {tab === 'plugins' && <Plugins />}
-            {tab === 'localmodels' && <LocalModels />}
-            {tab === 'appearance' && <Appearance />}
-            {tab === 'voice' && <Voice />}
-            {tab === 'phone' && <PhoneVoice />}
-            {tab === 'ambient' && <Ambient />}
-            {tab === 'notifications' && <Notifications />}
-            {tab === 'accessibility' && <Accessibility />}
-            {tab === 'hotkeys' && <Hotkeys />}
-            {tab === 'about' && <About />}
+            <SettingsTabPanel tab={tab} />
           </main>
         </div>
       </DialogContent>

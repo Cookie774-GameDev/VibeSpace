@@ -193,6 +193,7 @@ export function PhoneVoice() {
   useEffect(() => {
     if (!configured) return;
     const tick = () => {
+      if (document.visibilityState === 'hidden') return;
       try {
         const c = getBridgeClient();
         setBridgeStatus(c.getStatus());
@@ -201,7 +202,7 @@ export function PhoneVoice() {
       }
     };
     tick();
-    const id = window.setInterval(tick, 1500);
+    const id = window.setInterval(tick, 5000);
     return () => window.clearInterval(id);
   }, [configured]);
 

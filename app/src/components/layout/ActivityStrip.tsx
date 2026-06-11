@@ -11,8 +11,7 @@ import type { AgentRunState } from '@/types';
  *
  * Each row: avatar + name + verb + token/cost counter.
  */
-export function ActivityStrip() {
-  const chatMode = useUIStore((s) => s.chatMode);
+export function CouncilActivityStrip() {
   const agents = useAgentStore((s) => s.agents);
   const runStates = useAgentStore((s) => s.runStates);
   const verbs = useAgentStore((s) => s.verbs);
@@ -24,8 +23,6 @@ export function ActivityStrip() {
       return st && st !== 'idle' && st !== 'done';
     });
   }, [agents, runStates]);
-
-  if (chatMode !== 'council') return null;
 
   return (
     <div
@@ -81,3 +78,6 @@ function humanVerb(custom: string | undefined, state: AgentRunState | undefined)
       return 'Working\u2026';
   }
 }
+
+/** @deprecated Use CouncilActivityStrip — mounted only in council mode. */
+export const ActivityStrip = CouncilActivityStrip;

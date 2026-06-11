@@ -37,9 +37,22 @@ interface LiveOpenRouterUsage {
   error?: string;
 }
 
-function monthStartMs(): number {
+export function monthStartMs(): number {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+}
+
+const EMPTY_USAGE: LocalUsageTotals = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedTokens: 0,
+  costUsd: 0,
+  calls: 0,
+  lastUsed: null,
+};
+
+function emptyUsageTotals(): LocalUsageTotals {
+  return { ...EMPTY_USAGE };
 }
 
 function monthStartSeconds(): number {
@@ -57,38 +70,75 @@ async function getLocalUsage(provider: ProviderId): Promise<LocalUsageTotals> {
   return summarizeLocalProviderUsage(messages, provider, start);
 }
 
+type UsageMessage = {
+  created_at: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+    cost_usd?: number;
+    provider?: ProviderId;
+  };
+};
+
+function accumulateUsageTotals(
+  totals: LocalUsageTotals,
+  message: UsageMessage,
+  provider: ProviderId,
+  sinceMs: number,
+): void {
+  if (message.created_at < sinceMs) return;
+  const usage = message.usage;
+  if (!usage) return;
+  if (usage.provider && usage.provider !== provider) return;
+
+  totals.inputTokens += usage.input_tokens ?? 0;
+  totals.outputTokens += usage.output_tokens ?? 0;
+  totals.cachedTokens += (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
+  totals.costUsd += usage.cost_usd ?? 0;
+  totals.calls += 1;
+  totals.lastUsed = Math.max(totals.lastUsed ?? 0, message.created_at);
+}
+
 export function summarizeLocalProviderUsage(
-  messages: Array<{
-    created_at: number;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_read_tokens?: number;
-      cache_write_tokens?: number;
-      cost_usd?: number;
-      provider?: ProviderId;
-    };
-  }>,
+  messages: UsageMessage[],
   provider: ProviderId,
   sinceMs = monthStartMs(),
 ): LocalUsageTotals {
-  return messages.reduce<LocalUsageTotals>(
-    (totals, message) => {
-      if (message.created_at < sinceMs) return totals;
-      const usage = message.usage;
-      if (!usage) return totals;
-      if (usage.provider && usage.provider !== provider) return totals;
+  const totals = emptyUsageTotals();
+  for (const message of messages) {
+    accumulateUsageTotals(totals, message, provider, sinceMs);
+  }
+  return totals;
+}
 
-      totals.inputTokens += usage.input_tokens ?? 0;
-      totals.outputTokens += usage.output_tokens ?? 0;
-      totals.cachedTokens += (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
-      totals.costUsd += usage.cost_usd ?? 0;
-      totals.calls += 1;
-      totals.lastUsed = Math.max(totals.lastUsed ?? 0, message.created_at);
-      return totals;
-    },
-    { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0, calls: 0, lastUsed: null },
-  );
+/** Single-pass monthly usage rollup for every BYOK provider row in Settings. */
+export function summarizeAllLocalProviderUsage(
+  messages: UsageMessage[],
+  providers: readonly ProviderId[],
+  sinceMs = monthStartMs(),
+): Partial<Record<ProviderId, LocalUsageTotals>> {
+  const totals = Object.fromEntries(
+    providers.map((provider) => [provider, emptyUsageTotals()]),
+  ) as Record<ProviderId, LocalUsageTotals>;
+
+  for (const message of messages) {
+    if (message.created_at < sinceMs) continue;
+    const usage = message.usage;
+    const provider = usage?.provider;
+    if (!usage || !provider || !totals[provider]) continue;
+
+    const bucket = totals[provider];
+    bucket.inputTokens += usage.input_tokens ?? 0;
+    bucket.outputTokens += usage.output_tokens ?? 0;
+    bucket.cachedTokens += (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
+    bucket.costUsd += usage.cost_usd ?? 0;
+    bucket.calls += 1;
+    bucket.lastUsed = Math.max(bucket.lastUsed ?? 0, message.created_at);
+  }
+
+  return totals;
 }
 
 function sumOpenAiUsageBucket(

@@ -27,27 +27,8 @@ import { getPluginContextBlock } from '@/features/plugins';
 import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
-import {
-  speakText,
-  SPEECH_SYNTHESIS_START_EVENT,
-  SPEECH_SYNTHESIS_END_EVENT,
-} from '@/features/voice/speechSynthesis';
+import { createStreamingVoiceSession, type StreamingVoiceSession } from '@/features/voice/streamingVoice';
 
-/**
- * Read the user's selected Cloud Voice provider from local settings. Returns
- * the provider id only when it's a metered cloud provider (OpenAI / Deepgram /
- * ElevenLabs); otherwise null so the caller keeps the system-voice path.
- * Safe in non-browser/test contexts (returns null).
- */
-function readSelectedCloudVoiceProvider(): string | null {
-  try {
-    const v = globalThis.localStorage?.getItem('jarvis.voice.cloudProvider');
-    if (v === 'openai_tts' || v === 'deepgram_tts' || v === 'elevenlabs_tts') return v;
-    return null;
-  } catch {
-    return null;
-  }
-}
 import {
   getProjectContextBlock,
   getProjectContextTreeBlock,
@@ -442,6 +423,14 @@ export function startRuntimeListener(
     let lastFlush = 0;
     let pending = false;
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const voiceSettings = useAuthStore.getState();
+    let streamingVoice: StreamingVoiceSession | null = null;
+    if (detail.speakReply && voiceSettings.speakReplies) {
+      streamingVoice = createStreamingVoiceSession({
+        voiceEngine: voiceSettings.voiceEngine,
+        voicePreset: voiceSettings.voicePreset,
+      });
+    }
 
     const flushNow = () => {
       if (flushTimer) {
@@ -532,6 +521,7 @@ export function startRuntimeListener(
           if (chunk.delta && chunk.delta.length > 0) {
             acc += chunk.delta;
             scheduleFlush();
+            streamingVoice?.onDelta(acc);
           }
           if (chunk.done) flushNow();
         },
@@ -612,69 +602,23 @@ export function startRuntimeListener(
         `${agent.name} done`,
         derivePaneTitle(finalText) || 'The AI response is complete.',
       );
-      const voiceSettings = useAuthStore.getState();
-      // Jarvis speaks ONLY when summoned by voice (clicking the J / voice panel,
-      // or dictating into the composer) — never for plain typed messages.
-      // `detail.speakReply` is true only for voice-initiated sends; the global
-      // "speak replies" toggle can additionally mute even those.
-      if (detail.speakReply && voiceSettings.speakReplies) {
-        const speechText = textToSpeechOutput(finalText);
-        if (speechText) {
-          // If the user explicitly selected a metered cloud voice (OpenAI /
-          // Deepgram / ElevenLabs) in Cloud Voice settings, route the reply
-          // through TtsService so it uses that provider with automatic
-          // fallback to local/system voice. Otherwise keep the lightweight
-          // system-voice path unchanged.
-          const cloudProvider = readSelectedCloudVoiceProvider();
-          if (voiceSettings.voiceEngine === 'kokoro') {
-            // Local Kokoro neural voice. Emit the same speech-start/end events
-            // Web Speech uses so the voice panel pauses the mic while Jarvis
-            // talks and resumes after. TtsService falls back to the Windows
-            // Natural voice only if Kokoro is genuinely unavailable.
-            const ttsPreset = voiceSettings.voicePreset === 'aurora' ? 'friday' : 'jarvis';
-            window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT));
-            void import('@/features/voice/TtsService')
-              .then(({ TtsService }) =>
-                TtsService.speak(speechText, { provider: 'kokoro_local', preset: ttsPreset }),
-              )
-              .catch((speechErr) => {
-                devConsole.log({
-                  channel: 'ai',
-                  level: 'warn',
-                  message: `Kokoro voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
-                  detail: { agent: agent.slug, textChars: speechText.length },
-                });
-              })
-              .finally(() => {
-                window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
-              });
-          } else if (cloudProvider) {
-            void import('@/features/voice/TtsService')
-              .then(({ TtsService }) => TtsService.speak(speechText))
-              .catch((speechErr) => {
-                devConsole.log({
-                  channel: 'ai',
-                  level: 'warn',
-                  message: `Cloud voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
-                  detail: { agent: agent.slug, textChars: speechText.length },
-                });
-              });
-          } else {
-            void speakText(speechText, {
-              voicePreset: voiceSettings.voicePreset,
-              engine: voiceSettings.voiceEngine,
-            }).catch((speechErr) => {
-              devConsole.log({
-                channel: 'ai',
-                level: 'warn',
-                message: `Voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
-                detail: { agent: agent.slug, textChars: speechText.length },
-              });
-            });
-          }
+      if (streamingVoice) {
+        try {
+          await streamingVoice.onComplete(finalText);
+        } catch (speechErr) {
+          devConsole.log({
+            channel: 'ai',
+            level: 'warn',
+            message: `Streaming voice reply failed: ${speechErr instanceof Error ? speechErr.message : String(speechErr)}`,
+            detail: { agent: agent.slug, textChars: finalText.length },
+          });
+        } finally {
+          streamingVoice = null;
         }
       }
     } catch (err) {
+      streamingVoice?.stop();
+      streamingVoice = null;
       // Cancel any pending flush before stamping the suffix or it'll overwrite us.
       cancelPendingFlush();
 

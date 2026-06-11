@@ -150,9 +150,17 @@ export function TerminalsPage() {
   }, [tree, treeProjectId, treeReady]);
 
   // Persist tree shape (not session ids) under the active project's key.
+  // Debounced like transcript persistence so resize/rename bursts do not
+  // synchronously hammer localStorage; flush on cleanup for durability.
   React.useEffect(() => {
     if (!treeReady) return;
-    saveTerminalTree(treeProjectId, tree);
+    const handle = window.setTimeout(() => {
+      saveTerminalTree(treeProjectId, tree);
+    }, 350);
+    return () => {
+      window.clearTimeout(handle);
+      saveTerminalTree(treeProjectId, tree);
+    };
   }, [tree, treeProjectId, treeReady]);
 
   // Esc exits fullscreen. Hook only attaches while fullscreen is active so

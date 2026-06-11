@@ -146,3 +146,47 @@ export function prepareForSpeech(
   if (!cleaned) return [];
   return chunkText(cleaned, options.maxChunkChars ?? DEFAULT_MAX_CHUNK);
 }
+
+/** Completed sentences in streamed assistant text that have not been spoken yet. */
+export function pullNewSpeechSegments(
+  rawAccumulated: string,
+  spokenCleanLength: number,
+  options: CleanupOptions = {},
+): { segments: string[]; nextSpokenCleanLength: number } {
+  const cleaned = cleanTextForSpeech(rawAccumulated, options);
+  if (cleaned.length <= spokenCleanLength) {
+    return { segments: [], nextSpokenCleanLength: spokenCleanLength };
+  }
+
+  const tail = cleaned.slice(spokenCleanLength);
+  const segments: string[] = [];
+  const sentenceRe = /[^.!?\n]+[.!?]+(?:\s+|$)/g;
+  let lastEnd = 0;
+  let match: RegExpExecArray | null;
+  while ((match = sentenceRe.exec(tail)) !== null) {
+    const sentence = match[0].trim();
+    if (sentence.length >= 6) {
+      segments.push(sentence);
+      lastEnd = match.index + match[0].length;
+    }
+  }
+
+  return {
+    segments,
+    nextSpokenCleanLength: spokenCleanLength + lastEnd,
+  };
+}
+
+/** Trailing fragment without a closing sentence delimiter (spoken at stream end). */
+export function pullRemainingSpeech(
+  rawAccumulated: string,
+  spokenCleanLength: number,
+  options: CleanupOptions = {},
+): { remainder: string; nextSpokenCleanLength: number } {
+  const cleaned = cleanTextForSpeech(rawAccumulated, options);
+  if (cleaned.length <= spokenCleanLength) {
+    return { remainder: '', nextSpokenCleanLength: spokenCleanLength };
+  }
+  const remainder = cleaned.slice(spokenCleanLength).trim();
+  return { remainder, nextSpokenCleanLength: cleaned.length };
+}

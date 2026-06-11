@@ -5,7 +5,9 @@
  * and cloud voice is unavailable.
  */
 import type { SpeakChunkOptions, VoiceProvider } from './types';
+import { useAuthStore } from '@/stores/auth';
 import { isSpeechSynthesisSupported, speakText } from '../speechSynthesis';
+import { getVoiceProfile } from '../voiceProfiles';
 
 class SystemFallbackProvider implements VoiceProvider {
   readonly id = 'system_tts_fallback' as const;
@@ -16,9 +18,15 @@ class SystemFallbackProvider implements VoiceProvider {
 
   async speakChunk(text: string, options: SpeakChunkOptions): Promise<void> {
     if (options.signal.aborted) return;
-    // Map our TTS preset onto a persona the speechSynthesis voice picker knows.
-    const persona = options.preset === 'friday' ? 'athena' : 'jarvis';
-    const rate = options.preset === 'friday' ? 1.05 : 0.96;
+    const auth = useAuthStore.getState();
+    const voicePreset =
+      options.preset === 'friday'
+        ? 'aurora'
+        : options.preset === 'jarvis'
+          ? 'jarvis-prime'
+          : auth.voicePreset;
+    const profile = getVoiceProfile(voicePreset);
+    const engine = auth.voiceEngine === 'local' ? 'local' : 'system';
     const onAbort = () => {
       try {
         window.speechSynthesis?.cancel();
@@ -28,7 +36,13 @@ class SystemFallbackProvider implements VoiceProvider {
     };
     options.signal.addEventListener('abort', onAbort, { once: true });
     try {
-      await speakText(text, { persona, rate, volume: options.volume ?? 1 });
+      await speakText(text, {
+        voicePreset,
+        engine,
+        rate: profile.rate,
+        pitch: profile.pitch,
+        volume: options.volume ?? 1,
+      });
     } finally {
       options.signal.removeEventListener('abort', onAbort);
     }

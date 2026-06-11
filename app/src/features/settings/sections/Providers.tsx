@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -25,7 +25,11 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { testProviderKey } from '@/lib/ai/testKey';
 import { db, openDb } from '@/lib/db';
-import { summarizeLocalProviderUsage, type LocalUsageTotals } from '@/lib/usage/usageSummary';
+import {
+  monthStartMs,
+  summarizeAllLocalProviderUsage,
+  type LocalUsageTotals,
+} from '@/lib/usage/usageSummary';
 import { ProviderUsageCounter, type ProviderUsageData } from '../components/ProviderUsageCounter';
 
 interface ProviderRow {
@@ -254,10 +258,16 @@ export function Providers() {
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const usageByProvider = useLiveQuery(async () => {
     await openDb();
+    const sinceMs = monthStartMs();
     const messages = await db.messages.toArray();
+    const totals = summarizeAllLocalProviderUsage(
+      messages,
+      BYOK_PROVIDERS.map((provider) => provider.id),
+      sinceMs,
+    );
     return BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
       (acc, provider) => {
-        acc[provider.id] = toProviderUsageData(summarizeLocalProviderUsage(messages, provider.id));
+        acc[provider.id] = toProviderUsageData(totals[provider.id] ?? emptyUsageTotals());
         return acc;
       },
       {},
@@ -399,6 +409,17 @@ function maskKey(key: string): string {
   return `${prefix}${masked}${suffix}`;
 }
 
+function emptyUsageTotals(): LocalUsageTotals {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    costUsd: 0,
+    calls: 0,
+    lastUsed: null,
+  };
+}
+
 function toProviderUsageData(totals: LocalUsageTotals): ProviderUsageData | null {
   const totalTokens = totals.inputTokens + totals.outputTokens + totals.cachedTokens;
   if (totals.calls === 0 && totalTokens === 0) return null;
@@ -412,7 +433,7 @@ function toProviderUsageData(totals: LocalUsageTotals): ProviderUsageData | null
   };
 }
 
-function ProviderKeyRow({ row, value, onSave, onClear, usageData }: ProviderKeyRowProps) {
+const ProviderKeyRow = memo(function ProviderKeyRow({ row, value, onSave, onClear, usageData }: ProviderKeyRowProps) {
   const [draft, setDraft] = useState(value);
   const [revealed, setRevealed] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -679,4 +700,4 @@ function ProviderKeyRow({ row, value, onSave, onClear, usageData }: ProviderKeyR
       </div>
     </motion.div>
   );
-}
+});

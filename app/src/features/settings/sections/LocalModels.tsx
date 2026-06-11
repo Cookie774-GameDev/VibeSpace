@@ -247,15 +247,8 @@ export function LocalModels() {
 
   useEffect(() => {
     void scan();
-    return () => {
-      for (const [, entry] of _downloads) {
-        if (entry.status === 'downloading' && entry.abortController) {
-          entry.abortController.abort();
-        }
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // Keep in-flight Ollama pulls alive when the user switches settings tabs.
+  }, [scan]);
 
   function saveBase() {
     const trimmed = baseDraft.trim() || OLLAMA_DEFAULT_BASE;
