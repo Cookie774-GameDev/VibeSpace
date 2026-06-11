@@ -58,7 +58,7 @@ JSON over WebSocket. One JSON object per frame, no batching. Frames are typed by
   "token": "<256-bit hex>",
   "daemon_version": "0.1.0",
   "platform": "win32",
-  "workspace_root": "C:\\Users\\viper",
+  "workspace_root": "C:\\Users\\you",
   "tools": [
     {"name": "fs.read", "schema": {"path": "string"}, "acl": "read"},
     {"name": "fs.list", "schema": {"path": "string"}, "acl": "read"},
@@ -256,7 +256,7 @@ When we adopt MCP later we keep the wire protocol between daemon and cloud the s
 {
   "cloud_url": "wss://phone-jarvis.fly.dev/bridge",
   "session_token_file": "~/.phone-jarvis/session.key",
-  "workspace_root": "C:\\Users\\viper",
+  "workspace_root": "C:\\Users\\you",
   "deny_paths": [
     ".env*",
     ".aws/**",
@@ -313,7 +313,7 @@ phone-jarvis test fs.read --path ~/notes.md   # run a tool locally without a cal
 phone-jarvis 0.1.0
 connection: connected (uptime 4h 12m)
 cloud: wss://phone-jarvis.fly.dev/bridge
-workspace: C:\Users\viper
+workspace: C:\Users\you
 last call: 2026-05-29 14:02 (3 min, 7 tool calls, ok)
 recent errors: none
 ```

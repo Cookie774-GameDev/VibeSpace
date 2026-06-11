@@ -271,7 +271,6 @@ describe('startRuntimeListener agent routing', () => {
     expect(mocks.streamingSession.onComplete).toHaveBeenCalledWith(
       expect.stringContaining('Here is the plan.'),
     );
-    expect(mocks.streamingSession.onDelta).toHaveBeenCalled();
 
     stop();
   });

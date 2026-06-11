@@ -3,18 +3,18 @@ import { detectOS, resolveModelPath } from './modelManager';
 
 describe('resolveModelPath', () => {
   it('uses %APPDATA%/VibeSpace/models/kokoro on Windows', () => {
-    const p = resolveModelPath('windows', { APPDATA: 'C:\\Users\\viper\\AppData\\Roaming' });
-    expect(p).toBe('C:\\Users\\viper\\AppData\\Roaming\\VibeSpace\\models\\kokoro');
+    const p = resolveModelPath('windows', { APPDATA: 'C:\\Users\\dev\\AppData\\Roaming' });
+    expect(p).toBe('C:\\Users\\dev\\AppData\\Roaming\\VibeSpace\\models\\kokoro');
   });
 
   it('uses ~/Library/Application Support on macOS', () => {
-    const p = resolveModelPath('macos', { HOME: '/Users/viper' });
-    expect(p).toBe('/Users/viper/Library/Application Support/VibeSpace/models/kokoro');
+    const p = resolveModelPath('macos', { HOME: '/Users/dev' });
+    expect(p).toBe('/Users/dev/Library/Application Support/VibeSpace/models/kokoro');
   });
 
   it('uses ~/.local/share on Linux', () => {
-    const p = resolveModelPath('linux', { HOME: '/home/viper' });
-    expect(p).toBe('/home/viper/.local/share/VibeSpace/models/kokoro');
+    const p = resolveModelPath('linux', { HOME: '/home/dev' });
+    expect(p).toBe('/home/dev/.local/share/VibeSpace/models/kokoro');
   });
 });
 

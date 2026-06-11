@@ -43,6 +43,7 @@ import { startRuntimeListener } from '@/lib/ai/runtime';
 import { messageRepo, agentRepo, chatRepo, openDb, db } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
 import { getDefaultAgents } from '@/features/agents';
+import { ensureActiveChat } from '@/features/chat/chatLifecycle';
 import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import { DevConsoleHost } from '@/features/dev-console';
 import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
@@ -632,30 +633,11 @@ function WorkspaceRoot() {
   // Listen for the jarvis:new-chat event to spawn a new chat
   React.useEffect(() => {
     const handleNewChat = async () => {
-      const workspaceId = useAuthStore.getState().workspaceId;
-      const projectId = useAuthStore.getState().projectId;
-      if (!workspaceId) {
-        toast.warning('Still loading', 'Workspace is initializing — try again in a sec.');
-        return;
-      }
       try {
-        const allChats = await db.chats.where('workspace_id').equals(workspaceId).toArray();
-        const filtered = projectId
-          ? allChats.filter((c) => c.project_id === projectId)
-          : allChats.filter((c) => !c.project_id);
-        const existing = filtered.length;
-        const title = `New chat ${existing + 1}`;
-
-        const chat = await chatRepo.create({
-          workspace_id: workspaceId,
-          project_id: projectId ?? undefined,
-          title,
-          mode: 'chat',
-          active_agent_ids: [],
-        });
-        useUIStore.getState().setActiveChat(chat.id);
-        useUIStore.getState().setChatMode('chat');
-        useUIStore.getState().setRoute('chat');
+        const chatId = await ensureActiveChat({ forceNew: true });
+        if (!chatId) {
+          toast.warning('Still loading', 'Workspace is initializing — try again in a sec.');
+        }
       } catch (err) {
         toast.error('Could not create chat', err instanceof Error ? err.message : 'Try again.');
       }

@@ -11,7 +11,7 @@ This runs the full UI in your browser. All core features work locally. Official 
 node --version  # should be >= 20
 
 # 2. Install deps
-cd C:\Users\viper\projects\Jarvis\app
+cd path\to\Jarvis\app
 npm install
 
 # 3. Optional for source maintainers: copy env template and fill in app backend + AI keys
@@ -54,7 +54,7 @@ cargo --version
 ### 3. Run Tauri dev
 
 ```powershell
-cd C:\Users\viper\projects\Jarvis\app
+cd path\to\Jarvis\app
 npm run tauri:dev
 ```
 

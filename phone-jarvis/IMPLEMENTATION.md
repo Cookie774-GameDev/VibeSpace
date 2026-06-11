@@ -176,7 +176,7 @@ to `/bridge` whenever the user is signed in.
   "token": "<Supabase JWT>",
   "daemon_version": "jarvis-app/0.1.0",
   "platform": "Win32",
-  "workspace_root": "C:\\Users\\viper\\projects\\Jarvis",
+  "workspace_root": "C:\\Users\\you\\projects\\VibeSpace",
   "tools": [ /* OpenAI-style function schema array */ ],
   "writable": false,
   "shell_enabled": false

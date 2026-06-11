@@ -5,10 +5,10 @@ describe('composer file path detection', () => {
   it('extracts a Windows path with spaces from a natural-language request', () => {
     expect(
       extractAbsoluteFilePaths(
-        'C:\\Users\\viper\\Documents\\APPS HTML\\Scripts\\Editor\\context_map.json please summarize this',
+        'C:\\Users\\dev\\Documents\\project\\Scripts\\Editor\\context_map.json please summarize this',
       ),
     ).toEqual([
-      'C:\\Users\\viper\\Documents\\APPS HTML\\Scripts\\Editor\\context_map.json',
+      'C:\\Users\\dev\\Documents\\project\\Scripts\\Editor\\context_map.json',
     ]);
   });
 

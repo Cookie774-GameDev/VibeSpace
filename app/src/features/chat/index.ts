@@ -9,6 +9,12 @@ export { ChatView } from './ChatView';
 export { ChatThread } from './ChatThread';
 export { Composer } from './Composer';
 export { EmptyChat } from './EmptyChat';
+export {
+  ensureActiveChat,
+  deriveChatTitle,
+  isDefaultChatTitle,
+  maybeRenameChat,
+} from './chatLifecycle';
 export { InputToken, TokenList, type TokenType } from './InputToken';
 export {
   SlashCommandTypeahead,

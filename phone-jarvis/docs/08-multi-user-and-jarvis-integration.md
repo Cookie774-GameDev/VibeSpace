@@ -255,7 +255,7 @@ That is the shape you are building toward. Path C, BYO keys, in-app voice.
 
 ## 15. File Locations
 
-- This document: `C:\Users\viper\projects\phone-jarvis\docs\08-multi-user-and-jarvis-integration.md`
+- This document: `phone-jarvis/docs/08-multi-user-and-jarvis-integration.md`
 - Companion: `docs\07-free-vs-paid-comparison.md`
 - Original architecture: `docs\02-architecture.md`
 - Security model: `docs\06-security.md`

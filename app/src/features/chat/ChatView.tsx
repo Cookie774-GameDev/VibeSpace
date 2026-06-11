@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { TooltipProvider } from '@/components/ui';
 import { useUIStore } from '@/stores/ui';
 import { ChatThread } from './ChatThread';
 import { Composer } from './Composer';
 import { EmptyChat } from './EmptyChat';
+import { ensureActiveChat } from './chatLifecycle';
 import { cn } from '@/lib/utils';
 import { getChatDragKind, getChatDropPayload, type ChatDropKind } from './dropPayload';
 
@@ -14,6 +15,28 @@ import { getChatDragKind, getChatDropPayload, type ChatDropKind } from './dropPa
 export function ChatView() {
   const activeChatId = useUIStore((s) => s.activeChatId);
   const [dropKind, setDropKind] = useState<ChatDropKind | null>(null);
+  const [ensuringChat, setEnsuringChat] = useState(false);
+  const [ensureFailed, setEnsureFailed] = useState(false);
+
+  useEffect(() => {
+    if (activeChatId) return;
+    let cancelled = false;
+    setEnsuringChat(true);
+    setEnsureFailed(false);
+    void ensureActiveChat()
+      .then((id) => {
+        if (!cancelled && !id) setEnsureFailed(true);
+      })
+      .catch(() => {
+        if (!cancelled) setEnsureFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setEnsuringChat(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChatId]);
 
   return (
     <TooltipProvider delayDuration={400}>
@@ -38,7 +61,7 @@ export function ChatView() {
           if (payload.kind === 'context') {
             window.dispatchEvent(new CustomEvent('jarvis:context:attach', { detail: { raw: payload.raw, chatId: activeChatId } }));
           } else if (payload.kind === 'terminal') {
-            window.dispatchEvent(new CustomEvent('jarvis:terminal:attach', { detail: { raw: payload.raw, chatId: activeChatId } }));
+            window.dispatchEvent(new CustomEvent('jarvis:context:attach', { detail: { raw: payload.raw, chatId: activeChatId } }));
           } else {
             window.dispatchEvent(new CustomEvent('jarvis:file:attach', { detail: { path: payload.path, chatId: activeChatId } }));
           }
@@ -58,9 +81,18 @@ export function ChatView() {
             <ChatThread chatId={activeChatId} />
             <Composer chatId={activeChatId} />
           </>
+        ) : ensuringChat ? (
+          <div className="flex flex-1 items-center justify-center text-secondary text-muted-foreground">
+            Starting a conversation…
+          </div>
         ) : (
           <EmptyChat />
         )}
+        {ensureFailed && !activeChatId && !ensuringChat ? (
+          <p className="px-4 pb-3 text-center text-metadata text-muted-foreground">
+            Could not open a chat yet — workspace may still be loading.
+          </p>
+        ) : null}
       </div>
     </TooltipProvider>
   );

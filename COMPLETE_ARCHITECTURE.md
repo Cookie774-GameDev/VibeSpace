@@ -1,6 +1,6 @@
 # Jarvis — Complete Codebase Architecture & Documentation
 
-> Generated from source files at `C:\Users\viper\projects\Jarvis`
+> Generated from source files at the Jarvis / VibeSpace repository root
 > Version: 0.1.14 | Platform: Windows x64 (Tauri 2 + React 18 + Vite + Rust)
 
 ---
@@ -52,7 +52,7 @@ Jarvis is a **local-first, offline-capable AI workspace** built as a Tauri 2 des
 ## 3. Directory Structure (Key Paths)
 
 ```
-C:\Users\viper\projects\Jarvis\
+<repo-root>/
 ├── app/                           # Main application (React + Tauri)
 │   ├── src/                       # Frontend TypeScript/React source
 │   │   ├── App.tsx                # Root component, boot wiring
@@ -979,4 +979,4 @@ The `release-windows.ps1` script:
 
 *Generated from codebase analysis. Version: 0.1.14 | Date: 2026-06-04 | Total source files: ~296*
 
-*Sources analyzed: All .ts, .tsx, .rs, .json, .toml, .md, .sql, .py files at C:\Users\viper\projects\Jarvis*
+*Sources analyzed: All .ts, .tsx, .rs, .json, .toml, .md, .sql, .py files at the repository root*

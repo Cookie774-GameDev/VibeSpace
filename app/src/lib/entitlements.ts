@@ -244,14 +244,15 @@ function envList(name: string): string[] {
  * user-editable client flag. This keeps paid-feature gates from becoming a
  * trivial localStorage toggle while still allowing internal/admin builds.
  */
-export function isAdminIdentity(identity: AdminIdentity = {}): boolean {
-  const localAdminEnabled =
-    String(import.meta.env.VITE_JARVIS_ADMIN ?? '').toLowerCase() === '1' ||
-    String(import.meta.env.VITE_JARVIS_LOCAL_ADMIN ?? '').toLowerCase() === '1' ||
-    String(import.meta.env.VITE_JARVIS_ADMIN ?? '').toLowerCase() === 'true' ||
-    String(import.meta.env.VITE_JARVIS_LOCAL_ADMIN ?? '').toLowerCase() === 'true';
+function blanketAdminBuildFlagEnabled(): boolean {
+  const admin = String(import.meta.env.VITE_JARVIS_ADMIN ?? '').toLowerCase();
+  const local = String(import.meta.env.VITE_JARVIS_LOCAL_ADMIN ?? '').toLowerCase();
+  return admin === '1' || admin === 'true' || local === '1' || local === 'true';
+}
 
-  if (localAdminEnabled) return true;
+export function isAdminIdentity(identity: AdminIdentity = {}): boolean {
+  // Production bundles must never honor blanket admin toggles (release CI clears them).
+  if (!import.meta.env.PROD && blanketAdminBuildFlagEnabled()) return true;
 
   const emails = envList('VITE_JARVIS_ADMIN_EMAILS');
   const ids = envList('VITE_JARVIS_ADMIN_LOCAL_IDS');

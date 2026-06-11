@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth';
 import { cn } from '@/lib/utils';
 import { messageRepo } from '@/lib/db';
 import { useChatMessages } from '@/features/chat/hooks';
+import { ensureActiveChat } from '@/features/chat/chatLifecycle';
 import type { ChatId, Message } from '@/types';
 import type { VoiceState } from './store';
 import { useVoiceStore } from './store';
@@ -296,30 +297,38 @@ export function VoiceModal() {
       utteranceTimerRef.current = null;
       const text = pendingUtteranceRef.current.trim();
       pendingUtteranceRef.current = '';
-      const chatId = useUIStore.getState().activeChatId;
-      if (!text || !chatId) return;
+      if (!text) return;
 
       useVoiceStore.getState().setState('thinking');
-      void messageRepo
-        .create({
-          chat_id: chatId as ChatId,
-          role: 'user',
-          parts: [{ kind: 'text', text }],
-        })
-        .then(() => {
+      void (async () => {
+        let chatId = useUIStore.getState().activeChatId;
+        if (!chatId) {
+          chatId = (await ensureActiveChat({ titleHint: text })) as string | null;
+        }
+        if (!chatId) {
+          useVoiceStore.getState().setState('error', 'Open a chat first.');
+          return;
+        }
+
+        try {
+          await messageRepo.create({
+            chat_id: chatId as ChatId,
+            role: 'user',
+            parts: [{ kind: 'text', text }],
+          });
           window.dispatchEvent(
             new CustomEvent('jarvis:send', {
               detail: { chatId, text, speakReply: true },
             }),
           );
-        })
-        .catch((error) => {
+        } catch (error) {
           toast.error(
             'Voice message failed',
             error instanceof Error ? error.message : 'Could not send.',
           );
           useVoiceStore.getState().setState('error', 'Could not send the voice message.');
-        });
+        }
+      })();
     };
 
     const offs = [

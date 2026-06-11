@@ -16,11 +16,9 @@
  *   id; the strip just reflects it) stays one-directional.
  *
  * Auto-tab-on-empty.
- *   When the list is empty we DON'T silently spawn a tab the way the
- *   old version did. With projects in the picture, "no chats" means
- *   "this project has no chats yet" — letting the user see that empty
- *   state is the friendlier behaviour. The "+" button at the right
- *   creates a chat in the active project on demand.
+ *   When a project has no chats yet we bootstrap one via
+ *   `ensureActiveChat` so the user can start talking immediately.
+ *   The "+" button still forces a brand-new tab on demand.
  *
  * Renaming.
  *   Double-click the tab title to enter inline edit mode. Enter
@@ -50,6 +48,7 @@ import { toast } from '@/components/ui/toast';
 import type { Chat } from '@/types/chat';
 import type { ChatId, WorkspaceId, ProjectId } from '@/types';
 import { cn } from '@/lib/utils';
+import { ensureActiveChat } from '@/features/chat/chatLifecycle';
 
 interface TabModel {
   id: ChatId;
@@ -115,6 +114,11 @@ export function TabStrip() {
       setActiveChat(rememberedChatId);
     }
   }, [projectId, activeChatId, setActiveChat]);
+
+  React.useEffect(() => {
+    if (!workspaceId || activeChatId || tabs.length > 0) return;
+    void ensureActiveChat({ navigateToChat: false });
+  }, [workspaceId, activeChatId, tabs.length]);
 
   // Reconcile the active chat against the current project's tab list.
   //
@@ -203,14 +207,11 @@ export function TabStrip() {
       return;
     }
     try {
-      const chat = await chatRepo.create({
-        workspace_id: workspaceId,
-        project_id: projectId ?? undefined,
-        title: `New chat ${(chats?.length ?? 0) + 1}`,
-        mode: 'chat',
-        active_agent_ids: [],
-      });
-      setActiveChat(chat.id);
+      const chatId = await ensureActiveChat({ forceNew: true });
+      if (!chatId) {
+        toast.warning('Still loading', 'Workspace is initializing — try again in a sec.');
+        return;
+      }
       setChatMode('chat');
       setRoute('chat');
     } catch (err) {

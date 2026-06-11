@@ -28,6 +28,7 @@ import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
 import { createStreamingVoiceSession, type StreamingVoiceSession } from '@/features/voice/streamingVoice';
+import { deriveChatTitle, maybeRenameChat } from '@/features/chat/chatLifecycle';
 
 import {
   getProjectContextBlock,
@@ -105,43 +106,6 @@ export interface RuntimeOptions {
 function detectMention(text: string): string | null {
   const m = /(?:^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/.exec(text);
   return m ? m[1]! : null;
-}
-
-/**
- * Derive a short tab title from an assistant reply.
- *
- * Picks the first non-empty prose sentence (strips markdown, code
- * fences, and lists), normalises whitespace, and clamps to 48 chars.
- * Returns the empty string when nothing usable was found — callers
- * use that as the "leave the title alone" signal.
- *
- * Why this lives here (not in a separate util):
- *   It's only called once, from the post-run hook, and the rules are
- *   tightly coupled to "what makes a good chat tab". Splitting it out
- *   for testability would invite premature generalisation.
- */
-function derivePaneTitle(reply: string): string {
-  if (!reply) return '';
-  // Drop fenced code blocks entirely; they almost never make good titles.
-  let stripped = reply.replace(/```[\s\S]*?```/g, ' ');
-  // Drop inline code spans (preserve content but lose backticks).
-  stripped = stripped.replace(/`([^`]+)`/g, '$1');
-  // Drop common markdown chrome at the start of lines.
-  stripped = stripped.replace(/^\s*[#>*\-+\d.]+\s+/gm, '');
-  // Collapse whitespace.
-  stripped = stripped.replace(/\s+/g, ' ').trim();
-  if (!stripped) return '';
-  // Take the first sentence (or the whole thing when no terminator).
-  const sentenceMatch = /^[^.!?\n]{3,}[.!?]/.exec(stripped);
-  let title = sentenceMatch ? sentenceMatch[0] : stripped;
-  title = title.replace(/[.!?]+$/, '').trim();
-  // Hard cap at 48 chars; ellipsis if we cut.
-  if (title.length > 48) {
-    title = title.slice(0, 47).trimEnd() + '…';
-  }
-  // Reject titles that ended up too short to be useful.
-  if (title.length < 3) return '';
-  return title;
 }
 
 /** Flatten Message[] -> LLMMessage[] for the provider call. */
@@ -269,6 +233,8 @@ export function startRuntimeListener(
       console.warn('[jarvis runtime] no agent resolvable for chat', chatId);
       return;
     }
+
+    void maybeRenameChat(chatId as ChatId, text);
 
     // Apply the active persona preset to Jarvis only. Other agents pass through.
     // Same gate is reused for the action-catalogue addendum so we don't
@@ -564,21 +530,7 @@ export function startRuntimeListener(
       // clamp to 48 chars. That's good enough to make tabs scannable;
       // the user can rename manually any time.
       try {
-        const chat = await chatRepo.getById(chatId as ChatId);
-        if (chat) {
-          const t = (chat.title ?? '').trim();
-          const looksDefault =
-            t.length === 0 ||
-            t === 'New chat' ||
-            /^New chat( \d+)?$/i.test(t) ||
-            t.startsWith('Chat with ');
-          if (looksDefault) {
-            const title = derivePaneTitle(finalText);
-            if (title) {
-              await chatRepo.update(chat.id, { title });
-            }
-          }
-        }
+        await maybeRenameChat(chatId as ChatId, finalText);
       } catch {
         // Auto-naming is best-effort; never let it break the run.
       }
@@ -600,7 +552,7 @@ export function startRuntimeListener(
       void notifyDone(
         'jarvis',
         `${agent.name} done`,
-        derivePaneTitle(finalText) || 'The AI response is complete.',
+        deriveChatTitle(finalText) || 'The AI response is complete.',
       );
       if (streamingVoice) {
         try {

@@ -128,6 +128,11 @@ jobs:
           # never go on the client.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Never ship blanket admin bypasses in public release binaries.
+          VITE_JARVIS_ADMIN: 'false'
+          VITE_JARVIS_LOCAL_ADMIN: 'false'
+          VITE_JARVIS_ADMIN_EMAILS: ''
+          VITE_JARVIS_ADMIN_LOCAL_IDS: ''
           # Windows Authenticode signing. The signCommand no-ops if these are blank
           # unless JARVIS_WINDOWS_SIGN_REQUIRED=1 is set.
           WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}

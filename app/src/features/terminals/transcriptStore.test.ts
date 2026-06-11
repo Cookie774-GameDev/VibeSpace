@@ -73,10 +73,10 @@ describe('stripAnsi', () => {
   });
 
   it('removes midline orphan fragments after PowerShell prompts', () => {
-    expect(stripAnsi('PS C:\\Users\\viper> [0\nnext')).toBe('PS C:\\Users\\viper> \nnext');
-    expect(stripAnsi('PS C:\\Users\\viper> [I\nnext')).toBe('PS C:\\Users\\viper> \nnext');
-    expect(stripAnsi('PS C:\\Users\\viper> [0[[0[0[0[\nnext')).toBe('PS C:\\Users\\viper> \nnext');
-    expect(stripAnsi('PS C:\\Users\\viper> [0[I\nnext')).toBe('PS C:\\Users\\viper> \nnext');
+    expect(stripAnsi('PS C:\\Users\\dev> [0\nnext')).toBe('PS C:\\Users\\dev> \nnext');
+    expect(stripAnsi('PS C:\\Users\\dev> [I\nnext')).toBe('PS C:\\Users\\dev> \nnext');
+    expect(stripAnsi('PS C:\\Users\\dev> [0[[0[0[0[\nnext')).toBe('PS C:\\Users\\dev> \nnext');
+    expect(stripAnsi('PS C:\\Users\\dev> [0[I\nnext')).toBe('PS C:\\Users\\dev> \nnext');
   });
 });
 

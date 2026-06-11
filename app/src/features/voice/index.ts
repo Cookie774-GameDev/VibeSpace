@@ -27,6 +27,14 @@ export {
   speakText,
   VOICE_PREVIEW_TEXT,
 } from './speechSynthesis';
+export {
+  speakWithSettings,
+  previewVoiceWithSettings,
+  stopAllVoiceOutput,
+  warmVoiceEngine,
+  ensureKokoroReadyForSpeech,
+} from './voiceRouter';
+export { createStreamingVoiceSession, StreamingVoiceSession } from './streamingVoice';
 export type { SpeakTextOptions } from './speechSynthesis';
 export { IntentClassifier, classify } from './IntentClassifier';
 export type { Intent, VoiceIntent, VoiceSlots } from './IntentClassifier';
