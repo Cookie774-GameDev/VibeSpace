@@ -21,7 +21,7 @@ npx supabase secrets set STRIPE_SECRET_KEY="sk_test_..."
 npx supabase secrets set STRIPE_STARTER_PRICE_ID="price_..."
 npx supabase secrets set STRIPE_PRO_PRICE_ID="price_..."
 npx supabase secrets set STRIPE_ULTRA_PRICE_ID="price_..."
-npx supabase secrets set APP_BASE_URL="https://cookie774-gamedev.github.io/Jarivs-One"
+npx supabase secrets set APP_BASE_URL="https://vibespaceos.com"
 ```
 
 ## 3. Create the webhook endpoint

@@ -1,4 +1,4 @@
-# Jarvis One 0.1.25
+# VibeSpace 0.1.25
 
 ## Highlights
 

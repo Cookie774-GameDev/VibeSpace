@@ -1,4 +1,4 @@
-# Jarvis One 0.1.27 — Production Build Reliability & Terminal Launcher Fix
+# VibeSpace 0.1.27 — Production Build Reliability & Terminal Launcher Fix
 
 ### Fixed
 - **Production build path**: `tauri build` is now used instead of raw `cargo build --release`, ensuring the NSIS installer bundles frontend assets correctly. This fixes the `localhost refused to connect` / `ERR_CONNECTION_REFUSED` error that occurred when the installed executable was an unbundled raw binary.
@@ -14,10 +14,10 @@
 - **`Jarvis --help`**: Clean help output explaining the command.
 
 ### Assets
-- **Windows x64 NSIS installer**: `Jarvis-One-0.1.27-Windows-x64.exe`
+- **Windows x64 NSIS installer**: `VibeSpace-0.1.27-Windows-x64.exe`
 - SHA-256 checksums included in `SHA256SUMS.txt`
 
 ### Install (one line)
 ```powershell
-irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex
 ```

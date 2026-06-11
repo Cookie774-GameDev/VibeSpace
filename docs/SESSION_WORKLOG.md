@@ -1,4 +1,4 @@
-# Jarvis One — Work Log (Voice / Subscription / Calling / Fixes)
+# VibeSpace — Work Log (Voice / Subscription / Calling / Fixes)
 
 Branch: `feat/voice-subscription-system`
 Latest commit at time of writing: `bc97478`

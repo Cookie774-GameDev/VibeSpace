@@ -1,17 +1,17 @@
 <p align="center">
-  <img src="site/images/jarvis-logo.png" alt="Jarvis Logo" width="120" height="120" />
+  <img src="site/images/jarvis-logo.png" alt="VibeSpace Logo" width="120" height="120" />
 </p>
 
-<h1 align="center">Jarvis One</h1>
+<h1 align="center">VibeSpace</h1>
 
 <p align="center">
   <strong>The AI workspace for every model, agent, voice & task</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Cookie774-GameDev/Jarivs-One/releases"><img src="https://img.shields.io/github/v/release/Cookie774-GameDev/Jarivs-One?style=flat-square&color=7c3aed&label=Latest" alt="Latest Release"></a>
-  <a href="https://github.com/Cookie774-GameDev/Jarivs-One/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square" alt="License"></a>
-  <a href="https://github.com/Cookie774-GameDev/Jarivs-One"><img src="https://img.shields.io/github/stars/Cookie774-GameDev/Jarivs-One?style=flat-square&color=f59e0b" alt="Stars"></a>
+  <a href="https://github.com/Cookie774-GameDev/VibeSpace/releases"><img src="https://img.shields.io/github/v/release/Cookie774-GameDev/VibeSpace?style=flat-square&color=7c3aed&label=Latest" alt="Latest Release"></a>
+  <a href="https://github.com/Cookie774-GameDev/VibeSpace/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square" alt="License"></a>
+  <a href="https://github.com/Cookie774-GameDev/VibeSpace"><img src="https://img.shields.io/github/stars/Cookie774-GameDev/VibeSpace?style=flat-square&color=f59e0b" alt="Stars"></a>
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platforms">
 </p>
 
@@ -25,9 +25,9 @@
 
 ---
 
-## What is Jarvis?
+## What is VibeSpace?
 
-Jarvis is a **cozy, local-first, all-in-one AI workspace** for builders who context-switch all day. It brings AI calling, agent councils, coding terminals, memory, tasks, and **21 model providers** into one desktop app.
+VibeSpace is a **cozy, local-first, all-in-one AI workspace** for builders who context-switch all day. It brings AI calling, agent councils, coding terminals, memory, tasks, and **21 model providers** into one desktop app.
 
 > **Vibe coding for vibe coders. Built by a vibe coder.**
 
@@ -40,13 +40,13 @@ Stop juggling seven AI apps. Ship from one calm workspace.
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex
 ```
 
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
 ```
 
 <details>
@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/Jarivs-One/main/i
 1. Downloads the latest release from GitHub
 2. Installs to the appropriate location (user-scope by default)
 3. Creates desktop/menu entries
-4. Auto-launches Jarvis One
+4. Auto-launches VibeSpace
 
 Run `Jarvis` in a new terminal to launch with the animated intro.
 
@@ -122,7 +122,7 @@ See [DOWNLOAD.md](DOWNLOAD.md) for manual downloads, checksums, and troubleshoot
 
 ## Model Support
 
-Jarvis is **BYOK-first** (Bring Your Own Key). Your keys stay on your device.
+VibeSpace is **BYOK-first** (Bring Your Own Key). Your keys stay on your device.
 
 | Category | Providers |
 |----------|-----------|
@@ -149,13 +149,13 @@ That's it. You're ready to chat.
 
 ## Calling
 
-Jarvis isn't just a desktop window — **it's an AI you can talk to**.
+VibeSpace isn't just a desktop window — **it's an AI you can talk to**.
 
 | Method | Description | Status |
 |--------|-------------|--------|
 | **In-app call** | Tap the green call button, talk via WebRTC | Shipping |
 | **Phone inbound** | Dial a Twilio number from any phone | Backend ready |
-| **Phone outbound** | Jarvis calls you for alerts/deadlines | API ready |
+| **Phone outbound** | VibeSpace calls you for alerts/deadlines | API ready |
 
 **Stack:** Twilio · LiveKit · Pipecat · FastAPI · Supabase
 
@@ -177,7 +177,7 @@ Jarvis isn't just a desktop window — **it's an AI you can talk to**.
 | Shortcut | Action |
 |----------|--------|
 | `Mod+K` | Command palette |
-| `Mod+J` | Jarvis assistant |
+| `Mod+J` | VibeSpace assistant |
 | `Mod+,` | Settings |
 | `Mod+Space` | Voice push-to-talk |
 | `Mod+Enter` | Send message |
@@ -219,8 +219,8 @@ Jarvis isn't just a desktop window — **it's an AI you can talk to**.
 
 ```bash
 # Clone and install
-git clone https://github.com/Cookie774-GameDev/Jarivs-One.git
-cd Jarivs-One
+git clone https://github.com/Cookie774-GameDev/VibeSpace.git
+cd VibeSpace
 npm install
 
 # Run development server
@@ -250,9 +250,9 @@ See [SETUP.md](SETUP.md) for prerequisites and environment setup.
 
 | | |
 |---|---|
-| **Website** | [Cookie774-GameDev.github.io/Jarivs-One](https://Cookie774-GameDev.github.io/Jarivs-One/) |
-| **Releases** | [GitHub Releases](https://github.com/Cookie774-GameDev/Jarivs-One/releases) |
-| **Issues** | [GitHub Issues](https://github.com/Cookie774-GameDev/Jarivs-One/issues) |
+| **Website** | [vibespaceos.com](https://vibespaceos.com) |
+| **Releases** | [GitHub Releases](https://github.com/Cookie774-GameDev/VibeSpace/releases) |
+| **Issues** | [GitHub Issues](https://github.com/Cookie774-GameDev/VibeSpace/issues) |
 
 ---
 

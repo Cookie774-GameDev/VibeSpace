@@ -1,4 +1,4 @@
-# Jarvis - Tech Stack Decisions
+# VibeSpace - Tech Stack Decisions
 
 *Decision log for the major technology choices. Each section: what we picked, alternatives considered, and why.*
 
@@ -70,7 +70,7 @@
 
 ## Multi-agent topology
 
-**Picked:** Supervisor + specialist workers + parallel fan-out, with a memory agent and a Jarvis voice supervisor.
+**Picked:** Supervisor + specialist workers + parallel fan-out, with a memory agent and a VibeSpace voice supervisor.
 
 Detailed in `docs/03-multi-agent-orchestration.md`.
 
@@ -80,7 +80,7 @@ Detailed in `docs/03-multi-agent-orchestration.md`.
 
 ## Model routing
 
-**Picked:** **LiteLLM** as the routing gateway (self-hosted in Jarvis Cloud for the managed plan; users can run their own for BYOK Pro+).
+**Picked:** **LiteLLM** as the routing gateway (self-hosted in VibeSpace Cloud for the managed plan; users can run their own for BYOK Pro+).
 
 **Alternatives:** OpenRouter, Vercel AI Gateway, raw provider SDKs.
 
@@ -93,7 +93,7 @@ Detailed in `docs/03-multi-agent-orchestration.md`.
 **Default model tiers:**
 | Role | Primary | Fallback | Local fallback |
 |---|---|---|---|
-| Supervisor / Jarvis | Claude Opus 4.x | GPT-5.5 | Llama 3.3 70B (cloud) -> Llama 3.1 8B (local) |
+| Supervisor / VibeSpace | Claude Opus 4.x | GPT-5.5 | Llama 3.3 70B (cloud) -> Llama 3.1 8B (local) |
 | Worker (general) | Claude Sonnet 4.x | GPT-5-mini | Qwen 3 14B local |
 | Worker (cheap/fast) | Gemini Flash 3.x | GPT-5-nano | Qwen 3 8B local |
 | Coding worker | Claude Sonnet 4.x | GPT-5.5 | DeepSeek-Coder 6.7B local |
@@ -119,7 +119,7 @@ Detailed in `docs/03-multi-agent-orchestration.md`.
 
 **Picked:** **MCP (Model Context Protocol)** as the universal tool interface. Native in-process tools only when MCP overhead isn't justified.
 
-**Why:** MCP is the de facto standard. Cursor, Claude, Cline, VS Code, Windsurf all speak it. Building our own plugin API would put us in a corner; speaking MCP makes every existing server work in Jarvis on day one.
+**Why:** MCP is the de facto standard. Cursor, Claude, Cline, VS Code, Windsurf all speak it. Building our own plugin API would put us in a corner; speaking MCP makes every existing server work in VibeSpace on day one.
 
 **MCP servers we ship by default:**
 - Filesystem (read-only by default, opt-in write)

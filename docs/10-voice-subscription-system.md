@@ -1,10 +1,10 @@
 # Voice Subscription System
 
-Secure, metered cloud TTS + free local Kokoro voice for Jarvis One.
+Secure, metered cloud TTS + free local Kokoro voice for VibeSpace.
 
 ## Overview
 
-Jarvis One has two independent voice systems. The voice provider is independent
+VibeSpace has two independent voice systems. The voice provider is independent
 of the chat provider — e.g. you can chat with Gemini and have the reply read by
 OpenAI TTS, or chat with Claude and use local Kokoro.
 
@@ -95,7 +95,7 @@ npx supabase secrets set STRIPE_ULTRA_PRICE_ID=price_...
 npx supabase secrets set OPENAI_API_KEY=sk-...
 npx supabase secrets set DEEPGRAM_API_KEY=...
 npx supabase secrets set ELEVENLABS_API_KEY=...
-npx supabase secrets set APP_BASE_URL=https://cookie774-gamedev.github.io/Jarivs-One
+npx supabase secrets set APP_BASE_URL=https://vibespaceos.com
 # Optional: MODEL_MANIFEST_URL or GITHUB_MODEL_RELEASE_URL for Kokoro assets
 ```
 
@@ -127,9 +127,9 @@ Then add the `stripe-webhook` URL to the Stripe dashboard with these events:
 
 ModelManager (`app/src/features/voice/modelManager.ts`) resolves the OS path:
 
-- Windows: `%APPDATA%/Jarvis-One/models/kokoro/`
-- macOS: `~/Library/Application Support/Jarvis-One/models/kokoro/`
-- Linux: `~/.local/share/Jarvis-One/models/kokoro/`
+- Windows: `%APPDATA%/VibeSpace/models/kokoro/`
+- macOS: `~/Library/Application Support/VibeSpace/models/kokoro/`
+- Linux: `~/.local/share/VibeSpace/models/kokoro/`
 
 It fetches the public manifest from `model-manifest`, downloads with progress,
 verifies SHA-256 checksums, resumes partial downloads, and repairs corrupt

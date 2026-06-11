@@ -1,4 +1,4 @@
-# Jarvis - Voice Layer Design
+# VibeSpace - Voice Layer Design
 
 *Companion to `02-system-architecture.md` and `03-multi-agent-orchestration.md`. This is the design of the always-available voice supervisor.*
 
@@ -6,12 +6,12 @@
 
 ## 1. Goals
 
-1. **Sub-450 ms median round-trip** from end-of-user-utterance to first audible Jarvis syllable on broadband.
-2. **Always available**: wake-word ("Hey Jarvis") OR global push-to-talk hotkey (Ctrl+Space) OR menu-bar tap.
+1. **Sub-450 ms median round-trip** from end-of-user-utterance to first audible VibeSpace syllable on broadband.
+2. **Always available**: wake-word ("Hey VibeSpace") OR global push-to-talk hotkey (Ctrl+Space) OR menu-bar tap.
 3. **Privacy-first**: wake word and pre-roll buffer never leave the device.
 4. **Modal-aware**: knows what's on screen, what chat is active, what tasks are pending, who said what in the last meeting.
-5. **Interruptible**: barge-in supported. User can talk over Jarvis and Jarvis stops.
-6. **Voice -> action**: not just chat. Jarvis can create tasks, set reminders, switch agents, summon files, dictate into other apps.
+5. **Interruptible**: barge-in supported. User can talk over VibeSpace and VibeSpace stops.
+6. **Voice -> action**: not just chat. VibeSpace can create tasks, set reminders, switch agents, summon files, dictate into other apps.
 
 ## 2. Architecture
 
@@ -69,7 +69,7 @@ Why both:
 
 Switch between them based on:
 - User preference setting ("Speed" vs "Accuracy" vs "Auto").
-- Task type detection (Jarvis classifies the intent in the first ~150 ms of speech).
+- Task type detection (VibeSpace classifies the intent in the first ~150 ms of speech).
 - Privacy mode (cascade-only when local-models-only is active; S2S routes to cloud).
 
 ## 4. Component-by-component
@@ -101,7 +101,7 @@ Switch between them based on:
 
 ### 4.6 LLM (the brain)
 - Uses the same LiteLLM router as the main orchestrator.
-- Default model for Jarvis: **Claude Opus 4.x** (warmth, breadth) for cascade voice.
+- Default model for VibeSpace: **Claude Opus 4.x** (warmth, breadth) for cascade voice.
 - For S2S: locked to OpenAI's `gpt-realtime` voices ("alloy", "marin", "cedar") or Gemini Live's voices.
 - System prompt includes: persona, current project context, recent chat history (last 10 turns summarized), today's to-do list, currently active agents.
 
@@ -113,7 +113,7 @@ Switch between them based on:
 - All streaming token-by-token; the LLM streams text into the TTS WebSocket as it generates.
 
 ### 4.8 Speaker ID
-- **Live:** Picovoice Eagle (on-device, real-time). Jarvis only responds to enrolled voices by default.
+- **Live:** Picovoice Eagle (on-device, real-time). VibeSpace only responds to enrolled voices by default.
 - **Post-hoc:** pyannote community-1 for batch transcripts (meeting attribution).
 
 ### 4.9 Audio routing
@@ -144,7 +144,7 @@ Switch between them based on:
 Tricks we use:
 1. **Stream STT partials directly into LLM context.** Start the LLM on the first transcript token. Cancel in-flight if user keeps talking.
 2. **Stream LLM output token-by-token to TTS** over a Cartesia/ElevenLabs WebSocket. Never buffer a full sentence.
-3. **Speculative TTS warm-up.** If Jarvis frequently says "Sure," "Got it," "Let me check" - pre-synthesize a tiny ack and play it the moment the user stops. Buys 500 ms of LLM cover.
+3. **Speculative TTS warm-up.** If VibeSpace frequently says "Sure," "Got it," "Let me check" - pre-synthesize a tiny ack and play it the moment the user stops. Buys 500 ms of LLM cover.
 4. **Co-locate STT+TTS region** with the LLM provider to save 30-80 ms per hop.
 5. **Disable double echo cancellation.** macOS does it natively; Windows mostly does. Software EC on top adds latency.
 
@@ -152,7 +152,7 @@ Tricks we use:
 
 The patterns that work:
 
-1. **Hotword -> record -> respond.** Wake word locally; pre-roll buffer included so user doesn't pause after "Hey Jarvis."
+1. **Hotword -> record -> respond.** Wake word locally; pre-roll buffer included so user doesn't pause after "Hey VibeSpace."
 2. **Push-to-talk.** Default for power users. Global hotkey (Ctrl+Space). Faster and more reliable than wake word.
 3. **Tap-to-talk plus visible mic indicator.** Menu-bar / tray icon shows mic state. macOS/Windows force a system-level mic indicator anyway.
 
@@ -164,9 +164,9 @@ Patterns we explicitly avoid:
 
 **Battery cost:** openWakeWord/Porcupine run on a fraction of one CPU core. <1% CPU on M-series. On mobile (Phase 2), wake word is OFF by default and triggered on screen-on or hardware-button.
 
-## 7. Voice intents (what Jarvis can do)
+## 7. Voice intents (what VibeSpace can do)
 
-Jarvis classifies every utterance into one of these intents in the first 150 ms of speech (using a fast classifier on the streaming partial transcript):
+VibeSpace classifies every utterance into one of these intents in the first 150 ms of speech (using a fast classifier on the streaming partial transcript):
 
 | Intent | Examples | Routing |
 |---|---|---|
@@ -185,22 +185,22 @@ The classifier itself is a Haiku-class model invoked once per turn with a tiny p
 
 ## 8. Visual feedback
 
-Voice without visual feedback feels broken. Jarvis ships three persistent UI signals:
+Voice without visual feedback feels broken. VibeSpace ships three persistent UI signals:
 
-1. **Apple-Intelligence-style glow border.** A conic-gradient CSS animation around the entire screen edge while listening. Lights up on wake word / push-to-talk activation, dims when Jarvis is speaking.
+1. **Apple-Intelligence-style glow border.** A conic-gradient CSS animation around the entire screen edge while listening. Lights up on wake word / push-to-talk activation, dims when VibeSpace is speaking.
 2. **Spline 3D orb** in the voice modal (only when modal is open). Pulses with audio amplitude, color-shifts on intent classification.
 3. **Menu-bar / tray icon state.** Idle dot, listening pulse, thinking spinner, speaking wave. Match macOS Voice Control conventions where possible.
 
-Plus inline transcript: a translucent caption bar overlays the bottom of the screen during voice sessions so the user can see what Jarvis heard. Drops away when the session ends.
+Plus inline transcript: a translucent caption bar overlays the bottom of the screen during voice sessions so the user can see what VibeSpace heard. Drops away when the session ends.
 
 ## 9. Persona & system prompt
 
-Jarvis is a calm, friendly, lightly British (toggleable) personality. Concise by default, expansive only when asked. Treats the user as an equal, not a sycophant.
+VibeSpace is a calm, friendly, lightly British (toggleable) personality. Concise by default, expansive only when asked. Treats the user as an equal, not a sycophant.
 
 System prompt skeleton (production version is longer and more careful):
 
 ```
-You are Jarvis, the user's personal AI workspace assistant.
+You are VibeSpace, the user's personal AI workspace assistant.
 
 Voice rules:
 - Reply in 1-2 sentences unless the user asks for more.
@@ -226,11 +226,11 @@ Personality:
 - Use the user's preferred name from their profile.
 ```
 
-User can edit the persona in settings. We ship 5 presets: **Jarvis** (default), **Athena** (formal), **Edge** (snappy), **Watson** (warm), **HAL** (terse).
+User can edit the persona in settings. We ship 5 presets: **VibeSpace** (default), **Athena** (formal), **Edge** (snappy), **Watson** (warm), **HAL** (terse).
 
 ## 10. Failure modes
 
-- **Wake word false positive.** Jarvis says nothing if no real speech follows within 1.5 s. No "Sorry, I didn't catch that" - silent abort.
+- **Wake word false positive.** VibeSpace says nothing if no real speech follows within 1.5 s. No "Sorry, I didn't catch that" - silent abort.
 - **Wake word missed.** Push-to-talk hotkey is always available as backup.
 - **STT outage.** Fall back to next provider; if all cloud STT down, swap to Moonshine local automatically with a one-toast warning.
 - **TTS outage.** Same pattern; fallback to local Piper if all cloud TTS down. Voice quality degrades but functionality continues.
@@ -240,12 +240,12 @@ User can edit the persona in settings. We ship 5 presets: **Jarvis** (default), 
 
 ## 11. Roadmap (post-MVP)
 
-- **Vision-in-the-loop** via Gemini Live - Jarvis can see what's on screen and respond to "what's wrong with this UI?"
+- **Vision-in-the-loop** via Gemini Live - VibeSpace can see what's on screen and respond to "what's wrong with this UI?"
 - **Persistent ambient mode** - opt-in, bounded ("listen for the next 30 minutes during my coding session, only interject if I ask for help") - never default-on.
 - **Multi-language voice** - one persona, switching languages mid-conversation based on user.
 - **Voice authentication** - "only respond to me" via Picovoice Eagle with 99%+ accuracy after 30s enrollment.
 - **Watch / earbuds first** - Phase 3+. AirPods Pro or Pixel Buds Pro as the primary audio surface.
-- **Custom voice clone** - user records 60s, we synthesize their preferred Jarvis voice with their consent (paid tier only).
+- **Custom voice clone** - user records 60s, we synthesize their preferred VibeSpace voice with their consent (paid tier only).
 
 ---
 

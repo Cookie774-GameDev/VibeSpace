@@ -1,4 +1,4 @@
-# Jarvis - Multi-Agent Orchestration Design
+# VibeSpace - Multi-Agent Orchestration Design
 
 *Companion to `02-system-architecture.md`. This is the design of the agent runtime itself.*
 
@@ -6,9 +6,9 @@
 
 ## 1. The orchestration layers
 
-Jarvis runs four conceptual layers, top to bottom:
+VibeSpace runs four conceptual layers, top to bottom:
 
-1. **Jarvis (the voice + intent supervisor).** The user-facing assistant. Owns voice in/out, intent classification, and routing to the orchestration layer. Always the first responder.
+1. **VibeSpace (the voice + intent supervisor).** The user-facing assistant. Owns voice in/out, intent classification, and routing to the orchestration layer. Always the first responder.
 2. **Council orchestrator (Mastra-based).** Decides whether a request needs one agent or many. Spins up a supervisor + workers graph for multi-agent tasks. Owns shared state.
 3. **Worker agents.** Specialists pulled from a registry. Each has a persona, system prompt, model config, allowed tools, and memory scope. Workers can be parallel, sequential, or hand-off-routed depending on the task.
 4. **Tool & memory layer.** MCP servers, native tools, vector store, SQLite metadata, sandboxes.
@@ -97,7 +97,7 @@ Each agent is a JSON definition + optional skill bundle:
 ```
 
 Default agents shipped with the app:
-- **Jarvis** (the voice supervisor; persona-rich, calm)
+- **VibeSpace** (the voice supervisor; persona-rich, calm)
 - **Researcher** (Claude Sonnet 4)
 - **Coder** (Claude Sonnet 4 with coding system prompt + extended tool access)
 - **Writer** (Claude Opus 4)
@@ -234,7 +234,7 @@ Runs on every PR via GitHub Actions. Regressions block merge.
 
 What this design does that BridgeMind, Cursor, and others don't:
 
-1. **Voice-supervisor-on-top.** Jarvis sits above the council orchestrator. Most products bolt voice on as a side feature; we make it the primary input.
+1. **Voice-supervisor-on-top.** VibeSpace sits above the council orchestrator. Most products bolt voice on as a side feature; we make it the primary input.
 2. **Structured inter-agent messaging.** Agents can ask each other questions on a bounded channel. BridgeMind's BridgeSwarm explicitly disallows this; we measure the trade-off.
 3. **Auto-extract action items.** A standing Action Extractor agent surfaces draft to-dos from every chat and meeting. No competitor does this in real time.
 4. **Memory namespace isolation per agent.** Each agent has a scoped memory view; cross-agent contamination is bounded and observable.

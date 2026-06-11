@@ -1,4 +1,4 @@
-# Jarvis One 0.1.26
+# VibeSpace 0.1.26
 
 Terminal stability and latest-download repair.
 

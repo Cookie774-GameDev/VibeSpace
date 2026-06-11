@@ -1,6 +1,6 @@
-# Jarvis - Live To-Do List, Smart Scheduler & Notifications
+# VibeSpace - Live To-Do List, Smart Scheduler & Notifications
 
-*The category-defining feature. Specs the live task system that Jarvis manages, schedules, and reminds on.*
+*The category-defining feature. Specs the live task system that VibeSpace manages, schedules, and reminds on.*
 
 ---
 
@@ -8,17 +8,17 @@
 
 Every AI assistant on the market today has a memory leak: the user asks the assistant to do something later, the assistant says "I'll remind you," and then the assistant forgets the moment the chat closes. Lindy got close on the email/scheduling axis. Granola got close on the meeting axis. No one has built an executive-assistant-grade task layer that lives at the heart of an AI workspace.
 
-That's what this system is. **A live to-do list that Jarvis owns end-to-end** - it can create, modify, schedule, snooze, prioritize, complete, and notify on tasks via voice, text, or autonomous extraction from any chat or meeting. The user never has to touch a separate task app.
+That's what this system is. **A live to-do list that VibeSpace owns end-to-end** - it can create, modify, schedule, snooze, prioritize, complete, and notify on tasks via voice, text, or autonomous extraction from any chat or meeting. The user never has to touch a separate task app.
 
 ## 2. Goals
 
-1. **Voice-first task creation.** "Hey Jarvis, add 'review PR #1234' due Friday at 4pm" works in under 2 seconds with verbal confirmation.
+1. **Voice-first task creation.** "Hey VibeSpace, add 'review PR #1234' due Friday at 4pm" works in under 2 seconds with verbal confirmation.
 2. **Auto-extracted action items.** Every meeting and chat has its action items detected by an extractor agent and surfaced as draft tasks.
-3. **Smart scheduling.** Reminder times are picked by Jarvis based on calendar density, location, quiet hours, deadline pressure, and user habits - not just static "remind at X."
+3. **Smart scheduling.** Reminder times are picked by VibeSpace based on calendar density, location, quiet hours, deadline pressure, and user habits - not just static "remind at X."
 4. **Native, multi-surface notifications.** Desktop banners, mobile push, watch buzz, optional email/SMS digest. Snooze syncs everywhere instantly.
-5. **One source of truth.** Tasks live in Jarvis's database. Optional bidirectional sync to system Reminders, Google Tasks, Todoist, Linear, Notion, etc.
-6. **Daily plan briefing.** Morning standup: Jarvis tells you what's on your list, surfaces conflicts, drafts prep.
-7. **Zero-friction completion.** Mark done by saying "done", swiping a notification, or just doing the thing (Jarvis can detect completion from chat / git / calendar in many cases).
+5. **One source of truth.** Tasks live in VibeSpace's database. Optional bidirectional sync to system Reminders, Google Tasks, Todoist, Linear, Notion, etc.
+6. **Daily plan briefing.** Morning standup: VibeSpace tells you what's on your list, surfaces conflicts, drafts prep.
+7. **Zero-friction completion.** Mark done by saying "done", swiping a notification, or just doing the thing (VibeSpace can detect completion from chat / git / calendar in many cases).
 
 ## 3. Data model
 
@@ -66,7 +66,7 @@ type Task = {
 
   // Completion
   done_at?: number;
-  completion_evidence?: ContextRef;   // what convinced Jarvis it was done
+  completion_evidence?: ContextRef;   // what convinced VibeSpace it was done
 
   created_at: number;
   updated_at: number;
@@ -80,7 +80,7 @@ type Reminder = {
   message_override?: string;          // custom payload
   status: 'scheduled' | 'fired' | 'snoozed' | 'dismissed' | 'completed';
   snooze_history: { snoozed_at: number, until: number, reason?: string }[];
-  smart_reason?: string;              // why Jarvis chose this time
+  smart_reason?: string;              // why VibeSpace chose this time
 };
 
 type NotificationChannel =
@@ -89,7 +89,7 @@ type NotificationChannel =
   | 'watch'         // Apple Watch / Wear OS
   | 'email'         // digest or single
   | 'sms'           // Twilio
-  | 'voice'         // Jarvis says it out loud
+  | 'voice'         // VibeSpace says it out loud
   | 'imessage'      // iOS only
   | 'in_app';       // shown in to-do panel only
 
@@ -102,10 +102,10 @@ type ContextRef = {
 
 ### Why these specific fields
 
-- **`effort` + `context_tags` + `energy_required`** drive smart scheduling. Without them Jarvis can't pick good reminder times - it'd just nag you at the deadline.
+- **`effort` + `context_tags` + `energy_required`** drive smart scheduling. Without them VibeSpace can't pick good reminder times - it'd just nag you at the deadline.
 - **`source_refs`** is what makes "Pull up the design doc from yesterday's call" work later. Every task carries the chain back to where it came from.
 - **`external_ids`** keeps two-way sync correct without leaking N copies of the task across systems.
-- **`completion_evidence`** is the proof Jarvis used to auto-complete - we need it for "wait, why did you mark this done?" debugging.
+- **`completion_evidence`** is the proof VibeSpace used to auto-complete - we need it for "wait, why did you mark this done?" debugging.
 
 ## 4. Subsystem architecture
 
@@ -156,7 +156,7 @@ The hard part. Three rules:
 
 1. **Never fire a reminder at the wrong time.** No 6am buzzes for non-urgent tasks. No interruptions during meetings. No notifications during quiet hours.
 2. **Always fire one when it matters.** A high-priority deadline should never slip silently.
-3. **Be honest about why.** Every smart-scheduled reminder carries a `smart_reason` string Jarvis can verbalize ("Setting this for 9am because your morning is light and the deadline is Friday").
+3. **Be honest about why.** Every smart-scheduled reminder carries a `smart_reason` string VibeSpace can verbalize ("Setting this for 9am because your morning is light and the deadline is Friday").
 
 ### Inputs
 
@@ -193,7 +193,7 @@ For a new task with a `due_at`:
 
 ### What the user can override
 
-Every smart decision shows up with a small "scheduled by Jarvis" badge. Tap to edit time, channel, or message. Tap "always do this" to teach Jarvis a preference.
+Every smart decision shows up with a small "scheduled by VibeSpace" badge. Tap to edit time, channel, or message. Tap "always do this" to teach VibeSpace a preference.
 
 ## 6. Action Extractor agent
 
@@ -223,7 +223,7 @@ type DraftTask = {
 - Drafts appear in a "Suggested" section of the to-do panel with a one-tap accept.
 - High confidence drafts (>= 0.85) can be auto-accepted if the user opts in.
 - Drafts time-out after 24 hours if not accepted.
-- Voice surfacing: at the end of a meeting, Jarvis says "I caught 3 action items - want to add them?" and reads the titles.
+- Voice surfacing: at the end of a meeting, VibeSpace says "I caught 3 action items - want to add them?" and reads the titles.
 
 ### Extraction prompt (sketch)
 
@@ -265,8 +265,8 @@ The notification engine decides:
 | **Banner** | Desktop OS banner top-right (Mac) / bottom-right (Win) | Tauri's notification plugin -> `UNUserNotificationCenter` (Mac) / Windows Action Center |
 | **Tray badge** | System tray / menu bar icon shows count + dot | Tauri tray APIs |
 | **Sound** | Optional chime per priority level | Custom audio assets in `~/.jarvis/sounds/` |
-| **Voice** | Jarvis verbalizes the reminder if user is in voice session | Voice sidecar TTS |
-| **Push** | Mobile lock-screen / Notification Center | APNs (iOS), FCM (Android), via Jarvis Cloud |
+| **Voice** | VibeSpace verbalizes the reminder if user is in voice session | Voice sidecar TTS |
+| **Push** | Mobile lock-screen / Notification Center | APNs (iOS), FCM (Android), via VibeSpace Cloud |
 | **Watch** | Apple Watch / Wear OS buzz | Companion app or Critical Alert with relay |
 | **Web Push** | Browser extension | VAPID Web Push |
 | **Email** | Daily digest or single-shot for urgent | Resend |
@@ -281,14 +281,14 @@ The notification engine decides:
 | Low | in_app + tray badge |
 | Normal | banner + push |
 | High | banner + push + watch |
-| Urgent | banner + push + watch + voice (if Jarvis active) + sound |
+| Urgent | banner + push + watch + voice (if VibeSpace active) + sound |
 
 ### Rich notification content
 
 Banner / push notifications carry actions:
 - **Done** - mark complete.
 - **Snooze** - opens a quick picker (15m / 1h / tonight / tomorrow / custom / "until I'm done with my next meeting").
-- **Open in Jarvis** - opens app to the task.
+- **Open in VibeSpace** - opens app to the task.
 - **Edit** - inline reschedule.
 
 Mac actions and Windows toast actions are wired through Tauri; iOS/Android use action categories registered with APNs/FCM.
@@ -302,15 +302,15 @@ Default quiet hours: 10pm-8am local time, plus all-day Sunday. User-configurable
 
 ### Do Not Disturb integration
 
-Reads system DND state on Mac (Focus modes) and Windows (Focus assist). When the user is in a Focus mode, Jarvis respects it for non-urgent tasks. Urgent tasks can be allowlisted by adding Jarvis to the Focus's allowed apps list.
+Reads system DND state on Mac (Focus modes) and Windows (Focus assist). When the user is in a Focus mode, VibeSpace respects it for non-urgent tasks. Urgent tasks can be allowlisted by adding VibeSpace to the Focus's allowed apps list.
 
 ### Smart silencing
 
-If the user has dismissed three notifications in a row in the last hour without acting, Jarvis silently rate-limits for the next hour and surfaces a "you seem busy - I've held 5 reminders, want them now?" prompt at the end.
+If the user has dismissed three notifications in a row in the last hour without acting, VibeSpace silently rate-limits for the next hour and surfaces a "you seem busy - I've held 5 reminders, want them now?" prompt at the end.
 
 ## 8. Voice integration
 
-Voice is the primary way the user interacts with the to-do system. Jarvis recognizes these intents (full list in `04-voice-jarvis-layer.md` section 7):
+Voice is the primary way the user interacts with the to-do system. VibeSpace recognizes these intents (full list in `04-voice-jarvis-layer.md` section 7):
 
 ### Create
 - "Add 'review PR 1234' to my list."
@@ -319,7 +319,7 @@ Voice is the primary way the user interacts with the to-do system. Jarvis recogn
 - "Put 'pick up dry cleaning' on errands for tomorrow."
 
 Confirmation pattern (under 1 second, voice + visual):
-> Jarvis: "Added: review PR 1234, due Friday 4pm. Reminding you Friday at 9am."
+> VibeSpace: "Added: review PR 1234, due Friday 4pm. Reminding you Friday at 9am."
 > Glow border pulses green briefly. Task panel briefly highlights the new task.
 
 ### Modify
@@ -349,11 +349,11 @@ Confirmation pattern (under 1 second, voice + visual):
 - "Help me figure out what to do next."
 - "What should I pick up first?"
 
-The "plan my morning" flow is interactive: Jarvis pulls today's tasks, calendar, and energy patterns, proposes an ordering, asks for any swaps, then sets the schedule. Takes about 90 seconds in voice.
+The "plan my morning" flow is interactive: VibeSpace pulls today's tasks, calendar, and energy patterns, proposes an ordering, asks for any swaps, then sets the schedule. Takes about 90 seconds in voice.
 
 ## 9. Daily plan briefing
 
-Every morning at the user's chosen time (default: 30 minutes before their first calendar event), Jarvis runs a briefing:
+Every morning at the user's chosen time (default: 30 minutes before their first calendar event), VibeSpace runs a briefing:
 
 1. **Pulls** today's tasks (scheduled or due) + calendar + any blockers.
 2. **Detects conflicts** (a 2-hour task with no calendar room, two urgent tasks competing for the same morning).
@@ -361,7 +361,7 @@ Every morning at the user's chosen time (default: 30 minutes before their first 
 4. **Drafts prep** for the first 1-2 things on the schedule (links to relevant docs, summarizes prior context, surfaces names of attendees).
 5. **Delivers** via:
    - In-app briefing card.
-   - Optional voice (Jarvis reads it aloud while user makes coffee).
+   - Optional voice (VibeSpace reads it aloud while user makes coffee).
    - Optional email digest.
    - Mobile push notification with deep link.
 
@@ -399,7 +399,7 @@ Two-way sync with one external system at a time per task to keep state simple.
 
 ## 11. Auto-complete detection
 
-Jarvis can detect that a task got done without the user marking it. Sources:
+VibeSpace can detect that a task got done without the user marking it. Sources:
 
 - **Git:** if a task has `source_ref` pointing to a PR and the PR merges, mark done.
 - **Calendar:** if a task is "Meeting prep for X" and the meeting passed, mark done.
@@ -483,7 +483,7 @@ Phase 1 (closed beta):
 - < 5% of reminders dismissed as "wrong time" (fed back into smart scheduler).
 - 30% of accepted tasks come from the extractor (auto-suggested, not manually typed).
 
-These numbers are how we know the system is actually shifting work into Jarvis instead of asking users to remember to use it.
+These numbers are how we know the system is actually shifting work into VibeSpace instead of asking users to remember to use it.
 
 ---
 

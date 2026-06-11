@@ -1,4 +1,4 @@
-# Jarvis 0.1.5
+# VibeSpace 0.1.5
 
 First release that bundles the full Supabase backend.
 

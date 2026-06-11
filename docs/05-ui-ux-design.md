@@ -1,4 +1,4 @@
-# Jarvis - UI/UX Design Blueprint
+# VibeSpace - UI/UX Design Blueprint
 
 *Working aesthetic name: **Voltage**. OLED-black, electric-accent, council-of-agents. Dense, calm, keyboard-first.*
 
@@ -10,7 +10,7 @@
 2. **Keyboard-first, mouse-friendly.** Every action reachable via Cmd+K. Mouse is for browsing, keyboard is for working.
 3. **Calm motion.** Spring physics. Brief. Choreographed. Never gratuitous.
 4. **One accent color.** A cyan-to-violet gradient appears sparingly. Everything else is neutral OLED grays.
-5. **Voice is visible.** When Jarvis is listening, the entire screen edge knows. When agents are working, you see what they're doing.
+5. **Voice is visible.** When VibeSpace is listening, the entire screen edge knows. When agents are working, you see what they're doing.
 6. **Local feel even when cloud.** Avoid spinners that imply network round-trips. Optimistic UI. Skeleton states.
 7. **Trust through transparency.** Show the user the trace, the cost, the model, the source. Never hide what an agent did.
 
@@ -187,7 +187,7 @@ Triggered by wake word, push-to-talk hotkey, or tray click. Slides up from the b
 ### Components
 - **Spline 3D orb** at the visual center, ~200px. Color-shifts on intent classification, pulses with audio amplitude.
 - **Apple-Intelligence-style glow border** wraps the entire screen edge during listening states. CSS conic-gradient with a slow rotation animation.
-- **Translucent transcript caption** at the bottom of the screen showing what Jarvis heard.
+- **Translucent transcript caption** at the bottom of the screen showing what VibeSpace heard.
 - **Active agent badge** under the orb showing which agent is currently responding.
 - **Timer** showing turn duration (helps users understand latency).
 - **Esc to close**, **Space to push-to-talk** while modal is open.
@@ -237,7 +237,7 @@ The to-do panel docks in the right pane (in chat mode) or in the floating tray d
 - Drag-drop between sections to change scheduling.
 
 ### Voice creation feedback
-When Jarvis creates a task via voice, the new card animates in with an accent-gradient flash on the left border for ~1 second.
+When VibeSpace creates a task via voice, the new card animates in with an accent-gradient flash on the left border for ~1 second.
 
 ## 7. Notification design
 
@@ -247,7 +247,7 @@ Compact (matching macOS / Windows native):
 
 ```
 +------------------------------------------+
-| Jarvis  ·  Reminder           [x]        |
+| VibeSpace  ·  Reminder           [x]        |
 | Review PR #1234 (urgent)                 |
 | Due in 1h - your morning is clear.       |
 | [ Done ]  [ Snooze v ]  [ Open ]         |
@@ -270,11 +270,11 @@ Standard iOS/Android push notification with category-defined actions: Done, Snoo
 
 5 steps, each takes <1 minute:
 
-1. **Welcome screen** with Aceternity Aurora Background, Spline orb hero. "Meet Jarvis." CTA: Continue.
-2. **Pick personality** - Jarvis (default), Athena, Edge, Watson, HAL. Click to preview voice + style.
+1. **Welcome screen** with Aceternity Aurora Background, Spline orb hero. "Meet VibeSpace." CTA: Continue.
+2. **Pick personality** - VibeSpace (default), Athena, Edge, Watson, HAL. Click to preview voice + style.
 3. **Connect models** - one-click providers (or BYOK). Skip-able to local-only.
 4. **Mic + notification permissions.** Required for voice and reminders. Clear explanation of why.
-5. **Quick demo** - Jarvis says "Try this: 'Hey Jarvis, what can you do?'". User says it. Glow border lights up. Magic moment.
+5. **Quick demo** - VibeSpace says "Try this: 'Hey VibeSpace, what can you do?'". User says it. Glow border lights up. Magic moment.
 
 After onboarding, drop the user into a fresh project with the to-do panel showing one example task ("Try saying 'mark this done'").
 

@@ -1,6 +1,6 @@
-# Jarvis Call, Account, Admin, and Release Setup
+# VibeSpace Call, Account, Admin, and Release Setup
 
-This guide wires the production-facing pieces that are not purely local UI: Supabase auth/billing state, Stripe checkout links, the phone-jarvis cloud bridge, Jarvis Call entitlement gating, usage reporting, and signed silent updates.
+This guide wires the production-facing pieces that are not purely local UI: Supabase auth/billing state, Stripe checkout links, the phone-jarvis cloud bridge, VibeSpace Call entitlement gating, usage reporting, and signed silent updates.
 
 ## 1. App environment
 
@@ -17,7 +17,7 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-public-key
 ```
 
-Required for in-app Jarvis Call:
+Required for in-app VibeSpace Call:
 
 ```env
 VITE_PHONE_JARVIS_CLOUD_URL=https://your-phone-jarvis-cloud.example.com
@@ -32,7 +32,7 @@ VITE_STRIPE_CHECKOUT_ULTRA=
 VITE_STRIPE_CHECKOUT_URL=
 ```
 
-Optional admin build flags. Admin users resolve to effective Ultra in the app and can use Jarvis Call even before Stripe subscription sync is fully deployed:
+Optional admin build flags. Admin users resolve to effective Ultra in the app and can use VibeSpace Call even before Stripe subscription sync is fully deployed:
 
 ```env
 VITE_JARVIS_ADMIN=false
@@ -66,7 +66,7 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=...
 Expected app behavior after Supabase is configured:
 
 - The top-left `J` avatar opens the Account page.
-- The Account page shows local/cloud identity, plan, billing entry points, saved provider-key count, usage summary, and Jarvis Call status.
+- The Account page shows local/cloud identity, plan, billing entry points, saved provider-key count, usage summary, and VibeSpace Call status.
 - Paid tiers update through Stripe/Supabase billing sync when those webhooks are deployed.
 - Admin identities resolve to effective Ultra inside the client.
 
@@ -100,9 +100,9 @@ Twilio is required for PSTN inbound/outbound phone calls. LiveKit is required fo
 
 ## 4. Entitlement gates
 
-Jarvis Call availability:
+VibeSpace Call availability:
 
-| Plan | Voice minutes | In-app Jarvis Call |
+| Plan | Voice minutes | In-app VibeSpace Call |
 | --- | ---: | --- |
 | `free` | 0 | No |
 | `starter` | 60 | Yes |
@@ -120,7 +120,7 @@ All call entry points must enforce the same rules:
 
 The `/usage` slash command and Account page combine local and provider-backed data:
 
-- Local monthly message/token totals are available for every provider because they come from Jarvis IndexedDB message metadata.
+- Local monthly message/token totals are available for every provider because they come from VibeSpace IndexedDB message metadata.
 - OpenAI live organization usage/cost totals are fetched when the saved OpenAI key can access the usage and costs endpoints.
 - OpenRouter live key usage, daily/monthly spend, limit, and remaining credit are fetched from the current-key endpoint when an OpenRouter key is linked.
 - Other providers currently fall back to local totals until their hosted usage APIs are wired.
@@ -139,7 +139,7 @@ Expected result:
 
 ## 6. Silent updates and release channel
 
-Jarvis One uses the `Cookie774-GameDev/Jarivs-One` release channel. Production update behavior:
+VibeSpace uses the `Cookie774-GameDev/VibeSpace` release channel. Production update behavior:
 
 - Tauri updater checks signed GitHub Releases.
 - Silent install uses the NSIS current-user installer under `%LOCALAPPDATA%`.
@@ -182,10 +182,10 @@ Run this before calling the production update complete:
 - `npm --prefix app run test` passes or unrelated failures are documented.
 - `npm --prefix app run build` passes.
 - `npm run release:windows` stages signed Windows artifacts.
-- `releases/latest.json` points at `https://github.com/Cookie774-GameDev/Jarivs-One/releases/...`.
+- `releases/latest.json` points at `https://github.com/Cookie774-GameDev/VibeSpace/releases/...`.
 - Account page opens from the top-left `J` avatar.
-- Admin env identity shows effective Ultra and Jarvis Call enabled.
-- Free user sees Jarvis Call blocked with upgrade copy.
+- Admin env identity shows effective Ultra and VibeSpace Call enabled.
+- Free user sees VibeSpace Call blocked with upgrade copy.
 - Starter/pro/ultra user or admin can open the call modal when `VITE_PHONE_JARVIS_CLOUD_URL` is configured.
 - `/usage` returns local totals, and OpenAI live usage when the linked OpenAI key has usage endpoint access.
 - Tools page can create and run a workflow tool with multiple built-in action steps.

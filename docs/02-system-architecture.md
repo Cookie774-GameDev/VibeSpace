@@ -1,4 +1,4 @@
-# Jarvis - System Architecture
+# VibeSpace - System Architecture
 
 *Companion to `01-product-vision.md`. This document is the high-level technical blueprint.*
 
@@ -106,12 +106,12 @@ Full design and latency budgeting in `04-voice-jarvis-layer.md`.
     logs/                    # rolling logs
     voice/models/            # ONNX models for wake word + VAD + Moonshine
   ```
-- **Optional cloud sync.** Postgres (per-user schema) + Qdrant (per-user collection) on the Jarvis Cloud side. End-to-end encrypted with a user-held key (we hold ciphertext only).
+- **Optional cloud sync.** Postgres (per-user schema) + Qdrant (per-user collection) on the VibeSpace Cloud side. End-to-end encrypted with a user-held key (we hold ciphertext only).
 
 ### 2.5 Cloud services (optional, opt-in)
 - **Auth:** WorkOS (enterprise) or Clerk (consumer). Email + Google + Apple SSO.
 - **Sync API:** TRPC over HTTPS, websocket for live multi-device sync.
-- **LiteLLM gateway:** managed model routing for users on the Jarvis-managed plan.
+- **LiteLLM gateway:** managed model routing for users on the VibeSpace-managed plan.
 - **Voice infra:** LiveKit Cloud for browser/mobile WebRTC; Pipecat self-hosted for desktop direct.
 - **Push:** FCM (Android), APNs (iOS), Web Push (browser ext).
 - **Marketplace:** Postgres + S3 for skills/MCP server distribution. Stripe for revenue share.
