@@ -110,7 +110,7 @@ export function usageCopy(
   return `Cloud voice: ${fmtHours(usedSeconds)} used / ${fmtHours(limitSeconds)} included. Local Kokoro voice unlimited.`;
 }
 
-/** Launch Deepgram promo — one-time seconds from the $6k company pool (server enforced). */
+/** Launch Deepgram promo — one-time seconds from the $1k company pool (server enforced). */
 export const DEEPGRAM_LAUNCH_PROMO: Record<
   VoicePlanId,
   { seconds: number; minutesLabel: string; maxCostUsd: number }
@@ -121,9 +121,18 @@ export const DEEPGRAM_LAUNCH_PROMO: Record<
   ultra: { seconds: 10800, minutesLabel: '3 hr', maxCostUsd: 2.03 },
 };
 
-export const DEEPGRAM_PROMO_POOL_USD = 6000;
+export const DEEPGRAM_PROMO_POOL_USD = 1000;
+export const DEEPGRAM_PROMO_PAUSE_AT_USD = 900; // 90% kill switch
 
-export function deepgramPromoCopy(plan: VoicePlanId, usedSeconds: number, limitSeconds: number): string {
+export function deepgramPromoCopy(
+  plan: VoicePlanId,
+  usedSeconds: number,
+  limitSeconds: number,
+  poolActive = true,
+): string {
+  if (!poolActive) {
+    return 'Launch Deepgram promo is paused. Local Kokoro voice still included.';
+  }
   const promo = DEEPGRAM_LAUNCH_PROMO[plan];
   const remaining = Math.max(0, limitSeconds - usedSeconds);
   if (remaining <= 0) {

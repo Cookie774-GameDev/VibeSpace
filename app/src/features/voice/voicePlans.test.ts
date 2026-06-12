@@ -7,6 +7,8 @@ import {
   usageCopy,
   deepgramPromoCopy,
   DEEPGRAM_LAUNCH_PROMO,
+  DEEPGRAM_PROMO_POOL_USD,
+  DEEPGRAM_PROMO_PAUSE_AT_USD,
 } from './voicePlans';
 
 describe('VOICE_PLANS cost model', () => {
@@ -56,16 +58,26 @@ describe('VOICE_PROVIDERS', () => {
 });
 
 describe('DEEPGRAM_LAUNCH_PROMO', () => {
-  it('allocates one-time seconds from the $6k pool by plan', () => {
+  it('allocates one-time seconds from the $1k pool by plan', () => {
     expect(DEEPGRAM_LAUNCH_PROMO.free.seconds).toBe(60);
     expect(DEEPGRAM_LAUNCH_PROMO.starter.seconds).toBe(1800);
     expect(DEEPGRAM_LAUNCH_PROMO.pro.seconds).toBe(5400);
     expect(DEEPGRAM_LAUNCH_PROMO.ultra.seconds).toBe(10800);
   });
 
+  it('uses a $1k pool with 90% kill switch at $900', () => {
+    expect(DEEPGRAM_PROMO_POOL_USD).toBe(1000);
+    expect(DEEPGRAM_PROMO_PAUSE_AT_USD).toBe(900);
+    expect(DEEPGRAM_PROMO_PAUSE_AT_USD / DEEPGRAM_PROMO_POOL_USD).toBeCloseTo(0.9, 5);
+  });
+
   it('describes remaining launch Deepgram time', () => {
     expect(deepgramPromoCopy('free', 0, 60)).toContain('Launch Deepgram');
     expect(deepgramPromoCopy('free', 60, 60)).toContain('trial used');
+  });
+
+  it('shows paused copy when the company pool hit the kill switch', () => {
+    expect(deepgramPromoCopy('starter', 0, 1800, false)).toContain('paused');
   });
 });
 

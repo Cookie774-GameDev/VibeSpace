@@ -148,7 +148,7 @@ export function CloudVoice() {
         </div>
         <p className="text-secondary text-muted-foreground mt-1">
           Choose how VibeSpace speaks. Local Kokoro is free and unlimited. Launch Deepgram gives
-          every plan a one-time fast cloud voice bonus from our $6k credit pool; paid plans also
+          every plan a one-time fast cloud voice bonus from our $1k credit pool; paid plans also
           get monthly cloud voice budget. Everything falls back to Kokoro automatically.
         </p>
       </div>
@@ -282,6 +282,7 @@ export function CloudVoice() {
                 planId,
                 usage.deepgram_promo.seconds_used,
                 usage.deepgram_promo.seconds_limit,
+                usage.deepgram_promo.active,
               )}
             </p>
           )}
