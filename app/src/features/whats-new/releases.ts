@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.33';
+export const CURRENT_VERSION = '0.1.34';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,37 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.34',
+    date: '2026-06-12',
+    headline: 'Deepgram launch promo, voice billing security, and $1k FCFS pool',
+    summary:
+      'One-time Deepgram cloud voice bonus for every plan (1 min free → 3 hr Ultra), drawn from a $1,000 first-come-first-serve pool with auto-shutdown at 90% spend. Hardened server-side billing guardrails and Stripe→Supabase tier sync.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Deepgram launch promo — free users get 1 min cloud voice; Starter 30 min, Pro 90 min, Ultra 3 hr one-time bonus.',
+          'Settings → Cloud Voice shows promo remaining; Deepgram auto-selected when signed in with promo left.',
+          'Pool auto-pauses at $900 (90% of $1k); then paid users use normal monthly budget, free users return to Kokoro local.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Fail-closed rate limits on tts-speak and message-complete (no bypass on DB errors).',
+          'Blocked free-tier Deepgram fallback after promo exhaustion.',
+          'Capped promo settlement refunds; tightened admin and promo RPC security.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets VibeSpace-0.1.34-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.33',
     date: '2026-06-12',
