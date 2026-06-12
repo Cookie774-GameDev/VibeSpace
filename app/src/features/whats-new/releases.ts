@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.34';
+export const CURRENT_VERSION = '0.1.35';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,44 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.35',
+    date: '2026-06-12',
+    headline: 'Subscription plan v2, terminal persistence, agent prompts, and landing site',
+    summary:
+      'DeepSeek V4 Flash chat and SMS on paid tiers with triple usage windows (5-hour, weekly, monthly). Terminals restore scrollback correctly and spawned CLIs receive agent + system prompts. Marketing site rebuilt with an interactive app demo.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Subscription plan v2 — DeepSeek V4 Flash chat, outbound SMS, and triple usage caps (5-hour, weekly, monthly) on AI credits, calls, and texts.',
+          'Settings → Cloud Voice shows unified usage meters; System engine uses a cloud icon with BYOK for OpenAI/Deepgram when subscribed.',
+          'Spark / Orbit / Nova / Singularity tiers with 30-day Stripe billing cycles and no credit rollover.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Terminal persistence — scrollback no longer morphs or jumps after reloads; viewport pins to the bottom on restore.',
+          'Agent prompt delivery — spawned CLIs (e.g. opencode) receive agent-specific + base system prompts via AGENTS.md and env vars.',
+          'ConPTY cursor-home sequences filtered during terminal restore.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'vibespaceos.com landing page — interactive app replica (chat, terminals, voice), liquid-glass theme, Spark/Orbit/Nova/Singularity pricing.',
+          'README refreshed with product screenshots and install one-liner.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets VibeSpace-0.1.35-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.34',
     date: '2026-06-12',
