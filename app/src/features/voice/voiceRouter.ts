@@ -18,7 +18,28 @@ import { playBase64Audio } from './audioPlayback';
 import { ModelManager } from './modelManager';
 import { VOICE_PRESETS } from './voicePlans';
 import { TtsService } from './TtsService';
-import { getDeepgramVoiceKey } from '@/lib/security/voiceKeys';
+import { deepgramTtsProvider } from './providers/deepgramTts';
+import type { StreamingVoiceSession } from './streamingVoice';
+
+let activePlaybackAbort: AbortController | null = null;
+let activeStreamingSession: StreamingVoiceSession | null = null;
+
+export function registerActiveStreamingVoiceSession(
+  session: StreamingVoiceSession | null,
+): void {
+  activeStreamingSession = session;
+}
+
+function beginPlaybackAbortScope(): AbortController {
+  activePlaybackAbort?.abort();
+  const controller = new AbortController();
+  activePlaybackAbort = controller;
+  return controller;
+}
+
+function endPlaybackAbortScope(controller: AbortController): void {
+  if (activePlaybackAbort === controller) activePlaybackAbort = null;
+}
 
 export function voicePresetToTtsPreset(preset: VoicePresetId): VoiceTtsPreset {
   return preset === 'aurora' ? 'friday' : 'jarvis';
@@ -94,12 +115,21 @@ export async function warmVoiceEngine(engine: VoiceEngine): Promise<void> {
   }
 }
 
-export function stopAllVoiceOutput(): void {
+function stopPlaybackOnly(): void {
+  activePlaybackAbort?.abort();
+  activePlaybackAbort = null;
   stopSpeech();
   void import('./TtsService')
     .then(({ TtsService }) => TtsService.stop())
     .catch(() => {});
   kokoroLocalProvider.stop();
+}
+
+export function stopAllVoiceOutput(): void {
+  const streaming = activeStreamingSession;
+  activeStreamingSession = null;
+  streaming?.haltPlayback();
+  stopPlaybackOnly();
 }
 
 export interface SpeakWithSettingsOptions {
@@ -122,13 +152,10 @@ export async function speakWithSettings(
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 
   if (engine === 'deepgram') {
-    const key = await getDeepgramVoiceKey();
-    if (key) {
-      TtsService.setProvider('deepgram_tts');
-      TtsService.setVoicePreset(ttsPreset);
-      await TtsService.speak(trimmed);
-      return;
-    }
+    TtsService.setProvider('deepgram_tts');
+    TtsService.setVoicePreset(ttsPreset);
+    await TtsService.speak(trimmed);
+    return;
   }
 
   if (engine === 'kokoro') {
@@ -139,18 +166,28 @@ export async function speakWithSettings(
         return;
       }
     }
-    const controller = new AbortController();
+    const controller = beginPlaybackAbortScope();
     options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
-    const { audio, mime } = await synthesizeKokoroPhrase(trimmed, ttsPreset);
-    if (controller.signal.aborted) return;
-    await playBase64Audio(audio, mime || 'audio/wav', {
-      volume: 1,
-      signal: controller.signal,
-    });
+    try {
+      const { audio, mime } = await synthesizeKokoroPhrase(trimmed, ttsPreset);
+      if (controller.signal.aborted) return;
+      await playBase64Audio(audio, mime || 'audio/wav', {
+        volume: 1,
+        signal: controller.signal,
+      });
+    } finally {
+      endPlaybackAbortScope(controller);
+    }
     return;
   }
 
-  await speakText(trimmed, { voicePreset, engine });
+  const controller = beginPlaybackAbortScope();
+  options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
+  try {
+    await speakText(trimmed, { voicePreset, engine });
+  } finally {
+    endPlaybackAbortScope(controller);
+  }
 }
 
 export async function previewVoiceWithSettings(
@@ -162,10 +199,11 @@ export async function previewVoiceWithSettings(
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 
   if (engine === 'deepgram') {
-    const key = await getDeepgramVoiceKey();
-    if (!key) throw new Error('Add your Deepgram API key in Settings → Voice first.');
     TtsService.setProvider('deepgram_tts');
     TtsService.setVoicePreset(ttsPreset);
+    if (!(await deepgramTtsProvider.isAvailable())) {
+      throw new Error('Sign in to use launch Deepgram cloud voice, or add your own API key in Settings → Voice.');
+    }
     await TtsService.testVoice(ttsPreset);
     return;
   }

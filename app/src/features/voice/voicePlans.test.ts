@@ -70,8 +70,9 @@ describe('DEEPGRAM_LAUNCH_PROMO', () => {
 });
 
 describe('usageCopy', () => {
-  it('free plan says cloud not included', () => {
-    expect(usageCopy('free', 0, 0)).toContain('not included');
+  it('free plan mentions the launch Deepgram trial', () => {
+    expect(usageCopy('free', 0, 0)).toContain('Launch Deepgram');
+    expect(usageCopy('free', 0, 0)).toContain('1 min');
   });
   it('starter shows minutes', () => {
     expect(usageCopy('starter', 600, 8000)).toContain('min');

@@ -100,7 +100,9 @@ export function usageCopy(
   usedSeconds: number,
   limitSeconds: number,
 ): string {
-  if (plan === 'free') return 'Local Kokoro voice included. Cloud voice not included.';
+  if (plan === 'free') {
+    return `Local Kokoro voice included. Launch Deepgram: ${DEEPGRAM_LAUNCH_PROMO.free.minutesLabel} one-time cloud voice trial.`;
+  }
   if (plan === 'starter') {
     return `Cloud voice: ${fmtMinutes(usedSeconds)} used / ${fmtMinutes(limitSeconds)} included. Local Kokoro voice unlimited.`;
   }

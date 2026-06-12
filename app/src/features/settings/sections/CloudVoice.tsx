@@ -35,6 +35,13 @@ function readPref<T extends string>(key: string, fallback: T): T {
     return fallback;
   }
 }
+function hasProviderPref(): boolean {
+  try {
+    return window.localStorage.getItem(PROVIDER_PREF_KEY) != null;
+  } catch {
+    return false;
+  }
+}
 function writePref(key: string, value: string): void {
   try {
     window.localStorage.setItem(key, value);
@@ -79,6 +86,16 @@ export function CloudVoice() {
   useEffect(() => {
     const off = TtsService.onNotice((m) => setNotice(m));
     return off;
+  }, []);
+  useEffect(() => {
+    if (hasProviderPref()) return;
+    void TtsService.getUsage().then((u) => {
+      if (!u?.cloud_voice_available || !u.deepgram_promo?.active) return;
+      if (u.deepgram_promo.remaining_seconds <= 0) return;
+      setProvider('deepgram_tts');
+      writePref(PROVIDER_PREF_KEY, 'deepgram_tts');
+      setUsage(u);
+    });
   }, []);
 
   function chooseProvider(id: VoiceProviderId) {
@@ -130,8 +147,9 @@ export function CloudVoice() {
           <h2 className="text-heading text-foreground">Cloud Voice</h2>
         </div>
         <p className="text-secondary text-muted-foreground mt-1">
-          Choose how Jarvis speaks. Local Kokoro voice is free and unlimited; cloud voices use your
-          plan&apos;s monthly budget and fall back to Kokoro automatically.
+          Choose how VibeSpace speaks. Local Kokoro is free and unlimited. Launch Deepgram gives
+          every plan a one-time fast cloud voice bonus from our $6k credit pool; paid plans also
+          get monthly cloud voice budget. Everything falls back to Kokoro automatically.
         </p>
       </div>
 
@@ -157,9 +175,11 @@ export function CloudVoice() {
                 )}
               >
                 <span className="text-ui-strong text-foreground">{info.label}</span>
-                {info.cloud && (
+                {id === 'deepgram_tts' ? (
+                  <span className="text-metadata text-muted-foreground">Launch promo</span>
+                ) : info.cloud ? (
                   <span className="text-metadata text-muted-foreground">Paid plan</span>
-                )}
+                ) : null}
               </button>
             );
           })}
