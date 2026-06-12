@@ -144,36 +144,43 @@ Deno.serve(async (req: Request): Promise<Response> => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // 3. Rate limit (atomic increment over a sliding 60s window)
-  const windowStart = new Date(
-    Math.floor(Date.now() / RATE_WINDOW_MS) * RATE_WINDOW_MS,
-  ).toISOString();
-  const { data: rlData, error: rlErr } = await admin.rpc('voice_rate_limit_hit', {
-    p_user_id: userId,
-    p_window_start: windowStart,
-    p_chars: text.length,
-    p_max_requests: RATE_MAX_REQUESTS,
-  });
-  if (!rlErr && (rlData as { limited?: boolean } | null)?.limited) {
-    return json({ error: 'rate_limited' }, 429, origin);
-  }
+  const { data: appAdminFlag } = await admin.rpc('is_app_admin', { p_user_id: userId });
+  const appAdmin = Boolean(appAdminFlag);
 
-  // 4. Atomic quota reservation against the SHARED call/voice budget (USD).
-  // Cloud voice and AI calling draw from one bucket per the plan model, so we
-  // reserve in dollars (seconds * cost-per-second) via reserve_call_budget.
   const estSecs = estimateSeconds(text.length);
   const estCostUsd = estSecs * COST_PER_SECOND_USD;
-  const { data: reservation, error: reserveErr } = await admin
-    .rpc('reserve_call_budget', { p_user_id: userId, p_estimate_usd: estCostUsd });
-  if (reserveErr) return json({ error: 'usage_unavailable' }, 500, origin);
-  const reserved = reservation as { ok: boolean; reason?: string; remaining_usd?: number } | null;
-  if (!reserved?.ok) {
-    // Budget gone / free plan -> client falls back to Kokoro/system voice.
-    await admin.from('voice_events').insert({
-      user_id: userId, provider, voice_preset: preset, text_chars: text.length,
-      estimated_seconds: estSecs, status: 'blocked', error_code: reserved?.reason ?? 'budget',
+  let reserved: { ok: boolean; reason?: string; remaining_usd?: number } | null = {
+    ok: true,
+    remaining_usd: null,
+  };
+
+  if (!appAdmin) {
+    // 3. Rate limit (atomic increment over a sliding 60s window)
+    const windowStart = new Date(
+      Math.floor(Date.now() / RATE_WINDOW_MS) * RATE_WINDOW_MS,
+    ).toISOString();
+    const { data: rlData, error: rlErr } = await admin.rpc('voice_rate_limit_hit', {
+      p_user_id: userId,
+      p_window_start: windowStart,
+      p_chars: text.length,
+      p_max_requests: RATE_MAX_REQUESTS,
     });
-    return json({ error: 'quota_exceeded', reason: reserved?.reason ?? 'budget', fallback: 'kokoro_local' }, 402, origin);
+    if (!rlErr && (rlData as { limited?: boolean } | null)?.limited) {
+      return json({ error: 'rate_limited' }, 429, origin);
+    }
+
+    // 4. Atomic quota reservation against the SHARED call/voice budget (USD).
+    const { data: reservation, error: reserveErr } = await admin
+      .rpc('reserve_call_budget', { p_user_id: userId, p_estimate_usd: estCostUsd });
+    if (reserveErr) return json({ error: 'usage_unavailable' }, 500, origin);
+    reserved = reservation as { ok: boolean; reason?: string; remaining_usd?: number } | null;
+    if (!reserved?.ok) {
+      await admin.from('voice_events').insert({
+        user_id: userId, provider, voice_preset: preset, text_chars: text.length,
+        estimated_seconds: estSecs, status: 'blocked', error_code: reserved?.reason ?? 'budget',
+      });
+      return json({ error: 'quota_exceeded', reason: reserved?.reason ?? 'budget', fallback: 'kokoro_local' }, 402, origin);
+    }
   }
 
   // 5. Call provider
@@ -183,10 +190,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     else if (provider === 'deepgram_tts') audio = await callDeepgram(text, preset);
     else audio = await callElevenLabs(text, preset);
   } catch (e) {
-    // Release the reservation and record a safe error (no provider secret leak).
-    await admin.rpc('settle_call_budget', {
-      p_user_id: userId, p_reserved: estCostUsd, p_actual: 0, p_seconds: 0,
-    });
+    if (!appAdmin) {
+      await admin.rpc('settle_call_budget', {
+        p_user_id: userId, p_reserved: estCostUsd, p_actual: 0, p_seconds: 0,
+      });
+    }
     const code = (e as Error).message?.startsWith('provider') ? (e as Error).message : 'provider_failed';
     await admin.from('voice_events').insert({
       user_id: userId, provider, voice_preset: preset, text_chars: text.length,
@@ -198,18 +206,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // 6. Settle actual usage (dollars + seconds) and record the event.
   const actualSecs = estSecs;
   const actualCostUsd = actualSecs * COST_PER_SECOND_USD;
-  await admin.rpc('settle_call_budget', {
-    p_user_id: userId, p_reserved: estCostUsd, p_actual: actualCostUsd, p_seconds: actualSecs,
-  });
+  if (!appAdmin) {
+    await admin.rpc('settle_call_budget', {
+      p_user_id: userId, p_reserved: estCostUsd, p_actual: actualCostUsd, p_seconds: actualSecs,
+    });
+  }
   await admin.from('voice_events').insert({
     user_id: userId, provider, voice_preset: preset, text_chars: text.length,
     estimated_seconds: estSecs, actual_seconds: actualSecs,
-    estimated_cost_usd: actualCostUsd, status: 'ok',
+    estimated_cost_usd: appAdmin ? 0 : actualCostUsd, status: 'ok',
   });
 
   // 7. Return audio. remaining_seconds derived from the shared call/voice budget.
-  const remainingSeconds =
-    typeof reserved.remaining_usd === 'number'
+  const remainingSeconds = appAdmin
+    ? 999_999
+    : typeof reserved?.remaining_usd === 'number'
       ? Math.max(0, Math.floor(reserved.remaining_usd / COST_PER_SECOND_USD))
       : null;
   return json(

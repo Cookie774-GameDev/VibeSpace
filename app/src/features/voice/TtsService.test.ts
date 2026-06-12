@@ -29,8 +29,10 @@ vi.mock('./providers/kokoroLocal', () => ({ kokoroLocalProvider: h.kokoro }));
 vi.mock('./providers/systemFallback', () => ({ systemFallbackProvider: h.system }));
 vi.mock('./providers/cloudTts', () => ({
   openaiTtsProvider: h.openai,
-  deepgramTtsProvider: h.deepgram,
   elevenlabsTtsProvider: h.elevenlabs,
+}));
+vi.mock('./providers/deepgramTts', () => ({
+  deepgramTtsProvider: h.deepgram,
 }));
 
 import { TtsService } from './TtsService';

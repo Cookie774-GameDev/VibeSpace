@@ -17,6 +17,8 @@ import { kokoroLocalProvider } from './providers/kokoroLocal';
 import { playBase64Audio } from './audioPlayback';
 import { ModelManager } from './modelManager';
 import { VOICE_PRESETS } from './voicePlans';
+import { TtsService } from './TtsService';
+import { getDeepgramVoiceKey } from '@/lib/security/voiceKeys';
 
 export function voicePresetToTtsPreset(preset: VoicePresetId): VoiceTtsPreset {
   return preset === 'aurora' ? 'friday' : 'jarvis';
@@ -86,6 +88,10 @@ export async function warmVoiceEngine(engine: VoiceEngine): Promise<void> {
   if (engine === 'system' || engine === 'local') {
     await preloadSpeechVoices(engine);
   }
+  if (engine === 'deepgram') {
+    TtsService.setProvider('deepgram_tts');
+    await TtsService.warmup();
+  }
 }
 
 export function stopAllVoiceOutput(): void {
@@ -114,6 +120,16 @@ export async function speakWithSettings(
   const engine = options.voiceEngine ?? state.voiceEngine ?? 'system';
   const voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
+
+  if (engine === 'deepgram') {
+    const key = await getDeepgramVoiceKey();
+    if (key) {
+      TtsService.setProvider('deepgram_tts');
+      TtsService.setVoicePreset(ttsPreset);
+      await TtsService.speak(trimmed);
+      return;
+    }
+  }
 
   if (engine === 'kokoro') {
     if (!(await kokoroLocalProvider.isAvailable())) {
@@ -144,6 +160,15 @@ export async function previewVoiceWithSettings(
   stopAllVoiceOutput();
   const engine = voiceEngine ?? useAuthStore.getState().voiceEngine ?? 'system';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
+
+  if (engine === 'deepgram') {
+    const key = await getDeepgramVoiceKey();
+    if (!key) throw new Error('Add your Deepgram API key in Settings → Voice first.');
+    TtsService.setProvider('deepgram_tts');
+    TtsService.setVoicePreset(ttsPreset);
+    await TtsService.testVoice(ttsPreset);
+    return;
+  }
 
   if (engine === 'kokoro') {
     if (!(await kokoroLocalProvider.isAvailable())) {

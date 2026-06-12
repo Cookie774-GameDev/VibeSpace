@@ -60,7 +60,7 @@ export type VoicePresetId = 'jarvis-prime' | 'aurora' | 'atlas' | 'nova' | 'sent
  *  - 'kokoro': local Kokoro-82M neural TTS (downloads once); falls back to
  *              the Windows Natural system voice if unavailable.
  */
-export type VoiceEngine = 'system' | 'local' | 'kokoro';
+export type VoiceEngine = 'system' | 'local' | 'kokoro' | 'deepgram';
 
 /**
  * Provider IDs we know about.

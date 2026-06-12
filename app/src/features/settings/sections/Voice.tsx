@@ -4,6 +4,7 @@ import {
   MicOff,
   AudioLines,
   Check,
+  Cloud,
   Download,
   HardDrive,
   Play,
@@ -19,11 +20,14 @@ import {
   stopAllVoiceOutput,
   warmVoiceEngine,
 } from '@/features/voice/voiceRouter';
+import { useAppAdmin } from '@/lib/admin';
+import { effectivePlan, planAllowsVoiceWithAdmin } from '@/lib/entitlements';
 import {
-  effectivePlan,
-  isAdminIdentity,
-  planAllowsVoiceWithAdmin,
-} from '@/lib/entitlements';
+  getDeepgramVoiceKey,
+  setVoiceApiKey,
+} from '@/lib/security/voiceKeys';
+import { testDeepgramVoiceKey } from '@/features/voice/providers/deepgramSpeak';
+import { Input } from '@/components/ui/input';
 import { VOICE_PROFILES, type VoiceProfile } from '@/features/voice/voiceProfiles';
 import { ModelManager } from '@/features/voice/modelManager';
 import { Badge } from '@/components/ui/badge';
@@ -60,12 +64,12 @@ export function Voice() {
   const voiceAutoListenOnOpen = useAuthStore((s) => s.voiceAutoListenOnOpen);
   const setVoiceAutoListenOnOpen = useAuthStore((s) => s.setVoiceAutoListenOnOpen);
   const plan = useAuthStore((s) => s.plan);
-  const email = useAuthStore((s) => s.email);
-  const cloudEmail = useAuthStore((s) => s.cloudSession?.email);
-  const localUserId = useAuthStore((s) => s.localUserId);
-  const admin = isAdminIdentity({ email, cloudEmail, localUserId });
+  const admin = useAppAdmin();
   const activePlan = effectivePlan(plan, admin);
   const canUseSystemVoice = planAllowsVoiceWithAdmin(activePlan, admin);
+  const [deepgramDraft, setDeepgramDraft] = useState('');
+  const [deepgramConfigured, setDeepgramConfigured] = useState(false);
+  const [deepgramTesting, setDeepgramTesting] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState<VoicePresetId | null>(null);
   const [localVoiceStatus, setLocalVoiceStatus] = useState<LocalVoiceStatus>('idle');
   const [localVoiceNames, setLocalVoiceNames] = useState<string[]>([]);
@@ -84,6 +88,10 @@ export function Voice() {
   useEffect(() => {
     void warmVoiceEngine(voiceEngine);
   }, [voiceEngine]);
+
+  useEffect(() => {
+    void getDeepgramVoiceKey().then((key) => setDeepgramConfigured(Boolean(key)));
+  }, []);
 
   useEffect(() => {
     if (!canUseSystemVoice && voiceEngine === 'system') {
@@ -108,6 +116,35 @@ export function Voice() {
       setMicStatus('denied');
       const reason = err instanceof Error ? err.message : 'Permission denied';
       toast.warning('Mic test failed', reason);
+    }
+  }
+
+  async function saveDeepgramKey() {
+    const trimmed = deepgramDraft.trim();
+    if (!trimmed) {
+      toast.warning('Enter your Deepgram API key first.');
+      return;
+    }
+    setDeepgramTesting(true);
+    try {
+      const ok = await testDeepgramVoiceKey(trimmed);
+      if (!ok) {
+        toast.error('Deepgram test failed', 'Check the key and try again.');
+        return;
+      }
+      await setVoiceApiKey('deepgram_voice', trimmed);
+      setDeepgramConfigured(true);
+      setDeepgramDraft('');
+      setVoiceEngine('deepgram');
+      try {
+        window.localStorage.setItem('jarvis.voice.cloudProvider', 'deepgram_tts');
+      } catch {
+        /* ignore */
+      }
+      toast.success('Deepgram connected', 'Jarvis will speak through your Deepgram account.');
+      void warmVoiceEngine('deepgram');
+    } finally {
+      setDeepgramTesting(false);
     }
   }
 
@@ -179,6 +216,13 @@ export function Voice() {
     void previewVoice(voicePreset, engine);
     if (engine === 'local') void checkLocalVoices(false);
     if (engine === 'kokoro') void downloadKokoro();
+    if (engine === 'deepgram') {
+      try {
+        window.localStorage.setItem('jarvis.voice.cloudProvider', 'deepgram_tts');
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async function downloadKokoro() {
@@ -310,7 +354,7 @@ export function Voice() {
             this device.
           </p>
         </div>
-        <div className="grid max-w-xl grid-cols-3 gap-2">
+        <div className="grid max-w-2xl grid-cols-2 gap-2 sm:grid-cols-4">
           <VoiceEngineCard
             engine="system"
             selected={voiceEngine === 'system'}
@@ -340,7 +384,60 @@ export function Voice() {
             icon={<AudioLines className="h-4 w-4" />}
             onSelect={() => chooseVoiceEngine('kokoro')}
           />
+          <VoiceEngineCard
+            engine="deepgram"
+            selected={voiceEngine === 'deepgram'}
+            title="Deepgram"
+            description={
+              deepgramConfigured ? 'Your API key · Aura voices' : 'Paste your Deepgram key'
+            }
+            icon={<Cloud className="h-4 w-4" />}
+            onSelect={() => chooseVoiceEngine('deepgram')}
+          />
         </div>
+        {voiceEngine === 'deepgram' ? (
+          <div className="max-w-xl rounded-md border border-border bg-panel p-3 flex flex-col gap-3">
+            <p className="text-metadata text-muted-foreground">
+              Uses your Deepgram credits directly. Keys stay in the OS keychain — never in cloud
+              sync or chat logs.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                type="password"
+                className="font-mono flex-1 min-w-[200px]"
+                placeholder={deepgramConfigured ? 'Saved — paste to replace' : 'Deepgram API key'}
+                value={deepgramDraft}
+                onChange={(event) => setDeepgramDraft(event.target.value)}
+                autoComplete="off"
+              />
+              <Button
+                type="button"
+                size="sm"
+                disabled={deepgramTesting}
+                onClick={() => void saveDeepgramKey()}
+              >
+                {deepgramTesting ? 'Testing…' : deepgramConfigured ? 'Update & test' : 'Connect'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void previewVoice(voicePreset, 'deepgram')}
+              >
+                <Play className="h-3.5 w-3.5" />
+                Preview
+              </Button>
+            </div>
+            <a
+              className="text-metadata text-accent-copper hover:underline w-fit"
+              href="https://console.deepgram.com/project/default/keys"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Deepgram API keys
+            </a>
+          </div>
+        ) : null}
         {voiceEngine === 'local' ? (
           <div className="max-w-xl rounded-md border border-border bg-panel p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

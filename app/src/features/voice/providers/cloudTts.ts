@@ -100,5 +100,4 @@ export class CloudTtsProvider implements VoiceProvider {
 }
 
 export const openaiTtsProvider = new CloudTtsProvider('openai_tts');
-export const deepgramTtsProvider = new CloudTtsProvider('deepgram_tts');
 export const elevenlabsTtsProvider = new CloudTtsProvider('elevenlabs_tts');

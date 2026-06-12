@@ -23,11 +23,8 @@ import {
 import type { VoiceProvider } from './providers/types';
 import { systemFallbackProvider } from './providers/systemFallback';
 import { kokoroLocalProvider } from './providers/kokoroLocal';
-import {
-  deepgramTtsProvider,
-  elevenlabsTtsProvider,
-  openaiTtsProvider,
-} from './providers/cloudTts';
+import { deepgramTtsProvider } from './providers/deepgramTts';
+import { elevenlabsTtsProvider, openaiTtsProvider } from './providers/cloudTts';
 import { prepareForSpeech, type CleanupOptions } from './textCleanup';
 
 export interface SpeakOptions extends CleanupOptions {

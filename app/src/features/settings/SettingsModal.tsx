@@ -13,8 +13,10 @@ import {
   HardDriveDownload,
   Accessibility as AccessibilityIcon,
   Blocks,
+  Shield,
   type LucideIcon,
 } from 'lucide-react';
+import { useAppAdmin } from '@/lib/admin';
 import { useUIStore } from '@/stores/ui';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
@@ -38,6 +40,7 @@ const Notifications = lazy(() =>
   import('./sections/Notifications').then((m) => ({ default: m.Notifications })),
 );
 const Plugins = lazy(() => import('@/features/plugins').then((m) => ({ default: m.Plugins })));
+const Admin = lazy(() => import('./sections/Admin').then((m) => ({ default: m.Admin })));
 
 type SettingsTab =
   | 'account'
@@ -52,6 +55,7 @@ type SettingsTab =
   | 'notifications'
   | 'accessibility'
   | 'hotkeys'
+  | 'admin'
   | 'about';
 
 interface TabDef {
@@ -96,6 +100,7 @@ function SettingsTabPanel({ tab }: { tab: SettingsTab }) {
       {tab === 'notifications' && <Notifications />}
       {tab === 'accessibility' && <Accessibility />}
       {tab === 'hotkeys' && <Hotkeys />}
+      {tab === 'admin' && <Admin />}
       {tab === 'about' && <About />}
     </Suspense>
   );
@@ -115,7 +120,11 @@ function SettingsTabPanel({ tab }: { tab: SettingsTab }) {
 export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
   const open = useUIStore((s) => s.settingsOpen);
   const setOpen = useUIStore((s) => s.setSettingsOpen);
+  const isAdmin = useAppAdmin();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const tabs = isAdmin
+    ? [...TABS.slice(0, 1), { id: 'admin' as const, label: 'Admin', icon: Shield }, ...TABS.slice(1)]
+    : TABS;
 
   useEffect(() => {
     if (!open) return;
@@ -153,7 +162,7 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
               className="flex-1 px-2 pb-2 flex flex-col gap-0.5 overflow-y-auto min-h-0"
               aria-label="Settings sections"
             >
-              {TABS.map((t) => {
+              {tabs.map((t) => {
                 const Icon = t.icon;
                 const active = tab === t.id;
                 return (

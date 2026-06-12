@@ -25,6 +25,27 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  const { data: appAdminFlag } = await admin.rpc('is_app_admin', { p_user_id: userId });
+  if (appAdminFlag) {
+    return json(
+      {
+        plan: 'ultra',
+        subscription_status: 'active',
+        provider: 'admin_unlimited',
+        monthly_seconds_limit: 999_999,
+        monthly_seconds_used: 0,
+        remaining_seconds: 999_999,
+        reset_date: null,
+        local_voice_available: true,
+        cloud_voice_available: true,
+        admin_unlimited: true,
+      },
+      200,
+      origin,
+    );
+  }
+
   // Cloud voice draws from the SHARED call/voice budget (call_usage), so report
   // remaining from there. COST_PER_SECOND_USD converts dollars -> seconds.
   const { data: usage } = await admin

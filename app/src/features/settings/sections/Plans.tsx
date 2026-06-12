@@ -24,10 +24,10 @@ import {
   PLANS,
   PLAN_ORDER,
   effectivePlan,
-  isAdminIdentity,
   type PlanDef,
   type PlanId,
 } from '@/lib/entitlements';
+import { useAppAdmin } from '@/lib/admin';
 import { getCheckoutUrl, isStripeConfigured } from '@/lib/billing/stripe';
 import { openExternal } from '@/lib/tauri';
 import { toast } from '@/components/ui/toast';
@@ -44,10 +44,7 @@ const PLAN_PAGE_BACKGROUNDS: Record<PlanId, string> = {
 export function Plans() {
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const currentPlan = useAuthStore((s) => s.plan);
-  const email = useAuthStore((s) => s.email);
-  const cloudEmail = useAuthStore((s) => s.cloudSession?.email);
-  const localUserId = useAuthStore((s) => s.localUserId);
-  const admin = isAdminIdentity({ email, cloudEmail, localUserId });
+  const admin = useAppAdmin();
   const activePlanId = effectivePlan(currentPlan, admin);
   const stripeReady = isStripeConfigured();
 
