@@ -5,6 +5,8 @@ import {
   VOICE_PRESETS,
   VOICE_PROVIDERS,
   usageCopy,
+  deepgramPromoCopy,
+  DEEPGRAM_LAUNCH_PROMO,
 } from './voicePlans';
 
 describe('VOICE_PLANS cost model', () => {
@@ -50,6 +52,20 @@ describe('VOICE_PROVIDERS', () => {
     expect(VOICE_PROVIDERS.openai_tts.cloud).toBe(true);
     expect(VOICE_PROVIDERS.deepgram_tts.cloud).toBe(true);
     expect(VOICE_PROVIDERS.elevenlabs_tts.cloud).toBe(true);
+  });
+});
+
+describe('DEEPGRAM_LAUNCH_PROMO', () => {
+  it('allocates one-time seconds from the $6k pool by plan', () => {
+    expect(DEEPGRAM_LAUNCH_PROMO.free.seconds).toBe(60);
+    expect(DEEPGRAM_LAUNCH_PROMO.starter.seconds).toBe(1800);
+    expect(DEEPGRAM_LAUNCH_PROMO.pro.seconds).toBe(5400);
+    expect(DEEPGRAM_LAUNCH_PROMO.ultra.seconds).toBe(10800);
+  });
+
+  it('describes remaining launch Deepgram time', () => {
+    expect(deepgramPromoCopy('free', 0, 60)).toContain('Launch Deepgram');
+    expect(deepgramPromoCopy('free', 60, 60)).toContain('trial used');
   });
 });
 

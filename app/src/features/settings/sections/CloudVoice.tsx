@@ -8,6 +8,7 @@ import {
   VOICE_PROVIDERS,
   VOICE_PRESETS,
   usageCopy,
+  deepgramPromoCopy,
   type VoiceProviderId,
   type VoiceTtsPreset,
   type VoicePlanId,
@@ -255,6 +256,15 @@ export function CloudVoice() {
           <p className="text-secondary text-foreground">
             {usageCopy(planId, usage.monthly_seconds_used, usage.monthly_seconds_limit)}
           </p>
+          {usage.deepgram_promo && usage.deepgram_promo.seconds_limit > 0 && (
+            <p className="text-secondary text-foreground mt-2">
+              {deepgramPromoCopy(
+                planId,
+                usage.deepgram_promo.seconds_used,
+                usage.deepgram_promo.seconds_limit,
+              )}
+            </p>
+          )}
           <p className="text-metadata text-muted-foreground mt-1">
             Plan: {planId} · Local voice {usage.local_voice_available ? 'available' : 'unavailable'} ·
             Cloud voice {usage.cloud_voice_available ? 'available' : 'unavailable'}

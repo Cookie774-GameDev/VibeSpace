@@ -63,6 +63,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const usedSecs = Math.floor(used / COST_PER_SECOND_USD);
   const remaining = Math.floor(remainingUsd / COST_PER_SECOND_USD);
 
+  const { data: promo } = await admin
+    .from('deepgram_promo_usage')
+    .select('seconds_limit, used_seconds')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const promoLimit = Number(promo?.seconds_limit ?? 0);
+  const promoUsed = Number(promo?.used_seconds ?? 0);
+  const promoRemaining = Math.max(0, promoLimit - promoUsed);
+
+  const { data: pool } = await admin
+    .from('deepgram_promo_pool')
+    .select('active, budget_usd, used_usd, pause_at_usd')
+    .eq('id', 1)
+    .maybeSingle();
+
+  const poolActive = Boolean(pool?.active) && Number(pool?.used_usd ?? 0) < Number(pool?.pause_at_usd ?? 0);
+  const deepgramPromoAvailable = poolActive && promoRemaining > 0;
+
   return json(
     {
       plan,
@@ -73,7 +92,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
       remaining_seconds: remaining,
       reset_date: null,
       local_voice_available: true,
-      cloud_voice_available: budget > 0 && remainingUsd > 0,
+      cloud_voice_available: deepgramPromoAvailable || (budget > 0 && remainingUsd > 0),
+      deepgram_promo: {
+        active: poolActive,
+        seconds_limit: promoLimit,
+        seconds_used: promoUsed,
+        remaining_seconds: promoRemaining,
+        one_time: true,
+      },
     },
     200,
     origin,

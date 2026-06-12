@@ -108,6 +108,31 @@ export function usageCopy(
   return `Cloud voice: ${fmtHours(usedSeconds)} used / ${fmtHours(limitSeconds)} included. Local Kokoro voice unlimited.`;
 }
 
+/** Launch Deepgram promo — one-time seconds from the $6k company pool (server enforced). */
+export const DEEPGRAM_LAUNCH_PROMO: Record<
+  VoicePlanId,
+  { seconds: number; minutesLabel: string; maxCostUsd: number }
+> = {
+  free: { seconds: 60, minutesLabel: '1 min', maxCostUsd: 0.011 },
+  starter: { seconds: 1800, minutesLabel: '30 min', maxCostUsd: 0.34 },
+  pro: { seconds: 5400, minutesLabel: '90 min', maxCostUsd: 1.01 },
+  ultra: { seconds: 10800, minutesLabel: '3 hr', maxCostUsd: 2.03 },
+};
+
+export const DEEPGRAM_PROMO_POOL_USD = 6000;
+
+export function deepgramPromoCopy(plan: VoicePlanId, usedSeconds: number, limitSeconds: number): string {
+  const promo = DEEPGRAM_LAUNCH_PROMO[plan];
+  const remaining = Math.max(0, limitSeconds - usedSeconds);
+  if (remaining <= 0) {
+    return plan === 'free'
+      ? 'Launch Deepgram trial used. Local Kokoro voice still included.'
+      : 'Launch Deepgram bonus used. Monthly cloud voice still applies.';
+  }
+  const remMin = Math.max(1, Math.round(remaining / 60));
+  return `Launch Deepgram: ${remMin} min left of ${promo.minutesLabel} one-time bonus (fast cloud voice).`;
+}
+
 export const FALLBACK_MESSAGES = {
   quotaExceeded: "You've used your monthly cloud voice time. I switched to free local Kokoro voice.",
   cloudFailure: 'Cloud voice is temporarily unavailable. I switched to local Kokoro voice.',

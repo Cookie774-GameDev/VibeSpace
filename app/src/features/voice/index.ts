@@ -56,6 +56,9 @@ export {
   VOICE_PRESETS,
   DEFAULT_VOICE_TTS_PRESET,
   usageCopy,
+  deepgramPromoCopy,
+  DEEPGRAM_LAUNCH_PROMO,
+  DEEPGRAM_PROMO_POOL_USD,
   FALLBACK_MESSAGES,
   COST_PER_SECOND_USD,
 } from './voicePlans';

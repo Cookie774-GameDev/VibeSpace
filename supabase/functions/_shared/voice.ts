@@ -5,6 +5,23 @@ export const COST_PER_SECOND_USD = 0.00025; // ~$0.015/min, OpenAI gpt-4o-mini-t
 
 export type PlanId = 'free' | 'starter' | 'pro' | 'ultra';
 
+/** Deepgram Aura-1 (aura-orion-en / aura-luna-en): ~$15/1M chars ≈ $0.01125/min. */
+export const DEEPGRAM_COST_PER_SECOND_USD = 0.0001875;
+
+/** Launch promo: one-time Deepgram seconds per plan from the $6k company pool. */
+export const DEEPGRAM_PROMO_SECONDS: Record<PlanId, number> = {
+  free: 60,
+  starter: 1800,
+  pro: 5400,
+  ultra: 10800,
+};
+
+export const DEEPGRAM_PROMO_POOL_USD = 6000;
+
+export function deepgramCostUsd(seconds: number): number {
+  return Math.max(0, seconds) * DEEPGRAM_COST_PER_SECOND_USD;
+}
+
 export const PLAN_BUDGET_USD: Record<PlanId, number> = {
   free: 0,
   starter: 2,

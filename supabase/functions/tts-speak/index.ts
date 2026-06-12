@@ -20,6 +20,7 @@ import {
   APPROVED_PRESETS,
   APPROVED_PROVIDERS,
   COST_PER_SECOND_USD,
+  deepgramCostUsd,
   estimateSeconds,
   json,
   MAX_TTS_CHARS,
@@ -149,10 +150,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   const estSecs = estimateSeconds(text.length);
   const estCostUsd = estSecs * COST_PER_SECOND_USD;
-  let reserved: { ok: boolean; reason?: string; remaining_usd?: number } | null = {
-    ok: true,
-    remaining_usd: null,
-  };
+  const estDeepgramUsd = deepgramCostUsd(estSecs);
+  let billingSource: 'admin' | 'deepgram_promo' | 'call_budget' = appAdmin ? 'admin' : 'call_budget';
+  let reserved: {
+    ok: boolean;
+    reason?: string;
+    remaining_usd?: number;
+    remaining_seconds?: number;
+  } | null = { ok: true, remaining_usd: null };
 
   if (!appAdmin) {
     // 3. Rate limit (atomic increment over a sliding 60s window)
@@ -169,17 +174,33 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json({ error: 'rate_limited' }, 429, origin);
     }
 
-    // 4. Atomic quota reservation against the SHARED call/voice budget (USD).
-    const { data: reservation, error: reserveErr } = await admin
-      .rpc('reserve_call_budget', { p_user_id: userId, p_estimate_usd: estCostUsd });
-    if (reserveErr) return json({ error: 'usage_unavailable' }, 500, origin);
-    reserved = reservation as { ok: boolean; reason?: string; remaining_usd?: number } | null;
-    if (!reserved?.ok) {
-      await admin.from('voice_events').insert({
-        user_id: userId, provider, voice_preset: preset, text_chars: text.length,
-        estimated_seconds: estSecs, status: 'blocked', error_code: reserved?.reason ?? 'budget',
+    // 4. Deepgram launch promo first ($6k company pool; cheaper Aura-1 rate).
+    if (provider === 'deepgram_tts') {
+      const { data: promoReservation, error: promoErr } = await admin.rpc('reserve_deepgram_promo', {
+        p_user_id: userId,
+        p_estimate_seconds: estSecs,
+        p_estimate_usd: estDeepgramUsd,
       });
-      return json({ error: 'quota_exceeded', reason: reserved?.reason ?? 'budget', fallback: 'kokoro_local' }, 402, origin);
+      if (!promoErr && (promoReservation as { ok?: boolean } | null)?.ok) {
+        billingSource = 'deepgram_promo';
+        reserved = promoReservation as typeof reserved;
+      }
+    }
+
+    // 5. Fall back to shared monthly call/voice budget (paid plans / other providers).
+    if (billingSource !== 'deepgram_promo') {
+      const { data: reservation, error: reserveErr } = await admin
+        .rpc('reserve_call_budget', { p_user_id: userId, p_estimate_usd: estCostUsd });
+      if (reserveErr) return json({ error: 'usage_unavailable' }, 500, origin);
+      reserved = reservation as typeof reserved;
+      if (!reserved?.ok) {
+        await admin.from('voice_events').insert({
+          user_id: userId, provider, voice_preset: preset, text_chars: text.length,
+          estimated_seconds: estSecs, status: 'blocked', error_code: reserved?.reason ?? 'budget',
+        });
+        return json({ error: 'quota_exceeded', reason: reserved?.reason ?? 'budget', fallback: 'kokoro_local' }, 402, origin);
+      }
+      billingSource = 'call_budget';
     }
   }
 
@@ -191,9 +212,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
     else audio = await callElevenLabs(text, preset);
   } catch (e) {
     if (!appAdmin) {
-      await admin.rpc('settle_call_budget', {
-        p_user_id: userId, p_reserved: estCostUsd, p_actual: 0, p_seconds: 0,
-      });
+      if (billingSource === 'deepgram_promo') {
+        await admin.rpc('settle_deepgram_promo', {
+          p_user_id: userId,
+          p_reserved_seconds: estSecs,
+          p_reserved_usd: estDeepgramUsd,
+          p_actual_seconds: 0,
+          p_actual_usd: 0,
+        });
+      } else {
+        await admin.rpc('settle_call_budget', {
+          p_user_id: userId, p_reserved: estCostUsd, p_actual: 0, p_seconds: 0,
+        });
+      }
     }
     const code = (e as Error).message?.startsWith('provider') ? (e as Error).message : 'provider_failed';
     await admin.from('voice_events').insert({
@@ -205,11 +236,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // 6. Settle actual usage (dollars + seconds) and record the event.
   const actualSecs = estSecs;
-  const actualCostUsd = actualSecs * COST_PER_SECOND_USD;
+  const actualCostUsd = billingSource === 'deepgram_promo'
+    ? deepgramCostUsd(actualSecs)
+    : actualSecs * COST_PER_SECOND_USD;
   if (!appAdmin) {
-    await admin.rpc('settle_call_budget', {
-      p_user_id: userId, p_reserved: estCostUsd, p_actual: actualCostUsd, p_seconds: actualSecs,
-    });
+    if (billingSource === 'deepgram_promo') {
+      await admin.rpc('settle_deepgram_promo', {
+        p_user_id: userId,
+        p_reserved_seconds: estSecs,
+        p_reserved_usd: estDeepgramUsd,
+        p_actual_seconds: actualSecs,
+        p_actual_usd: actualCostUsd,
+      });
+    } else {
+      await admin.rpc('settle_call_budget', {
+        p_user_id: userId, p_reserved: estCostUsd, p_actual: actualCostUsd, p_seconds: actualSecs,
+      });
+    }
   }
   await admin.from('voice_events').insert({
     user_id: userId, provider, voice_preset: preset, text_chars: text.length,
@@ -217,15 +260,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     estimated_cost_usd: appAdmin ? 0 : actualCostUsd, status: 'ok',
   });
 
-  // 7. Return audio. remaining_seconds derived from the shared call/voice budget.
+  // 7. Return audio + remaining quota for the billing source used.
   const remainingSeconds = appAdmin
     ? 999_999
-    : typeof reserved?.remaining_usd === 'number'
-      ? Math.max(0, Math.floor(reserved.remaining_usd / COST_PER_SECOND_USD))
-      : null;
+    : billingSource === 'deepgram_promo' && typeof reserved?.remaining_seconds === 'number'
+      ? Math.max(0, reserved.remaining_seconds)
+      : typeof reserved?.remaining_usd === 'number'
+        ? Math.max(0, Math.floor(reserved.remaining_usd / COST_PER_SECOND_USD))
+        : null;
   return json(
     { audio: bufToB64(audio), mime: 'audio/mpeg', provider, preset, seconds: actualSecs,
-      remaining_seconds: remainingSeconds },
+      remaining_seconds: remainingSeconds, billing_source: billingSource },
     200,
     origin,
   );

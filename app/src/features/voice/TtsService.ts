@@ -35,6 +35,14 @@ export interface SpeakOptions extends CleanupOptions {
   raw?: boolean;
 }
 
+export interface DeepgramPromoSnapshot {
+  active: boolean;
+  seconds_limit: number;
+  seconds_used: number;
+  remaining_seconds: number;
+  one_time: boolean;
+}
+
 export interface VoiceUsageSnapshot {
   plan: string;
   monthly_seconds_limit: number;
@@ -42,6 +50,7 @@ export interface VoiceUsageSnapshot {
   remaining_seconds: number;
   local_voice_available: boolean;
   cloud_voice_available: boolean;
+  deepgram_promo?: DeepgramPromoSnapshot;
 }
 
 export type TtsStatus = 'idle' | 'speaking' | 'paused';
