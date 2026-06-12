@@ -197,7 +197,8 @@ code {
 .nav__inner { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 
 .brand { display: inline-flex; align-items: center; gap: 0.7rem; }
-.brand__mark { display: inline-flex; filter: drop-shadow(0 6px 16px rgba(123,99,216,0.4)); }
+.brand__mark { display: inline-flex; filter: drop-shadow(0 6px 16px rgba(232,120,60,0.35)); }
+.brand__mark img { border-radius: 9px; display: block; }
 .brand__text { display: inline-flex; flex-direction: column; line-height: 1.05; }
 .brand__name { font-family: var(--font-display); font-weight: 600; font-size: 1.15rem; letter-spacing: -0.01em; }
 .brand__badge {

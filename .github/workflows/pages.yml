@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "landing/**"
       - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -33,7 +34,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: landing
           include-hidden-files: true
 
       - name: Deploy to GitHub Pages

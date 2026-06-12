@@ -1,8 +1,21 @@
 import { FileText, Image as ImageIcon } from 'lucide-react';
 import { ToolCallCard } from './ToolCallCard';
 import { ActionApprovalCard } from './ActionApprovalCard';
+import { parseActionBlocks } from '@/lib/actions';
 import type { Part } from '@/types';
 import type { MessageId } from '@/types/common';
+
+function textForDisplay(text: string): string {
+  if (!text.includes('```')) return text;
+  const parsed = parseActionBlocks(text);
+  if (!parsed.hasActionBlocks) return text;
+  const prose = parsed.segments
+    .filter((seg): seg is Extract<typeof seg, { kind: 'prose' }> => seg.kind === 'prose')
+    .map((seg) => seg.text)
+    .join('')
+    .trim();
+  return prose;
+}
 
 export interface MessagePartProps {
   part: Part;
@@ -35,12 +48,19 @@ export function MessagePart({
   switch (part.kind) {
     case 'text': {
       if (!part.text) {
-        // Streaming-not-yet-arrived: render a faint pulse so the bubble has presence.
         return <span className="inline-block h-3 w-3 rounded-full bg-muted-foreground/40 animate-pulse" aria-label="Thinking" />;
+      }
+      const display = textForDisplay(part.text);
+      if (!display && part.text.includes('```action')) {
+        return (
+          <p className="text-secondary italic text-muted-foreground">
+            Jarvis is preparing an action for your approval…
+          </p>
+        );
       }
       return (
         <div className="text-body text-foreground whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-          {part.text}
+          {display || part.text}
         </div>
       );
     }

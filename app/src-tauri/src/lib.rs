@@ -115,13 +115,26 @@ pub fn run() {
                 ],
             )?;
 
-            let icon_bytes = include_bytes!("../icons/32x32.png");
-            let icon = tauri::image::Image::from_bytes(icon_bytes).unwrap_or_else(|_| {
-                app.default_window_icon().cloned().expect("Failed to load default window icon")
-            });
+            let window_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))
+                .or_else(|_| tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")))
+                .or_else(|_| {
+                    app.default_window_icon()
+                        .cloned()
+                        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no default icon"))
+                })
+                .expect("Failed to load VibeSpace window icon");
+
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(err) = window.set_icon(window_icon.clone()) {
+                    eprintln!("[lifecycle] failed to set main window icon: {err}");
+                }
+            }
+
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
+                .unwrap_or_else(|_| window_icon.clone());
 
             let _tray = tauri::tray::TrayIconBuilder::new()
-                .icon(icon)
+                .icon(tray_icon)
                 .menu(&tray_menu)
                 .on_menu_event(|app, event| {
                     match event.id.as_ref() {

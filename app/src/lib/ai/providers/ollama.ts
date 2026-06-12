@@ -41,6 +41,14 @@ const ALLOWED_OLLAMA_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 /** Default local model used when promoting a mock/local-default agent. */
 export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
 
+/** Prepended to every Ollama request so local models answer like Jarvis. */
+export const OLLAMA_JARVIS_STYLE_PROMPT = `You are Jarvis — the user's personal AI assistant. Keep every reply short, direct, and natural (usually 1–3 sentences unless they ask for more). No filler, no long intros, no unnecessary markdown. Sound calm, capable, and conversational, as if speaking aloud.`;
+
+export function buildOllamaSystemPrompt(agentPrompt: string | undefined): string {
+  const base = (agentPrompt ?? '').trim();
+  return base ? `${OLLAMA_JARVIS_STYLE_PROMPT}\n\n${base}` : OLLAMA_JARVIS_STYLE_PROMPT;
+}
+
 /** Maximum response size for a single chat completion (10 MB). */
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
@@ -743,7 +751,7 @@ export const ollamaProvider: LLMProvider = {
     }
 
     const messages = [
-      { role: 'system' as const, content: req.agent.system_prompt },
+      { role: 'system' as const, content: buildOllamaSystemPrompt(req.agent.system_prompt) },
       ...req.messages.filter((m) => m.role !== 'system'),
     ];
 

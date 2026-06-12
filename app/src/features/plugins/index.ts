@@ -16,4 +16,6 @@ export {
 } from './activation';
 export { testPluginConnection, callPluginTool } from './runtime';
 export { pluginSearchBlob } from './providerRegistry';
+export { PluginLogo } from './PluginLogo';
+export { getPluginLogoSources } from './pluginLogos';
 export type * from './types';

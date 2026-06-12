@@ -39,6 +39,11 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { openSystemSpeechSettings } from '@/lib/tauri';
 import { readWakeWordEnabled, setWakeWordEnabled } from '@/features/voice/wakeWord';
+import {
+  VOICE_SILENCE_DELAY_MS_MAX,
+  VOICE_SILENCE_DELAY_MS_MIN,
+  voiceSilenceDelayLabel,
+} from '@/features/voice/voiceConversation';
 
 type MicStatus = 'idle' | 'testing' | 'ok' | 'denied' | 'unavailable';
 type LocalVoiceStatus = 'idle' | 'checking' | 'ready' | 'missing' | 'unsupported';
@@ -63,6 +68,8 @@ export function Voice() {
   const setSpeakReplies = useAuthStore((s) => s.setSpeakReplies);
   const voiceAutoListenOnOpen = useAuthStore((s) => s.voiceAutoListenOnOpen);
   const setVoiceAutoListenOnOpen = useAuthStore((s) => s.setVoiceAutoListenOnOpen);
+  const voiceSilenceDelayMs = useAuthStore((s) => s.voiceSilenceDelayMs);
+  const setVoiceSilenceDelayMs = useAuthStore((s) => s.setVoiceSilenceDelayMs);
   const plan = useAuthStore((s) => s.plan);
   const admin = useAppAdmin();
   const activePlan = effectivePlan(plan, admin);
@@ -331,18 +338,52 @@ export function Voice() {
             onCheckedChange={setSpeakReplies}
           />
         </div>
-        <div className="flex max-w-xl items-start justify-between gap-4 rounded-md border border-border bg-panel p-3">
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="voice-auto-listen-toggle">Start listening when the panel opens</Label>
-            <p className="text-metadata text-muted-foreground">
-              Turn this off so Jarvis stays idle until you click the symbiote orb yourself.
+        <div className="flex max-w-xl flex-col gap-3">
+          <div>
+            <Label>Conversation mode</Label>
+            <p className="mt-1 text-metadata text-muted-foreground">
+              Choose whether Jarvis listens continuously or waits for you to tap the symbiote orb.
             </p>
           </div>
-          <Switch
-            id="voice-auto-listen-toggle"
-            checked={voiceAutoListenOnOpen}
-            onCheckedChange={setVoiceAutoListenOnOpen}
-          />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <VoiceConversationModeCard
+              selected={voiceAutoListenOnOpen}
+              title="Hands-free"
+              description="Open voice and just talk. Jarvis listens and replies after you pause."
+              onSelect={() => setVoiceAutoListenOnOpen(true)}
+            />
+            <VoiceConversationModeCard
+              selected={!voiceAutoListenOnOpen}
+              title="Click to talk"
+              description="Tap the symbiote orb each time you want Jarvis to hear you."
+              onSelect={() => setVoiceAutoListenOnOpen(false)}
+            />
+          </div>
+          <div className="rounded-md border border-border bg-panel p-3">
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="voice-silence-delay">Pause before Jarvis responds</Label>
+              <span className="text-metadata font-medium text-foreground">
+                {voiceSilenceDelayLabel(voiceSilenceDelayMs)}
+              </span>
+            </div>
+            <p className="mt-1 text-metadata text-muted-foreground">
+              How long you stay quiet after speaking before Jarvis sends your message.
+            </p>
+            <input
+              id="voice-silence-delay"
+              type="range"
+              min={VOICE_SILENCE_DELAY_MS_MIN}
+              max={VOICE_SILENCE_DELAY_MS_MAX}
+              step={250}
+              value={voiceSilenceDelayMs}
+              onChange={(event) => setVoiceSilenceDelayMs(Number(event.target.value))}
+              className="mt-3 w-full accent-[hsl(var(--accent-cyan))]"
+            />
+            <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+              <span>{voiceSilenceDelayLabel(VOICE_SILENCE_DELAY_MS_MIN)}</span>
+              <span>{voiceSilenceDelayLabel(VOICE_SILENCE_DELAY_MS_MAX)}</span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -703,6 +744,41 @@ interface VoiceEngineCardProps {
   icon: ReactNode;
   disabled?: boolean;
   onSelect: () => void;
+}
+
+function VoiceConversationModeCard({
+  selected,
+  title,
+  description,
+  onSelect,
+}: {
+  selected: boolean;
+  title: string;
+  description: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={cn(
+        'relative flex min-h-[88px] flex-col items-start gap-1 rounded-md border bg-panel p-3 text-left transition-colors',
+        'hover:bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        selected
+          ? 'border-accent-cyan/50 shadow-[0_0_0_1px_hsl(var(--accent-cyan)/0.35)]'
+          : 'border-border',
+      )}
+    >
+      {selected ? (
+        <Check className="absolute right-2 top-2 h-3.5 w-3.5 text-accent-cyan" strokeWidth={3} />
+      ) : null}
+      <span className={cn('text-ui-strong', selected ? 'text-accent-gradient' : 'text-foreground')}>
+        {title}
+      </span>
+      <span className="text-metadata text-muted-foreground">{description}</span>
+    </button>
+  );
 }
 
 function VoiceEngineCard({

@@ -67,6 +67,7 @@ import {
 } from '@/features/clock/clockStore';
 import type { ActionDef, ActionResult } from './types';
 import type { CustomToolStep } from '@/features/tools/toolStore';
+import { PRESET_ACTIONS } from './registryPresets';
 
 /* --------------------------------------------------------------------------
  * Helpers
@@ -423,15 +424,28 @@ const TERMINAL_ACTIONS: ActionDef[] = [
         placeholder: 'opencode',
         help: 'Optional command typed into every new pane after the shell starts.',
       },
+      {
+        key: 'cwd',
+        label: 'Working directory',
+        type: 'string',
+        required: false,
+        help: 'Optional project folder for every pane. Omit to use the active chat project when known.',
+      },
     ],
     run: async (params) => {
       const rawCount = typeof params.count === 'number' ? params.count : 1;
       const count = Math.min(10, Math.max(1, Math.floor(rawCount)));
       const command = typeof params.command === 'string' ? params.command.trim() : '';
+      const cwd = typeof params.cwd === 'string' ? params.cwd.trim() : undefined;
+      if (cwd) {
+        const meta = rejectShellMetaChars(cwd);
+        if (meta) return fail(meta);
+      }
       for (let i = 0; i < count; i++) {
         enqueueTerminalCommand({
           command,
           label: command ? `${command} ${i + 1}` : `terminal ${i + 1}`,
+          cwd,
         });
       }
       navigateTo('terminal');
@@ -1120,6 +1134,7 @@ export function getBuiltinActions(): ActionDef[] {
     ...PLUGIN_ACTIONS,
     ...CLOCK_ACTIONS,
     ...PRODUCTIVITY_ACTIONS,
+    ...PRESET_ACTIONS,
   ];
 }
 
@@ -1142,22 +1157,7 @@ export function getBuiltinAction(id: string): ActionDef | undefined {
 }
 
 /** Stable count for tests + the prompt addendum's "N actions" header. */
-export const BUILTIN_ACTION_COUNT = (() => {
-  // Avoid building the full cache eagerly; just count in place.
-  return (
-    NAVIGATION_ACTIONS.length +
-    SETTINGS_ACTIONS.length +
-    THEME_ACTIONS.length +
-    VOICE_ACTIONS.length +
-    TERMINAL_ACTIONS.length +
-    CHAT_ACTIONS.length +
-    WELLNESS_ACTIONS.length +
-    HOST_ACTIONS.length +
-    PLUGIN_ACTIONS.length +
-    CLOCK_ACTIONS.length +
-    PRODUCTIVITY_ACTIONS.length
-  );
-})();
+export const BUILTIN_ACTION_COUNT = getBuiltinActions().length;
 
 /** Expose category labels for the palette section dividers. */
 export const CATEGORY_LABELS: Record<

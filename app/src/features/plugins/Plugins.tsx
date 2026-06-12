@@ -4,7 +4,6 @@ import {
   ExternalLink,
   KeyRound,
   Loader2,
-  Plug,
   Search,
   Settings2,
   ShieldCheck,
@@ -32,6 +31,7 @@ import { testPluginConnection } from './runtime';
 import { usePluginStore } from './store';
 import type { PluginConnection, PluginManifest } from './types';
 import { isConnectableStatus } from './types';
+import { PluginLogo } from './PluginLogo';
 
 type Filter = 'all' | 'available' | 'connected' | 'planned';
 
@@ -145,9 +145,7 @@ export function Plugins() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="h-8 w-8 rounded-md bg-elevated flex items-center justify-center">
-                        <Plug className="h-4 w-4 text-accent-cyan" />
-                      </span>
+                      <PluginLogo plugin={plugin} />
                       <div>
                         <h3 className="text-ui-strong text-foreground">{plugin.name}</h3>
                         <p className="text-metadata text-muted-foreground">{plugin.category}</p>
@@ -331,8 +329,11 @@ function PluginSetupDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>
-            {connection?.state === 'connected' ? `Manage ${plugin.name}` : `Connect ${plugin.name}`}
+          <DialogTitle className="flex items-center gap-2">
+            <PluginLogo plugin={plugin} size="sm" />
+            <span>
+              {connection?.state === 'connected' ? `Manage ${plugin.name}` : `Connect ${plugin.name}`}
+            </span>
           </DialogTitle>
           <DialogDescription>{plugin.help}</DialogDescription>
         </DialogHeader>

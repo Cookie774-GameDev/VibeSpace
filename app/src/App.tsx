@@ -573,7 +573,9 @@ function CommandPaletteHost() {
 
 function SettingsModalHost() {
   const open = useUIStore((s) => s.settingsOpen);
-  if (!open) return null;
+  const mountedRef = React.useRef(false);
+  if (open) mountedRef.current = true;
+  if (!mountedRef.current) return null;
   return (
     <React.Suspense fallback={null}>
       <SettingsModal />

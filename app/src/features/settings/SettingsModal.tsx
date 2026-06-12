@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import {
+  lazy,
+  startTransition,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   User2,
   KeyRound,
@@ -14,12 +22,18 @@ import {
   Accessibility as AccessibilityIcon,
   Blocks,
   Shield,
+  Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { useAppAdmin } from '@/lib/admin';
 import { useUIStore } from '@/stores/ui';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import {
+  prefetchAllSettingsTabs,
+  prefetchSettingsTab,
+  type SettingsTab,
+} from './settingsPrefetch';
 
 const Account = lazy(() => import('./sections/Account').then((m) => ({ default: m.Account })));
 const Providers = lazy(() => import('./sections/Providers').then((m) => ({ default: m.Providers })));
@@ -39,24 +53,13 @@ const Accessibility = lazy(() =>
 const Notifications = lazy(() =>
   import('./sections/Notifications').then((m) => ({ default: m.Notifications })),
 );
-const Plugins = lazy(() => import('@/features/plugins').then((m) => ({ default: m.Plugins })));
+const Plugins = lazy(() =>
+  import('@/features/plugins/Plugins').then((m) => ({ default: m.Plugins })),
+);
 const Admin = lazy(() => import('./sections/Admin').then((m) => ({ default: m.Admin })));
-
-type SettingsTab =
-  | 'account'
-  | 'plans'
-  | 'providers'
-  | 'plugins'
-  | 'localmodels'
-  | 'appearance'
-  | 'voice'
-  | 'phone'
-  | 'ambient'
-  | 'notifications'
-  | 'accessibility'
-  | 'hotkeys'
-  | 'admin'
-  | 'about';
+const JarvisActions = lazy(() =>
+  import('./sections/JarvisActions').then((m) => ({ default: m.JarvisActions })),
+);
 
 interface TabDef {
   id: SettingsTab;
@@ -77,6 +80,7 @@ const TABS: TabDef[] = [
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'accessibility', label: 'Accessibility', icon: AccessibilityIcon },
   { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
+  { id: 'jarvisactions', label: 'Jarvis Actions', icon: Zap },
   { id: 'about', label: 'About', icon: Info },
 ];
 
@@ -85,23 +89,95 @@ interface SettingsModalProps {
   initialTab?: SettingsTab;
 }
 
-function SettingsTabPanel({ tab }: { tab: SettingsTab }) {
+function CachedTabPanel({
+  id,
+  active,
+  visited,
+  children,
+}: {
+  id: SettingsTab;
+  active: boolean;
+  visited: boolean;
+  children: ReactNode;
+}) {
+  if (!visited) return null;
+  return (
+    <div
+      id={`settings-panel-${id}`}
+      role="tabpanel"
+      aria-labelledby={`settings-tab-${id}`}
+      hidden={!active}
+      className={cn(!active && 'hidden')}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SettingsTabPanels({ tab, visited }: { tab: SettingsTab; visited: ReadonlySet<SettingsTab> }) {
   return (
     <Suspense fallback={null}>
-      {tab === 'account' && <Account />}
-      {tab === 'plans' && <Plans />}
-      {tab === 'providers' && <Providers />}
-      {tab === 'plugins' && <Plugins />}
-      {tab === 'localmodels' && <LocalModels />}
-      {tab === 'appearance' && <Appearance />}
-      {tab === 'voice' && <Voice />}
-      {tab === 'phone' && <PhoneVoice />}
-      {tab === 'ambient' && <Ambient />}
-      {tab === 'notifications' && <Notifications />}
-      {tab === 'accessibility' && <Accessibility />}
-      {tab === 'hotkeys' && <Hotkeys />}
-      {tab === 'admin' && <Admin />}
-      {tab === 'about' && <About />}
+      <CachedTabPanel id="account" active={tab === 'account'} visited={visited.has('account')}>
+        <Account />
+      </CachedTabPanel>
+      <CachedTabPanel id="plans" active={tab === 'plans'} visited={visited.has('plans')}>
+        <Plans />
+      </CachedTabPanel>
+      <CachedTabPanel id="providers" active={tab === 'providers'} visited={visited.has('providers')}>
+        <Providers />
+      </CachedTabPanel>
+      <CachedTabPanel id="plugins" active={tab === 'plugins'} visited={visited.has('plugins')}>
+        <Plugins />
+      </CachedTabPanel>
+      <CachedTabPanel
+        id="localmodels"
+        active={tab === 'localmodels'}
+        visited={visited.has('localmodels')}
+      >
+        <LocalModels />
+      </CachedTabPanel>
+      <CachedTabPanel id="appearance" active={tab === 'appearance'} visited={visited.has('appearance')}>
+        <Appearance />
+      </CachedTabPanel>
+      <CachedTabPanel id="voice" active={tab === 'voice'} visited={visited.has('voice')}>
+        <Voice />
+      </CachedTabPanel>
+      <CachedTabPanel id="phone" active={tab === 'phone'} visited={visited.has('phone')}>
+        <PhoneVoice />
+      </CachedTabPanel>
+      <CachedTabPanel id="ambient" active={tab === 'ambient'} visited={visited.has('ambient')}>
+        <Ambient />
+      </CachedTabPanel>
+      <CachedTabPanel
+        id="notifications"
+        active={tab === 'notifications'}
+        visited={visited.has('notifications')}
+      >
+        <Notifications />
+      </CachedTabPanel>
+      <CachedTabPanel
+        id="accessibility"
+        active={tab === 'accessibility'}
+        visited={visited.has('accessibility')}
+      >
+        <Accessibility />
+      </CachedTabPanel>
+      <CachedTabPanel id="hotkeys" active={tab === 'hotkeys'} visited={visited.has('hotkeys')}>
+        <Hotkeys />
+      </CachedTabPanel>
+      <CachedTabPanel
+        id="jarvisactions"
+        active={tab === 'jarvisactions'}
+        visited={visited.has('jarvisactions')}
+      >
+        <JarvisActions />
+      </CachedTabPanel>
+      <CachedTabPanel id="admin" active={tab === 'admin'} visited={visited.has('admin')}>
+        <Admin />
+      </CachedTabPanel>
+      <CachedTabPanel id="about" active={tab === 'about'} visited={visited.has('about')}>
+        <About />
+      </CachedTabPanel>
     </Suspense>
   );
 }
@@ -122,6 +198,9 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
   const setOpen = useUIStore((s) => s.setSettingsOpen);
   const isAdmin = useAppAdmin();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<SettingsTab>>(
+    () => new Set<SettingsTab>([initialTab]),
+  );
   const tabs = useMemo(
     () =>
       isAdmin
@@ -134,29 +213,55 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
     [isAdmin],
   );
 
+  const selectTab = (next: SettingsTab) => {
+    prefetchSettingsTab(next);
+    startTransition(() => {
+      setTab(next);
+      setVisitedTabs((prev) => {
+        if (prev.has(next)) return prev;
+        const copy = new Set(prev);
+        copy.add(next);
+        return copy;
+      });
+    });
+  };
+
   useEffect(() => {
     if (!isAdmin && tab === 'admin') setTab('account');
   }, [isAdmin, tab]);
 
   useEffect(() => {
     if (!open) return;
+    prefetchSettingsTab(tab);
+    prefetchAllSettingsTabs(tab);
+  }, [open, tab]);
+
+  useEffect(() => {
+    if (!open) return;
     const onJump = (e: Event) => {
       const detail = (e as CustomEvent<{ tab?: SettingsTab }>).detail;
-      if (detail?.tab) setTab(detail.tab);
+      if (detail?.tab) selectTab(detail.tab);
     };
     window.addEventListener('jarvis:settings:tab', onJump);
     return () => window.removeEventListener('jarvis:settings:tab', onJump);
   }, [open]);
+
+  useEffect(() => {
+    if (open) return;
+    setTab(initialTab);
+    setVisitedTabs((prev) => {
+      if (prev.has(initialTab)) return prev;
+      const copy = new Set(prev);
+      copy.add(initialTab);
+      return copy;
+    });
+  }, [open, initialTab]);
 
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         setOpen(v);
-        if (!v) {
-          // Reset to the requested initial tab so the next open lands there.
-          setTab(initialTab);
-        }
       }}
     >
       <DialogContent className="max-w-6xl w-[min(1180px,94vw)] h-[min(760px,90vh)] p-0 flex flex-col overflow-hidden">
@@ -180,8 +285,14 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
                 return (
                   <button
                     key={t.id}
+                    id={`settings-tab-${t.id}`}
                     type="button"
-                    onClick={() => setTab(t.id)}
+                    role="tab"
+                    aria-selected={active}
+                    aria-controls={`settings-panel-${t.id}`}
+                    onClick={() => selectTab(t.id)}
+                    onMouseEnter={() => prefetchSettingsTab(t.id)}
+                    onFocus={() => prefetchSettingsTab(t.id)}
                     aria-current={active ? 'page' : undefined}
                     className={cn(
                       'group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-secondary text-left transition-colors',
@@ -204,8 +315,8 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
             </nav>
           </aside>
 
-          <main className="overflow-y-auto px-6 py-6 min-h-0">
-            <SettingsTabPanel tab={tab} />
+          <main className="overflow-y-auto px-6 py-6 min-h-0" role="tablist">
+            <SettingsTabPanels tab={tab} visited={visitedTabs} />
           </main>
         </div>
       </DialogContent>

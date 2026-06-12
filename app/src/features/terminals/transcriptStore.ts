@@ -29,6 +29,10 @@
  */
 
 import { create } from 'zustand';
+import {
+  MAX_PENDING_ESCAPE_CHARS,
+  splitTrailingIncompleteEscape,
+} from './terminalEscape';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                 */
@@ -43,7 +47,6 @@ import { create } from 'zustand';
 export const MAX_BYTES_PER_SESSION = 32 * 1024;
 export const MAX_PERSISTED_SESSIONS = 10;
 export const MAX_TOTAL_TRANSCRIPTS_SIZE_BYTES = 512 * 1024; // 512 KB
-const MAX_PENDING_ESCAPE_CHARS = 4096;
 
 /**
  * Truncation marker prefixed when the buffer is full and we drop
@@ -83,8 +86,12 @@ const ORPHAN_OSC_FRAGMENT = /(^|[\r\n])(?:\x1B)?\](?:\d{1,3}|[A-Za-z])(?:;[^\r\n
 const ORPHAN_DIGIT_REPEAT = /(?:^|[\r\n])(?:\[0)+\[?(?=$|[\r\n])/g;
 /** Legacy: orphan `[I` tab fragments from pre-NoProfile PSReadLine escape soup. */
 const ORPHAN_TAB_FRAGMENT = /(?:^|[\r\n])\[I(?=$|[\r\n])/g;
-/** Mid-line orphan `[0` repeats and `[I` fragments appearing after a PowerShell prompt (e.g. `PS C:...> [0[[0[`). */
-const ORPHAN_MIDLINE = /(>[^\S\r\n]*)((?:\[0|\[I)[^\r\n]*)(?=\s*$)/gm;
+/**
+ * Mid-line orphan fragments after a PowerShell prompt when ESC was lost
+ * across PTY chunk boundaries (e.g. `PS C:...>]4;0;rgb:...` or `> [0[[0[`).
+ */
+const ORPHAN_MIDLINE =
+  /(>[^\S\r\n]*)((?:\]4;|\]10;|\]11;|\]12;)[^\r\n\x07]*(?:\x07)?|(?:\[0|\[I|\[<)[^\r\n]*)(?=\s*$|[\r\n])/gm;
 
 /**
  * Bare control-character regex. Keeps `\n`, `\r`, `\t` because they
@@ -110,43 +117,6 @@ export function stripAnsi(input: string): string {
     .replace(ORPHAN_DIGIT_REPEAT, '\n')
     .replace(ORPHAN_TAB_FRAGMENT, '').replace(ORPHAN_MIDLINE, '$1')
     .replace(CONTROL_CHARS, '');
-}
-
-function splitTrailingIncompleteEscape(input: string): { complete: string; pendingEscape: string } {
-  const escIndex = input.lastIndexOf('\x1B');
-  if (escIndex < 0) return { complete: input, pendingEscape: '' };
-
-  const candidate = input.slice(escIndex);
-  if (candidate.includes('\n') || candidate.includes('\r')) {
-    return { complete: input, pendingEscape: '' };
-  }
-  if (candidate === '\x1B') {
-    return { complete: input.slice(0, escIndex), pendingEscape: candidate };
-  }
-
-  const kind = candidate[1];
-  if (kind === '[') {
-    const completeCsi = /^\x1B\[[\x30-\x3F]*[\x20-\x2F]*[\x40-\x7E]/.test(candidate);
-    return completeCsi
-      ? { complete: input, pendingEscape: '' }
-      : { complete: input.slice(0, escIndex), pendingEscape: candidate };
-  }
-
-  if (kind === ']') {
-    const hasTerminator = candidate.includes('\x07') || candidate.includes('\x1B\\');
-    return hasTerminator
-      ? { complete: input, pendingEscape: '' }
-      : { complete: input.slice(0, escIndex), pendingEscape: candidate };
-  }
-
-  if (kind === 'P') {
-    const hasTerminator = candidate.includes('\x1B\\');
-    return hasTerminator
-      ? { complete: input, pendingEscape: '' }
-      : { complete: input.slice(0, escIndex), pendingEscape: candidate };
-  }
-
-  return { complete: input, pendingEscape: '' };
 }
 
 function sanitizeTerminalOutputChunk(

@@ -9,7 +9,8 @@ describe('useAuthStore API key persistence', () => {
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
       speakReplies: true,
-      voiceAutoListenOnOpen: false,
+      voiceAutoListenOnOpen: true,
+      voiceSilenceDelayMs: 2000,
     });
     await secureDeleteApiKey('groq');
   });
@@ -52,19 +53,22 @@ describe('useAuthStore API key persistence', () => {
     useAuthStore.getState().setVoicePreset('sentinel');
     useAuthStore.getState().setVoiceEngine('local');
     useAuthStore.getState().setSpeakReplies(false);
-    useAuthStore.getState().setVoiceAutoListenOnOpen(true);
+    useAuthStore.getState().setVoiceAutoListenOnOpen(false);
+    useAuthStore.getState().setVoiceSilenceDelayMs(3000);
 
     const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
     expect(persisted).toContain('"voicePreset":"sentinel"');
     expect(persisted).toContain('"voiceEngine":"local"');
     expect(persisted).toContain('"speakReplies":false');
-    expect(persisted).toContain('"voiceAutoListenOnOpen":true');
+    expect(persisted).toContain('"voiceAutoListenOnOpen":false');
+    expect(persisted).toContain('"voiceSilenceDelayMs":3000');
 
     useAuthStore.setState({
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
       speakReplies: true,
-      voiceAutoListenOnOpen: false,
+      voiceAutoListenOnOpen: true,
+      voiceSilenceDelayMs: 2000,
     });
     window.localStorage.setItem('jarvis-auth', persisted);
     await useAuthStore.persist.rehydrate();
@@ -72,6 +76,12 @@ describe('useAuthStore API key persistence', () => {
     expect(useAuthStore.getState().voicePreset).toBe('sentinel');
     expect(useAuthStore.getState().voiceEngine).toBe('local');
     expect(useAuthStore.getState().speakReplies).toBe(false);
+    expect(useAuthStore.getState().voiceAutoListenOnOpen).toBe(false);
+    expect(useAuthStore.getState().voiceSilenceDelayMs).toBe(3000);
+  });
+
+  it('defaults new installs to hands-free voice with a two-second pause', () => {
     expect(useAuthStore.getState().voiceAutoListenOnOpen).toBe(true);
+    expect(useAuthStore.getState().voiceSilenceDelayMs).toBe(2000);
   });
 });

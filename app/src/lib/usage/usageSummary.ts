@@ -63,13 +63,6 @@ function usd(value: number): string {
   return `$${value.toFixed(value >= 1 ? 2 : 4)}`;
 }
 
-async function getLocalUsage(provider: ProviderId): Promise<LocalUsageTotals> {
-  await openDb();
-  const start = monthStartMs();
-  const messages = await db.messages.toArray();
-  return summarizeLocalProviderUsage(messages, provider, start);
-}
-
 type UsageMessage = {
   created_at: number;
   usage?: {
@@ -81,6 +74,52 @@ type UsageMessage = {
     provider?: ProviderId;
   };
 };
+
+const MESSAGE_SCAN_CACHE_MS = 30_000;
+let messageScanCache: { at: number; sinceMs: number; messages: UsageMessage[] } | null = null;
+let messageScanInflight: Promise<UsageMessage[]> | null = null;
+
+async function loadMessagesForUsage(sinceMs: number): Promise<UsageMessage[]> {
+  const now = Date.now();
+  if (
+    messageScanCache &&
+    messageScanCache.sinceMs === sinceMs &&
+    now - messageScanCache.at < MESSAGE_SCAN_CACHE_MS
+  ) {
+    return messageScanCache.messages;
+  }
+  if (!messageScanInflight) {
+    messageScanInflight = (async () => {
+      await openDb();
+      return db.messages.toArray();
+    })().finally(() => {
+      messageScanInflight = null;
+    });
+  }
+  const messages = await messageScanInflight;
+  messageScanCache = { at: Date.now(), sinceMs, messages };
+  return messages;
+}
+
+/** Bust cached message scans after new usage is written (optional; cache is short-lived). */
+export function invalidateProviderUsageCache(): void {
+  messageScanCache = null;
+}
+
+/** Monthly BYOK usage rollup with a short-lived in-memory cache for Settings. */
+export async function getMonthlyAllProviderUsage(
+  providers: readonly ProviderId[],
+  sinceMs = monthStartMs(),
+): Promise<Partial<Record<ProviderId, LocalUsageTotals>>> {
+  const messages = await loadMessagesForUsage(sinceMs);
+  return summarizeAllLocalProviderUsage(messages, providers, sinceMs);
+}
+
+async function getLocalUsage(provider: ProviderId): Promise<LocalUsageTotals> {
+  const start = monthStartMs();
+  const messages = await loadMessagesForUsage(start);
+  return summarizeLocalProviderUsage(messages, provider, start);
+}
 
 function accumulateUsageTotals(
   totals: LocalUsageTotals,

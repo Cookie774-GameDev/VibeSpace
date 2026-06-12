@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, ChevronDown, Sparkles, Mic, MicOff, FileText, X, Network, Terminal } from 'lucide-react';
 import { PLUGIN_CATALOG } from '@/features/plugins/catalog';
 import { extractPluginMentions } from '@/features/plugins/mentions';
+import { PluginLogo } from '@/features/plugins/PluginLogo';
 import { usePluginStore } from '@/features/plugins/store';
 import {
   Button,
@@ -402,6 +403,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
         label: plugin.name,
         description: pluginConnectionLabel(pluginConnections[plugin.id]),
         metadata: plugin.category,
+        leading: <PluginLogo plugin={plugin} size="sm" />,
       }));
     }
 
@@ -887,7 +889,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             terminalRefs: attachedTerminals,
             contextNodes: attachedContexts,
             pluginIds,
-            speakReply: voiceReplyRequestedRef.current,
+            speakReply: voiceReplyRequestedRef.current || useAuthStore.getState().speakReplies,
           },
         }),
       );
@@ -1550,6 +1552,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                         key={pluginId}
                         type="plugin"
                         label={plugin?.name ?? pluginId}
+                        icon={plugin ? <PluginLogo plugin={plugin} size="sm" className="!h-5 !w-5" /> : undefined}
                         onRemove={() => setAttachedPlugins((cur) => cur.filter((id) => id !== pluginId))}
                       />
                     );

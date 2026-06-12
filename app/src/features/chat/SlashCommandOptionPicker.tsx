@@ -9,6 +9,8 @@ export interface SlashCommandOption {
   description?: string;
   metadata?: string;
   icon?: LucideIcon;
+  /** Replaces the default Lucide icon (e.g. official plugin logo). */
+  leading?: React.ReactNode;
 }
 
 export interface SlashCommandOptionPickerProps {
@@ -152,12 +154,14 @@ export const SlashCommandOptionPicker = forwardRef<
                       : 'border-transparent text-muted-foreground hover:border-border hover:bg-muted/70 hover:text-foreground',
                   )}
                 >
-                  <Icon
-                    className={cn(
-                      'h-4 w-4 shrink-0',
-                      isSelected ? 'text-accent-copper' : 'text-muted-foreground/70',
-                    )}
-                  />
+                  {option.leading ?? (
+                    <Icon
+                      className={cn(
+                        'h-4 w-4 shrink-0',
+                        isSelected ? 'text-accent-copper' : 'text-muted-foreground/70',
+                      )}
+                    />
+                  )}
                   <div className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-medium leading-5 text-foreground">
                       {option.label}

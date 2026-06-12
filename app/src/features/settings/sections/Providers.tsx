@@ -24,10 +24,8 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { testProviderKey } from '@/lib/ai/testKey';
-import { db, openDb } from '@/lib/db';
 import {
-  monthStartMs,
-  summarizeAllLocalProviderUsage,
+  getMonthlyAllProviderUsage,
   type LocalUsageTotals,
 } from '@/lib/usage/usageSummary';
 import { ProviderUsageCounter, type ProviderUsageData } from '../components/ProviderUsageCounter';
@@ -240,6 +238,8 @@ const CATEGORY_META: Record<ProviderRow['category'], { label: string; icon: type
   local: { label: 'Local', icon: Server },
 };
 
+const BYOK_PROVIDER_IDS = BYOK_PROVIDERS.map((provider) => provider.id);
+
 const DEFAULT_PROVIDER_OPTIONS: { id: ProviderId; label: string; description: string }[] = [
   { id: 'anthropic', label: 'Anthropic', description: 'Best for reasoning and writing.' },
   { id: 'openai', label: 'OpenAI', description: 'Strong generalist with realtime voice.' },
@@ -257,14 +257,7 @@ export function Providers() {
   const defaultProvider = useAuthStore((s) => s.defaultProvider);
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const usageByProvider = useLiveQuery(async () => {
-    await openDb();
-    const sinceMs = monthStartMs();
-    const messages = await db.messages.toArray();
-    const totals = summarizeAllLocalProviderUsage(
-      messages,
-      BYOK_PROVIDERS.map((provider) => provider.id),
-      sinceMs,
-    );
+    const totals = await getMonthlyAllProviderUsage(BYOK_PROVIDER_IDS);
     return BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
       (acc, provider) => {
         acc[provider.id] = toProviderUsageData(totals[provider.id] ?? emptyUsageTotals());

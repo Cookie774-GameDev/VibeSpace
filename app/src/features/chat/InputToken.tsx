@@ -18,6 +18,8 @@ export interface InputTokenProps {
   type: TokenType;
   label: string;
   sublabel?: string;
+  /** Replaces the default type icon (e.g. official plugin logo). */
+  icon?: React.ReactNode;
   onRemove?: () => void;
   className?: string;
 }
@@ -61,7 +63,7 @@ const TOKEN_GLOW: Record<TokenType, string> = {
   plugin: 'shadow-[0_0_10px_rgba(245,158,11,0.2)]',
 };
 
-export function InputToken({ type, label, sublabel, onRemove, className }: InputTokenProps) {
+export function InputToken({ type, label, sublabel, icon, onRemove, className }: InputTokenProps) {
   const Icon = TOKEN_ICONS[type];
 
   return (
@@ -80,7 +82,7 @@ export function InputToken({ type, label, sublabel, onRemove, className }: Input
         className,
       )}
     >
-      <Icon className="h-3 w-3 text-violet-400 shrink-0" />
+      {icon ?? <Icon className="h-3 w-3 text-violet-400 shrink-0" />}
       <span className="text-foreground/90 truncate max-w-[120px]">{label}</span>
       {sublabel && (
         <span className="text-muted-foreground/70 truncate max-w-[80px]">{sublabel}</span>

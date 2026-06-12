@@ -189,6 +189,7 @@ export function VoiceModal() {
   const setOpen = useUIStore((state) => state.setVoiceModalOpen);
   const activeChatId = useUIStore((state) => state.activeChatId);
   const voiceAutoListenOnOpen = useAuthStore((state) => state.voiceAutoListenOnOpen);
+  const voiceSilenceDelayMs = useAuthStore((state) => state.voiceSilenceDelayMs);
   const messages = useChatMessages(open ? activeChatId : null);
   const state = useVoiceStore((voice) => voice.state);
   const partial = useVoiceStore((voice) => voice.partialTranscript);
@@ -277,8 +278,11 @@ export function VoiceModal() {
       stopListening('idle');
       return;
     }
+    if (!voiceAutoListenOnOpen) {
+      listeningArmedRef.current = true;
+    }
     startListening();
-  }, [startListening, state, stopListening]);
+  }, [startListening, state, stopListening, voiceAutoListenOnOpen]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -286,12 +290,22 @@ export function VoiceModal() {
     if (voiceAutoListenOnOpen) startListening();
     else useVoiceStore.getState().setState('idle');
 
+    const handsFree = () => useAuthStore.getState().voiceAutoListenOnOpen;
+
     const restartListening = () => {
       if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
+      if (!handsFree() && !listeningArmedRef.current) return;
       window.setTimeout(() => {
         if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
         startListening();
       }, 180);
+    };
+
+    const disarmPushToTalk = () => {
+      if (handsFree()) return;
+      listeningArmedRef.current = false;
+      VoiceService.stopListening();
+      useUIStore.getState().setVoiceListening(false);
     };
 
     const flushUtterance = () => {
@@ -300,6 +314,7 @@ export function VoiceModal() {
       pendingUtteranceRef.current = '';
       if (!text) return;
 
+      disarmPushToTalk();
       useVoiceStore.getState().setState('thinking');
       void (async () => {
         let chatId = useUIStore.getState().activeChatId;
@@ -344,7 +359,8 @@ export function VoiceModal() {
         useVoiceStore.getState().pushFinalTranscript(text);
         pendingUtteranceRef.current = `${pendingUtteranceRef.current} ${text}`.trim();
         if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
-        utteranceTimerRef.current = window.setTimeout(flushUtterance, 550);
+        const delay = useAuthStore.getState().voiceSilenceDelayMs;
+        utteranceTimerRef.current = window.setTimeout(flushUtterance, delay);
       }),
       VoiceService.on('voice:error', ({ kind, message }) => {
         if (kind === 'no_speech' || kind === 'aborted') {
@@ -374,7 +390,12 @@ export function VoiceModal() {
     };
     const onSpeechEnd = () => {
       speakingRef.current = false;
-      restartListening();
+      if (handsFree()) {
+        listeningArmedRef.current = true;
+        restartListening();
+      } else {
+        useVoiceStore.getState().setState('idle');
+      }
     };
     window.addEventListener(SPEECH_SYNTHESIS_START_EVENT, onSpeechStart);
     window.addEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
@@ -392,7 +413,7 @@ export function VoiceModal() {
       useVoiceStore.getState().setState('idle');
       stopAllVoiceOutput();
     };
-  }, [open, startListening, voiceAutoListenOnOpen]);
+  }, [open, startListening, voiceAutoListenOnOpen, voiceSilenceDelayMs]);
 
   React.useEffect(() => {
     if (!open || !navigator.mediaDevices?.getUserMedia) return;
@@ -500,8 +521,20 @@ export function VoiceModal() {
                 'jarvis-voice-orb-button flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/70',
                 (state === 'listening' || state === 'speaking') && 'is-active',
               )}
-              aria-label={state === 'listening' ? 'Stop listening' : 'Start listening'}
-              title={state === 'listening' ? 'Stop listening' : 'Click to let Jarvis hear you'}
+              aria-label={
+                state === 'listening'
+                  ? 'Stop listening'
+                  : voiceAutoListenOnOpen
+                    ? 'Listening active'
+                    : 'Click to talk'
+              }
+              title={
+                state === 'listening'
+                  ? 'Stop listening'
+                  : voiceAutoListenOnOpen
+                    ? 'Hands-free — just speak'
+                    : 'Click to let Jarvis hear you'
+              }
             >
               <SymbioteOrb state={state} size={30} />
             </button>

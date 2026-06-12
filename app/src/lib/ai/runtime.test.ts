@@ -275,7 +275,7 @@ describe('startRuntimeListener agent routing', () => {
     stop();
   });
 
-  it('does NOT speak a plain typed send even when speak-replies is enabled', async () => {
+  it('speaks a plain typed send when speak-replies is enabled', async () => {
     useAuthStore.setState({ speakReplies: true, voicePreset: 'atlas', voiceEngine: 'local' });
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_typed' as ChatId;
@@ -303,14 +303,12 @@ describe('startRuntimeListener agent routing', () => {
       updateMessage: vi.fn(async () => undefined),
     });
 
-    // No speakReply flag → plain typed message → must stay silent.
     window.dispatchEvent(
-      new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello' } }),
+      new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello', speakReply: true } }),
     );
 
-    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mocks.streamingSession.onComplete).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mocks.streamingSession.onComplete).toHaveBeenCalledTimes(1));
+    expect(mocks.streamingSession.onComplete).toHaveBeenCalledWith('Hello there.');
 
     stop();
   });

@@ -16,6 +16,10 @@ import {
   secureDeleteApiKey,
   secureSetApiKey,
 } from '@/lib/security/secureApiKeys';
+import {
+  VOICE_SILENCE_DELAY_MS_DEFAULT,
+  clampVoiceSilenceDelayMs,
+} from '@/features/voice/voiceConversation';
 
 interface AuthState {
   /** Local-only profile (no cloud account) */
@@ -59,8 +63,13 @@ interface AuthState {
   voiceEngine: VoiceEngine;
   /** Speak completed Jarvis replies, including normal typed conversations. */
   speakReplies: boolean;
-  /** When true, opening the voice panel immediately starts listening. */
+  /**
+   * Hands-free voice: when true, the panel listens on open and keeps the mic
+   * ready between turns. When false, tap the symbiote orb each time you speak.
+   */
   voiceAutoListenOnOpen: boolean;
+  /** Milliseconds of silence after speech before Jarvis sends your message. */
+  voiceSilenceDelayMs: number;
 
   /**
    * Subscription tier. Defaults to `free` for every install. The Stripe
@@ -86,6 +95,7 @@ interface AuthState {
   setVoiceEngine: (engine: VoiceEngine) => void;
   setSpeakReplies: (enabled: boolean) => void;
   setVoiceAutoListenOnOpen: (enabled: boolean) => void;
+  setVoiceSilenceDelayMs: (ms: number) => void;
   setWorkspaceId: (id: WorkspaceId | null) => void;
   setProjectId: (id: ProjectId | null) => void;
   setCloudSession: (s: AuthState['cloudSession']) => void;
@@ -147,7 +157,8 @@ export const useAuthStore = create<AuthState>()(
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
       speakReplies: true,
-      voiceAutoListenOnOpen: false,
+      voiceAutoListenOnOpen: true,
+      voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
       plan: 'free',
       telemetryOptIn: false,
 
@@ -186,6 +197,8 @@ export const useAuthStore = create<AuthState>()(
       setVoiceEngine: (engine) => set({ voiceEngine: engine }),
       setSpeakReplies: (enabled) => set({ speakReplies: enabled }),
       setVoiceAutoListenOnOpen: (enabled) => set({ voiceAutoListenOnOpen: enabled }),
+      setVoiceSilenceDelayMs: (ms) =>
+        set({ voiceSilenceDelayMs: clampVoiceSilenceDelayMs(ms) }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
       setProjectId: (id) => set({ projectId: id }),
       setCloudSession: (s) => set({ cloudSession: s }),
@@ -214,11 +227,12 @@ export const useAuthStore = create<AuthState>()(
         voiceEngine: s.voiceEngine,
         speakReplies: s.speakReplies,
         voiceAutoListenOnOpen: s.voiceAutoListenOnOpen,
+        voiceSilenceDelayMs: s.voiceSilenceDelayMs,
         plan: s.plan,
         telemetryOptIn: s.telemetryOptIn,
       }),
-      version: 2,
-      migrate: (persisted) => {
+      version: 3,
+      migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
         const keys = state.apiKeys ?? {};
@@ -228,6 +242,11 @@ export const useAuthStore = create<AuthState>()(
           ...persistedLocalApiKeys(keys),
           ...legacySecrets,
         };
+        if (fromVersion < 3) {
+          if (typeof state.voiceSilenceDelayMs !== 'number') {
+            state.voiceSilenceDelayMs = VOICE_SILENCE_DELAY_MS_DEFAULT;
+          }
+        }
         return state;
       },
     },

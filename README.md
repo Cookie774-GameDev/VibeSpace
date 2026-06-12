@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="site/images/jarvis-logo.png" alt="VibeSpace Logo" width="120" height="120" />
+  <img src="site/images/vibespace-logo.png" alt="VibeSpace Logo" width="120" height="120" />
 </p>
 
 <h1 align="center">VibeSpace</h1>

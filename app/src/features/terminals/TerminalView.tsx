@@ -45,6 +45,11 @@ import { toast } from '@/components/ui/toast';
 import type { TerminalViewProps } from './types';
 import { useTerminalTranscriptStore } from './transcriptStore';
 import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
+import {
+  createTerminalOutputBuffer,
+  filterStartupTerminalOutput,
+  stripOrphanEscapeFragments,
+} from './terminalEscape';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
@@ -276,8 +281,18 @@ export function TerminalView({
     let rafToken: number | null = null;
     let outputRafToken: number | null = null;
     let pendingOutput = '';
+    let pendingTranscript = '';
+    const outputBuffer = createTerminalOutputBuffer();
     let handleVisible: (() => void) | null = null;
     let onClear: ((e: Event) => void) | null = null;
+
+    const prepareTerminalChunk = (chunk: string): string => {
+      if (!chunk) return '';
+      if (Date.now() < ignoreClearsUntilRef.current) {
+        return filterStartupTerminalOutput(chunk);
+      }
+      return stripOrphanEscapeFragments(chunk);
+    };
 
     // RAF-coalesced resize. Multiple ResizeObserver fires inside the same
     // animation frame collapse to a single fit() + IPC. Without this,
@@ -323,29 +338,41 @@ export function TerminalView({
     const flushTerminalOutput = () => {
       outputRafToken = null;
       if (!pendingOutput) return;
-      const data = pendingOutput;
+      const displayData = pendingOutput;
+      const transcriptData = pendingTranscript;
       pendingOutput = '';
+      pendingTranscript = '';
       const sid = sessionRef.current;
       if (!sid) return;
 
       try {
-        termRef.current?.write(data);
+        termRef.current?.write(displayData);
       } catch (err) {
         console.warn('[Jarvis] terminal render write failed:', err);
       }
 
       try {
-        useTerminalTranscriptStore.getState().appendOutput(sid, data);
+        useTerminalTranscriptStore.getState().appendOutput(sid, transcriptData);
       } catch (err) {
         console.warn('[Jarvis] terminal transcript append failed:', err);
       }
     };
 
-    const queueTerminalOutput = (data: string) => {
-      if (!data) return;
-      pendingOutput += data;
+    const queueTerminalOutput = (displayData: string, transcriptData: string) => {
+      if (!displayData) return;
+      pendingOutput += displayData;
+      pendingTranscript += transcriptData;
       if (outputRafToken != null) return;
       outputRafToken = requestAnimationFrame(flushTerminalOutput);
+    };
+
+    const enqueueTerminalChunks = (raw: string) => {
+      for (const chunk of outputBuffer.push(raw)) {
+        if (!chunk) continue;
+        const displayData = prepareTerminalChunk(chunk);
+        if (!displayData) continue;
+        queueTerminalOutput(displayData, chunk);
+      }
     };
 
     const init = async () => {
@@ -435,15 +462,9 @@ export function TerminalView({
       try {
         const u1 = await listen<OutputPayload>('terminal://output', (e) => {
           if (e.payload.sessionId !== sessionRef.current) return;
-          let data = e.payload.data;
-          if (Date.now() < ignoreClearsUntilRef.current) {
-            // Strip only clear screen and resets, but preserve cursor positioning and alternate screens sent during PTY startup
-            data = data.replace(/\x1bc|\x1b\[!p|\x1b\[[0-9;]*J/g, '');
-          }
-          // Mirror into xterm and the transcript store in one frame-batched
-          // write. This keeps output floods smooth without changing the
-          // terminal UI or command flow.
-          queueTerminalOutput(data);
+          // Reassemble split ESC sequences before rendering or persisting so
+          // orphan `]4;rgb:` / `[0[` fragments never land in xterm.
+          enqueueTerminalChunks(e.payload.data);
         });
         if (cancelled) {
           u1();
@@ -543,6 +564,7 @@ export function TerminalView({
           // Restore visual transcript for active session re-attach
           if (restoreDecision.restoredText) {
             term.write(restoreDecision.restoredText);
+            ignoreClearsUntilRef.current = Date.now() + 3000;
           }
         }
       } catch (err) {
@@ -582,6 +604,12 @@ export function TerminalView({
         projectId: projectId ?? null,
       });
       onReadyRef.current?.(sid);
+      if (spawnedFresh) {
+        ignoreClearsUntilRef.current = Math.max(
+          ignoreClearsUntilRef.current,
+          Date.now() + 1500,
+        );
+      }
       if (spawnedFresh && startupCommand) {
         invoke('terminal_write', {
           sessionId: sid,
@@ -626,6 +654,7 @@ export function TerminalView({
         if (!matchesPane && !matchesSession) return;
         ignoreClearsUntilRef.current = 0;
         pendingOutput = '';
+        pendingTranscript = '';
         if (outputRafToken != null) {
           cancelAnimationFrame(outputRafToken);
           outputRafToken = null;
@@ -678,6 +707,23 @@ export function TerminalView({
       if (outputRafToken != null) {
         cancelAnimationFrame(outputRafToken);
         flushTerminalOutput();
+      }
+      const tailRaw = outputBuffer.flush();
+      const tailDisplay = prepareTerminalChunk(tailRaw);
+      if (tailDisplay) {
+        try {
+          termRef.current?.write(tailDisplay);
+        } catch {
+          /* xterm may already be disposed */
+        }
+        const sid = sessionRef.current;
+        if (sid && tailRaw) {
+          try {
+            useTerminalTranscriptStore.getState().appendOutput(sid, tailRaw);
+          } catch {
+            /* store may be tearing down */
+          }
+        }
       }
       window.removeEventListener('resize', dispatchResize);
       if (handleVisible) {

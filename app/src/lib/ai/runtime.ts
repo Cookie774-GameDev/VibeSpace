@@ -28,6 +28,7 @@ import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
 import { createStreamingVoiceSession, type StreamingVoiceSession } from '@/features/voice/streamingVoice';
+import { registerActiveStreamingVoiceSession } from '@/features/voice/voiceRouter';
 import { deriveChatTitle, maybeRenameChat } from '@/features/chat/chatLifecycle';
 
 import {
@@ -110,6 +111,29 @@ function detectMention(text: string): string | null {
   return m ? m[1]! : null;
 }
 
+function actionPartToLlmText(part: Extract<Part, { kind: 'action_proposal' }>): string {
+  const label = part.action_id;
+  switch (part.status) {
+    case 'pending':
+      return `[Action proposed: ${label}. Awaiting user approval. Rationale: ${part.rationale ?? 'none'}]`;
+    case 'running':
+      return `[Action ${label}: running…]`;
+    case 'success': {
+      const summary =
+        part.result && typeof part.result === 'object' && part.result !== null && 'summary' in part.result
+          ? String((part.result as { summary?: string }).summary ?? '')
+          : '';
+      return `[Action ${label}: completed.${summary ? ` ${summary}` : ''}]`;
+    }
+    case 'error':
+      return `[Action ${label}: failed — ${part.error ?? 'unknown error'}]`;
+    case 'cancelled':
+      return `[Action ${label}: cancelled by user.]`;
+    default:
+      return `[Action ${label}: ${part.status}]`;
+  }
+}
+
 /** Flatten Message[] -> LLMMessage[] for the provider call. */
 function toLLMMessages(history: Message[], excludeId?: MessageId): LLMMessage[] {
   const out: LLMMessage[] = [];
@@ -117,8 +141,12 @@ function toLLMMessages(history: Message[], excludeId?: MessageId): LLMMessage[] 
     if (excludeId && m.id === excludeId) continue;
     if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'agent') continue;
     const content = m.parts
-      .filter((p): p is Extract<Part, { kind: 'text' }> => p.kind === 'text')
-      .map((p) => p.text)
+      .map((p) => {
+        if (p.kind === 'text') return p.text;
+        if (p.kind === 'action_proposal') return actionPartToLlmText(p);
+        return '';
+      })
+      .filter(Boolean)
       .join('\n')
       .trim();
     if (content.length === 0) continue;
@@ -393,7 +421,8 @@ export function startRuntimeListener(
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     const voiceSettings = useAuthStore.getState();
     let streamingVoice: StreamingVoiceSession | null = null;
-    if (detail.speakReply && voiceSettings.speakReplies) {
+    const shouldSpeakReply = Boolean(detail.speakReply || voiceSettings.speakReplies);
+    if (shouldSpeakReply) {
       streamingVoice = createStreamingVoiceSession({
         voiceEngine: voiceSettings.voiceEngine,
         voicePreset: voiceSettings.voicePreset,
@@ -567,11 +596,13 @@ export function startRuntimeListener(
             detail: { agent: agent.slug, textChars: finalText.length },
           });
         } finally {
+          registerActiveStreamingVoiceSession(null);
           streamingVoice = null;
         }
       }
     } catch (err) {
       streamingVoice?.stop();
+      registerActiveStreamingVoiceSession(null);
       streamingVoice = null;
       // Cancel any pending flush before stamping the suffix or it'll overwrite us.
       cancelPendingFlush();
