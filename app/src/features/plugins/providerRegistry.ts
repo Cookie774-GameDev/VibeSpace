@@ -98,7 +98,13 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
       'Paste the key and test the connection.',
     ],
     supportedFeatures: ['model routing', 'chat context'],
-    httpTest: apiKeyHeaderTest('https://api.anthropic.com/v1/models', 'x-api-key', 'api_key'),
+    httpTest: {
+      url: 'https://api.anthropic.com/v1/models',
+      headers: {
+        'x-api-key': '{{api_key}}',
+        'anthropic-version': '2023-06-01',
+      },
+    },
     tools: [readTool('models_context', 'Verify Anthropic API access.')],
   },
   groq: {
@@ -248,7 +254,10 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
     tags: ['voice', 'stt', 'api_key'],
     setupSteps: ['Create a Deepgram API key.', 'Paste and test.'],
     supportedFeatures: ['speech-to-text'],
-    httpTest: apiKeyHeaderTest('https://api.deepgram.com/v1/projects', 'Authorization', 'api_key'),
+    httpTest: {
+      url: 'https://api.deepgram.com/v1/projects',
+      headers: { Authorization: 'Token {{api_key}}' },
+    },
     tools: [readTool('voice_context', 'List Deepgram projects.')],
   },
   stripe: {
@@ -267,7 +276,10 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
       'Paste and test.',
     ],
     supportedFeatures: ['billing', 'checkout context'],
-    httpTest: bearerTest('https://api.stripe.com/v1/balance', 'secret_key'),
+    httpTest: {
+      url: 'https://api.stripe.com/v1/balance',
+      headers: { Authorization: 'Basic {{stripe_basic}}' },
+    },
     tools: [readTool('billing_context', 'Read Stripe account balance metadata.')],
   },
   discord: {
@@ -280,7 +292,11 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
     tags: ['messaging', 'community', 'token'],
     setupSteps: ['Create an application and bot.', 'Copy the bot token.', 'Paste and test.'],
     supportedFeatures: ['messaging', 'community bots'],
-    httpTest: bearerTest('https://discord.com/api/v10/users/@me', 'token', 'username'),
+    httpTest: {
+      url: 'https://discord.com/api/v10/users/@me',
+      headers: { Authorization: 'Bot {{token}}' },
+      accountLabelPath: 'username',
+    },
     tools: [readTool('identity', 'Read bot identity.')],
   },
   twilio: {

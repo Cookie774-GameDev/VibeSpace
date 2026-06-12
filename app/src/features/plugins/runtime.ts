@@ -40,6 +40,14 @@ function normalizeStoreDomain(raw: string): string {
   return store;
 }
 
+function mailchimpDatacenter(apiKey: string): string {
+  const suffix = apiKey.trim().split('-').pop();
+  if (!suffix || !/^[a-z]{2}\d+$/i.test(suffix)) {
+    throw new Error('Mailchimp API key must include a datacenter suffix, for example ...-us1.');
+  }
+  return suffix.toLowerCase();
+}
+
 function substitute(template: string, values: CredentialMap, manifest: PluginManifest): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
     if (key === 'store') return normalizeStoreDomain(required(values, 'store', 'Store domain'));
@@ -47,6 +55,18 @@ function substitute(template: string, values: CredentialMap, manifest: PluginMan
       const email = required(values, 'email', 'Account email');
       const apiKey = required(values, 'api_key', 'Management API key');
       return btoa(`${email}:${apiKey}`);
+    }
+    if (key === 'basic_auth') {
+      const accountSid = required(values, 'account_sid', 'Account SID');
+      const authToken = required(values, 'auth_token', 'Auth token');
+      return btoa(`${accountSid}:${authToken}`);
+    }
+    if (key === 'stripe_basic') {
+      const secretKey = required(values, 'secret_key', 'Secret key');
+      return btoa(`${secretKey}:`);
+    }
+    if (key === 'datacenter') {
+      return mailchimpDatacenter(required(values, 'api_key', 'API key'));
     }
     const field = manifest.fields.find((candidate) => candidate.id === key);
     return required(values, key, field?.label ?? key);
