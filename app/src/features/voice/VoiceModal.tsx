@@ -15,6 +15,7 @@ import { VoiceService } from './VoiceService';
 import { SPEECH_SYNTHESIS_END_EVENT, SPEECH_SYNTHESIS_START_EVENT } from './speechSynthesis';
 import { PERSONAS } from './personas';
 import { VoiceActivityWaveform } from './VoiceActivityWaveform';
+import { stopAllVoiceOutput } from './voiceRouter';
 
 const STATE_LABEL: Record<VoiceState, string> = {
   idle: 'Ready',
@@ -389,15 +390,7 @@ export function VoiceModal() {
       VoiceService.stopListening();
       useUIStore.getState().setVoiceListening(false);
       useVoiceStore.getState().setState('idle');
-      // Closing the voice panel must silence any in-flight reply audio too —
-      // Web Speech, the local Kokoro player, and any cloud TTS.
-      try {
-        window.speechSynthesis?.cancel();
-      } catch {
-        /* ignore */
-      }
-      void import('./speechSynthesis').then((m) => m.stopSpeech()).catch(() => {});
-      void import('./TtsService').then((m) => m.TtsService.stop()).catch(() => {});
+      stopAllVoiceOutput();
     };
   }, [open, startListening, voiceAutoListenOnOpen]);
 

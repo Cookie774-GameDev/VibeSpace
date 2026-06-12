@@ -147,7 +147,9 @@ export function prepareForSpeech(
   return chunkText(cleaned, options.maxChunkChars ?? DEFAULT_MAX_CHUNK);
 }
 
-/** Completed sentences in streamed assistant text that have not been spoken yet. */
+const MIN_TWO_WORD_CHARS = 8;
+
+/** Completed sentences and early phrase chunks from streamed assistant text. */
 export function pullNewSpeechSegments(
   rawAccumulated: string,
   spokenCleanLength: number,
@@ -160,20 +162,42 @@ export function pullNewSpeechSegments(
 
   const tail = cleaned.slice(spokenCleanLength);
   const segments: string[] = [];
+  let advance = 0;
+
   const sentenceRe = /[^.!?\n]+[.!?]+(?:\s+|$)/g;
-  let lastEnd = 0;
   let match: RegExpExecArray | null;
   while ((match = sentenceRe.exec(tail)) !== null) {
     const sentence = match[0].trim();
     if (sentence.length >= 6) {
       segments.push(sentence);
-      lastEnd = match.index + match[0].length;
+      advance = match.index + match[0].length;
+    }
+  }
+
+  const partialRaw = tail.slice(advance);
+  const partial = partialRaw.trimEnd();
+  if (partial.length > 0) {
+    const words = partial.split(/\s+/).filter(Boolean);
+    let phrase = '';
+    if (words.length >= 3) {
+      phrase = words.slice(0, -1).join(' ');
+    } else if (words.length === 2 && partial.length >= MIN_TWO_WORD_CHARS) {
+      phrase = partial;
+    }
+
+    if (phrase.length >= MIN_TWO_WORD_CHARS) {
+      const offset = partialRaw.indexOf(phrase);
+      if (offset >= 0) {
+        segments.push(phrase);
+        advance += offset + phrase.length;
+        while (advance < tail.length && /\s/.test(tail[advance]!)) advance += 1;
+      }
     }
   }
 
   return {
     segments,
-    nextSpokenCleanLength: spokenCleanLength + lastEnd,
+    nextSpokenCleanLength: spokenCleanLength + advance,
   };
 }
 

@@ -4,7 +4,11 @@
 import type { VoiceEngine, VoicePresetId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { pullNewSpeechSegments, pullRemainingSpeech } from './textCleanup';
-import { speakWithSettings, stopAllVoiceOutput } from './voiceRouter';
+import {
+  registerActiveStreamingVoiceSession,
+  speakWithSettings,
+  stopAllVoiceOutput,
+} from './voiceRouter';
 import {
   SPEECH_SYNTHESIS_END_EVENT,
   SPEECH_SYNTHESIS_START_EVENT,
@@ -28,6 +32,7 @@ export class StreamingVoiceSession {
     const state = useAuthStore.getState();
     this.engine = options.voiceEngine ?? state.voiceEngine ?? 'system';
     this.voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
+    registerActiveStreamingVoiceSession(this);
   }
 
   onDelta(accumulatedRaw: string): void {
@@ -59,12 +64,18 @@ export class StreamingVoiceSession {
     }
   }
 
-  stop(): void {
+  /** Stop playback without clearing the global streaming session registry. */
+  haltPlayback(): void {
     this.stopped = true;
-    stopAllVoiceOutput();
     if (this.started) {
       window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
     }
+  }
+
+  stop(): void {
+    registerActiveStreamingVoiceSession(null);
+    this.haltPlayback();
+    stopAllVoiceOutput();
   }
 
   private enqueue(text: string): void {
