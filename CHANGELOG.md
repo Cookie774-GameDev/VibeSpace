@@ -2,6 +2,20 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.32] - 2026-06-12
+
+### Added
+
+- Deepgram BYOK voice engine in Settings → Voice; API keys stored in the OS keychain.
+- Admin settings section and Supabase `app_admins` for unlimited cloud voice on edge functions.
+- Plugin catalog capped at 112 verified connectors with two-step credential connect.
+- Chat `/plug` slash command and plugin mention detection for connected integrations.
+- Terminal bulk open, Claude, and OpenCode actions marked destructive (require Approve).
+
+### Fixed
+
+- Plugin HTTP test auth for Twilio, Stripe, Discord, Mailchimp, Deepgram, and Anthropic.
+
 ## [0.1.31] - 2026-06-11
 
 ### Security

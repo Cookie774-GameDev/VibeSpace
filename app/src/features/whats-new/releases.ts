@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.31';
+export const CURRENT_VERSION = '0.1.32';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,37 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.32',
+    date: '2026-06-12',
+    headline: 'Deepgram voice, 112 verified plugins, and /plug chat integration',
+    summary:
+      'Connect your own Deepgram API key for Jarvis voice, browse 112 verified plugins with two-step connect, attach plugins in chat with /plug, and approve bulk terminal actions before they run.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Deepgram BYOK voice engine — paste your API key in Settings → Voice; Aura voices use your credits directly.',
+          'Admin access section and Supabase app_admins list for unlimited cloud voice when signed in.',
+          '112 verified plugins only — no placeholder flood; each has credential fields and a real connection test.',
+          'Chat /plug slash command attaches connected plugins; Jarvis detects plugin mentions in messages.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Plugin credential auth fixed for Twilio, Stripe, Discord, Mailchimp, Deepgram, and Anthropic probes.',
+          'Terminal bulk open, Claude, and OpenCode actions require explicit Approve before running.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets VibeSpace-0.1.32-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.31',
     date: '2026-06-11',
