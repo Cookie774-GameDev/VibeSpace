@@ -4,6 +4,7 @@ import {
   BILLING_PLAN_ORDER,
   messageUsageCopy,
   callUsageCopy,
+  bucketUsageCopy,
 } from './planLimits';
 
 describe('PUBLIC_PLANS', () => {
@@ -14,13 +15,18 @@ describe('PUBLIC_PLANS', () => {
     expect(PUBLIC_PLANS.ultra.priceUsd).toBe(100);
 
     expect(PUBLIC_PLANS.free.messageCredits).toBe(0);
-    expect(PUBLIC_PLANS.starter.messageCredits).toBe(2500);
-    expect(PUBLIC_PLANS.pro.messageCredits).toBe(12500);
-    expect(PUBLIC_PLANS.ultra.messageCredits).toBe(25000);
+    expect(PUBLIC_PLANS.starter.messageCredits).toBe(3100);
+    expect(PUBLIC_PLANS.pro.messageCredits).toBe(15500);
+    expect(PUBLIC_PLANS.ultra.messageCredits).toBe(31000);
 
-    expect(PUBLIC_PLANS.starter.callMinutes).toBe(25);
-    expect(PUBLIC_PLANS.pro.callMinutes).toBe(125);
-    expect(PUBLIC_PLANS.ultra.callMinutes).toBe(250);
+    expect(PUBLIC_PLANS.starter.callMinutes).toBe(22);
+    expect(PUBLIC_PLANS.pro.callMinutes).toBe(109);
+    expect(PUBLIC_PLANS.ultra.callMinutes).toBe(217);
+
+    expect(PUBLIC_PLANS.free.smsTexts).toBe(0);
+    expect(PUBLIC_PLANS.starter.smsTexts).toBe(100);
+    expect(PUBLIC_PLANS.pro.smsTexts).toBe(500);
+    expect(PUBLIC_PLANS.ultra.smsTexts).toBe(1000);
   });
 
   it('orders plans free -> ultra', () => {
@@ -36,15 +42,41 @@ describe('messageUsageCopy', () => {
     const copy = messageUsageCopy(
       {
         plan: 'starter',
-        message_credits_included: 2500,
+        message_credits_included: 3100,
         message_credits_used: 100,
-        message_credits_remaining: 2400,
+        message_credits_remaining: 3000,
         company_messaging_available: true,
       },
       'starter',
     );
-    expect(copy).toContain('2,500');
+    expect(copy).toContain('3,100');
     expect(copy).toContain('100');
+    expect(copy).not.toContain('$');
+  });
+});
+
+describe('bucketUsageCopy', () => {
+  it('free plan says not included', () => {
+    expect(bucketUsageCopy('SMS texts', 'texts', null, 'free')).toMatch(/not included/i);
+  });
+  it('paid plan shows monthly + weekly + 5h remainders and never dollars', () => {
+    const copy = bucketUsageCopy(
+      'SMS texts',
+      'texts',
+      {
+        included: 100,
+        used: 7,
+        remaining: 93,
+        remaining_now: 7,
+        window_5h_remaining: 7,
+        window_weekly_remaining: 18,
+        available: true,
+      },
+      'starter',
+    );
+    expect(copy).toContain('100');
+    expect(copy).toContain('18');
+    expect(copy).toContain('5h');
     expect(copy).not.toContain('$');
   });
 });

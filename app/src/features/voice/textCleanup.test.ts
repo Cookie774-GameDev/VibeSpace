@@ -97,13 +97,13 @@ describe('pullNewSpeechSegments', () => {
     expect(second.segments).toEqual(['How are you today?']);
   });
 
-  it('starts speaking early phrase chunks before the sentence ends', () => {
+  it('waits for a full sentence before speaking streamed partials', () => {
     const first = pullNewSpeechSegments('Today is', 0);
-    expect(first.segments).toEqual(['Today is']);
+    expect(first.segments).toEqual([]);
     const second = pullNewSpeechSegments('Today is Thursday', first.nextSpokenCleanLength);
     expect(second.segments).toEqual([]);
     const third = pullNewSpeechSegments('Today is Thursday.', first.nextSpokenCleanLength);
-    expect(third.segments).toEqual(['Thursday.']);
+    expect(third.segments).toEqual(['Today is Thursday.']);
   });
 });
 
@@ -111,7 +111,7 @@ describe('pullRemainingSpeech', () => {
   it('speaks the tail without a closing delimiter at stream end', () => {
     const partial = pullNewSpeechSegments('Hello there. Still going', 0);
     const tail = pullRemainingSpeech('Hello there. Still going strong', partial.nextSpokenCleanLength);
-    expect(tail.remainder).toBe('strong');
+    expect(tail.remainder).toBe('Still going strong');
   });
 });
 

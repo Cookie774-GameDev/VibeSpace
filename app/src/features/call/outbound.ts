@@ -73,13 +73,22 @@ export function fireOutboundCall(reason: OutboundReason, context?: OutboundConte
   );
 }
 
+/**
+ * Sends an SMS to the user's own verified phone number through the metered
+ * `sms-send` Supabase edge function (the canonical billed SMS path — the old
+ * phone-jarvis cloud `/outbound/message` route bypassed billing).
+ *
+ * The server resolves the destination from phone_settings server-side; no
+ * phone number ever leaves the client. Budget windows (monthly/weekly/5h)
+ * are enforced server-side and surface as friendly errors here.
+ */
 export async function sendOutboundMessage(
   message: string,
-  reason: OutboundReason = 'manual',
-  context?: OutboundContext,
+  _reason: OutboundReason = 'manual',
+  _context?: OutboundContext,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const cloudUrl = callCloudUrl();
-  if (!cloudUrl) return { ok: false, error: 'Phone cloud is not configured.' };
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  if (!supabaseUrl) return { ok: false, error: 'VibeSpace Cloud is not configured in this build.' };
 
   const { getSupabaseClient } = await import('@/lib/supabase/client');
   const supa = getSupabaseClient();
@@ -89,17 +98,27 @@ export async function sendOutboundMessage(
   const jwt = data.session?.access_token;
   if (!jwt) return { ok: false, error: 'Sign in before sending phone messages.' };
 
-  const r = await fetch(`${cloudUrl}/outbound/message`, {
+  const r = await fetch(`${supabaseUrl}/functions/v1/sms-send`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${jwt}`,
     },
-    body: JSON.stringify({ reason, message, context: context ?? {} }),
+    body: JSON.stringify({ message }),
   });
   if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    return { ok: false, error: text || r.statusText };
+    const body = (await r.json().catch(() => null)) as { error?: string; reason?: string } | null;
+    const code = body?.reason ?? body?.error ?? '';
+    const friendly: Record<string, string> = {
+      no_phone_number: 'Add your phone number in Settings → Phone & Voice first.',
+      invalid_phone_number: 'Your saved phone number is not a valid international (+) number.',
+      sms_not_configured: 'SMS service is not configured yet. Try again later.',
+      budget_exceeded: 'You have used all of your SMS texts for this cycle.',
+      window_5h_exceeded: 'SMS limit for this 5-hour window reached. Try again later.',
+      window_weekly_exceeded: 'SMS limit for this week reached. Try again later.',
+      rate_limited: 'Too many texts at once — wait a minute and try again.',
+    };
+    return { ok: false, error: friendly[code] ?? (body?.error || r.statusText) };
   }
   return { ok: true };
 }

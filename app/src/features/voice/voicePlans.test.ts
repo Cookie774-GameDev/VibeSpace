@@ -15,16 +15,16 @@ describe('VOICE_PLANS cost model', () => {
   it('uses the shared call/voice budget (no separate voice-only budget)', () => {
     expect(COST_PER_SECOND_USD).toBe(0.00025);
     expect(VOICE_PLANS.free.callVoiceBudgetUsd).toBe(0);
-    expect(VOICE_PLANS.starter.callVoiceBudgetUsd).toBe(2.5);
-    expect(VOICE_PLANS.pro.callVoiceBudgetUsd).toBe(12.5);
-    expect(VOICE_PLANS.ultra.callVoiceBudgetUsd).toBe(25);
+    expect(VOICE_PLANS.starter.callVoiceBudgetUsd).toBe(2.17);
+    expect(VOICE_PLANS.pro.callVoiceBudgetUsd).toBe(10.85);
+    expect(VOICE_PLANS.ultra.callVoiceBudgetUsd).toBe(21.7);
   });
 
   it('derives max cloud seconds from the shared budget', () => {
     expect(VOICE_PLANS.free.cloudSecondsMax).toBe(0);
-    expect(VOICE_PLANS.starter.cloudSecondsMax).toBe(10000); // $2.50 / 0.00025
-    expect(VOICE_PLANS.pro.cloudSecondsMax).toBe(50000); // $12.50
-    expect(VOICE_PLANS.ultra.cloudSecondsMax).toBe(100000); // $25
+    expect(VOICE_PLANS.starter.cloudSecondsMax).toBe(8680); // $2.17 / 0.00025
+    expect(VOICE_PLANS.pro.cloudSecondsMax).toBe(43400); // $10.85
+    expect(VOICE_PLANS.ultra.cloudSecondsMax).toBe(86800); // $21.70
   });
 
   it('has the correct sticker prices', () => {

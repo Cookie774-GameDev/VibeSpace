@@ -2,6 +2,7 @@ import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { PERSONAS } from './personas';
 import { DEFAULT_VOICE_PRESET, getVoiceProfile } from './voiceProfiles';
+import { resolveSpeechRate } from './speechRate';
 
 export const VOICE_PREVIEW_TEXT = "Hi, how's your day doing? Jarvis is online.";
 export const VOICE_ACKNOWLEDGEMENT_TEXT = 'Ready.';
@@ -220,11 +221,8 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   const utterance = new SpeechSynthesisUtterance(trimmed);
   utterance.voice = selectedVoice ?? null;
   utterance.lang = options.lang ?? selectedVoice?.lang ?? 'en-US';
-  utterance.rate = clamp(
-    options.rate ?? (useVoiceProfile ? profile.rate : personaVoice?.rate) ?? 1,
-    0.7,
-    1.3,
-  );
+  const baseRate = options.rate ?? (useVoiceProfile ? profile.rate : personaVoice?.rate) ?? 1.22;
+  utterance.rate = clamp(resolveSpeechRate(baseRate), 0.85, 2);
   utterance.pitch = clamp(
     options.pitch ?? (useVoiceProfile ? profile.pitch : personaVoice?.pitch) ?? 1,
     0.6,
@@ -233,7 +231,7 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   utterance.volume = clamp(options.volume ?? 1, 0, 1);
 
   await new Promise<void>((resolve, reject) => {
-    const fallbackMs = Math.min(30_000, Math.max(2_500, trimmed.length * 90));
+    const fallbackMs = Math.min(20_000, Math.max(1_800, trimmed.length * 55));
     let settled = false;
     let timeout = 0;
     let keepAlive = 0;

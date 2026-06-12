@@ -4,7 +4,7 @@
  */
 import { isTauri } from '@/lib/utils';
 
-const VOICE_KEY_PROVIDERS = ['deepgram_voice'] as const;
+const VOICE_KEY_PROVIDERS = ['deepgram_voice', 'openai_voice'] as const;
 export type VoiceKeyProvider = (typeof VOICE_KEY_PROVIDERS)[number];
 
 const browserVault = new Map<VoiceKeyProvider, string>();
@@ -38,4 +38,8 @@ export async function getVoiceApiKey(provider: VoiceKeyProvider): Promise<string
 
 export async function getDeepgramVoiceKey(): Promise<string | undefined> {
   return getVoiceApiKey('deepgram_voice');
+}
+
+export async function getOpenAIVoiceKey(): Promise<string | undefined> {
+  return getVoiceApiKey('openai_voice');
 }

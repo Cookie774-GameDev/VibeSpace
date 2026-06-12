@@ -50,11 +50,18 @@ const TENDRIL_SEEDS = [
   { angle: 247, lenScale: 0.75, durationBase: 4.3, widthBase: 1.5 },
 ];
 
-function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number }) {
+const SymbioteOrb = React.memo(function SymbioteOrb({
+  state,
+  size = 40,
+}: {
+  state: VoiceState;
+  size?: number;
+}) {
   const isSpeaking = state === 'speaking';
   const isListening = state === 'listening';
   const isThinking = state === 'thinking';
   const active = isSpeaking || isListening || isThinking;
+  const showTendrils = active;
 
   const coreSize = size * 0.65;
   const half = size / 2;
@@ -87,8 +94,9 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
         }}
       />
 
-      {/* Symbiote tendrils */}
-      {TENDRIL_SEEDS.map((seed, i) => {
+      {/* Symbiote tendrils — only while active to keep the rest of the app responsive */}
+      {showTendrils
+        ? TENDRIL_SEEDS.map((seed, i) => {
         const rad = (seed.angle * Math.PI) / 180;
         const maxLen = half * seed.lenScale * (isSpeaking ? 2.2 : isListening ? 1.2 : isThinking ? 0.7 : 0.35);
         const duration = seed.durationBase * (isSpeaking ? 0.22 : isListening ? 0.55 : isThinking ? 0.7 : 1);
@@ -140,7 +148,8 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
             }}
           />
         );
-      })}
+      })
+        : null}
 
       {/* Core orb - morphing border-radius for organic shape */}
       <motion.div
@@ -182,7 +191,7 @@ function SymbioteOrb({ state, size = 40 }: { state: VoiceState; size?: number })
       </motion.div>
     </div>
   );
-}
+});
 
 export function VoiceModal() {
   const open = useUIStore((state) => state.voiceModalOpen);
@@ -190,7 +199,8 @@ export function VoiceModal() {
   const activeChatId = useUIStore((state) => state.activeChatId);
   const voiceAutoListenOnOpen = useAuthStore((state) => state.voiceAutoListenOnOpen);
   const voiceSilenceDelayMs = useAuthStore((state) => state.voiceSilenceDelayMs);
-  const messages = useChatMessages(open ? activeChatId : null);
+  const [showTranscript, setShowTranscript] = React.useState(false);
+  const messages = useChatMessages(open && showTranscript ? activeChatId : null);
   const state = useVoiceStore((voice) => voice.state);
   const partial = useVoiceStore((voice) => voice.partialTranscript);
   const persona = useVoiceStore((voice) => voice.persona);
@@ -202,7 +212,6 @@ export function VoiceModal() {
   const speakingRef = React.useRef(false);
   const listeningArmedRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
-  const [showTranscript, setShowTranscript] = React.useState(false);
 
   // Drag state — primary-button drag on the panel chrome, clamped to viewport
   const dragX = useMotionValue(0);
@@ -416,12 +425,16 @@ export function VoiceModal() {
   }, [open, startListening, voiceAutoListenOnOpen, voiceSilenceDelayMs]);
 
   React.useEffect(() => {
-    if (!open || !navigator.mediaDevices?.getUserMedia) return;
+    if (!open || state !== 'listening' || !navigator.mediaDevices?.getUserMedia) {
+      levelRef.current = 0;
+      return;
+    }
 
     let disposed = false;
     let stream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
     let animationFrame = 0;
+    let lastSample = 0;
 
     void navigator.mediaDevices
       .getUserMedia({
@@ -440,16 +453,20 @@ export function VoiceModal() {
         audioContext = new AudioCtor();
         const source = audioContext.createMediaStreamSource(stream);
         const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.72;
+        analyser.fftSize = 128;
+        analyser.smoothingTimeConstant = 0.78;
         source.connect(analyser);
         const data = new Uint8Array(analyser.frequencyBinCount);
 
-        const update = () => {
-          analyser.getByteFrequencyData(data);
-          let sum = 0;
-          for (const value of data) sum += value;
-          levelRef.current = Math.min(1, sum / Math.max(1, data.length) / 40);
+        const update = (time: number) => {
+          if (disposed) return;
+          if (time - lastSample >= 48) {
+            analyser.getByteFrequencyData(data);
+            let sum = 0;
+            for (const value of data) sum += value;
+            levelRef.current = Math.min(1, sum / Math.max(1, data.length) / 40);
+            lastSample = time;
+          }
           animationFrame = window.requestAnimationFrame(update);
         };
         animationFrame = window.requestAnimationFrame(update);
@@ -465,7 +482,7 @@ export function VoiceModal() {
       if (audioContext) void audioContext.close().catch(() => undefined);
       levelRef.current = 0;
     };
-  }, [open]);
+  }, [open, state]);
 
   React.useEffect(() => {
     const node = transcriptRef.current;

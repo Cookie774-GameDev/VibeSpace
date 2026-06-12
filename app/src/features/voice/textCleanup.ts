@@ -16,7 +16,7 @@ export interface CleanupOptions {
   maxChunkChars?: number;
 }
 
-const DEFAULT_MAX_CHUNK = 400;
+const DEFAULT_MAX_CHUNK = 520;
 
 /** Strip a fenced code block down to a short spoken summary (or keep it). */
 function handleCodeBlocks(text: string, readCode: boolean): string {
@@ -147,9 +147,7 @@ export function prepareForSpeech(
   return chunkText(cleaned, options.maxChunkChars ?? DEFAULT_MAX_CHUNK);
 }
 
-const MIN_TWO_WORD_CHARS = 8;
-
-/** Completed sentences and early phrase chunks from streamed assistant text. */
+/** Completed sentences from streamed assistant text (no tiny partial chunks). */
 export function pullNewSpeechSegments(
   rawAccumulated: string,
   spokenCleanLength: number,
@@ -168,30 +166,9 @@ export function pullNewSpeechSegments(
   let match: RegExpExecArray | null;
   while ((match = sentenceRe.exec(tail)) !== null) {
     const sentence = match[0].trim();
-    if (sentence.length >= 6) {
+    if (sentence.length >= 4) {
       segments.push(sentence);
       advance = match.index + match[0].length;
-    }
-  }
-
-  const partialRaw = tail.slice(advance);
-  const partial = partialRaw.trimEnd();
-  if (partial.length > 0) {
-    const words = partial.split(/\s+/).filter(Boolean);
-    let phrase = '';
-    if (words.length >= 3) {
-      phrase = words.slice(0, -1).join(' ');
-    } else if (words.length === 2 && partial.length >= MIN_TWO_WORD_CHARS) {
-      phrase = partial;
-    }
-
-    if (phrase.length >= MIN_TWO_WORD_CHARS) {
-      const offset = partialRaw.indexOf(phrase);
-      if (offset >= 0) {
-        segments.push(phrase);
-        advance += offset + phrase.length;
-        while (advance < tail.length && /\s/.test(tail[advance]!)) advance += 1;
-      }
     }
   }
 

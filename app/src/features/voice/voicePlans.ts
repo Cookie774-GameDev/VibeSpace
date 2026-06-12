@@ -27,9 +27,9 @@ function seconds(budget: number): number {
 
 export const VOICE_PLANS: Record<VoicePlanId, VoicePlanInfo> = {
   free: { id: 'free', label: 'Free', priceUsd: 0, callVoiceBudgetUsd: 0, cloudSecondsMax: 0 },
-  starter: { id: 'starter', label: 'Starter', priceUsd: 10, callVoiceBudgetUsd: 2.5, cloudSecondsMax: seconds(2.5) },
-  pro: { id: 'pro', label: 'Pro', priceUsd: 50, callVoiceBudgetUsd: 12.5, cloudSecondsMax: seconds(12.5) },
-  ultra: { id: 'ultra', label: 'Ultra', priceUsd: 100, callVoiceBudgetUsd: 25, cloudSecondsMax: seconds(25) },
+  starter: { id: 'starter', label: 'Starter', priceUsd: 10, callVoiceBudgetUsd: 2.17, cloudSecondsMax: seconds(2.17) },
+  pro: { id: 'pro', label: 'Pro', priceUsd: 50, callVoiceBudgetUsd: 10.85, cloudSecondsMax: seconds(10.85) },
+  ultra: { id: 'ultra', label: 'Ultra', priceUsd: 100, callVoiceBudgetUsd: 21.7, cloudSecondsMax: seconds(21.7) },
 };
 
 // ─── Voice providers (independent of chat providers) ─────────────────────────

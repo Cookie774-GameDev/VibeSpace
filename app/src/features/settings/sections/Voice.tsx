@@ -9,7 +9,6 @@ import {
   HardDrive,
   Play,
   RefreshCw,
-  Volume2,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
 import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
@@ -22,8 +21,10 @@ import {
 } from '@/features/voice/voiceRouter';
 import { useAppAdmin } from '@/lib/admin';
 import { effectivePlan, planAllowsVoiceWithAdmin } from '@/lib/entitlements';
+import { getCombinedUsage } from '@/features/billing/planLimits';
 import {
   getDeepgramVoiceKey,
+  getOpenAIVoiceKey,
   setVoiceApiKey,
 } from '@/lib/security/voiceKeys';
 import { testDeepgramVoiceKey } from '@/features/voice/providers/deepgramSpeak';
@@ -77,6 +78,10 @@ export function Voice() {
   const [deepgramDraft, setDeepgramDraft] = useState('');
   const [deepgramConfigured, setDeepgramConfigured] = useState(false);
   const [deepgramTesting, setDeepgramTesting] = useState(false);
+  const [systemOpenAIDraft, setSystemOpenAIDraft] = useState('');
+  const [systemOpenAIConfigured, setSystemOpenAIConfigured] = useState(false);
+  const [systemDeepgramDraft, setSystemDeepgramDraft] = useState('');
+  const [subscriptionIncluded, setSubscriptionIncluded] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState<VoicePresetId | null>(null);
   const [localVoiceStatus, setLocalVoiceStatus] = useState<LocalVoiceStatus>('idle');
   const [localVoiceNames, setLocalVoiceNames] = useState<string[]>([]);
@@ -98,6 +103,12 @@ export function Voice() {
 
   useEffect(() => {
     void getDeepgramVoiceKey().then((key) => setDeepgramConfigured(Boolean(key)));
+    void getOpenAIVoiceKey().then((key) => setSystemOpenAIConfigured(Boolean(key)));
+    // Subscription status comes from the server usage endpoint; never trusted
+    // for gating (the edge functions enforce), display only.
+    void getCombinedUsage().then((u) => {
+      if (u) setSubscriptionIncluded(u.admin_unlimited || u.plan !== 'free');
+    });
   }, []);
 
   useEffect(() => {
@@ -150,6 +161,40 @@ export function Voice() {
       }
       toast.success('Deepgram connected', 'Jarvis will speak through your Deepgram account.');
       void warmVoiceEngine('deepgram');
+    } finally {
+      setDeepgramTesting(false);
+    }
+  }
+
+  async function saveSystemOpenAIKey() {
+    const trimmed = systemOpenAIDraft.trim();
+    if (!trimmed) {
+      toast.warning('Enter your OpenAI API key first.');
+      return;
+    }
+    await setVoiceApiKey('openai_voice', trimmed);
+    setSystemOpenAIConfigured(true);
+    setSystemOpenAIDraft('');
+    toast.success('OpenAI key saved', 'Stored in the OS keychain — never synced or logged.');
+  }
+
+  async function saveSystemDeepgramKey() {
+    const trimmed = systemDeepgramDraft.trim();
+    if (!trimmed) {
+      toast.warning('Enter your Deepgram API key first.');
+      return;
+    }
+    setDeepgramTesting(true);
+    try {
+      const ok = await testDeepgramVoiceKey(trimmed);
+      if (!ok) {
+        toast.error('Deepgram test failed', 'Check the key and try again.');
+        return;
+      }
+      await setVoiceApiKey('deepgram_voice', trimmed);
+      setDeepgramConfigured(true);
+      setSystemDeepgramDraft('');
+      toast.success('Deepgram connected', 'Stored in the OS keychain — never synced or logged.');
     } finally {
       setDeepgramTesting(false);
     }
@@ -292,15 +337,15 @@ export function Voice() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <header>
+    <div className="flex flex-col gap-8 max-w-4xl">
+      <header className="space-y-1">
         <h2 className="text-page-title text-foreground">Voice</h2>
-        <p className="text-secondary text-muted-foreground mt-1">
+        <p className="text-secondary text-muted-foreground">
           Spoken voice, persona, wake word, and microphone.
         </p>
       </header>
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-4">
         <div>
           <Label>Jarvis voice</Label>
           <p className="mt-1 text-metadata text-muted-foreground">
@@ -309,7 +354,7 @@ export function Voice() {
             require an API key. Premium cloud voices (OpenAI) unlock on a paid plan.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {FREE_VOICE_PRESETS.map((profile) => (
             <VoiceCard
               key={profile.id}
@@ -325,7 +370,7 @@ export function Voice() {
           ))}
         </div>
 
-        <div className="mt-1 flex max-w-xl items-start justify-between gap-4 rounded-md border border-border bg-panel p-3">
+        <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-panel p-4">
           <div className="flex flex-col gap-1">
             <Label htmlFor="speak-replies-toggle">Speak Jarvis replies</Label>
             <p className="text-metadata text-muted-foreground">
@@ -338,14 +383,14 @@ export function Voice() {
             onCheckedChange={setSpeakReplies}
           />
         </div>
-        <div className="flex max-w-xl flex-col gap-3">
+        <div className="flex flex-col gap-4">
           <div>
             <Label>Conversation mode</Label>
             <p className="mt-1 text-metadata text-muted-foreground">
               Choose whether Jarvis listens continuously or waits for you to tap the symbiote orb.
             </p>
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <VoiceConversationModeCard
               selected={voiceAutoListenOnOpen}
               title="Hands-free"
@@ -359,8 +404,8 @@ export function Voice() {
               onSelect={() => setVoiceAutoListenOnOpen(false)}
             />
           </div>
-          <div className="rounded-md border border-border bg-panel p-3">
-            <div className="flex items-center justify-between gap-3">
+          <div className="rounded-md border border-border bg-panel p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <Label htmlFor="voice-silence-delay">Pause before Jarvis responds</Label>
               <span className="text-metadata font-medium text-foreground">
                 {voiceSilenceDelayLabel(voiceSilenceDelayMs)}
@@ -387,7 +432,7 @@ export function Voice() {
         </div>
       </section>
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-4">
         <div>
           <Label>Voice engine</Label>
           <p className="mt-1 text-metadata text-muted-foreground">
@@ -395,17 +440,19 @@ export function Voice() {
             this device.
           </p>
         </div>
-        <div className="grid max-w-2xl grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <VoiceEngineCard
             engine="system"
             selected={voiceEngine === 'system'}
             title="System"
             description={
-              canUseSystemVoice
-                ? 'Best installed or enhanced voice'
-                : 'Paid plan required (Orbit+)'
+              subscriptionIncluded
+                ? 'Cloud voice · included with your plan'
+                : canUseSystemVoice
+                  ? 'Cloud voice · your OpenAI/Deepgram key'
+                  : 'Paid plan required (Orbit+)'
             }
-            icon={<Volume2 className="h-4 w-4" />}
+            icon={<Cloud className="h-4 w-4" />}
             disabled={!canUseSystemVoice}
             onSelect={() => chooseVoiceEngine('system')}
           />
@@ -436,16 +483,63 @@ export function Voice() {
             onSelect={() => chooseVoiceEngine('deepgram')}
           />
         </div>
+        {voiceEngine === 'system' ? (
+          <div className="rounded-md border border-border bg-panel p-4 flex flex-col gap-3">
+            {subscriptionIncluded ? (
+              <p className="text-metadata text-foreground">
+                <Cloud className="inline h-3.5 w-3.5 mr-1 text-accent-cyan" aria-hidden />
+                Cloud voice usage is included with your subscription. Adding your own keys below is
+                optional — they take priority and never count against your plan.
+              </p>
+            ) : (
+              <p className="text-metadata text-muted-foreground">
+                Bring your own OpenAI or Deepgram key for cloud voice. Keys stay in the OS keychain
+                — never in cloud sync or chat logs.
+              </p>
+            )}
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <Input
+                type="password"
+                className="font-mono w-full sm:min-w-[240px] sm:flex-1"
+                placeholder={systemOpenAIConfigured ? 'OpenAI key saved — paste to replace' : 'OpenAI API key'}
+                value={systemOpenAIDraft}
+                onChange={(event) => setSystemOpenAIDraft(event.target.value)}
+                autoComplete="off"
+              />
+              <Button type="button" size="sm" onClick={() => void saveSystemOpenAIKey()}>
+                {systemOpenAIConfigured ? 'Update OpenAI key' : 'Save OpenAI key'}
+              </Button>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <Input
+                type="password"
+                className="font-mono w-full sm:min-w-[240px] sm:flex-1"
+                placeholder={deepgramConfigured ? 'Deepgram key saved — paste to replace' : 'Deepgram API key'}
+                value={systemDeepgramDraft}
+                onChange={(event) => setSystemDeepgramDraft(event.target.value)}
+                autoComplete="off"
+              />
+              <Button
+                type="button"
+                size="sm"
+                disabled={deepgramTesting}
+                onClick={() => void saveSystemDeepgramKey()}
+              >
+                {deepgramTesting ? 'Testing…' : deepgramConfigured ? 'Update & test' : 'Connect Deepgram'}
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {voiceEngine === 'deepgram' ? (
-          <div className="max-w-xl rounded-md border border-border bg-panel p-3 flex flex-col gap-3">
+          <div className="rounded-md border border-border bg-panel p-4 flex flex-col gap-3">
             <p className="text-metadata text-muted-foreground">
               Uses your Deepgram credits directly. Keys stay in the OS keychain — never in cloud
               sync or chat logs.
             </p>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Input
                 type="password"
-                className="font-mono flex-1 min-w-[200px]"
+                className="font-mono w-full sm:min-w-[240px] sm:flex-1"
                 placeholder={deepgramConfigured ? 'Saved — paste to replace' : 'Deepgram API key'}
                 value={deepgramDraft}
                 onChange={(event) => setDeepgramDraft(event.target.value)}
@@ -480,9 +574,9 @@ export function Voice() {
           </div>
         ) : null}
         {voiceEngine === 'local' ? (
-          <div className="max-w-xl rounded-md border border-border bg-panel p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+          <div className="rounded-md border border-border bg-panel p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2">
                 <LocalVoiceStatusBadge status={localVoiceStatus} />
                 {localVoiceStatus === 'ready' ? (
                   <span className="text-metadata text-muted-foreground">
@@ -532,9 +626,9 @@ export function Voice() {
           </div>
         ) : null}
         {voiceEngine === 'kokoro' ? (
-          <div className="max-w-xl rounded-md border border-border bg-panel p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+          <div className="rounded-md border border-border bg-panel p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2">
                 <KokoroStatusBadge status={kokoroStatus} percent={kokoroPercent} />
                 <span className="text-metadata text-muted-foreground">
                   Kokoro-82M neural voice · ~82 MB · downloads once
@@ -583,7 +677,7 @@ export function Voice() {
 
       <Separator />
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-4">
         <div>
           <Label>Persona</Label>
           <p className="mt-1 text-metadata text-muted-foreground">
@@ -591,7 +685,7 @@ export function Voice() {
             spoken voice.
           </p>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {PERSONAS.map((p) => (
             <PersonaCard
               key={p.id}
@@ -605,8 +699,8 @@ export function Voice() {
 
       <Separator />
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3 max-w-md">
+      <section className="flex flex-col gap-4">
+        <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-panel p-4">
           <div className="flex flex-col gap-1">
             <Label htmlFor="wake-word-toggle">Wake word</Label>
             <p className="text-metadata text-muted-foreground">
@@ -620,7 +714,7 @@ export function Voice() {
 
       <Separator />
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-4">
         <Label>Microphone</Label>
         <div className="flex items-center gap-3">
           <Button
@@ -763,7 +857,7 @@ function VoiceConversationModeCard({
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        'relative flex min-h-[88px] flex-col items-start gap-1 rounded-md border bg-panel p-3 text-left transition-colors',
+        'relative flex min-h-[96px] flex-col items-start gap-1.5 rounded-md border bg-panel p-4 text-left transition-colors',
         'hover:bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         selected
           ? 'border-accent-cyan/50 shadow-[0_0_0_1px_hsl(var(--accent-cyan)/0.35)]'
@@ -798,7 +892,7 @@ function VoiceEngineCard({
       aria-pressed={selected}
       data-engine={engine}
       className={cn(
-        'flex items-start gap-3 rounded-md border bg-panel p-3 text-left transition-colors',
+        'flex min-h-[96px] items-start gap-3 rounded-md border bg-panel p-4 text-left transition-colors',
         'hover:bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         disabled && 'cursor-not-allowed opacity-60 hover:bg-panel',
         selected

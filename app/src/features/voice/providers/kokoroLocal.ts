@@ -12,6 +12,7 @@
  */
 import type { SpeakChunkOptions, VoiceProvider } from './types';
 import { VOICE_PRESETS } from '../voicePlans';
+import { resolveKokoroSpeed } from '../speechRate';
 import { playBase64Audio } from '../audioPlayback';
 
 const LOCAL_GEN_TIMEOUT_MS = 15_000;
@@ -78,7 +79,7 @@ class KokoroLocalProvider implements VoiceProvider {
       invoke<{ audio: string; mime: string }>('kokoro_speak', {
         text,
         voice: preset.kokoroVoice,
-        speed: preset.speed,
+        speed: resolveKokoroSpeed(preset.speed),
       }),
       LOCAL_GEN_TIMEOUT_MS,
     );

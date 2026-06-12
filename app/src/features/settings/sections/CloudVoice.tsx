@@ -16,12 +16,9 @@ import {
 import { TtsService, type VoiceUsageSnapshot } from '@/features/voice/TtsService';
 import { ModelManager, type DownloadProgress } from '@/features/voice/modelManager';
 import {
-  getMessageUsage,
-  getCallUsage,
-  messageUsageCopy,
-  callUsageCopy,
-  type MessageUsage,
-  type CallUsage,
+  getCombinedUsage,
+  bucketUsageCopy,
+  type CombinedUsage,
   type BillingPlanId,
 } from '@/features/billing/planLimits';
 
@@ -71,8 +68,7 @@ export function CloudVoice() {
     readPref<VoiceTtsPreset>(PRESET_PREF_KEY, 'jarvis'),
   );
   const [usage, setUsage] = useState<VoiceUsageSnapshot | null>(null);
-  const [msgUsage, setMsgUsage] = useState<MessageUsage | null>(null);
-  const [callUsageState, setCallUsageState] = useState<CallUsage | null>(null);
+  const [combined, setCombined] = useState<CombinedUsage | null>(null);
   const [notice, setNotice] = useState<string>('');
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
@@ -119,11 +115,10 @@ export function CloudVoice() {
     setUsage(u);
     if (!u) setNotice('Sign in to view cloud voice usage. Local Kokoro voice is always available.');
   }
-  async function onViewMessageUsage() {
-    setMsgUsage(await getMessageUsage());
-  }
-  async function onViewCallUsage() {
-    setCallUsageState(await getCallUsage());
+  async function onViewPlanUsage() {
+    const u = await getCombinedUsage();
+    setCombined(u);
+    if (!u) setNotice('Sign in to view plan usage. Local Kokoro voice is always available.');
   }
   async function onDownloadRepair() {
     setDownloading(true);
@@ -238,25 +233,34 @@ export function CloudVoice() {
         <Button type="button" variant="secondary" onClick={onViewUsage}>
           <Gauge className="h-4 w-4 mr-1.5" /> View Voice Usage
         </Button>
-        <Button type="button" variant="secondary" onClick={onViewMessageUsage}>
-          <Gauge className="h-4 w-4 mr-1.5" /> View Message Usage
-        </Button>
-        <Button type="button" variant="secondary" onClick={onViewCallUsage}>
-          <Gauge className="h-4 w-4 mr-1.5" /> View Call Usage
+        <Button type="button" variant="secondary" onClick={onViewPlanUsage}>
+          <Gauge className="h-4 w-4 mr-1.5" /> View Plan Usage
         </Button>
       </section>
 
-      {(msgUsage || callUsageState) && (
+      {combined && (
         <section className="rounded-md border border-border bg-panel p-3 space-y-1">
-          {msgUsage && (
+          {combined.admin_unlimited ? (
             <p className="text-secondary text-foreground">
-              {messageUsageCopy(msgUsage, (msgUsage.plan as BillingPlanId) ?? 'free')}
+              Admin account — no plan limits apply. Chat uses your own BYOK keys.
             </p>
-          )}
-          {callUsageState && (
-            <p className="text-secondary text-foreground">
-              {callUsageCopy(callUsageState, (callUsageState.plan as BillingPlanId) ?? 'free')}
-            </p>
+          ) : (
+            <>
+              <p className="text-secondary text-foreground">
+                {bucketUsageCopy('AI messages', 'credits', combined.message, combined.plan as BillingPlanId)}
+              </p>
+              <p className="text-secondary text-foreground">
+                {bucketUsageCopy('AI call minutes', 'min', combined.call, combined.plan as BillingPlanId)}
+              </p>
+              <p className="text-secondary text-foreground">
+                {bucketUsageCopy('SMS texts', 'texts', combined.sms, combined.plan as BillingPlanId)}
+              </p>
+              {combined.reset_date && (
+                <p className="text-metadata text-muted-foreground">
+                  Allowances reset {new Date(combined.reset_date).toLocaleDateString()} (no rollover).
+                </p>
+              )}
+            </>
           )}
           <p className="text-metadata text-muted-foreground">
             Local voice remains available regardless of company AI usage.

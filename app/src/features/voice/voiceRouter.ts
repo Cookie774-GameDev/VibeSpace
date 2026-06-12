@@ -17,6 +17,7 @@ import { kokoroLocalProvider } from './providers/kokoroLocal';
 import { playBase64Audio } from './audioPlayback';
 import { ModelManager } from './modelManager';
 import { VOICE_PRESETS } from './voicePlans';
+import { resolveKokoroSpeed } from './speechRate';
 import { TtsService } from './TtsService';
 import { deepgramTtsProvider } from './providers/deepgramTts';
 import type { StreamingVoiceSession } from './streamingVoice';
@@ -60,7 +61,7 @@ async function synthesizeKokoroPhrase(
   return invoke<{ audio: string; mime: string }>('kokoro_speak', {
     text,
     voice: voicePreset.kokoroVoice,
-    speed: voicePreset.speed,
+    speed: resolveKokoroSpeed(voicePreset.speed),
   });
 }
 

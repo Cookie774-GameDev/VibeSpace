@@ -104,13 +104,13 @@ const FREE: PlanDef = {
 const STARTER: PlanDef = {
   id: 'starter',
   label: 'Orbit',
-  priceUsd: 5,
+  priceUsd: 10,
   tagline: 'Voice & sync · zero friction',
   features: [
     'Everything in Free',
-    'Voice modal — talk to Jarvis in-app (unlimited)',
-    'Jarvis Call — outbound phone calls (60 min/mo included)',
-    'Hosted Gemini Flash Lite & Flash — no key needed',
+    '3,100 hosted AI message credits / mo',
+    'Jarvis Call — outbound phone calls (22 min/mo included)',
+    'SMS to your phone (~100 texts/mo included)',
     'Cloud sync for chats and memories across devices',
     'Smart reminders, schedule notifications',
   ],
@@ -118,7 +118,7 @@ const STARTER: PlanDef = {
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
   ],
-  voiceMinutesPerMonth: 60,
+  voiceMinutesPerMonth: 22,
   jarvisCall: true,
   cloudSync: true,
   toolPublishing: false,
@@ -128,14 +128,13 @@ const STARTER: PlanDef = {
 const PRO: PlanDef = {
   id: 'pro',
   label: 'Nova',
-  priceUsd: 20,
+  priceUsd: 50,
   tagline: 'Premium firepower · every frontier model',
   features: [
     'Everything in Starter',
-    'Hosted Gemini 2.5 Pro',
-    'Hosted Claude 3.5 Sonnet (1.5M tokens / mo)',
-    'Hosted GPT-4o (300K tokens / mo)',
-    'Jarvis Call — 300 min / mo',
+    '15,500 hosted AI message credits / mo',
+    'Jarvis Call — 109 min / mo',
+    'SMS to your phone (~500 texts/mo included)',
     'Publish custom tools and agents to your account',
     'Priority routing — no rate-limit pressure',
   ],
@@ -146,7 +145,7 @@ const PRO: PlanDef = {
     'claude-3-5-sonnet-latest',
     'gpt-4o',
   ],
-  voiceMinutesPerMonth: 300,
+  voiceMinutesPerMonth: 109,
   jarvisCall: true,
   cloudSync: true,
   toolPublishing: true,
@@ -160,10 +159,9 @@ const ULTRA: PlanDef = {
   tagline: 'Beyond limits · the entire universe unlocked',
   features: [
     'Everything in Pro',
-    'Hosted Claude 3.5 Opus (200K tokens / mo)',
-    'Hosted GPT-4o (1M tokens / mo)',
-    'Hosted Claude 3.5 Sonnet (5M tokens / mo)',
-    'Jarvis Call — unlimited',
+    '31,000 hosted AI message credits / mo',
+    'Jarvis Call — 217 min / mo',
+    'SMS to your phone (~1,000 texts/mo included)',
     'Early access to new providers and models',
     'Dedicated rate-limit pool · direct support email',
   ],
@@ -177,7 +175,7 @@ const ULTRA: PlanDef = {
     'o1',
     'o1-mini',
   ],
-  voiceMinutesPerMonth: Infinity,
+  voiceMinutesPerMonth: 217,
   jarvisCall: true,
   cloudSync: true,
   toolPublishing: true,
@@ -226,7 +224,7 @@ export function planAllowsVoice(plan: PlanId): boolean {
   return PLANS[plan].voiceMinutesPerMonth > 0;
 }
 
-/** Voice minutes included per month. `Infinity` for Ultra. */
+/** Voice/call minutes included per month. */
 export function planVoiceQuota(plan: PlanId): number {
   return PLANS[plan].voiceMinutesPerMonth;
 }

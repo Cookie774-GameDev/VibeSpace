@@ -43,9 +43,8 @@ export class StreamingVoiceSession {
     );
     if (segments.length === 0) return;
     this.spokenCleanLength = nextSpokenCleanLength;
-    for (const segment of segments) {
-      this.enqueue(segment);
-    }
+    const batch = segments.join(' ').trim();
+    if (batch) this.enqueue(batch);
   }
 
   async onComplete(finalRaw: string): Promise<void> {
