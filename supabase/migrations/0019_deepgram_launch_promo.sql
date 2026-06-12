@@ -1,7 +1,7 @@
 -- =============================================================================
--- 0019_deepgram_launch_promo: $6k Deepgram credit launch promotion
+-- 0019_deepgram_launch_promo: $1k Deepgram credit launch promotion
 -- =============================================================================
--- One-time per-user Deepgram cloud voice allowance drawn from a shared $6,000
+-- One-time per-user Deepgram cloud voice allowance drawn from a shared $1,000
 -- company pool. Free users get ~1 minute; paid tiers get more. Enforced only
 -- server-side via reserve_deepgram_promo / settle_deepgram_promo.
 --
@@ -12,10 +12,10 @@
 create table if not exists public.deepgram_promo_pool (
   id              smallint primary key default 1 check (id = 1),
   name            text not null default 'launch_deepgram_2026',
-  budget_usd      numeric not null default 6000,
+  budget_usd      numeric not null default 1000,
   used_usd        numeric not null default 0,
   cost_per_second numeric not null default 0.0001875, -- Aura-1 ~$0.01125/min
-  pause_at_usd    numeric not null default 5400,     -- 90% kill switch
+  pause_at_usd    numeric not null default 900,       -- 90% kill switch
   active          boolean not null default true,
   starts_at       timestamptz not null default now(),
   ends_at         timestamptz,                        -- null = until pool exhausted
