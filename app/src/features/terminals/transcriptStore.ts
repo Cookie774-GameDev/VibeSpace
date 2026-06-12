@@ -295,6 +295,29 @@ export function pruneSessions(sessions: Record<string, SessionTranscript>): Reco
   return pruned;
 }
 
+/**
+ * Cheap count-based eviction for the hot store paths. Unlike
+ * `pruneSessions` this never JSON-serializes the payload — it only
+ * sorts by recency and drops the oldest entries past the cap. The
+ * expensive total-byte enforcement (which requires a full
+ * `JSON.stringify`) happens once per debounced storage flush instead
+ * of on every PTY chunk; running it per-chunk pegged the main thread
+ * whenever several panes streamed output at once (the post-startup
+ * lag with a full 10-pane grid).
+ */
+function enforceSessionCount(
+  sessions: Record<string, SessionTranscript>,
+): Record<string, SessionTranscript> {
+  const ids = Object.keys(sessions);
+  if (ids.length <= MAX_PERSISTED_SESSIONS) return sessions;
+  const sorted = Object.values(sessions).sort((a, b) => b.lastWriteAt - a.lastWriteAt);
+  const next: Record<string, SessionTranscript> = {};
+  for (const s of sorted.slice(0, MAX_PERSISTED_SESSIONS)) {
+    next[s.sessionId] = s;
+  }
+  return next;
+}
+
 const pendingStorageWrites = new Map<string, string>();
 let transcriptStorageTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -365,7 +388,9 @@ export function flushTranscriptStorage(): void {
     transcriptStorageTimer = null;
   }
   try {
-    const sessions = useTerminalTranscriptStore.getState().sessions;
+    // Full prune (count + per-session + total-byte caps) runs here, once
+    // per debounced flush, instead of on every appendOutput call.
+    const sessions = pruneSessions({ ...useTerminalTranscriptStore.getState().sessions });
     const serialized = JSON.stringify({ sessions });
     const isEmpty = Object.keys(sessions).length === 0;
     const current = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY);
@@ -436,7 +461,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
               bytesSeen: existing?.bytesSeen ?? 0,
             },
           };
-          return { sessions: pruneSessions(nextSessions) };
+          return { sessions: enforceSessionCount(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -449,7 +474,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
             ...state.sessions,
             [sessionId]: { ...cur, agentSlug },
           };
-          return { sessions: pruneSessions(nextSessions) };
+          return { sessions: nextSessions };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -470,7 +495,10 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
               lastWriteAt: Date.now(),
             },
           };
-          return { sessions: pruneSessions(nextSessions) };
+          // Hot path (fires on every PTY chunk): per-session bounding is
+          // already handled by appendBounded; the expensive full prune
+          // happens in the debounced storage flush.
+          return { sessions: nextSessions };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -487,7 +515,8 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
               lastWriteAt: Date.now(),
             },
           };
-          return { sessions: pruneSessions(nextSessions) };
+          // Hot path (fires on every keystroke): no pruning here.
+          return { sessions: nextSessions };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -497,7 +526,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
           if (!state.sessions[sessionId]) return {};
           const next = { ...state.sessions };
           delete next[sessionId];
-          return { sessions: pruneSessions(next) };
+          return { sessions: next };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -513,7 +542,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
             lastWriteAt: Date.now(),
           };
           delete nextSessions[oldSessionId];
-          return { sessions: pruneSessions(nextSessions) };
+          return { sessions: enforceSessionCount(nextSessions) };
         });
         scheduleTranscriptStorageFlush();
       },
@@ -534,7 +563,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
               lastWriteAt: Date.now(),
             },
           };
-          return { sessions: pruneSessions(nextSessions) };
+          return { sessions: nextSessions };
         });
         scheduleTranscriptStorageFlush();
       },

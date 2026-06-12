@@ -421,7 +421,7 @@ export function startRuntimeListener(
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     const voiceSettings = useAuthStore.getState();
     let streamingVoice: StreamingVoiceSession | null = null;
-    const shouldSpeakReply = Boolean(detail.speakReply || voiceSettings.speakReplies);
+    const shouldSpeakReply = detail.speakReply === true;
     if (shouldSpeakReply) {
       streamingVoice = createStreamingVoiceSession({
         voiceEngine: voiceSettings.voiceEngine,

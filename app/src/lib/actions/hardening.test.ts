@@ -23,6 +23,7 @@ vi.mock('@/components/ui/toast', () => ({
 
 import { runAction } from '@/lib/actions/runner';
 import { useToolStore } from '@/features/tools/toolStore';
+import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import { useUIStore } from '@/stores/ui';
 import { useTerminalCommandQueue } from '@/features/terminals/terminalCommandQueue';
 
@@ -168,6 +169,7 @@ describe('terminal targeted command actions', () => {
     useToolStore.setState({ tools: [] });
     useTerminalCommandQueue.getState().clear();
     useUIStore.getState().setRoute('chat');
+    useTerminalTranscriptStore.getState().reset();
   });
 
   it('queues a command for a dragged terminal ref without opening a new pane', async () => {
@@ -243,6 +245,28 @@ describe('terminal targeted command actions', () => {
       command: 'git status',
       target: 'all',
     });
+  });
+
+  it('returns captured transcript for terminal.inspect', async () => {
+    useTerminalTranscriptStore.getState().registerSession('pty_inspect', {
+      paneId: 'pane_inspect',
+      command: 'npm test',
+    });
+    useTerminalTranscriptStore.getState().appendOutput('pty_inspect', 'PASS tests/unit\n');
+
+    const result = await runAction(
+      'terminal.inspect',
+      { paneId: 'pane_inspect', sessionId: 'pty_inspect' },
+      { source: 'ai' },
+      { emitToast: false },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const transcript = typeof result.data === 'string' ? result.data : '';
+      expect(transcript).toContain('PASS tests/unit');
+      expect(transcript).toContain('Never say you lack authorization');
+    }
   });
 });
 

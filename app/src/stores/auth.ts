@@ -156,7 +156,7 @@ export const useAuthStore = create<AuthState>()(
       personaPreset: 'jarvis',
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
-      speakReplies: true,
+      speakReplies: false,
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
       plan: 'free',
@@ -231,7 +231,7 @@ export const useAuthStore = create<AuthState>()(
         plan: s.plan,
         telemetryOptIn: s.telemetryOptIn,
       }),
-      version: 3,
+      version: 4,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -246,6 +246,10 @@ export const useAuthStore = create<AuthState>()(
           if (typeof state.voiceSilenceDelayMs !== 'number') {
             state.voiceSilenceDelayMs = VOICE_SILENCE_DELAY_MS_DEFAULT;
           }
+        }
+        if (fromVersion < 4) {
+          // Typed chat used to speak by default; voice panel is the primary speech surface now.
+          state.speakReplies = false;
         }
         return state;
       },

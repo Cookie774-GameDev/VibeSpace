@@ -67,6 +67,7 @@ import {
 } from '@/features/clock/clockStore';
 import type { ActionDef, ActionResult } from './types';
 import type { CustomToolStep } from '@/features/tools/toolStore';
+import { getExplicitTerminalBlock } from '@/lib/ai/context';
 import { PRESET_ACTIONS } from './registryPresets';
 
 /* --------------------------------------------------------------------------
@@ -397,6 +398,45 @@ const TERMINAL_ACTIONS: ActionDef[] = [
     run: async () => {
       navigateTo('terminal');
       return ok('Opened Terminals.');
+    },
+  },
+  {
+    id: 'terminal.inspect',
+    category: 'terminal',
+    label: 'Inspect terminal transcript',
+    description:
+      'Read the latest captured output from attached or referenced terminal pane(s). Use when the user asks to inspect a dragged terminal.',
+    icon: Eye,
+    params: [
+      {
+        key: 'paneId',
+        label: 'Pane id',
+        type: 'string',
+        help: 'Pane id from the attached-terminal context.',
+      },
+      {
+        key: 'sessionId',
+        label: 'Session id',
+        type: 'string',
+        help: 'PTY session id from the attached-terminal context.',
+      },
+      {
+        key: 'refsJson',
+        label: 'Refs JSON',
+        type: 'string',
+        help: 'Optional JSON object or array of terminal refs.',
+      },
+    ],
+    run: async (params) => {
+      const parsedRefs = readTerminalRefs(params);
+      if (!parsedRefs.ok) return fail(parsedRefs.error);
+      const block = getExplicitTerminalBlock(parsedRefs.refs);
+      if (!block.trim()) {
+        return fail(
+          'No terminal transcript captured yet. Ask the user to reopen the pane or wait for output.',
+        );
+      }
+      return ok('Terminal transcript captured.', block);
     },
   },
   {

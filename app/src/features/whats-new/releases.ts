@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.35';
+export const CURRENT_VERSION = '0.1.36';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,46 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.36',
+    date: '2026-06-12',
+    headline: 'VibeSpace branding, terminal polish, startup performance, and install splash',
+    summary:
+      'Regenerated app icons with persistent taskbar branding, fixed pixelated terminals via bundled fonts and WebGL rendering, faster cold start, reliable terminal clear, and animated VibeSpace install splash on download.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'VibeSpace icon suite regenerated across Windows, macOS, iOS, and Android; embedded branding re-applies on window show/focus.',
+          'GitHub install splash — three animated themes (Nebula, Aurora, Prism) play during download; default Aurora.',
+          'terminal.inspect action — drag a terminal into chat and Jarvis reads the captured transcript directly.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Terminal pixelation — self-hosted JetBrains Mono/Inter fonts (CSP-safe in production); WebGL renderer with device-pixel-ratio scaling.',
+          'Terminal clear — hold eraser → Confirm now wipes xterm, PTY, and persisted scrollback; PowerShell uses Clear-Host.',
+          'T-key font cycle wraps to Settings → Appearance default size instead of hardcoded 10px.',
+          'Chat terminal drop uses jarvis:terminal:attach so inspect/summarize works.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Cold-start performance — deferred non-critical store hydration and notification wiring.',
+          'Font load gate before xterm open prevents overlapping glyphs in multi-pane grids.',
+          'Icon tooling — crop-app-icon.py, sync-public-icons.mjs, npm run icons:generate.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets VibeSpace-0.1.36-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.35',
     date: '2026-06-12',

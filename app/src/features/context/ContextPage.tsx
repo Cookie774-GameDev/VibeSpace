@@ -261,8 +261,12 @@ export function ContextPage() {
       setSelectedId(PROJECT_ROOT_NODE_ID);
       setMapFlash(true);
       window.setTimeout(() => setMapFlash(false), 1250);
-      toast.success('Context map ready', `${generated.fileCount} files mapped with ${shortModel(generated.model)}.`);
-      void notifyDone('contextMaps', 'Context map ready', `${generated.fileCount} files mapped with ${shortModel(generated.model)}.`);
+      const contextBody = `${generated.fileCount} files mapped with ${shortModel(generated.model)}.`;
+      const notifyState = useUIStore.getState();
+      if (!notifyState.notificationMaster || !notifyState.doneNotifications.contextMaps) {
+        toast.success('Context map ready', contextBody);
+      }
+      void notifyDone('contextMaps', 'Context map ready', contextBody);
     } catch (err) {
       toast.error('Context map creation failed', err instanceof Error ? err.message : 'Unknown error');
       setStatus('Generation failed.');

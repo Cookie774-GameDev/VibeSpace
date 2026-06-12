@@ -103,7 +103,7 @@ export function Notifications() {
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => void notifyDone('jarvis', 'Jarvis done', 'Notification settings are working.')}
+          onClick={() => void notifyDone('jarvis', 'Jarvis done', 'Notification settings are working.', { allowFallbackToast: true })}
           disabled={!notificationMaster || !doneNotifications.jarvis}
         >
           Send Test

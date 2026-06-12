@@ -61,7 +61,7 @@ export function ChatView() {
           if (payload.kind === 'context') {
             window.dispatchEvent(new CustomEvent('jarvis:context:attach', { detail: { raw: payload.raw, chatId: activeChatId } }));
           } else if (payload.kind === 'terminal') {
-            window.dispatchEvent(new CustomEvent('jarvis:context:attach', { detail: { raw: payload.raw, chatId: activeChatId } }));
+            window.dispatchEvent(new CustomEvent('jarvis:terminal:attach', { detail: { raw: payload.raw, chatId: activeChatId } }));
           } else {
             window.dispatchEvent(new CustomEvent('jarvis:file:attach', { detail: { path: payload.path, chatId: activeChatId } }));
           }

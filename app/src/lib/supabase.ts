@@ -62,7 +62,7 @@ export function getSupabaseClient(): SupabaseClient | null {
       },
       global: {
         headers: {
-          'x-client-info': 'vibespace-desktop/0.1.35',
+          'x-client-info': 'vibespace-desktop/0.1.36',
         },
       },
     });

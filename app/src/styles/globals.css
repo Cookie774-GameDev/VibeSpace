@@ -1,4 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Fonts are self-hosted via @fontsource imports in main.tsx. The old
+ * fonts.googleapis.com @import was blocked by the production CSP
+ * (style-src 'self'), so installed builds silently lost JetBrains Mono /
+ * Fraunces / Plus Jakarta Sans and fell back to system fonts. */
 
 @tailwind base;
 @tailwind components;

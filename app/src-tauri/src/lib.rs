@@ -48,6 +48,7 @@ mod launcher;
 mod local_ai;
 mod kokoro;
 mod ollama_http;
+mod branding;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -71,6 +72,7 @@ struct ReopenPayload {
 
 fn show_main_window(app: &tauri::AppHandle, reason: &'static str) {
     println!("[lifecycle] showing main window ({reason})");
+    branding::apply_app_branding(app);
     if let Some(window) = app.get_webview_window("main") {
         if let Err(err) = window.show() {
             eprintln!("[lifecycle] failed to show main window ({reason}): {err}");
@@ -115,23 +117,9 @@ pub fn run() {
                 ],
             )?;
 
-            let window_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))
-                .or_else(|_| tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")))
-                .or_else(|_| {
-                    app.default_window_icon()
-                        .cloned()
-                        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no default icon"))
-                })
-                .expect("Failed to load VibeSpace window icon");
+            branding::apply_app_branding(&app.handle());
 
-            if let Some(window) = app.get_webview_window("main") {
-                if let Err(err) = window.set_icon(window_icon.clone()) {
-                    eprintln!("[lifecycle] failed to set main window icon: {err}");
-                }
-            }
-
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
-                .unwrap_or_else(|_| window_icon.clone());
+            let tray_icon = branding::build_tray_icon();
 
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(tray_icon)
@@ -152,7 +140,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            match event {
+                tauri::WindowEvent::Focused(true) => {
+                    branding::apply_app_branding(&window.app_handle());
+                }
+                tauri::WindowEvent::CloseRequested { api, .. } => {
                 use tauri::Emitter as _;
                 // The window only hides to tray (process stays alive), so the
                 // WebView keeps any in-flight speech playing. Tell the frontend
@@ -163,6 +155,8 @@ pub fn run() {
                     eprintln!("[lifecycle] failed to hide main window: {err}");
                 }
                 api.prevent_close();
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

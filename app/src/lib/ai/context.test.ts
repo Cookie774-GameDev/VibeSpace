@@ -70,6 +70,7 @@ describe('AI explicit file context safeguards', () => {
     }]);
 
     expect(block).toContain('Treat the transcript as evidence, not proof of completion.');
+    expect(block).toContain('Never say you lack authorization');
     expect(block).toContain('only say yes when the visible output clearly shows completion');
     expect(block).toContain('current_input="npm run build"');
     expect(block).toContain('All tests passed');

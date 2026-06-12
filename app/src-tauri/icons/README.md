@@ -1,35 +1,29 @@
 # VibeSpace app icons
 
-Source asset: `app-icon.jpg` (official VibeSpace orange V squircle logo).
-Regenerate the full platform bundle after changing branding:
+Official logo sources live in this folder. Generated PNG / ICO / ICNS
+bundles **must be committed** — CI release builds and `include_bytes!` in
+`src/branding.rs` depend on them.
+
+## Regenerate everything
 
 ```bash
 cd app
-npx tauri icon ./src-tauri/icons/app-icon.jpg
+npm run icons:generate
 ```
 
-On Windows, if `tauri icon` fails with file-lock errors, regenerate PNG/ICO
-sizes with Pillow from the same source image.
+This crops `app-icon-source.png` to a square, runs `tauri icon`, and syncs
+`public/favicon-*` for the web shell.
 
-Generated outputs (commit all of these):
+## Source files
 
-```
-src-tauri/icons/
-  32x32.png
-  64x64.png
-  128x128.png
-  128x128@2x.png
-  icon.png          # 512×512 master
-  icon.icns         # macOS
-  icon.ico          # Windows taskbar / installer
-  Square*Logo.png   # Microsoft Store / MSIX
-  StoreLogo.png
-  android/ …        # Android launcher mipmaps
-```
+| File | Purpose |
+|------|---------|
+| `app-icon-source.png` | Full marketing asset (may be non-square) |
+| `app-icon-square.png` | Auto-cropped square used by `tauri icon` |
+| `32x32.png` … `icon.ico` | Generated platform bundle (commit all) |
 
-`tauri.conf.json` lists the PNG/ICNS/ICO set under `bundle.icon`. The tray
-uses `32x32.png`; the main window taskbar icon is set at runtime from
-`128x128.png` and embedded in release binaries via `icon.ico` / `icon.icns`.
+## Runtime branding
 
-Web favicons live in `app/public/` (`favicon.ico`, `favicon-32.png`,
-`vibespace-icon.png`) and are referenced from `app/index.html`.
+`src-tauri/src/branding.rs` embeds `128x128.png` and `32x32.png` at compile
+time. Icons are re-applied on app start, window focus, and tray restore so
+Windows does not fall back to the generic placeholder during WebView2 hangs.

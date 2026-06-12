@@ -24,11 +24,22 @@ import { clearTerminalSession } from './terminalClear';
 export const FONT_SIZES = [10, 11, 12, 13, 14, 16, 18, 20] as const;
 export const DEFAULT_FONT_SIZE = 13;
 
-/** Return the next font size in the cycle. Treats unknown sizes as 13. */
-export function nextFontSize(current: number): number {
-  const idx = (FONT_SIZES as readonly number[]).indexOf(current);
-  if (idx < 0) return FONT_SIZES[1] ?? DEFAULT_FONT_SIZE;
-  return FONT_SIZES[(idx + 1) % FONT_SIZES.length] ?? DEFAULT_FONT_SIZE;
+/** Build the T-key cycle with the settings baseline as the wrap target (replaces fixed 10px). */
+export function buildFontSizeCycle(baseline: number): readonly number[] {
+  const clamped = Math.max(1, Math.min(100, Math.round(baseline)));
+  const withoutLegacyDefault = FONT_SIZES.filter((size) => size !== 10);
+  if ((withoutLegacyDefault as readonly number[]).includes(clamped)) {
+    return [clamped, ...withoutLegacyDefault.filter((size) => size !== clamped)];
+  }
+  return [clamped, ...withoutLegacyDefault];
+}
+
+/** Return the next font size in the cycle. Wraps back to the settings baseline. */
+export function nextFontSize(current: number, baseline = DEFAULT_FONT_SIZE): number {
+  const cycle = buildFontSizeCycle(baseline);
+  const idx = cycle.indexOf(current);
+  if (idx < 0) return cycle[1] ?? cycle[0] ?? baseline;
+  return cycle[(idx + 1) % cycle.length] ?? baseline;
 }
 
 interface PaneToolbarProps {

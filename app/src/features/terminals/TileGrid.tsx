@@ -59,7 +59,6 @@ import {
 import {
   PaneToolbar,
   nextFontSize,
-  DEFAULT_FONT_SIZE,
 } from './PaneToolbar';
 import { TerminalContextMenu } from './TerminalContextMenu';
 import { clearTerminalSession } from './terminalClear';
@@ -242,6 +241,7 @@ export function TileGrid({
   }, [allLeaves, fullscreenPaneId]);
 
   const { cols, rows } = gridDimensions(leaves.length);
+  const defaultTerminalFontSize = useUIStore((s) => s.defaultTerminalFontSize);
   const canFullscreen = allLeaves.length > 1;
   const layoutKey = `${cols}x${rows}`;
 
@@ -469,8 +469,10 @@ export function TileGrid({
     onChange((currentTree) => {
       const leaf = flattenLeaves(currentTree).find((l) => l.id === paneId);
       if (!leaf) return currentTree;
-      const current = leaf.fontSize ?? DEFAULT_FONT_SIZE;
-      return updateLeaf(currentTree, paneId, { fontSize: nextFontSize(current) });
+      const current = leaf.fontSize ?? defaultTerminalFontSize;
+      return updateLeaf(currentTree, paneId, {
+        fontSize: nextFontSize(current, defaultTerminalFontSize),
+      });
     });
   };
 

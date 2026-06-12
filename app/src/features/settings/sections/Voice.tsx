@@ -374,7 +374,8 @@ export function Voice() {
           <div className="flex flex-col gap-1">
             <Label htmlFor="speak-replies-toggle">Speak Jarvis replies</Label>
             <p className="text-metadata text-muted-foreground">
-              Read completed replies aloud in normal typed and voice conversations.
+              Also read completed replies aloud when you send messages from the chat composer.
+              The voice panel always speaks replies while it is open.
             </p>
           </div>
           <Switch

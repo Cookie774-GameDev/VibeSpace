@@ -8,7 +8,8 @@
 #   $env:JARVIS_SILENT   = "0"         force the interactive installer UI (default: silent current-user NSIS install)
 #   $env:JARVIS_DRYRUN   = "1"         download + verify only, do not run installer
 #   $env:JARVIS_DOWNLOAD_DIR = "D:\Jarvis-Tests\downloads" stage downloads in a specific folder
-#   $env:JARVIS_KEEP_DOWNLOAD = "1"    keep the downloaded installer after a normal run
+#   $env:VIBESPACE_INSTALL_SPLASH = "aurora"  nebula | aurora | prism install splash theme (default: aurora)
+#   $env:JARVIS_NO_SPLASH = "1"               skip animated install splash
 
 #Requires -Version 5.1
 $ErrorActionPreference = 'Stop'
@@ -361,6 +362,156 @@ function Get-TerminalBootSource {
     throw 'Unable to retrieve jarvis_boot_forever.py.'
 }
 
+function Get-InstallSplashVariant {
+    $variant = if ($env:VIBESPACE_INSTALL_SPLASH) { $env:VIBESPACE_INSTALL_SPLASH.Trim().ToLower() } else { 'aurora' }
+    if ($variant -notin @('nebula', 'aurora', 'prism')) {
+        return 'aurora'
+    }
+    return $variant
+}
+
+function Get-TerminalBootAssetSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$FileName,
+        [string]$VersionHint
+    )
+
+    $localBoot = Join-Path $PSScriptRoot "..\tools\terminal_boot\$FileName"
+    if ($PSScriptRoot -and (Test-Path -LiteralPath $localBoot)) {
+        return Get-Content -LiteralPath $localBoot -Raw -Encoding UTF8
+    }
+
+    $headers = @{ 'User-Agent' = 'jarvis-installer' }
+    $urls = @()
+    if ($VersionHint) {
+        $urls += "https://raw.githubusercontent.com/$JarvisRepo/v$VersionHint/tools/terminal_boot/$FileName"
+    }
+    $urls += "https://raw.githubusercontent.com/$JarvisRepo/main/tools/terminal_boot/$FileName"
+
+    foreach ($url in $urls) {
+        try {
+            return (Invoke-WebRequest -Uri $url -UseBasicParsing -Headers $headers -TimeoutSec 15).Content
+        } catch {
+            continue
+        }
+    }
+
+    return $null
+}
+
+function Resolve-InstallSplashPython {
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        return @{ Exe = 'py'; Prefix = @('-3') }
+    }
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        return @{ Exe = 'python'; Prefix = @() }
+    }
+    if (Get-Command python3 -ErrorAction SilentlyContinue) {
+        return @{ Exe = 'python3'; Prefix = @() }
+    }
+    return $null
+}
+
+function Initialize-InstallSplash {
+    param(
+        [string]$VersionHint = ''
+    )
+
+    if ($env:JARVIS_NO_SPLASH -eq '1') {
+        return $null
+    }
+
+    $python = Resolve-InstallSplashPython
+    if (-not $python) {
+        Write-Warn 'Python not found — skipping animated install splash.'
+        return $null
+    }
+
+    $ctxDir = Join-Path $env:TEMP ("vibespace-install-{0}" -f $PID)
+    $splashDir = Join-Path $ctxDir 'splash'
+    $signalFile = Join-Path $ctxDir 'done.signal'
+    $appFile = Join-Path $ctxDir 'app.txt'
+    New-Item -ItemType Directory -Path $splashDir -Force | Out-Null
+    if (Test-Path -LiteralPath $signalFile) { Remove-Item -LiteralPath $signalFile -Force }
+    if (Test-Path -LiteralPath $appFile) { Remove-Item -LiteralPath $appFile -Force }
+
+    $assets = @('boot_common.py', 'vibespace_install_splash.py')
+    foreach ($asset in $assets) {
+        $source = Get-TerminalBootAssetSource -FileName $asset -VersionHint $VersionHint
+        if (-not $source) {
+            Write-Warn "Install splash asset missing: $asset"
+            return $null
+        }
+        Set-Content -LiteralPath (Join-Path $splashDir $asset) -Value $source -Encoding UTF8
+    }
+
+    $variant = Get-InstallSplashVariant
+    $splashScript = Join-Path $splashDir 'vibespace_install_splash.py'
+    $argList = @()
+    foreach ($prefixArg in $python.Prefix) { $argList += $prefixArg }
+    $argList += @(
+        $splashScript,
+        '--variant', $variant,
+        '--signal-file', $signalFile,
+        '--app-file', $appFile,
+        '--hold', '5'
+    )
+
+    $title = "VibeSpace Install · $($variant.Substring(0,1).ToUpper() + $variant.Substring(1))"
+    $wt = Get-Command wt -ErrorAction SilentlyContinue
+    if ($wt) {
+        $wtArgs = @(
+            'new-tab', '--title', $title,
+            $python.Exe
+        ) + $argList
+        Start-Process -FilePath $wt.Source -ArgumentList $wtArgs -WorkingDirectory $splashDir | Out-Null
+    } else {
+        $quotedArgs = ($argList | ForEach-Object {
+            if ($_ -match '\s') { '"' + ($_ -replace '"', '""') + '"' } else { $_ }
+        }) -join ' '
+        $launch = @"
+`$Host.UI.RawUI.WindowTitle = '$title'
+Set-Location -LiteralPath '$($splashDir.Replace("'", "''"))'
+& '$($python.Exe.Replace("'", "''"))' $quotedArgs
+"@
+        Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-Command',
+            $launch
+        ) | Out-Null
+    }
+
+    Write-Ok "Install splash started ($variant)"
+    return @{
+        SignalFile = $signalFile
+        AppFile    = $appFile
+        CtxDir     = $ctxDir
+    }
+}
+
+function Complete-InstallSplash {
+    param(
+        [hashtable]$Splash,
+        [string]$ExePath
+    )
+
+    if (-not $Splash) {
+        return $false
+    }
+
+    try {
+        if ($ExePath) {
+            Set-Content -LiteralPath $Splash.AppFile -Value $ExePath -Encoding UTF8
+        }
+        New-Item -ItemType File -Path $Splash.SignalFile -Force | Out-Null
+        return $true
+    } catch {
+        Write-Warn ("Install splash completion failed: " + $_.Exception.Message)
+        return $false
+    }
+}
+
 function Backup-LauncherFile ($path) {
     if (-not (Test-Path -LiteralPath $path)) {
         return
@@ -376,6 +527,8 @@ function Install-TerminalLauncherForever ($exePath) {
     $corePath = Join-Path $binDir 'JarvisCore.ps1'
     $updatePath = Join-Path $binDir 'JarvisUpdate.ps1'
     $bootPath = Join-Path $binDir 'jarvis_boot_forever.py'
+    $bootCommonPath = Join-Path $binDir 'boot_common.py'
+    $installSplashPath = Join-Path $binDir 'vibespace_install_splash.py'
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
     $versionHint = ''
@@ -385,6 +538,8 @@ function Install-TerminalLauncherForever ($exePath) {
         $versionHint = ''
     }
     $bootSource = Get-TerminalBootSource -VersionHint $versionHint
+    $bootCommonSource = Get-TerminalBootAssetSource -FileName 'boot_common.py' -VersionHint $versionHint
+    $installSplashSource = Get-TerminalBootAssetSource -FileName 'vibespace_install_splash.py' -VersionHint $versionHint
 
     $cmdLauncher = @'
 @echo off
@@ -495,11 +650,19 @@ exit `$LASTEXITCODE
     Backup-LauncherFile $corePath
     Backup-LauncherFile $updatePath
     Backup-LauncherFile $bootPath
+    Backup-LauncherFile $bootCommonPath
+    Backup-LauncherFile $installSplashPath
     Set-Content -LiteralPath $cmdPath -Value $cmdLauncher -Encoding ASCII
     Set-Content -LiteralPath $corePath -Value $coreLauncher -Encoding UTF8
     Set-Content -LiteralPath $updatePath -Value $updateLauncher -Encoding UTF8
     Set-Content -LiteralPath $scriptPath -Value $psLauncher -Encoding UTF8
     Set-Content -LiteralPath $bootPath -Value $bootSource -Encoding UTF8
+    if ($bootCommonSource) {
+        Set-Content -LiteralPath $bootCommonPath -Value $bootCommonSource -Encoding UTF8
+    }
+    if ($installSplashSource) {
+        Set-Content -LiteralPath $installSplashPath -Value $installSplashSource -Encoding UTF8
+    }
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $entries = @($userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -590,6 +753,10 @@ if ($dryrun) {
     exit 0
 }
 
+$installSplash = $null
+$splashVersionHint = if ($env:JARVIS_VERSION) { $env:JARVIS_VERSION } else { '' }
+$installSplash = Initialize-InstallSplash -VersionHint $splashVersionHint
+
 # Admin check (only required for MSI per-machine installs)
 if ($format -eq 'msi' -and -not (Test-IsAdmin)) {
     Write-Step "MSI installer requires admin elevation. UAC prompt incoming..."
@@ -608,14 +775,19 @@ if ($exit -eq 0) {
     $exePath = Get-InstalledJarvisExe
     if ($exePath -and (Test-Path -LiteralPath $exePath)) {
         $launcherScript = Install-TerminalLauncherForever -exePath $exePath
-        Write-Step "Auto-launching Jarvis terminal..."
-        Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-            '-NoProfile',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-File',
-            $launcherScript
-        )
+        $splashLaunched = Complete-InstallSplash -Splash $installSplash -ExePath $exePath
+        if (-not $splashLaunched) {
+            Write-Step "Auto-launching Jarvis terminal..."
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+                '-NoProfile',
+                '-ExecutionPolicy',
+                'Bypass',
+                '-File',
+                $launcherScript
+            )
+        } else {
+            Write-Step "VibeSpace will open from the install splash window."
+        }
     } else {
         Write-Warn "Could not locate installed jarvis.exe to auto-launch."
     }

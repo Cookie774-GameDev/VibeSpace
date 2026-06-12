@@ -285,15 +285,15 @@ const defaults: Pick<
   whatsNewOpen: false,
   composerStt: true,
   defaultTerminalFontSize: 13,
-  notificationMaster: true,
+  notificationMaster: false,
   doneNotifications: {
-    jarvis: true,
-    terminal: true,
-    tasks: true,
-    contextMaps: true,
-    skills: true,
+    jarvis: false,
+    terminal: false,
+    tasks: false,
+    contextMaps: false,
+    skills: false,
   },
-  aiCompletionCue: true,
+  aiCompletionCue: false,
   route: 'chat',
   callModalOpen: false,
   lastSeenWhatsNewVersion: null,
@@ -404,8 +404,9 @@ export const useUIStore = create<UIState>()(
     {
       name: 'jarvis-ui',
       storage: createJSONStorage(() => debouncedUiStorage),
-      version: 1,
+      version: 2,
       migrate: (persistedState: any, version: number) => {
+        let state = persistedState;
         if (version < 1) {
           console.info(`[useUIStore] Migrating persisted state from version ${version} to 1`);
           const safeKeys = [
@@ -441,9 +442,23 @@ export const useUIStore = create<UIState>()(
             }
           }
           measureStorageSizes('migration', true);
-          return migrated;
+          state = migrated;
         }
-        return persistedState;
+        if (version < 2) {
+          state = {
+            ...(state && typeof state === 'object' ? state : {}),
+            notificationMaster: false,
+            doneNotifications: {
+              jarvis: false,
+              terminal: false,
+              tasks: false,
+              contextMaps: false,
+              skills: false,
+            },
+            aiCompletionCue: false,
+          };
+        }
+        return state;
       },
       partialize: (s) => ({
         navOpen: s.navOpen,

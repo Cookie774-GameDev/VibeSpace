@@ -38,6 +38,7 @@ import { Terminal } from 'xterm';
 import { isTauri } from '@/lib/utils';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebLinksAddon } from 'xterm-addon-web-links';
+import { WebglAddon } from 'xterm-addon-webgl';
 import 'xterm/css/xterm.css';
 
 import { cn } from '@/lib/utils';
@@ -56,6 +57,12 @@ import {
   findAltScreenEnter,
   stripOrphanEscapeFragments,
 } from './terminalEscape';
+import {
+  clearTerminalPaneSessionId,
+  registerTerminalPaneClearHandler,
+  setTerminalPaneSessionId,
+} from './terminalClearRegistry';
+import { TERMINAL_CLEAR_SUPPRESS_MS } from './terminalClear';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
@@ -213,6 +220,7 @@ export function TerminalView({
   const focusedRef = useRef(false);
   const dictatingRef = useRef(false);
   const ignoreClearsUntilRef = useRef<number>(0);
+  const suppressOutputUntilRef = useRef<number>(0);
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(existingSessionId ?? null);
   const [isFocused, setIsFocused] = useState(false);
@@ -322,6 +330,28 @@ export function TerminalView({
     const outputBuffer = createTerminalOutputBuffer();
     let handleVisible: (() => void) | null = null;
     let onClear: ((e: Event) => void) | null = null;
+    let unregisterPaneClear: (() => void) | null = null;
+
+    const resetTerminalSurface = () => {
+      outputBuffer.flush();
+      pendingOutput = '';
+      pendingTranscript = '';
+      if (outputRafToken != null) {
+        cancelAnimationFrame(outputRafToken);
+        outputRafToken = null;
+      }
+      suppressOutputUntilRef.current = Date.now() + TERMINAL_CLEAR_SUPPRESS_MS;
+      ignoreClearsUntilRef.current = 0;
+      const t = termRef.current;
+      if (!t) return;
+      try {
+        t.reset();
+        t.clear();
+        t.scrollToTop();
+      } catch {
+        /* xterm may already be disposed */
+      }
+    };
 
     const prepareTerminalChunk = (chunk: string): string => {
       if (!chunk) return '';
@@ -463,6 +493,27 @@ export function TerminalView({
 
       term.open(containerEl);
 
+      // GPU renderer. xterm's default DOM renderer re-lays-out HTML rows on
+      // every write, which is the dominant frame cost with a 10-pane grid of
+      // live CLIs. The WebGL addon renders glyphs on the GPU at the device
+      // pixel ratio (crisper at fractional Windows display scaling, too).
+      // If WebGL isn't available — or the browser reclaims the context
+      // because too many are alive — we dispose the addon and xterm falls
+      // back to the DOM renderer transparently.
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          try {
+            webgl.dispose();
+          } catch {
+            /* already disposed */
+          }
+        });
+        term.loadAddon(webgl);
+      } catch (err) {
+        console.warn('[Jarvis] WebGL renderer unavailable, using DOM renderer:', err);
+      }
+
       // Belt-and-braces: re-assigning fontFamily forces xterm's option
       // proxy to re-run its cell measurement, in case fonts.ready
       // resolved before the browser had finished building metric tables.
@@ -470,6 +521,12 @@ export function TerminalView({
 
       termRef.current = term;
       fitRef.current = fit;
+
+      if (paneId) {
+        unregisterPaneClear = registerTerminalPaneClearHandler(paneId, () => {
+          if (!cancelled) resetTerminalSurface();
+        });
+      }
 
       const textarea = (term as any).textarea as HTMLTextAreaElement | undefined;
       if (textarea) {
@@ -517,6 +574,7 @@ export function TerminalView({
       try {
         const u1 = await listen<OutputPayload>('terminal://output', (e) => {
           if (e.payload.sessionId !== sessionRef.current) return;
+          if (Date.now() < suppressOutputUntilRef.current) return;
           // Reassemble split ESC sequences before rendering or persisting so
           // orphan `]4;rgb:` / `[0[` fragments never land in xterm.
           enqueueTerminalChunks(e.payload.data);
@@ -711,6 +769,9 @@ export function TerminalView({
         return;
       }
       sessionRef.current = sid;
+      if (paneId) {
+        setTerminalPaneSessionId(paneId, sid);
+      }
       cwdRef.current = sessionCwd;
       if (briefingDelivered || slugAtSpawn == null) {
         // Record what's on disk so the agent-switch effect only rewrites
@@ -781,15 +842,7 @@ export function TerminalView({
         const matchesPane = detail.paneId != null && detail.paneId === paneId;
         const matchesSession = detail.sessionId === sid;
         if (!matchesPane && !matchesSession) return;
-        ignoreClearsUntilRef.current = 0;
-        pendingOutput = '';
-        pendingTranscript = '';
-        if (outputRafToken != null) {
-          cancelAnimationFrame(outputRafToken);
-          outputRafToken = null;
-        }
-        term?.clear();
-        term?.scrollToTop();
+        resetTerminalSurface();
       };
       window.addEventListener('jarvis:terminal:clear', onClear);
 
@@ -859,6 +912,8 @@ export function TerminalView({
         window.removeEventListener('jarvis:terminals:visible', handleVisible);
       }
       if (onClear) window.removeEventListener('jarvis:terminal:clear', onClear);
+      unregisterPaneClear?.();
+      if (paneId) clearTerminalPaneSessionId(paneId);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       unlistenOutput?.();

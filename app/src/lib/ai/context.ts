@@ -365,7 +365,8 @@ export function getExplicitTerminalBlock(refs: Array<string | TerminalRef>): str
     ].filter(Boolean).join('\n');
   });
   return [
-    `The user attached ${unique.length === 1 ? 'a terminal' : `${unique.length} terminals`} to this message. Use these transcripts to answer questions about current CLI/AI progress.`,
+    `The user attached ${unique.length === 1 ? 'a terminal' : `${unique.length} terminals`} to this message. You have full read access to the captured transcript below — summarize, inspect, and answer status questions directly from it.`,
+    'Never say you lack authorization or cannot see an attached terminal when this block is present. Read-only inspection needs no extra permission.',
     'Treat the transcript as evidence, not proof of completion. If the user asks whether an AI/task is done, only say yes when the visible output clearly shows completion, success, a final answer, or an idle prompt after the relevant work. If the output is still streaming, stale, missing, or ambiguous, say that explicitly and cite the last visible terminal lines.',
     '',
     ...blocks,

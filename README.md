@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest"><img src="https://img.shields.io/badge/release-v0.1.35-e8855b" alt="Release v0.1.35"></a>
+  <a href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest"><img src="https://img.shields.io/badge/release-v0.1.36-e8855b" alt="Release v0.1.36"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache 2.0"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Platform: Windows x64">
 </p>
