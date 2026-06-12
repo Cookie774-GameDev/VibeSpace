@@ -68,6 +68,10 @@ pub struct TerminalInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SpawnResponse {
     pub session_id: String,
+    /// Resolved working directory of the spawned process. Returned so the
+    /// frontend can place per-directory artefacts (AGENTS.md, coordination
+    /// doc) even when the caller did not pass an explicit `cwd`.
+    pub cwd: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -281,6 +285,7 @@ pub async fn terminal_spawn(
     let killer = child.clone_killer();
 
     let session_id = format!("tty_{}", nanoid::nanoid!(12));
+    let response_cwd = resolved_cwd.clone();
     let info = TerminalInfo {
         session_id: session_id.clone(),
         command: cmd_str,
@@ -360,7 +365,10 @@ pub async fn terminal_spawn(
     };
 
     state.0.lock().await.insert(session_id.clone(), handle);
-    Ok(SpawnResponse { session_id })
+    Ok(SpawnResponse {
+        session_id,
+        cwd: response_cwd,
+    })
 }
 
 /// Forward keystrokes (or any UTF-8 byte stream) into the PTY's stdin.

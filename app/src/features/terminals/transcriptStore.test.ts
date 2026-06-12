@@ -138,6 +138,50 @@ describe('terminalRestoreText', () => {
   });
 });
 
+describe('transcript restore round-trip (reload path)', () => {
+  const KEY = 'jarvis-terminal-transcripts';
+
+  it('persists chunked output and restores it in order after a simulated reload', () => {
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_rt', { agentSlug: 'coder', command: 'opencode', paneId: 'pane_rt', projectId: 'proj_rt' });
+    // Chunks arrive with colours and a split escape across boundaries —
+    // exactly what the PTY does.
+    store.appendOutput('pty_rt', '\x1B[32m$ npm test\x1B[0m\r\n');
+    store.appendOutput('pty_rt', 'Tests: 12 passed\r\n\x1B[');
+    store.appendOutput('pty_rt', '33mwarn: slow test\x1B[0m\r\nDone in 3.2s\r\n');
+
+    flushTranscriptStorage();
+
+    // Simulated reload: parse what landed in localStorage from scratch.
+    const reloaded = deserializeTranscriptSessions(window.localStorage.getItem(KEY));
+    const session = reloaded?.pty_rt;
+    expect(session).toBeDefined();
+
+    const restored = terminalRestoreText(session);
+    // Order preserved, escapes gone, lines joined with CRLF for xterm replay.
+    expect(restored).toBe(
+      '$ npm test\r\nTests: 12 passed\r\nwarn: slow test\r\nDone in 3.2s\r\n',
+    );
+    expect(restored).not.toContain('\x1B');
+  });
+
+  it('keeps the newest lines when the round-trip exceeds the replay cap', () => {
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_rt_cap', { agentSlug: null });
+    for (let i = 0; i < 950; i++) {
+      store.appendOutput('pty_rt_cap', `line-${i}\n`);
+    }
+    flushTranscriptStorage();
+
+    const reloaded = deserializeTranscriptSessions(window.localStorage.getItem(KEY));
+    const restored = terminalRestoreText(reloaded?.pty_rt_cap);
+    const lines = restored.split('\r\n');
+    expect(lines.length).toBeLessThanOrEqual(800);
+    expect(restored).toContain('line-949');
+    expect(restored).not.toContain('line-0\r\n');
+  });
+});
+
 describe('transcript store persistence performance', () => {
   it('can recover sessions from the last-known-good snapshot when primary JSON is corrupt', () => {
     const backup = JSON.stringify({

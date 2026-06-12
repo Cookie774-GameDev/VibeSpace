@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   createTerminalOutputBuffer,
   filterStartupTerminalOutput,
+  findAltScreenEnter,
   splitTrailingIncompleteEscape,
+  stripConPtyStartupClears,
   stripOrphanEscapeFragments,
 } from './terminalEscape';
 
@@ -52,5 +54,40 @@ describe('filterStartupTerminalOutput', () => {
   it('strips startup clears without leaving orphan palette text', () => {
     const input = '\x1B[2J]4;0;rgb:2a/20/18\x07ready';
     expect(filterStartupTerminalOutput(input)).toBe('ready');
+  });
+
+  it('strips cursor-home repositioning so a fresh prompt cannot overwrite restored lines', () => {
+    // Regression: ConPTY attach emits clear + cursor-home; without the CUP
+    // strip the prompt painted at the top of the viewport, overwriting the
+    // replayed transcript ("content morphed around / deleted" after reload).
+    const conPtyStartup = '\x1B[2J\x1B[H\x1B[?25lPS C:\\repo> ';
+    const filtered = filterStartupTerminalOutput(conPtyStartup);
+    expect(filtered).toBe('\x1B[?25lPS C:\\repo> ');
+    expect(filtered).not.toContain('[H');
+  });
+
+  it('strips parameterised CUP/HVP, VPA and scroll-region sequences', () => {
+    expect(stripConPtyStartupClears('\x1B[3;7Hx')).toBe('x');
+    expect(stripConPtyStartupClears('\x1B[12;1fx')).toBe('x');
+    expect(stripConPtyStartupClears('\x1B[5dx')).toBe('x');
+    expect(stripConPtyStartupClears('\x1B[1;24rx')).toBe('x');
+  });
+
+  it('keeps colour and cursor-visibility sequences intact', () => {
+    const input = '\x1B[33mwarn\x1B[0m\x1B[?25h';
+    expect(filterStartupTerminalOutput(input)).toBe(input);
+  });
+});
+
+describe('findAltScreenEnter', () => {
+  it('locates the alt-screen-buffer enter sequence', () => {
+    expect(findAltScreenEnter('plain output')).toBe(-1);
+    expect(findAltScreenEnter('boot\x1B[?1049h\x1B[2Jtui')).toBe(4);
+    expect(findAltScreenEnter('\x1B[?47hlegacy')).toBe(0);
+    expect(findAltScreenEnter('\x1B[?1047hlegacy')).toBe(0);
+  });
+
+  it('does not match the alt-screen *leave* sequence', () => {
+    expect(findAltScreenEnter('\x1B[?1049l')).toBe(-1);
   });
 });

@@ -74,9 +74,43 @@ export function createTerminalOutputBuffer() {
 /**
  * Strip ConPTY / shell startup clears during the post-restore window so a
  * replayed transcript is not wiped by initialization noise.
+ *
+ * Beyond plain clears (`ESC c`, `ESC [!p`, `ESC [..J/K`) this also strips
+ * absolute cursor positioning emitted while ConPTY attaches:
+ *   - CUP / HVP  (`ESC [H`, `ESC [<r>;<c>H`, `ESC [..f`)
+ *   - VPA        (`ESC [<n>d`)
+ *   - DECSTBM    (`ESC [<t>;<b>r`) scroll-region resets
+ *
+ * Without these, the fresh shell prompt is painted at the *top* of the
+ * viewport, overwriting the just-restored transcript lines — the
+ * "content morphed around / deleted after reload" bug. During the short
+ * restore window the prompt should simply print at the cursor (i.e.
+ * after the replayed transcript), so dropping repositioning is safe.
  */
 export function stripConPtyStartupClears(data: string): string {
-  return data.replace(/\x1bc|\x1b\[!p|\x1b\[[0-9;?]*[JK]/g, '');
+  return data.replace(
+    /\x1bc|\x1b\[!p|\x1b\[[0-9;?]*[JK]|\x1b\[[0-9;]*[Hf]|\x1b\[[0-9]*d|\x1b\[[0-9;]*r/g,
+    '',
+  );
+}
+
+/**
+ * Alternate-screen-buffer enter sequences (`ESC [?1049h` and friends).
+ * A fullscreen TUI (opencode, claude, htop…) switching to the alt buffer
+ * marks the end of "shell startup noise" — from that point on, absolute
+ * cursor positioning is intentional and must pass through untouched. The
+ * restored transcript lives in the normal buffer's scrollback, which the
+ * alt screen never destroys.
+ */
+const ALT_SCREEN_ENTER = /\x1b\[\?(?:47|1047|1049)h/;
+
+/**
+ * Index of the first alt-screen-enter sequence in `data`, or -1. Used by
+ * the renderer to terminate the post-restore filter window early.
+ */
+export function findAltScreenEnter(data: string): number {
+  const match = ALT_SCREEN_ENTER.exec(data);
+  return match ? match.index : -1;
 }
 
 /**

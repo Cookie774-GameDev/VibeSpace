@@ -46,8 +46,14 @@ import type { TerminalViewProps } from './types';
 import { useTerminalTranscriptStore } from './transcriptStore';
 import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
 import {
+  buildAgentSpawnEnv,
+  deliverAgentTerminalContext,
+  resolveAgentForSlug,
+} from './agentPromptDelivery';
+import {
   createTerminalOutputBuffer,
   filterStartupTerminalOutput,
+  findAltScreenEnter,
   stripOrphanEscapeFragments,
 } from './terminalEscape';
 import { VoiceService } from '@/features/voice/VoiceService';
@@ -66,6 +72,8 @@ import {
 
 interface SpawnResult {
   sessionId: string;
+  /** Resolved working directory reported by the backend. */
+  cwd?: string;
 }
 interface OutputPayload {
   sessionId: string;
@@ -196,6 +204,11 @@ export function TerminalView({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<string | null>(existingSessionId ?? null);
+  // Resolved working directory of the live session — needed to re-deliver
+  // the agent briefing (AGENTS.md + coordination doc) on agent switches.
+  const cwdRef = useRef<string | null>(cwd ?? null);
+  // Last agent slug whose briefing was written for this session's cwd.
+  const deliveredSlugRef = useRef<string | null>(null);
   const exitFiredRef = useRef(false);
   const focusedRef = useRef(false);
   const dictatingRef = useRef(false);
@@ -261,10 +274,34 @@ export function TerminalView({
   // keeps the by-agent index correct without re-spawning the PTY: the
   // user can pick a different role from the chrome dropdown and the
   // existing buffer flows under the new slug going forward.
+  //
+  // Re-delivery: switching agents also rewrites the managed briefing
+  // block in the session cwd's AGENTS.md (and clears it when the role is
+  // removed), so the next CLI started in this pane receives the new
+  // agent's prompt. A CLI already mid-session reads its instructions at
+  // session start — the user restarts it to pick up the switch.
   useEffect(() => {
     const sid = sessionRef.current;
     if (!sid) return;
     useTerminalTranscriptStore.getState().retagSession(sid, agentSlug ?? null);
+
+    const slug = agentSlug ?? null;
+    if (deliveredSlugRef.current === slug) return;
+    deliveredSlugRef.current = slug;
+    const sessionCwd = cwdRef.current;
+    if (!sessionCwd) return;
+    void deliverAgentTerminalContext({
+      cwd: sessionCwd,
+      agentSlug: slug,
+      projectId: projectId ?? null,
+      projectName: projectName ?? null,
+      excludeSessionId: sid,
+    }).then((result) => {
+      if (!result.ok && result.error) {
+        console.warn('[Jarvis] agent briefing re-delivery failed:', result.error);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentSlug]);
 
   useEffect(() => {
@@ -289,6 +326,15 @@ export function TerminalView({
     const prepareTerminalChunk = (chunk: string): string => {
       if (!chunk) return '';
       if (Date.now() < ignoreClearsUntilRef.current) {
+        // A fullscreen TUI entering the alternate screen buffer ends the
+        // startup window immediately: from that point on, clears and
+        // absolute cursor positioning are intentional (the TUI owns the
+        // viewport) and must not be filtered, or its UI renders mangled.
+        const altIdx = findAltScreenEnter(chunk);
+        if (altIdx >= 0) {
+          ignoreClearsUntilRef.current = 0;
+          return filterStartupTerminalOutput(chunk.slice(0, altIdx)) + chunk.slice(altIdx);
+        }
         return filterStartupTerminalOutput(chunk);
       }
       return stripOrphanEscapeFragments(chunk);
@@ -346,7 +392,16 @@ export function TerminalView({
       if (!sid) return;
 
       try {
-        termRef.current?.write(displayData);
+        if (Date.now() < ignoreClearsUntilRef.current) {
+          // During the post-restore window, keep the viewport pinned to the
+          // latest content so the user lands on their prompt — not scrolled
+          // to wherever ConPTY's startup noise left the cursor.
+          termRef.current?.write(displayData, () => {
+            if (!cancelled) termRef.current?.scrollToBottom();
+          });
+        } else {
+          termRef.current?.write(displayData);
+        }
       } catch (err) {
         console.warn('[Jarvis] terminal render write failed:', err);
       }
@@ -503,6 +558,9 @@ export function TerminalView({
       let sid: string;
       let spawnedFresh = false;
       let restoredInput = '';
+      let sessionCwd: string | null = cwd ?? null;
+      let briefingDelivered = false;
+      const slugAtSpawn = agentSlugRef.current;
       try {
         let activeSessions: BackendTerminalInfo[] = [];
         if (existingSessionId != null || paneId) {
@@ -527,9 +585,31 @@ export function TerminalView({
 
           if (restoreDecision.restoredText) {
             term.write(restoreDecision.restoredText);
-            term.write('\r\n\x1b[33m[Session restored - process restarted]\x1b[0m\r\n');
+            term.write('\r\n\x1b[33m[Session restored - process restarted]\x1b[0m\r\n', () => {
+              // Land the viewport on the latest restored content. xterm only
+              // auto-scrolls when already at the bottom, so pin it once the
+              // replay is parsed; subsequent PTY writes then keep it pinned.
+              if (!cancelled) termRef.current?.scrollToBottom();
+            });
             // Set active window of 3s to bypass ConPTY initialization screen-clear signals only when restoring transcript
             ignoreClearsUntilRef.current = Date.now() + 3000;
+          }
+
+          // Deliver the agent briefing (AGENTS.md managed block +
+          // coordination doc) BEFORE the process starts whenever the
+          // working directory is known, so a CLI spawned directly (e.g.
+          // `opencode` as the pane command) reads it on session start.
+          if (slugAtSpawn && cwd) {
+            const delivery = await deliverAgentTerminalContext({
+              cwd,
+              agentSlug: slugAtSpawn,
+              projectId: projectId ?? null,
+              projectName: projectName ?? null,
+            });
+            briefingDelivered = delivery.ok;
+            if (!delivery.ok && delivery.error) {
+              console.warn('[Jarvis] agent briefing delivery failed:', delivery.error);
+            }
           }
 
           const result = await invoke<SpawnResult>('terminal_spawn', {
@@ -539,9 +619,36 @@ export function TerminalView({
             cols: term.cols,
             projectId: projectId,
             projectName: projectName,
+            // Make the assignment discoverable by any process in the pane,
+            // not just AGENTS.md readers (env is inherited by child CLIs).
+            env: slugAtSpawn
+              ? buildAgentSpawnEnv({
+                  agentSlug: slugAtSpawn,
+                  agentName: resolveAgentForSlug(slugAtSpawn).name,
+                  cwd: cwd ?? null,
+                  projectName: projectName ?? null,
+                })
+              : undefined,
           });
           sid = result.sessionId;
+          sessionCwd = result.cwd || cwd || null;
           console.log(`[Jarvis] Spawned new PTY session: ${sid}`);
+
+          // The backend resolved a cwd we did not know up front — deliver
+          // there now, before any startup command launches a CLI.
+          if (slugAtSpawn && !briefingDelivered && sessionCwd) {
+            const delivery = await deliverAgentTerminalContext({
+              cwd: sessionCwd,
+              agentSlug: slugAtSpawn,
+              projectId: projectId ?? null,
+              projectName: projectName ?? null,
+              excludeSessionId: sid,
+            });
+            briefingDelivered = delivery.ok;
+            if (!delivery.ok && delivery.error) {
+              console.warn('[Jarvis] agent briefing delivery failed:', delivery.error);
+            }
+          }
 
           if (restoreDecision.oldSessionId) {
             useTerminalTranscriptStore
@@ -558,12 +665,28 @@ export function TerminalView({
           });
         } else {
           sid = restoreDecision.sessionId;
+          const backendInfo = activeSessions.find((s) => s.sessionId === sid);
+          sessionCwd = backendInfo?.cwd || cwd || null;
           console.log(
             `[Jarvis] Re-attaching to existing active session: ${sid} (${restoreDecision.source})`,
           );
+          // Keep the briefing fresh on re-attach: the assignment (or the
+          // agent's editable prompt) may have changed while unmounted.
+          if (slugAtSpawn && sessionCwd) {
+            const delivery = await deliverAgentTerminalContext({
+              cwd: sessionCwd,
+              agentSlug: slugAtSpawn,
+              projectId: projectId ?? null,
+              projectName: projectName ?? null,
+              excludeSessionId: sid,
+            });
+            briefingDelivered = delivery.ok;
+          }
           // Restore visual transcript for active session re-attach
           if (restoreDecision.restoredText) {
-            term.write(restoreDecision.restoredText);
+            term.write(restoreDecision.restoredText, () => {
+              if (!cancelled) termRef.current?.scrollToBottom();
+            });
             ignoreClearsUntilRef.current = Date.now() + 3000;
           }
         }
@@ -588,6 +711,12 @@ export function TerminalView({
         return;
       }
       sessionRef.current = sid;
+      cwdRef.current = sessionCwd;
+      if (briefingDelivered || slugAtSpawn == null) {
+        // Record what's on disk so the agent-switch effect only rewrites
+        // the briefing when the slug actually changes.
+        deliveredSlugRef.current = slugAtSpawn;
+      }
       setActiveSessionId(sid);
       // Register the session in the transcript store so the by-agent
       // index has somewhere to land subsequent appendOutput calls.
