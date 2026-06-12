@@ -4,706 +4,335 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!-- ============================================================= -->
-  <!--  VibeSpace — landing page for vibespaceos.com                 -->
-  <!--  Static HTML/CSS/JS. Open index.html directly to preview.     -->
-  <!--  Product: VibeSpace · Ecosystem: VibeSpaceOS                   -->
-  <!--  Edit copy freely. Look for <!-- EDIT ... --> markers.        -->
-  <!-- ============================================================= -->
+  <!-- ================================================================ -->
+  <!--  VibeSpace — vibespaceos.com                                     -->
+  <!--  Static HTML/CSS/JS for GitHub Pages.                            -->
+  <!--  Assets: assets/css · assets/js · assets/images · assets/videos  -->
+  <!-- ================================================================ -->
 
-  <title>VibeSpace — the calm home for your busy day | VibeSpaceOS</title>
-  <meta name="description" content="VibeSpace is a cozy desktop app that brings chat, calling, messaging, local models, and your tools into one calm place — so you can hand off the busywork and focus on what matters. Part of VibeSpaceOS." />
-  <meta name="theme-color" content="#0f0b13" />
+  <title>VibeSpace — the AI workspace that remembers</title>
+  <meta name="description" content="VibeSpace is the AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant. Terminals, Jarvis voice, AI calling, 112 plugins — local-first, bring your own keys." />
+  <meta name="theme-color" content="#1c140e" />
   <meta name="author" content="VibeSpaceOS" />
 
   <!-- Open Graph / social share -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="VibeSpace — the calm home for your busy day" />
-  <meta property="og:description" content="Chat, call, and message in one warm desktop app — then hand off the busywork and get back to the work you care about." />
+  <meta property="og:title" content="VibeSpace — the AI workspace that remembers" />
+  <meta property="og:description" content="Every model, agent, voice, and task under one persistent memory — with an assistant that's always within reach." />
   <meta property="og:url" content="https://vibespaceos.com" />
-  <!-- EDIT: add a real share image at assets/images/og-cover.png then uncomment -->
   <meta property="og:image" content="https://vibespaceos.com/assets/images/og-cover.png" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="VibeSpace — the calm home for your busy day" />
-  <meta name="twitter:description" content="A cozy desktop workspace for creators, builders, and everyday power users." />
+  <meta name="twitter:title" content="VibeSpace — the AI workspace that remembers" />
+  <meta name="twitter:description" content="Terminals, Jarvis voice, AI calling, 112 plugins, persistent memory. Local-first. Bring your own keys." />
 
   <link rel="icon" type="image/png" href="assets/images/favicon.png" />
   <link rel="apple-touch-icon" href="assets/images/logo.png" />
 
-  <!-- Fonts: Fraunces (cozy serif display) + Plus Jakarta Sans (body) + JetBrains Mono -->
+  <!-- Fonts: Fraunces (warm optical serif, matches the app) + Plus Jakarta Sans + JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,380;0,9..144,500;0,9..144,620;1,9..144,420;1,9..144,560&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="assets/css/main.css" />
 </head>
 <body>
 
-  <!-- Inline SVG icon sprite — crafted line icons (replaces emoji for a less generic look) -->
-  <svg width="0" height="0" class="svg-sprite" aria-hidden="true" focusable="false"><defs>
-    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-9 8.5 9 9 0 0 1-3.8-.8L3 21l1.9-4.2A8.5 8.5 0 0 1 12 3a8.5 8.5 0 0 1 9 8.5z"/></symbol>
-    <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7 12.8 12.8 0 0 0 .7 2.8 2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5 12.8 12.8 0 0 0 2.8.7 2 2 0 0 1 1.7 2z"/></symbol>
-    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M3 6.5l9 6 9-6"/></symbol>
-    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
-    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0V8zM12 16v6"/></symbol>
-    <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M5 15c-1.5 1.3-2 5-2 5s3.7-.5 5-2a2 2 0 0 0-3-3z"/><path d="M12 15l-3-3a18 18 0 0 1 2-4A11 11 0 0 1 21 3c0 2.7-.8 7-6 11a18 18 0 0 1-3 1z"/><path d="M9.5 11.5H5s.5-2.7 2-3.6c1.4-.8 3.6 0 3.6 0"/></symbol>
-    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
-    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/></symbol>
-    <symbol id="i-tools" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
-    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></symbol>
-    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-    <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
-    <symbol id="i-smartphone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
-    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
-    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
-    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
-    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 3v18M16 3v18M3 8h5M3 16h5M16 8h5M16 16h5M3 12h18"/></symbol>
-    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M5 7l5 5-5 5M13 17h6"/></symbol>
-    <symbol id="i-shell" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></symbol>
-    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></symbol>
-    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></symbol>
-    <symbol id="i-windows" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M3 5.2 10.5 4.1V11H3zM12 3.9 21 2.6V11h-9zM3 13h7.5v6.9L3 18.8zM12 13h9v8.4l-9-1.1z"/></symbol>
-    <symbol id="i-apple" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M16.7 12.4c0-2.1 1.7-3.1 1.8-3.2a3.9 3.9 0 0 0-3.1-1.7c-1.3-.1-2.5.8-3.2.8s-1.8-.7-2.9-.7A4.1 4.1 0 0 0 5.8 9.7c-1.5 2.5-.4 6.3 1 8.3.7.9 1.5 2 2.5 2s1.4-.7 2.7-.7 1.6.7 2.8.6 1.8-1 2.5-2a8.6 8.6 0 0 0 1.1-2.4 3.7 3.7 0 0 1-1.7-3.1z"/><path fill="currentColor" stroke="none" d="M14.3 5.8A3.7 3.7 0 0 0 15.1 3a3.8 3.8 0 0 0-2.5 1.3 3.5 3.5 0 0 0-.8 2.7 3.1 3.1 0 0 0 2.5-1.2z"/></symbol>
-    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M16 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/></symbol>
-  </defs></svg>
-
-  <!-- Scroll progress bar -->
-  <div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
-
-  <!-- Cursor spotlight (follows the mouse on fine-pointer devices) -->
-  <div class="cursor-glow" id="cursorGlow" aria-hidden="true"></div>
-
-  <!-- Animated background glow blobs -->
-  <div class="bg-orbs" aria-hidden="true">
-    <span class="orb orb--violet" data-parallax="0.05"></span>
-    <span class="orb orb--clay"   data-parallax="0.08"></span>
-    <div class="bg-grain"></div>
+  <!-- Ambient layer: animated gradient blobs + grain, fixed behind everything -->
+  <div class="ambient" aria-hidden="true">
+    <span class="blob blob--ember"></span>
+    <span class="blob blob--honey"></span>
+    <span class="blob blob--sage"></span>
+    <span class="blob blob--rose"></span>
+    <span class="ambient__haze"></span>
+    <span class="ambient__grain"></span>
   </div>
 
-  <!-- ============================ NAVBAR ============================ -->
-  <header class="nav" id="top">
+  <div class="progress" id="progress" aria-hidden="true"></div>
+
+  <!-- ============================== NAV ============================== -->
+  <header class="nav glass" id="top">
     <nav class="nav__inner" aria-label="Primary">
       <a class="brand" href="#top" aria-label="VibeSpace home">
-        <span class="brand__mark" aria-hidden="true">
-          <img src="assets/images/logo.png" width="34" height="34" alt="" />
-        </span>
-        <span class="brand__text">
-          <span class="brand__name">VibeSpace</span>
-          <span class="brand__badge">VibeSpaceOS</span>
-        </span>
+        <img class="brand__logo" src="assets/images/logo.png" width="36" height="36" alt="" />
+        <span class="brand__name">VibeSpace</span>
       </a>
 
-      <button class="nav__toggle" id="navToggle" aria-label="Open menu" aria-expanded="false" aria-controls="navLinks">
-        <span></span><span></span><span></span>
-      </button>
-
       <div class="nav__links" id="navLinks">
-        <a href="#features">Features</a>
-        <a href="#how">How it works</a>
-        <a href="#connect">Calling</a>
         <a href="#demo">Demo</a>
-        <a href="#chat">Try it</a>
-        <a href="#faq">FAQ</a>
-        <a href="#download" class="btn btn--primary btn--sm nav__cta">Download</a>
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a href="https://github.com/Cookie774-GameDev/VibeSpace" target="_blank" rel="noopener">GitHub</a>
+        <a class="btn btn--fill btn--sm" href="#download">Download</a>
       </div>
+
+      <button class="nav__burger" id="navBurger" aria-label="Menu" aria-expanded="false" aria-controls="navLinks">
+        <span></span><span></span>
+      </button>
     </nav>
   </header>
 
   <main>
-    <!-- ============================ HERO ============================ -->
-    <section class="hero" id="home">
-      <div class="hero__content reveal">
-        <span class="pill pill--soft hero__eyebrow">
-          <span class="dot dot--live"></span> Now in early access · v0.1.31
-        </span>
-        <h1 class="hero__title">
-          Meet <span class="grad-text">VibeSpace</span> —<br />
-          the calm home for your busy day.
+    <!-- ============================= HERO ============================= -->
+    <section class="hero">
+      <div class="hero__inner">
+        <img class="hero__logo rise" src="assets/images/logo.png" width="84" height="84" alt="VibeSpace logo" />
+
+        <p class="hero__eyebrow rise d1"><span class="pulse"></span> Now in early access for Windows</p>
+
+        <h1 class="hero__title rise d2">
+          Every model. Every agent.<br />
+          <em>One warm workspace.</em>
         </h1>
-        <p class="hero__sub">
-          Chat, call, and message in one warm desktop app — then hand off the busywork
-          and get back to the part you actually care about. No tab juggling, no clutter.
+
+        <p class="hero__sub rise d3">
+          VibeSpace is the AI workspace where every model, agent, voice, and task lives
+          under one persistent memory — with an assistant that&rsquo;s always within reach.
         </p>
 
-        <div class="hero__actions">
-          <a class="btn btn--primary btn--lg magnetic" href="#download">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Download VibeSpace
-          </a>
-          <a class="btn btn--ghost btn--lg" href="#demo">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg>
-            Watch Demo
-          </a>
-        </div>
-
-        <div class="hero__badges">
-          <span class="chip"><span class="dot dot--live"></span> Built for Windows</span>
-          <span class="chip">Private-first &amp; local</span>
-          <span class="chip">Bring your own keys</span>
-        </div>
-      </div>
-
-      <!-- Hero visual: app mockup card (tilts toward the cursor) -->
-      <div class="hero__visual reveal" aria-hidden="true">
-        <!-- EDIT HERO IMAGE: to use a real screenshot, uncomment below. -->
-        <!-- <img class="hero__shot" src="assets/images/hero-preview.png" alt="VibeSpace desktop app" /> -->
-
-        <div class="mockup glass" id="heroMockup">
-          <div class="mockup__bar">
-            <span class="traffic"><i></i><i></i><i></i></span>
-            <span class="mockup__title">VibeSpace — Workspace</span>
-            <span class="mockup__pills">
-              <span class="pill pill--mono"><span class="dot dot--live"></span> Online</span>
-              <span class="pill pill--mono"><span class="dot dot--blue"></span> Voice Ready</span>
-              <span class="pill pill--mono"><span class="dot dot--clay"></span> Local Models</span>
-            </span>
-          </div>
-
-          <div class="mockup__body">
-            <aside class="mockup__rail">
-              <span class="rail__item rail__item--active"><svg class="ico" aria-hidden="true"><use href="#i-chat"></use></svg> Chat</span>
-              <span class="rail__item"><svg class="ico" aria-hidden="true"><use href="#i-phone"></use></svg> Calls</span>
-              <span class="rail__item"><svg class="ico" aria-hidden="true"><use href="#i-users"></use></svg> Agents</span>
-              <span class="rail__item"><svg class="ico" aria-hidden="true"><use href="#i-terminal"></use></svg> Terminal</span>
-              <span class="rail__item"><svg class="ico" aria-hidden="true"><use href="#i-grid"></use></svg> Tasks</span>
-              <span class="rail__item"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg> Memory</span>
-            </aside>
-
-            <div class="mockup__main">
-              <div class="bubble bubble--ai">
-                <span class="bubble__who">VibeSpace</span>
-                Good to see you. Workspace synced — 3 tasks due today and your local model is warm.
-              </div>
-              <div class="bubble bubble--me">
-                Draft the launch checklist and call me at 9am to review.
-              </div>
-              <div class="bubble bubble--ai">
-                <span class="bubble__who">VibeSpace</span>
-                On it. Checklist drafted ✓ · Reminder call scheduled for 9:00 AM ✓
-              </div>
-
-              <div class="mockup__cards">
-                <div class="mini-card">
-                  <span class="mini-card__label">Voice</span>
-                  <span class="mini-card__value">Connected</span>
-                  <span class="wave"><i></i><i></i><i></i><i></i><i></i></span>
-                </div>
-                <div class="mini-card">
-                  <span class="mini-card__label">Model</span>
-                  <span class="mini-card__value">Ollama · local</span>
-                </div>
-                <div class="mini-card">
-                  <span class="mini-card__label">Agents</span>
-                  <span class="mini-card__value">Council · 3 active</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="float-card float-card--1 glass">
-          <span class="dot dot--live"></span> Call scheduled · 9:00 AM
-        </div>
-        <div class="float-card float-card--2 glass">
-          <svg class="ico" aria-hidden="true"><use href="#i-zap"></use></svg> Task automated · launch checklist
-        </div>
-      </div>
-    </section>
-
-    <!-- trust strip -->
-    <section class="strip reveal" aria-label="At a glance">
-      <div class="strip__inner">
-        <span><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg> Local-first &amp; private</span>
-        <span><svg class="ico" aria-hidden="true"><use href="#i-monitor"></use></svg> Windows · macOS · Linux</span>
-        <span><svg class="ico" aria-hidden="true"><use href="#i-plug"></use></svg> Plugin system</span>
-        <span><svg class="ico" aria-hidden="true"><use href="#i-mic"></use></svg> Voice calling</span>
-        <span><svg class="ico" aria-hidden="true"><use href="#i-layers"></use></svg> 21 model providers</span>
-        <span><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg> Persistent memory</span>
-      </div>
-    </section>
-
-    <!-- ========================== FEATURES ========================== -->
-    <section class="section" id="features">
-      <div class="section__head reveal">
-        <span class="pill pill--soft">Features</span>
-        <h2 class="section__title">One assistant for your whole workflow</h2>
-        <p class="section__lead">
-          VibeSpace brings chat, voice, local models, plugins, and automation into a
-          single calm workspace — so you can stop juggling a dozen tabs and tools.
-        </p>
-      </div>
-
-      <div class="grid grid--features stagger">
-        <article class="card feature reveal" data-tilt>
-          <span class="feature__icon"><svg class="ico" aria-hidden="true"><use href="#i-chat"></use></svg></span>
-          <h3>Chat with VibeSpace</h3>
-          <p>Ask questions, plan tasks, code, research, and manage your workflow from one assistant with multi-thread conversations.</p>
-        </article>
-
-        <article class="card feature reveal" data-tilt>
-          <span class="feature__icon"><svg class="ico" aria-hidden="true"><use href="#i-phone"></use></svg></span>
-          <h3>Call VibeSpace</h3>
-          <p>Use voice conversations for fast, hands-free help. Talk in-app or wire up phone calling when you need it.</p>
-        </article>
-
-        <article class="card feature reveal" data-tilt>
-          <span class="feature__icon"><svg class="ico" aria-hidden="true"><use href="#i-mail"></use></svg></span>
-          <h3>Message VibeSpace</h3>
-          <p>Send and receive messages for reminders, quick updates, and the little nudges that keep your day on track.</p>
-        </article>
-
-        <article class="card feature reveal" data-tilt>
-          <span class="feature__icon"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span>
-          <h3>Local AI models</h3>
-          <p>Run local models through supported providers like Ollama where available — private, offline-friendly workflows.</p>
-        </article>
-
-        <article class="card feature reveal" data-tilt>
-          <span class="feature__icon"><svg class="ico" aria-hidden="true"><use href="#i-plug"></use></svg></span>
-          <h3>Plugin system</h3>
-          <p>Connect tools, APIs, and workflows into one assistant so your stack works together instead of in silos.</p>
-        </article>
-
-        <article class="card feature reveal" data-tilt>
-          <span class="feature__icon"><svg class="ico" aria-hidden="true"><use href="#i-rocket"></use></svg></span>
-          <h3>Creator workspace</h3>
-          <p>Built for coding, launching apps, planning businesses, and automating the daily work that adds up.</p>
-        </article>
-      </div>
-    </section>
-
-    <!-- ========================= HOW IT WORKS ========================= -->
-    <section class="section" id="how">
-      <div class="section__head reveal">
-        <span class="pill pill--soft">How it works</span>
-        <h2 class="section__title">Calm to set up. Powerful to use.</h2>
-        <p class="section__lead">Three steps from download to a calmer, more capable desktop.</p>
-      </div>
-
-      <div class="steps stagger">
-        <article class="step reveal" data-tilt>
-          <span class="step__num">01</span>
-          <h3>Download VibeSpace</h3>
-          <p>Install the desktop app for Windows in a couple of clicks. macOS &amp; Linux builds are available via the setup guide.</p>
-        </article>
-        <span class="step__line" aria-hidden="true"></span>
-        <article class="step reveal" data-tilt>
-          <span class="step__num">02</span>
-          <h3>Bring your keys</h3>
-          <p>Add your own model-provider keys, or run local models with Ollama. Everything stays on your device by default.</p>
-        </article>
-        <span class="step__line" aria-hidden="true"></span>
-        <article class="step reveal" data-tilt>
-          <span class="step__num">03</span>
-          <h3>Start commanding</h3>
-          <p>Chat, call, automate, and connect your tools from one cozy workspace — keyboard-first and always close at hand.</p>
-        </article>
-      </div>
-    </section>
-
-    <!-- ========================= DEMO VIDEOS ========================= -->
-    <section class="section" id="demo">
-      <div class="section__head reveal">
-        <span class="pill pill--soft">Demo</span>
-        <h2 class="section__title">See VibeSpace in motion</h2>
-        <p class="section__lead">Real walkthroughs of the app. More full demos coming soon.</p>
-      </div>
-
-      <div class="video reveal">
-        <div class="video__stage glass">
-          <video id="featuredVideo" controls preload="metadata" playsinline poster="">
-            <!-- EDIT VIDEO: drop real files in assets/videos/ (see that folder's README) -->
-            <source id="featuredSource" src="assets/videos/jarvis-demo-1.mp4" type="video/mp4" />
-            Your browser does not support embedded video.
-          </video>
-          <div class="video__fallback" id="videoFallback" hidden>
-            <span class="video__fallback-icon"><svg class="ico" aria-hidden="true"><use href="#i-film"></use></svg></span>
-            <p><strong>This demo is on the way.</strong></p>
-            <p class="muted">Drop your clip at <code>assets/videos/jarvis-demo-1.mp4</code> to play it here.</p>
-          </div>
-          <h3 class="video__caption" id="videoCaption">VibeSpace App Walkthrough</h3>
-        </div>
-
-        <div class="video__list" id="videoList" role="list">
-          <button class="video__thumb is-active" role="listitem"
-                  data-src="assets/videos/jarvis-demo-1.mp4"
-                  data-title="VibeSpace App Walkthrough">
-            <span class="video__thumb-art"><svg class="ico" aria-hidden="true"><use href="#i-monitor"></use></svg></span>
-            <span class="video__thumb-meta">
-              <span class="video__thumb-title">App Walkthrough</span>
-              <span class="video__thumb-sub">A tour of the cozy workspace</span>
-            </span>
-            <span class="video__thumb-play">▶</span>
-          </button>
-
-          <button class="video__thumb" role="listitem"
-                  data-src="assets/videos/jarvis-demo-2.mp4"
-                  data-title="Voice + Chat Demo">
-            <span class="video__thumb-art"><svg class="ico" aria-hidden="true"><use href="#i-mic"></use></svg></span>
-            <span class="video__thumb-meta">
-              <span class="video__thumb-title">Voice + Chat Demo</span>
-              <span class="video__thumb-sub">Talking hands-free with VibeSpace</span>
-            </span>
-            <span class="video__thumb-play">▶</span>
-          </button>
-
-          <button class="video__thumb" role="listitem"
-                  data-src="assets/videos/jarvis-demo-3.mp4"
-                  data-title="Local Models &amp; Plugins Preview">
-            <span class="video__thumb-art"><svg class="ico" aria-hidden="true"><use href="#i-plug"></use></svg></span>
-            <span class="video__thumb-meta">
-              <span class="video__thumb-title">Local Models &amp; Plugins</span>
-              <span class="video__thumb-sub">Private models and connections</span>
-            </span>
-            <span class="video__thumb-play">▶</span>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <!-- ===================== INTERACTIVE CHAT DEMO ===================== -->
-    <section class="section" id="chat">
-      <div class="section__head reveal">
-        <span class="pill pill--soft">Try it</span>
-        <h2 class="section__title">Have a quick chat with VibeSpace</h2>
-        <p class="section__lead">A live preview of the VibeSpace chat. Tap a suggested prompt or type your own — this demo runs entirely in your browser.</p>
-      </div>
-
-      <div class="chat glass reveal">
-        <div class="chat__head">
-          <span class="chat__avatar" aria-hidden="true">
-            <svg viewBox="0 0 64 64" width="40" height="40" fill="none">
-              <defs>
-                <linearGradient id="chatMark" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
-                  <stop offset="0%" stop-color="#b98cff" /><stop offset="60%" stop-color="#8b5cf6" /><stop offset="100%" stop-color="#e8a87c" />
-                </linearGradient>
-              </defs>
-              <rect x="2" y="2" width="60" height="60" rx="18" fill="url(#chatMark)" />
-              <path d="M22 22 L32 42 L42 22" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-            </svg>
-          </span>
-          <div class="chat__id">
-            <span class="chat__name">VibeSpace</span>
-            <span class="chat__status"><span class="dot dot--live"></span> Online · demo mode</span>
-          </div>
-        </div>
-
-        <div class="chat__log" id="chatLog" aria-live="polite"></div>
-
-        <div class="chat__suggest" id="chatSuggest">
-          <button class="suggest" data-prompt="Call me at 3:00 AM">Call me at 3:00 AM</button>
-          <button class="suggest" data-prompt="Help me launch my app">Help me launch my app</button>
-          <button class="suggest" data-prompt="Show my local AI models">Show my local AI models</button>
-          <button class="suggest" data-prompt="Message me a reminder">Message me a reminder</button>
-          <button class="suggest" data-prompt="Explain VibeSpace">Explain VibeSpace</button>
-        </div>
-
-        <form class="chat__input" id="chatForm" autocomplete="off">
-          <input id="chatField" type="text" placeholder="Message VibeSpace…" aria-label="Message VibeSpace" />
-          <button type="submit" class="btn btn--primary chat__send" aria-label="Send message">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 12l16-8-6 16-3.5-6L4 12z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/></svg>
-            Send
-          </button>
-        </form>
-        <p class="chat__note muted">This is an interactive preview with pre-written responses — not a live model.</p>
-      </div>
-    </section>
-
-    <!-- ===================== CALL & MESSAGE (GLOBAL) ===================== -->
-    <section class="section" id="connect">
-      <div class="section__head reveal">
-        <span class="pill pill--soft">Calling &amp; Messaging</span>
-        <h2 class="section__title">Call and message VibeSpace<br />from anywhere in the world</h2>
-        <p class="section__lead">
-          Your workspace fits in your pocket. Call VibeSpace like a friend, let it call
-          you back, text it both ways, and run your entire project from the road — while
-          VibeSpace keeps everything moving.
-        </p>
-      </div>
-
-      <div class="connect">
-        <!-- left: capabilities -->
-        <div class="connect__list stagger">
-          <article class="connect__item reveal" data-tilt>
-            <span class="connect__icon"><svg class="ico" aria-hidden="true"><use href="#i-phone"></use></svg></span>
-            <div><h3>Call VibeSpace</h3><p>Tap to talk to VibeSpace like a phone call — hands-free help wherever you happen to be.</p></div>
-          </article>
-          <article class="connect__item reveal" data-tilt>
-            <span class="connect__icon"><svg class="ico" aria-hidden="true"><use href="#i-bell"></use></svg></span>
-            <div><h3>It calls you back</h3><p>A call for reminders, deadlines, or a morning rundown — VibeSpace reaches out when it actually matters.</p></div>
-          </article>
-          <article class="connect__item reveal" data-tilt>
-            <span class="connect__icon"><svg class="ico" aria-hidden="true"><use href="#i-chat"></use></svg></span>
-            <div><h3>Text it, both ways</h3><p>Message VibeSpace and it replies in seconds. Fire off a quick note and it gets to work.</p></div>
-          </article>
-          <article class="connect__item reveal" data-tilt>
-            <span class="connect__icon"><svg class="ico" aria-hidden="true"><use href="#i-globe"></use></svg></span>
-            <div><h3>Run things from anywhere</h3><p>Kick off tasks, check status, and ship updates from the train, the couch, or the other side of the planet.</p></div>
-          </article>
-          <article class="connect__item reveal" data-tilt>
-            <span class="connect__icon"><svg class="ico" aria-hidden="true"><use href="#i-tools"></use></svg></span>
-            <div><h3>It keeps the project moving</h3><p>Planning, code, notes, follow-ups — VibeSpace keeps things ticking along while you’re away.</p></div>
-          </article>
-        </div>
-
-        <!-- right: interactive phone (live call screen + message thread) -->
-        <div class="phone-stage reveal">
-          <div class="phone" id="phone">
-            <span class="phone__notch"></span>
-            <div class="phone__screen">
-              <div class="phone__switch" role="tablist" aria-label="Call or messages">
-                <button type="button" class="phone__tab is-active" data-view="call" role="tab">Call</button>
-                <button type="button" class="phone__tab" data-view="sms" role="tab">Messages</button>
-              </div>
-
-              <!-- CALL VIEW -->
-              <div class="phone__view is-active" data-view="call">
-                <div class="callscreen">
-                  <div class="callscreen__rings" aria-hidden="true"><span></span><span></span><span></span></div>
-                  <span class="callscreen__avatar">
-                    <svg viewBox="0 0 64 64" width="56" height="56" fill="none">
-                      <defs><linearGradient id="callMark" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
-                        <stop offset="0%" stop-color="#b98cff"/><stop offset="60%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#e8a87c"/></linearGradient></defs>
-                      <rect x="2" y="2" width="60" height="60" rx="18" fill="url(#callMark)"/>
-                      <path d="M22 22 L32 42 L42 22" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-                    </svg>
-                  </span>
-                  <p class="callscreen__name">VibeSpace</p>
-                  <p class="callscreen__timer" id="callTimer">00:00</p>
-                  <span class="wave callscreen__wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
-                  <p class="callscreen__caption" id="callCaption">“Scheduling your 9am review call.”</p>
-                  <div class="callscreen__actions">
-                    <span class="call__btn call__btn--soft" aria-hidden="true"><svg class="ico" aria-hidden="true"><use href="#i-mic"></use></svg></span>
-                    <span class="call__btn call__btn--end" aria-hidden="true">✕</span>
-                    <span class="call__btn call__btn--soft" aria-hidden="true"><svg class="ico" aria-hidden="true"><use href="#i-volume"></use></svg></span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- MESSAGES VIEW -->
-              <div class="phone__view" data-view="sms" hidden>
-                <div class="smsscreen">
-                  <div class="smsscreen__head">
-                    <span class="sms__ava" aria-hidden="true">V</span>
-                    <span class="sms__id"><strong>VibeSpace</strong><span class="muted">online · replies in seconds</span></span>
-                  </div>
-                  <div class="smsscreen__thread" id="smsThread"></div>
-                </div>
-              </div>
-            </div>
-            <span class="phone__home"></span>
-          </div>
-
-          <span class="phone__chip phone__chip--1"><svg class="ico" aria-hidden="true"><use href="#i-globe"></use></svg> Connected from anywhere</span>
-          <span class="phone__chip phone__chip--2"><svg class="ico" aria-hidden="true"><use href="#i-phone"></use></svg> Two-way calls &amp; texts</span>
-        </div>
-      </div>
-
-      <div class="connect__chips">
-        <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-mic"></use></svg> Voice calls</span>
-        <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-chat"></use></svg> Two-way texts</span>
-        <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-clock"></use></svg> Reminders &amp; nudges</span>
-        <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-zap"></use></svg> Hands-off actions</span>
-        <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-smartphone"></use></svg> Works on any phone</span>
-      </div>
-      <p class="connect__note muted">Calling and messaging features are rolling out and may vary by version, region, and provider configuration.</p>
-    </section>
-
-    <!-- ============================ ABOUT ============================ -->
-    <section class="section" id="about">
-      <div class="about reveal">
-        <div class="about__text">
-          <span class="pill pill--soft">About</span>
-          <h2 class="section__title">About VibeSpace</h2>
-          <p>
-            VibeSpace is a desktop AI assistant designed to bring chat, voice, local
-            models, plugins, and automation into one clean workspace. It is built for
-            creators, developers, entrepreneurs, and power users who want one assistant
-            that can help manage projects, code, research, reminders, and daily workflows.
-          </p>
-          <p class="muted">
-            Local-first by design — your chats, tasks, memories, and settings live on your
-            device by default. Cloud features are opt-in, and you bring your own model keys.
-          </p>
-          <div class="about__stats">
-            <div class="stat"><span class="stat__num grad-text" data-count="21" data-suffix="+">0</span><span class="stat__label">model providers</span></div>
-            <div class="stat"><span class="stat__num grad-text" data-count="1">0</span><span class="stat__label">calm workspace</span></div>
-            <div class="stat"><span class="stat__num grad-text" data-count="3">0</span><span class="stat__label">platforms supported</span></div>
-          </div>
-        </div>
-        <div class="about__panel glass" data-tilt>
-          <h3 class="about__panel-title">What lives inside</h3>
-          <ul class="ticks">
-            <li>AI chat with multi-thread conversations</li>
-            <li>Agent council — multiple agents in parallel</li>
-            <li>Voice calling &amp; messaging workflows</li>
-            <li>Coding terminals with real shells</li>
-            <li>Tasks, kanban, schedule &amp; reminders</li>
-            <li>Persistent memory across sessions</li>
-            <li>Plugin connections for tools &amp; APIs</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <!-- ========================= TESTIMONIALS ========================= -->
-    <section class="section" id="voices">
-      <div class="section__head reveal">
-        <span class="pill pill--soft">Reviews</span>
-        <h2 class="section__title">The first people who tried it</h2>
-        <p class="section__lead">Honest first impressions from the people closest to me.</p>
-      </div>
-
-      <div class="grid grid--quotes stagger">
-        <figure class="card quote reveal" data-tilt>
-          <span class="quote__mark" aria-hidden="true">“</span>
-          <blockquote>One calm window instead of seven tabs. VibeSpace is genuinely where my day starts now.</blockquote>
-          <figcaption><span class="quote__avatar">B</span> My brother</figcaption>
-        </figure>
-        <figure class="card quote reveal" data-tilt>
-          <span class="quote__mark" aria-hidden="true">“</span>
-          <blockquote>I’m not even techy and I got it in minutes. Texting it reminders feels like having a personal assistant.</blockquote>
-          <figcaption><span class="quote__avatar">S</span> My sister</figcaption>
-        </figure>
-        <figure class="card quote reveal" data-tilt>
-          <span class="quote__mark" aria-hidden="true">“</span>
-          <blockquote>It scheduled a reminder call and drafted my launch checklist before my coffee cooled. I’m hooked.</blockquote>
-          <figcaption><span class="quote__avatar">F</span> My friend</figcaption>
-        </figure>
-      </div>
-    </section>
-
-    <!-- ========================== DOWNLOAD ========================== -->
-    <section class="section" id="download">
-      <div class="download glass reveal">
-        <div class="download__head">
-          <span class="pill pill--soft">Download</span>
-          <h2 class="section__title">Get VibeSpace</h2>
-          <p class="section__lead">Install from your terminal in one line — pick your OS.</p>
-        </div>
-
-        <!-- =============================================================== -->
-        <!--  INSTALL COMMANDS · LIVE. Commands fetch the canonical          -->
-        <!--  installers from the VibeSpace GitHub repo (main branch).       -->
-        <!-- =============================================================== -->
-        <div class="install" id="installArea">
-
-          <div class="install__tabs" role="tablist" aria-label="Choose your operating system">
-            <button type="button" class="install__tab is-active" data-os="win" role="tab"><svg class="ico" aria-hidden="true"><use href="#i-windows"></use></svg> Windows</button>
-            <button type="button" class="install__tab" data-os="mac" role="tab"><svg class="ico" aria-hidden="true"><use href="#i-apple"></use></svg> macOS</button>
-            <button type="button" class="install__tab" data-os="linux" role="tab"><svg class="ico" aria-hidden="true"><use href="#i-shell"></use></svg> Linux</button>
-          </div>
-
-          <div class="install__panels">
-            <div class="install__panel is-active" data-os="win">
-              <div class="cmd">
-                <code class="cmd__code">irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex</code>
-                <button type="button" class="cmd__copy" aria-label="Copy command">Copy</button>
-              </div>
-              <p class="install__hint muted">Run in <strong>PowerShell</strong> on Windows 10/11.</p>
-            </div>
-            <div class="install__panel" data-os="mac" hidden>
-              <div class="cmd">
-                <code class="cmd__code">curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash</code>
-                <button type="button" class="cmd__copy" aria-label="Copy command">Copy</button>
-              </div>
-              <p class="install__hint muted">Run in <strong>Terminal</strong> on macOS 12+.</p>
-            </div>
-            <div class="install__panel" data-os="linux" hidden>
-              <div class="cmd">
-                <code class="cmd__code">curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash</code>
-                <button type="button" class="cmd__copy" aria-label="Copy command">Copy</button>
-              </div>
-              <p class="install__hint muted">Run in your <strong>shell</strong> — .deb, .rpm &amp; AppImage supported.</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="download__actions">
-          <!-- DIRECT DOWNLOAD · always points at the newest GitHub release. -->
-          <a class="btn btn--primary btn--lg magnetic" href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest" target="_blank" rel="noopener noreferrer">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div class="hero__actions rise d4">
+          <a class="btn btn--fill btn--lg" href="#download">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.4 10.6 4.3v6.9H3zM12 4.1 21 2.8V11.2h-9zM3 12.8h7.6v6.9L3 18.6zM12 12.8h9v8.4l-9-1.3z"/></svg>
             Download for Windows
           </a>
-          <!-- EDIT: point this at your setup guide / docs when ready -->
-          <a class="btn btn--ghost btn--lg" href="https://github.com/Cookie774-GameDev/VibeSpace/blob/main/DOWNLOAD.md">View Setup Guide</a>
-          <!-- EDIT: swap for a newsletter/Discord link when ready -->
-          <a class="btn btn--ghost btn--lg" href="#contact">Join Updates</a>
+          <button class="cmd glass" type="button" data-copy="irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex" aria-label="Copy PowerShell install command">
+            <span class="cmd__prompt">PS&gt;</span>
+            <code class="cmd__text">irm vibespace install.ps1 | iex</code>
+            <span class="cmd__copy">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+            </span>
+          </button>
         </div>
 
-        <p class="download__meta muted">Desktop app for Windows · macOS · Linux. Current release: <strong>v0.1.31</strong>.</p>
+        <!-- Floating glass capability chips -->
+        <div class="hero__chips rise d5" aria-hidden="true">
+          <span class="chip glass float-a">Persistent terminals</span>
+          <span class="chip glass float-b">Jarvis &amp; Friday voices</span>
+          <span class="chip glass float-c">AI phone calls</span>
+          <span class="chip glass float-a">112 verified plugins</span>
+          <span class="chip glass float-b">One persistent memory</span>
+        </div>
+      </div>
 
-        <div class="grid grid--reqs">
-          <div class="req"><span class="req__icon"><svg class="ico" aria-hidden="true"><use href="#i-windows"></use></svg></span><span class="req__title">Windows 10/11</span><span class="req__sub muted">64-bit desktop install</span></div>
-          <div class="req"><span class="req__icon"><svg class="ico" aria-hidden="true"><use href="#i-globe"></use></svg></span><span class="req__title">Internet connection</span><span class="req__sub muted">for cloud AI providers</span></div>
-          <div class="req"><span class="req__icon"><svg class="ico" aria-hidden="true"><use href="#i-cpu"></use></svg></span><span class="req__title">Optional local models</span><span class="req__sub muted">e.g. Ollama for offline use</span></div>
-          <div class="req"><span class="req__icon"><svg class="ico" aria-hidden="true"><use href="#i-mic"></use></svg></span><span class="req__title">Microphone</span><span class="req__sub muted">for voice features</span></div>
+      <div class="hero__fade" aria-hidden="true"></div>
+    </section>
+
+    <!-- ticker -->
+    <div class="ticker" aria-hidden="true">
+      <div class="ticker__track">
+        <span>Terminals</span><i>✦</i><span>Voice</span><i>✦</i><span>AI Calling</span><i>✦</i><span>Plugins</span><i>✦</i><span>Memory</span><i>✦</i><span>Local-first</span><i>✦</i><span>BYOK</span><i>✦</i>
+        <span>Terminals</span><i>✦</i><span>Voice</span><i>✦</i><span>AI Calling</span><i>✦</i><span>Plugins</span><i>✦</i><span>Memory</span><i>✦</i><span>Local-first</span><i>✦</i><span>BYOK</span><i>✦</i>
+      </div>
+    </div>
+
+    <!-- ============================= DEMO ============================= -->
+    <section class="section" id="demo">
+      <header class="section__head reveal">
+        <p class="kicker"><span>01</span> — Demo</p>
+        <h2>Watch it work</h2>
+        <p class="lead">One command in, a whole workspace in motion — terminals, agents, and a voice that calls you back.</p>
+      </header>
+
+      <div class="demo reveal">
+        <!-- ============================================================ -->
+        <!-- REAL VIDEO SLOT — when you have a screen recording, drop it  -->
+        <!-- at assets/videos/vibespace-demo.mp4, then UNCOMMENT the      -->
+        <!-- <video> block below and DELETE the .terminal element.       -->
+        <!--
+        <div class="demo__frame glass">
+          <video controls preload="metadata" playsinline
+                 poster="assets/images/og-cover.png"
+                 style="width:100%;display:block;border-radius:inherit">
+            <source src="assets/videos/vibespace-demo.mp4" type="video/mp4" />
+          </video>
+        </div>
+        -->
+        <!-- ============================================================ -->
+
+        <div class="demo__frame glass">
+          <div class="term" id="term">
+            <div class="term__bar">
+              <span class="term__dots"><i></i><i></i><i></i></span>
+              <span class="term__tabs">
+                <span class="term__tab is-on">jarvis — agent</span>
+                <span class="term__tab">build — pnpm</span>
+                <span class="term__tab">voice</span>
+              </span>
+              <span class="term__badge"><span class="pulse pulse--sage"></span> 3 terminals · persistent</span>
+            </div>
+            <div class="term__body" id="termBody" aria-live="off"></div>
+            <div class="term__voice" id="termVoice" hidden>
+              <span class="term__voice-ring"></span>
+              <span class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="term__voice-text" id="termVoiceText"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="demo__notes">
+          <div class="demo__note glass reveal"><strong>Real shells.</strong> Sessions survive restarts — pick up a build exactly where you left it.</div>
+          <div class="demo__note glass reveal"><strong>Agents in parallel.</strong> Run Claude, Codex, or any CLI agent side by side.</div>
+          <div class="demo__note glass reveal"><strong>Say the word.</strong> Jarvis hears you, acts, and can ring your phone when it&rsquo;s done.</div>
         </div>
       </div>
     </section>
 
-    <!-- ============================= FAQ ============================= -->
-    <section class="section" id="faq">
-      <div class="section__head reveal">
-        <span class="pill pill--soft">FAQ</span>
-        <h2 class="section__title">Questions, answered</h2>
-      </div>
+    <!-- =========================== FEATURES =========================== -->
+    <section class="section" id="features">
+      <header class="section__head reveal">
+        <p class="kicker"><span>02</span> — Features</p>
+        <h2>Everything, under one roof</h2>
+        <p class="lead">Not another chat window. A full workspace where the work — and the context — stays put.</p>
+      </header>
 
-      <div class="faq reveal">
-        <details class="faq__item">
-          <summary>Is VibeSpace free?<span class="faq__chev" aria-hidden="true">+</span></summary>
-          <p>Pricing and availability may vary by release. The download section will always show the latest option.</p>
-        </details>
-        <details class="faq__item">
-          <summary>Does VibeSpace support voice?<span class="faq__chev" aria-hidden="true">+</span></summary>
-          <p>Yes, VibeSpace is designed to support voice interaction where configured.</p>
-        </details>
-        <details class="faq__item">
-          <summary>Can VibeSpace use local models?<span class="faq__chev" aria-hidden="true">+</span></summary>
-          <p>VibeSpace can support compatible local model providers depending on your setup.</p>
-        </details>
-        <details class="faq__item">
-          <summary>Is this connected to VibeSpaceOS?<span class="faq__chev" aria-hidden="true">+</span></summary>
-          <p>Yes, VibeSpaceOS is the web home and ecosystem around VibeSpace.</p>
-        </details>
-        <details class="faq__item">
-          <summary>Can VibeSpace call or message me?<span class="faq__chev" aria-hidden="true">+</span></summary>
-          <p>VibeSpace is being designed with call and message workflows for reminders, notifications, and assistant interactions.</p>
-        </details>
+      <div class="bento">
+        <article class="cell glass reveal cell--wide">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m7 9.5 3 3-3 3M13 15.5h4.5"/></svg></span>
+          <h3>Terminals that don&rsquo;t forget</h3>
+          <p>Persistent sessions, fullscreen focus mode, and as many panes as your day needs. Run multiple agent CLIs — Claude Code, Codex, anything — side by side without losing state.</p>
+          <div class="cell__art" aria-hidden="true">
+            <span class="artline" style="width:78%"></span>
+            <span class="artline" style="width:52%"></span>
+            <span class="artline artline--accent" style="width:64%"></span>
+            <span class="artline" style="width:38%"></span>
+          </div>
+        </article>
+
+        <article class="cell glass reveal">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v4M8.5 21.5h7"/></svg></span>
+          <h3>Jarvis &amp; Friday</h3>
+          <p>Two voice presets, your pick of engines — cloud voices through Deepgram and OpenAI, or the free local Kokoro engine that never leaves your machine.</p>
+        </article>
+
+        <article class="cell glass reveal">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21.5 16.6v2.6a2 2 0 0 1-2.2 2A19.6 19.6 0 0 1 2.8 4.7a2 2 0 0 1 2-2.2h2.6a2 2 0 0 1 2 1.7c.13.95.36 1.88.7 2.77a2 2 0 0 1-.45 2.11L8.6 10.2a16 16 0 0 0 5.2 5.2l1.12-1.05a2 2 0 0 1 2.11-.45c.89.34 1.82.57 2.77.7a2 2 0 0 1 1.7 2z"/></svg></span>
+          <h3>Jarvis calls your phone</h3>
+          <p>Morning briefings, build-finished pings, &ldquo;call me when it&rsquo;s deployed.&rdquo; Real outbound calls and two-way texting, anywhere you are.</p>
+        </article>
+
+        <article class="cell glass reveal">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 2.5v5M15 2.5v5M7 7.5h10v3.5a5 5 0 0 1-10 0zM12 16v5.5"/></svg></span>
+          <h3>112 verified plugins</h3>
+          <p>GitHub, Stripe, Supabase, browsers, calendars — a vetted catalog that snaps into your workspace in one click.</p>
+        </article>
+
+        <article class="cell glass reveal">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M6.5 6.4 10 10m4 0 3.5-3.6M6.5 17.6 10 14m4 0 3.5 3.6"/></svg></span>
+          <h3>One persistent memory</h3>
+          <p>Chats, agents, tasks, and calls all share a living context map. Close the app on Tuesday, pick up the thread on Friday.</p>
+        </article>
+
+        <article class="cell glass reveal cell--wide">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5M12 14.5v2.5"/></svg></span>
+          <h3>Private by design</h3>
+          <p>Bring your own keys to 21+ model providers, or stay fully local with Ollama and Kokoro. Your chats, memory, and settings live on your device — cloud features are opt-in, never required.</p>
+          <div class="cell__tags" aria-hidden="true">
+            <span>BYOK</span><span>Local models</span><span>Local voice</span><span>On-device memory</span>
+          </div>
+        </article>
       </div>
     </section>
 
-    <!-- =========================== CONTACT =========================== -->
-    <section class="section" id="contact">
-      <div class="contact reveal">
-        <div class="contact__intro">
-          <span class="pill pill--soft">Contact</span>
-          <h2 class="section__title">Get in touch</h2>
-          <p class="section__lead">Questions, feedback, or partnership ideas? Send a note and we’ll get back to you.</p>
-          <ul class="contact__list">
-            <li><svg class="ico" aria-hidden="true"><use href="#i-mail"></use></svg> <a href="mailto:support@vibespaceos.com">support@vibespaceos.com</a></li>
-            <li><svg class="ico" aria-hidden="true"><use href="#i-globe"></use></svg> <a href="https://vibespaceos.com">vibespaceos.com</a></li>
+    <!-- =========================== PRICING =========================== -->
+    <section class="section" id="pricing">
+      <header class="section__head reveal">
+        <p class="kicker"><span>03</span> — Pricing</p>
+        <h2>Launch pricing</h2>
+        <p class="lead">Start free forever with your own keys. Add credits when you want the cloud to do the heavy lifting.</p>
+        <p class="promo glass reveal"><span class="pulse"></span> Launch promo — free Deepgram cloud voice minutes for early users</p>
+      </header>
+
+      <div class="plans">
+        <article class="plan glass reveal">
+          <h3 class="plan__name">Free</h3>
+          <p class="plan__price">$0<span>/mo</span></p>
+          <p class="plan__tag">Local &amp; yours</p>
+          <ul class="plan__list">
+            <li>Bring your own API keys</li>
+            <li>Free local Kokoro voice</li>
+            <li>Local models via Ollama</li>
+            <li>Terminals, memory &amp; plugins</li>
           </ul>
+          <a class="btn btn--line plan__cta" href="#download">Download free</a>
+        </article>
+
+        <article class="plan glass reveal">
+          <h3 class="plan__name">Starter</h3>
+          <p class="plan__price">$10<span>/mo</span></p>
+          <p class="plan__tag">Dip a toe in the cloud</p>
+          <ul class="plan__list">
+            <li><strong>3,100</strong> AI credits</li>
+            <li><strong>22</strong> call minutes</li>
+            <li><strong>~100</strong> texts</li>
+            <li>Cloud voice included</li>
+          </ul>
+          <a class="btn btn--line plan__cta" href="#download">Get Starter</a>
+        </article>
+
+        <article class="plan glass reveal plan--hot">
+          <span class="plan__flag">Most popular</span>
+          <h3 class="plan__name">Pro</h3>
+          <p class="plan__price">$50<span>/mo</span></p>
+          <p class="plan__tag">For the daily driver</p>
+          <ul class="plan__list">
+            <li><strong>15,500</strong> AI credits</li>
+            <li><strong>109</strong> call minutes</li>
+            <li><strong>~500</strong> texts</li>
+            <li>Cloud voice included</li>
+          </ul>
+          <a class="btn btn--fill plan__cta" href="#download">Get Pro</a>
+        </article>
+
+        <article class="plan glass reveal">
+          <h3 class="plan__name">Ultra</h3>
+          <p class="plan__price">$100<span>/mo</span></p>
+          <p class="plan__tag">Run the whole studio</p>
+          <ul class="plan__list">
+            <li><strong>31,000</strong> AI credits</li>
+            <li><strong>217</strong> call minutes</li>
+            <li><strong>~1,000</strong> texts</li>
+            <li>Cloud voice included</li>
+          </ul>
+          <a class="btn btn--line plan__cta" href="#download">Get Ultra</a>
+        </article>
+      </div>
+
+      <p class="plans__note reveal">Launch pricing — plans and allowances may change as VibeSpace grows. Every paid tier includes everything in Free.</p>
+    </section>
+
+    <!-- =========================== DOWNLOAD =========================== -->
+    <section class="section" id="download">
+      <div class="dl glass reveal">
+        <div class="dl__halo" aria-hidden="true"></div>
+        <img class="dl__logo" src="assets/images/logo.png" width="64" height="64" alt="" />
+        <p class="kicker"><span>04</span> — Download</p>
+        <h2>Bring your work home</h2>
+        <p class="lead">Free to start. Two minutes to install. Windows x64 today — more platforms on the roadmap.</p>
+
+        <div class="dl__buttons">
+          <a class="btn btn--fill btn--lg" href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest" target="_blank" rel="noopener">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.4 10.6 4.3v6.9H3zM12 4.1 21 2.8V11.2h-9zM3 12.8h7.6v6.9L3 18.6zM12 12.8h9v8.4l-9-1.3z"/></svg>
+            Installer (.exe)
+          </a>
+          <a class="btn btn--line btn--lg" href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest" target="_blank" rel="noopener">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M4.5 21h15"/></svg>
+            MSI package
+          </a>
         </div>
 
-        <form class="contact__form glass" id="contactForm" novalidate>
-          <!-- BACKEND: front-end only. To make it live, POST these fields to your endpoint
-               inside script.js → handleContactSubmit(). -->
-          <div class="field">
-            <label for="cName">Name</label>
-            <input id="cName" name="name" type="text" placeholder="Your name" required />
-          </div>
-          <div class="field">
-            <label for="cEmail">Email</label>
-            <input id="cEmail" name="email" type="email" placeholder="you@example.com" required />
-          </div>
-          <div class="field">
-            <label for="cMessage">Message</label>
-            <textarea id="cMessage" name="message" rows="4" placeholder="How can VibeSpace help?" required></textarea>
-          </div>
-          <button type="submit" class="btn btn--primary btn--lg contact__submit">Send message</button>
-          <p class="contact__success" id="contactSuccess" hidden>Thanks — your message is ready to be connected to the backend.</p>
-        </form>
+        <p class="dl__or">or paste into PowerShell</p>
+        <button class="cmd cmd--wide glass" type="button" data-copy="irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex" aria-label="Copy PowerShell install command">
+          <span class="cmd__prompt">PS&gt;</span>
+          <code class="cmd__text">irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex</code>
+          <span class="cmd__copy">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          </span>
+        </button>
+
+        <ul class="dl__reqs">
+          <li>Windows 10 1809+</li>
+          <li>64-bit (x64)</li>
+          <li>Mic optional — for voice</li>
+        </ul>
       </div>
     </section>
   </main>
@@ -711,34 +340,23 @@
   <!-- ============================ FOOTER ============================ -->
   <footer class="footer">
     <div class="footer__inner">
-      <div class="footer__brand">
-        <span class="brand__mark" aria-hidden="true">
-          <img src="assets/images/logo.png" width="30" height="30" alt="" />
-        </span>
-        <div>
-          <p class="footer__name">VibeSpace</p>
-          <p class="footer__by muted">by VibeSpaceOS · <a href="https://vibespaceos.com">vibespaceos.com</a></p>
-        </div>
-      </div>
-
+      <a class="brand" href="#top">
+        <img class="brand__logo" src="assets/images/logo.png" width="30" height="30" alt="" />
+        <span class="brand__name">VibeSpace</span>
+      </a>
       <nav class="footer__links" aria-label="Footer">
-        <a href="#home">Home</a>
-        <a href="#features">Features</a>
-        <a href="#connect">Calling</a>
         <a href="#demo">Demo</a>
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
         <a href="#download">Download</a>
-        <a href="#contact">Contact</a>
+        <a href="https://github.com/Cookie774-GameDev/VibeSpace" target="_blank" rel="noopener">GitHub</a>
       </nav>
-    </div>
-
-    <div class="footer__legal">
-      <p class="muted">VibeSpace is an independent AI assistant platform. Product features may vary by version and provider configuration.</p>
-      <p class="muted">© <span id="year"></span> VibeSpaceOS. All rights reserved.</p>
+      <p class="footer__legal">© <span id="year"></span> VibeSpaceOS · <a href="https://vibespaceos.com">vibespaceos.com</a></p>
     </div>
   </footer>
 
-  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div class="toast glass" id="toast" role="status" aria-live="polite" hidden>Copied to clipboard</div>
 
-  <script src="script.js" defer></script>
+  <script src="assets/js/main.js" defer></script>
 </body>
 </html>

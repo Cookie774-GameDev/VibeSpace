@@ -1,24 +1,10 @@
-# Images — Logo & Hero Assets (optional)
-
-The landing page ships with a built-in **inline SVG logo and hero mockup**, so
-it looks complete with NO image files. Add real images here only if you want to
-replace the generated visuals.
-
-## Optional drop-ins
+# Images
 
 ```
-logo.png            →  square app logo (used in navbar/footer if present)
-hero-preview.png    →  real screenshot of the VibeSpace desktop app
-og-cover.png        →  1200x630 social share image (Open Graph / Twitter card)
-favicon.png         →  browser tab icon
+logo.png       →  VibeSpace app icon (navbar, hero, footer)
+favicon.png    →  browser tab icon (same art as logo)
+og-cover.png   →  social share image (Open Graph / Twitter card)
 ```
 
-## How to use them
-
-- To swap the navbar logo: in `landing/index.html`, find `<!-- EDIT LOGO -->`
-  and replace the inline `<svg>` with `<img src="assets/images/logo.png" .../>`.
-- To swap the hero mockup with a real screenshot: find `<!-- EDIT HERO IMAGE -->`
-  and uncomment the `<img>` line.
-
-Recommended: PNG with transparent background for the logo, and a high-resolution
-(at least 1600px wide) screenshot for the hero preview.
+`logo.png` / `favicon.png` are copies of `app/public/vibespace-icon.png` —
+if the app icon changes, re-copy it here so the site stays in sync.
