@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { PLUGIN_CATALOG, catalogStats, validatePluginCatalog } from './catalog';
+import {
+  PLUGIN_CATALOG,
+  PLUGIN_CATALOG_TARGET,
+  catalogStats,
+  validatePluginCatalog,
+} from './catalog';
 
 describe('plugin catalog', () => {
-  it('contains 353 schema-valid unique entries', () => {
-    expect(PLUGIN_CATALOG.length).toBe(353);
+  it('contains 112 schema-valid verified connectors', () => {
+    expect(PLUGIN_CATALOG.length).toBe(PLUGIN_CATALOG_TARGET);
+    expect(PLUGIN_CATALOG.length).toBe(112);
     expect(validatePluginCatalog()).toEqual([]);
     expect(new Set(PLUGIN_CATALOG.map((plugin) => plugin.id)).size).toBe(PLUGIN_CATALOG.length);
   });
@@ -16,15 +22,19 @@ describe('plugin catalog', () => {
     expect(implemented.every((plugin) => plugin.tools.length > 0)).toBe(true);
   });
 
+  it('excludes needs_credentials placeholders from the curated catalog', () => {
+    expect(PLUGIN_CATALOG.every((plugin) => plugin.status !== 'needs_credentials')).toBe(true);
+  });
+
   it('reports catalog coverage stats', () => {
     const stats = catalogStats();
     expect(stats).toEqual({
-      total: 353,
+      total: 112,
       implemented: 6,
-      configurable: 37,
-      needsCredentials: 310,
+      configurable: 106,
+      needsCredentials: 0,
       blocked: 0,
-      withHttpTest: 42,
+      withHttpTest: 87,
     });
   });
 });

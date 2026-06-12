@@ -7,6 +7,7 @@ export {
 } from './catalog';
 export { usePluginStore } from './store';
 export { getPluginContextBlock } from './context';
+export { extractPluginMentions, resolvePluginSlug } from './mentions';
 export {
   isPluginActive,
   listActiveAiModelPlugins,

@@ -82,6 +82,8 @@ export interface SendDetail {
   contextNodes?: ContextAttachment[];
   /** Speak the final assistant reply when this send came from voice input. */
   speakReply?: boolean;
+  /** Plugin ids attached via /plug or detected in message text. */
+  pluginIds?: string[];
 }
 
 /** The shape of the `jarvis:cancel` event detail. */
@@ -347,7 +349,7 @@ export function startRuntimeListener(
       });
     }
     try {
-      pluginContext = getPluginContextBlock(projectId);
+      pluginContext = getPluginContextBlock(projectId, detail.pluginIds);
     } catch (err) {
       devConsole.log({
         channel: 'ai',

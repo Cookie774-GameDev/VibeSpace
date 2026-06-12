@@ -405,6 +405,7 @@ const TERMINAL_ACTIONS: ActionDef[] = [
     description:
       'Open 1-10 new terminal panes. Optionally start the same command, such as opencode, in each new pane.',
     icon: Layers,
+    destructive: true,
     params: [
       {
         key: 'count',
@@ -463,6 +464,7 @@ const TERMINAL_ACTIONS: ActionDef[] = [
     description:
       'Open Terminals and start Claude Code (`claude`) in a new pane. Optionally `cd` into a project folder first.',
     icon: PlayCircle,
+    destructive: true,
     params: [
       {
         key: 'cwd',
@@ -491,6 +493,7 @@ const TERMINAL_ACTIONS: ActionDef[] = [
     description:
       'Open Terminals and start OpenCode (`opencode`) in a new pane. Optionally `cd` into a project folder first.',
     icon: PlayCircle,
+    destructive: true,
     params: [
       {
         key: 'cwd',

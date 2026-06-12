@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { X, FileText, Network, Zap, Terminal, Clock, Image, Link, Folder } from 'lucide-react';
+import { X, FileText, Network, Zap, Terminal, Clock, Image, Link, Folder, Plug } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export type TokenType =
@@ -11,7 +11,8 @@ export type TokenType =
   | 'link'
   | 'folder'
   | 'model'
-  | 'agent';
+  | 'agent'
+  | 'plugin';
 
 export interface InputTokenProps {
   type: TokenType;
@@ -31,6 +32,7 @@ const TOKEN_ICONS: Record<TokenType, typeof FileText> = {
   folder: Folder,
   model: Zap,
   agent: Zap,
+  plugin: Plug,
 };
 
 const TOKEN_COLORS: Record<TokenType, string> = {
@@ -43,6 +45,7 @@ const TOKEN_COLORS: Record<TokenType, string> = {
   folder: 'from-amber-500/25 to-orange-500/25 border-amber-500/40',
   model: 'from-violet-500/30 to-purple-600/30 border-violet-500/50',
   agent: 'from-violet-500/30 to-purple-600/30 border-violet-500/50',
+  plugin: 'from-orange-500/25 to-amber-500/25 border-orange-500/40',
 };
 
 const TOKEN_GLOW: Record<TokenType, string> = {
@@ -55,6 +58,7 @@ const TOKEN_GLOW: Record<TokenType, string> = {
   folder: 'shadow-[0_0_10px_rgba(245,158,11,0.2)]',
   model: 'shadow-[0_0_12px_rgba(139,92,246,0.3)]',
   agent: 'shadow-[0_0_12px_rgba(139,92,246,0.3)]',
+  plugin: 'shadow-[0_0_10px_rgba(245,158,11,0.2)]',
 };
 
 export function InputToken({ type, label, sublabel, onRemove, className }: InputTokenProps) {

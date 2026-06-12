@@ -37,4 +37,24 @@ describe('plugin terminal context', () => {
     expect(block).not.toContain('token');
     expect(getPluginContextBlock('project-b')).toBe('');
   });
+
+  it('merges explicit plugin ids with connected plugins', () => {
+    usePluginStore.setState({
+      connections: {
+        github: {
+          pluginId: 'github',
+          state: 'connected',
+          enabled: true,
+          enabledProjectIds: ['project-a'],
+          accountLabel: 'octocat',
+          configuredFields: ['token'],
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const block = getPluginContextBlock('project-a', ['slack']);
+    expect(block).toContain('GitHub');
+    expect(block).toContain('Slack');
+    expect(block).toContain('mentioned, not connected');
+  });
 });

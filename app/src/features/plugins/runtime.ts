@@ -68,6 +68,25 @@ function substitute(template: string, values: CredentialMap, manifest: PluginMan
     if (key === 'datacenter') {
       return mailchimpDatacenter(required(values, 'api_key', 'API key'));
     }
+    if (key === 'mongo_basic') {
+      const publicKey = required(values, 'public_key', 'Public key');
+      const privateKey = required(values, 'private_key', 'Private key');
+      return btoa(`${publicKey}:${privateKey}`);
+    }
+    if (key === 'woo_basic') {
+      const consumerKey = required(values, 'consumer_key', 'Consumer key');
+      const consumerSecret = required(values, 'consumer_secret', 'Consumer secret');
+      return btoa(`${consumerKey}:${consumerSecret}`);
+    }
+    if (key === 'chargebee_basic') {
+      const apiKey = required(values, 'api_key', 'API key');
+      return btoa(`${apiKey}:`);
+    }
+    if (key === 'wp_basic') {
+      const username = required(values, 'username', 'Username');
+      const appPassword = required(values, 'app_password', 'Application password');
+      return btoa(`${username}:${appPassword}`);
+    }
     const field = manifest.fields.find((candidate) => candidate.id === key);
     return required(values, key, field?.label ?? key);
   });
@@ -174,10 +193,13 @@ export async function testPluginConnection(pluginId: string): Promise<PluginTest
       return await runHttpTest(manifest, values, manifest.httpTest);
     }
 
+    if (manifest.authType === 'oauth') {
+      return { ok: true, accountLabel: manifest.provider };
+    }
+
     if (
       manifest.status === 'needs_credentials' ||
       manifest.status === 'blocked' ||
-      manifest.authType === 'oauth' ||
       manifest.authType === 'service_account'
     ) {
       return manualSetupResult(manifest);

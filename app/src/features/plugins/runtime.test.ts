@@ -57,6 +57,16 @@ describe('plugin runtime', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it('accepts oauth connectors after required fields are saved', async () => {
+    const { setPluginCredential } = await import('./credentials');
+    await setPluginCredential('gmail', 'client_id', 'client-id');
+    await setPluginCredential('gmail', 'client_secret', 'client-secret');
+    await expect(testPluginConnection('gmail')).resolves.toEqual({
+      ok: true,
+      accountLabel: 'Gmail',
+    });
+  });
+
   it('returns a readable invalid-credential error without logging the secret', async () => {
     const secret = 'github_pat_invalid_super_secret';
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);

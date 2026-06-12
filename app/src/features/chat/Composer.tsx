@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, ChevronDown, Sparkles, Mic, MicOff, FileText, X, Network, Terminal } from 'lucide-react';
+import { PLUGIN_CATALOG } from '@/features/plugins/catalog';
+import { extractPluginMentions } from '@/features/plugins/mentions';
+import { usePluginStore } from '@/features/plugins/store';
 import {
   Button,
   Hint,
@@ -264,6 +267,13 @@ function cleanupAudioRecorder(
   stream?.getTracks().forEach((t) => t.stop());
 }
 
+function pluginConnectionLabel(
+  connection: { accountLabel?: string; configuredFields: string[] } | undefined,
+): string | undefined {
+  if (!connection) return undefined;
+  return connection.accountLabel ?? `${connection.configuredFields.length} credential(s)`;
+}
+
 export function Composer({ chatId, placeholder, compact = false, disableRouteSlashCommands = false }: ComposerProps) {
   const [text, setText] = useState('');
   const [mentionCtx, setMentionCtx] = useState<MentionContext | null>(null);
@@ -276,6 +286,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const [sending, setSending] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [attachedTerminals, setAttachedTerminals] = useState<TerminalRef[]>([]);
+  const [attachedPlugins, setAttachedPlugins] = useState<string[]>([]);
   const [attachedContexts, setAttachedContexts] = useState<ContextAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   // V2 — speech-to-text in the composer.
@@ -311,6 +322,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const projectId = useAuthStore((s) => s.projectId);
   const terminalPickerActive = optionPickerCtx?.cmd.cmd === 'terminal';
+  const pluginPickerActive = optionPickerCtx?.cmd.cmd === 'plug';
+  const pluginConnections = usePluginStore((s) => (pluginPickerActive ? s.connections : {}));
   const terminalSessions = useTerminalTranscriptStore((s) =>
     terminalPickerActive ? s.sessions : COMPOSER_IDLE_TERMINAL_SESSIONS,
   );
@@ -370,8 +383,24 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       }));
     }
 
+    if (cmd === 'plug') {
+      return PLUGIN_CATALOG.filter((plugin) => {
+        const connection = pluginConnections[plugin.id];
+        if (!connection || connection.state !== 'connected' || !connection.enabled) return false;
+        return (
+          connection.enabledProjectIds.includes('*') ||
+          Boolean(projectId && connection.enabledProjectIds.includes(projectId))
+        );
+      }).map((plugin) => ({
+        id: plugin.id,
+        label: plugin.name,
+        description: pluginConnectionLabel(pluginConnections[plugin.id]),
+        metadata: plugin.category,
+      }));
+    }
+
     return [];
-  }, [optionPickerCtx, terminalSessions, projectId]);
+  }, [optionPickerCtx, terminalSessions, projectId, pluginConnections]);
 
   // Keep selectedOptionId in sync when options change
   useEffect(() => {
@@ -531,7 +560,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     const after = text.slice(ta.selectionStart);
 
     // If command has options (like /terminal or /contextmap), show option picker
-    if (cmd.hasOptions && (cmd.cmd === 'terminal' || cmd.cmd === 'contextmap')) {
+    if (cmd.hasOptions && (cmd.cmd === 'terminal' || cmd.cmd === 'contextmap' || cmd.cmd === 'plug')) {
       // Remove the typed slash command from text
       setText(before + after);
       setSlashCtx(null);
@@ -754,7 +783,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const handleSend = async () => {
     const trimmed = text.trim();
     const hasConfirmedCommands = confirmedCommands.length > 0;
-    if ((!trimmed && attachedFiles.length === 0 && attachedTerminals.length === 0 && attachedContexts.length === 0 && !hasConfirmedCommands) || sending) return;
+    if ((!trimmed && attachedFiles.length === 0 && attachedTerminals.length === 0 && attachedPlugins.length === 0 && attachedContexts.length === 0 && !hasConfirmedCommands) || sending) return;
     if (await handleSlashCommand(trimmed)) return;
 
     // Process confirmed commands before sending
@@ -775,6 +804,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             return cur.some((t) => terminalRefKey(t) === key) ? cur : [...cur, ref];
           });
         }
+      } else if (confirmed.cmd === 'plug' && confirmed.value) {
+        setAttachedPlugins((cur) =>
+          cur.includes(confirmed.value!) ? cur : [...cur, confirmed.value!].slice(0, 8),
+        );
       } else if (confirmed.cmd === 'contextmap' && confirmed.value) {
         const maps = projectId ? loadStoredContextMaps(projectId) : [];
         const matched = maps.find((m: ContextMapRecord) => m.name === confirmed.value || (m.name ?? '').toLowerCase().includes((confirmed.value ?? '').toLowerCase()));
@@ -833,6 +866,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       });
 
       const mentionedAgentIds = extractMentionedAgentIds(trimmed, agents);
+      const mentionedPluginIds = extractPluginMentions(trimmed, PLUGIN_CATALOG);
+      const pluginIds = Array.from(new Set([...attachedPlugins, ...mentionedPluginIds])).slice(0, 8);
       const messageFilePaths = Array.from(
         new Set([...attachedFiles, ...extractAbsoluteFilePaths(trimmed)]),
       ).slice(0, 8);
@@ -845,6 +880,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             filePaths: messageFilePaths,
             terminalRefs: attachedTerminals,
             contextNodes: attachedContexts,
+            pluginIds,
             speakReply: voiceReplyRequestedRef.current,
           },
         }),
@@ -853,6 +889,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       setText('');
       setAttachedFiles([]);
       setAttachedTerminals([]);
+      setAttachedPlugins([]);
       setAttachedContexts([]);
       setMentionCtx(null);
     } catch (err) {
@@ -971,7 +1008,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     }
   };
 
-  const canSend = (text.trim().length > 0 || attachedFiles.length > 0 || attachedTerminals.length > 0 || attachedContexts.length > 0 || confirmedCommands.length > 0) && !sending;
+  const canSend = (text.trim().length > 0 || attachedFiles.length > 0 || attachedTerminals.length > 0 || attachedPlugins.length > 0 || attachedContexts.length > 0 || confirmedCommands.length > 0) && !sending;
 
   const addDroppedPath = useCallback((path: string) => {
     const clean = path.trim();
@@ -1496,6 +1533,21 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                       onRemove={() => setAttachedTerminals((cur) => cur.filter((p) => terminalRefKey(p) !== terminalRefKey(ref)))}
                     />
                   ))}
+                </div>
+              )}
+              {attachedPlugins.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-2 pb-1">
+                  {attachedPlugins.map((pluginId) => {
+                    const plugin = PLUGIN_CATALOG.find((entry) => entry.id === pluginId);
+                    return (
+                      <InputToken
+                        key={pluginId}
+                        type="plugin"
+                        label={plugin?.name ?? pluginId}
+                        onRemove={() => setAttachedPlugins((cur) => cur.filter((id) => id !== pluginId))}
+                      />
+                    );
+                  })}
                 </div>
               )}
               {attachedContexts.length > 0 && (
