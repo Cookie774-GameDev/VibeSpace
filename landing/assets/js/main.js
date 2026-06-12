@@ -202,3 +202,159 @@
     run();
   }
 })();
+
+/* ====================== interactive layer ======================
+   Pointer spotlight + 3D tilt on glass cards, magnetic CTAs,
+   nav scrollspy, count-up plan numbers, hero parallax, back-to-top.
+   Everything respects prefers-reduced-motion and coarse pointers.  */
+(() => {
+  "use strict";
+
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const finePointer = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+  /* Let hero elements accept inline transforms after their entrance
+     animation finishes (fill-mode: forwards would otherwise win). */
+  document.querySelectorAll(".rise").forEach((el) => {
+    el.addEventListener("animationend", () => {
+      el.classList.remove("rise", "d1", "d2", "d3", "d4", "d5");
+    }, { once: true });
+  });
+
+  /* ------------------ spotlight glow on cards ------------------ */
+  if (finePointer) {
+    document.querySelectorAll(".cell, .plan, .demo__note").forEach((card) => {
+      card.addEventListener("pointermove", (e) => {
+        const r = card.getBoundingClientRect();
+        card.style.setProperty("--mx", `${e.clientX - r.left}px`);
+        card.style.setProperty("--my", `${e.clientY - r.top}px`);
+      });
+    });
+  }
+
+  /* ------------------------- 3D tilt ---------------------------- */
+  if (finePointer && !reducedMotion) {
+    const MAX_DEG = 4.5;
+    document.querySelectorAll(".cell, .plan").forEach((card) => {
+      let raf = 0;
+      card.addEventListener("pointermove", (e) => {
+        if (!card.classList.contains("is-in")) return; // wait for reveal
+        const r = card.getBoundingClientRect();
+        const px = (e.clientX - r.left) / r.width - 0.5;
+        const py = (e.clientY - r.top) / r.height - 0.5;
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => {
+          card.style.transition = "transform 0.12s ease-out, border-color 0.3s, box-shadow 0.3s";
+          card.style.transform =
+            `perspective(900px) rotateX(${(-py * MAX_DEG).toFixed(2)}deg) ` +
+            `rotateY(${(px * MAX_DEG).toFixed(2)}deg) translateY(-2px)`;
+        });
+      });
+      card.addEventListener("pointerleave", () => {
+        cancelAnimationFrame(raf);
+        card.style.transition = "transform 0.55s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s, box-shadow 0.3s";
+        card.style.transform = "";
+      });
+    });
+  }
+
+  /* --------------------- magnetic buttons ----------------------- */
+  if (finePointer && !reducedMotion) {
+    document.querySelectorAll(".hero__actions .btn--fill, .dl__buttons .btn").forEach((btn) => {
+      btn.addEventListener("pointermove", (e) => {
+        const r = btn.getBoundingClientRect();
+        const x = (e.clientX - r.left - r.width / 2) * 0.16;
+        const y = (e.clientY - r.top - r.height / 2) * 0.28;
+        btn.style.transform = `translate(${x.toFixed(1)}px, ${(y - 2).toFixed(1)}px)`;
+      });
+      btn.addEventListener("pointerleave", () => {
+        btn.style.transform = "";
+      });
+    });
+  }
+
+  /* ------------------------ scrollspy --------------------------- */
+  const navAnchors = [...document.querySelectorAll('.nav__links a[href^="#"]')]
+    .filter((a) => a.getAttribute("href").length > 1 && !a.classList.contains("btn"));
+  const spied = navAnchors
+    .map((a) => document.querySelector(a.getAttribute("href")))
+    .filter(Boolean);
+  if (spied.length && "IntersectionObserver" in window) {
+    const setActive = (id) =>
+      navAnchors.forEach((a) => a.classList.toggle("is-active", a.getAttribute("href") === "#" + id));
+    const io = new IntersectionObserver(
+      (entries) => entries.forEach((en) => en.isIntersecting && setActive(en.target.id)),
+      { rootMargin: "-30% 0px -60% 0px" }
+    );
+    spied.forEach((s) => io.observe(s));
+  }
+
+  /* ------------------ count-up plan numbers --------------------- */
+  if (!reducedMotion && "IntersectionObserver" in window) {
+    const parsed = [];
+    document.querySelectorAll(".plan__price, .plan__list strong").forEach((el) => {
+      const node = el.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE) return;
+      const m = node.textContent.match(/^([^\d]*)([\d,]+)(.*)$/);
+      if (!m) return;
+      parsed.push({ el, node, prefix: m[1], value: parseInt(m[2].replace(/,/g, ""), 10), suffix: m[3] });
+    });
+    const animate = (t) => {
+      const dur = 1100;
+      const t0 = performance.now();
+      const step = (now) => {
+        const p = Math.min(1, (now - t0) / dur);
+        const eased = 1 - Math.pow(1 - p, 3);
+        t.node.textContent = t.prefix + Math.round(t.value * eased).toLocaleString("en-US") + t.suffix;
+        if (p < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    };
+    const io = new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue;
+        io.unobserve(en.target);
+        const t = parsed.find((x) => x.el === en.target);
+        if (t) animate(t);
+      }
+    }, { threshold: 0.6 });
+    parsed.forEach((t) => io.observe(t.el));
+  }
+
+  /* --------------------- hero parallax -------------------------- */
+  if (finePointer && !reducedMotion) {
+    const hero = document.querySelector(".hero");
+    const chips = document.querySelector(".hero__chips");
+    const logo = document.querySelector(".hero__logo");
+    if (hero) {
+      hero.addEventListener("pointermove", (e) => {
+        const r = hero.getBoundingClientRect();
+        const x = (e.clientX - r.left) / r.width - 0.5;
+        const y = (e.clientY - r.top) / r.height - 0.5;
+        if (chips) chips.style.transform = `translate(${(x * 14).toFixed(1)}px, ${(y * 10).toFixed(1)}px)`;
+        if (logo) logo.style.transform = `translate(${(x * -8).toFixed(1)}px, ${(y * -6).toFixed(1)}px)`;
+      });
+      hero.addEventListener("pointerleave", () => {
+        if (chips) chips.style.transform = "";
+        if (logo) logo.style.transform = "";
+      });
+    }
+  }
+
+  /* ----------------------- back to top -------------------------- */
+  const toTop = document.getElementById("toTop");
+  if (toTop) {
+    let ticking = false;
+    const onScroll = () => {
+      toTop.classList.toggle("is-show", window.scrollY > 700);
+      ticking = false;
+    };
+    window.addEventListener("scroll", () => {
+      if (!ticking) { ticking = true; requestAnimationFrame(onScroll); }
+    }, { passive: true });
+    onScroll();
+    toTop.addEventListener("click", () =>
+      window.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" })
+    );
+  }
+})();

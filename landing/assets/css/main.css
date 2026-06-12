@@ -947,6 +947,76 @@ a { color: inherit; }
 }
 
 /* ---------------------------------------------------------------
+   Interactive layer — spotlight, tilt, scrollspy, back-to-top
+   --------------------------------------------------------------- */
+
+/* pointer-tracked glow on glass cards (set via --mx/--my from JS) */
+@media (hover: hover) and (pointer: fine) {
+  .cell::after,
+  .plan::after,
+  .demo__note::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.35s;
+    background: radial-gradient(
+      240px circle at var(--mx, 50%) var(--my, 50%),
+      rgba(255, 243, 214, 0.09),
+      rgba(217, 119, 87, 0.055) 42%,
+      transparent 72%
+    );
+  }
+  .cell:hover::after,
+  .plan:hover::after,
+  .demo__note:hover::after { opacity: 1; }
+}
+
+/* scrollspy underline in the nav */
+.nav__links a:not(.btn) {
+  position: relative;
+  padding-bottom: 2px;
+}
+.nav__links a:not(.btn)::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 100%; bottom: -3px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--terracotta-hot), var(--honey));
+  transition: right 0.35s var(--ease-out);
+}
+.nav__links a.is-active { color: var(--ink); }
+.nav__links a.is-active:not(.btn)::after { right: 0; }
+
+/* back to top */
+.totop {
+  position: fixed;
+  right: 22px; bottom: 22px;
+  z-index: 55;
+  width: 46px; height: 46px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--ink-dim);
+  opacity: 0;
+  transform: translateY(16px);
+  pointer-events: none;
+  transition: opacity 0.3s, transform 0.3s var(--ease-out), color 0.2s, border-color 0.2s;
+}
+.totop.is-show { opacity: 1; transform: none; pointer-events: auto; }
+.totop:hover { color: var(--ink); border-color: rgba(217, 119, 87, 0.5); }
+.totop .ic { width: 18px; height: 18px; fill: none; }
+
+/* ticker pauses while inspected */
+.ticker:hover .ticker__track { animation-play-state: paused; }
+
+/* tilt targets keep their snappy hover shadow while transformed */
+.cell, .plan { will-change: transform; }
+
+/* ---------------------------------------------------------------
    Reduced motion
    --------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
@@ -960,4 +1030,5 @@ a { color: inherit; }
     transform: none !important;
     transition: none !important;
   }
+  .cell, .plan { will-change: auto; }
 }
