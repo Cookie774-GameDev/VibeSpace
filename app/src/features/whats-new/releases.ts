@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.32';
+export const CURRENT_VERSION = '0.1.33';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,28 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.33',
+    date: '2026-06-12',
+    headline: 'Fix React crash when opening Settings or chat',
+    summary:
+      'Resolves a production crash (React error #185) caused by an infinite re-render loop in the chat composer plugin picker.',
+    sections: [
+      {
+        kind: 'fix',
+        items: [
+          'Fixed infinite re-render when the chat composer mounted alongside Settings.',
+          'Hardened admin tab state in Settings to avoid redundant updates.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets VibeSpace-0.1.33-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.32',
     date: '2026-06-12',

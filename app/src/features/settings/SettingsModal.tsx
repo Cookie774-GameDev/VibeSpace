@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   User2,
   KeyRound,
@@ -122,9 +122,21 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
   const setOpen = useUIStore((s) => s.setSettingsOpen);
   const isAdmin = useAppAdmin();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
-  const tabs = isAdmin
-    ? [...TABS.slice(0, 1), { id: 'admin' as const, label: 'Admin', icon: Shield }, ...TABS.slice(1)]
-    : TABS;
+  const tabs = useMemo(
+    () =>
+      isAdmin
+        ? [
+            ...TABS.slice(0, 1),
+            { id: 'admin' as const, label: 'Admin', icon: Shield },
+            ...TABS.slice(1),
+          ]
+        : TABS,
+    [isAdmin],
+  );
+
+  useEffect(() => {
+    if (!isAdmin && tab === 'admin') setTab('account');
+  }, [isAdmin, tab]);
 
   useEffect(() => {
     if (!open) return;

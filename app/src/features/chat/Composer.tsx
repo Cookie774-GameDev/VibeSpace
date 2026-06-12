@@ -71,6 +71,10 @@ const MIN_LINES = 1;
 const MAX_LINES = 8;
 const MIN_HEIGHT = MIN_LINES * LINE_HEIGHT + PADDING_Y;
 const MAX_HEIGHT = MAX_LINES * LINE_HEIGHT + PADDING_Y;
+const COMPOSER_IDLE_PLUGIN_CONNECTIONS = {} as ReturnType<
+  typeof usePluginStore.getState
+>['connections'];
+
 const COMPOSER_IDLE_TERMINAL_SESSIONS = {} as ReturnType<
   typeof useTerminalTranscriptStore.getState
 >['sessions'];
@@ -323,7 +327,9 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const projectId = useAuthStore((s) => s.projectId);
   const terminalPickerActive = optionPickerCtx?.cmd.cmd === 'terminal';
   const pluginPickerActive = optionPickerCtx?.cmd.cmd === 'plug';
-  const pluginConnections = usePluginStore((s) => (pluginPickerActive ? s.connections : {}));
+  const pluginConnections = usePluginStore((s) =>
+    pluginPickerActive ? s.connections : COMPOSER_IDLE_PLUGIN_CONNECTIONS,
+  );
   const terminalSessions = useTerminalTranscriptStore((s) =>
     terminalPickerActive ? s.sessions : COMPOSER_IDLE_TERMINAL_SESSIONS,
   );

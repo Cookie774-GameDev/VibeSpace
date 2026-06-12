@@ -36,15 +36,17 @@ export function useAppAdmin(): boolean {
   const [cloudAdmin, setCloudAdmin] = useState(false);
 
   useEffect(() => {
-    if (localAdmin) {
-      setCloudAdmin(false);
+    if (localAdmin || !cloudUserId) {
+      setCloudAdmin((prev) => (prev ? false : prev));
       return;
     }
-    if (!cloudUserId) {
-      setCloudAdmin(false);
-      return;
-    }
-    void fetchCloudAdminStatus(cloudUserId).then(setCloudAdmin);
+    let cancelled = false;
+    void fetchCloudAdminStatus(cloudUserId).then((value) => {
+      if (!cancelled) setCloudAdmin(value);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [localAdmin, cloudUserId]);
 
   return localAdmin || cloudAdmin;
