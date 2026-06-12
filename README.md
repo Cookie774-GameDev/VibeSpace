@@ -1,267 +1,104 @@
 <p align="center">
-  <img src="site/images/vibespace-logo.png" alt="VibeSpace Logo" width="120" height="120" />
+  <img src="site/images/vibespace-logo.png" alt="VibeSpace" width="128" height="128" />
 </p>
 
 <h1 align="center">VibeSpace</h1>
 
 <p align="center">
-  <strong>The AI workspace for every model, agent, voice & task</strong>
+  The AI workspace where every model, agent, voice, and task lives under one roof.
 </p>
 
 <p align="center">
-  <a href="https://github.com/Cookie774-GameDev/VibeSpace/releases"><img src="https://img.shields.io/github/v/release/Cookie774-GameDev/VibeSpace?style=flat-square&color=7c3aed&label=Latest" alt="Latest Release"></a>
-  <a href="https://github.com/Cookie774-GameDev/VibeSpace/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square" alt="License"></a>
-  <a href="https://github.com/Cookie774-GameDev/VibeSpace"><img src="https://img.shields.io/github/stars/Cookie774-GameDev/VibeSpace?style=flat-square&color=f59e0b" alt="Stars"></a>
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platforms">
+  <a href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest"><img src="https://img.shields.io/badge/release-v0.1.34-e8855b" alt="Release v0.1.34"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache 2.0"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey" alt="Platform: Windows x64">
 </p>
 
 <p align="center">
-  <a href="#-quick-install">Install</a> •
-  <a href="#-features">Features</a> •
-  <a href="#-model-support">Models</a> •
-  <a href="#%EF%B8%8F-calling">Calling</a> •
-  <a href="#-documentation">Docs</a>
+  <a href="https://vibespaceos.com/">Website</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#features">Features</a> ·
+  <a href="https://github.com/Cookie774-GameDev/VibeSpace/releases/latest">Download</a>
 </p>
 
 ---
 
-## What is VibeSpace?
+## Install
 
-VibeSpace is a **cozy, local-first, all-in-one AI workspace** for builders who context-switch all day. It brings AI calling, agent councils, coding terminals, memory, tasks, and **21 model providers** into one desktop app.
-
-> **Vibe coding for vibe coders. Built by a vibe coder.**
-
-Stop juggling seven AI apps. Ship from one calm workspace.
-
----
-
-## Quick Install
-
-### Windows
+One line in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex
 ```
 
-### macOS / Linux
+Or grab the [latest release](https://github.com/Cookie774-GameDev/VibeSpace/releases/latest) directly — both the `.exe` installer and `.msi` package are available. See [DOWNLOAD.md](DOWNLOAD.md) for manual downloads and checksums.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.sh | bash
-```
+Requires Windows 10 1809 or later, 64-bit.
 
-<details>
-<summary>What happens when you run the installer?</summary>
+## Screenshots
 
-1. Downloads the latest release from GitHub
-2. Installs to the appropriate location (user-scope by default)
-3. Creates desktop/menu entries
-4. Auto-launches VibeSpace
+### Terminals
 
-Run `Jarvis` in a new terminal to launch with the animated intro.
+A tile grid of real PTY shells. Run an agent CLI in one pane while shells stay live in the rest — every session persists across navigation.
 
-</details>
+![VibeSpace terminal grid running an agent CLI](docs/screenshots/terminals.png)
 
-See [DOWNLOAD.md](DOWNLOAD.md) for manual downloads, checksums, and troubleshooting.
+### Voice
 
----
+Two built-in presets — Jarvis and Friday — with selectable personas and your choice of engine.
+
+![Voice settings with Jarvis and Friday presets](docs/screenshots/voice-settings.png)
+
+![Voice engine selection including local Kokoro and Deepgram](docs/screenshots/voice-engines.png)
+
+### Plans
+
+Free forever with your own keys. Paid tiers add hosted inference, cloud voice, and AI calling.
+
+![Plan tiers from free Spark to Singularity](docs/screenshots/plans.png)
 
 ## Features
 
-<table>
-<tr>
-<td width="50%">
+### Terminal workspace
 
-### Core Experience
+- **Tile grid** — up to ten live PTY panes per project, drag-resizable, with per-project layouts.
+- **Persistence** — sessions survive page switches and pane rearranging; shells keep running in the background.
+- **Per-terminal fullscreen** — focus one pane edge to edge, then Esc back to the grid. Other shells stay alive.
+- **Font scaling** — cycle each pane's font size independently, plus a global default in settings.
+- **Hold-to-clear** — clear a terminal's screen with a deliberate press-and-hold, so a stray click never wipes your scrollback.
+- **Agent CLIs** — run opencode, Claude Code, Codex, or any terminal agent inside a pane, side by side with plain shells.
 
-- **AI Chat** — Multi-thread conversations with any model
-- **Agent Council** — Multiple agents working in parallel
-- **Voice Calling** — Talk to your AI via phone or in-app
-- **Coding Terminals** — Real PTY shells with tile grids
-- **Actions** — Approve/cancel safe, inspectable commands
+### Voice
 
-</td>
-<td width="50%">
+- **Jarvis & Friday presets** — two free local voices for replies, previews, and wake acknowledgement. No API key needed.
+- **Local Kokoro engine** — a neural voice that downloads once and runs entirely on your machine.
+- **Personas** — pick the conversational style (Jarvis, Athena, Edge, Watson, HAL) independently of the spoken voice.
+- **Hands-free or click-to-talk** — continuous listening with a configurable pause, or push-to-talk.
 
-### Productivity
+### Subscriptions
 
-- **Tasks & Kanban** — Visual project management
-- **Schedule** — Events, reminders, and deadlines
-- **Memory** — Context that persists across sessions
-- **Skills** — Loadable system prompts and behaviors
-- **Quick Launcher** — Pinned apps and links
-
-</td>
-</tr>
-<tr>
-<td>
-
-### AI Providers (21+)
-
-- OpenAI, Anthropic, Google Gemini
-- Groq, Cerebras, Fireworks (fast inference)
-- OpenRouter, Replicate, Hugging Face (gateways)
-- Azure OpenAI, AWS Bedrock (enterprise)
-- Ollama for fully offline local models
-
-</td>
-<td>
-
-### Developer Tools
-
-- **Command Palette** — `Mod+K` for everything
-- **Inspector** — Debug panel for diagnostics
-- **Terminal Swarm** — Multi-terminal workflows
-- **Custom Tools** — Import/export local templates
-- **Offline Mode** — Work without internet
-
-</td>
-</tr>
-</table>
-
----
-
-## Model Support
-
-VibeSpace is **BYOK-first** (Bring Your Own Key). Your keys stay on your device.
-
-| Category | Providers |
-|----------|-----------|
-| **Major Cloud** | Anthropic · OpenAI · Google Gemini |
-| **Fast Inference** | Groq · Cerebras · Fireworks · Together AI · DeepSeek · Mistral · Cohere · Perplexity · xAI |
-| **Gateways** | OpenRouter · Replicate · Hugging Face |
-| **Enterprise** | Azure OpenAI · AWS Bedrock |
-| **Local** | Ollama (offline, no key needed) |
-
-<details>
-<summary>Free-tier quick start</summary>
-
-The easiest path is a **Google Gemini API key** — no credit card required:
-
-1. Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-2. Create a key (30 seconds)
-3. Paste it in Settings → Providers
-
-That's it. You're ready to chat.
-
-</details>
-
----
-
-## Calling
-
-VibeSpace isn't just a desktop window — **it's an AI you can talk to**.
-
-| Method | Description | Status |
-|--------|-------------|--------|
-| **In-app call** | Tap the green call button, talk via WebRTC | Shipping |
-| **Phone inbound** | Dial a Twilio number from any phone | Backend ready |
-| **Phone outbound** | VibeSpace calls you for alerts/deadlines | API ready |
-
-**Stack:** Twilio · LiveKit · Pipecat · FastAPI · Supabase
-
-<details>
-<summary>Privacy & security</summary>
-
-- Read-only tools by default
-- File reads happen through local bridge only
-- Write/edit/delete requires confirmation
-- PIN and caller allowlist for phone flow
-- 30-day audit log retention
-
-</details>
-
----
-
-## Hotkeys
-
-| Shortcut | Action |
-|----------|--------|
-| `Mod+K` | Command palette |
-| `Mod+J` | VibeSpace assistant |
-| `Mod+,` | Settings |
-| `Mod+Space` | Voice push-to-talk |
-| `Mod+Enter` | Send message |
-| `Mod+B` | Toggle nav pane |
-| `Mod+\` | Toggle inspector |
-| `Mod+Shift+A` | Actions palette |
-| `Mod+Shift+L` | Quick launcher |
-| `Mod+Shift+T` | To-do drawer |
-
-<details>
-<summary>All hotkeys</summary>
-
-| Shortcut | Action |
-|----------|--------|
-| `Mod+Shift+S` | Schedule modal |
-| `Mod+Shift+D` / `F12` | Dev Console |
-| `Mod+Shift+Enter` | Broadcast to council |
-| `Mod+Shift+M` | Composer mic/STT |
-| `Mod+Shift+F` | Chat fullscreen |
-| `Mod+1..9` | Switch tabs |
-
-</details>
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| **Desktop** | Tauri 2 · Rust · React · TypeScript · Vite |
-| **UI** | Cozy paper theme · Warm copper accents · Keyboard-first |
-| **AI** | 21 providers · MCP tools · Local Ollama |
-| **Voice** | Twilio · LiveKit · Pipecat · FastAPI |
-| **Storage** | Local-first · IndexedDB · Optional Supabase sync |
-
----
+- **Free (Spark)** — bring your own API keys, local voice, terminals, and the full workspace. Local-first; your data stays on your device.
+- **Paid tiers** — hosted AI credits, cloud voice, and Jarvis Call: real outbound phone calls and SMS from your workspace.
+- **Launch promo** — early users get free Deepgram cloud voice minutes.
 
 ## Development
 
 ```bash
-# Clone and install
 git clone https://github.com/Cookie774-GameDev/VibeSpace.git
 cd VibeSpace
 npm install
-
-# Run development server
 npm run tauri:dev
-
-# Build for release
-npm run tauri:build
 ```
 
-See [SETUP.md](SETUP.md) for prerequisites and environment setup.
-
----
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [SETUP.md](SETUP.md) | Development environment setup |
-| [DOWNLOAD.md](DOWNLOAD.md) | Manual downloads and checksums |
-| [CHANGELOG.md](CHANGELOG.md) | Version history |
-| [COMPLETE_ARCHITECTURE.md](COMPLETE_ARCHITECTURE.md) | System architecture |
-| [docs/](docs/) | Feature documentation |
-
----
+See [SETUP.md](SETUP.md) for prerequisites and [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Links
 
-| | |
-|---|---|
-| **Website** | [vibespaceos.com](https://vibespaceos.com) |
-| **Releases** | [GitHub Releases](https://github.com/Cookie774-GameDev/VibeSpace/releases) |
-| **Issues** | [GitHub Issues](https://github.com/Cookie774-GameDev/VibeSpace/issues) |
-
----
+- Website: [vibespaceos.com](https://vibespaceos.com/)
+- Releases: [github.com/Cookie774-GameDev/VibeSpace/releases](https://github.com/Cookie774-GameDev/VibeSpace/releases)
+- Issues: [github.com/Cookie774-GameDev/VibeSpace/issues](https://github.com/Cookie774-GameDev/VibeSpace/issues)
 
 ## License
 
-[Apache 2.0](LICENSE) — Use it, modify it, ship it.
-
----
-
-<p align="center">
-  <sub>Built with 🧡 for vibe coders everywhere</sub>
-</p>
+[Apache 2.0](LICENSE)
