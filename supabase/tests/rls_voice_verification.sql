@@ -15,7 +15,8 @@ do $$
 declare
   t text;
   tables text[] := array['voice_usage','voice_events','subscription_events',
-                         'voice_rate_limits','api_key_settings'];
+                         'voice_rate_limits','api_key_settings',
+                         'deepgram_promo_pool','deepgram_promo_usage','deepgram_promo_plan_limits'];
 begin
   foreach t in array tables loop
     if not exists (
@@ -65,16 +66,19 @@ end $$;
 do $$
 declare
   fn text;
-  fns text[] := array['reserve_voice_seconds','settle_voice_seconds','sync_voice_usage_for_user'];
+  fns text[] := array['reserve_voice_seconds','settle_voice_seconds','sync_voice_usage_for_user',
+                      'reserve_deepgram_promo','settle_deepgram_promo','sync_deepgram_promo_for_user'];
 begin
   foreach fn in array fns loop
     if not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                    where n.nspname='public' and p.proname=fn) then
       raise exception 'RPC % missing', fn;
     end if;
-    if fn = 'reserve_voice_seconds'
-       and has_function_privilege('authenticated', 'public.reserve_voice_seconds(uuid,integer)', 'EXECUTE') then
-      raise exception 'reserve_voice_seconds is EXECUTABLE by authenticated (should be revoked)';
+    if has_function_privilege('authenticated', format('public.%I(uuid,integer)', fn), 'EXECUTE')
+       or has_function_privilege('authenticated', format('public.%I(uuid,integer,numeric)', fn), 'EXECUTE')
+       or has_function_privilege('authenticated', format('public.%I(uuid,integer,numeric,integer,numeric)', fn), 'EXECUTE')
+       or has_function_privilege('authenticated', format('public.%I(uuid,text)', fn), 'EXECUTE') then
+      raise exception '% is EXECUTABLE by authenticated (should be revoked)', fn;
     end if;
   end loop;
   raise notice 'OK: quota RPCs exist and are not client-executable';
@@ -192,6 +196,28 @@ begin
   if (res->>'reason') <> 'no_message_budget' then raise exception 'free msg should have no budget, got %', res->>'reason'; end if;
 
   raise notice 'OK: message/call budgets enforce limits';
+end $$;
+
+-- ── 10. Deepgram promo: RPCs revoked + reservation enforces pool + per-user cap ─
+do $$
+declare
+  uid uuid := gen_random_uuid();
+  res jsonb;
+begin
+  insert into auth.users (id, email) values (uid, 'rls-dg@example.com') on conflict do nothing;
+  perform public.sync_deepgram_promo_for_user(uid, 'free');
+
+  res := public.reserve_deepgram_promo(uid, 30, 0.005);
+  if (res->>'ok')::boolean is not true then
+    raise exception 'promo reserve within cap failed: %', res;
+  end if;
+
+  res := public.reserve_deepgram_promo(uid, 999999, 999);
+  if (res->>'ok')::boolean is true then
+    raise exception 'promo reserve over cap incorrectly succeeded';
+  end if;
+
+  raise notice 'OK: deepgram promo reservation enforces limits';
 end $$;
 
 rollback; -- discard the throwaway auth.users row + usage

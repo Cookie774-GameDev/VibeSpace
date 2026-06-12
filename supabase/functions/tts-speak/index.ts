@@ -170,25 +170,50 @@ Deno.serve(async (req: Request): Promise<Response> => {
       p_chars: text.length,
       p_max_requests: RATE_MAX_REQUESTS,
     });
-    if (!rlErr && (rlData as { limited?: boolean } | null)?.limited) {
+    // Fail closed: a rate-limit RPC error must not bypass the window cap.
+    if (rlErr) return json({ error: 'usage_unavailable' }, 503, origin);
+    if ((rlData as { limited?: boolean } | null)?.limited) {
       return json({ error: 'rate_limited' }, 429, origin);
     }
 
-    // 4. Deepgram launch promo first ($6k company pool; cheaper Aura-1 rate).
+    // 4. Deepgram launch promo first ($1k company pool; cheaper Aura-1 rate).
+    let promoAttempted = false;
     if (provider === 'deepgram_tts') {
+      promoAttempted = true;
       const { data: promoReservation, error: promoErr } = await admin.rpc('reserve_deepgram_promo', {
         p_user_id: userId,
         p_estimate_seconds: estSecs,
         p_estimate_usd: estDeepgramUsd,
       });
-      if (!promoErr && (promoReservation as { ok?: boolean } | null)?.ok) {
+      if (promoErr) return json({ error: 'usage_unavailable' }, 503, origin);
+      if ((promoReservation as { ok?: boolean } | null)?.ok) {
         billingSource = 'deepgram_promo';
         reserved = promoReservation as typeof reserved;
       }
     }
 
-    // 5. Fall back to shared monthly call/voice budget (paid plans / other providers).
+    // 5. Fall back to shared monthly call/voice budget (paid plans / non-promo providers).
+    // Free-tier Deepgram after promo exhaustion must not silently retry another bucket.
     if (billingSource !== 'deepgram_promo') {
+      if (promoAttempted) {
+        const { data: profile } = await admin
+          .from('profiles')
+          .select('tier')
+          .eq('id', userId)
+          .maybeSingle();
+        const tier = String(profile?.tier ?? 'free');
+        if (tier === 'free') {
+          await admin.from('voice_events').insert({
+            user_id: userId, provider, voice_preset: preset, text_chars: text.length,
+            estimated_seconds: estSecs, status: 'blocked', error_code: 'promo_exhausted',
+          });
+          return json(
+            { error: 'quota_exceeded', reason: 'promo_exhausted', fallback: 'kokoro_local' },
+            402,
+            origin,
+          );
+        }
+      }
       const { data: reservation, error: reserveErr } = await admin
         .rpc('reserve_call_budget', { p_user_id: userId, p_estimate_usd: estCostUsd });
       if (reserveErr) return json({ error: 'usage_unavailable' }, 500, origin);

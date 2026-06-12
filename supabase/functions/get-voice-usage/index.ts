@@ -63,6 +63,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const usedSecs = Math.floor(used / COST_PER_SECOND_USD);
   const remaining = Math.floor(remainingUsd / COST_PER_SECOND_USD);
 
+  const { data: activeSub } = await admin
+    .from('subscriptions')
+    .select('status, plan')
+    .eq('user_id', userId)
+    .in('status', ['active', 'trialing', 'past_due'])
+    .order('current_period_end', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const subscriptionStatus = activeSub?.status ?? (plan === 'free' ? 'free' : 'unknown');
+
   const { data: promo } = await admin
     .from('deepgram_promo_usage')
     .select('seconds_limit, used_seconds')
@@ -85,7 +95,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   return json(
     {
       plan,
-      subscription_status: plan === 'free' ? 'free' : 'active',
+      subscription_status: subscriptionStatus,
       provider: 'shared_call_voice',
       monthly_seconds_limit: limit,
       monthly_seconds_used: usedSecs,

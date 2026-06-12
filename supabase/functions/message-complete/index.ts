@@ -62,7 +62,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     p_user_id: userId, p_window_start: windowStart, p_chars: promptChars, p_max_requests: RATE_MAX,
   });
   // Dedicated message-window RPC (0015) so message traffic no longer consumes the voice window.
-  if (!rlErr && (rl as { limited?: boolean } | null)?.limited) {
+  // Fail closed on RPC errors so a broken limiter cannot be bypassed.
+  if (rlErr) return json({ error: 'usage_unavailable' }, 503, origin);
+  if ((rl as { limited?: boolean } | null)?.limited) {
     return json({ error: 'rate_limited' }, 429, origin);
   }
 
