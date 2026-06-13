@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.36';
+export const CURRENT_VERSION = '0.1.37';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,43 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.37',
+    date: '2026-06-13',
+    headline: 'Auth OTP signup, terminal WebGL teardown, voice routing polish',
+    summary:
+      'Settings signup now uses a 6-digit email code flow, terminal panes close without xterm WebGL dispose crashes, and voice preview/routing stays in sync across the panel.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Sign up with email — 6-digit OTP verification in Settings → Account (paste-friendly code input).',
+          'Supabase auth email templates for confirmation and magic-link codes.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Terminal WebGL teardown — safe dispose on pane close and context loss (fixes onRequestRedraw crash).',
+          'Terminal escape filtering — additional ConPTY sequences during restore.',
+          'Voice router — unified preview/stop path; streaming session cleanup on panel close.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Regenerated VibeSpace icon assets across platforms.',
+          'Auth validation helpers with unit tests.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets VibeSpace-0.1.37-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.36',
     date: '2026-06-12',

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Mic,
   MicOff,
@@ -15,8 +15,8 @@ import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
 import { PERSONAS } from '@/features/onboarding/steps/personas-data';
 import { getInstalledSpeechVoices, isSpeechSynthesisSupported } from '@/features/voice/speechSynthesis';
 import {
+  cancelVoicePreview,
   previewVoiceWithSettings,
-  stopAllVoiceOutput,
   warmVoiceEngine,
 } from '@/features/voice/voiceRouter';
 import { useAppAdmin } from '@/lib/admin';
@@ -83,6 +83,7 @@ export function Voice() {
   const [systemDeepgramDraft, setSystemDeepgramDraft] = useState('');
   const [subscriptionIncluded, setSubscriptionIncluded] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState<VoicePresetId | null>(null);
+  const previewSeqRef = useRef(0);
   const [localVoiceStatus, setLocalVoiceStatus] = useState<LocalVoiceStatus>('idle');
   const [localVoiceNames, setLocalVoiceNames] = useState<string[]>([]);
   const [kokoroStatus, setKokoroStatus] = useState<KokoroStatus>('idle');
@@ -100,6 +101,8 @@ export function Voice() {
   useEffect(() => {
     void warmVoiceEngine(voiceEngine);
   }, [voiceEngine]);
+
+  useEffect(() => () => cancelVoicePreview(), []);
 
   useEffect(() => {
     void getDeepgramVoiceKey().then((key) => setDeepgramConfigured(Boolean(key)));
@@ -201,17 +204,20 @@ export function Voice() {
   }
 
   async function previewVoice(nextVoice: VoicePresetId, engine: VoiceEngine = voiceEngine) {
+    const seq = ++previewSeqRef.current;
     setPreviewingVoice(nextVoice);
     try {
-      stopAllVoiceOutput();
       await previewVoiceWithSettings(nextVoice, engine);
     } catch (err) {
+      if (previewSeqRef.current !== seq) return;
       toast.error(
         'Voice preview failed',
         err instanceof Error ? err.message : 'Could not play this voice.',
       );
     } finally {
-      setPreviewingVoice((cur) => (cur === nextVoice ? null : cur));
+      if (previewSeqRef.current === seq) {
+        setPreviewingVoice(null);
+      }
     }
   }
 
@@ -262,7 +268,9 @@ export function Voice() {
       toast.info('System voice requires a paid plan', 'Local and Kokoro stay available on Spark.');
       return;
     }
-    stopAllVoiceOutput();
+    previewSeqRef.current += 1;
+    setPreviewingVoice(null);
+    cancelVoicePreview();
     setVoiceEngine(engine);
     void warmVoiceEngine(engine);
     void previewVoice(voicePreset, engine);
@@ -308,7 +316,7 @@ export function Voice() {
     setKokoroError(null);
     setKokoroStatus('testing');
     try {
-      stopAllVoiceOutput();
+      cancelVoicePreview();
       await previewVoiceWithSettings(voicePreset, 'kokoro');
       setKokoroStatus('ready');
       toast.success('Kokoro voice', 'Played the test phrase with the local neural voice.');

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Mail, Loader2, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertTriangle, Mail } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,13 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { toast } from '@/components/ui/toast';
 import { getSupabaseClient } from '@/lib/supabase/client';
+import { OtpCodeInput } from './OtpCodeInput';
+import {
+  isCompleteOtpCode,
+  normalizeOtpCode,
+  validateEmail,
+  validatePassword,
+} from './authValidation';
 
 interface SignInDialogProps {
   open: boolean;
@@ -23,26 +30,30 @@ interface SignInDialogProps {
 }
 
 type Mode = 'signin' | 'signup' | 'magic';
+type Phase = 'credentials' | 'verify';
+type VerifyKind = 'signup' | 'email';
 
 /**
- * Lightweight Supabase auth form. Three modes:
- *   - signin: email + password (existing account)
- *   - signup: email + password (create a new account)
- *   - magic:  email-only, calls signInWithOtp
- *
- * Gracefully degrades when the Supabase client isn't configured.
+ * Supabase auth form:
+ *   - signin: email + password
+ *   - signup: email + password, then 6-digit email verification code
+ *   - magic:  email-only sign-in via 6-digit code (no password)
  */
 export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [otpCode, setOtpCode] = useState('');
   const [mode, setMode] = useState<Mode>(initialMode ?? 'signin');
+  const [phase, setPhase] = useState<Phase>('credentials');
+  const [verifyKind, setVerifyKind] = useState<VerifyKind>('signup');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Open on the requested tab each time the dialog is shown.
   useEffect(() => {
     if (open) {
       setMode(initialMode ?? 'signin');
+      setPhase('credentials');
+      setOtpCode('');
       setError(null);
     }
   }, [open, initialMode]);
@@ -53,27 +64,38 @@ export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogPr
   function reset() {
     setEmail('');
     setPassword('');
+    setOtpCode('');
+    setPhase('credentials');
     setBusy(false);
     setError(null);
   }
 
-  async function handleSubmit() {
+  function selectMode(next: Mode) {
+    setMode(next);
+    setPhase('credentials');
+    setOtpCode('');
     setError(null);
-    if (!email.trim()) {
-      setError('Enter your email to continue.');
-      return;
-    }
-    if (mode !== 'magic' && !password) {
-      setError('Enter a password.');
-      return;
-    }
-    if (mode === 'signup' && password.length < 8) {
-      setError('Use at least 8 characters for your password.');
+  }
+
+  async function handleCredentialsSubmit() {
+    setError(null);
+    const trimmedEmail = email.trim();
+    const emailError = validateEmail(trimmedEmail);
+    if (emailError) {
+      setError(emailError);
       return;
     }
 
+    if (mode !== 'magic') {
+      const passwordError = validatePassword(password, mode);
+      if (passwordError) {
+        setError(passwordError);
+        return;
+      }
+    }
+
     setBusy(true);
-    const client = loadSupabaseClient();
+    const client = getSupabaseClient();
     if (!client) {
       setBusy(false);
       setError(NOT_CONFIGURED);
@@ -82,36 +104,45 @@ export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogPr
 
     try {
       if (mode === 'magic') {
-        const { error: e } = await client.auth.signInWithOtp({ email: email.trim() });
-        if (e) throw e;
-        toast.success('Magic link sent', `Check ${email.trim()} to finish signing in.`);
-        onOpenChange(false);
-        reset();
-      } else if (mode === 'signup') {
-        const { data, error: e } = await client.auth.signUp({
-          email: email.trim(),
-          password,
+        const { error: otpError } = await client.auth.signInWithOtp({
+          email: trimmedEmail,
+          options: { shouldCreateUser: false },
         });
-        if (e) throw e;
-        // When email confirmation is required, Supabase returns a user with no
-        // active session. Tell the user to confirm; otherwise they're in.
-        if (data?.session) {
-          toast.success('Account created', 'You are signed in. Cloud sync is enabled.');
-        } else {
-          toast.success('Check your email', `Confirm ${email.trim()} to finish creating your account.`);
-        }
-        onOpenChange(false);
-        reset();
-      } else {
-        const { error: e } = await client.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        });
-        if (e) throw e;
-        toast.success('Signed in', 'Cloud sync is now enabled.');
-        onOpenChange(false);
-        reset();
+        if (otpError) throw otpError;
+        setVerifyKind('email');
+        setPhase('verify');
+        setOtpCode('');
+        toast.success('Code sent', `We emailed a 6-digit code to ${trimmedEmail}.`);
+        return;
       }
+
+      if (mode === 'signup') {
+        const { data, error: signUpError } = await client.auth.signUp({
+          email: trimmedEmail,
+          password,
+        });
+        if (signUpError) throw signUpError;
+        if (data.session) {
+          toast.success('Account created', 'You are signed in. Cloud sync is enabled.');
+          onOpenChange(false);
+          reset();
+          return;
+        }
+        setVerifyKind('signup');
+        setPhase('verify');
+        setOtpCode('');
+        toast.success('Code sent', `We emailed a 6-digit code to ${trimmedEmail}.`);
+        return;
+      }
+
+      const { error: signInError } = await client.auth.signInWithPassword({
+        email: trimmedEmail,
+        password,
+      });
+      if (signInError) throw signInError;
+      toast.success('Signed in', 'Cloud sync is now enabled.');
+      onOpenChange(false);
+      reset();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Sign in failed.';
       setError(message);
@@ -119,6 +150,95 @@ export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogPr
       setBusy(false);
     }
   }
+
+  async function handleVerifySubmit() {
+    setError(null);
+    const trimmedEmail = email.trim();
+    const token = normalizeOtpCode(otpCode);
+    if (!isCompleteOtpCode(token)) {
+      setError('Enter the full 6-digit code from your email.');
+      return;
+    }
+
+    setBusy(true);
+    const client = getSupabaseClient();
+    if (!client) {
+      setBusy(false);
+      setError(NOT_CONFIGURED);
+      return;
+    }
+
+    try {
+      const { error: verifyError } = await client.auth.verifyOtp({
+        email: trimmedEmail,
+        token,
+        type: verifyKind,
+      });
+      if (verifyError) throw verifyError;
+
+      toast.success(
+        verifyKind === 'signup' ? 'Account created' : 'Signed in',
+        verifyKind === 'signup'
+          ? 'Your email is verified and cloud sync is enabled.'
+          : 'Cloud sync is now enabled.',
+      );
+      onOpenChange(false);
+      reset();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Verification failed.';
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResendCode() {
+    setError(null);
+    const trimmedEmail = email.trim();
+    const emailError = validateEmail(trimmedEmail);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+
+    setBusy(true);
+    const client = getSupabaseClient();
+    if (!client) {
+      setBusy(false);
+      setError(NOT_CONFIGURED);
+      return;
+    }
+
+    try {
+      if (verifyKind === 'signup') {
+        if (!password) {
+          setError('Go back and re-enter your password to resend the code.');
+          return;
+        }
+        const { error: signUpError } = await client.auth.signUp({
+          email: trimmedEmail,
+          password,
+        });
+        if (signUpError) throw signUpError;
+      } else {
+        const { error: otpError } = await client.auth.signInWithOtp({
+          email: trimmedEmail,
+          options: { shouldCreateUser: false },
+        });
+        if (otpError) throw otpError;
+      }
+      setOtpCode('');
+      toast.success('New code sent', `Check ${trimmedEmail} for a fresh 6-digit code.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not resend the code.';
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const verifying = phase === 'verify';
+  const trimmedEmail = email.trim();
 
   return (
     <Dialog
@@ -130,65 +250,118 @@ export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogPr
     >
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{mode === 'signup' ? 'Create your account' : 'Sign in'}</DialogTitle>
+          <DialogTitle>
+            {verifying
+              ? 'Enter verification code'
+              : mode === 'signup'
+                ? 'Create your account'
+                : 'Sign in'}
+          </DialogTitle>
           <DialogDescription>
-            {mode === 'signup'
-              ? 'Create a Jarvis account to save your workspace and manage your plan across devices.'
-              : 'Welcome back. Sign in to access your account, plan, and synced workspace.'}
+            {verifying ? (
+              <>
+                We sent a 6-digit code to{' '}
+                <span className="font-medium text-foreground">{trimmedEmail}</span>. Paste it below
+                to {verifyKind === 'signup' ? 'finish creating your account' : 'sign in'}.
+              </>
+            ) : mode === 'signup' ? (
+              'Use a valid email and password. We will email you a verification code to confirm your account.'
+            ) : mode === 'magic' ? (
+              'Sign in without a password. We will email you a one-time 6-digit code.'
+            ) : (
+              'Welcome back. Sign in to access your account, plan, and synced workspace.'
+            )}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-1 rounded-md bg-muted p-0.5 self-start">
-          <ModeButton current={mode} value="signin" onSelect={setMode}>
-            Sign in
-          </ModeButton>
-          <ModeButton current={mode} value="signup" onSelect={setMode}>
-            Create account
-          </ModeButton>
-          <ModeButton current={mode} value="magic" onSelect={setMode}>
-            Magic link
-          </ModeButton>
-        </div>
+        {!verifying && (
+          <div className="flex items-center gap-1 rounded-md bg-muted p-0.5 self-start">
+            <ModeButton current={mode} value="signin" onSelect={selectMode}>
+              Sign in
+            </ModeButton>
+            <ModeButton current={mode} value="signup" onSelect={selectMode}>
+              Create account
+            </ModeButton>
+            <ModeButton current={mode} value="magic" onSelect={selectMode}>
+              Email code
+            </ModeButton>
+          </div>
+        )}
 
         <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="signin-email">Email</Label>
-            <Input
-              id="signin-email"
-              type="email"
-              autoComplete="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && mode === 'magic') {
-                  e.preventDefault();
-                  void handleSubmit();
-                }
-              }}
-              disabled={busy}
-            />
-          </div>
-
-          {mode !== 'magic' && (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="signin-password">Password</Label>
-              <Input
-                id="signin-password"
-                type="password"
-                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void handleSubmit();
-                  }
-                }}
+          {verifying ? (
+            <div className="flex flex-col items-center gap-4 py-2">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-accent-cyan/10 text-accent-cyan">
+                <Mail className="h-5 w-5" />
+              </div>
+              <OtpCodeInput
+                value={otpCode}
+                onChange={setOtpCode}
                 disabled={busy}
+                autoFocus
+                aria-invalid={Boolean(error)}
               />
+              <p className="text-metadata text-muted-foreground text-center">
+                Codes expire after one hour. You can paste the full code at once.
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-secondary"
+                disabled={busy}
+                onClick={() => void handleResendCode()}
+              >
+                Resend code
+              </Button>
             </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="signin-email">Email</Label>
+                <Input
+                  id="signin-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleCredentialsSubmit();
+                    }
+                  }}
+                  disabled={busy}
+                />
+              </div>
+
+              {mode !== 'magic' && (
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="signin-password">Password</Label>
+                  <Input
+                    id="signin-password"
+                    type="password"
+                    autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                    placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleCredentialsSubmit();
+                      }
+                    }}
+                    disabled={busy}
+                  />
+                  {mode === 'signup' ? (
+                    <p className="text-metadata text-muted-foreground">
+                      At least 8 characters with letters and numbers.
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </>
           )}
 
           {error && (
@@ -202,22 +375,43 @@ export function SignInDialog({ open, onOpenChange, initialMode }: SignInDialogPr
         <Separator />
 
         <DialogFooter className="!justify-between sm:!justify-between">
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="accent" onClick={handleSubmit} disabled={busy}>
+          {verifying ? (
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setPhase('credentials');
+                setOtpCode('');
+                setError(null);
+              }}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back
+            </Button>
+          ) : (
+            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+              Cancel
+            </Button>
+          )}
+          <Button
+            variant="accent"
+            onClick={verifying ? handleVerifySubmit : handleCredentialsSubmit}
+            disabled={busy || (verifying && !isCompleteOtpCode(otpCode))}
+          >
             {busy ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 Working...
               </>
+            ) : verifying ? (
+              <>Verify & continue</>
             ) : mode === 'magic' ? (
               <>
                 <Mail className="h-3.5 w-3.5" />
-                Send magic link
+                Send code
               </>
             ) : mode === 'signup' ? (
-              <>Create account</>
+              <>Send verification code</>
             ) : (
               <>Sign in</>
             )}
@@ -256,41 +450,3 @@ function ModeButton({
     </button>
   );
 }
-
-/**
- * Look up the Supabase client through the typed wrapper.
- *
- * The wrapper itself is statically imported across the rest of the
- * cloud-sync code paths (CallService, hosted-tier settings, bridge
- * lifecycle), so going through it here keeps the SignIn flow on the
- * same chunk boundary instead of fighting Vite's chunk consolidation
- * with a redundant dynamic import.
- *
- * Returns `null` when env vars aren't wired up — the dialog falls back
- * to its `setupRequired` state in that case.
- */
-function loadSupabaseClient(): SupabaseLikeClient | null {
-  try {
-    return (getSupabaseClient() as unknown as SupabaseLikeClient | null) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Minimal structural type covering only the methods this dialog calls.
- * Keeps us decoupled from the @supabase/supabase-js shape until the helper is wired.
- */
-type SupabaseLikeClient = {
-  auth: {
-    signInWithOtp: (opts: { email: string }) => Promise<{ error: { message: string } | null }>;
-    signInWithPassword: (opts: {
-      email: string;
-      password: string;
-    }) => Promise<{ error: { message: string } | null }>;
-    signUp: (opts: {
-      email: string;
-      password: string;
-    }) => Promise<{ data: { session: unknown | null } | null; error: { message: string } | null }>;
-  };
-};

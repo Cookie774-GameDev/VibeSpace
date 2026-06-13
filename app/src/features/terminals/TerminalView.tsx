@@ -63,6 +63,7 @@ import {
   setTerminalPaneSessionId,
 } from './terminalClearRegistry';
 import { TERMINAL_CLEAR_SUPPRESS_MS } from './terminalClear';
+import { createWebglDisposeTracker } from './terminalDispose';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
@@ -331,6 +332,8 @@ export function TerminalView({
     let handleVisible: (() => void) | null = null;
     let onClear: ((e: Event) => void) | null = null;
     let unregisterPaneClear: (() => void) | null = null;
+    let startupRestoreMode = false;
+    const webglDispose = createWebglDisposeTracker();
 
     const resetTerminalSurface = () => {
       outputBuffer.flush();
@@ -356,6 +359,7 @@ export function TerminalView({
     const prepareTerminalChunk = (chunk: string): string => {
       if (!chunk) return '';
       if (Date.now() < ignoreClearsUntilRef.current) {
+        const filterOpts = { stripCursorPositioning: startupRestoreMode };
         // A fullscreen TUI entering the alternate screen buffer ends the
         // startup window immediately: from that point on, clears and
         // absolute cursor positioning are intentional (the TUI owns the
@@ -363,9 +367,9 @@ export function TerminalView({
         const altIdx = findAltScreenEnter(chunk);
         if (altIdx >= 0) {
           ignoreClearsUntilRef.current = 0;
-          return filterStartupTerminalOutput(chunk.slice(0, altIdx)) + chunk.slice(altIdx);
+          return filterStartupTerminalOutput(chunk.slice(0, altIdx), filterOpts) + chunk.slice(altIdx);
         }
-        return filterStartupTerminalOutput(chunk);
+        return filterStartupTerminalOutput(chunk, filterOpts);
       }
       return stripOrphanEscapeFragments(chunk);
     };
@@ -425,9 +429,15 @@ export function TerminalView({
         if (Date.now() < ignoreClearsUntilRef.current) {
           // During the post-restore window, keep the viewport pinned to the
           // latest content so the user lands on their prompt — not scrolled
-          // to wherever ConPTY's startup noise left the cursor.
+          // to wherever ConPTY's startup noise left the cursor. Fresh panes
+          // pin to the top so PowerShell's cursor-home prompt is visible.
           termRef.current?.write(displayData, () => {
-            if (!cancelled) termRef.current?.scrollToBottom();
+            if (cancelled) return;
+            if (startupRestoreMode) {
+              termRef.current?.scrollToBottom();
+            } else {
+              termRef.current?.scrollToTop();
+            }
           });
         } else {
           termRef.current?.write(displayData);
@@ -503,14 +513,12 @@ export function TerminalView({
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
-          try {
-            webgl.dispose();
-          } catch {
-            /* already disposed */
-          }
+          webglDispose.disposeAddon();
         });
+        webglDispose.setAddon(webgl);
         term.loadAddon(webgl);
       } catch (err) {
+        webglDispose.setAddon(null);
         console.warn('[Jarvis] WebGL renderer unavailable, using DOM renderer:', err);
       }
 
@@ -636,6 +644,7 @@ export function TerminalView({
           activeSessions,
           transcripts: useTerminalTranscriptStore.getState().sessions,
         });
+        startupRestoreMode = Boolean(restoreDecision.restoredText);
 
         if (restoreDecision.kind === 'spawn') {
           spawnedFresh = true;
@@ -918,7 +927,11 @@ export function TerminalView({
       mutationObserver?.disconnect();
       unlistenOutput?.();
       unlistenExit?.();
-      termRef.current?.dispose();
+      try {
+        webglDispose.disposeTerminal(termRef.current);
+      } catch {
+        /* best-effort teardown */
+      }
       termRef.current = null;
       fitRef.current = null;
       // NOTE: deliberately no `terminal_kill` here. Sessions persist past

@@ -55,6 +55,25 @@ plugin metadata sync in production:
 supabase migration list
 ```
 
+## Email signup verification (6-digit OTP)
+
+The desktop app signs users up with **email + password**, then verifies via a
+**6-digit code** (`verifyOtp` with `type: 'signup'`). Magic-link-only sign-in
+uses `signInWithOtp` + `type: 'email'`.
+
+**Hosted project checklist** (Supabase Dashboard → Authentication):
+
+1. **Providers → Email** — enable email signups; turn on **Confirm email**.
+2. **Email templates** — set **Confirm signup** and **Magic link** bodies to
+   include `{{ .Token }}` (not only `{{ .ConfirmationURL }}`), e.g. the HTML in
+   `supabase/templates/confirmation.html` and `magic_link.html`.
+3. **SMTP** — configure custom SMTP (Settings → Authentication → SMTP) so
+   messages deliver reliably in production. Without SMTP, emails may not arrive.
+
+Local `supabase start` uses Inbucket (`http://127.0.0.1:54324`) and the
+templates in `supabase/templates/`. `config.toml` sets `otp_length = 6` and
+`enable_confirmations = true`.
+
 ## One-time setup (new project)
 
 1. **Init** (only if this directory wasn't created by `supabase init`):

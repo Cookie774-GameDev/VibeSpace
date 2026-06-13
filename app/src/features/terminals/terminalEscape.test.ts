@@ -56,6 +56,15 @@ describe('filterStartupTerminalOutput', () => {
     expect(filterStartupTerminalOutput(input)).toBe('ready');
   });
 
+  it('preserves cursor-home on fresh panes so the shell prompt lands at the top', () => {
+    const conPtyStartup = '\x1B[2J\x1B[H\x1B[?25lPS C:\\repo> ';
+    const filtered = filterStartupTerminalOutput(conPtyStartup, {
+      stripCursorPositioning: false,
+    });
+    expect(filtered).toContain('\x1B[H');
+    expect(filtered).toBe('\x1B[H\x1B[?25lPS C:\\repo> ');
+  });
+
   it('strips cursor-home repositioning so a fresh prompt cannot overwrite restored lines', () => {
     // Regression: ConPTY attach emits clear + cursor-home; without the CUP
     // strip the prompt painted at the top of the viewport, overwriting the

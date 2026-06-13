@@ -30,6 +30,7 @@ export {
 export {
   speakWithSettings,
   previewVoiceWithSettings,
+  cancelVoicePreview,
   stopAllVoiceOutput,
   warmVoiceEngine,
   ensureKokoroReadyForSpeech,

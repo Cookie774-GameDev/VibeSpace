@@ -120,10 +120,17 @@ function stopPlaybackOnly(): void {
   activePlaybackAbort?.abort();
   activePlaybackAbort = null;
   stopSpeech();
-  void import('./TtsService')
-    .then(({ TtsService }) => TtsService.stop())
-    .catch(() => {});
+  TtsService.stop();
   kokoroLocalProvider.stop();
+}
+
+/** Bumped on every new preview or explicit cancel — in-flight previews check this. */
+let voicePreviewGeneration = 0;
+
+/** Stop any preview immediately (e.g. before switching voice engine). */
+export function cancelVoicePreview(): void {
+  voicePreviewGeneration += 1;
+  stopPlaybackOnly();
 }
 
 export function stopAllVoiceOutput(): void {
@@ -195,7 +202,10 @@ export async function previewVoiceWithSettings(
   voicePreset: VoicePresetId,
   voiceEngine?: VoiceEngine,
 ): Promise<void> {
+  const generation = ++voicePreviewGeneration;
   stopAllVoiceOutput();
+  const stale = () => generation !== voicePreviewGeneration;
+
   const engine = voiceEngine ?? useAuthStore.getState().voiceEngine ?? 'system';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 
@@ -203,27 +213,45 @@ export async function previewVoiceWithSettings(
     TtsService.setProvider('deepgram_tts');
     TtsService.setVoicePreset(ttsPreset);
     if (!(await deepgramTtsProvider.isAvailable())) {
+      if (stale()) return;
       throw new Error('Sign in to use launch Deepgram cloud voice, or add your own API key in Settings → Voice.');
     }
+    if (stale()) return;
     await TtsService.testVoice(ttsPreset);
+    if (stale()) TtsService.stop();
     return;
   }
 
   if (engine === 'kokoro') {
     if (!(await kokoroLocalProvider.isAvailable())) {
       const ready = await ensureKokoroReadyForSpeech();
+      if (stale()) return;
       if (!ready) {
         throw new Error('Kokoro is not ready. Download the model first.');
       }
     }
+    if (stale()) return;
     const { audio, mime } = await getCachedKokoroAudio(VOICE_PREVIEW_TEXT, ttsPreset);
-    const controller = new AbortController();
-    await playBase64Audio(audio, mime || 'audio/wav', { volume: 1, signal: controller.signal });
+    if (stale()) return;
+    const controller = beginPlaybackAbortScope();
+    try {
+      await playBase64Audio(audio, mime || 'audio/wav', { volume: 1, signal: controller.signal });
+    } finally {
+      endPlaybackAbortScope(controller);
+      if (stale()) kokoroLocalProvider.stop();
+    }
     return;
   }
 
   if (!isSpeechSynthesisSupported()) {
     throw new Error('Speech synthesis is not available in this runtime.');
   }
-  await speakText(VOICE_PREVIEW_TEXT, { voicePreset, engine });
+  if (stale()) return;
+  const controller = beginPlaybackAbortScope();
+  try {
+    await speakText(VOICE_PREVIEW_TEXT, { voicePreset, engine });
+    if (stale()) stopSpeech();
+  } finally {
+    endPlaybackAbortScope(controller);
+  }
 }

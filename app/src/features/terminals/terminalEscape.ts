@@ -87,11 +87,28 @@ export function createTerminalOutputBuffer() {
  * restore window the prompt should simply print at the cursor (i.e.
  * after the replayed transcript), so dropping repositioning is safe.
  */
-export function stripConPtyStartupClears(data: string): string {
-  return data.replace(
-    /\x1bc|\x1b\[!p|\x1b\[[0-9;?]*[JK]|\x1b\[[0-9;]*[Hf]|\x1b\[[0-9]*d|\x1b\[[0-9;]*r/g,
-    '',
-  );
+export interface StartupOutputFilterOptions {
+  /**
+   * Strip absolute cursor positioning (CUP/HVP/VPA/DECSTBM). Keep enabled when
+   * replaying a restored transcript so a fresh shell prompt cannot overwrite it.
+   * Disable on brand-new panes so ConPTY's cursor-home lands the prompt at the top.
+   */
+  stripCursorPositioning?: boolean;
+}
+
+export function stripConPtyStartupClears(
+  data: string,
+  options: StartupOutputFilterOptions = {},
+): string {
+  const stripCursorPositioning = options.stripCursorPositioning !== false;
+  let result = data.replace(/\x1bc|\x1b\[!p|\x1b\[[0-9;?]*[JK]/g, '');
+  if (stripCursorPositioning) {
+    result = result.replace(
+      /\x1b\[[0-9;]*[Hf]|\x1b\[[0-9]*d|\x1b\[[0-9;]*r/g,
+      '',
+    );
+  }
+  return result;
 }
 
 /**
@@ -129,6 +146,9 @@ export function stripOrphanEscapeFragments(data: string): string {
 }
 
 /** Apply startup guards to a fully reassembled PTY chunk. */
-export function filterStartupTerminalOutput(data: string): string {
-  return stripOrphanEscapeFragments(stripConPtyStartupClears(data));
+export function filterStartupTerminalOutput(
+  data: string,
+  options?: StartupOutputFilterOptions,
+): string {
+  return stripOrphanEscapeFragments(stripConPtyStartupClears(data, options));
 }
