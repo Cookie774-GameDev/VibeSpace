@@ -121,8 +121,8 @@ export const DEEPGRAM_LAUNCH_PROMO: Record<
   ultra: { seconds: 10800, minutesLabel: '3 hr', maxCostUsd: 2.03 },
 };
 
-export const DEEPGRAM_PROMO_POOL_USD = 1000;
-export const DEEPGRAM_PROMO_PAUSE_AT_USD = 900; // 90% kill switch
+export const DEEPGRAM_PROMO_POOL_USD = 1200; // $1.2k ceiling ($200 reward headroom)
+export const DEEPGRAM_PROMO_PAUSE_AT_USD = 1000; // normal promo hard-stop
 
 export function deepgramPromoCopy(
   plan: VoicePlanId,

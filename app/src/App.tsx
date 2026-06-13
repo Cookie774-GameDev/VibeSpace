@@ -284,6 +284,8 @@ function useBoot() {
                 // automatically (route is persisted in the UI store).
                 if (!data.session) {
                   useUIStore.getState().setRoute('account');
+                } else if (data.session.user?.id) {
+                  void import('@/lib/launchPromo').then((m) => m.claimLaunchPromo(data.session?.user?.id));
                 }
               });
               const sub = supa.auth.onAuthStateChange((_event, session) => {
@@ -291,6 +293,7 @@ function useBoot() {
                 applyCloudSession(session as SupabaseSessionLike);
                 if (session?.user?.id) {
                   void retrySyncErrors().then(() => processSyncQueue()).then(() => processCloudPull()).catch((err) => console.warn('[sync] immediate flush failed:', err));
+                  void import('@/lib/launchPromo').then((m) => m.claimLaunchPromo(session.user?.id));
                 }
               });
               stopCloudAuth = () => sub.data.subscription.unsubscribe();

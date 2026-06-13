@@ -161,13 +161,14 @@ end $$;
 do $$
 declare v public.subscription_plan_limits%rowtype;
 begin
+  -- Values per migration 0021 (38% margin model).
   select * into v from public.subscription_plan_limits where plan='starter';
-  if v.message_credits <> 2500 or v.call_minutes <> 25 then
+  if v.message_credits <> 3100 or v.call_minutes <> 22 then
     raise exception 'starter limits wrong: % credits, % min', v.message_credits, v.call_minutes;
   end if;
   select * into v from public.subscription_plan_limits where plan='ultra';
-  if v.message_credits <> 25000 or v.call_minutes <> 250 then
-    raise exception 'ultra limits wrong';
+  if v.message_credits <> 31000 or v.call_minutes <> 217 then
+    raise exception 'ultra limits wrong: % credits, % min', v.message_credits, v.call_minutes;
   end if;
   raise notice 'OK: subscription_plan_limits seeded correctly';
 end $$;
@@ -203,19 +204,43 @@ do $$
 declare
   uid uuid := gen_random_uuid();
   res jsonb;
+  pool_used_before numeric;
+  pool_active_before boolean;
 begin
-  insert into auth.users (id, email) values (uid, 'rls-dg@example.com') on conflict do nothing;
-  perform public.sync_deepgram_promo_for_user(uid, 'free');
+  -- 0023: free users get $0 unless they claim a launch reward, and the pool is
+  -- inactive until launched. Snapshot, launch, claim, verify, restore.
+  select used_usd, active into pool_used_before, pool_active_before
+    from public.deepgram_promo_pool where id = 1;
 
+  insert into auth.users (id, email, email_confirmed_at)
+  values (uid, 'rls-dg@example.com', now()) on conflict do nothing;
+
+  update public.deepgram_promo_pool
+     set active = true, used_usd = 0, promo_phase = 'launch_1k', updated_at = now()
+   where id = 1;
+
+  -- Without a claim, a free user has no allowance.
+  perform public.sync_deepgram_promo_for_user(uid, 'free');
+  res := public.reserve_deepgram_promo(uid, 30, 0.005);
+  if (res->>'ok')::boolean is true then
+    raise exception 'unclaimed free user must have no promo allowance, got %', res;
+  end if;
+
+  -- After claiming the founder reward, reservation works and enforces the cap.
+  perform public.claim_launch_founder_reward(uid);
   res := public.reserve_deepgram_promo(uid, 30, 0.005);
   if (res->>'ok')::boolean is not true then
-    raise exception 'promo reserve within cap failed: %', res;
+    raise exception 'promo reserve within cap failed after claim: %', res;
   end if;
 
   res := public.reserve_deepgram_promo(uid, 999999, 999);
   if (res->>'ok')::boolean is true then
     raise exception 'promo reserve over cap incorrectly succeeded';
   end if;
+
+  update public.deepgram_promo_pool
+     set used_usd = pool_used_before, active = pool_active_before, updated_at = now()
+   where id = 1;
 
   raise notice 'OK: deepgram promo reservation enforces limits';
 end $$;

@@ -1,340 +1,569 @@
 # VibeSpace Subscription Plans — Complete Reference
 
-**Purpose:** Single oversight document for marketing, sales, support, and product. Covers every tier (including free), what customers get, how enforcement works, and how to position plans for customer growth.
-
-**Last synced with codebase:** v0.1.37 economics (`subscription_plan_limits` migration 0021, `budget.ts`, `entitlements.ts`, `callVoiceMarketing.ts`).
-
----
-
-## Executive summary (growth lens)
-
-VibeSpace wins customers on a **generous free tier** and upgrades them on **hosted convenience** — not by locking core features behind a paywall.
-
-| Lever | Why it converts |
-|-------|-----------------|
-| **Free forever (Spark)** | Full workspace, terminals, BYOK, unlimited local Kokoro — zero card required |
-| **Unlimited local voice** | Every plan includes on-device neural TTS; cloud voice is a bonus, not the only voice |
-| **Honest dual-minute messaging** | Lead with **AI phone minutes** (worst case); upsell **in-app cloud voice** as “same bucket, more time” |
-| **Low-friction entry ($10 Orbit)** | Cloud sync + SMS + first hosted models + calling for the price of a streaming sub |
-| **No surprise bills** | Hard monthly caps + rolling rate windows; over-burn is throttled, not charged |
-
-**Positioning headline:** *“Free local-first AI workspace. Upgrade when you want hosted models, phone calls, and sync — not before.”*
+**Last updated:** June 2026  
+**Document path:** `docs/SUBSCRIPTION_PLANS_REFERENCE.md`  
+**Code sources:** `callVoiceMarketing.ts`, `budget.ts`, `entitlements.ts`, `message-complete`, migrations `0019` + `0021` + `0022`
 
 ---
 
-## Plan naming (internal ↔ marketing)
+## Table of contents
 
-| Internal ID | Marketing name | Price (USD/mo) | Stripe (when live) |
-|-------------|----------------|----------------|---------------------|
-| `free` | **Spark** | $0 | — |
-| `starter` | **Orbit** | $10 | `STRIPE_STARTER_PRICE_ID` |
-| `pro` | **Nova** | $50 | `STRIPE_PRO_PRICE_ID` |
-| `ultra` | **Singularity** | $100 | `STRIPE_ULTRA_PRICE_ID` |
+1. [Plan ladder at a glance](#plan-ladder-at-a-glance)
+2. [Three surfaces — don’t mix these up](#three-surfaces--dont-mix-these-up)
+3. [Two separate money systems](#two-separate-money-systems)
+4. [Hosted AI chat — DeepSeek V4 Flash](#hosted-ai-chat--deepseek-v4-flash)
+5. [What Deepgram credits pay for](#what-deepgram-credits-pay-for)
+6. [What does NOT use Deepgram promo](#what-does-not-use-deepgram-promo)
+7. [Launch promotion — Phase 1 (now)](#launch-promotion--phase-1-now)
+8. [Launch promotion — Phase 2 (at $5k pool)](#launch-promotion--phase-2-at-5k-pool)
+9. [Promo eligibility — no card](#promo-eligibility--no-card)
+10. [Spend-by deadline (Spark promos)](#spend-by-deadline-locked)
+11. [Monthly subscription buckets](#monthly-subscription-buckets)
+12. [Burn rates & headline minutes](#burn-rates--headline-minutes)
+13. [Billing draw order](#billing-draw-order)
+14. [When the pool runs out](#when-the-pool-runs-out)
+15. [Plan economics — 38% margin rule](#plan-economics--38-margin-rule)
+16. [Customer-facing copy](#customer-facing-copy)
+17. [What NOT to say](#what-not-to-say)
+18. [Implementation & ops](#implementation--ops)
 
 ---
 
-## At-a-glance comparison
+## Plan ladder at a glance
 
-| | **Spark** (Free) | **Orbit** (Starter) | **Nova** (Pro) | **Singularity** (Ultra) |
+| Internal ID | Display name | Price/mo | Spark = free forever |
+|-------------|--------------|----------|----------------------|
+| `free` | **Spark** | $0 | ✓ |
+| `starter` | **Orbit** | $10 | |
+| `pro` | **Nova** | $50 | |
+| `ultra` | **Singularity** | $100 | |
+
+**Monthly sticker prices never change** during launch promos. Only the **one-time Deepgram launch bonus** increases when the company pool scales to $5k.
+
+---
+
+## Three surfaces — don’t mix these up
+
+VibeSpace has **three different voice/chat surfaces**. Marketing and support must use the right name for each.
+
+| Surface | What it is | Phone network? | How users access it |
+|---------|------------|:--------------:|---------------------|
+| **Voice module** | Talk to Jarvis **inside the app** — wake word, push-to-talk, Voice modal, spoken replies in chat | **No** | Settings → Voice · orb / mic in UI · `streamingVoice` in chat runtime |
+| **Jarvis Call (PSTN)** | Real **phone call** on the cellular network — you dial Jarvis or Jarvis dials you | **Yes** | Twilio + phone-jarvis cloud (Pipecat). Requires Orbit+ or active promo |
+| **Hosted AI chat** | Typed chat with **company-paid** inference (no user API key) | **No** | Chat composer on paid plans → `message-complete` Edge Function |
+
+**There is no “Path C in-app phone call” for talking to Jarvis.** The green phone / LiveKit scaffold in `phone-jarvis` is **not** the product voice experience. Users talk to Jarvis through the **voice module** (local Kokoro by default, optional cloud Deepgram TTS). **Jarvis Call** is PSTN only.
+
+```
+┌────────────────────┐   ┌────────────────────┐   ┌────────────────────┐
+│  VOICE MODULE      │   │  JARVIS CALL       │   │  HOSTED AI CHAT    │
+│  (in-app talk)     │   │  (real phone)      │   │  (typed messages)  │
+│                    │   │                    │   │                    │
+│  Kokoro = free     │   │  Twilio PSTN       │   │  DeepSeek V4 Flash │
+│  Cloud TTS = meter │   │  Pipecat AI loop   │   │  message credits   │
+│  NOT a phone call  │   │  IS a phone call   │   │  NOT voice         │
+└────────────────────┘   └────────────────────┘   └────────────────────┘
+```
+
+---
+
+## Two separate money systems
+
+Users interact with two independent wallets. Do not conflate them in marketing or support.
+
+| System | Funded by | When it applies | Resets? |
+|--------|-----------|-----------------|---------|
+| **Launch Deepgram promo** | Company Deepgram pool ($1k → $5k) | One-time welcome / launch bonus per user | No — use it or lose it |
+| **Monthly subscription buckets** | Paid plan COGS allocation | Every billing cycle on Orbit+ | Yes — monthly |
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  LAUNCH PROMO (one-time)          MONTHLY (paid tiers)      │
+│  ───────────────────────          ─────────────────────     │
+│  • Founder $5 (200 slots)         • AI message credits      │
+│  • Spark $2 at $5k (1k slots)     • Call/voice bucket       │
+│  • Paid launch Deepgram bonus     • SMS bucket              │
+│  • Shared company Deepgram pool   • DeepSeek V4 Flash chat │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Hosted AI chat — DeepSeek V4 Flash
+
+Paid subscribers (Orbit / Nova / Singularity) get **hosted AI message credits** — company-paid chat **without** bringing your own API key.
+
+| Item | Detail |
+|------|--------|
+| **Model** | **DeepSeek V4 Flash** (API id: `deepseek-chat`) |
+| **Endpoint** | Supabase Edge Function `message-complete` |
+| **Who gets it** | Orbit+ only — Spark uses BYOK or free Gemini Flash Lite via Google AI Studio |
+| **Metering** | Monthly **message credits** bucket (1 credit ≈ $0.001 company spend) |
+| **Rate limits** | Triple windows on every bucket: **5-hour** (8%), **weekly** (25%), **monthly** (100%) — no rollover |
+| **Fallback** | If budget exhausted or provider down → client falls back to BYOK / local models |
+
+### Message credits by tier
+
+| Tier | Credits/mo | Internal msg budget |
+|------|------------|---------------------|
+| Spark | 0 | $0 |
+| Orbit | **3,100** | $3.10 |
+| Nova | **15,500** | $15.50 |
+| Singularity | **31,000** | $31.00 |
+
+**BYOK always works on every tier** for any provider the user configures. Hosted DeepSeek is an **optional convenience** on paid plans, not a replacement for BYOK.
+
+**Server allowlist:** clients cannot pick a more expensive model on the hosted path — only `deepseek-chat` is permitted (`message-complete/index.ts`).
+
+### DeepSeek spend cap (fixed per tier)
+
+Hosted chat is **not unlimited**. Each tier gets a **fixed monthly DeepSeek budget** — exactly **50% of total plan COGS** (the AI slice of the 62% rule):
+
+| Tier | Max company spend on DeepSeek/mo | Message credits shown to user |
+|------|----------------------------------|-------------------------------|
+| Orbit | **$3.10** | 3,100 |
+| Nova | **$15.50** | 15,500 |
+| Singularity | **$31.00** | 31,000 |
+
+**Provider:** DeepSeek V4 Flash (`deepseek-chat`). Actual token cost is settled after each completion (`deepseekActualCostUsd` in `budget.ts`) — cache hits cost less, so heavy users may get **more messages** before hitting the cap, but never more than the **$ budget** allows.
+
+**1 credit = $0.001** of company DeepSeek spend. When credits hit zero → throttle; client falls back to BYOK/local. **No overage billing.**
+
+---
+
+## What Deepgram credits pay for
+
+**One shared Deepgram wallet** per user. Launch promo credits and the monthly call/voice bucket cover **Deepgram-backed** surfaces only:
+
+| Use | Surface | Description |
+|-----|---------|-------------|
+| **You calling Jarvis** | Jarvis Call (PSTN) | Outbound AI phone call via Twilio |
+| **Jarvis calling you** | Jarvis Call (PSTN) | Inbound / callback AI phone sessions |
+| **Cloud voice in the voice module** | Voice module | Deepgram TTS when user selects cloud engine (not local Kokoro) |
+| **Speech-to-text** | Voice module + global | Global dictation (`Ctrl+CapsLock`) |
+
+**Talking to Jarvis in the app through the voice module is NOT a phone call** and does not use Twilio. Default in-app talk uses **unlimited local Kokoro** (free, no Deepgram). Cloud Deepgram TTS in the voice module draws from the same wallet when selected.
+
+All four Deepgram uses above share the **same** `deepgram_promo_usage` / call-voice balance. Users can mix until the balance is gone.
+
+### Example: $5 founder credit (~26,667 seconds)
+
+Approximate **if you spent the whole wallet on one thing**:
+
+| If you only use… | Rough capacity |
+|------------------|----------------|
+| AI phone calls (PSTN) | ~50 min |
+| Cloud voice module (Deepgram TTS) | ~110+ min |
+| Speech-to-text | ~5+ hr |
+
+Real usage blends all three — the wallet depletes by actual Deepgram seconds consumed.
+
+---
+
+## What does NOT use Deepgram promo
+
+| Feature | How it's paid |
+|---------|---------------|
+| **Unlimited local Kokoro** | Free on every plan — voice module default; **never** touches Deepgram promo or monthly buckets |
+| **Hosted AI chat (DeepSeek V4 Flash)** | Monthly **message credits** bucket (Orbit+ only) — separate from Deepgram |
+| **BYOK inference** | User's own API keys — always allowed on every tier |
+| **SMS texts** | Monthly **SMS** bucket (paid tiers only) |
+| **Twilio telephony leg** | Rolled into call-minute burn from monthly call/voice bucket on paid plans |
+
+---
+
+## Launch promotion — Phase 1 (now)
+
+**Pool:** $1,000 company Deepgram (`promo_phase = launch_1k`)  
+**Pause threshold:** ~$900 used (90% kill switch)  
+**Status:** Active now
+
+### Spark (free) — founders only
+
+> **First 200 users: $5 FREE Deepgram credit** — Jarvis Call (phone), cloud voice in the voice module, speech-to-text. **No card.**
+
+| Item | Value |
+|------|-------|
+| **Who qualifies** | First **200 signups** only |
+| **Credit** | **$5** Deepgram (~26,667 seconds) |
+| **Max company cost** | 200 × $5 = **$1,000** (entire phase-1 pool) |
+| **Everyone else on Spark** | **$0** company credit |
+
+**We do NOT give $2 to everyone.** The $1k pool exists solely to fund 200 founders at $5 each.
+
+### Paid tiers — phase 1 launch bonus (unchanged until $5k)
+
+| Tier | One-time Deepgram launch bonus |
+|------|-------------------------------|
+| **Orbit** | 30 min |
+| **Nova** | 90 min |
+| **Singularity** | 3 hr |
+
+These are **on top of** monthly subscription buckets and do **not** change monthly prices.
+
+---
+
+## Launch promotion — Phase 2 (at $5k pool)
+
+**Trigger:** Manually flip `promo_phase` to `scale_5k` and increase pool to $5,000.  
+**Pause threshold:** ~$4,500 used.
+
+When the pool hits $5k, **two things** change:
+
+### A) New Spark promo (limited — separate from founders)
+
+> **First 1,000 Spark users: $2 FREE Deepgram credit** — Jarvis Call · cloud voice module · STT
+
+| Item | Value |
+|------|-------|
+| **Who qualifies** | First **1,000** Spark signups **after** phase 2 is activated |
+| **Credit** | **$2** Deepgram (~10,667 seconds) |
+| **Max company cost** | 1,000 × $2 = **$2,000** |
+| **Founders** | Keep their original **$5** — they do **not** claim this promo |
+| **Before $5k** | This promo is **inactive** (`spark_promo_not_active`) |
+
+### B) Main boost — paid subscription launch credits (priority)
+
+| Tier | Phase 1 bonus | Phase 2 bonus |
+|------|---------------|---------------|
+| **Orbit** | 30 min | **3 hr** |
+| **Nova** | 90 min | **9 hr** |
+| **Singularity** | 3 hr | **15 hr** |
+
+**Monthly subscription prices stay the same** ($10 / $50 / $100). Only the one-time Deepgram launch bonus increases.
+
+### Phase summary
+
+| Phase | Pool | Spark free credit | Paid launch bonus |
+|-------|------|-------------------|-------------------|
+| **1 — now** | $1,000 | **200 × $5** only | 30m / 90m / 3h |
+| **2 — $5k** | $5,000 | **1,000 × $2** (new promo) | **3h / 9h / 15h** |
+
+Promos run **until the pool money runs out** — no new claims after `pause_at_usd` is hit. Users who already claimed keep spending their personal balance until exhausted.
+
+---
+
+## Promo eligibility — no card
+
+**Policy (locked):** Spark launch credits require **no credit card**. Not for the $5 founder promo. Not for the $2 phase-2 promo. Card is only collected when someone **chooses a paid plan** (Orbit / Nova / Singularity).
+
+| Promo | Card? | To unlock |
+|-------|:-----:|-----------|
+| **$5 founder (first 200)** | **No** | Sign up + verified email + slot available |
+| **$2 Spark (first 1,000 at $5k)** | **No** | Same — no Stripe, no $0 auth hold |
+
+**Why no card:** The promos are capped (200 / 1,000 slots) and pool-funded ($1k / $5k). Requiring a card would crush conversion on the exact hook you're using to get early users. Abuse is handled by **slot limits + verified email**, not payment friction.
+
+**Anti-abuse (instead of card):**
+
+- Verified email before credit activates
+- Hard slot caps (200 founders, 1,000 Spark promo)
+- Pool pause at 90% spend — promos stop when money runs out
+- One claim per user (RPC rejects `already_claimed`)
+- *(Future)* phone verify or soft device limits if farming becomes a problem
+
+**Do not add card gates later** without updating all marketing copy — “No card” is part of the promise.
+
+### Spend-by deadline (locked)
+
+**Spark promos ($5 founder + $2 phase-2): 7 days to spend.** Unused credit is **forfeited** after the window. Paid cloud tools **lock back** to subscription-only.
+
+| Promo | Spend window | Clock starts |
+|-------|--------------|--------------|
+| **$5 founder** | **7 days** | When credit is claimed (verified email + slot granted) |
+| **$2 Spark (phase 2)** | **7 days** | Same |
+
+**Why 7 days (not 2 weeks / 1 month / 4 months):**
+
+- $5 / $2 is a **taste**, not a bank account — urgency drives real trials
+- Stops 200 founders from sitting on credit for months while you carry pool liability
+- 4 months would be stupid for a $5 hook; you’d fund idle balances forever
+- 2 weeks is fine if you want softer onboarding, but **1 week is the right default** for launch scarcity
+
+**What unlocks during the 7 days (Spark + active promo balance):**
+
+| Feature | With promo credit | After 7 days or balance = 0 |
+|---------|-------------------|-------------------------------|
+| **Jarvis Call** (PSTN phone) | ✓ unlocked | ✗ locked — Orbit+ only |
+| **Cloud voice module** (Deepgram TTS) | ✓ unlocked | ✗ locked — use local Kokoro or subscribe |
+| **Speech-to-text** (`Ctrl+CapsLock`) | ✓ unlocked | ✗ locked — BYOK Deepgram key or subscribe |
+| **Voice module (local Kokoro)** | ✓ always | ✓ always free |
+| **Hosted DeepSeek V4 Flash chat** | ✗ (Spark) | ✗ — subscribe for message credits |
+| **BYOK chat / terminals** | ✓ always | ✓ always free |
+
+**Paid tier launch Deepgram bonus** (30m → 15h on subscribe): recommend **30 days** to spend — they’re paying customers, not free-tier tasters. *(Implement separately if desired.)*
+
+**Marketing line:**
+
+> *$5 free Deepgram credit — use it within **7 days**. AI calls, Jarvis voice & speech-to-text. No card.*
+
+---
+
+## Monthly subscription buckets
+
+Paid tiers get **three separate monthly buckets**. Spark gets none (BYOK + local Kokoro).
+
+### Full plan comparison
+
+| | **Spark** | **Orbit** | **Nova** | **Singularity** |
 |---|:---:|:---:|:---:|:---:|
 | **Price** | $0 | $10/mo | $50/mo | $100/mo |
-| **Hosted AI message credits** | 0 | 3,100 | 15,500 | 31,000 |
-| **AI phone minutes** (headline) | — | 22 | 109 | 217 |
-| **In-app cloud voice** (max, same bucket) | — | up to ~140+ min | up to ~720+ min | up to ~1,400+ min |
-| **Unlimited local Kokoro** | ✓ | ✓ | ✓ | ✓ |
-| **Jarvis Call** (outbound phone) | — | ✓ | ✓ | ✓ |
-| **SMS texts** (monthly) | — | ~93* | ~465* | ~930* |
-| **Cloud sync** | — | ✓ | ✓ | ✓ |
-| **Custom tool publishing** | — | — | ✓ | ✓ |
-| **Priority routing** | — | — | ✓ | ✓ |
-| **Deepgram launch promo** (one-time) | 1 min | 30 min | 90 min | 3 hr |
+| **Hosted AI (DeepSeek V4 Flash)** | — | 3,100 credits/mo | 15,500 credits/mo | 31,000 credits/mo |
+| **AI phone min headline/mo** | — | 22 | 109 | 217 |
+| **Cloud voice module max/mo** | Kokoro only | up to ~140+ min Deepgram TTS | up to ~720+ min | up to ~1,400+ min |
+| **SMS texts/mo** | — | ~100 | ~500 | ~1,000 |
+| **Jarvis Call (PSTN)** | ✗ | ✓ | ✓ | ✓ |
+| **Voice module (local Kokoro)** | ✓ unlimited | ✓ unlimited | ✓ unlimited | ✓ unlimited |
+| **Cloud sync** | ✗ | ✓ | ✓ | ✓ |
+| **Tool publishing** | ✗ | ✗ | ✓ | ✓ |
+| **Priority routing** | ✗ | ✗ | ✓ | ✓ |
 
-\*Enforced server-side at ~$0.01/segment; marketing often rounds to ~100 / ~500 / ~1,000 texts.
+### Internal USD budgets (all tiers)
 
----
+**Rule:** every paid tier allocates **62% of sticker price** to provider COGS and keeps **38% gross margin** *before* Stripe fees. After Stripe (~2.9% + $0.30/invoice), full-burn months land around **~32–35% net profit** per tier.
 
-## Tier details
+COGS split: **50% AI (DeepSeek)** · **35% call/voice** · **15% SMS**.
 
-### Spark — Free ($0)
+| Tier | Price | DeepSeek cap | Call/voice cap | SMS cap | COGS total | Gross margin (38%) |
+|------|-------|-------------|----------------|---------|------------|-------------------|
+| **Orbit** | $10 | **$3.10** | $2.17 | $0.93 | $6.20 | $3.80 |
+| **Nova** | $50 | **$15.50** | $10.85 | $4.65 | $31.00 | $19.00 |
+| **Singularity** | $100 | **$31.00** | $21.70 | $9.30 | $62.00 | $38.00 |
 
-**Tagline:** *Your launchpad · bring your own keys*
+User-facing credits/minutes are derived from these caps (e.g. $3.10 → 3,100 message credits at $0.001/credit). **These dollar caps are hard limits** — `reserve_message_budget` denies requests when exhausted.
 
-**Who it’s for:** Developers and power users who already have API keys, want local-first privacy, and don’t need company-hosted inference yet.
+See [Plan economics — 38% margin rule](#plan-economics--38-margin-rule) for the full napkin math and DeepSeek specifics.
 
-**Included:**
-- Full desktop workspace (terminals, tile grid, agents, chat, context, history)
-- **Bring your own keys** — Groq, Anthropic, OpenAI, OpenRouter, Together, Ollama, local models
-- Free **Gemini 2.5 Flash Lite** via Google AI Studio (no card)
-- **Unlimited local Kokoro voice** (on-device neural TTS)
-- Jarvis & Friday voice presets, personas, hands-free / push-to-talk
-- Custom tools (local), terminal swarm, wellness break, Mod+Shift+A palette
-- **Local-first** — data stays on the device; no cloud sync
+### Hosted AI by tier
 
-**Not included:**
-- Company-hosted AI message credits
-- AI phone calls (Jarvis Call)
-- In-app cloud TTS from company bucket
-- SMS to your phone
-- Cloud sync across devices
+| Tier | Company-hosted chat |
+|------|---------------------|
+| **Spark** | None — BYOK any provider, or free Gemini 2.5 Flash Lite via Google AI Studio (no card) |
+| **Orbit / Nova / Singularity** | **DeepSeek V4 Flash** via `message-complete` — credits scale with tier (3.1k → 31k/mo) |
 
-**Launch promo:** 1 minute one-time Deepgram cloud voice (from shared company pool, separate from monthly bucket).
+BYOK for Anthropic, OpenAI, Groq, etc. remains available on **all** tiers regardless of hosted DeepSeek.
 
-**Growth role:** Top-of-funnel. No credit card. Let users build habit on terminals + local voice, then convert when they want sync or hosted models without managing keys on every device.
+### Shared call/voice bucket (paid monthly)
 
----
+The monthly **call/voice** bucket pays for Deepgram-backed surfaces on a **recurring** basis:
 
-### Orbit — Starter ($10/mo)
+- **Jarvis Call** (PSTN via Twilio)
+- **Cloud Deepgram TTS** in the voice module (when cloud engine is selected)
+- **Speech-to-text** (when wired to bucket)
 
-**Tagline:** *Voice & sync · zero friction*
+**Phone minutes** use worst-case burn (~$0.10/min headline). **Cloud voice module** burns slower (~$0.015/min), so the same bucket lasts longer when users stay on Kokoro or use TTS only.
 
-**Who it’s for:** Users who want hosted AI and phone features without a $50 commitment.
-
-**Everything in Spark, plus:**
-- **3,100 hosted AI message credits / month** (~$3.10 company AI budget)
-- **Shared call/voice bucket** ($2.17/mo):
-  - **22 AI phone minutes** at worst-case burn (~$0.10/min connected call time)
-  - **Up to ~140+ min in-app cloud voice** (same bucket, ~$0.015/min burn)
-- **Unlimited local Kokoro** (does not touch the bucket)
-- **~93 SMS texts / month** to your phone
-- **Cloud sync** — chats and memories across devices
-- Smart reminders, schedule notifications
-- **Hosted models:** Gemini 2.5 Flash Lite, Gemini 2.5 Flash
-- **30 min** one-time Deepgram launch promo
-
-**Growth role:** Primary conversion tier. Price anchors against ChatGPT Plus / Copilot; differentiator is terminals + calling + local voice + BYOK still works.
+**Local Kokoro in the voice module never draws from this bucket.**
 
 ---
 
-### Nova — Pro ($50/mo)
+## Burn rates & headline minutes
 
-**Tagline:** *Premium firepower · every frontier model*
+Display rates used in marketing copy (`callVoiceMarketing.ts`):
 
-**Who it’s for:** Daily drivers who want frontier models, more calling/SMS, and priority routing.
+| Surface | Estimated company cost |
+|---------|------------------------|
+| AI phone minute (PSTN) | ~$0.10/min |
+| Cloud voice module minute (Deepgram TTS) | ~$0.015/min |
+| Speech-to-text minute | ~$0.008/min |
 
-**Everything in Orbit, plus:**
-- **15,500 hosted AI message credits / month**
-- **Shared call/voice bucket** ($10.85/mo):
-  - **109 AI phone minutes**
-  - **Up to ~720+ min in-app cloud voice**
-- **~465 SMS texts / month**
-- **Publish custom tools and agents** to your account
-- **Priority routing** — no rate-limit pressure on hosted inference
-- **Hosted models:** + Gemini 2.5 Pro, Claude 3.5 Sonnet, GPT-4o
-- **90 min** one-time Deepgram launch promo
-
-**Growth role:** “Pro” anchor for serious users. Emphasize frontier models + 5× message credits vs Orbit + tool publishing for power users.
+Launch promo seconds are tracked in `deepgram_promo_usage` and settled via `reserve_deepgram_promo` / `settle_deepgram_promo`.
 
 ---
 
-### Singularity — Ultra ($100/mo)
+## Billing draw order
 
-**Tagline:** *Beyond limits · the entire universe unlocked*
+When a user consumes cloud voice / calls / STT, the server tries sources in this order:
 
-**Who it’s for:** Heavy users, early adopters, and anyone who wants maximum hosted quota and support.
+1. **Founder $5** or phase-2 Spark **$2** (if eligible and balance remains)
+2. **Paid tier one-time launch Deepgram promo** (30m → 15h depending on phase)
+3. **Monthly call/voice bucket** (paid tiers only)
+4. **BYOK Deepgram key** (user-supplied)
+5. **Throttle** — no surprise overage bills
 
-**Everything in Nova, plus:**
-- **31,000 hosted AI message credits / month**
-- **Shared call/voice bucket** ($21.70/mo):
-  - **217 AI phone minutes**
-  - **Up to ~1,400+ min in-app cloud voice**
-- **~930 SMS texts / month**
-- **Early access** to new providers and models
-- **Dedicated rate-limit pool** + direct support email
-- **Hosted models:** + Claude 3 Opus, o1, o1-mini
-- **3 hr** one-time Deepgram launch promo
-
-**Growth role:** Flagship tier. Lead with **217 AI phone minutes**; secondary line is **up to ~1,400+ min in-app cloud voice**. Do **not** market “~1,000 minutes” as the only number — phone-heavy users hit the cap at 217.
+Admins bypass billing (`billingSource = admin`).
 
 ---
 
-## How the shared call/voice bucket works
+## When the pool runs out
 
-One monthly **dollar budget** funds both:
+| Event | What happens |
+|-------|--------------|
+| Pool hits `pause_at_usd` | `active = false` — **no new promo claims** |
+| Founder slots full (200) | `founder_slots_exhausted` — signup #201+ gets $0 Spark credit |
+| Spark promo slots full (1,000) | `spark_promo_slots_exhausted` at phase 2 |
+| User exhausts personal balance | Falls through to monthly bucket → BYOK → throttle |
+| Phase 2 not yet active | `claim_launch_spark_promo` returns `spark_promo_not_active` |
 
-1. **AI phone calls (Jarvis Call)** — Twilio outbound; full **connected call time** burns at ~**$0.10/min** (Twilio + STT + LLM + TTS stack).
-2. **In-app cloud voice** — TTS seconds inside the app burn at ~**$0.015/min** (`COST_PER_SECOND_USD`).
-
-**Unlimited local Kokoro never draws from this bucket.**
-
-| Burn type | Rate (display) | Ultra example ($21.70 bucket) |
-|-----------|------------------|-------------------------------|
-| Phone call | ~$0.10/min | 217 min if 100% phone |
-| In-app cloud TTS | ~$0.015/min | ~1,447 min if 100% cloud voice |
-| Local Kokoro | $0 | Unlimited |
-
-The UI shows **“AI phone minutes”** as the headline because that is the **worst-case** burn. In-app users get more real speech time from the same allowance.
-
-**Per-call hard cap:** 30 minutes max per single call (`MAX_CALL_SECONDS = 1800`).
+Existing users **keep** whatever they already claimed until they use it up **or the 7-day Spark deadline passes** (whichever comes first).
 
 ---
 
-## AI message credits
+## Plan economics — 38% margin rule
 
-- **1 credit ≈ $0.001** of company-hosted AI spend.
-- Credits cover hosted inference when the user is **not** using their own API key.
-- **BYOK is always allowed on every tier** — core Jarvis ethos.
-- Typical hosted models route through company keys on paid tiers only.
+**Locked policy (migration `0021`, `budget.ts`):** every paid tier must hit **38% gross margin before Stripe fees**. Provider COGS are capped at **62%** of sticker price. After Stripe (~2.9% + $0.30 per invoice), a subscriber who fully burns their quotas leaves roughly **~32–35% net profit** — target **~35%** in planning.
 
-**Hosted model allowlist by tier:**
+### The formula
 
-| Model | Spark | Orbit | Nova | Singularity |
-|-------|:-----:|:-----:|:----:|:-----------:|
-| Gemini 2.5 Flash Lite | BYOK / free Studio | ✓ | ✓ | ✓ |
-| Gemini 2.5 Flash | BYOK | ✓ | ✓ | ✓ |
-| Gemini 2.5 Pro | BYOK | — | ✓ | ✓ |
-| Claude 3.5 Sonnet | BYOK | — | ✓ | ✓ |
-| Claude 3 Opus | BYOK | — | — | ✓ |
-| GPT-4o | BYOK | — | ✓ | ✓ |
-| o1 / o1-mini | BYOK | — | — | ✓ |
+```
+Sticker price (e.g. $10 Orbit)
+├── 62% COGS (provider spend) ──┬── 50% → DeepSeek V4 Flash (message bucket)
+│                               ├── 35% → Call/voice bucket (Twilio + Deepgram + …)
+│                               └── 15% → SMS bucket
+└── 38% gross margin (before Stripe)
+    └── after Stripe fees → ~35% net profit at full burn
+```
 
----
+### Full tier breakdown
 
-## SMS
+| Tier | Price | DeepSeek (50%) | Call/voice (35%) | SMS (15%) | COGS Σ | Margin 38% | ≈ Net after Stripe* |
+|------|-------|----------------|------------------|-----------|--------|------------|---------------------|
+| **Orbit** | $10 | $3.10 | $2.17 | $0.93 | $6.20 | $3.80 | **~$3.20 (~32%)** |
+| **Nova** | $50 | $15.50 | $10.85 | $4.65 | $31.00 | $19.00 | **~$17.25 (~35%)** |
+| **Singularity** | $100 | $31.00 | $21.70 | $9.30 | $62.00 | $38.00 | **~$34.80 (~35%)** |
 
-- Billed in **segments** (~$0.01/segment company cost).
-- Monthly budgets: **$0.93** (Orbit) · **$4.65** (Nova) · **$9.30** (Singularity).
-- Enforced counts: **93 · 465 · 930** segments; UI/marketing may round to ~100 / ~500 / ~1,000.
-- Max **1,000 characters** per outbound request.
+\*Approximate: Stripe `2.9% + $0.30` on monthly invoice, assuming subscriber uses **100%** of all three buckets. Partial use = higher margin. Over-burn is **rate-limited**, not billed — windows cap at 8% (5h) / 25% (week) / 100% (month).
 
----
+### DeepSeek V4 Flash unit economics
 
-## Deepgram launch promo (separate from monthly bucket)
+Reference pricing in `budget.ts` (model `deepseek-chat`):
 
-One-time per-user allowance from a **$1,000 shared company pool** (`deepgram_promo_pool`).
+| Token type | Price |
+|------------|-------|
+| Input (cache miss) | $0.14 / 1M tokens |
+| Input (cache hit) | $0.0028 / 1M tokens |
+| Output | $0.28 / 1M tokens |
 
-| Plan | One-time promo |
-|------|----------------|
-| Spark | 1 min |
-| Orbit | 30 min |
-| Nova | 90 min |
-| Singularity | 3 hr (10,800 seconds) |
+Reservations assume cache-miss worst case; settlement uses actual usage (cache hits refund budget). **You cannot swap hosted chat to a pricier model** — server allowlist is `deepseek-chat` only.
 
-Drawn **before** the monthly call/voice bucket at actual Deepgram rates (~$0.01125/min). Pool pauses at 90% spend ($900).
+**Example (Orbit $3.10 cap):** at ~500 input + ~80 output tokens per turn, a power user might get thousands of messages before hitting the dollar cap; a single huge context dump burns it faster. Credits are the user-friendly face of the **same dollar ceiling**.
 
----
+### Launch promo economics (separate)
 
-## Rate limits & fairness (all paid buckets)
+Launch Deepgram pool ($1k / $5k) is **marketing COGS**, not part of the 38% subscription math. Founders ($5 × 200) and Spark promo ($2 × 1,000) are funded from the promo pool, not from per-subscriber message/call budgets.
 
-Enforced server-side on **messages**, **calls/voice**, and **SMS**:
+### Launch pool math
 
-| Window | Cap (% of monthly budget) |
-|--------|---------------------------|
-| Rolling **5 hours** | 8% |
-| Rolling **week** | 25% |
-| **Month** | 100% |
+| Phase | Pool | Largest Spark liability | Paid launch liability (per subscriber) |
+|-------|------|-------------------------|----------------------------------------|
+| 1 | $1,000 | 200 × $5 = $1,000 | Orbit ~$0.34 · Nova ~$1.01 · Ultra ~$2.03 |
+| 2 | $5,000 | +1,000 × $2 = $2,000 | Orbit ~$2.03 · Nova ~$6.08 · Ultra ~$10.13 |
 
-- **No rollover** — unused budget forfeits at period end.
-- Reset: **30 days from Stripe subscription period** when subscribed; calendar month fallback otherwise.
-- Over-burn is **rate-limited**, not auto-billed (no surprise charges).
-
-**Example (Singularity call bucket, $21.70):**
-- 5h cap ≈ $1.74 → ~17 phone-min equivalent
-- Weekly cap ≈ $5.43 → ~54 phone-min equivalent
+Phase 2 prioritizes **subscription launch credits** (3h / 9h / 15h) over free-tier giveaways.
 
 ---
 
-## Plan economics (internal — do not publish verbatim)
+## Customer-facing copy
 
-Target: **~38% gross margin**; **62% COGS** split **50% AI / 35% calls+voice / 15% SMS**.
+### Hero — Phase 1 (now)
 
-| Plan | Price | AI budget | Call/voice budget | SMS budget | Total COGS cap |
-|------|-------|-----------|-------------------|------------|----------------|
-| Spark | $0 | $0 | $0 | $0 | $0 |
-| Orbit | $10 | $3.10 | $2.17 | $0.93 | $6.20 |
-| Nova | $50 | $15.50 | $10.85 | $4.65 | $31.00 |
-| Singularity | $100 | $31.00 | $21.70 | $9.30 | $62.00 |
+> **First 200 users: $5 FREE** — Deepgram for Jarvis Call (phone), cloud voice module & speech-to-text. **Use within 7 days.** No card. Unlimited local Kokoro in the voice module for everyone.
 
-Napkin: after Stripe (~3%), tax (~10%), income tax (~25%), kept revenue ≈ **65%** of sticker. Quotas are tuned so a full-burn month stays inside ~**33% COGS** of sticker (≈3× markup on usage).
+### Hero — Phase 2 (after $5k)
 
-**Vendor cost vs customer allowance:** A mixed usage example may cost VibeSpace ~$5–7 in vendor fees while the customer still has dollars left in their $21.70 bucket — the headline **217 minutes** is priced for phone worst-case, not average COGS.
+> **Subscriptions unlocked:** up to **15 hours** launch Deepgram credit. **First 1,000** Spark users get **$2** to try calls, Jarvis voice & STT. **No card.**
 
----
+### Spark card bullets
 
-## Approved customer-facing copy
+- Every BYOK provider works
+- Unlimited local Kokoro (voice module)
+- **First 200:** $5 Deepgram — Jarvis Call, cloud voice module & STT
+- At $5k pool: first 1,000 Spark users get $2
 
-### Plan card one-liner (paid tiers)
+### Paid tier lines
 
-> **{N} AI phone min/mo** · **up to ~{M}+ min in-app cloud voice** · **Unlimited local Kokoro on every plan**
+> **Hosted chat:** DeepSeek V4 Flash — 3,100 / 15,500 / 31,000 credits per month  
+> **Jarvis Call + cloud voice:** 30 min → 90 min → 3 hr launch Deepgram (phase 1)
 
-### Pricing footnote
+### Paid tier promo line (phase 2)
 
-> Phone and in-app cloud voice share one monthly bucket. Phone minutes use worst-case burn (~$0.10/min); in-app cloud voice burns slower (~$0.015/min), so you get more speech time when you stay in the app.
-
-### Spark (free) blurb
-
-> Unlimited local Kokoro voice on every plan. Bring your own keys — no company-paid cloud AI, calling, SMS, or cloud voice.
-
-### What NOT to say
-
-- ❌ “**1,000+ minutes**” as the only headline (misleading for phone users)
-- ❌ “Unlimited calling” on paid tiers
-- ❌ Dollar budgets or internal COGS in customer copy
+> Orbit **3 hr** · Nova **9 hr** · Singularity **15 hr** launch Deepgram credit
 
 ---
 
-## Customer acquisition playbook
+## What NOT to say
 
-### 1. Lead with Spark
-- No card, full app, unlimited local voice, BYOK
-- Message: *“Install free. Add keys you already have. Upgrade only when hosted AI or calling saves you time.”*
-
-### 2. Convert to Orbit ($10)
-- Triggers: wants cloud sync, SMS reminders, hosted Gemini without key management, first AI phone calls
-- Message: *“$10 — sync across devices, 3,100 AI messages, 22 phone minutes + up to ~140 min in-app voice, unlimited local Kokoro.”*
-
-### 3. Upsell Nova ($50)
-- Triggers: hits message limits, wants Claude/GPT-4o hosted, publishes tools, needs priority routing
-- Message: *“5× credits, frontier models, 109 phone min, publish agents.”*
-
-### 4. Flagship Singularity ($100)
-- Triggers: power users, o1/Opus, max SMS/calling, support SLA
-- Message: *“217 phone min · up to ~1,400+ in-app cloud voice · 31k credits · early access.”*
-
-### 5. Objection handling
-
-| Objection | Response |
-|-----------|----------|
-| “ChatGPT is $20” | VibeSpace is a **workspace** — terminals, agents, memory, local voice, optional phone calls |
-| “I only use voice in-app” | Same bucket burns **7× slower** for in-app cloud voice; local Kokoro is **unlimited** |
-| “What are call minutes?” | **Connected AI phone time** when Jarvis calls you; in-app speech is separate burn rate |
-| “Will I get surprise bills?” | **No** — hard caps + rolling windows; we throttle, not charge overage |
+- ❌ “Everyone gets $2 free”
+- ❌ “Free tier always has company voice credit”
+- ❌ “Launch credit is added to your monthly subscription dollars”
+- ❌ “Unlimited Kokoro uses your Deepgram balance”
+- ❌ Implying phase-2 Spark $2 promo is active before the $5k pool flip
+- ❌ “Add a card to unlock your free credit” (Spark promos never ask for a card)
+- ❌ “Path C” or “in-app phone call” for the voice module — **there is no in-app phone call**
+- ❌ “Paid tiers get Gemini/Claude hosted” — hosted chat is **DeepSeek V4 Flash** only
+- ❌ Calling local Kokoro voice module usage a “phone call” or Deepgram spend
+- ❌ “Unlimited hosted DeepSeek” — every tier has a **fixed dollar cap** ($3.10 / $15.50 / $31.00)
+- ❌ Implying COGS is 33% of sticker — correct rule is **62% COGS / 38% gross margin before Stripe**
 
 ---
 
-## Where this appears in the product
+## Implementation & ops
 
-| Surface | Location |
-|---------|----------|
-| App plan cards | Settings → Plans (`Plans.tsx`, `entitlements.ts`) |
-| Usage meters | Settings → Cloud Voice, message/call/SMS usage (`planLimits.ts`) |
-| Marketing site | [vibespaceos.com](https://vibespaceos.com) → Pricing (`landing/index.html`) |
-| GitHub README | Plans table (`README.md`) |
-| Server enforcement | `subscription_plan_limits` + Edge Functions (`budget.ts`, reserve/settle RPCs) |
+### Database tables
 
----
+| Table | Purpose |
+|-------|---------|
+| `deepgram_promo_pool` | Singleton company pool ($, phase, pause threshold) |
+| `deepgram_promo_usage` | Per-user seconds_limit / used_seconds |
+| `deepgram_promo_plan_limits` | Paid-tier launch seconds (phase 1 + phase 2 columns) |
+| `launch_founder_rewards` | First 200 × $5 claims (+ `expires_at` TODO) |
+| `launch_spark_promo_rewards` | Phase 2 first 1,000 × $2 claims (+ `expires_at` TODO) |
 
-## Source of truth (engineering)
+### RPC functions
 
-| Concern | File / table |
-|---------|----------------|
-| Public plan numbers (UI) | `app/src/features/billing/planLimits.ts` |
-| Plan features & models | `app/src/lib/entitlements.ts` |
-| Marketing copy helpers | `app/src/lib/callVoiceMarketing.ts` |
-| Server budgets & rates | `supabase/functions/_shared/budget.ts` |
-| DB plan rows | `public.subscription_plan_limits` (migration `0021`) |
-| Deepgram promo | `public.deepgram_promo_plan_limits` (migration `0019`) |
-| Cloud TTS cost rate | `supabase/functions/_shared/voice.ts` |
-| Stripe wiring | `docs/stripe-setup.md` |
+| Function | Purpose |
+|----------|---------|
+| `claim_launch_founder_reward(uuid)` | First **200** signups → **$5** Deepgram |
+| `claim_launch_spark_promo(uuid)` | Phase 2 only, first **1,000** Spark → **$2** |
+| `reserve_deepgram_promo` / `settle_deepgram_promo` | Meter usage against promo wallet |
+| `sync_deepgram_promo_for_user` | Reconcile user balance on tier change |
+| `deepgram_promo_seconds_for_plan` | Returns phase-appropriate paid launch seconds |
 
-When quotas change, update **DB migration**, **`budget.ts`**, **`callVoiceMarketing.ts`**, **`entitlements.ts`**, **`planLimits.ts`**, **landing**, and **README** together.
+### Activate Phase 2 (admin SQL)
 
----
+```sql
+update public.deepgram_promo_pool
+   set budget_usd = 5000,
+       pause_at_usd = 4500,
+       promo_phase = 'scale_5k',
+       active = true,
+       updated_at = now()
+ where id = 1;
+```
 
-## Billing status
+### Signup hooks (TODO)
 
-- Plan enforcement is **server-authoritative** (Supabase Edge Functions + RPCs).
-- Stripe Checkout + webhooks are documented in `docs/stripe-setup.md`; verify price IDs match current quotas before launch.
-- Default install is **Spark (free)** until Stripe subscription is active.
+Wire auth signup webhook to call:
+
+1. `claim_launch_founder_reward` — always attempt on new user
+2. `claim_launch_spark_promo` — only succeeds when phase 2 is active and user is not a founder
+
+### Code files
+
+| File | Role |
+|------|------|
+| `supabase/migrations/0019_deepgram_launch_promo.sql` | Base pool + reserve/settle |
+| `supabase/migrations/0022_launch_rewards_program.sql` | Founders, Spark phase 2, paid boost |
+| `supabase/migrations/0021_subscription_plan_v2.sql` | **38% margin** plan limits + triple windows |
+| `supabase/functions/message-complete/index.ts` | Hosted **DeepSeek V4 Flash** chat + message budget |
+| `supabase/functions/tts-speak/index.ts` | Cloud Deepgram TTS for voice module (promo → bucket) |
+| `supabase/functions/call-start/index.ts` | Jarvis Call PSTN billing (monthly bucket today) |
+| `app/src/features/voice/` | **Voice module** — Kokoro, streaming voice, Voice modal (not PSTN) |
+| `supabase/functions/_shared/budget.ts` | Monthly bucket USD limits + DeepSeek pricing |
+| `app/src/lib/callVoiceMarketing.ts` | Marketing constants + phase logic |
+| `app/src/lib/entitlements.ts` | Plans UI feature lines |
+| `app/src/features/billing/planLimits.ts` | Usage display helpers |
+
+### Wiring status (honest)
+
+| Surface | Promo wallet | Monthly bucket | Status |
+|---------|:---:|:---:|--------|
+| **Voice module — cloud Deepgram TTS** | ✓ first | ✓ fallback | **Live** (`tts-speak`) |
+| **Voice module — local Kokoro** | — | — | **Always free** |
+| **Jarvis Call (PSTN)** | designed | ✓ today | **TODO** — route promo before bucket |
+| **Global STT (`Ctrl+CapsLock`)** | designed | ✓ fallback | **TODO** — currently BYOK-only in app |
+| **Hosted DeepSeek V4 Flash chat** | — | ✓ message credits | **Live** (`message-complete`) |
+| **7-day Spark expiry + lock-back** | — | — | **TODO** — `expires_at` on claim |
 
 ---
 

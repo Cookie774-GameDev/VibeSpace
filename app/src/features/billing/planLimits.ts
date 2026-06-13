@@ -9,7 +9,11 @@
 
 import {
   callVoiceBucketLine,
+  FOUNDER_REWARD_HEADLINE,
+  FOUNDER_WELCOME_TRY_LINE,
   PHONE_MINUTES_BY_PLAN,
+  SPARK_NO_FREE_CREDIT_LINE,
+  SPARK_PHASE2_HEADLINE,
   UNLIMITED_LOCAL_KOKORO_LINE,
 } from '@/lib/callVoiceMarketing';
 
@@ -36,7 +40,7 @@ export const PUBLIC_PLANS: Record<BillingPlanId, PublicPlan> = {
     messageCredits: 0,
     callMinutes: 0,
     smsTexts: 0,
-    blurb: `${UNLIMITED_LOCAL_KOKORO_LINE}. Bring your own keys — no company-paid cloud AI, calling, SMS, or cloud voice.`,
+    blurb: `${FOUNDER_REWARD_HEADLINE} ${FOUNDER_WELCOME_TRY_LINE} ${SPARK_NO_FREE_CREDIT_LINE}. ${SPARK_PHASE2_HEADLINE}.`,
   },
   starter: {
     id: 'starter',

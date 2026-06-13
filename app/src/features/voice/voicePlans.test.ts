@@ -65,10 +65,11 @@ describe('DEEPGRAM_LAUNCH_PROMO', () => {
     expect(DEEPGRAM_LAUNCH_PROMO.ultra.seconds).toBe(10800);
   });
 
-  it('uses a $1k pool with 90% kill switch at $900', () => {
-    expect(DEEPGRAM_PROMO_POOL_USD).toBe(1000);
-    expect(DEEPGRAM_PROMO_PAUSE_AT_USD).toBe(900);
-    expect(DEEPGRAM_PROMO_PAUSE_AT_USD / DEEPGRAM_PROMO_POOL_USD).toBeCloseTo(0.9, 5);
+  it('uses a $1.2k ceiling with the normal promo hard-stop at $1k', () => {
+    expect(DEEPGRAM_PROMO_POOL_USD).toBe(1200);
+    expect(DEEPGRAM_PROMO_PAUSE_AT_USD).toBe(1000);
+    // $200 reward headroom remains above the normal stop.
+    expect(DEEPGRAM_PROMO_POOL_USD - DEEPGRAM_PROMO_PAUSE_AT_USD).toBe(200);
   });
 
   it('describes remaining launch Deepgram time', () => {

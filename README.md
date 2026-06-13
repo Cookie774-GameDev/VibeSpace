@@ -56,11 +56,12 @@ Two built-in presets — Jarvis and Friday — with selectable personas and your
 
 Free forever with your own keys. **Unlimited local Kokoro voice on every plan.** Paid tiers add hosted inference, AI phone minutes, in-app cloud voice, and Jarvis Call.
 
-| Tier | Price | AI phone min/mo | In-app cloud voice (max) | Deepgram promo |
-|------|-------|-----------------|--------------------------|----------------|
-| Orbit (Starter) | $10 | 22 | up to ~140+ min | 30 min one-time |
-| Nova (Pro) | $50 | 109 | up to ~720+ min | 90 min one-time |
-| Singularity (Ultra) | $100 | 217 | up to ~1,400+ min | 3 hr one-time |
+| Tier | Price | AI phone min/mo | In-app cloud voice (max) | Deepgram launch promo |
+|------|-------|-----------------|--------------------------|------------------------|
+| Spark (Free) | $0 | — | unlimited local Kokoro | **First 200 only:** $5 (calls · voice · STT) |
+| Orbit (Starter) | $10 | 22 | up to ~140+ min | 30 min now → **3 hr** at $5k pool |
+| Nova (Pro) | $50 | 109 | up to ~720+ min | 90 min now → **9 hr** at $5k pool |
+| Singularity (Ultra) | $100 | 217 | up to ~1,400+ min | 3 hr now → **15 hr** at $5k pool |
 
 Phone and in-app cloud voice share one monthly bucket. Phone minutes use worst-case burn (~$0.10/min); in-app cloud voice burns slower (~$0.015/min), so you get more speech time when you stay in the app.
 
@@ -86,9 +87,9 @@ Phone and in-app cloud voice share one monthly bucket. Phone minutes use worst-c
 
 ### Subscriptions
 
-- **Free (Spark)** — bring your own API keys, unlimited local Kokoro voice, terminals, and the full workspace. Local-first; your data stays on your device.
+- **Free (Spark)** — bring your own API keys, unlimited local Kokoro voice, terminals, and the full workspace. **First 200 users only** get $5 company Deepgram credit (AI calls, Jarvis voice, speech-to-text). Everyone else: $0 company credit.
 - **Paid tiers** — hosted AI credits plus a shared call/voice bucket: **AI phone minutes** (worst-case headline) and **up to more in-app cloud voice** from the same allowance. Real outbound phone calls and SMS included.
-- **Launch promo** — one-time Deepgram cloud voice bonus per plan (30 min → 3 hr on Ultra), separate from the monthly bucket.
+- **Launch promo** — one-time Deepgram credit per plan (30 min → 3 hr on Singularity now). When the pool hits **$5k**, subscriptions jump to **3 hr / 9 hr / 15 hr**; first **1,000** Spark users get a separate **$2** promo.
 
 ## Development
 

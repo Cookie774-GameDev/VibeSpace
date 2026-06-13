@@ -130,46 +130,10 @@
     });
   }
 
-  /* ------------------------- 3D tilt cards ------------------------ */
-  if (finePointer && !reducedMotion) {
-    const MAX_DEG = 4.5;
-    document.querySelectorAll(".cell, .plan").forEach((card) => {
-      let raf = 0;
-      card.addEventListener("pointermove", (e) => {
-        if (!card.classList.contains("is-in")) return;
-        const r = card.getBoundingClientRect();
-        const px = (e.clientX - r.left) / r.width - 0.5;
-        const py = (e.clientY - r.top) / r.height - 0.5;
-        cancelAnimationFrame(raf);
-        raf = requestAnimationFrame(() => {
-          card.style.transition = "transform 0.12s ease-out, border-color 0.3s, box-shadow 0.3s";
-          card.style.transform =
-            `perspective(900px) rotateX(${(-py * MAX_DEG).toFixed(2)}deg) ` +
-            `rotateY(${(px * MAX_DEG).toFixed(2)}deg) translateY(-2px)`;
-        });
-      });
-      card.addEventListener("pointerleave", () => {
-        cancelAnimationFrame(raf);
-        card.style.transition = "transform 0.55s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s, box-shadow 0.3s";
-        card.style.transform = "";
-      });
-    });
-  }
-
-  /* --------------------- magnetic buttons ------------------------- */
-  if (finePointer && !reducedMotion) {
-    document.querySelectorAll(".hero__actions .btn, .dl__buttons .btn").forEach((btn) => {
-      btn.addEventListener("pointermove", (e) => {
-        const r = btn.getBoundingClientRect();
-        const x = (e.clientX - r.left - r.width / 2) * 0.16;
-        const y = (e.clientY - r.top - r.height / 2) * 0.28;
-        btn.style.transform = `translate(${x.toFixed(1)}px, ${(y - 2).toFixed(1)}px)`;
-      });
-      btn.addEventListener("pointerleave", () => {
-        btn.style.transform = "";
-      });
-    });
-  }
+  /* NOTE: pointer-follow effects (3D tilt cards + magnetic buttons) were
+     removed by request — the UI no longer chases the cursor. Cards still get
+     a soft spotlight glow and a CSS hover lift, which feel alive without
+     moving layout toward the mouse. */
 
   /* ------------------ count-up plan numbers ----------------------- */
   if (!reducedMotion && "IntersectionObserver" in window) {
@@ -228,6 +192,8 @@
   if (!stage || !aw) return;
 
   /* ------------- 3D pose: sideways until you engage --------------- */
+  /* Flatten the stage on hover/focus so it's readable, but never tilt it
+     toward the cursor (pointer-follow removed by request). */
   if (finePointer && !reducedMotion) {
     let leaveTimer;
     aw.addEventListener("pointerenter", () => {
@@ -237,15 +203,6 @@
     aw.addEventListener("pointerleave", () => {
       leaveTimer = setTimeout(() => stage.classList.remove("is-flat"), 700);
     });
-    /* subtle living tilt while flat */
-    aw.addEventListener("pointermove", (e) => {
-      if (!stage.classList.contains("is-flat")) return;
-      const r = aw.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width - 0.5;
-      const py = (e.clientY - r.top) / r.height - 0.5;
-      aw.style.transform = `rotateY(${(px * 2.4).toFixed(2)}deg) rotateX(${(-py * 1.8).toFixed(2)}deg)`;
-    });
-    aw.addEventListener("pointerleave", () => { aw.style.transform = ""; });
   } else {
     stage.classList.add("is-flat");
   }

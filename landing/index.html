@@ -33,6 +33,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,380;0,9..144,500;0,9..144,620;1,9..144,420;1,9..144,560&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 
   <link rel="stylesheet" href="assets/css/main.css" />
+  <link rel="stylesheet" href="assets/css/playground.css" />
 </head>
 <body>
 
@@ -58,9 +59,10 @@
 
       <div class="nav__links" id="navLinks">
         <a href="#app">Try it</a>
+        <a href="#playground">Playground</a>
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
-        <a href="https://github.com/Cookie774-GameDev/VibeSpace" target="_blank" rel="noopener">GitHub</a>
+        <a href="#support">Support</a>
         <a class="btn btn--fill btn--sm" href="#download">Download</a>
       </div>
 
@@ -76,7 +78,7 @@
       <div class="hero__inner">
         <img class="hero__logo rise" src="assets/images/logo.png" width="92" height="92" alt="VibeSpace logo" />
 
-        <p class="hero__eyebrow rise d1"><span class="pulse"></span> Now in early access for Windows</p>
+        <p class="hero__eyebrow rise d1"><span class="pulse"></span> First 200 users: $5 FREE Deepgram — calls, Jarvis voice &amp; speech-to-text. Use within 7 days. No card.</p>
 
         <h1 class="hero__title rise d2">
           Every model. Every agent.<br />
@@ -259,10 +261,162 @@
       </div>
     </section>
 
+    <!-- ===================== INTERACTIVE PLAYGROUND ===================== -->
+    <section class="section section--wide" id="playground">
+      <header class="section__head section__head--center reveal">
+        <p class="kicker"><span>02</span> — Playground</p>
+        <h2>Answer the call. <em>Then go exploring.</em></h2>
+        <p class="lead">A real little phone you can actually use — take the call or hang up, text Jarvis, Friday &amp; Mom, surf the browser, beat the mini-game, and poke the floating Jarvis. Secrets hidden throughout.</p>
+      </header>
+
+      <div class="playground__grid reveal">
+        <div class="playground__copy">
+          <h3>It&rsquo;s not a screenshot. <em>It&rsquo;s playable.</em></h3>
+          <p>This is the spirit of VibeSpace — warm, alive, and always within reach. Everything below responds to you. Drag Jarvis anywhere. Find the hidden contact.</p>
+          <div class="pg-hints">
+            <span class="pg-hint"><span class="pg-hint__key"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21.5 16.6v2.6a2 2 0 0 1-2.2 2A19.6 19.6 0 0 1 2.8 4.7a2 2 0 0 1 2-2.2h2.6a2 2 0 0 1 2 1.7c.13.95.36 1.88.7 2.77a2 2 0 0 1-.45 2.11L8.6 10.2a16 16 0 0 0 5.2 5.2l1.12-1.05a2 2 0 0 1 2.11-.45c.89.34 1.82.57 2.77.7a2 2 0 0 1 1.7 2z"/></svg></span> <b>Accept or decline</b> the incoming call — then hang up and explore.</span>
+            <span class="pg-hint"><span class="pg-hint__key"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 20l1-4.1a8.4 8.4 0 1 1 17-4.4z"/></svg></span> <b>Text the contacts</b> — each one replies differently. One is locked.</span>
+            <span class="pg-hint"><span class="pg-hint__key"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span> <b>Search the browser</b> — there&rsquo;s a secret word that unlocks a ghost.</span>
+            <span class="pg-hint"><span class="pg-hint__key"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 6 10 6-10 6z"/></svg></span> <b>Play Orbit Tap</b> — pop the orbs before they fade.</span>
+          </div>
+          <p class="pg-egg-log" id="pgEgg" aria-live="polite"></p>
+        </div>
+
+        <div class="pg-stage">
+          <!-- floating Jarvis orb -->
+          <div class="jarvis-bubble" id="jarvisBubble"></div>
+          <div class="jarvis-orb" id="jarvisOrb" role="button" tabindex="0" aria-label="Jarvis — tap or drag me">
+            <svg class="jarvis-orb__core" viewBox="0 0 120 120" aria-hidden="true">
+              <defs>
+                <radialGradient id="orbG" cx="38%" cy="34%" r="70%">
+                  <stop offset="0%" stop-color="#fff4dc"/>
+                  <stop offset="38%" stop-color="#d97757"/>
+                  <stop offset="100%" stop-color="#7c5fd0"/>
+                </radialGradient>
+              </defs>
+              <circle class="jarvis-orb__glow" cx="60" cy="60" r="38" fill="url(#orbG)"/>
+              <g class="jarvis-orb__ring" fill="none" stroke="rgba(255,244,220,0.55)" stroke-width="1.4">
+                <ellipse cx="60" cy="60" rx="52" ry="20"/>
+              </g>
+              <g class="jarvis-orb__ring jarvis-orb__ring--2" fill="none" stroke="rgba(86,200,189,0.6)" stroke-width="1.2">
+                <ellipse cx="60" cy="60" rx="20" ry="52"/>
+              </g>
+              <circle cx="60" cy="60" r="6" fill="#fff7ea"/>
+            </svg>
+          </div>
+
+          <!-- the phone -->
+          <div class="phone" id="phone" aria-label="Interactive VibeSpace phone">
+            <div class="phone__notch" aria-hidden="true"></div>
+            <div class="phone__screen">
+
+              <!-- CALL -->
+              <div class="scr scr-call is-on" id="scrCall">
+                <div class="call__who">
+                  <p class="call__name">Jarvis</p>
+                  <p class="call__state" id="callState">VibeSpace · incoming call…</p>
+                </div>
+                <div class="call__orb">
+                  <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v4"/></svg>
+                </div>
+                <span class="call__wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <div class="call__actions">
+                  <div class="call__row--incoming">
+                    <button class="call__btn call__btn--decline" id="callDecline" aria-label="Decline call">
+                      <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 16.6v2.6a2 2 0 0 1-2.2 2A19.6 19.6 0 0 1 2.8 4.7a2 2 0 0 1 2-2.2h2.6a2 2 0 0 1 2 1.7c.13.95.36 1.88.7 2.77a2 2 0 0 1-.45 2.11L8.6 10.2a16 16 0 0 0 5.2 5.2l1.12-1.05a2 2 0 0 1 2.11-.45c.89.34 1.82.57 2.77.7a2 2 0 0 1 1.7 2z" transform="rotate(135 12 12)"/></svg>
+                    </button>
+                    <button class="call__btn call__btn--accept" id="callAccept" aria-label="Accept call">
+                      <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 16.6v2.6a2 2 0 0 1-2.2 2A19.6 19.6 0 0 1 2.8 4.7a2 2 0 0 1 2-2.2h2.6a2 2 0 0 1 2 1.7c.13.95.36 1.88.7 2.77a2 2 0 0 1-.45 2.11L8.6 10.2a16 16 0 0 0 5.2 5.2l1.12-1.05a2 2 0 0 1 2.11-.45c.89.34 1.82.57 2.77.7a2 2 0 0 1 1.7 2z"/></svg>
+                    </button>
+                  </div>
+                  <div class="call__row--active">
+                    <button class="call__btn call__btn--end" id="callEnd" aria-label="End call">
+                      <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 16.6v2.6a2 2 0 0 1-2.2 2A19.6 19.6 0 0 1 2.8 4.7a2 2 0 0 1 2-2.2h2.6a2 2 0 0 1 2 1.7c.13.95.36 1.88.7 2.77a2 2 0 0 1-.45 2.11L8.6 10.2a16 16 0 0 0 5.2 5.2l1.12-1.05a2 2 0 0 1 2.11-.45c.89.34 1.82.57 2.77.7a2 2 0 0 1 1.7 2z" transform="rotate(135 12 12)"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <span class="call__label">tap to talk to Jarvis — or hang up and explore</span>
+              </div>
+
+              <!-- HOME -->
+              <div class="scr scr-home" id="scrHome">
+                <div class="scr-status"><span data-clock></span><span class="scr-status__right"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M2 17h2v-4H2zM6 17h2V9H6zM10 17h2V5h-2zM14 17h2v-8h-2zM18 17h2V7h-2z"/></svg><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M2 8.5a16 16 0 0 1 20 0l-2 2.2a13 13 0 0 0-16 0zM6 12.5a10 10 0 0 1 12 0l-2 2.2a7 7 0 0 0-8 0zM12 19.5l2-2.2a4 4 0 0 0-4 0z"/></svg><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="7" width="18" height="10" rx="2.5"/><path d="M22 10v4"/><rect x="4" y="9" width="11" height="6" rx="1" fill="currentColor"/></svg></span></div>
+                <div class="home__hello">
+                  <p class="home__time" data-clock></p>
+                  <p class="home__date" id="homeDate"></p>
+                </div>
+                <div class="home__grid">
+                  <button class="appicon appicon--messages" data-app="messages"><span class="appicon__tile"><span class="appicon__badge">3</span><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 20l1-4.1a8.4 8.4 0 1 1 17-4.4z"/></svg></span><span>Messages</span></button>
+                  <button class="appicon appicon--phone" data-app="phone"><span class="appicon__tile"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 16.6v2.6a2 2 0 0 1-2.2 2A19.6 19.6 0 0 1 2.8 4.7a2 2 0 0 1 2-2.2h2.6a2 2 0 0 1 2 1.7c.13.95.36 1.88.7 2.77a2 2 0 0 1-.45 2.11L8.6 10.2a16 16 0 0 0 5.2 5.2l1.12-1.05a2 2 0 0 1 2.11-.45c.89.34 1.82.57 2.77.7a2 2 0 0 1 1.7 2z"/></svg></span><span>Phone</span></button>
+                  <button class="appicon appicon--browser" data-app="browser"><span class="appicon__tile"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/></svg></span><span>Browser</span></button>
+                  <button class="appicon appicon--game" data-app="game"><span class="appicon__tile"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="7" width="19" height="10" rx="4"/><path d="M7 11v2M6 12h2M16 11.5h.01M18 13.5h.01"/></svg></span><span>Orbit Tap</span></button>
+                  <button class="appicon appicon--notes" data-app="notes"><span class="appicon__tile"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3h10l4 4v14H5zM15 3v4h4M8 12h8M8 16h6"/></svg></span><span>Notes</span></button>
+                  <button class="appicon appicon--music" data-app="music"><span class="appicon__tile"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg></span><span>Music</span></button>
+                  <button class="appicon appicon--photos" data-app="photos"><span class="appicon__tile"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.8"/><path d="m4 17 5-4 4 3 3-2 4 3"/></svg></span><span>Photos</span></button>
+                  <button class="appicon appicon--settings" data-app="settings"><span class="appicon__tile"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></span><span>Settings</span></button>
+                </div>
+              </div>
+
+              <!-- MESSAGES LIST -->
+              <div class="scr scr-messages" id="scrMessages">
+                <div class="app-head"><button class="app-head__back" data-home><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg></button><span class="app-head__title">Messages</span><span class="app-head__spacer"></span></div>
+                <div class="msg-list" id="msgList"></div>
+              </div>
+
+              <!-- MESSAGE THREAD -->
+              <div class="scr scr-thread" id="scrThread">
+                <div class="app-head"><button class="app-head__back" data-back="messages"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg></button><span class="app-head__title" id="threadTitle">—</span><span class="app-head__spacer"></span></div>
+                <div class="thread-scroll" id="threadScroll"></div>
+                <div class="thread-replies" id="threadReplies"></div>
+              </div>
+
+              <!-- BROWSER -->
+              <div class="scr scr-browser" id="scrBrowser">
+                <div class="br-bar">
+                  <button class="app-head__back" data-home aria-label="Home"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11.5 12 4l9 7.5M5 10v9h14v-9"/></svg></button>
+                  <span class="br-url"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><input id="brInput" type="text" placeholder="search vibespaceos.com…" autocomplete="off" /></span>
+                  <button class="br-go" id="brGo">Go</button>
+                </div>
+                <div class="br-view" id="brView"></div>
+              </div>
+
+              <!-- GAME -->
+              <div class="scr scr-game" id="scrGame">
+                <div class="game-hud"><button class="app-head__back" data-home><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg></button><span>Score <b id="gameScore">0</b></span><span>⏱ <b id="gameTime">20</b>s</span></div>
+                <div class="game-wrap">
+                  <canvas id="gameCanvas"></canvas>
+                  <div class="game-over" id="gameOver">
+                    <h4>Time!</h4>
+                    <p>You popped <b id="gameFinal">0</b> orbs.</p>
+                    <p id="gameRank" style="color:var(--spark)"></p>
+                    <button id="gameRestart">Play again</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- NOTES / SETTINGS -->
+              <div class="scr scr-notes" id="scrNotes">
+                <div class="app-head"><button class="app-head__back" data-home><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg></button><span class="app-head__title">Settings</span><span class="app-head__spacer"></span></div>
+                <div class="notes-body">
+                  <h4>VibeSpace OS</h4>
+                  <label>Unlimited local Kokoro voice <span class="notes-toggle is-on"><i></i></span></label>
+                  <label>Persistent terminals <span class="notes-toggle is-on"><i></i></span></label>
+                  <label>One shared memory <span class="notes-toggle is-on"><i></i></span></label>
+                  <label>Tell Mom you ate <span class="notes-toggle"><i></i></span></label>
+                  <p style="margin-top:16px;color:var(--pg-ink-dim);font-size:0.8rem">Everything local-first. Cloud features are opt-in, never required. ✦</p>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- =========================== FEATURES =========================== -->
     <section class="section" id="features">
       <header class="section__head reveal">
-        <p class="kicker"><span>02</span> — Features</p>
+        <p class="kicker"><span>03</span> — Features</p>
         <h2>Everything, under one roof</h2>
         <p class="lead">Not another chat window. A full workspace where the work — and the context — stays put.</p>
       </header>
@@ -318,10 +472,10 @@
     <!-- =========================== PRICING =========================== -->
     <section class="section" id="pricing">
       <header class="section__head section__head--center reveal">
-        <p class="kicker"><span>03</span> — Pricing</p>
+        <p class="kicker"><span>04</span> — Pricing</p>
         <h2>Select your Jarvis intelligence tier</h2>
         <p class="lead">Spark is free forever with your own keys. Paid tiers add hosted inference, AI phone minutes, in-app cloud voice, calls, and texts. Unlimited local Kokoro on every plan.</p>
-        <p class="promo glass reveal"><span class="pulse"></span> Launch promo — one-time Deepgram cloud voice bonus (up to 3&nbsp;hr on Singularity)</p>
+        <p class="promo glass reveal"><span class="pulse"></span> Launch promo — first 200 get $5 Deepgram (calls · Jarvis voice · STT), <strong>7 days to spend, no card</strong>. Paid tiers: 30&nbsp;min → 3&nbsp;hr. At $5k pool: up to 15&nbsp;hr on subscriptions.</p>
       </header>
 
       <div class="plans">
@@ -333,6 +487,7 @@
           <ul class="plan__list">
             <li>Every BYOK provider works</li>
             <li>Free local Kokoro voice</li>
+            <li><strong>First 200:</strong> $5 Deepgram — calls, Jarvis voice &amp; STT <em>(7 days, no card)</em></li>
             <li>Terminals, memory &amp; plugins</li>
             <li>Local-first — your data stays put</li>
           </ul>
@@ -386,7 +541,60 @@
         </article>
       </div>
 
-      <p class="plans__note reveal">Phone and in-app cloud voice share one monthly bucket — AI phone minutes burn at the worst-case rate; in-app cloud voice goes further. Unlimited local Kokoro on every plan. Launch pricing may change as VibeSpace grows.</p>
+      <p class="plans__note reveal">Phone and in-app cloud voice share one monthly bucket — AI phone minutes burn at the worst-case rate; in-app cloud voice goes further. Unlimited local Kokoro on every plan. Only the first 200 Spark users get $5 company Deepgram credit now; at $5k pool, first 1,000 Spark users get $2. Launch pricing may change as VibeSpace grows.</p>
+    </section>
+
+    <!-- =========================== SUPPORT =========================== -->
+    <section class="section" id="support">
+      <header class="section__head section__head--center reveal">
+        <p class="kicker"><span>05</span> — Support</p>
+        <h2>We&rsquo;ve got your back</h2>
+        <p class="lead">Real answers, fast. Reach a human, browse the docs, or skim the questions everyone asks.</p>
+      </header>
+
+      <div class="support__grid">
+        <article class="support__card glass reveal">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg></span>
+          <h3>Email support</h3>
+          <p>Questions, bugs, billing — we usually reply within a day.</p>
+          <a href="mailto:support@vibespaceos.com">support@vibespaceos.com</a>
+        </article>
+        <article class="support__card glass reveal">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg></span>
+          <h3>Docs &amp; guides</h3>
+          <p>Install, BYOK setup, plugins, voice, the Jarvis terminal command.</p>
+          <a href="https://github.com/Cookie774-GameDev/VibeSpace#readme" target="_blank" rel="noopener">Read the docs →</a>
+        </article>
+        <article class="support__card glass reveal">
+          <span class="cell__icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10c0-1.6-.4-3.2-1-4.5"/><path d="M9 12a3 3 0 1 1 6 0c0 2-3 2.5-3 4.5M12 19h.01"/></svg></span>
+          <h3>Report an issue</h3>
+          <p>Found a bug or have a feature idea? Open an issue on GitHub.</p>
+          <a href="https://github.com/Cookie774-GameDev/VibeSpace/issues" target="_blank" rel="noopener">Open an issue →</a>
+        </article>
+      </div>
+
+      <div class="faq reveal">
+        <div class="faq__item">
+          <button class="faq__q">Is VibeSpace really free? <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+          <div class="faq__a"><p>Yes — Spark is free forever. Bring your own keys for any of 21+ providers, run fully-local models with Ollama, and use unlimited local Kokoro voice. Paid tiers add hosted inference, AI phone minutes, cloud voice, and texts.</p></div>
+        </div>
+        <div class="faq__item">
+          <button class="faq__q">What&rsquo;s the $5 launch credit? <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+          <div class="faq__a"><p>The first 200 signups get $5 of free Deepgram credit to try AI phone calls, Jarvis cloud voice, and speech-to-text — no credit card required. Spend it within 7 days; after that those cloud tools lock back to BYOK or a subscription. Unlimited local Kokoro stays free for everyone.</p></div>
+        </div>
+        <div class="faq__item">
+          <button class="faq__q">Do I have to use the cloud? <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+          <div class="faq__a"><p>Never. VibeSpace is local-first — your chats, memory, and settings live on your device. Cloud features are entirely opt-in. You can run the whole thing offline with local models and local voice.</p></div>
+        </div>
+        <div class="faq__item">
+          <button class="faq__q">Which platforms are supported? <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+          <div class="faq__a"><p>Windows 10 (1809+) x64 is available today. macOS and Linux are on the roadmap. The <code>Jarvis</code> terminal command launches and updates the app for you.</p></div>
+        </div>
+        <div class="faq__item">
+          <button class="faq__q">Can I cancel anytime? <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+          <div class="faq__a"><p>Yes. Paid plans are month-to-month with no lock-in — manage or cancel from the billing portal whenever you like. Your local data stays yours.</p></div>
+        </div>
+      </div>
     </section>
 
     <!-- =========================== DOWNLOAD =========================== -->
@@ -394,7 +602,7 @@
       <div class="dl glass reveal">
         <div class="dl__halo" aria-hidden="true"></div>
         <img class="dl__logo" src="assets/images/logo.png" width="68" height="68" alt="" />
-        <p class="kicker"><span>04</span> — Download</p>
+        <p class="kicker"><span>06</span> — Download</p>
         <h2>Bring your work home</h2>
         <p class="lead">Free to start. Two minutes to install. Windows x64 today — more platforms on the roadmap.</p>
 
@@ -436,8 +644,10 @@
       </a>
       <nav class="footer__links" aria-label="Footer">
         <a href="#app">Try it</a>
+        <a href="#playground">Playground</a>
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
+        <a href="#support">Support</a>
         <a href="#download">Download</a>
         <a href="https://github.com/Cookie774-GameDev/VibeSpace" target="_blank" rel="noopener">GitHub</a>
       </nav>
@@ -452,5 +662,6 @@
   <div class="toast glass" id="toast" role="status" aria-live="polite" hidden>Copied to clipboard</div>
 
   <script src="assets/js/main.js" defer></script>
+  <script src="assets/js/playground.js" defer></script>
 </body>
 </html>
