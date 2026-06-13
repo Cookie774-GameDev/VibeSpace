@@ -18,10 +18,11 @@ import type { Agent, AgentId, Message, MessageId, Part } from '@/types';
 import type { ChatId, ProjectId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
+import { useUIStore } from '@/stores/ui';
 import { runAgent } from './router';
 import type { LLMMessage } from './types';
 import { applyPersona } from '@/features/agents/personas';
-import { applyAvailableActions, parseActionBlocks } from '@/lib/actions';
+import { applyAvailableActions, parseActionBlocks, autoApprovePendingActions } from '@/lib/actions';
 import { buildAgentTerminalContext } from '@/features/terminals/agentContext';
 import { getPluginContextBlock } from '@/features/plugins';
 import { devConsole } from '@/features/dev-console';
@@ -30,6 +31,7 @@ import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
 import { createStreamingVoiceSession, type StreamingVoiceSession } from '@/features/voice/streamingVoice';
 import { registerActiveStreamingVoiceSession } from '@/features/voice/voiceRouter';
 import { deriveChatTitle, maybeRenameChat } from '@/features/chat/chatLifecycle';
+import { composeSkillAddenda, resolveSkills } from '@/lib/agents/skills';
 
 import {
   getProjectContextBlock,
@@ -83,8 +85,12 @@ export interface SendDetail {
   contextNodes?: ContextAttachment[];
   /** Speak the final assistant reply when this send came from voice input. */
   speakReply?: boolean;
+  /** Run Jarvis action proposals immediately without approval cards. */
+  autoApproveActions?: boolean;
   /** Plugin ids attached via /plug or detected in message text. */
   pluginIds?: string[];
+  /** Skill ids selected via /skills for this turn. */
+  skillIds?: string[];
 }
 
 /** The shape of the `jarvis:cancel` event detail. */
@@ -109,6 +115,20 @@ export interface RuntimeOptions {
 function detectMention(text: string): string | null {
   const m = /(?:^|\s)@([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/.exec(text);
   return m ? m[1]! : null;
+}
+
+function getSelectedSkillsBlock(skillIds: string[] | undefined): string {
+  const unique = Array.from(new Set((skillIds ?? []).map((id) => id.trim()).filter(Boolean))).slice(0, 6);
+  if (unique.length === 0) return '';
+  const skills = resolveSkills(unique);
+  const addenda = composeSkillAddenda(unique);
+  if (skills.length === 0 && !addenda.trim()) return '';
+  const list = skills.map((skill) => `- ${skill.name}: ${skill.description}`).join('\n');
+  return [
+    'The user selected these skills for this turn. Apply their instructions to this response.',
+    list,
+    addenda.trim() ? `\nSkill instructions:\n${addenda.trim()}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 function actionPartToLlmText(part: Extract<Part, { kind: 'action_proposal' }>): string {
@@ -314,6 +334,7 @@ export function startRuntimeListener(
     let explicitFilesContext = '';
     let explicitTerminalContext = '';
     let pluginContext = '';
+    let selectedSkillsContext = '';
     try {
       projectContext = await getProjectContextBlock(projectId);
     } catch (err) {
@@ -386,11 +407,22 @@ export function startRuntimeListener(
         detail: { error: err instanceof Error ? err.message : String(err) },
       });
     }
+    try {
+      selectedSkillsContext = getSelectedSkillsBlock(detail.skillIds);
+    } catch (err) {
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'selected-skills context build failed',
+        detail: { error: err instanceof Error ? err.message : String(err) },
+      });
+    }
 
     const contextBlocks = [
       projectContext,
       projectContextTree,
       pluginContext,
+      selectedSkillsContext,
       explicitContext,
       explicitFilesContext,
       explicitTerminalContext,
@@ -421,7 +453,48 @@ export function startRuntimeListener(
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     const voiceSettings = useAuthStore.getState();
     let streamingVoice: StreamingVoiceSession | null = null;
-    const shouldSpeakReply = detail.speakReply === true;
+    let lastSpeechDeltaAt = 0;
+    let speechDeltaTimer: ReturnType<typeof setTimeout> | null = null;
+    let speechDeltaStarted = false;
+    const SPEECH_DELTA_MS = 120;
+
+    const flushSpeechDelta = () => {
+      speechDeltaTimer = null;
+      if (!streamingVoice || !acc) return;
+      lastSpeechDeltaAt = Date.now();
+      streamingVoice.onDelta(acc);
+    };
+
+    const scheduleSpeechDelta = () => {
+      if (!streamingVoice) return;
+      if (!speechDeltaStarted) {
+        speechDeltaStarted = true;
+        flushSpeechDelta();
+        return;
+      }
+      const now = Date.now();
+      const elapsed = now - lastSpeechDeltaAt;
+      if (elapsed >= SPEECH_DELTA_MS) {
+        if (speechDeltaTimer) {
+          clearTimeout(speechDeltaTimer);
+          speechDeltaTimer = null;
+        }
+        flushSpeechDelta();
+        return;
+      }
+      if (!speechDeltaTimer) {
+        speechDeltaTimer = setTimeout(flushSpeechDelta, SPEECH_DELTA_MS - elapsed);
+      }
+    };
+
+    const cancelSpeechDelta = () => {
+      if (speechDeltaTimer) {
+        clearTimeout(speechDeltaTimer);
+        speechDeltaTimer = null;
+      }
+    };
+    const shouldSpeakReply =
+      detail.speakReply === true && useUIStore.getState().voiceModalOpen;
     if (shouldSpeakReply) {
       streamingVoice = createStreamingVoiceSession({
         voiceEngine: voiceSettings.voiceEngine,
@@ -518,7 +591,7 @@ export function startRuntimeListener(
           if (chunk.delta && chunk.delta.length > 0) {
             acc += chunk.delta;
             scheduleFlush();
-            streamingVoice?.onDelta(acc);
+            scheduleSpeechDelta();
           }
           if (chunk.done) flushNow();
         },
@@ -541,6 +614,19 @@ export function startRuntimeListener(
           model: response.model,
         },
       });
+
+      if (detail.autoApproveActions && agent.slug === 'jarvis') {
+        try {
+          await autoApprovePendingActions(placeholder.id, chatId);
+        } catch (approveErr) {
+          devConsole.log({
+            channel: 'ai',
+            level: 'warn',
+            message: `Auto-approve actions failed: ${approveErr instanceof Error ? approveErr.message : String(approveErr)}`,
+            detail: { agent: agent.slug, messageId: placeholder.id },
+          });
+        }
+      }
 
       useAgentStore.getState().setRunState(agent.id, 'done');
       useAgentStore.getState().setVerb(agent.id, undefined);
@@ -587,6 +673,8 @@ export function startRuntimeListener(
       );
       if (streamingVoice) {
         try {
+          cancelSpeechDelta();
+          flushSpeechDelta();
           await streamingVoice.onComplete(finalText);
         } catch (speechErr) {
           devConsole.log({
@@ -601,6 +689,7 @@ export function startRuntimeListener(
         }
       }
     } catch (err) {
+      cancelSpeechDelta();
       streamingVoice?.stop();
       registerActiveStreamingVoiceSession(null);
       streamingVoice = null;

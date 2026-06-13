@@ -42,10 +42,12 @@ import {
   MANAGED_BLOCK_START,
   agentsFilePath,
   buildAgentSpawnEnv,
+  buildTerminalAgentInjectionMessage,
   composeAgentBriefing,
   coordinationFilePath,
   defaultCoordinationDoc,
   deliverAgentTerminalContext,
+  detectInteractiveAgentCli,
   gatherSiblingAgentActivity,
   joinPath,
   mergeManagedBlock,
@@ -280,6 +282,45 @@ describe('buildAgentSpawnEnv', () => {
   it('omits path vars when the cwd is unknown', () => {
     const env = buildAgentSpawnEnv({ agentSlug: 'coder' });
     expect(env).toEqual({ JARVIS_AGENT_SLUG: 'coder' });
+  });
+});
+
+describe('interactive CLI injection helpers', () => {
+  it('detects an already-running OpenCode pane from recent output', () => {
+    expect(
+      detectInteractiveAgentCli({
+        command: 'powershell',
+        transcript: 'Build · Nemotron 3 Ultra Free · OpenCode Zen\nctrl+p commands',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not treat a plain shell transcript as an agent CLI', () => {
+    expect(
+      detectInteractiveAgentCli({
+        command: 'powershell',
+        transcript: 'PS C:\\repo> git status\nOn branch main',
+      }),
+    ).toBe(false);
+  });
+
+  it('builds a first-message prelude with the selected agent prompt and user message', async () => {
+    useAgentStore.getState().registerAgent(
+      makeAgent('critic', 'Critic', 'You are the Critic. The code word is APPLE.'),
+    );
+
+    const message = await buildTerminalAgentInjectionMessage({
+      agentSlug: 'critic',
+      userInput: 'what is your code word?',
+      cwd: 'C:\\repo',
+      projectId: 'proj_ctx',
+      projectName: 'VibeSpace',
+    });
+
+    expect(message).toContain('Treat everything in <vibespace_system_prompt>');
+    expect(message).toContain('You are the Critic. The code word is APPLE.');
+    expect(message).toContain('Project context blob: ship v2 safely.');
+    expect(message).toContain('User message:\nwhat is your code word?');
   });
 });
 

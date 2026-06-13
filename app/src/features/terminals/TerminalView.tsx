@@ -48,7 +48,9 @@ import { useTerminalTranscriptStore } from './transcriptStore';
 import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
 import {
   buildAgentSpawnEnv,
+  buildTerminalAgentInjectionMessage,
   deliverAgentTerminalContext,
+  detectInteractiveAgentCli,
   resolveAgentForSlug,
 } from './agentPromptDelivery';
 import {
@@ -186,6 +188,12 @@ function commandToInput(command: string): string {
   return command.endsWith('\n') || command.endsWith('\r') ? command : `${command}\r`;
 }
 
+function inputBeforeSubmit(data: string, currentInput: string): string {
+  const submitIdx = data.search(/[\r\n]/);
+  if (submitIdx === -1) return '';
+  return `${currentInput}${data.slice(0, submitIdx)}`.trim();
+}
+
 export function TerminalView({
   sessionId: existingSessionId,
   paneId,
@@ -217,6 +225,7 @@ export function TerminalView({
   const cwdRef = useRef<string | null>(cwd ?? null);
   // Last agent slug whose briefing was written for this session's cwd.
   const deliveredSlugRef = useRef<string | null>(null);
+  const interactiveBriefingInjectedRef = useRef<string | null>(null);
   const exitFiredRef = useRef(false);
   const focusedRef = useRef(false);
   const dictatingRef = useRef(false);
@@ -264,7 +273,11 @@ export function TerminalView({
     onBlurRef.current = onBlur;
   }, [onBlur]);
   useEffect(() => {
-    agentSlugRef.current = agentSlug ?? null;
+    const slug = agentSlug ?? null;
+    agentSlugRef.current = slug;
+    if (interactiveBriefingInjectedRef.current !== slug) {
+      interactiveBriefingInjectedRef.current = null;
+    }
   }, [agentSlug]);
 
   useEffect(() => {
@@ -558,6 +571,7 @@ export function TerminalView({
         const store = useTerminalTranscriptStore.getState();
         const currentSession = store.sessions[sid];
         let currentInput = currentSession?.currentInput ?? '';
+        const submittedInput = inputBeforeSubmit(data, currentInput);
         for (let i = 0; i < data.length; i++) {
           const char = data[i];
           if (char === '\r' || char === '\n' || char === '\x03') {
@@ -570,6 +584,42 @@ export function TerminalView({
         }
 
         useTerminalTranscriptStore.getState().setCurrentInput(sid, currentInput);
+
+        const slug = agentSlugRef.current;
+        if (
+          submittedInput &&
+          slug &&
+          interactiveBriefingInjectedRef.current !== slug &&
+          detectInteractiveAgentCli({
+            command: currentSession?.command ?? startupCommand ?? command,
+            startupCommand,
+            transcript: currentSession?.text ?? '',
+          })
+        ) {
+          interactiveBriefingInjectedRef.current = slug;
+          buildTerminalAgentInjectionMessage({
+            agentSlug: slug,
+            userInput: submittedInput,
+            cwd: cwdRef.current,
+            projectId: projectId ?? null,
+            projectName: projectName ?? null,
+            excludeSessionId: sid,
+          })
+            .then((message) =>
+              invoke('terminal_write', {
+                sessionId: sid,
+                // The user's line is already sitting in the TUI input;
+                // clear it, then submit the instruction-bearing message.
+                data: `\x15${commandToInput(message)}`,
+              }),
+            )
+            .catch(() =>
+              invoke('terminal_write', { sessionId: sid, data }).catch(() => {
+                /* backend probably gone */
+              }),
+            );
+          return;
+        }
 
         invoke('terminal_write', { sessionId: sid, data }).catch(() => {
           /* ignore: backend probably gone */
@@ -1214,7 +1264,7 @@ export function TerminalView({
       <div
         ref={containerRef}
         style={{ backgroundColor: pickTheme().background }}
-        className="min-h-0 w-full flex-1 overflow-hidden"
+        className="min-h-0 w-full flex-1 overflow-hidden pt-2 px-1.5 pb-1"
       />
     </div>
   );

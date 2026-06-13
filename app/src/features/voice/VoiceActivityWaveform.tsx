@@ -7,7 +7,35 @@ interface VoiceActivityWaveformProps {
 
 const BAR_COUNT = 36;
 const ACTIVE_FRAME_MS = 48;
-const IDLE_FRAME_MS = 400;
+
+function drawStaticWaveform(
+  context: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+): void {
+  const rect = canvas.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * scale));
+  const height = Math.max(1, Math.round(rect.height * scale));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  context.clearRect(0, 0, width, height);
+  const gap = 2.8 * scale;
+  const barWidth = Math.max(1 * scale, (width - gap * (BAR_COUNT - 1)) / BAR_COUNT);
+  const centerY = height / 2;
+  const idleHeight = 1.4 * scale;
+  context.fillStyle = 'rgba(249, 139, 8, 0.22)';
+
+  for (let index = 0; index < BAR_COUNT; index += 1) {
+    const x = index * (barWidth + gap);
+    const y = centerY - idleHeight / 2;
+    context.beginPath();
+    context.roundRect(x, y, barWidth, idleHeight, barWidth / 2);
+    context.fill();
+  }
+}
 
 export const VoiceActivityWaveform = React.memo(function VoiceActivityWaveform({
   levelRef,
@@ -22,6 +50,11 @@ export const VoiceActivityWaveform = React.memo(function VoiceActivityWaveform({
     const context = canvas.getContext('2d');
     if (!context) return;
 
+    if (!active) {
+      drawStaticWaveform(context, canvas);
+      return;
+    }
+
     let frame = 0;
     let smoothedLevel = 0;
     let lastDraw = 0;
@@ -29,8 +62,7 @@ export const VoiceActivityWaveform = React.memo(function VoiceActivityWaveform({
     let gradientHeight = 0;
 
     const draw = (time: number) => {
-      const interval = active ? ACTIVE_FRAME_MS : IDLE_FRAME_MS;
-      if (time - lastDraw < interval) {
+      if (time - lastDraw < ACTIVE_FRAME_MS) {
         frame = window.requestAnimationFrame(draw);
         return;
       }
@@ -47,7 +79,7 @@ export const VoiceActivityWaveform = React.memo(function VoiceActivityWaveform({
       }
 
       context.clearRect(0, 0, width, height);
-      const target = active ? Math.min(1, Math.max(0, levelRef.current ?? 0)) : 0.02;
+      const target = Math.min(1, Math.max(0, levelRef.current ?? 0));
       smoothedLevel += (target - smoothedLevel) * (target > smoothedLevel ? 0.42 : 0.18);
 
       const gap = 2.8 * scale;

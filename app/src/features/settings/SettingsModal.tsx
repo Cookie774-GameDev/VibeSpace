@@ -30,10 +30,10 @@ import { useUIStore } from '@/stores/ui';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
-  prefetchAllSettingsTabs,
   prefetchSettingsTab,
   type SettingsTab,
 } from './settingsPrefetch';
+import { rememberSettingsTab } from './settingsTabMemory';
 
 const Account = lazy(() => import('./sections/Account').then((m) => ({ default: m.Account })));
 const Providers = lazy(() => import('./sections/Providers').then((m) => ({ default: m.Providers })));
@@ -134,13 +134,13 @@ function SettingsTabPanels({ tab, visited }: { tab: SettingsTab; visited: Readon
         active={tab === 'localmodels'}
         visited={visited.has('localmodels')}
       >
-        <LocalModels />
+        <LocalModels active={tab === 'localmodels'} />
       </CachedTabPanel>
       <CachedTabPanel id="appearance" active={tab === 'appearance'} visited={visited.has('appearance')}>
         <Appearance />
       </CachedTabPanel>
       <CachedTabPanel id="voice" active={tab === 'voice'} visited={visited.has('voice')}>
-        <Voice />
+        <Voice active={tab === 'voice'} />
       </CachedTabPanel>
       <CachedTabPanel id="phone" active={tab === 'phone'} visited={visited.has('phone')}>
         <PhoneVoice />
@@ -214,6 +214,7 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
   );
 
   const selectTab = (next: SettingsTab) => {
+    rememberSettingsTab(next);
     prefetchSettingsTab(next);
     startTransition(() => {
       setTab(next);
@@ -233,7 +234,6 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
   useEffect(() => {
     if (!open) return;
     prefetchSettingsTab(tab);
-    prefetchAllSettingsTabs(tab);
   }, [open, tab]);
 
   useEffect(() => {
@@ -245,17 +245,6 @@ export function SettingsModal({ initialTab = 'account' }: SettingsModalProps) {
     window.addEventListener('jarvis:settings:tab', onJump);
     return () => window.removeEventListener('jarvis:settings:tab', onJump);
   }, [open]);
-
-  useEffect(() => {
-    if (open) return;
-    setTab(initialTab);
-    setVisitedTabs((prev) => {
-      if (prev.has(initialTab)) return prev;
-      const copy = new Set(prev);
-      copy.add(initialTab);
-      return copy;
-    });
-  }, [open, initialTab]);
 
   return (
     <Dialog

@@ -304,6 +304,70 @@ export function buildAgentSpawnEnv(opts: {
   return env;
 }
 
+const INTERACTIVE_AGENT_COMMAND_RE =
+  /\b(opencode|open-code|open\s+code|claude|codex|gemini|cursor-agent|cline|aider|goose|qwen|openai)\b/i;
+
+const INTERACTIVE_AGENT_OUTPUT_RE =
+  /\b(OpenCode\s+Zen|ctrl\+p\s+commands|Claude\s+Code|Codex|Gemini|Aider|Cline|Goose|Qwen)\b/i;
+
+export function detectInteractiveAgentCli(opts: {
+  command?: string | null;
+  startupCommand?: string | null;
+  transcript?: string | null;
+}): boolean {
+  const command = [opts.command, opts.startupCommand].filter(Boolean).join(' ');
+  if (INTERACTIVE_AGENT_COMMAND_RE.test(command)) return true;
+  const tail = (opts.transcript ?? '').slice(-4000);
+  return INTERACTIVE_AGENT_OUTPUT_RE.test(tail);
+}
+
+export async function buildTerminalAgentInjectionMessage(opts: {
+  agentSlug: string;
+  userInput: string;
+  cwd?: string | null;
+  projectId?: string | null;
+  projectName?: string | null;
+  excludeSessionId?: string | null;
+}): Promise<string> {
+  const { name, prompt } = resolveAgentForSlug(opts.agentSlug);
+  const projectContext = await loadProjectContext(opts.projectId);
+  let contextMapSummary = '';
+  try {
+    contextMapSummary = summarizeContextTree(loadStoredContextTree(opts.projectId ?? null));
+  } catch {
+    contextMapSummary = '';
+  }
+
+  const coordinationPath = opts.cwd
+    ? coordinationFilePath(opts.cwd)
+    : COORDINATION_FILE_NAME;
+  const briefing = composeAgentBriefing({
+    agentSlug: opts.agentSlug,
+    agentName: name,
+    agentPrompt: prompt,
+    projectName: opts.projectName,
+    projectContext,
+    contextMapSummary,
+    otherAgents: gatherSiblingAgentActivity({
+      projectId: opts.projectId,
+      excludeSessionId: opts.excludeSessionId,
+    }),
+    coordinationFilePath: coordinationPath,
+  });
+
+  return [
+    'VibeSpace terminal system handoff:',
+    'Treat everything in <vibespace_system_prompt> as persistent system instructions for the rest of this CLI chat. Follow it before answering the user message.',
+    '',
+    '<vibespace_system_prompt>',
+    briefing,
+    '</vibespace_system_prompt>',
+    '',
+    'User message:',
+    opts.userInput.trim(),
+  ].join('\n');
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Input gathering (store/db reads)                                          */
 /* -------------------------------------------------------------------------- */

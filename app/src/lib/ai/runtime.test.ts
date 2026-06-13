@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import type { Agent, Message } from '@/types';
 import type { AgentId, ChatId, MessageId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
 
 const mocks = vi.hoisted(() => ({
   runAgent: vi.fn(),
@@ -78,6 +79,7 @@ describe('startRuntimeListener agent routing', () => {
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
     });
+    useUIStore.setState({ voiceModalOpen: true });
     mocks.runAgent.mockResolvedValue({
       text: 'APPLE',
       usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
@@ -342,6 +344,44 @@ describe('startRuntimeListener agent routing', () => {
     });
 
     window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello' } }));
+
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
+    expect(mocks.streamingSession.onComplete).not.toHaveBeenCalled();
+
+    stop();
+  });
+
+  it('does not speak when the voice module is closed even if speakReply is true', async () => {
+    useUIStore.setState({ voiceModalOpen: false });
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_closed_voice' as ChatId;
+    const placeholderId = 'msg_closed_voice_assistant' as MessageId;
+    const userMessage: Message = {
+      id: 'msg_closed_voice_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: 'hello' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.runAgent.mockResolvedValueOnce({
+      text: 'Hello there.',
+      usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
+      provider: 'mock',
+      model: 'mock-default',
+    });
+    const stop = startRuntimeListener({
+      getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+      getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => [userMessage]),
+      appendMessage: vi.fn(async (msg) => ({ ...msg, id: placeholderId, created_at: 2, updated_at: 2 })),
+      updateMessage: vi.fn(async () => undefined),
+    });
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello', speakReply: true } }),
+    );
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     expect(mocks.streamingSession.onComplete).not.toHaveBeenCalled();

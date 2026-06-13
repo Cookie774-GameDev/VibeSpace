@@ -5,6 +5,7 @@
  */
 import type { VoiceEngine, VoicePresetId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
 import type { VoiceTtsPreset } from './voicePlans';
 import {
   isSpeechSynthesisSupported,
@@ -21,6 +22,8 @@ import { resolveKokoroSpeed } from './speechRate';
 import { TtsService } from './TtsService';
 import { deepgramTtsProvider } from './providers/deepgramTts';
 import type { StreamingVoiceSession } from './streamingVoice';
+import { VoiceService } from './VoiceService';
+import { useVoiceStore } from './store';
 
 let activePlaybackAbort: AbortController | null = null;
 let activeStreamingSession: StreamingVoiceSession | null = null;
@@ -47,6 +50,15 @@ export function voicePresetToTtsPreset(preset: VoicePresetId): VoiceTtsPreset {
 }
 
 const kokoroAudioCache = new Map<string, Promise<{ audio: string; mime: string }>>();
+const KOKORO_CACHE_MAX = 64;
+
+function trimKokoroCache(): void {
+  while (kokoroAudioCache.size > KOKORO_CACHE_MAX) {
+    const oldest = kokoroAudioCache.keys().next().value;
+    if (!oldest) break;
+    kokoroAudioCache.delete(oldest);
+  }
+}
 
 async function synthesizeKokoroPhrase(
   text: string,
@@ -74,6 +86,7 @@ async function getCachedKokoroAudio(
   if (!pending) {
     pending = synthesizeKokoroPhrase(text, preset);
     kokoroAudioCache.set(key, pending);
+    trimKokoroCache();
     pending.catch(() => kokoroAudioCache.delete(key));
   }
   return pending;
@@ -133,6 +146,19 @@ export function cancelVoicePreview(): void {
   stopPlaybackOnly();
 }
 
+export function isVoiceModuleOpen(): boolean {
+  return useUIStore.getState().voiceModalOpen;
+}
+
+/** Hard stop when the voice panel is dismissed — cuts playback and listening. */
+export function handleVoiceModuleClosed(): void {
+  stopAllVoiceOutput();
+  VoiceService.stopListening();
+  useUIStore.getState().setVoiceListening(false);
+  useVoiceStore.getState().setPartialTranscript('');
+  useVoiceStore.getState().setState('idle');
+}
+
 export function stopAllVoiceOutput(): void {
   const streaming = activeStreamingSession;
   activeStreamingSession = null;
@@ -153,6 +179,7 @@ export async function speakWithSettings(
 ): Promise<void> {
   const trimmed = (options.text ?? text).trim();
   if (!trimmed) return;
+  if (!isVoiceModuleOpen()) return;
 
   const state = useAuthStore.getState();
   const engine = options.voiceEngine ?? state.voiceEngine ?? 'system';
@@ -177,7 +204,7 @@ export async function speakWithSettings(
     const controller = beginPlaybackAbortScope();
     options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
     try {
-      const { audio, mime } = await synthesizeKokoroPhrase(trimmed, ttsPreset);
+      const { audio, mime } = await getCachedKokoroAudio(trimmed, ttsPreset);
       if (controller.signal.aborted) return;
       await playBase64Audio(audio, mime || 'audio/wav', {
         volume: 1,

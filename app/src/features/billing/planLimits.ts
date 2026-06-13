@@ -7,6 +7,12 @@
  * cards and usage bars. Raw dollar budgets are intentionally NOT exposed here.
  */
 
+import {
+  callVoiceBucketLine,
+  PHONE_MINUTES_BY_PLAN,
+  UNLIMITED_LOCAL_KOKORO_LINE,
+} from '@/lib/callVoiceMarketing';
+
 export type BillingPlanId = 'free' | 'starter' | 'pro' | 'ultra';
 
 export interface PublicPlan {
@@ -30,34 +36,34 @@ export const PUBLIC_PLANS: Record<BillingPlanId, PublicPlan> = {
     messageCredits: 0,
     callMinutes: 0,
     smsTexts: 0,
-    blurb: 'Local voice + bring-your-own-key. No company-paid cloud AI, calling, SMS, or cloud voice.',
+    blurb: `${UNLIMITED_LOCAL_KOKORO_LINE}. Bring your own keys — no company-paid cloud AI, calling, SMS, or cloud voice.`,
   },
   starter: {
     id: 'starter',
     label: 'Starter',
     priceUsd: 10,
     messageCredits: 3100,
-    callMinutes: 22,
+    callMinutes: PHONE_MINUTES_BY_PLAN.starter,
     smsTexts: 100,
-    blurb: 'Company AI messages, AI calling, and SMS texts, plus unlimited local voice.',
+    blurb: `${callVoiceBucketLine('starter')}. ${UNLIMITED_LOCAL_KOKORO_LINE}. Plus AI messages and SMS.`,
   },
   pro: {
     id: 'pro',
     label: 'Pro',
     priceUsd: 50,
     messageCredits: 15500,
-    callMinutes: 109,
+    callMinutes: PHONE_MINUTES_BY_PLAN.pro,
     smsTexts: 500,
-    blurb: 'More AI messages, calling minutes, and texts, plus unlimited local voice.',
+    blurb: `${callVoiceBucketLine('pro')}. ${UNLIMITED_LOCAL_KOKORO_LINE}. Plus more AI messages and SMS.`,
   },
   ultra: {
     id: 'ultra',
     label: 'Ultra',
     priceUsd: 100,
     messageCredits: 31000,
-    callMinutes: 217,
+    callMinutes: PHONE_MINUTES_BY_PLAN.ultra,
     smsTexts: 1000,
-    blurb: 'Maximum AI messages, calling minutes, and texts, plus unlimited local voice.',
+    blurb: `${callVoiceBucketLine('ultra')}. ${UNLIMITED_LOCAL_KOKORO_LINE}. Maximum AI messages and SMS.`,
   },
 };
 
@@ -113,7 +119,7 @@ export function callUsageCopy(u: CallUsage | null, plan: BillingPlanId): string 
   if (plan === 'free' || !u || u.call_minutes_included === 0) {
     return 'AI calling not included on this plan.';
   }
-  return `AI calls: ${u.call_minutes_used} min used / ${u.call_minutes_included} min included.`;
+  return `AI phone minutes: ${u.call_minutes_used} min used / ${u.call_minutes_included} min included (worst-case phone burn).`;
 }
 
 /** Friendly per-bucket copy with window remainders. Never shows dollars. */

@@ -26,7 +26,6 @@ import {
   Info,
   Workflow,
 } from 'lucide-react';
-import { ClockToolPanel } from '@/features/clock';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -67,13 +66,6 @@ interface QuickTemplate {
 
 const QUICK_TEMPLATES: QuickTemplate[] = [
   {
-    emoji: '⏱',
-    name: 'One-hour timer',
-    description: 'Start a one-hour Clock timer with a chime.',
-    baseAction: 'clock.timer',
-    params: { durationMinutes: 60, label: 'One-hour timer', sound: 'chime' },
-  },
-  {
     emoji: '🤖',
     name: 'Claude in my project',
     description: 'Open a terminal and start Claude Code in your main project.',
@@ -93,13 +85,6 @@ const QUICK_TEMPLATES: QuickTemplate[] = [
     description: 'Open Google AI Studio in the browser to grab a free key.',
     baseAction: 'host.openUrl',
     params: { url: 'https://aistudio.google.com/apikey' },
-  },
-  {
-    emoji: '👁',
-    name: '20-20-20 break',
-    description: 'Quick eye break (20 seconds, look 20 feet away).',
-    baseAction: 'wellness.eyeBreak',
-    params: { durationSec: 20 },
   },
   {
     emoji: '🧪',
@@ -702,8 +687,6 @@ export function ToolsPage() {
             Export / Import still works for manual backups and offline moves.
           </div>
         </div>
-
-        <ClockToolPanel />
 
         {/* Quick-start templates (always visible — they make new tools cheap) */}
         <div className="mb-8">

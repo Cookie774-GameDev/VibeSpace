@@ -89,8 +89,8 @@ export function Plans() {
           </div>
           <h2 className="font-display text-hero text-white tracking-tight">Select your Jarvis intelligence tier</h2>
           <p className="text-secondary text-slate-400 mt-2 max-w-2xl leading-relaxed">
-            Configure how Jarvis powers your workflow. The Spark plan is free to use with your own API keys. 
-            Paid tiers offer plug-and-play hosted inference, unlimited voice features, and deep-space capabilities.
+            Configure how Jarvis powers your workflow. Spark is free with your own API keys.
+            Paid tiers add hosted inference, AI phone minutes, in-app cloud voice, and unlimited local Kokoro.
           </p>
         </div>
       </header>

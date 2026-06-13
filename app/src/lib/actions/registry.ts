@@ -69,6 +69,7 @@ import type { ActionDef, ActionResult } from './types';
 import type { CustomToolStep } from '@/features/tools/toolStore';
 import { getExplicitTerminalBlock } from '@/lib/ai/context';
 import { PRESET_ACTIONS } from './registryPresets';
+import { APP_CONTROL_ACTIONS } from './registryAppControl';
 
 /* --------------------------------------------------------------------------
  * Helpers
@@ -1169,11 +1170,10 @@ export function getBuiltinActions(): ActionDef[] {
     ...VOICE_ACTIONS,
     ...TERMINAL_ACTIONS,
     ...CHAT_ACTIONS,
-    ...WELLNESS_ACTIONS,
     ...HOST_ACTIONS,
     ...PLUGIN_ACTIONS,
-    ...CLOCK_ACTIONS,
     ...PRODUCTIVITY_ACTIONS,
+    ...APP_CONTROL_ACTIONS,
     ...PRESET_ACTIONS,
   ];
 }

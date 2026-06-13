@@ -3,6 +3,7 @@
  */
 import type { VoiceEngine, VoicePresetId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
 import { pullNewSpeechSegments, pullRemainingSpeech } from './textCleanup';
 import {
   registerActiveStreamingVoiceSession,
@@ -12,6 +13,8 @@ import {
 import {
   SPEECH_SYNTHESIS_END_EVENT,
   SPEECH_SYNTHESIS_START_EVENT,
+  STREAMING_VOICE_END_EVENT,
+  STREAMING_VOICE_START_EVENT,
 } from './speechSynthesis';
 
 export interface StreamingVoiceOptions {
@@ -24,7 +27,6 @@ export class StreamingVoiceSession {
   private queue: Promise<void> = Promise.resolve();
   private started = false;
   private stopped = false;
-  private activeSegments = 0;
   private readonly engine: VoiceEngine;
   private readonly voicePreset: VoicePresetId;
 
@@ -37,6 +39,10 @@ export class StreamingVoiceSession {
 
   onDelta(accumulatedRaw: string): void {
     if (this.stopped || !accumulatedRaw.trim()) return;
+    if (!useUIStore.getState().voiceModalOpen) {
+      this.haltPlayback();
+      return;
+    }
     const { segments, nextSpokenCleanLength } = pullNewSpeechSegments(
       accumulatedRaw,
       this.spokenCleanLength,
@@ -48,7 +54,7 @@ export class StreamingVoiceSession {
   }
 
   async onComplete(finalRaw: string): Promise<void> {
-    if (this.stopped) return;
+    if (this.stopped || !useUIStore.getState().voiceModalOpen) return;
     const { remainder, nextSpokenCleanLength } = pullRemainingSpeech(
       finalRaw,
       this.spokenCleanLength,
@@ -58,15 +64,18 @@ export class StreamingVoiceSession {
       this.enqueue(remainder);
     }
     await this.queue;
-    if (this.started && this.activeSegments === 0) {
+    if (this.started && !this.stopped) {
+      window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
       window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
     }
   }
 
   /** Stop playback without clearing the global streaming session registry. */
   haltPlayback(): void {
+    const wasActive = this.started && !this.stopped;
     this.stopped = true;
-    if (this.started) {
+    if (wasActive) {
+      window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
       window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
     }
   }
@@ -78,20 +87,17 @@ export class StreamingVoiceSession {
   }
 
   private enqueue(text: string): void {
-    this.activeSegments += 1;
     this.queue = this.queue.then(async () => {
       if (this.stopped) return;
       if (!this.started) {
         this.started = true;
+        window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT));
         window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT));
       }
       await speakWithSettings(text, {
         voiceEngine: this.engine,
         voicePreset: this.voicePreset,
       });
-    });
-    this.queue = this.queue.finally(() => {
-      this.activeSegments = Math.max(0, this.activeSegments - 1);
     });
   }
 }

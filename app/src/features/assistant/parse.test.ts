@@ -43,27 +43,22 @@ describe('parseAssistantInput terminal commands', () => {
   });
 });
 
-describe('parseAssistantInput clock commands', () => {
-  it('parses a one-hour timer request', () => {
+describe('parseAssistantInput removed clock commands', () => {
+  it('does not parse one-hour timer requests', () => {
     expect(parseAssistantInput('make me a one-hour timer')).toMatchObject({
-      kind: 'clock_timer',
-      durationMinutes: 60,
+      kind: 'unknown',
     });
   });
 
-  it('parses timer seconds and labels', () => {
+  it('does not parse timer seconds and labels', () => {
     expect(parseAssistantInput('set timer for 1 minute 30 seconds called tea')).toMatchObject({
-      kind: 'clock_timer',
-      durationMinutes: 1,
-      durationSeconds: 30,
-      label: 'tea',
+      kind: 'unknown',
     });
   });
 
-  it('parses alarm requests', () => {
+  it('does not parse alarm requests', () => {
     expect(parseAssistantInput('set an alarm for 3:30 PM')).toMatchObject({
-      kind: 'clock_alarm',
-      time: '3:30 pm',
+      kind: 'unknown',
     });
   });
 });

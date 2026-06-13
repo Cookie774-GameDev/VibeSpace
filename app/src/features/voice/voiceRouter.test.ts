@@ -64,16 +64,42 @@ vi.mock('./audioPlayback', () => ({
   playBase64Audio: vi.fn(async () => () => {}),
 }));
 
+let voiceModalOpen = true;
+
+vi.mock('@/stores/ui', () => ({
+  useUIStore: {
+    getState: () => ({
+      voiceModalOpen,
+      setVoiceListening: vi.fn(),
+    }),
+  },
+}));
+
+vi.mock('./VoiceService', () => ({
+  VoiceService: { stopListening: vi.fn() },
+}));
+
+vi.mock('./store', () => ({
+  useVoiceStore: {
+    getState: () => ({
+      setState: vi.fn(),
+      setPartialTranscript: vi.fn(),
+    }),
+  },
+}));
+
 import {
   cancelVoicePreview,
   previewVoiceWithSettings,
   registerActiveStreamingVoiceSession,
+  speakWithSettings,
   stopAllVoiceOutput,
 } from './voiceRouter';
 
 describe('voiceRouter preview cancellation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    voiceModalOpen = true;
     useAuthStore.setState({ voiceEngine: 'system', voicePreset: 'jarvis-prime' });
     registerActiveStreamingVoiceSession(null);
   });
@@ -112,5 +138,26 @@ describe('voiceRouter preview cancellation', () => {
 
     expect(h.speakText).toHaveBeenCalledTimes(2);
     expect(h.stopSpeech.mock.calls.length).toBeGreaterThan(stopCallsAfterFirst);
+  });
+});
+
+describe('voice module gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceModalOpen = true;
+    useAuthStore.setState({ voiceEngine: 'system', voicePreset: 'jarvis-prime' });
+  });
+
+  it('speakWithSettings does nothing when the voice module is closed', async () => {
+    voiceModalOpen = false;
+    await speakWithSettings('Hello from Jarvis.');
+    expect(h.speakText).not.toHaveBeenCalled();
+  });
+
+  it('speakWithSettings runs when the voice module is open', async () => {
+    voiceModalOpen = true;
+    h.speakText.mockResolvedValue(undefined);
+    await speakWithSettings('Hello from Jarvis.');
+    expect(h.speakText).toHaveBeenCalledTimes(1);
   });
 });

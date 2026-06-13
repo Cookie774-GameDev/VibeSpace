@@ -26,6 +26,7 @@ import type { Agent } from '@/types';
 import type { ActionDef, ActionParam } from './types';
 import { getBuiltinActions, CATEGORY_LABELS } from './registry';
 import { useToolStore } from '@/features/tools/toolStore';
+import { SKILLS } from '@/lib/agents/skills';
 
 /**
  * One concise line per action for the catalogue. Keep the line under
@@ -63,6 +64,7 @@ export function buildAddendumText(): string {
 
   const all = [...builtins, ...customs];
   if (all.length === 0) return '';
+  const skills = Object.values(SKILLS);
 
   const byCategory = new Map<string, ActionDef[]>();
   for (const a of all) {
@@ -109,7 +111,37 @@ export function buildAddendumText(): string {
     '- `terminal.bulkOpen`, `terminal.claude`, and `terminal.opencode` are destructive: always include a clear rationale and wait for approval.',
     '- Plugin tools: when the user attaches a plugin via /plug or mentions one in chat, use `plugin.call` with `{"pluginId":"<id>","toolName":"<tool>"}` — credentials never appear in prompts.',
     '- Do not claim a plugin tool ran unless an approved `plugin.call` action returned a result.',
+    '- Skills: the user can type `/skills` and choose a skill for the current turn. If they ask by voice or text which skills exist, use the Available skills section below.',
     '- Avoid triple-backticks inside `params` values; they break the fence.',
+    '',
+    '## Settings & voice (direct mutation)',
+    '',
+    'Prefer these when the user wants app changes without manual clicking:',
+    '- `settings.voice` — open Settings → Voice tab (UI only).',
+    '- `voice.setEngine` — params `engine`: system | local | kokoro | deepgram; optional `openSettings`: true.',
+    '- `voice.setPreset` — params `preset`: jarvis-prime | aurora | atlas | nova | sentinel.',
+    '- `voice.configure` — set engine and/or preset in one step; opens Voice tab by default.',
+    '- Example Deepgram switch: `voice.configure` with `{"engine":"deepgram","openSettings":true}`.',
+    '- `preferences.setChatAutoApprove` / `voice.setAutoApprove` — toggle auto-run of action proposals.',
+    '',
+    '## Multi-step workflows',
+    '',
+    'For requests like "open settings, go to voice, switch to Deepgram":',
+    '- Emit multiple ```action``` blocks in one reply (Approve all), OR',
+    '- One `workflow.run` block with `stepsJson` as a JSON array, e.g.',
+    '  `[{"action":"settings.voice","params":{}},{"action":"voice.setEngine","params":{"engine":"deepgram"}}]`.',
+    '- Chain only built-in dotted ids (not `custom.*`). Max 12 steps.',
+    '',
+    '## Settings tabs (navigation only)',
+    '',
+    'Every settings tab has a `settings.<tab>` action: account, plans, providers, plugins,',
+    'localmodels, appearance, voice, phone, ambient, notifications, accessibility,',
+    'hotkeys, jarvisactions, about. Use `settings.open` for the default tab.',
+    '',
+    '## Shell shortcuts',
+    '',
+    '- `host.openCommandPalette` (Cmd+K), `host.openLauncher` (Mod+Shift+L),',
+    '  `actions.openPalette` (Mod+Shift+A), `host.openAssistant` (Mod+J), `voice.open` (voice modal).',
     '',
     '## App Surfaces You Control',
     '',
@@ -126,11 +158,10 @@ export function buildAddendumText(): string {
     '  Route-aware: shows active terminal sessions on the terminal page,',
     '  kanban updates on the kanban page, etc.',
     '- **Command Palette (Cmd+K)**: Full global search with nested pages.',
-    '- **Settings (Cmd+,)**: Providers, local models, plans, hotkeys, phone,',
-    '  ambient, notifications.',
+    '- **Settings (Cmd+,)**: Providers, local models, plans, voice, phone,',
+    '  ambient, notifications, hotkeys, Jarvis Actions — each tab is a `settings.*` action.',
     '- **Voice Modal (Cmd+Space)**: Push-to-talk voice interface.',
     '- **Ambient Mode**: Idle takeover with procedural Web Audio soundscapes.',
-    '- **Wellness Break**: 20-20-20 eye break overlay.',
     '- **To-Do Drawer (Cmd+Shift+T)**: Live task panel with reminders.',
     '- **Quick Launcher (Cmd+Shift+L)**: Pinned apps and links.',
     '- **Actions Palette (Cmd+Shift+A)**: Built-in and custom tool runner.',
@@ -140,6 +171,10 @@ export function buildAddendumText(): string {
     '"fullscreen" or "make the chat big", use `chat.fullscreen`. When they',
     'ask "what\'s scheduled today?", navigate to the schedule route so they can',
     'see it, or check the Inspector\'s Today tab.',
+    '',
+    '## Available skills',
+    '',
+    skills.map((skill) => `- **${skill.name}** (\`${skill.id}\`) — ${skill.description}`).join('\n'),
     '',
     sections.join('\n\n'),
     '',

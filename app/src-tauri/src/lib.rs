@@ -40,7 +40,9 @@
 //! runtime sidecar so we keep the Rust core boring and stable.
 
 use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+mod dictation;
 mod fsread;
 mod terminal;
 mod credentials;
@@ -91,6 +93,16 @@ fn show_main_window(app: &tauri::AppHandle, reason: &'static str) {
     }
 }
 
+fn show_dictation_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("dictation") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("jarvis:global-dictation-toggle", ());
+    } else {
+        eprintln!("[dictation] dictation window missing");
+    }
+}
+
 /// Runs the Tauri app. Re-exposed under `#[mobile_entry_point]` so the same
 /// crate works for future iOS / Android builds via `npx tauri ios|android`.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -107,6 +119,15 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        show_dictation_window(app);
+                    }
+                })
+                .build(),
+        )
         .manage(terminal::TerminalState::default())
         .setup(|app| {
             let tray_menu = tauri::menu::Menu::with_items(
@@ -136,6 +157,11 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            let dictation_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::CapsLock);
+            if let Err(err) = app.global_shortcut().register(dictation_shortcut) {
+                eprintln!("[dictation] failed to register Ctrl+CapsLock: {err}");
+            }
 
             Ok(())
         })
@@ -177,6 +203,7 @@ pub fn run() {
             credentials::credential_set,
             credentials::credential_get,
             credentials::credential_delete,
+            dictation::dictation_paste_text,
             launcher::install_terminal_launcher,
             local_ai::ollama_installation_status,
             local_ai::ollama_start,

@@ -24,6 +24,13 @@ This crops `app-icon-source.png` to a square, runs `tauri icon`, and syncs
 
 ## Runtime branding
 
-`src-tauri/src/branding.rs` embeds `128x128.png` and `32x32.png` at compile
-time. Icons are re-applied on app start, window focus, and tray restore so
-Windows does not fall back to the generic placeholder during WebView2 hangs.
+`src-tauri/src/branding.rs` embeds icons at compile time:
+
+| Surface | Asset |
+|---------|-------|
+| Windows taskbar / window / Start menu | `icon.ico` (same bytes as the `.exe`) |
+| System tray | `32x32.png` |
+| Web favicon | synced to `public/favicon.ico` |
+
+Icons are re-applied on app start, window focus, and tray restore so Windows
+does not fall back to a stale placeholder during WebView2 hangs.

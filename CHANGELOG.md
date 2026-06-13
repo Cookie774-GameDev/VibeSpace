@@ -2,6 +2,27 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.38] - 2026-06-13
+
+### Added
+
+- Global Deepgram dictation overlay (`Ctrl+CapsLock`) — speak into any app; clipboard restored after paste.
+- Jarvis app-control actions (`voice.configure`, `workflow.run`, settings-tab navigation) with prompt catalogue.
+- `/skills` slash command in chat composer.
+- `callVoiceMarketing.ts` and `docs/SUBSCRIPTION_PLANS_REFERENCE.md` — honest phone vs cloud-voice subscription copy.
+
+### Improved
+
+- Subscription messaging on Settings → Plans, Cloud Voice, landing page, and README.
+- Voice panel routing, streaming TTS, and chat voice session cleanup.
+- Terminal agent prompt delivery and skill addenda.
+- Settings tab memory; removed legacy clock/timer/20-20-20 tool entries.
+
+### Fixed
+
+- Slash-command attachments (`/terminal`, `/plug`, `/contextmap`) no longer use stale React state on send.
+- No-option slash commands insert executable `/cmd` text instead of inert tokens.
+
 ## [0.1.32] - 2026-06-12
 
 ### Added

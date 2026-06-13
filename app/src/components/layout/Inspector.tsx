@@ -439,21 +439,6 @@ function InspectorToolsPanel() {
   return (
     <div className="flex flex-col gap-4">
       <Section
-        label="Preloaded"
-        icon={<Clock className="h-3.5 w-3.5" />}
-        hint="built-in"
-      >
-        <ToolResourceRow
-          title="Clock"
-          actionId="clock.timer"
-          description="Create timers and alarms with Jarvis control, alerts, and sound."
-          icon={<Clock className="h-3.5 w-3.5" />}
-          projectId={projectId}
-          onOpen={() => setRoute('tools')}
-        />
-      </Section>
-
-      <Section
         label="Custom tools"
         icon={<Wrench className="h-3.5 w-3.5" />}
         hint={String(tools.length)}

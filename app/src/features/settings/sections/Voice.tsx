@@ -36,6 +36,8 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
+import { HOTKEYS } from '@/lib/hotkeys';
+import { renderHotkey } from '@/lib/utils';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { openSystemSpeechSettings } from '@/lib/tauri';
@@ -58,7 +60,7 @@ type KokoroStatus = 'idle' | 'downloading' | 'ready' | 'testing' | 'error';
 const FREE_VOICE_PRESET_IDS: readonly VoicePresetId[] = ['jarvis-prime', 'aurora'];
 const FREE_VOICE_PRESETS = VOICE_PROFILES.filter((p) => FREE_VOICE_PRESET_IDS.includes(p.id));
 
-export function Voice() {
+export function Voice({ active = true }: { active?: boolean } = {}) {
   const persona = useAuthStore((s) => s.personaPreset);
   const setPersona = useAuthStore((s) => s.setPersona);
   const voicePreset = useAuthStore((s) => s.voicePreset);
@@ -71,6 +73,10 @@ export function Voice() {
   const setVoiceAutoListenOnOpen = useAuthStore((s) => s.setVoiceAutoListenOnOpen);
   const voiceSilenceDelayMs = useAuthStore((s) => s.voiceSilenceDelayMs);
   const setVoiceSilenceDelayMs = useAuthStore((s) => s.setVoiceSilenceDelayMs);
+  const jarvisAutoApprove = useAuthStore((s) => s.jarvisAutoApprove);
+  const setJarvisAutoApprove = useAuthStore((s) => s.setJarvisAutoApprove);
+  const voiceAutoApproveActions = useAuthStore((s) => s.voiceAutoApproveActions);
+  const setVoiceAutoApproveActions = useAuthStore((s) => s.setVoiceAutoApproveActions);
   const plan = useAuthStore((s) => s.plan);
   const admin = useAppAdmin();
   const activePlan = effectivePlan(plan, admin);
@@ -99,8 +105,9 @@ export function Voice() {
   const [micStatus, setMicStatus] = useState<MicStatus>('idle');
 
   useEffect(() => {
+    if (!active) return;
     void warmVoiceEngine(voiceEngine);
-  }, [voiceEngine]);
+  }, [active, voiceEngine]);
 
   useEffect(() => () => cancelVoicePreview(), []);
 
@@ -437,6 +444,32 @@ export function Voice() {
               <span>{voiceSilenceDelayLabel(VOICE_SILENCE_DELAY_MS_MIN)}</span>
               <span>{voiceSilenceDelayLabel(VOICE_SILENCE_DELAY_MS_MAX)}</span>
             </div>
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-panel p-4">
+            <div className="min-w-0">
+              <Label htmlFor="voice-auto-approve-toggle">Auto-run Jarvis commands (voice)</Label>
+              <p className="mt-1 text-metadata text-muted-foreground">
+                When on, voice requests like “open five terminals” run immediately without Approve cards.
+              </p>
+            </div>
+            <Switch
+              id="voice-auto-approve-toggle"
+              checked={voiceAutoApproveActions}
+              onCheckedChange={setVoiceAutoApproveActions}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-panel p-4">
+            <div className="min-w-0">
+              <Label htmlFor="chat-auto-approve-toggle">Auto-run Jarvis commands (chat)</Label>
+              <p className="mt-1 text-metadata text-muted-foreground">
+                Same for typed chat. Toggle quickly with {renderHotkey(HOTKEYS.JARVIS_BUBBLE)} while chatting.
+              </p>
+            </div>
+            <Switch
+              id="chat-auto-approve-toggle"
+              checked={jarvisAutoApprove}
+              onCheckedChange={setJarvisAutoApprove}
+            />
           </div>
         </div>
       </section>
@@ -785,6 +818,25 @@ interface VoiceCardProps {
   previewing: boolean;
 }
 
+/** Tiny animated bars shown while a voice preview is playing. */
+function VoiceSpeakingBars() {
+  const delays = ['0ms', '120ms', '240ms', '360ms'];
+  return (
+    <span
+      className="inline-flex h-3 w-3.5 items-end justify-center gap-[1.5px]"
+      aria-hidden
+    >
+      {delays.map((delay) => (
+        <span
+          key={delay}
+          className="h-full w-[2px] origin-bottom scale-y-[0.25] rounded-full bg-current animate-voice-bar"
+          style={{ animationDelay: delay }}
+        />
+      ))}
+    </span>
+  );
+}
+
 function VoiceCard({ profile, selected, onSelect, onPreview, previewing }: VoiceCardProps) {
   return (
     <div
@@ -830,9 +882,9 @@ function VoiceCard({ profile, selected, onSelect, onPreview, previewing }: Voice
           'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
           previewing && 'border-accent-cyan/50 text-accent-cyan',
         )}
-        aria-label={`Preview ${profile.name} voice`}
+        aria-label={previewing ? `${profile.name} voice preview playing` : `Preview ${profile.name} voice`}
       >
-        <Play className={cn('h-3 w-3', previewing && 'animate-pulse')} />
+        {previewing ? <VoiceSpeakingBars /> : <Play className="h-3 w-3" />}
         {previewing ? 'Playing' : 'Preview'}
       </button>
     </div>

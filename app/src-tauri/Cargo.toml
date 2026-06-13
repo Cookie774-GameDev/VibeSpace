@@ -1,6 +1,6 @@
 [package]
 name = "jarvis"
-version = "0.1.37"
+version = "0.1.38"
 description = "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant."
 authors = ["Jarvis"]
 edition = "2021"
@@ -25,6 +25,7 @@ tauri-plugin-http = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

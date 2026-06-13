@@ -7,15 +7,19 @@ import { useAuthStore } from '@/stores/auth';
 import { cn } from '@/lib/utils';
 import { messageRepo } from '@/lib/db';
 import { useChatMessages } from '@/features/chat/hooks';
-import { ensureActiveChat } from '@/features/chat/chatLifecycle';
+import {
+  ensureJarvisChatForVoice,
+  focusVoiceChat,
+  resolveVoiceChatTarget,
+} from './voiceChatRouting';
 import type { ChatId, Message } from '@/types';
 import type { VoiceState } from './store';
 import { useVoiceStore } from './store';
 import { VoiceService } from './VoiceService';
-import { SPEECH_SYNTHESIS_END_EVENT, SPEECH_SYNTHESIS_START_EVENT } from './speechSynthesis';
+import { SPEECH_SYNTHESIS_END_EVENT, SPEECH_SYNTHESIS_START_EVENT, STREAMING_VOICE_END_EVENT, STREAMING_VOICE_START_EVENT } from './speechSynthesis';
 import { PERSONAS } from './personas';
 import { VoiceActivityWaveform } from './VoiceActivityWaveform';
-import { stopAllVoiceOutput } from './voiceRouter';
+import { handleVoiceModuleClosed } from './voiceRouter';
 
 const STATE_LABEL: Record<VoiceState, string> = {
   idle: 'Ready',
@@ -96,7 +100,7 @@ const SymbioteOrb = React.memo(function SymbioteOrb({
 
       {/* Symbiote tendrils — only while active to keep the rest of the app responsive */}
       {showTendrils
-        ? TENDRIL_SEEDS.map((seed, i) => {
+        ? TENDRIL_SEEDS.slice(0, 6).map((seed, i) => {
         const rad = (seed.angle * Math.PI) / 180;
         const maxLen = half * seed.lenScale * (isSpeaking ? 2.2 : isListening ? 1.2 : isThinking ? 0.7 : 0.35);
         const duration = seed.durationBase * (isSpeaking ? 0.22 : isListening ? 0.55 : isThinking ? 0.7 : 1);
@@ -198,7 +202,6 @@ export function VoiceModal() {
   const setOpen = useUIStore((state) => state.setVoiceModalOpen);
   const activeChatId = useUIStore((state) => state.activeChatId);
   const voiceAutoListenOnOpen = useAuthStore((state) => state.voiceAutoListenOnOpen);
-  const voiceSilenceDelayMs = useAuthStore((state) => state.voiceSilenceDelayMs);
   const [showTranscript, setShowTranscript] = React.useState(false);
   const messages = useChatMessages(open && showTranscript ? activeChatId : null);
   const state = useVoiceStore((voice) => voice.state);
@@ -210,6 +213,7 @@ export function VoiceModal() {
   const pendingUtteranceRef = React.useRef('');
   const utteranceTimerRef = React.useRef<number | null>(null);
   const speakingRef = React.useRef(false);
+  const streamingReplyRef = React.useRef(false);
   const listeningArmedRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
 
@@ -295,6 +299,13 @@ export function VoiceModal() {
 
   React.useEffect(() => {
     if (!open) return;
+    void ensureJarvisChatForVoice().then((chatId) => {
+      if (chatId) focusVoiceChat(chatId);
+    });
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
     listeningArmedRef.current = voiceAutoListenOnOpen;
     if (voiceAutoListenOnOpen) startListening();
     else useVoiceStore.getState().setState('idle');
@@ -326,12 +337,17 @@ export function VoiceModal() {
       disarmPushToTalk();
       useVoiceStore.getState().setState('thinking');
       void (async () => {
-        let chatId = useUIStore.getState().activeChatId;
-        if (!chatId) {
-          chatId = (await ensureActiveChat({ titleHint: text })) as string | null;
+        const target = await resolveVoiceChatTarget(text);
+        if (!target) {
+          useVoiceStore.getState().setState('error', 'Could not open a Jarvis chat.');
+          return;
         }
-        if (!chatId) {
-          useVoiceStore.getState().setState('error', 'Open a chat first.');
+
+        focusVoiceChat(target.chatId);
+        const chatId = target.chatId;
+        const messageText = target.messageText.trim();
+        if (!messageText) {
+          useVoiceStore.getState().setState('error', 'Say something for Jarvis to send.');
           return;
         }
 
@@ -339,11 +355,19 @@ export function VoiceModal() {
           await messageRepo.create({
             chat_id: chatId as ChatId,
             role: 'user',
-            parts: [{ kind: 'text', text }],
+            parts: [{ kind: 'text', text: messageText }],
           });
+          const auth = useAuthStore.getState();
           window.dispatchEvent(
             new CustomEvent('jarvis:send', {
-              detail: { chatId, text, speakReply: true },
+              detail: {
+                chatId,
+                text: messageText,
+                agentId: target.agentId,
+                mentionedAgentIds: target.mentionedAgentIds,
+                speakReply: true,
+                autoApproveActions: auth.voiceAutoApproveActions,
+              },
             }),
           );
         } catch (error) {
@@ -356,13 +380,26 @@ export function VoiceModal() {
       })();
     };
 
+    let partialTimer: number | null = null;
+    let pendingPartial = '';
+
+    const schedulePartial = (text: string) => {
+      pendingPartial = text;
+      levelRef.current = Math.min(1, 0.25 + text.length / 48);
+      if (partialTimer !== null) return;
+      partialTimer = window.setTimeout(() => {
+        partialTimer = null;
+        useVoiceStore.getState().setPartialTranscript(pendingPartial);
+      }, 100);
+    };
+
     const offs = [
       VoiceService.on('voice:start', () => {
         useUIStore.getState().setVoiceListening(true);
         useVoiceStore.getState().setState('listening');
       }),
       VoiceService.on('voice:partial', ({ text }) => {
-        useVoiceStore.getState().setPartialTranscript(text);
+        schedulePartial(text);
       }),
       VoiceService.on('voice:final', ({ text }) => {
         useVoiceStore.getState().pushFinalTranscript(text);
@@ -391,13 +428,16 @@ export function VoiceModal() {
       VoiceService.on('voice:end', () => restartListening()),
     ];
 
-    const onSpeechStart = () => {
+    const onStreamingStart = () => {
+      streamingReplyRef.current = true;
+      if (speakingRef.current) return;
       speakingRef.current = true;
       VoiceService.stopListening();
       useUIStore.getState().setVoiceListening(false);
       useVoiceStore.getState().setState('speaking');
     };
-    const onSpeechEnd = () => {
+    const onStreamingEnd = () => {
+      streamingReplyRef.current = false;
       speakingRef.current = false;
       if (handsFree()) {
         listeningArmedRef.current = true;
@@ -406,83 +446,43 @@ export function VoiceModal() {
         useVoiceStore.getState().setState('idle');
       }
     };
+    const onSpeechStart = () => {
+      if (streamingReplyRef.current) return;
+      speakingRef.current = true;
+      VoiceService.stopListening();
+      useUIStore.getState().setVoiceListening(false);
+      useVoiceStore.getState().setState('speaking');
+    };
+    const onSpeechEnd = () => {
+      if (streamingReplyRef.current) return;
+      speakingRef.current = false;
+      if (handsFree()) {
+        listeningArmedRef.current = true;
+        restartListening();
+      } else {
+        useVoiceStore.getState().setState('idle');
+      }
+    };
+    window.addEventListener(STREAMING_VOICE_START_EVENT, onStreamingStart);
+    window.addEventListener(STREAMING_VOICE_END_EVENT, onStreamingEnd);
     window.addEventListener(SPEECH_SYNTHESIS_START_EVENT, onSpeechStart);
     window.addEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
 
     return () => {
       offs.forEach((off) => off());
+      if (partialTimer !== null) window.clearTimeout(partialTimer);
       if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
       utteranceTimerRef.current = null;
       pendingUtteranceRef.current = '';
       listeningArmedRef.current = false;
+      streamingReplyRef.current = false;
+      window.removeEventListener(STREAMING_VOICE_START_EVENT, onStreamingStart);
+      window.removeEventListener(STREAMING_VOICE_END_EVENT, onStreamingEnd);
       window.removeEventListener(SPEECH_SYNTHESIS_START_EVENT, onSpeechStart);
       window.removeEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
-      VoiceService.stopListening();
-      useUIStore.getState().setVoiceListening(false);
-      useVoiceStore.getState().setState('idle');
-      stopAllVoiceOutput();
+      handleVoiceModuleClosed();
     };
-  }, [open, startListening, voiceAutoListenOnOpen, voiceSilenceDelayMs]);
-
-  React.useEffect(() => {
-    if (!open || state !== 'listening' || !navigator.mediaDevices?.getUserMedia) {
-      levelRef.current = 0;
-      return;
-    }
-
-    let disposed = false;
-    let stream: MediaStream | null = null;
-    let audioContext: AudioContext | null = null;
-    let animationFrame = 0;
-    let lastSample = 0;
-
-    void navigator.mediaDevices
-      .getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      })
-      .then((nextStream) => {
-        if (disposed) {
-          nextStream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        stream = nextStream;
-        const AudioCtor =
-          window.AudioContext ??
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioCtor) return;
-        audioContext = new AudioCtor();
-        const source = audioContext.createMediaStreamSource(stream);
-        const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 128;
-        analyser.smoothingTimeConstant = 0.78;
-        source.connect(analyser);
-        const data = new Uint8Array(analyser.frequencyBinCount);
-
-        const update = (time: number) => {
-          if (disposed) return;
-          if (time - lastSample >= 48) {
-            analyser.getByteFrequencyData(data);
-            let sum = 0;
-            for (const value of data) sum += value;
-            levelRef.current = Math.min(1, sum / Math.max(1, data.length) / 40);
-            lastSample = time;
-          }
-          animationFrame = window.requestAnimationFrame(update);
-        };
-        animationFrame = window.requestAnimationFrame(update);
-      })
-      .catch(() => {
-        levelRef.current = 0;
-      });
-
-    return () => {
-      disposed = true;
-      window.cancelAnimationFrame(animationFrame);
-      stream?.getTracks().forEach((track) => track.stop());
-      if (audioContext) void audioContext.close().catch(() => undefined);
-      levelRef.current = 0;
-    };
-  }, [open, state]);
+  }, [open, startListening, voiceAutoListenOnOpen]);
 
   React.useEffect(() => {
     const node = transcriptRef.current;

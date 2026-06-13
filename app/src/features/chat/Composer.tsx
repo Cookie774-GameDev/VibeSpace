@@ -44,10 +44,11 @@ import {
   type ContextMapRecord,
 } from '@/features/context/tree';
 import { MentionTypeahead } from './MentionTypeahead';
-import { SlashCommandTypeahead, SLASH_COMMANDS, type SlashCommandDef, type SlashCommandTypeaheadRef } from './SlashCommandTypeahead';
+import { SlashCommandTypeahead, SLASH_COMMANDS, orderSlashCommandsForDisplay, type SlashCommandDef, type SlashCommandTypeaheadRef } from './SlashCommandTypeahead';
 import { SlashCommandOptionPicker, type SlashCommandOption, type SlashCommandOptionPickerRef } from './SlashCommandOptionPicker';
 import { InputToken, TokenList } from './InputToken';
 import { getChatDragKind, getChatDropPayload } from './dropPayload';
+import { SKILLS } from '@/lib/agents/skills';
 import {
   REAL_CHAT_PROVIDERS,
   selectLocalModelForChat,
@@ -407,6 +408,15 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       }));
     }
 
+    if (cmd === 'skills') {
+      return Object.values(SKILLS).map((skill) => ({
+        id: skill.id,
+        label: skill.name,
+        description: skill.description,
+        metadata: skill.tools.length > 0 ? skill.tools.join(', ') : 'prompt',
+      }));
+    }
+
     return [];
   }, [optionPickerCtx, terminalSessions, projectId, pluginConnections]);
 
@@ -534,8 +544,9 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       setSelectedSlashCmd('');
       return;
     }
-    if (!filteredSlashCommands.some((c) => c.cmd === selectedSlashCmd)) {
-      setSelectedSlashCmd(filteredSlashCommands[0]!.cmd);
+    const displayCommands = orderSlashCommandsForDisplay(filteredSlashCommands);
+    if (!displayCommands.some((c) => c.cmd === selectedSlashCmd)) {
+      setSelectedSlashCmd(displayCommands[0]!.cmd);
     }
   }, [filteredSlashCommands, selectedSlashCmd]);
 
@@ -568,7 +579,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     const after = text.slice(ta.selectionStart);
 
     // If command has options (like /terminal or /contextmap), show option picker
-    if (cmd.hasOptions && (cmd.cmd === 'terminal' || cmd.cmd === 'contextmap' || cmd.cmd === 'plug')) {
+    if (cmd.hasOptions && (cmd.cmd === 'terminal' || cmd.cmd === 'contextmap' || cmd.cmd === 'plug' || cmd.cmd === 'skills')) {
       // Remove the typed slash command from text
       setText(before + after);
       setSlashCtx(null);
@@ -577,15 +588,20 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       return;
     }
 
-    // For commands without options, add as confirmed token
+    // For commands without options, insert executable slash text. Confirmed
+    // tokens are reserved for option commands that need a selected value.
     if (!cmd.takesArg) {
-      setText(before + after);
+      const insert = `/${cmd.cmd}`;
+      const next = before + insert + after;
+      setText(next);
       setSlashCtx(null);
-      setConfirmedCommands((cur) => [
-        ...cur.filter((c) => c.cmd !== cmd.cmd),
-        { cmd: cmd.cmd, label: `/${cmd.cmd}` },
-      ]);
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      requestAnimationFrame(() => {
+        const node = textareaRef.current;
+        if (!node) return;
+        const pos = before.length + insert.length;
+        node.focus();
+        node.setSelectionRange(pos, pos);
+      });
       return;
     }
 
@@ -688,7 +704,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       kanban: 'kanban',
       context: 'context',
       contexts: 'context',
-      skills: 'skills',
+      skillspage: 'skills',
       history: 'history',
       tools: 'tools',
       agents: 'agents',
@@ -702,6 +718,13 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       }
       useUIStore.getState().setRoute(routes[cmd] as never);
       await addSystem(`Opened ${cmd}.`);
+      return true;
+    }
+    if (cmd === 'skills') {
+      const available = Object.values(SKILLS)
+        .map((skill) => `- ${skill.name} (${skill.id}) — ${skill.description}`)
+        .join('\n');
+      await addSystem(`Available skills:\n${available}\n\nType /skills and choose one from the dropdown to apply it to your next message.`);
       return true;
     }
     if (cmd === 'attach' && rest) {
@@ -795,6 +818,13 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     if (await handleSlashCommand(trimmed)) return;
 
     // Process confirmed commands before sending
+    const skillIds = confirmedCommands
+      .filter((confirmed) => confirmed.cmd === 'skills' && confirmed.value)
+      .map((confirmed) => confirmed.value!)
+      .slice(0, 6);
+    let nextAttachedTerminals = attachedTerminals;
+    let nextAttachedPlugins = attachedPlugins;
+    let nextAttachedContexts = attachedContexts;
     for (const confirmed of confirmedCommands) {
       if (confirmed.cmd === 'terminal' && confirmed.value) {
         const session = useTerminalTranscriptStore.getState().sessions[confirmed.value];
@@ -807,15 +837,15 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             command: session.command ?? undefined,
             agentSlug: session.agentSlug,
           };
-          setAttachedTerminals((cur) => {
-            const key = terminalRefKey(ref);
-            return cur.some((t) => terminalRefKey(t) === key) ? cur : [...cur, ref];
-          });
+          const key = terminalRefKey(ref);
+          nextAttachedTerminals = nextAttachedTerminals.some((t) => terminalRefKey(t) === key)
+            ? nextAttachedTerminals
+            : [...nextAttachedTerminals, ref];
         }
       } else if (confirmed.cmd === 'plug' && confirmed.value) {
-        setAttachedPlugins((cur) =>
-          cur.includes(confirmed.value!) ? cur : [...cur, confirmed.value!].slice(0, 8),
-        );
+        nextAttachedPlugins = nextAttachedPlugins.includes(confirmed.value!)
+          ? nextAttachedPlugins
+          : [...nextAttachedPlugins, confirmed.value!].slice(0, 8);
       } else if (confirmed.cmd === 'contextmap' && confirmed.value) {
         const maps = projectId ? loadStoredContextMaps(projectId) : [];
         const matched = maps.find((m: ContextMapRecord) => m.name === confirmed.value || (m.name ?? '').toLowerCase().includes((confirmed.value ?? '').toLowerCase()));
@@ -831,7 +861,9 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             path: '',
             kind: 'root',
           };
-          setAttachedContexts((cur) => cur.some((c) => c.nodeId === attachment.nodeId) ? cur : [...cur, attachment]);
+          nextAttachedContexts = nextAttachedContexts.some((c) => c.nodeId === attachment.nodeId)
+            ? nextAttachedContexts
+            : [...nextAttachedContexts, attachment];
         }
       }
     }
@@ -839,10 +871,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 
     setSending(true);
     try {
-      if (attachedTerminals.length > 0) {
+      if (nextAttachedTerminals.length > 0) {
         const scheduled = parseTerminalScheduleRequest(trimmed);
         if (scheduled) {
-          scheduleTerminalCommandFromChat(attachedTerminals, scheduled.command, scheduled.runAt);
+          scheduleTerminalCommandFromChat(nextAttachedTerminals, scheduled.command, scheduled.runAt);
           await messageRepo.create({
             chat_id: chatId as ChatId,
             role: 'system',
@@ -868,14 +900,14 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
         parts: [
           { kind: 'text', text: trimmed || 'Attached context.' },
           ...attachedFiles.map((path) => ({ kind: 'file_ref' as const, ref: { kind: 'file' as const, id: path } })),
-          ...attachedTerminals.map((ref) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `terminal:${terminalRefKey(ref)}`, excerpt: `Terminal reference: ${terminalRefLabel(ref)}` } })),
-          ...attachedContexts.map((context) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `context:${context.nodeId}`, excerpt: `Context: ${context.title}` } })),
+          ...nextAttachedTerminals.map((ref) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `terminal:${terminalRefKey(ref)}`, excerpt: `Terminal reference: ${terminalRefLabel(ref)}` } })),
+          ...nextAttachedContexts.map((context) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `context:${context.nodeId}`, excerpt: `Context: ${context.title}` } })),
         ],
       });
 
       const mentionedAgentIds = extractMentionedAgentIds(trimmed, agents);
       const mentionedPluginIds = extractPluginMentions(trimmed, PLUGIN_CATALOG);
-      const pluginIds = Array.from(new Set([...attachedPlugins, ...mentionedPluginIds])).slice(0, 8);
+      const pluginIds = Array.from(new Set([...nextAttachedPlugins, ...mentionedPluginIds])).slice(0, 8);
       const messageFilePaths = Array.from(
         new Set([...attachedFiles, ...extractAbsoluteFilePaths(trimmed)]),
       ).slice(0, 8);
@@ -886,10 +918,12 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             text: trimmed || 'Attached context.',
             mentionedAgentIds,
             filePaths: messageFilePaths,
-            terminalRefs: attachedTerminals,
-            contextNodes: attachedContexts,
+            terminalRefs: nextAttachedTerminals,
+            contextNodes: nextAttachedContexts,
             pluginIds,
+            skillIds,
             speakReply: voiceReplyRequestedRef.current || useAuthStore.getState().speakReplies,
+            autoApproveActions: useAuthStore.getState().jarvisAutoApprove,
           },
         }),
       );

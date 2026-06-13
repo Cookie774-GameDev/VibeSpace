@@ -349,9 +349,6 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   const openTerminalRunChain = tryOpenTerminalRunChain(s);
   if (openTerminalRunChain) return openTerminalRunChain;
 
-  const clockIntent = tryClockIntent(s);
-  if (clockIntent) return clockIntent;
-
   // ---- create project ----
   const createProject = /^(?:create|new|make|add)\s+(?:a\s+)?(?:new\s+)?project\s+(?:called\s+|named\s+)?(.+)$/i.exec(s);
   if (createProject) {

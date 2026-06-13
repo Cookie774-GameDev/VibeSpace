@@ -55,7 +55,12 @@ describe('buildAddendumText', () => {
     const text = buildAddendumText();
     expect(text).toContain('nav.chat');
     expect(text).toContain('terminal.swarm');
-    expect(text).toContain('wellness.eyeBreak');
+    expect(text).toContain('voice.setEngine');
+    expect(text).toContain('workflow.run');
+    expect(text).toContain('settings.voice');
+    expect(text).toContain('Available skills');
+    expect(text).not.toContain('wellness.eyeBreak');
+    expect(text).not.toContain('clock.timer');
   });
 
   it('appends custom tools that are exposed to AI', () => {

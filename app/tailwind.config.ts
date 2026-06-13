@@ -151,6 +151,10 @@ const config: Config = {
           '0%': { transform: 'scale(0.96)', opacity: '0' },
           '100%': { transform: 'scale(1)', opacity: '1' },
         },
+        'voice-bar': {
+          '0%, 100%': { transform: 'scaleY(0.25)' },
+          '50%': { transform: 'scaleY(1)' },
+        },
       },
       animation: {
         breathe: 'breathe 4s ease-in-out infinite',
@@ -162,6 +166,7 @@ const config: Config = {
         'fade-out': 'fade-out 150ms ease-in',
         'slide-up': 'slide-up 200ms cubic-bezier(0.16, 1, 0.3, 1)',
         'scale-in': 'scale-in 150ms cubic-bezier(0.16, 1, 0.3, 1)',
+        'voice-bar': 'voice-bar 0.55s ease-in-out infinite',
       },
       backgroundImage: {
         // V2 cozy gradient: copper -> amber. CSS variable values shifted in

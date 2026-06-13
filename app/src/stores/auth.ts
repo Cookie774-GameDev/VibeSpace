@@ -70,6 +70,16 @@ interface AuthState {
   voiceAutoListenOnOpen: boolean;
   /** Milliseconds of silence after speech before Jarvis sends your message. */
   voiceSilenceDelayMs: number;
+  /**
+   * Chat auto-approve: when true, Jarvis action proposals run without
+   * clicking Approve. Toggle with Shift+Tab on the chat route.
+   */
+  jarvisAutoApprove: boolean;
+  /**
+   * Voice auto-approve: when true, action proposals from voice turns
+   * run immediately (open terminals, navigate, etc.).
+   */
+  voiceAutoApproveActions: boolean;
 
   /**
    * Subscription tier. Defaults to `free` for every install. The Stripe
@@ -96,6 +106,8 @@ interface AuthState {
   setSpeakReplies: (enabled: boolean) => void;
   setVoiceAutoListenOnOpen: (enabled: boolean) => void;
   setVoiceSilenceDelayMs: (ms: number) => void;
+  setJarvisAutoApprove: (enabled: boolean) => void;
+  setVoiceAutoApproveActions: (enabled: boolean) => void;
   setWorkspaceId: (id: WorkspaceId | null) => void;
   setProjectId: (id: ProjectId | null) => void;
   setCloudSession: (s: AuthState['cloudSession']) => void;
@@ -159,6 +171,8 @@ export const useAuthStore = create<AuthState>()(
       speakReplies: false,
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
+      jarvisAutoApprove: false,
+      voiceAutoApproveActions: true,
       plan: 'free',
       telemetryOptIn: false,
 
@@ -199,6 +213,8 @@ export const useAuthStore = create<AuthState>()(
       setVoiceAutoListenOnOpen: (enabled) => set({ voiceAutoListenOnOpen: enabled }),
       setVoiceSilenceDelayMs: (ms) =>
         set({ voiceSilenceDelayMs: clampVoiceSilenceDelayMs(ms) }),
+      setJarvisAutoApprove: (enabled) => set({ jarvisAutoApprove: enabled }),
+      setVoiceAutoApproveActions: (enabled) => set({ voiceAutoApproveActions: enabled }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
       setProjectId: (id) => set({ projectId: id }),
       setCloudSession: (s) => set({ cloudSession: s }),
@@ -228,10 +244,12 @@ export const useAuthStore = create<AuthState>()(
         speakReplies: s.speakReplies,
         voiceAutoListenOnOpen: s.voiceAutoListenOnOpen,
         voiceSilenceDelayMs: s.voiceSilenceDelayMs,
+        jarvisAutoApprove: s.jarvisAutoApprove,
+        voiceAutoApproveActions: s.voiceAutoApproveActions,
         plan: s.plan,
         telemetryOptIn: s.telemetryOptIn,
       }),
-      version: 4,
+      version: 5,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -250,6 +268,10 @@ export const useAuthStore = create<AuthState>()(
         if (fromVersion < 4) {
           // Typed chat used to speak by default; voice panel is the primary speech surface now.
           state.speakReplies = false;
+        }
+        if (fromVersion < 5) {
+          if (typeof state.jarvisAutoApprove !== 'boolean') state.jarvisAutoApprove = false;
+          if (typeof state.voiceAutoApproveActions !== 'boolean') state.voiceAutoApproveActions = true;
         }
         return state;
       },

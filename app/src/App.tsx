@@ -23,6 +23,7 @@
  */
 import * as React from 'react';
 import { applyThemeToDocument, useUIStore } from '@/stores/ui';
+import { handleVoiceModuleClosed } from '@/features/voice/voiceRouter';
 import { useAgentStore } from '@/stores/agents';
 import { AuthGate } from '@/features/auth';
 import { AppShell } from '@/components/layout';
@@ -30,7 +31,6 @@ import { JarvisContextMenu } from '@/components/layout/JarvisContextMenu';
 import { PageRouter } from '@/components/layout/PageRouter';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { startNotificationLoop } from '@/features/tasks';
-import { startClockEngine } from '@/features/clock';
 import { useGlobalHotkeys } from '@/features/command-palette';
 import { WakeWordHost } from '@/features/voice/WakeWordHost';
 import { ApiKeySaveBurst } from '@/features/settings/ApiKeySaveBurst';
@@ -48,6 +48,7 @@ import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import { DevConsoleHost } from '@/features/dev-console';
 import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
 import { UpdateWarningHost } from '@/features/updates/UpdateWarningHost';
+import { GlobalDictationOverlay } from '@/features/global-dictation/GlobalDictationOverlay';
 import type { Agent, AgentId, Message } from '@/types';
 
 type SupabaseSessionLike = {
@@ -82,6 +83,8 @@ const ChatView = React.lazy(() => import('@/features/chat').then((m) => ({ defau
 const CouncilView = React.lazy(() =>
   import('@/features/council').then((m) => ({ default: m.CouncilView })),
 );
+import { getLastSettingsTab } from '@/features/settings/settingsTabMemory';
+
 const SettingsModal = React.lazy(() =>
   import('@/features/settings').then((m) => ({ default: m.SettingsModal })),
 );
@@ -102,9 +105,6 @@ const WhatsNewHost = React.lazy(() =>
 );
 const ActionsPalette = React.lazy(() =>
   import('@/features/actions').then((m) => ({ default: m.ActionsPalette })),
-);
-const WellnessBreak = React.lazy(() =>
-  import('@/features/wellness').then((m) => ({ default: m.WellnessBreak })),
 );
 const AmbientHome = React.lazy(() =>
   import('@/features/ambient').then((m) => ({ default: m.AmbientHome })),
@@ -229,7 +229,6 @@ function useBoot() {
   React.useEffect(() => {
     let stopRuntime: (() => void) | undefined;
     let stopNotifications: (() => void) | undefined;
-    let stopClock: (() => void) | undefined;
     let stopTerminalScheduler: (() => void) | undefined;
     let stopSyncLoop: (() => void) | undefined;
     let stopCloudAuth: (() => void) | undefined;
@@ -344,7 +343,6 @@ function useBoot() {
 
       // Phase 5: background loops
       try { stopNotifications = startNotificationLoop(); } catch (err) { console.error('Failed to start notification loop:', err); }
-      try { stopClock = startClockEngine(); } catch (err) { console.error('Failed to start clock engine:', err); }
       try { stopTerminalScheduler = initTerminalScheduler(); } catch (err) { console.error('Failed to start terminal scheduler:', err); }
 
       // Phase 6: Ollama model discovery (non-blocking)
@@ -367,7 +365,6 @@ function useBoot() {
       cancelled = true;
       stopRuntime?.();
       stopNotifications?.();
-      stopClock?.();
       stopTerminalScheduler?.();
       stopSyncLoop?.();
       stopCloudAuth?.();
@@ -510,6 +507,17 @@ function GlobalHotkeysHost() {
     HOTKEYS.JARVIS_BUBBLE,
     (e) => {
       e.preventDefault();
+      if (useUIStore.getState().route === 'chat') {
+        const next = !useAuthStore.getState().jarvisAutoApprove;
+        useAuthStore.getState().setJarvisAutoApprove(next);
+        toast.info(
+          next ? 'Auto-approve on' : 'Auto-approve off',
+          next
+            ? 'Jarvis will run proposed actions without asking in this chat.'
+            : 'Jarvis will show Approve cards before running actions.',
+        );
+        return;
+      }
       setAssistantOpen(true);
     },
     { whenInputs: true },
@@ -573,14 +581,20 @@ function CommandPaletteHost() {
 
 function SettingsModalHost() {
   const open = useUIStore((s) => s.settingsOpen);
-  const mountedRef = React.useRef(false);
-  if (open) mountedRef.current = true;
-  if (!mountedRef.current) return null;
+  if (!open) return null;
   return (
     <React.Suspense fallback={null}>
-      <SettingsModal />
+      <SettingsModal initialTab={getLastSettingsTab()} />
     </React.Suspense>
   );
+}
+
+function VoiceModuleLifecycle() {
+  const open = useUIStore((s) => s.voiceModalOpen);
+  React.useEffect(() => {
+    if (!open) handleVoiceModuleClosed();
+  }, [open]);
+  return null;
 }
 
 function VoiceModalHost() {
@@ -599,16 +613,6 @@ function ActionsPaletteHost() {
   return (
     <React.Suspense fallback={null}>
       <ActionsPalette />
-    </React.Suspense>
-  );
-}
-
-function WellnessBreakHost() {
-  const active = useUIStore((s) => s.wellnessActive);
-  if (!active) return null;
-  return (
-    <React.Suspense fallback={null}>
-      <WellnessBreak />
     </React.Suspense>
   );
 }
@@ -688,6 +692,7 @@ function WorkspaceRoot() {
       {/* Modal layer — mount only while open to avoid idle store subscriptions */}
       <CommandPaletteHost />
       <SettingsModalHost />
+      <VoiceModuleLifecycle />
       <VoiceModalHost />
       <WakeWordHost />
       <React.Suspense fallback={null}>
@@ -709,11 +714,6 @@ function WorkspaceRoot() {
       {/* V2 — idle takeover. Self-renders only when ambientActive=true. */}
       <AmbientHome />
       <AmbientAudioHost />
-
-      {/* V3 — wellness break overlay (20-20-20 eye break). Sits at z-80
-          so it covers ambient + every route, but stays below toasts so
-          the completion confirmation can shine through. */}
-      <WellnessBreakHost />
 
       {/* V3 — actions palette (Mod+Shift+A). Direct user invocation of
           built-in actions and saved custom tools. Sibling to the
@@ -745,6 +745,15 @@ function WorkspaceRoot() {
  *     stage logs too.
  */
 export function App() {
+  if (new URLSearchParams(window.location.search).get('view') === 'dictation') {
+    return (
+      <ErrorBoundary>
+        <ThemeHost />
+        <GlobalDictationOverlay />
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <ErrorBoundary>
       <ThemeHost />

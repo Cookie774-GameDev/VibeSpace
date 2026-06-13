@@ -184,7 +184,7 @@ async function ensureOllamaReady(signal?: AbortSignal): Promise<boolean> {
 
 // ── Component ────────────────────────────────────────────────────────────
 
-export function LocalModels() {
+export function LocalModels({ active = true }: { active?: boolean } = {}) {
   const offlineMode = useAuthStore((state) => state.offlineMode);
   const setOfflineMode = useAuthStore((state) => state.setOfflineMode);
   const defaultLocalModel = useAuthStore((state) => state.defaultLocalModel);
@@ -246,9 +246,10 @@ export function LocalModels() {
   );
 
   useEffect(() => {
+    if (!active) return;
     void scan();
     // Keep in-flight Ollama pulls alive when the user switches settings tabs.
-  }, [scan]);
+  }, [active, scan]);
 
   function saveBase() {
     const trimmed = baseDraft.trim() || OLLAMA_DEFAULT_BASE;

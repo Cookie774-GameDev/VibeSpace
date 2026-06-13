@@ -19,7 +19,7 @@ const HOTKEY_LABELS: Record<keyof typeof HOTKEYS, string> = {
   SCHEDULE: 'Open schedule',
   LAUNCHER: 'Open quick launcher',
   ASSISTANT: 'Open Jarvis Assistant',
-  JARVIS_BUBBLE: 'Open Jarvis wake bubble',
+  JARVIS_BUBBLE: 'Toggle chat auto-approve (chat) / open Assistant elsewhere',
   ACTIONS: 'Open actions palette',
 };
 

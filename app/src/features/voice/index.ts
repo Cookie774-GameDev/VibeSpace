@@ -31,6 +31,8 @@ export {
   speakWithSettings,
   previewVoiceWithSettings,
   cancelVoicePreview,
+  handleVoiceModuleClosed,
+  isVoiceModuleOpen,
   stopAllVoiceOutput,
   warmVoiceEngine,
   ensureKokoroReadyForSpeech,

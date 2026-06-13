@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.37';
+export const CURRENT_VERSION = '0.1.38';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,46 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.38',
+    date: '2026-06-13',
+    headline: 'Global dictation, Jarvis app control, subscription copy, voice polish',
+    summary:
+      'Consolidates multi-agent work: system-wide Deepgram dictation, full Jarvis action catalogue for settings/voice workflows, honest subscription minutes messaging, and terminal/voice refinements.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Global dictation — Ctrl+CapsLock overlay; Deepgram STT pastes into any app and restores clipboard.',
+          'Jarvis app control — voice.configure, workflow.run, and settings-tab actions so Jarvis can change voice engine and run multi-step flows.',
+          '/skills slash command — pick a skill from chat with arrow-key navigation.',
+          'Subscription marketing copy — phone minutes + in-app cloud voice lines on Plans, landing, and README.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Slash commands — /terminal, /plug, /contextmap attachments apply on send without stale state.',
+          'Voice routing — preview/stop sync and chat streaming voice session cleanup.',
+          'Terminal agent prompts — skill addenda and delivery hardening with tests.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Removed legacy clock, timer, and 20-20-20 wellness tool surfaces from the tools palette.',
+          'Settings tab memory and faster Settings modal open.',
+          'docs/SUBSCRIPTION_PLANS_REFERENCE.md — full tier reference for marketing and support.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Silent updater manifest targets VibeSpace-0.1.38-Windows-x64.exe on GitHub Releases.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.37',
     date: '2026-06-13',

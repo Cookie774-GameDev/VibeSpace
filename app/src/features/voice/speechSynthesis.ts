@@ -35,6 +35,8 @@ let activeSpeechRequestId = 0;
 
 export const SPEECH_SYNTHESIS_START_EVENT = 'jarvis:speech:start';
 export const SPEECH_SYNTHESIS_END_EVENT = 'jarvis:speech:end';
+export const STREAMING_VOICE_START_EVENT = 'jarvis:streaming-voice:start';
+export const STREAMING_VOICE_END_EVENT = 'jarvis:streaming-voice:end';
 
 function dispatchSpeechEvent(name: string): void {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(name));

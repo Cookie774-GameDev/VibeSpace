@@ -13,6 +13,7 @@ import {
   Network,
   Plug,
   Settings,
+  Sparkles,
   Terminal,
   Users,
   Wrench,
@@ -54,6 +55,13 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     hasOptions: true,
   },
   {
+    cmd: 'skills',
+    description: 'Add a skill to this chat turn',
+    icon: Sparkles,
+    category: 'action',
+    hasOptions: true,
+  },
+  {
     cmd: 'file',
     description: 'Attach a project file',
     icon: FileText,
@@ -87,6 +95,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { cmd: 'context', description: 'Open Context', icon: Network, category: 'navigation' },
   { cmd: 'history', description: 'Open History', icon: History, category: 'navigation' },
   { cmd: 'tools', description: 'Open Tools', icon: Wrench, category: 'navigation' },
+  { cmd: 'skillspage', description: 'Open Skills', icon: Users, category: 'navigation' },
   { cmd: 'agents', description: 'Open Agents', icon: Users, category: 'navigation' },
   { cmd: 'schedule', description: 'Open Schedule', icon: CalendarDays, category: 'navigation' },
   { cmd: 'chat', description: 'Back to Chat', icon: MessageSquare, category: 'navigation' },
@@ -104,6 +113,16 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const CATEGORY_ORDER = ['action', 'navigation', 'utility'];
+
+export function orderSlashCommandsForDisplay(commands: SlashCommandDef[]): SlashCommandDef[] {
+  const grouped = commands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
+    const cat = cmd.category ?? 'utility';
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(cmd);
+    return acc;
+  }, {});
+  return CATEGORY_ORDER.flatMap((category) => grouped[category] ?? []);
+}
 
 export interface SlashCommandTypeaheadProps {
   commands: SlashCommandDef[];
@@ -124,22 +143,23 @@ export const SlashCommandTypeahead = forwardRef<
   SlashCommandTypeaheadProps
 >(function SlashCommandTypeahead({ commands, selectedCmd, query, onHoverCmd, onSelect }, ref) {
   const listRef = useRef<HTMLDivElement>(null);
+  const displayCommands = orderSlashCommandsForDisplay(commands);
 
   useImperativeHandle(ref, () => ({
     moveUp: () => {
-      if (commands.length === 0) return;
-      const i = commands.findIndex((c) => c.cmd === selectedCmd);
-      const next = commands[(i - 1 + commands.length) % commands.length]!;
+      if (displayCommands.length === 0) return;
+      const i = displayCommands.findIndex((c) => c.cmd === selectedCmd);
+      const next = displayCommands[(i - 1 + displayCommands.length) % displayCommands.length]!;
       onHoverCmd?.(next.cmd);
     },
     moveDown: () => {
-      if (commands.length === 0) return;
-      const i = commands.findIndex((c) => c.cmd === selectedCmd);
-      const next = commands[(i + 1) % commands.length]!;
+      if (displayCommands.length === 0) return;
+      const i = displayCommands.findIndex((c) => c.cmd === selectedCmd);
+      const next = displayCommands[(i + 1) % displayCommands.length]!;
       onHoverCmd?.(next.cmd);
     },
     selectCurrent: () => {
-      const cmd = commands.find((c) => c.cmd === selectedCmd) ?? commands[0];
+      const cmd = displayCommands.find((c) => c.cmd === selectedCmd) ?? displayCommands[0];
       if (cmd) onSelect(cmd);
     },
   }));
@@ -150,7 +170,7 @@ export const SlashCommandTypeahead = forwardRef<
     selected?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [selectedCmd]);
 
-  const groupedCommands = commands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
+  const groupedCommands = displayCommands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
     const cat = cmd.category ?? 'utility';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(cmd);

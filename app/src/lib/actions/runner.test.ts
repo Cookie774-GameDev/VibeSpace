@@ -22,7 +22,7 @@ vi.mock('@/components/ui/toast', () => ({
 import { runAction, resolveAction, getAllActions } from '@/lib/actions/runner';
 import { toast } from '@/components/ui/toast';
 import { useToolStore } from '@/features/tools/toolStore';
-import { useClockStore } from '@/features/clock/clockStore';
+import { useTerminalCommandQueue } from '@/features/terminals/terminalCommandQueue';
 
 describe('resolveAction', () => {
   it('finds built-in actions by id', () => {
@@ -89,7 +89,7 @@ describe('runAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useToolStore.setState({ tools: [] });
-    useClockStore.setState({ entries: [] });
+    useTerminalCommandQueue.getState().clear();
   });
 
   it('returns a structured error for unknown ids and toasts by default', async () => {
@@ -145,31 +145,21 @@ describe('runAction', () => {
     if (!result.ok) expect(result.error).toMatch(/unknown base action/i);
   });
 
-  it('runs the preloaded Clock timer action', async () => {
+  it('does not expose the removed Clock timer action', async () => {
     const def = resolveAction('clock.timer');
-    expect(def?.category).toBe('clock');
-
-    const result = await runAction(
-      'clock.timer',
-      { durationMinutes: 1, label: 'Tea' },
-      { source: 'user' },
-      { emitToast: false },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(useClockStore.getState().scheduled()[0]?.label).toBe('Tea');
+    expect(def).toBeUndefined();
   });
 
   it('coerces params inside custom workflow tool steps', async () => {
     const tool = useToolStore.getState().create({
       name: 'Tea workflow',
-      description: 'Set a tea timer.',
+      description: 'Open a small terminal batch.',
       baseAction: 'workflow.run',
       params: {},
       steps: [
         {
-          action: 'clock.timer',
-          params: { durationMinutes: '1', durationSeconds: '30', label: 'Tea' },
+          action: 'terminal.bulkOpen',
+          params: { count: '2', command: 'echo hi' },
         },
       ],
     });
@@ -182,8 +172,6 @@ describe('runAction', () => {
     );
 
     expect(result.ok).toBe(true);
-    const timer = useClockStore.getState().scheduled()[0];
-    expect(timer?.label).toBe('Tea');
-    expect(timer?.durationMs).toBe(90_000);
+    expect(useTerminalCommandQueue.getState().queue).toHaveLength(2);
   });
 });

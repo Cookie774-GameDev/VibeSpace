@@ -73,6 +73,15 @@ import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 
+/** Refit mounted xterms after pane swap or drag — layout may settle one frame late. */
+function scheduleTerminalRefit(): void {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('jarvis:terminals:visible'));
+    });
+  });
+}
+
 interface TileGridProps {
   tree: PaneNode;
   onChange: (next: PaneTreeChange) => void;
@@ -488,6 +497,7 @@ export function TileGrid({
       nextLeaves[toIdx] = temp;
       return fromLeaves(nextLeaves);
     });
+    scheduleTerminalRefit();
   };
 
   const handleConnectedFilesChange = (paneId: string, next: string[]) => {
@@ -925,7 +935,7 @@ function Tile({
         frame = requestAnimationFrame(updatePreview);
       };
 
-      const cleanup = () => {
+      const cleanup = (refit = false) => {
         if (frame) cancelAnimationFrame(frame);
         clearHoverTarget();
         preview?.remove();
@@ -939,6 +949,7 @@ function Tile({
         window.setTimeout(() => {
           document.removeEventListener('contextmenu', onContextMenu, true);
         }, delay);
+        if (refit) scheduleTerminalRefit();
       };
 
       const onContextMenu = (ev: MouseEvent) => {
@@ -966,18 +977,19 @@ function Tile({
         if (ev.key !== 'Escape') return;
         cancelled = true;
         ev.preventDefault();
-        cleanup();
+        cleanup(dragging);
       };
 
       const onUp = (ev: PointerEvent) => {
         latestX = ev.clientX;
         latestY = ev.clientY;
         const target = dragging ? findDropTarget() : null;
+        const didDrag = dragging;
         if (dragging || ev.button === 2) {
           suppressNativeMenuUntil = Date.now() + 900;
           document.body.dataset.jarvisSuppressContextMenuUntil = String(suppressNativeMenuUntil);
         }
-        cleanup();
+        cleanup(didDrag);
         if (cancelled) return;
         ev.preventDefault();
         if (dragging) {
@@ -1000,10 +1012,10 @@ function Tile({
 
   return (
     <div className={cn(
-      "flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-lg border bg-panel shadow-soft transition-all duration-300",
+      "flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-lg border bg-panel shadow-soft transition-[border-color,box-shadow,outline-color] duration-300",
       isFocused ? "animate-terminal-focus border-accent-copper/80 ring-2 ring-accent-copper/30" : "border-border",
-      isDragOver && "jarvis-terminal-drop-hover border-accent-copper border-2 shadow-lg ring-4 ring-accent-copper/40 scale-[0.98]",
-      isDragging && "pointer-events-none opacity-0 scale-[0.985]"
+      isDragOver && "jarvis-terminal-drop-hover border-accent-copper border-2 shadow-lg ring-4 ring-accent-copper/40",
+      isDragging && "pointer-events-none opacity-0"
     )}
       data-terminal-drop="pane"
       data-terminal-drop-pane-id={leaf.id}
@@ -1018,10 +1030,19 @@ function Tile({
         e.dataTransfer.setData(TERMINAL_MIME, serializedRef);
         e.dataTransfer.setData(TERMINAL_PANE_MIME, leaf.id);
         e.dataTransfer.setData('text/plain', `terminal:${displayLabel}`);
+        // Avoid the browser snapshotting the xterm canvas as the drag ghost.
+        const ghost = document.createElement('div');
+        ghost.className = 'jarvis-terminal-drag-preview';
+        ghost.textContent = `Move terminal · ${displayLabel}`;
+        ghost.style.transform = 'translate(-9999px, -9999px)';
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 14, 14);
+        window.setTimeout(() => ghost.remove(), 0);
       }}
       onDragEnd={() => {
         setIsDragging(false);
         setIsDragOver(false);
+        scheduleTerminalRefit();
       }}
       onDragOver={(e) => {
         if (dataTransferHasTerminal(e.dataTransfer.types)) {

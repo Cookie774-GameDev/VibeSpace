@@ -21,6 +21,7 @@ import {
   type CombinedUsage,
   type BillingPlanId,
 } from '@/features/billing/planLimits';
+import { UNLIMITED_LOCAL_KOKORO_LINE } from '@/lib/callVoiceMarketing';
 
 const PROVIDER_PREF_KEY = 'jarvis.voice.cloudProvider';
 const PRESET_PREF_KEY = 'jarvis.voice.ttsPreset';
@@ -142,9 +143,10 @@ export function CloudVoice() {
           <h2 className="text-heading text-foreground">Cloud Voice</h2>
         </div>
         <p className="text-secondary text-muted-foreground mt-1">
-          Choose how VibeSpace speaks. Local Kokoro is free and unlimited. Launch Deepgram gives
-          every plan a one-time fast cloud voice bonus from our $1k credit pool; paid plans also
-          get monthly cloud voice budget. Everything falls back to Kokoro automatically.
+          Choose how VibeSpace speaks. {UNLIMITED_LOCAL_KOKORO_LINE} Launch Deepgram gives every plan a
+          one-time fast cloud voice bonus from our $1k credit pool. Paid plans share one monthly bucket
+          for AI phone calls and in-app cloud voice — phone minutes burn faster than in-app speech.
+          Everything falls back to Kokoro automatically.
         </p>
       </div>
 
@@ -250,7 +252,7 @@ export function CloudVoice() {
                 {bucketUsageCopy('AI messages', 'credits', combined.message, combined.plan as BillingPlanId)}
               </p>
               <p className="text-secondary text-foreground">
-                {bucketUsageCopy('AI call minutes', 'min', combined.call, combined.plan as BillingPlanId)}
+                {bucketUsageCopy('AI phone minutes', 'min', combined.call, combined.plan as BillingPlanId)}
               </p>
               <p className="text-secondary text-foreground">
                 {bucketUsageCopy('SMS texts', 'texts', combined.sms, combined.plan as BillingPlanId)}

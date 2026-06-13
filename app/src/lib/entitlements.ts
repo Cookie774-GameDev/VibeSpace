@@ -31,6 +31,13 @@
  *   LiveKit voice         : ~$0.001 / participant-minute
  */
 
+import {
+  callVoiceBucketLine,
+  DEEPGRAM_PROMO_LABEL,
+  PHONE_MINUTES_BY_PLAN,
+  UNLIMITED_LOCAL_KOKORO_LINE,
+} from '@/lib/callVoiceMarketing';
+
 export type PlanId = 'free' | 'starter' | 'pro' | 'ultra';
 
 export interface AdminIdentity {
@@ -89,6 +96,7 @@ const FREE: PlanDef = {
   features: [
     'Free Gemini 2.5 Flash Lite via Google AI Studio (no card)',
     'Every BYOK provider works: Groq, Anthropic, OpenAI, OpenRouter, Together',
+    UNLIMITED_LOCAL_KOKORO_LINE,
     'Custom tools (local), terminal swarm, wellness break',
     'Mod+Shift+A actions palette, full chat history, project Context',
     'Local-first — your data lives on this device',
@@ -109,7 +117,9 @@ const STARTER: PlanDef = {
   features: [
     'Everything in Free',
     '3,100 hosted AI message credits / mo',
-    'Jarvis Call — outbound phone calls (22 min/mo included)',
+    callVoiceBucketLine('starter')!,
+    UNLIMITED_LOCAL_KOKORO_LINE,
+    DEEPGRAM_PROMO_LABEL.starter!,
     'SMS to your phone (~100 texts/mo included)',
     'Cloud sync for chats and memories across devices',
     'Smart reminders, schedule notifications',
@@ -118,7 +128,7 @@ const STARTER: PlanDef = {
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
   ],
-  voiceMinutesPerMonth: 22,
+  voiceMinutesPerMonth: PHONE_MINUTES_BY_PLAN.starter,
   jarvisCall: true,
   cloudSync: true,
   toolPublishing: false,
@@ -133,7 +143,9 @@ const PRO: PlanDef = {
   features: [
     'Everything in Starter',
     '15,500 hosted AI message credits / mo',
-    'Jarvis Call — 109 min / mo',
+    callVoiceBucketLine('pro')!,
+    UNLIMITED_LOCAL_KOKORO_LINE,
+    DEEPGRAM_PROMO_LABEL.pro!,
     'SMS to your phone (~500 texts/mo included)',
     'Publish custom tools and agents to your account',
     'Priority routing — no rate-limit pressure',
@@ -145,7 +157,7 @@ const PRO: PlanDef = {
     'claude-3-5-sonnet-latest',
     'gpt-4o',
   ],
-  voiceMinutesPerMonth: 109,
+  voiceMinutesPerMonth: PHONE_MINUTES_BY_PLAN.pro,
   jarvisCall: true,
   cloudSync: true,
   toolPublishing: true,
@@ -160,7 +172,9 @@ const ULTRA: PlanDef = {
   features: [
     'Everything in Pro',
     '31,000 hosted AI message credits / mo',
-    'Jarvis Call — 217 min / mo',
+    callVoiceBucketLine('ultra')!,
+    UNLIMITED_LOCAL_KOKORO_LINE,
+    DEEPGRAM_PROMO_LABEL.ultra!,
     'SMS to your phone (~1,000 texts/mo included)',
     'Early access to new providers and models',
     'Dedicated rate-limit pool · direct support email',
@@ -175,7 +189,7 @@ const ULTRA: PlanDef = {
     'o1',
     'o1-mini',
   ],
-  voiceMinutesPerMonth: 217,
+  voiceMinutesPerMonth: PHONE_MINUTES_BY_PLAN.ultra,
   jarvisCall: true,
   cloudSync: true,
   toolPublishing: true,

@@ -37,28 +37,27 @@ describe('runAction param coercion', () => {
   });
 
   it('coerces a numeric-string into a number for number-typed params', async () => {
-    // wellness.eyeBreak's `durationSec` is `type: 'number'`. The actions
+    // terminal.bulkOpen's `count` is `type: 'number'`. The actions
     // palette uses `<input type="number">` whose value is always a
-    // string — without coercion the action would treat "30" as invalid
-    // and silently fall back to the default of 20.
+    // string, so the runner must coerce before invoking the action.
     const result = await runAction(
-      'wellness.eyeBreak',
-      { durationSec: '30' },
+      'terminal.bulkOpen',
+      { count: '2' },
       { source: 'user' },
     );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.summary).toBe('Eye break for 30s.');
+    if (result.ok) expect(result.summary).toBe('Opening 2 terminal panes.');
   });
 
   it('rejects non-numeric strings on number-typed params', async () => {
     const result = await runAction(
-      'wellness.eyeBreak',
-      { durationSec: 'banana' },
+      'terminal.bulkOpen',
+      { count: 'banana' },
       { source: 'user' },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toMatch(/durationSec/);
+      expect(result.error).toMatch(/count/);
       expect(result.error).toMatch(/number/);
     }
   });

@@ -30,6 +30,8 @@ export {
 
 export { runAction, resolveAction, getAllActions } from './runner';
 
+export { autoApprovePendingActions } from './autoApprove';
+
 export { parseActionBlocks } from './parse';
 export type { ParsedSegment, ParseResult } from './parse';
 

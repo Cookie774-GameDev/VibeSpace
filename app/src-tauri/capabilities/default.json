@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for the Jarvis main window. Grants the core IPC surface plus notification/dialog/os defaults and shell:open for external URLs. The http plugin scope explicitly allows the Ollama daemon and the major BYOK provider hosts so the native HTTP client can serve as a CORS-free fallback when the WebView blocks direct fetches in packaged builds.",
-  "windows": ["main"],
+  "windows": ["main", "dictation"],
   "permissions": [
     "core:default",
     "core:event:default",
