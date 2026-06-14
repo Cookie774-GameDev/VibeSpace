@@ -1,4 +1,4 @@
-# VibeSpace (Jarvis) - Windows Terminal Installer
+﻿# VibeSpace (Jarvis) - Windows Terminal Installer
 # Usage:    irm https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/install/install.ps1 | iex
 #
 # Optional environment variables (set before piping into iex):
@@ -19,7 +19,9 @@ $ProgressPreference     = 'SilentlyContinue'
 $JarvisRepo       = 'Cookie774-GameDev/VibeSpace'
 $JarvisGitHubApi  = "https://api.github.com/repos/$JarvisRepo/releases"
 $JarvisDownloads  = "https://github.com/$JarvisRepo/releases/download"
+$JarvisChannelUrl = "https://raw.githubusercontent.com/$JarvisRepo/main/releases/channel.json"
 $JarvisLocalBuild = Join-Path $env:USERPROFILE 'projects\Jarvis\app\src-tauri\target\release\bundle'
+$script:UpdateChannelManifest = $null
 
 # GitHub requires modern TLS. Windows PowerShell 5.1 can inherit older defaults
 # on some machines, so force TLS 1.2 before any release API or asset request.
@@ -32,12 +34,16 @@ try {
 # --- Pretty banner --------------------------------------------------------
 # PS 5.1 does not interpret `e as ESC; build it from [char]27 so colors work everywhere.
 $ESC = [char]27
+function Ansi {
+    param([Parameter(Mandatory = $true)][string]$Code)
+    return "${ESC}[$Code"
+}
 function Write-Banner {
     $line   = '-' * 60
-    $cyan   = "$ESC[38;5;51m"
-    $violet = "$ESC[38;5;141m"
-    $dim    = "$ESC[2m"
-    $reset  = "$ESC[0m"
+    $cyan   = Ansi '38;5;51m'
+    $violet = Ansi '38;5;141m'
+    $dim    = Ansi '2m'
+    $reset  = Ansi '0m'
     Write-Host ""
     Write-Host "$cyan$line$reset"
     Write-Host "$violet  V I B E S P A C E $reset$dim  (terminal command: Jarvis)$reset"
@@ -101,14 +107,18 @@ function Test-WebView2 {
 }
 
 function Get-UpdateChannelManifest {
-    $channelUrl = "https://raw.githubusercontent.com/$JarvisRepo/main/releases/channel.json"
+    if ($script:UpdateChannelManifest) {
+        return $script:UpdateChannelManifest
+    }
+    $headers = @{ 'User-Agent' = 'jarvis-installer' }
     try {
-        $manifest = Invoke-RestMethod -Uri $channelUrl -Headers @{ 'User-Agent' = 'jarvis-installer' } -TimeoutSec 15
-        if ($manifest.version) {
+        $manifest = Invoke-RestMethod -Uri $JarvisChannelUrl -Headers $headers -TimeoutSec 15
+        if ($manifest -and $manifest.version) {
+            $script:UpdateChannelManifest = $manifest
             return $manifest
         }
     } catch {
-        # Fall back to GitHub latest release when channel.json is unavailable.
+        # Fall through to GitHub latest-release lookup.
     }
     return $null
 }
@@ -117,10 +127,12 @@ function Get-LatestVersion {
     if ($env:JARVIS_VERSION) {
         return $env:JARVIS_VERSION
     }
+    Write-Step 'Checking production update channel...'
     $channel = Get-UpdateChannelManifest
     if ($channel -and $channel.version) {
-        Write-Ok "Update channel version: $($channel.version)"
-        return $channel.version
+        $v = ([string]$channel.version) -replace '^v', ''
+        Write-Ok "Channel version: $v"
+        return $v
     }
     Write-Step 'Checking GitHub for the latest release...'
     $apiError = $null
@@ -162,7 +174,7 @@ function Get-DownloadUrl ($version, $format) {
     if ($format -eq 'msi') {
         return "$JarvisDownloads/v$version/VibeSpace_${version}_x64_en-US.msi"
     } else {
-        return "$JarvisDownloads/v$version/VibeSpace_${version}_x64-setup.exe"
+        return "$JarvisDownloads/v$version/VibeSpace-$version-Windows-x64.exe"
     }
 }
 
@@ -175,6 +187,13 @@ function Get-AssetPattern ($format) {
 }
 
 function Resolve-DownloadUrl ($version, $format) {
+    $channel = Get-UpdateChannelManifest
+    if ($channel -and ([string]$channel.version -replace '^v', '') -eq $version) {
+        $platform = $channel.platforms.'windows-x86_64'
+        if ($format -eq 'nsis' -and $platform -and $platform.url) {
+            return [string]$platform.url
+        }
+    }
     $fallback = Get-DownloadUrl -version $version -format $format
     $pattern = Get-AssetPattern -format $format
     $headers = @{ 'User-Agent' = 'jarvis-installer' }
@@ -563,105 +582,105 @@ function Install-TerminalLauncherForever ($exePath) {
 @echo off
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Jarvis.ps1" %*
 '@
-    $coreLauncher = @"
-`$ErrorActionPreference = 'Stop'
-`$jarvisExe = '$($exePath.Replace("'", "''"))'
-if (-not (Test-Path -LiteralPath `$jarvisExe)) {
+    $coreLauncher = @'
+$ErrorActionPreference = 'Stop'
+$jarvisExe = '__JARVIS_EXE__'
+if (-not (Test-Path -LiteralPath $jarvisExe)) {
   Write-Error 'VibeSpace executable not found. Reinstall VibeSpace and try again.'
   exit 1
 }
-Start-Process -FilePath `$jarvisExe -WorkingDirectory (Split-Path -Parent `$jarvisExe)
-"@
-    $updateLauncher = @"
-`$ErrorActionPreference = 'Stop'
-`$jarvisExe = '$($exePath.Replace("'", "''"))'
-`$repo = '$JarvisRepo'
-`$localInstaller = Join-Path `$env:USERPROFILE 'projects\Jarvis\install\install.ps1'
-`$remoteInstaller = "https://raw.githubusercontent.com/`$repo/main/install/install.ps1"
+Start-Process -FilePath $jarvisExe -WorkingDirectory (Split-Path -Parent $jarvisExe)
+'@ -replace '__JARVIS_EXE__', ($exePath.Replace("'", "''"))
+    $updateLauncher = @'
+$ErrorActionPreference = 'Stop'
+$jarvisExe = '__JARVIS_EXE__'
+$repo = '__JARVIS_REPO__'
+$localInstaller = Join-Path $env:USERPROFILE 'projects\Jarvis\install\install.ps1'
+$remoteInstaller = "https://raw.githubusercontent.com/$repo/main/install/install.ps1"
 
-function Normalize-Version([string]`$value) {
-  if ([string]::IsNullOrWhiteSpace(`$value)) { return [version]'0.0.0' }
-  `$clean = (`$value -replace '^v', '') -replace '[^0-9\.].*$', ''
-  try { return [version]`$clean } catch { return [version]'0.0.0' }
+function Normalize-Version([string]$value) {
+  if ([string]::IsNullOrWhiteSpace($value)) { return [version]'0.0.0' }
+  $clean = ($value -replace '^v', '') -replace '[^0-9\.].*$', ''
+  try { return [version]$clean } catch { return [version]'0.0.0' }
 }
 
 function Get-InstalledVersion() {
-  if (-not (Test-Path -LiteralPath `$jarvisExe)) { return [version]'0.0.0' }
+  if (-not (Test-Path -LiteralPath $jarvisExe)) { return [version]'0.0.0' }
   try {
-    return Normalize-Version ((Get-Item -LiteralPath `$jarvisExe).VersionInfo.ProductVersion)
+    return Normalize-Version ((Get-Item -LiteralPath $jarvisExe).VersionInfo.ProductVersion)
   } catch {
     return [version]'0.0.0'
   }
 }
 
 try {
-  `$release = Invoke-RestMethod -Uri "https://api.github.com/repos/`$repo/releases/latest" -Headers @{ 'User-Agent' = 'jarvis-terminal-launcher' } -TimeoutSec 15
-  `$latestVersion = Normalize-Version `$release.tag_name
-  `$installedVersion = Get-InstalledVersion
-  if (`$latestVersion -le `$installedVersion) {
+  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'jarvis-terminal-launcher' } -TimeoutSec 15
+  $latestVersion = Normalize-Version $release.tag_name
+  $installedVersion = Get-InstalledVersion
+  if ($latestVersion -le $installedVersion) {
     exit 0
   }
 
-  `$env:JARVIS_SILENT = '1'
-  `$env:JARVIS_FORMAT = 'nsis'
-  if (Test-Path -LiteralPath `$localInstaller) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File `$localInstaller
-    exit `$LASTEXITCODE
+  $env:JARVIS_SILENT = '1'
+  $env:JARVIS_FORMAT = 'nsis'
+  if (Test-Path -LiteralPath $localInstaller) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $localInstaller
+    exit $LASTEXITCODE
   }
 
-  & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm '`$remoteInstaller' | iex"
-  exit `$LASTEXITCODE
+  & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm '$remoteInstaller' | iex"
+  exit $LASTEXITCODE
 } catch {
-  Write-Warning ('Jarvis update check failed: ' + `$_.Exception.Message)
+  Write-Warning ('Jarvis update check failed: ' + $_.Exception.Message)
   exit 0
 }
-"@
-    $psLauncher = @"
-`$ErrorActionPreference = 'Stop'
-`$binDir = Split-Path -Parent `$MyInvocation.MyCommand.Path
-`$bootScript = Join-Path `$binDir 'jarvis_boot_forever.py'
-`$coreScript = Join-Path `$binDir 'JarvisCore.ps1'
-`$updateScript = Join-Path `$binDir 'JarvisUpdate.ps1'
+'@ -replace '__JARVIS_EXE__', ($exePath.Replace("'", "''")) -replace '__JARVIS_REPO__', $JarvisRepo
+    $psLauncher = @'
+$ErrorActionPreference = 'Stop'
+$binDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$bootScript = Join-Path $binDir 'jarvis_boot_forever.py'
+$coreScript = Join-Path $binDir 'JarvisCore.ps1'
+$updateScript = Join-Path $binDir 'JarvisUpdate.ps1'
 
-if (-not (Test-Path -LiteralPath `$bootScript)) {
+if (-not (Test-Path -LiteralPath $bootScript)) {
   Write-Error 'Jarvis terminal boot script is missing. Reinstall the Jarvis launcher.'
   exit 1
 }
 
-`$pythonExe = `$null
-`$pythonArgsPrefix = @()
+$pythonExe = $null
+$pythonArgsPrefix = @()
 
 if (Get-Command py -ErrorAction SilentlyContinue) {
-    `$pythonExe = 'py'
-    `$pythonArgsPrefix = @('-3')
+    $pythonExe = 'py'
+    $pythonArgsPrefix = @('-3')
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    `$pythonExe = 'python'
+    $pythonExe = 'python'
 } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
-    `$pythonExe = 'python3'
+    $pythonExe = 'python3'
 }
 
-if (-not `$pythonExe) {
+if (-not $pythonExe) {
     Write-Warning 'Python was not found. Launching VibeSpace directly.'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File `$updateScript
-    & powershell -NoProfile -ExecutionPolicy Bypass -File `$coreScript
-    exit `$LASTEXITCODE
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $updateScript
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $coreScript
+    exit $LASTEXITCODE
 }
 
-`$updateCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + `$updateScript + '"'
-`$appCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + `$coreScript + '"'
-`$bootArgs = @(
-  '--update-command', `$updateCommand,
+$updateCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $updateScript + '"'
+$appCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $coreScript + '"'
+$bootArgs = @(
+  '--update-command', $updateCommand,
   '--ignore-update-failure',
-  '--app-command', `$appCommand,
-  '--app-cwd', `$env:USERPROFILE,
+  '--app-command', $appCommand,
+  '--app-cwd', $env:USERPROFILE,
   '--app-process-name', 'jarvis.exe',
   '--launch-wait-seconds', '7',
   '--timeout', '900',
   '--forever'
 )
-& `$pythonExe @pythonArgsPrefix `$bootScript @bootArgs
-exit `$LASTEXITCODE
-"@
+& $pythonExe @pythonArgsPrefix $bootScript @bootArgs
+exit $LASTEXITCODE
+'@
 
     Backup-LauncherFile $cmdPath
     Backup-LauncherFile $scriptPath
