@@ -329,39 +329,16 @@ export async function buildTerminalAgentInjectionMessage(opts: {
   projectName?: string | null;
   excludeSessionId?: string | null;
 }): Promise<string> {
-  const { name, prompt } = resolveAgentForSlug(opts.agentSlug);
-  const projectContext = await loadProjectContext(opts.projectId);
-  let contextMapSummary = '';
-  try {
-    contextMapSummary = summarizeContextTree(loadStoredContextTree(opts.projectId ?? null));
-  } catch {
-    contextMapSummary = '';
-  }
-
   const coordinationPath = opts.cwd
     ? coordinationFilePath(opts.cwd)
     : COORDINATION_FILE_NAME;
-  const briefing = composeAgentBriefing({
-    agentSlug: opts.agentSlug,
-    agentName: name,
-    agentPrompt: prompt,
-    projectName: opts.projectName,
-    projectContext,
-    contextMapSummary,
-    otherAgents: gatherSiblingAgentActivity({
-      projectId: opts.projectId,
-      excludeSessionId: opts.excludeSessionId,
-    }),
-    coordinationFilePath: coordinationPath,
-  });
+  const agentsPath = opts.cwd ? agentsFilePath(opts.cwd) : AGENTS_FILE_NAME;
 
   return [
-    'VibeSpace terminal system handoff:',
-    'Treat everything in <vibespace_system_prompt> as persistent system instructions for the rest of this CLI chat. Follow it before answering the user message.',
-    '',
-    '<vibespace_system_prompt>',
-    briefing,
-    '</vibespace_system_prompt>',
+    'VibeSpace terminal context:',
+    `Read and follow the managed project instructions in \`${agentsPath}\` before answering.`,
+    `Use the shared coordination document at \`${coordinationPath}\` so multiple agents do not overlap.`,
+    'The instructions are stored as project documents, not pasted into this chat.',
     '',
     'User message:',
     opts.userInput.trim(),

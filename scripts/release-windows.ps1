@@ -386,6 +386,18 @@ if (Test-Path -LiteralPath $manifestScript) {
     throw "updater manifest generation failed with exit code $LASTEXITCODE"
   }
   Write-Ok 'Wrote latest.json'
+
+  $manifestsDir = Join-Path $ReleasesDir 'manifests'
+  if (-not (Test-Path -LiteralPath $manifestsDir)) {
+    New-Item -ItemType Directory -Path $manifestsDir -Force | Out-Null
+  }
+  $archived = Join-Path $manifestsDir "v$Version.json"
+  Copy-Item -LiteralPath $manifestPath -Destination $archived -Force
+  Write-Ok "Archived manifest: manifests/v$Version.json"
+
+  $channelPath = Join-Path $ReleasesDir 'channel.json'
+  Copy-Item -LiteralPath $manifestPath -Destination $channelPath -Force
+  Write-Ok 'Updated releases/channel.json (production update channel)'
 } else {
   Write-Warn "Manifest script not found: $manifestScript"
 }

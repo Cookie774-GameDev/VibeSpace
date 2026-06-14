@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.38';
+export const CURRENT_VERSION = '0.1.39';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,44 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.39',
+    date: '2026-06-14',
+    headline: 'AI routing, plugins, rollback-safe updates, installer fix',
+    summary:
+      'Consolidates recent agent work: smarter Ollama fallbacks and agent provider options, plugins context injection, voice store hardening, fixed Windows one-line installer, and a rollback channel so all users can be pointed at a safe version.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Update rollback channel — releases/channel.json lets maintainers point every client at a known-good version without deleting GitHub releases.',
+          'Agent provider options — per-agent model routing and fallback actions when a provider is down.',
+          'Plugins context — richer workspace context injected into plugin runs.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Windows install script — fixed PowerShell parser error that broke irm | iex updates.',
+          'Phone voice settings and composer slash-command stability.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Agent manager UX, Ollama provider reliability, and expanded test coverage.',
+          'Branding and icon SVG refresh across app and tray.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Updater checks releases/channel.json first, then GitHub latest.json.',
+          'scripts/rollback-update.ps1 — roll all users back to e.g. v0.1.38 with one push.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.38',
     date: '2026-06-13',

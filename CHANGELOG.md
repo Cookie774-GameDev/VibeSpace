@@ -2,6 +2,24 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.39] - 2026-06-14
+
+### Added
+
+- **Update rollback channel** — `releases/channel.json` on `main` controls production updater target; archived manifests in `releases/manifests/`.
+- `scripts/rollback-update.ps1` — point all channel clients at a prior version (e.g. `0.1.38`) with `-Push`.
+- Agent provider options, fallback actions, and expanded Ollama/router/runtime tests.
+- Plugins workspace context injection and UI improvements.
+
+### Fixed
+
+- Windows `install.ps1` PowerShell parser error (`$ESC[38;…]` → `${ESC}[38;…]`) that broke `irm | iex`.
+- Install script reads `releases/channel.json` for version when rolling back.
+
+### Improved
+
+- Agent manager, composer, phone voice settings, branding/icons, security doc scrub.
+
 ## [0.1.38] - 2026-06-13
 
 ### Added

@@ -33,6 +33,11 @@
 latest.json
 SHA256SUMS.txt
 
+# Tracked update channel (rollback by editing channel.json or rollback-update.ps1).
+!channel.json
+!manifests/
+!manifests/**
+
 # But keep the human-facing files.
 !README.md
 !.gitignore

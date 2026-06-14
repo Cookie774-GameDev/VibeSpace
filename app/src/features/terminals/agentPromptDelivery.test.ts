@@ -304,7 +304,7 @@ describe('interactive CLI injection helpers', () => {
     ).toBe(false);
   });
 
-  it('builds a first-message prelude with the selected agent prompt and user message', async () => {
+  it('builds a document reminder without pasting the selected agent prompt into the CLI chat', async () => {
     useAgentStore.getState().registerAgent(
       makeAgent('critic', 'Critic', 'You are the Critic. The code word is APPLE.'),
     );
@@ -317,9 +317,10 @@ describe('interactive CLI injection helpers', () => {
       projectName: 'VibeSpace',
     });
 
-    expect(message).toContain('Treat everything in <vibespace_system_prompt>');
-    expect(message).toContain('You are the Critic. The code word is APPLE.');
-    expect(message).toContain('Project context blob: ship v2 safely.');
+    expect(message).toContain('AGENTS.md');
+    expect(message).toContain('C:\\repo\\AGENTS.md');
+    expect(message).not.toContain('You are the Critic. The code word is APPLE.');
+    expect(message).not.toContain('Project context blob: ship v2 safely.');
     expect(message).toContain('User message:\nwhat is your code word?');
   });
 });

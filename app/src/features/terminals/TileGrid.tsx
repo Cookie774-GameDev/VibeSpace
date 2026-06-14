@@ -55,6 +55,7 @@ import {
   updateLeaf,
   closePane,
   gridDimensions,
+  resizeAdjacentTracks,
 } from './paneTree';
 import {
   PaneToolbar,
@@ -334,40 +335,29 @@ export function TileGrid({
     if (totalPx <= 0) return;
 
     const startSizes = [...(axis === 'col' ? colSizes : rowSizes)];
-    const totalFr = startSizes.reduce((a, b) => a + b, 0);
     const startCoord = axis === 'col' ? e.clientX : e.clientY;
     let latest = startSizes;
+    let frame = 0;
+
+    const commitLatest = () => {
+      frame = 0;
+      if (axis === 'col') setColSizes(latest);
+      else setRowSizes(latest);
+    };
 
     const onMove = (ev: MouseEvent) => {
       const coord = axis === 'col' ? ev.clientX : ev.clientY;
-      const dPx = coord - startCoord;
-      const dFr = (dPx / totalPx) * totalFr;
-      const a = startSizes[idx]! + dFr;
-      const b = startSizes[idx + 1]! - dFr;
-      // Clamp: if either neighbour would shrink below the minimum, snap
-      // to the boundary instead of refusing the move outright. That gives
-      // the user predictable behaviour all the way to the limits.
-      if (a < MIN_FR || b < MIN_FR) {
-        const total = startSizes[idx]! + startSizes[idx + 1]!;
-        const clampedA = a < MIN_FR ? MIN_FR : total - MIN_FR;
-        const clampedB = total - clampedA;
-        const next = [...startSizes];
-        next[idx] = clampedA;
-        next[idx + 1] = clampedB;
-        latest = next;
-      } else {
-        const next = [...startSizes];
-        next[idx] = a;
-        next[idx + 1] = b;
-        latest = next;
-      }
-      if (axis === 'col') setColSizes(latest);
-      else setRowSizes(latest);
+      latest = resizeAdjacentTracks(startSizes, idx, coord - startCoord, totalPx, MIN_FR);
+      if (frame === 0) frame = requestAnimationFrame(commitLatest);
     };
 
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      if (frame !== 0) {
+        cancelAnimationFrame(frame);
+        commitLatest();
+      }
       // Persist the post-drag distribution. We pull `cols`/`rows` from
       // the closure (the layoutKey at drag start) so a mid-drag layout
       // change can't write the wrong shape into storage.
@@ -1021,7 +1011,7 @@ function Tile({
       data-terminal-drop-pane-id={leaf.id}
       data-terminal-drop-project-id={encodeDropProjectId(projectId)}
       data-terminal-drop-project-name={projectName ?? undefined}
-      draggable={true}
+      draggable={false}
       onPointerDown={startRightButtonDrag}
       onContextMenu={(e) => e.preventDefault()}
       onDragStart={(e) => {

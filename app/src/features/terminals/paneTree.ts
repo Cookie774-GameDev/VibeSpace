@@ -94,6 +94,25 @@ export type PaneTreeChange = PaneNode | null | ((current: PaneNode) => PaneNode 
 
 export const MAX_PANES = 10;
 
+export function resizeAdjacentTracks(
+  sizes: number[],
+  index: number,
+  deltaPx: number,
+  totalPx: number,
+  minTrack = 0.35,
+): number[] {
+  if (index < 0 || index >= sizes.length - 1 || totalPx <= 0) return sizes;
+  const totalFr = sizes.reduce((sum, value) => sum + value, 0);
+  const deltaFr = (deltaPx / totalPx) * totalFr;
+  const pairTotal = sizes[index]! + sizes[index + 1]!;
+  const rawA = sizes[index]! + deltaFr;
+  const clampedA = Math.max(minTrack, Math.min(rawA, pairTotal - minTrack));
+  const next = [...sizes];
+  next[index] = clampedA;
+  next[index + 1] = pairTotal - clampedA;
+  return next;
+}
+
 export function newLeaf(seed?: Partial<LeafBase>): PaneNode {
   return {
     kind: 'leaf',

@@ -86,3 +86,25 @@ The one-line installers now default to user-scope installs with no installer UI 
 Keep both names when staging Windows releases so one-line installers, direct downloads, and silent updates all keep working.
 
 Do not commit `latest.json` or `SHA256SUMS.txt`; they are regenerated for the exact signed artifacts uploaded to a GitHub Release. A stale manifest can make silent updates fail signature validation.
+
+## Rollback channel (all users)
+
+Production clients on **v0.1.39+** check `releases/channel.json` on `main` first:
+
+```text
+releases/
+  channel.json          live updater target (tracked in git)
+  manifests/
+    v0.1.38.json        archived signed manifest per release
+    v0.1.39.json
+```
+
+**Promote** a new build: `npm run release:windows` archives `manifests/vX.Y.Z.json` and updates `channel.json`.
+
+**Rollback** every user to a safe version without deleting GitHub releases:
+
+```powershell
+.\scripts\rollback-update.ps1 -Version 0.1.38 -Push
+```
+
+Clients pick up the change on the next updater check or `irm | iex` run.
