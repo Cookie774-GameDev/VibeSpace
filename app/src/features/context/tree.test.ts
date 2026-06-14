@@ -12,7 +12,7 @@ vi.mock('@/lib/fs', () => ({
   writeTextFile: fsMocks.writeTextFile,
 }));
 
-import { generateProjectContextTree, MAX_CONTEXT_FILE_BYTES } from './tree';
+import { generateProjectContextTree, MAX_CONTEXT_FILE_BYTES, contextMapSlashOptions, resolveContextMapRecord, type ContextMapRecord } from './tree';
 
 describe('generateProjectContextTree file safeguards', () => {
   beforeEach(() => {
@@ -105,5 +105,89 @@ describe('generateProjectContextTree file safeguards', () => {
     expect(serialized).toContain('image media');
     expect(serialized).toContain('video media');
     expect(fsMocks.readTextFileSample).not.toHaveBeenCalled();
+  });
+});
+
+describe('contextMapSlashOptions', () => {
+  it('keys each row by stable map id even when names match', () => {
+    const maps: ContextMapRecord[] = [
+      {
+        id: 'map-a',
+        projectId: 'p1',
+        rootDir: 'C:\\one',
+        name: 'Jarvis Context Map',
+        status: 'active',
+        createdAt: 1,
+        updatedAt: 1,
+        tree: {
+          version: 1,
+          projectId: 'p1',
+          rootDir: 'C:\\one',
+          generatedAt: 1,
+          model: 'local-fallback',
+          fileCount: 0,
+          totalBytes: 0,
+          summary: '',
+          nodes: [{ id: 'root-a', title: 'A', kind: 'root', summary: '' }],
+        },
+      },
+      {
+        id: 'map-b',
+        projectId: 'p1',
+        rootDir: 'C:\\two',
+        name: 'Jarvis Context Map',
+        status: 'active',
+        createdAt: 2,
+        updatedAt: 2,
+        tree: {
+          version: 1,
+          projectId: 'p1',
+          rootDir: 'C:\\two',
+          generatedAt: 2,
+          model: 'local-fallback',
+          fileCount: 0,
+          totalBytes: 0,
+          summary: '',
+          nodes: [{ id: 'root-b', title: 'B', kind: 'root', summary: '' }],
+        },
+      },
+    ];
+    const options = contextMapSlashOptions(maps);
+    expect(options).toHaveLength(2);
+    expect(new Set(options.map((o) => o.id)).size).toBe(2);
+    expect(options.map((o) => o.id)).toEqual(['map-a', 'map-b']);
+  });
+});
+
+describe('resolveContextMapRecord', () => {
+  const maps: ContextMapRecord[] = [
+    {
+      id: 'map-a',
+      projectId: 'p1',
+      rootDir: 'C:\\one',
+      name: 'Alpha',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      tree: {
+        version: 1,
+        projectId: 'p1',
+        rootDir: 'C:\\one',
+        generatedAt: 1,
+        model: 'local-fallback',
+        fileCount: 0,
+        totalBytes: 0,
+        summary: '',
+        nodes: [],
+      },
+    },
+  ];
+
+  it('resolves by stable id first', () => {
+    expect(resolveContextMapRecord(maps, 'map-a')?.name).toBe('Alpha');
+  });
+
+  it('falls back to name match for legacy values', () => {
+    expect(resolveContextMapRecord(maps, 'Alpha')?.id).toBe('map-a');
   });
 });

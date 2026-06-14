@@ -379,7 +379,16 @@ function useBoot() {
 
 function useDesktopReopenLifecycle() {
   React.useEffect(() => {
+    const refreshBranding = () => {
+      void import('@tauri-apps/api/core')
+        .then(({ invoke }) => invoke('refresh_app_branding'))
+        .catch(() => {
+          /* Web preview or test runtime without Tauri invoke. */
+        });
+    };
+
     const notifyVisible = (reason: string) => {
+      refreshBranding();
       window.requestAnimationFrame(() => {
         window.dispatchEvent(
           new CustomEvent('jarvis:terminals:visible', {

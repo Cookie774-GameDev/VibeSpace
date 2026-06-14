@@ -167,6 +167,37 @@ export function loadStoredContextMaps(projectId: string | null): ContextMapRecor
   return loadContextMapCollection(projectId).maps;
 }
 
+/** Resolve a context map from a slash-picker value (stable id) or legacy name match. */
+export function resolveContextMapRecord(
+  maps: ContextMapRecord[],
+  pickerValue: string,
+): ContextMapRecord | undefined {
+  if (!pickerValue) return undefined;
+  const byId = maps.find((m) => m.id === pickerValue);
+  if (byId) return byId;
+  const lower = pickerValue.toLowerCase();
+  return (
+    maps.find((m) => (m.name ?? '').toLowerCase() === lower) ??
+    maps.find((m) => (m.name ?? '').toLowerCase().includes(lower))
+  );
+}
+
+/** Build slash-command picker rows; always keys by map id so duplicate names stay distinct. */
+export function contextMapSlashOptions(
+  maps: ContextMapRecord[],
+): Array<{ id: string; label: string; description?: string; metadata?: string }> {
+  return maps
+    .filter((m) => m.status !== 'deleted')
+    .map((m) => ({
+      id: m.id,
+      label: m.name || 'Untitled',
+      description: `${(m.tree?.nodes ?? []).length} nodes`,
+      metadata: m.tree?.generatedAt
+        ? new Date(m.tree.generatedAt).toLocaleDateString()
+        : undefined,
+    }));
+}
+
 export function loadSelectedContextMap(projectId: string | null): ContextMapRecord | null {
   const collection = loadContextMapCollection(projectId);
   return collection.maps.find((map) => map.id === collection.selectedMapId)

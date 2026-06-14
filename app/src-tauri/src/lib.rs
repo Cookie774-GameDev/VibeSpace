@@ -67,6 +67,12 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Re-apply the embedded taskbar / window icon (Windows WebView2 recovery).
+#[tauri::command]
+fn refresh_app_branding(app: tauri::AppHandle) {
+    branding::apply_app_branding(&app);
+}
+
 #[derive(Clone, serde::Serialize)]
 struct ReopenPayload {
     reason: &'static str,
@@ -85,6 +91,8 @@ fn show_main_window(app: &tauri::AppHandle, reason: &'static str) {
         if let Err(err) = window.set_focus() {
             eprintln!("[lifecycle] failed to focus main window ({reason}): {err}");
         }
+        // WebView2 often swaps HWND during show — re-apply after the surface is back.
+        branding::apply_window_icon(&window);
         if let Err(err) = window.emit("jarvis:reopen", ReopenPayload { reason }) {
             eprintln!("[lifecycle] failed to emit reopen event ({reason}): {err}");
         }
@@ -139,6 +147,7 @@ pub fn run() {
             )?;
 
             branding::apply_app_branding(&app.handle());
+            branding::start_windows_icon_watchdog(&app.handle());
 
             let tray_icon = branding::build_tray_icon();
 
@@ -167,8 +176,12 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             match event {
-                tauri::WindowEvent::Focused(true) => {
-                    branding::apply_app_branding(&window.app_handle());
+                tauri::WindowEvent::Focused(true)
+                | tauri::WindowEvent::Resized(_)
+                | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                    if window.label() == "main" {
+                        branding::apply_app_branding(&window.app_handle());
+                    }
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                 use tauri::Emitter as _;
@@ -188,6 +201,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             app_version,
+            refresh_app_branding,
             fsread::fs_create_text_file,
             fsread::fs_list_dir,
             fsread::fs_read_text,

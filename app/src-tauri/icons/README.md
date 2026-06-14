@@ -28,13 +28,9 @@ This crops `app-icon-source.png` to a square, runs `tauri icon`, and syncs
 
 | Surface | Asset |
 |---------|-------|
-| Windows taskbar / window / Start menu | `icon.ico` (same bytes as the `.exe`) |
-| System tray | `icon.ico` on Windows; `32x32.png` elsewhere |
+| Windows taskbar / window / tray (runtime) | `32x32.png` in `branding.rs` |
+| Windows Start menu / pinned shortcut | `icon.ico` embedded in the `.exe` at build |
 | Web favicon | synced to `public/favicon.ico` |
 
-If Windows search still shows the old purple mark after an update, the OS is
-caching the previous `.exe` icon. Reinstall from a fresh build (or unpin and
-re-pin the shortcut) after `npm run icons:generate`.
-
-Icons are re-applied on app start, window focus, and tray restore so Windows
-does not fall back to a stale placeholder during WebView2 hangs.
+Runtime branding re-applies on focus, resize, tray restore, and a Windows watchdog
+so WebView2 cannot leave the generic placeholder on the taskbar.

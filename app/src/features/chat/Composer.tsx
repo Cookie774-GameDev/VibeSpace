@@ -40,6 +40,8 @@ import {
   parseContextAttachment,
   serializeContextAttachment,
   loadStoredContextMaps,
+  contextMapSlashOptions,
+  resolveContextMapRecord,
   type ContextAttachment,
   type ContextMapRecord,
 } from '@/features/context/tree';
@@ -380,15 +382,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     }
 
     if (cmd === 'contextmap') {
-      // Get list of context maps for the current project
       const maps = projectId ? loadStoredContextMaps(projectId) : [];
-      const active = maps.filter((m: ContextMapRecord) => m.status !== 'deleted');
-      return active.map((m: ContextMapRecord) => ({
-        id: m.name ?? `map-${m.tree?.generatedAt ?? Date.now()}`,
-        label: m.name ?? 'Untitled',
-        description: `${(m.tree?.nodes ?? []).length} nodes`,
-        metadata: m.tree?.generatedAt ? new Date(m.tree.generatedAt).toLocaleDateString() : undefined,
-      }));
+      return contextMapSlashOptions(maps);
     }
 
     if (cmd === 'plug') {
@@ -420,16 +415,16 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     return [];
   }, [optionPickerCtx, terminalSessions, projectId, pluginConnections]);
 
-  // Keep selectedOptionId in sync when options change
+  // Keep keyboard highlight on a valid option without clobbering hover/arrow nav.
   useEffect(() => {
     if (optionPickerOptions.length === 0) {
       setSelectedOptionId('');
       return;
     }
-    if (!optionPickerOptions.some((o) => o.id === selectedOptionId)) {
-      setSelectedOptionId(optionPickerOptions[0]!.id);
-    }
-  }, [optionPickerOptions, selectedOptionId]);
+    setSelectedOptionId((current) =>
+      optionPickerOptions.some((o) => o.id === current) ? current : optionPickerOptions[0]!.id,
+    );
+  }, [optionPickerOptions]);
 
   const clearAudioSilenceTimer = () => {
     if (audioSilenceTimerRef.current) clearInterval(audioSilenceTimerRef.current);
@@ -583,6 +578,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       // Remove the typed slash command from text
       setText(before + after);
       setSlashCtx(null);
+      setSelectedOptionId('');
       setOptionPickerCtx({ cmd, query: '' });
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
@@ -622,19 +618,31 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const selectOption = (option: SlashCommandOption) => {
     if (!optionPickerCtx) return;
     const cmd = optionPickerCtx.cmd;
+    const entry: ConfirmedCommand = {
+      cmd: cmd.cmd,
+      value: option.id,
+      label: `/${cmd.cmd}: ${option.label}`,
+    };
 
-    // Add as confirmed command token
-    setConfirmedCommands((cur) => [
-      ...cur.filter((c) => c.cmd !== cmd.cmd),
-      { cmd: cmd.cmd, value: option.id, label: `/${cmd.cmd}: ${option.label}` },
-    ]);
+    setConfirmedCommands((cur) => {
+      if (cmd.cmd === 'skills') {
+        if (cur.some((c) => c.cmd === 'skills' && c.value === option.id)) return cur;
+        if (cur.filter((c) => c.cmd === 'skills').length >= 6) return cur;
+        return [...cur, entry];
+      }
+      return [...cur.filter((c) => c.cmd !== cmd.cmd), entry];
+    });
     setOptionPickerCtx(null);
     setSelectedOptionId('');
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const removeConfirmedCommand = (cmd: string) => {
-    setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== cmd));
+  const removeConfirmedCommand = (cmd: string, value?: string) => {
+    setConfirmedCommands((cur) =>
+      value != null
+        ? cur.filter((c) => !(c.cmd === cmd && c.value === value))
+        : cur.filter((c) => c.cmd !== cmd),
+    );
   };
 
   const insertMention = (agent: Agent) => {
@@ -848,7 +856,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
           : [...nextAttachedPlugins, confirmed.value!].slice(0, 8);
       } else if (confirmed.cmd === 'contextmap' && confirmed.value) {
         const maps = projectId ? loadStoredContextMaps(projectId) : [];
-        const matched = maps.find((m: ContextMapRecord) => m.name === confirmed.value || (m.name ?? '').toLowerCase().includes((confirmed.value ?? '').toLowerCase()));
+        const matched = resolveContextMapRecord(maps, confirmed.value);
         if (matched?.tree?.nodes?.[0]) {
           const root = matched.tree.nodes[0];
           const attachment: ContextAttachment = {
@@ -1543,10 +1551,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                   <TokenList>
                     {confirmedCommands.map((cmd) => (
                       <InputToken
-                        key={cmd.cmd}
+                        key={cmd.value ? `${cmd.cmd}:${cmd.value}` : cmd.cmd}
                         type="command"
                         label={cmd.label}
-                        onRemove={() => removeConfirmedCommand(cmd.cmd)}
+                        onRemove={() => removeConfirmedCommand(cmd.cmd, cmd.value)}
                       />
                     ))}
                   </TokenList>

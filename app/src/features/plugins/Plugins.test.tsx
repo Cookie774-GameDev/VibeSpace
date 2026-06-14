@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Plugins } from './Plugins';
 import { usePluginStore } from './store';
@@ -8,8 +8,15 @@ vi.mock('@/lib/sync', () => ({
 }));
 
 describe('Plugins settings page', () => {
+  const originalOpen = window.open;
+
   beforeEach(() => {
     usePluginStore.setState({ connections: {} });
+    window.open = vi.fn();
+  });
+
+  afterEach(() => {
+    window.open = originalOpen;
   });
 
   it('loads the catalog and filters by search', () => {
@@ -38,6 +45,18 @@ describe('Plugins settings page', () => {
       expect(
         within(screen.getByTestId('plugin-card-mock-connector')).getByText('Not connected'),
       ).toBeTruthy(),
+    );
+  }, 15_000);
+
+  it('opens the official provider connect page before credential entry', () => {
+    render(<Plugins />);
+    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'GitHub' } });
+    fireEvent.click(within(screen.getByTestId('plugin-card-github')).getByRole('button', { name: /^connect$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open github connect page/i }));
+    expect(window.open).toHaveBeenCalledWith(
+      'https://github.com/settings/personal-access-tokens',
+      '_blank',
+      'noopener,noreferrer',
     );
   }, 15_000);
 });

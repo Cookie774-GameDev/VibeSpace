@@ -255,6 +255,22 @@ function PluginSetupDialog({
   const activePlugin = plugin;
   const configuredFields = new Set(connection?.configuredFields ?? []);
   const hasAutomatedTest = Boolean(activePlugin.httpTest) || activePlugin.authType === 'none';
+  const providerConnectLabel =
+    activePlugin.authType === 'oauth'
+      ? `Continue with ${activePlugin.provider}`
+      : `Open ${activePlugin.provider} connect page`;
+  const requiresLocalCredential = activePlugin.fields.length > 0;
+
+  function openProviderConnect() {
+    if (!activePlugin.credentialUrl) return;
+    window.open(activePlugin.credentialUrl, '_blank', 'noopener,noreferrer');
+    toast.info(
+      `${activePlugin.provider} opened`,
+      requiresLocalCredential
+        ? 'Finish the provider setup in your browser, then paste the returned credential here.'
+        : 'Finish the provider authorization in your browser, then return to VibeSpace.',
+    );
+  }
 
   async function connect() {
     setError('');
@@ -349,6 +365,30 @@ function PluginSetupDialog({
             </p>
           </div>
 
+          {plugin.credentialUrl && (
+            <div className="relative overflow-hidden rounded-2xl border border-accent-cyan/20 bg-gradient-to-br from-accent-cyan/10 via-elevated to-purple-500/10 p-4">
+              <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-accent-cyan/20 blur-3xl" />
+              <div className="relative flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-ui-strong text-foreground">
+                    {activePlugin.authType === 'oauth'
+                      ? `Sign in with ${activePlugin.provider}`
+                      : `Connect through ${activePlugin.provider}`}
+                  </p>
+                  <p className="text-secondary text-muted-foreground">
+                    {activePlugin.authType === 'oauth'
+                      ? 'Start from the official provider page. VibeSpace never asks for your password.'
+                      : 'We send you to the official provider page first, then store only the credential you choose to save.'}
+                  </p>
+                </div>
+                <Button type="button" onClick={openProviderConnect}>
+                  <ExternalLink className="h-4 w-4" />
+                  {providerConnectLabel}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {plugin.setupSteps.length > 0 && (
             <div>
               <p className="text-metadata uppercase tracking-wide text-muted-foreground mb-1">
@@ -362,37 +402,41 @@ function PluginSetupDialog({
             </div>
           )}
 
-          {plugin.credentialUrl && (
-            <a
-              className="inline-flex items-center gap-1 text-secondary text-accent-cyan hover:underline"
-              href={plugin.credentialUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Get credentials from {plugin.provider} <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          )}
-
-          {plugin.fields.map((field) => (
-            <div key={field.id} className="flex flex-col gap-1.5">
-              <Label htmlFor={`plugin-${plugin.id}-${field.id}`}>{field.label}</Label>
-              <Input
-                id={`plugin-${plugin.id}-${field.id}`}
-                type={field.secret ? 'password' : 'text'}
-                autoComplete="off"
-                value={draft[field.id] ?? ''}
-                placeholder={
-                  configuredFields.has(field.id)
-                    ? 'Saved securely - enter a new value to replace'
-                    : field.placeholder
-                }
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, [field.id]: event.target.value }))
-                }
-              />
-              {field.help && <p className="text-metadata text-muted-foreground">{field.help}</p>}
+          {requiresLocalCredential && (
+            <div className="rounded-xl border border-border bg-panel/70 p-3">
+              <div className="mb-3 flex items-start gap-2">
+                <ShieldCheck className="mt-0.5 h-4 w-4 text-success" />
+                <div>
+                  <p className="text-secondary font-medium text-foreground">Secure credential storage</p>
+                  <p className="text-metadata text-muted-foreground">
+                    Values saved here go to the OS keychain. VibeSpace does not print them in logs or terminal context.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-3">
+                {plugin.fields.map((field) => (
+                  <div key={field.id} className="flex flex-col gap-1.5">
+                    <Label htmlFor={`plugin-${plugin.id}-${field.id}`}>{field.label}</Label>
+                    <Input
+                      id={`plugin-${plugin.id}-${field.id}`}
+                      type={field.secret ? 'password' : 'text'}
+                      autoComplete="off"
+                      value={draft[field.id] ?? ''}
+                      placeholder={
+                        configuredFields.has(field.id)
+                          ? 'Saved securely - enter a new value to replace'
+                          : field.placeholder
+                      }
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, [field.id]: event.target.value }))
+                      }
+                    />
+                    {field.help && <p className="text-metadata text-muted-foreground">{field.help}</p>}
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
+          )}
 
           {plugin.fields.length === 0 && (
             <div className="rounded-md border border-border bg-panel p-3 flex gap-2">

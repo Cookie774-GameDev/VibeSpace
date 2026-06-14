@@ -73,7 +73,43 @@ See `docs/stripe-setup.md` and `docs/twilio-calling-setup.md`. Check with:
 npx supabase secrets list   # shows names + digests only, never values
 ```
 
-## 5. Deploy Edge Functions
+## 5. Configure Auth email delivery (Resend)
+
+Supabase Auth emails do not reliably reach public inboxes on the default sender.
+For production, use Resend SMTP with the verified VibeSpace domain.
+
+1. Verify the sending domain in Resend.
+   - Recommended sender: `VibeSpace <no-reply@vibespaceos.com>`.
+   - Configure SPF, DKIM, and DMARC in DNS before launch.
+   - Disable link tracking for transactional Auth emails.
+2. Open Supabase Dashboard → Authentication → Emails → SMTP Settings.
+3. Enable custom SMTP and enter:
+
+| Field | Value |
+|--------|-------|
+| Host | `smtp.resend.com` |
+| Port | `587` |
+| Username | `resend` |
+| Password | Resend API key / SMTP password |
+| Sender email | `no-reply@vibespaceos.com` |
+| Sender name | `VibeSpace` |
+
+4. Open Supabase Dashboard → Authentication → Emails → Templates.
+5. Set the Confirm signup and Magic Link templates from:
+   - `supabase/templates/confirmation.html`
+   - `supabase/templates/magic_link.html`
+6. Keep OTP settings:
+   - OTP length: `6`
+   - OTP expiry: `3600` seconds or lower
+   - Email confirmation: enabled
+
+Security notes:
+- Do not put the Resend key in `VITE_*` variables.
+- Do not disable email confirmation to work around delivery issues.
+- Use OTP templates (`{{ .Token }}`) instead of one-click auth links so security scanners cannot consume single-use links.
+- Keep Auth emails transactional only: no promos, no marketing copy, minimal links.
+
+## 6. Deploy Edge Functions
 
 ```powershell
 # Auth-protected (default JWT verification):

@@ -1364,10 +1364,13 @@ const OAUTH_CATEGORY_DEFAULTS: Partial<RegistryPartial> = {
     token('client_secret', 'Client secret', '...', 'Stored in the OS keychain only.'),
   ],
   setupSteps: [
-    'Click Connect, then authorize in your browser.',
+    'Open the provider sign-in page from VibeSpace.',
+    'Create or select the provider OAuth app.',
+    'Save the client credentials here, then test the connection.',
   ],
   supportedFeatures: ['authenticated context'],
-  limitations: 'OAuth requires a one-time browser authorization after credentials are saved.',
+  limitations:
+    'Direct one-click OAuth requires a hosted VibeSpace callback and provider app approval. Until that backend exchange is configured, VibeSpace opens the official provider setup page and stores credentials only in the OS keychain.',
   tools: [readTool('oauth_context', 'OAuth capability metadata after setup.')],
 };
 
@@ -1476,7 +1479,9 @@ function mergeManifest(
     base.help ??
     (status === 'needs_credentials'
       ? 'Manual setup may be required. Follow the steps below, use the official credential link, then test the connection.'
-      : 'Enter credentials from the official provider console, then test the connection.');
+      : authType === 'oauth'
+        ? 'Use the official provider sign-in/setup page to authorize access, then save the returned credentials in VibeSpace.'
+        : 'Open the official provider page, create the narrowest credential available, then test the connection.');
 
   return {
     id,
