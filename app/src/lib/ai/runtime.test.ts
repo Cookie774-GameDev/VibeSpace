@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { Agent, Message } from '@/types';
+import type { Agent, Message, Part } from '@/types';
 import type { AgentId, ChatId, MessageId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
@@ -385,6 +385,69 @@ describe('startRuntimeListener agent routing', () => {
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     expect(mocks.streamingSession.onComplete).not.toHaveBeenCalled();
+
+    stop();
+  });
+
+  it('adds an approval proposal when a tiny local model answers an app-control request in prose', async () => {
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_action_fallback' as ChatId;
+    const placeholderId = 'msg_action_fallback_assistant' as MessageId;
+    const updateMessage = vi.fn(async () => undefined);
+    const userMessage: Message = {
+      id: 'msg_action_fallback_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: 'please open the settings page' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.runAgent.mockResolvedValueOnce({
+      text: "I'll open the Settings page for you.",
+      usage: { input_tokens: 1, output_tokens: 8, cost_usd: 0 },
+      provider: 'ollama',
+      model: 'llama3.2:1b',
+    });
+
+    const stop = startRuntimeListener({
+      getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+      getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => [userMessage]),
+      appendMessage: vi.fn(async (msg) => ({
+        ...msg,
+        id: placeholderId,
+        created_at: 2,
+        updated_at: 2,
+      })),
+      updateMessage,
+    });
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: { chatId, text: 'please open the settings page' },
+      }),
+    );
+
+    await vi.waitFor(() => expect(updateMessage).toHaveBeenCalled());
+    const updateCalls = updateMessage.mock.calls as unknown as Array<
+      [MessageId, { parts: Part[] }]
+    >;
+    const finalWrite = updateCalls[updateCalls.length - 1]?.[1];
+    if (!finalWrite) throw new Error('expected a final assistant message write');
+    expect(finalWrite.parts[0]).toMatchObject({
+      kind: 'text',
+      text: expect.stringMatching(/approve/i),
+    });
+    expect(finalWrite.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'action_proposal',
+          action_id: 'settings.open',
+          status: 'pending',
+        }),
+      ]),
+    );
 
     stop();
   });

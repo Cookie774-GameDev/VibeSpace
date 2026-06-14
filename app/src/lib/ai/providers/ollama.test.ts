@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { _resetNativeFetchForTests } from '@/lib/nativeFetch';
-import { listOllamaModelInfo, pullOllamaModel, isOllamaReachable } from './ollama';
+import { listOllamaModelInfo, pullOllamaModel, isOllamaReachable, ollamaProvider } from './ollama';
 
 describe('ollama provider utilities', () => {
   beforeEach(() => {
@@ -130,6 +130,104 @@ describe('ollama provider utilities', () => {
 
     await expect(pullOllamaModel('missing-model')).rejects.toThrow('model not found');
   });
+
+  it('uses fast bounded chat options for local model responses', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/api/version')) {
+        return Promise.resolve(new Response('{"version":"0.6.0"}', { status: 200 }));
+      }
+      if (url.includes('/api/tags')) {
+        return Promise.resolve(jsonResponse({ models: [{ name: 'llama3.2:1b' }] }));
+      }
+      if (url.includes('/v1/chat/completions')) {
+        const body = JSON.parse(String(init?.body));
+        expect(body.keep_alive).toBe('15m');
+        expect(body.options).toMatchObject({
+          num_ctx: 4096,
+          num_predict: 320,
+          repeat_penalty: 1.18,
+          top_p: 0.9,
+        });
+        return Promise.resolve(
+          sseResponse([
+            { choices: [{ delta: { content: 'Done.' } }] },
+            { choices: [{ finish_reason: 'stop' }] },
+            '[DONE]',
+          ]),
+        );
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await ollamaProvider.run({
+      agent: {
+        id: 'agent_jarvis' as any,
+        slug: 'jarvis',
+        name: 'Jarvis',
+        description: '',
+        system_prompt: 'Use real actions.',
+        model: { provider: 'ollama', model: 'llama3.2:1b' },
+        tools_allowed: [],
+        memory_scope: 'workspace',
+        capabilities: [],
+        created_at: 1,
+        updated_at: 1,
+      },
+      messages: [{ role: 'user', content: 'open settings' }],
+    });
+
+    expect(response.text).toBe('Done.');
+  });
+
+  it('caps local chat history while preserving the latest user turn', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/api/version')) {
+        return Promise.resolve(new Response('{"version":"0.6.0"}', { status: 200 }));
+      }
+      if (url.includes('/api/tags')) {
+        return Promise.resolve(jsonResponse({ models: [{ name: 'llama3.2:1b' }] }));
+      }
+      if (url.includes('/v1/chat/completions')) {
+        const body = JSON.parse(String(init?.body));
+        expect(body.messages.length).toBeLessThanOrEqual(13);
+        expect(body.messages.at(-1)).toMatchObject({
+          role: 'user',
+          content: 'latest command',
+        });
+        expect(JSON.stringify(body.messages)).not.toContain('old turn 1');
+        return Promise.resolve(
+          sseResponse([{ choices: [{ delta: { content: 'Done.' } }] }, '[DONE]']),
+        );
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const longHistory = Array.from({ length: 40 }, (_, index) => ({
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `old turn ${index + 1}`,
+    }));
+
+    const response = await ollamaProvider.run({
+      agent: {
+        id: 'agent_jarvis' as any,
+        slug: 'jarvis',
+        name: 'Jarvis',
+        description: '',
+        system_prompt: 'Use real actions.',
+        model: { provider: 'ollama', model: 'llama3.2:1b' },
+        tools_allowed: [],
+        memory_scope: 'workspace',
+        capabilities: [],
+        created_at: 1,
+        updated_at: 1,
+      },
+      messages: [...longHistory, { role: 'user', content: 'latest command' }],
+    });
+
+    expect(response.text).toBe('Done.');
+  });
 });
 
 function jsonResponse(body: unknown): Response {
@@ -153,6 +251,25 @@ function ndjsonResponse(lines: unknown[]): Response {
     {
       status: 200,
       headers: { 'content-type': 'application/x-ndjson' },
+    },
+  );
+}
+
+function sseResponse(events: Array<unknown | '[DONE]'>): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const event of events) {
+          const payload = event === '[DONE]' ? '[DONE]' : JSON.stringify(event);
+          controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+        }
+        controller.close();
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
     },
   );
 }

@@ -158,9 +158,20 @@ jobs:
             irm https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.ps1 | iex
             ```
 
-            **macOS / Linux**
+            **macOS**
             ```
             curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | bash
+            ```
+
+            **Linux (AppImage, default)**
+            ```
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | bash
+            ```
+
+            **Linux packages**
+            ```
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | JARVIS_FORMAT=deb bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | JARVIS_FORMAT=rpm bash
             ```
 
             ### Direct downloads

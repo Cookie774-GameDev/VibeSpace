@@ -23,7 +23,53 @@ import { openaiProvider } from './providers/openai';
 import { googleProvider } from './providers/google';
 import { groqProvider } from './providers/groq';
 import { ollamaProvider, OLLAMA_DEFAULT_MODEL } from './providers/ollama';
-import { defaultModelForProvider, isRealChatProvider } from './models';
+import { defaultModelForProvider, getDiscoveredOllamaModels, isRealChatProvider } from './models';
+import {
+  agentUsesDefaultProvider,
+} from './agentProviderOptions';
+
+export class NoModelSelectedError extends Error {
+  constructor() {
+    super('No model selected. Connect a provider key, use your subscription, or install a local model.');
+    this.name = 'NoModelSelectedError';
+  }
+}
+
+function localModelsAvailable(): boolean {
+  return getDiscoveredOllamaModels().length > 0;
+}
+
+function resolveLocalFallback(auth: ReturnType<typeof useAuthStore.getState>): {
+  provider: LLMProvider;
+  model: string;
+} | null {
+  if (!localModelsAvailable() || !ollamaProvider.isAvailable()) return null;
+  return {
+    provider: ollamaProvider,
+    model: defaultModelForProvider('ollama', auth.defaultLocalModel),
+  };
+}
+
+function resolveDefaultProviderRoute(
+  auth: ReturnType<typeof useAuthStore.getState>,
+): { provider: LLMProvider; model: string } | null {
+  const pref = auth.defaultProvider;
+  if (pref === 'mock') {
+    return mockProvider.isAvailable()
+      ? { provider: mockProvider, model: 'mock-default' }
+      : null;
+  }
+  if (pref === 'ollama' || pref === 'local') {
+    return resolveLocalFallback(auth);
+  }
+  if (isRealChatProvider(pref)) {
+    const p = providers[pref];
+    if (p?.isAvailable()) {
+      return { provider: p, model: selectedModelFor(pref) };
+    }
+  }
+  return null;
+}
 
 /**
  * All providers, keyed by their id.
@@ -101,38 +147,52 @@ export function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; 
   }
 
   const provId = agent.model.provider;
-  const pref = auth.defaultProvider;
+  const usesDefault =
+    agentUsesDefaultProvider(provId, agent.model.model) ||
+    (agent.builtin && provId === 'mock' && agent.model.model === 'mock-default');
 
-  if (agent.builtin && pref && pref !== 'local') {
-    if (pref === 'mock') {
-      return { provider: mockProvider, model: 'mock-default' };
+  if (usesDefault) {
+    const routed = resolveDefaultProviderRoute(auth);
+    if (routed) return routed;
+
+    const ordered: ProviderId[] = [];
+    const pref = auth.defaultProvider;
+    if (pref && pref !== 'mock' && pref !== 'local' && isRealChatProvider(pref)) {
+      ordered.push(pref);
     }
-    if (isRealChatProvider(pref)) {
-      const p = providers[pref];
+    for (const p of ['google', 'groq', 'anthropic', 'openai'] as const) {
+      if (!ordered.includes(p)) ordered.push(p);
+    }
+    for (const id of ordered) {
+      const p = providers[id];
       if (p?.isAvailable()) {
-        return { provider: p, model: selectedModelFor(pref) };
+        return { provider: p, model: selectedModelFor(id) };
       }
     }
+
+    const local = resolveLocalFallback(auth);
+    if (local) return local;
+    throw new NoModelSelectedError();
   }
 
-  if (provId !== 'mock' && provId !== 'local') {
+  if (provId === 'local' || provId === 'ollama') {
+    const local = resolveLocalFallback(auth);
+    if (local) return local;
+    throw new NoModelSelectedError();
+  }
+
+  if (provId !== 'mock') {
     const p = providers[provId];
     if (p && p.isAvailable()) {
       return { provider: p, model: auth.selectedModels[provId] || agent.model.model };
     }
-    // Configured for a real provider but key not set - quietly mock.
-    return { provider: mockProvider, model: agent.model.model || 'mock-default' };
-  }
-
-  // `local`-pinned agents resolve straight to the Ollama adapter.
-  if (provId === 'local') {
-    return {
-      provider: ollamaProvider,
-      model: agent.model.model || auth.defaultLocalModel || OLLAMA_DEFAULT_MODEL,
-    };
+    const local = resolveLocalFallback(auth);
+    if (local) return local;
+    throw new NoModelSelectedError();
   }
 
   const ordered: ProviderId[] = [];
+  const pref = auth.defaultProvider;
   if (pref && pref !== 'mock' && pref !== 'local' && isRealChatProvider(pref)) ordered.push(pref);
   for (const p of ['google', 'groq', 'anthropic', 'openai'] as const) {
     if (!ordered.includes(p)) ordered.push(p);
@@ -144,7 +204,9 @@ export function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; 
       return { provider: p, model: selectedModelFor(id) };
     }
   }
-  return { provider: mockProvider, model: 'mock-default' };
+  const local = resolveLocalFallback(auth);
+  if (local) return local;
+  throw new NoModelSelectedError();
 }
 
 /**

@@ -42,7 +42,47 @@ const ALLOWED_OLLAMA_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
 
 /** Prepended to every Ollama request so local models answer like Jarvis. */
-export const OLLAMA_JARVIS_STYLE_PROMPT = `You are Jarvis — the user's personal AI assistant. Keep every reply short, direct, and natural (usually 1–3 sentences unless they ask for more). No filler, no long intros, no unnecessary markdown. Sound calm, capable, and conversational, as if speaking aloud.`;
+export const OLLAMA_JARVIS_STYLE_PROMPT = `You are Jarvis — the user's personal AI assistant. Keep every reply short, direct, and natural (usually 1–3 sentences unless they ask for more). No filler, no long intros, no unnecessary markdown. Sound calm, capable, and conversational, as if speaking aloud. If the user asks you to do something in VibeSpace, emit the real fenced action block from the system instructions and never claim it already happened before approval.`;
+
+const OLLAMA_CHAT_KEEP_ALIVE = '15m';
+const OLLAMA_CHAT_NUM_CTX = 4096;
+const OLLAMA_CHAT_NUM_PREDICT = 320;
+const OLLAMA_CHAT_REPEAT_PENALTY = 1.18;
+const OLLAMA_CHAT_TOP_P = 0.9;
+const OLLAMA_CHAT_DEFAULT_TEMPERATURE = 0.45;
+const OLLAMA_CHAT_HISTORY_TURNS = 12;
+const OLLAMA_CHAT_HISTORY_CHARS = 14_000;
+
+function ollamaChatTemperature(req: LLMRequest): number {
+  return req.temperature ?? req.agent.temperature ?? OLLAMA_CHAT_DEFAULT_TEMPERATURE;
+}
+
+function ollamaChatOptions(req: LLMRequest): Record<string, number> {
+  return {
+    temperature: ollamaChatTemperature(req),
+    num_ctx: OLLAMA_CHAT_NUM_CTX,
+    num_predict: req.max_output_tokens ?? OLLAMA_CHAT_NUM_PREDICT,
+    repeat_penalty: OLLAMA_CHAT_REPEAT_PENALTY,
+    top_p: OLLAMA_CHAT_TOP_P,
+  };
+}
+
+function compactOllamaMessages(messages: LLMRequest['messages']): LLMRequest['messages'] {
+  const nonSystem = messages.filter((m) => m.role !== 'system');
+  const tail = nonSystem.slice(-OLLAMA_CHAT_HISTORY_TURNS);
+  let totalChars = 0;
+  const compacted: LLMRequest['messages'] = [];
+
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const message = tail[i]!;
+    const nextTotal = totalChars + message.content.length;
+    if (compacted.length > 0 && nextTotal > OLLAMA_CHAT_HISTORY_CHARS) break;
+    compacted.unshift(message);
+    totalChars = nextTotal;
+  }
+
+  return compacted;
+}
 
 export function buildOllamaSystemPrompt(agentPrompt: string | undefined): string {
   const base = (agentPrompt ?? '').trim();
@@ -752,7 +792,7 @@ export const ollamaProvider: LLMProvider = {
 
     const messages = [
       { role: 'system' as const, content: buildOllamaSystemPrompt(req.agent.system_prompt) },
-      ...req.messages.filter((m) => m.role !== 'system'),
+      ...compactOllamaMessages(req.messages),
     ];
 
     // Packaged Tauri build: stream chat through the Rust reqwest command (no
@@ -804,7 +844,7 @@ export const ollamaProvider: LLMProvider = {
             requestId,
             model,
             messages,
-            temperature: req.temperature ?? req.agent.temperature ?? 0.7,
+            temperature: ollamaChatTemperature(req),
           }).catch((err) =>
             finish(() => reject(err instanceof Error ? err : new Error(String(err)))),
           );
@@ -831,11 +871,8 @@ export const ollamaProvider: LLMProvider = {
       model,
       messages,
       stream: true,
-      keep_alive: '10m',
-      options: {
-        temperature: req.temperature ?? req.agent.temperature ?? 0.7,
-        num_ctx: 8192,
-      },
+      keep_alive: OLLAMA_CHAT_KEEP_ALIVE,
+      options: ollamaChatOptions(req),
     };
 
     let res: Response;

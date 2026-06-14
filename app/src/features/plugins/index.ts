@@ -6,7 +6,7 @@ export {
   validatePluginCatalog,
 } from './catalog';
 export { usePluginStore } from './store';
-export { getPluginContextBlock } from './context';
+export { getPluginContextBlock, getPluginStatusContextBlock } from './context';
 export { extractPluginMentions, resolvePluginSlug } from './mentions';
 export {
   isPluginActive,

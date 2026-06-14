@@ -212,6 +212,7 @@ export function VoiceModal() {
   const transcriptRef = React.useRef<HTMLDivElement>(null);
   const pendingUtteranceRef = React.useRef('');
   const utteranceTimerRef = React.useRef<number | null>(null);
+  const restartTimerRef = React.useRef<number | null>(null);
   const speakingRef = React.useRef(false);
   const streamingReplyRef = React.useRef(false);
   const listeningArmedRef = React.useRef(false);
@@ -315,8 +316,12 @@ export function VoiceModal() {
     const restartListening = () => {
       if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
       if (!handsFree() && !listeningArmedRef.current) return;
-      window.setTimeout(() => {
+      if (VoiceService.isListening() || VoiceService.wantsListening()) return;
+      if (restartTimerRef.current !== null) window.clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = window.setTimeout(() => {
+        restartTimerRef.current = null;
         if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
+        if (VoiceService.isListening() || VoiceService.wantsListening()) return;
         startListening();
       }, 180);
     };
@@ -425,7 +430,6 @@ export function VoiceModal() {
         useVoiceStore.getState().setState('error', message);
       }),
       VoiceService.on('voice:timeout', () => restartListening()),
-      VoiceService.on('voice:end', () => restartListening()),
     ];
 
     const onStreamingStart = () => {
@@ -471,9 +475,12 @@ export function VoiceModal() {
     return () => {
       offs.forEach((off) => off());
       if (partialTimer !== null) window.clearTimeout(partialTimer);
+      if (restartTimerRef.current !== null) window.clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
       if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
       utteranceTimerRef.current = null;
       pendingUtteranceRef.current = '';
+      useVoiceStore.getState().clearTranscripts();
       listeningArmedRef.current = false;
       streamingReplyRef.current = false;
       window.removeEventListener(STREAMING_VOICE_START_EVENT, onStreamingStart);

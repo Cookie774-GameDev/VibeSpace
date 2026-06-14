@@ -52,4 +52,20 @@ describe('chat model catalog', () => {
   it('returns empty ollama options until models are discovered', () => {
     expect(getModelOptions('ollama')).toEqual([]);
   });
+
+  it('includes subscription-hosted providers when plan is paid', () => {
+    const apiKeys = { mock: 'mock-skip-sentinel' };
+    syncDiscoveredOllamaModels(['llama3.2']);
+
+    expect(getAccessibleProviders(apiKeys, false, 'starter')).toEqual([
+      'google',
+      'deepseek',
+      'mock',
+      'ollama',
+      'local',
+    ]);
+    expect(getAccessibleModelOptions('deepseek', apiKeys, false, 'llama3.2', 'starter')).toEqual([
+      { provider: 'deepseek', id: 'deepseek-chat', label: 'DeepSeek V4 Flash' },
+    ]);
+  });
 });

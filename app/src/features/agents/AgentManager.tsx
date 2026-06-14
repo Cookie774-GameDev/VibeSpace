@@ -11,6 +11,7 @@ import * as React from 'react';
 import { Trash2, Copy, Save, RotateCcw, Sparkles, Lock } from 'lucide-react';
 import type { Agent, AgentId, ProviderId } from '@/types';
 import { useAgentStore } from '@/stores/agents';
+import { useAuthStore } from '@/stores/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -24,21 +25,13 @@ import { agentRepo } from '@/lib/db';
 import { AgentBadge } from './AgentBadge';
 import { getDefaultAgents } from './registry';
 import { getAgentRole, ROLE_PERSONAS, type AgentRole } from './personas';
-
-const PROVIDERS: ProviderId[] = [
-  'mock',
-  'anthropic',
-  'openai',
-  'google',
-  'xai',
-  'openrouter',
-  'groq',
-  'deepseek',
-  'mistral',
-  'together',
-  'ollama',
-  'local',
-];
+import {
+  agentEditorProviderFromAgent,
+  agentModelFromEditorChoice,
+  getAgentEditorProviderOptions,
+  type AgentEditorProviderChoice,
+} from '@/lib/ai/agentProviderOptions';
+import { getAccessibleModelOptions } from '@/lib/ai/models';
 
 /**
  * Tiny role-pill for swarm agents (Scout / Builder / Reviewer).
@@ -70,6 +63,7 @@ interface DraftState {
   name: string;
   description: string;
   system_prompt: string;
+  providerChoice: AgentEditorProviderChoice;
   provider: ProviderId;
   model: string;
   temperature: number;
@@ -80,6 +74,7 @@ function agentToDraft(a: Agent): DraftState {
     name: a.name,
     description: a.description,
     system_prompt: a.system_prompt,
+    providerChoice: agentEditorProviderFromAgent(a.model.provider, a.model.model),
     provider: a.model.provider,
     model: a.model.model,
     temperature: a.temperature ?? 0.7,
@@ -87,13 +82,15 @@ function agentToDraft(a: Agent): DraftState {
 }
 
 function draftDiffers(d: DraftState, a: Agent): boolean {
+  const base = agentToDraft(a);
   return (
-    d.name !== a.name ||
-    d.description !== a.description ||
-    d.system_prompt !== a.system_prompt ||
-    d.provider !== a.model.provider ||
-    d.model !== a.model.model ||
-    d.temperature !== (a.temperature ?? 0.7)
+    d.name !== base.name ||
+    d.description !== base.description ||
+    d.system_prompt !== base.system_prompt ||
+    d.providerChoice !== base.providerChoice ||
+    d.provider !== base.provider ||
+    d.model !== base.model ||
+    d.temperature !== base.temperature
   );
 }
 
@@ -133,7 +130,47 @@ export function AgentManager() {
     // Intentionally watch selectedAgent?.id, not the whole agent reference.
   }, [selectedAgent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const apiKeys = useAuthStore((s) => s.apiKeys);
+  const offlineMode = useAuthStore((s) => s.offlineMode);
+  const plan = useAuthStore((s) => s.plan);
+  const defaultProvider = useAuthStore((s) => s.defaultProvider);
+
+  const providerOptions = React.useMemo(
+    () => getAgentEditorProviderOptions({ apiKeys, offlineMode, plan, defaultProvider }),
+    [apiKeys, offlineMode, plan, defaultProvider],
+  );
+
+  const modelOptions = React.useMemo(() => {
+    if (!draft || draft.providerChoice === 'default') return [];
+    return getAccessibleModelOptions(
+      draft.providerChoice,
+      apiKeys,
+      offlineMode,
+      useAuthStore.getState().defaultLocalModel,
+      plan,
+    );
+  }, [draft, apiKeys, offlineMode, plan]);
+
   const dirty = !!(draft && selectedAgent && draftDiffers(draft, selectedAgent));
+
+  const handleProviderChoice = (choice: AgentEditorProviderChoice) => {
+    if (!draft) return;
+    const nextModel = agentModelFromEditorChoice(
+      choice,
+      draft.provider,
+      draft.model,
+      apiKeys,
+      offlineMode,
+      plan,
+      useAuthStore.getState().defaultLocalModel,
+    );
+    setDraft({
+      ...draft,
+      providerChoice: choice,
+      provider: nextModel.provider,
+      model: nextModel.model,
+    });
+  };
 
   const handleSave = async () => {
     if (!selectedAgent || !draft || !dirty) return;
@@ -334,9 +371,9 @@ export function AgentManager() {
                   <Label htmlFor="agent-provider">Provider</Label>
                   <select
                     id="agent-provider"
-                    value={draft.provider}
+                    value={draft.providerChoice}
                     onChange={(e) =>
-                      setDraft({ ...draft, provider: e.target.value as ProviderId })
+                      handleProviderChoice(e.target.value as AgentEditorProviderChoice)
                     }
                     className={cn(
                       'flex h-8 w-full rounded-md border border-input bg-background px-2 text-body text-foreground',
@@ -344,21 +381,47 @@ export function AgentManager() {
                       'transition-colors',
                     )}
                   >
-                    {PROVIDERS.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
+                    {providerOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div className="space-y-1.5 sm:col-span-2">
                   <Label htmlFor="agent-model">Model</Label>
-                  <Input
-                    id="agent-model"
-                    value={draft.model}
-                    onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                    placeholder="e.g. claude-3-5-sonnet-20241022 / mock-default"
-                  />
+                  {draft.providerChoice === 'default' ? (
+                    <p
+                      id="agent-model"
+                      className="flex h-8 items-center rounded-md border border-dashed border-border px-2 text-secondary text-muted-foreground"
+                    >
+                      Follows Settings → Providers → Default provider
+                    </p>
+                  ) : modelOptions.length > 0 ? (
+                    <select
+                      id="agent-model"
+                      value={draft.model}
+                      onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                      className={cn(
+                        'flex h-8 w-full rounded-md border border-input bg-background px-2 text-body text-foreground',
+                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                        'transition-colors',
+                      )}
+                    >
+                      {modelOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p
+                      id="agent-model"
+                      className="flex h-8 items-center rounded-md border border-dashed border-border px-2 text-secondary text-muted-foreground"
+                    >
+                      No models available — add a key or install a local model
+                    </p>
+                  )}
                 </div>
               </div>
 

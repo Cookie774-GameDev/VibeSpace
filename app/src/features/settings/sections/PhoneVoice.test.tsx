@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from '@/components/ui/toast';
 import {
   PHONE_SETTINGS_DRAFT_KEY,
   PhoneVoice,
@@ -55,6 +56,25 @@ describe('PhoneVoice autosave', () => {
       user_phone_number?: string;
     };
     expect(saved.user_phone_number).toBe('+15550001111');
+  });
+
+  it('autosaves BYOK keys after typing without a save button', async () => {
+    const toastSpy = vi.spyOn(toast, 'success');
+    render(<PhoneVoice />);
+
+    const groqInput = await screen.findByPlaceholderText('gsk_…');
+    fireEvent.change(groqInput, { target: { value: 'gsk_test_autosave_key' } });
+
+    await vi.waitFor(
+      () =>
+        expect(toastSpy).toHaveBeenCalledWith(
+          'Auto saved',
+          'Phone settings saved on this device.',
+        ),
+      { timeout: 2000 },
+    );
+
+    toastSpy.mockRestore();
   });
 
   it('autosaves the unlock phrase draft before debounce or navigation', async () => {

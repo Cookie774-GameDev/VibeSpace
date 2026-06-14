@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@/types';
 import { useAuthStore } from '@/stores/auth';
-import { resolveProviderAndModel } from './router';
+import { AGENT_DEFAULT_PROVIDER_MODEL } from './agentProviderOptions';
+import { syncDiscoveredOllamaModels } from './models';
+import { NoModelSelectedError, resolveProviderAndModel } from './router';
 
 const jarvis: Agent = {
   id: 'agent_jarvis' as Agent['id'],
@@ -18,25 +20,64 @@ const jarvis: Agent = {
   updated_at: 1,
 };
 
+const defaultProviderAgent: Agent = {
+  ...jarvis,
+  id: 'agent_custom' as Agent['id'],
+  slug: 'custom',
+  builtin: false,
+  model: { provider: 'mock', model: AGENT_DEFAULT_PROVIDER_MODEL },
+};
+
 describe('AI provider routing', () => {
   beforeEach(() => {
+    syncDiscoveredOllamaModels([]);
     useAuthStore.setState({
       apiKeys: {},
       defaultProvider: 'google',
       selectedModels: {},
       offlineMode: false,
       defaultLocalModel: 'llama3.2',
+      plan: 'free',
     });
   });
 
-  it('uses the selected provider and model for built-in Jarvis', () => {
+  it('uses the pinned provider for built-in Jarvis when that key is available', () => {
+    useAuthStore.setState({
+      apiKeys: { google: 'AIza-test', groq: 'gsk_test' },
+      defaultProvider: 'groq',
+      selectedModels: { groq: 'llama-3.1-8b-instant' },
+    });
+
+    const resolved = resolveProviderAndModel(jarvis);
+    expect(resolved.provider.id).toBe('google');
+    expect(resolved.model).toBe('gemini-2.5-flash-lite');
+  });
+
+  it('falls back to local models when a pinned provider is unavailable', () => {
+    syncDiscoveredOllamaModels(['qwen3:4b']);
+    useAuthStore.setState({
+      apiKeys: {},
+      defaultProvider: 'google',
+      defaultLocalModel: 'qwen3:4b',
+    });
+
+    const resolved = resolveProviderAndModel(jarvis);
+    expect(resolved.provider.id).toBe('ollama');
+    expect(resolved.model).toBe('qwen3:4b');
+  });
+
+  it('throws when no provider or local model is available', () => {
+    expect(() => resolveProviderAndModel(jarvis)).toThrow(NoModelSelectedError);
+  });
+
+  it('routes default-provider agents through the configured default provider', () => {
     useAuthStore.setState({
       apiKeys: { groq: 'gsk_test' },
       defaultProvider: 'groq',
       selectedModels: { groq: 'llama-3.1-8b-instant' },
     });
 
-    const resolved = resolveProviderAndModel(jarvis);
+    const resolved = resolveProviderAndModel(defaultProviderAgent);
     expect(resolved.provider.id).toBe('groq');
     expect(resolved.model).toBe('llama-3.1-8b-instant');
   });
@@ -47,9 +88,7 @@ describe('AI provider routing', () => {
       defaultProvider: 'openrouter',
     });
 
-    const resolved = resolveProviderAndModel(jarvis);
-    expect(resolved.provider.id).toBe('mock');
-    expect(resolved.model).toBe('gemini-2.5-flash-lite');
+    expect(() => resolveProviderAndModel(defaultProviderAgent)).toThrow(NoModelSelectedError);
   });
 
   it('forces every agent through the selected Ollama model in fully local mode', () => {

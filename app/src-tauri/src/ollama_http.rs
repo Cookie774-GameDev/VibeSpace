@@ -196,7 +196,7 @@ pub fn ollama_chat_stream(
     }
     let event = format!("ollama:chat:{request_id}");
     let name = model.trim().to_string();
-    let temp = temperature.unwrap_or(0.7);
+    let temp = temperature.unwrap_or(0.45);
 
     std::thread::spawn(move || {
         let emit = |d: ChatDelta| {
@@ -213,10 +213,13 @@ pub fn ollama_chat_stream(
             "model": name,
             "messages": messages,
             "stream": true,
-            "keep_alive": "10m",
+            "keep_alive": "15m",
             "options": {
                 "temperature": temp,
-                "num_ctx": 8192
+                "num_ctx": 4096,
+                "num_predict": 320,
+                "repeat_penalty": 1.18,
+                "top_p": 0.9
             }
         })
         .to_string();

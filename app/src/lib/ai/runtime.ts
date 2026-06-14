@@ -23,8 +23,9 @@ import { runAgent } from './router';
 import type { LLMMessage } from './types';
 import { applyPersona } from '@/features/agents/personas';
 import { applyAvailableActions, parseActionBlocks, autoApprovePendingActions } from '@/lib/actions';
+import { inferFallbackActionProposals } from '@/lib/actions/fallbackActions';
 import { buildAgentTerminalContext } from '@/features/terminals/agentContext';
-import { getPluginContextBlock } from '@/features/plugins';
+import { getPluginContextBlock, getPluginStatusContextBlock } from '@/features/plugins';
 import { devConsole } from '@/features/dev-console';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
@@ -105,8 +106,8 @@ export interface RuntimeOptions {
   /** Override the cancel event name (default: `jarvis:cancel`). */
   cancelEventName?: string;
   /**
-   * Throttle for streaming DB writes during chunk delivery. Default 50 ms gives
-   * smooth visible streaming without saturating the message store.
+   * Throttle for streaming DB writes during chunk delivery. Default 120 ms keeps
+   * visible streaming smooth without saturating the message store on long runs.
    */
   flushIntervalMs?: number;
 }
@@ -198,10 +199,27 @@ function toLLMMessages(history: Message[], excludeId?: MessageId): LLMMessage[] 
  * wrote, and the AI sees the same context on the next turn so it can
  * self-correct rather than silently retrying broken JSON.
  */
-function textToParts(text: string): Part[] {
+function textToParts(text: string, userText?: string): Part[] {
   const result = parseActionBlocks(text);
   if (!result.hasActionBlocks) {
-    return [{ kind: 'text', text }];
+    const fallbackProposals = userText
+      ? inferFallbackActionProposals(userText, text)
+      : [];
+    if (fallbackProposals.length === 0) return [{ kind: 'text', text }];
+    return [
+      {
+        kind: 'text',
+        text: 'I can do that in VibeSpace. Approve the action card below and I will run it.',
+      },
+      ...fallbackProposals.map<Part>((proposal) => ({
+        kind: 'action_proposal',
+        call_id: proposal.call_id,
+        action_id: proposal.action_id,
+        params: proposal.params,
+        rationale: proposal.rationale,
+        status: 'pending',
+      })),
+    ];
   }
   const parts: Part[] = [];
   for (const seg of result.segments) {
@@ -255,7 +273,7 @@ export function startRuntimeListener(
 ): () => void {
   const sendEventName = options.eventName ?? 'jarvis:send';
   const cancelEventName = options.cancelEventName ?? 'jarvis:cancel';
-  const flushIntervalMs = options.flushIntervalMs ?? 50;
+  const flushIntervalMs = options.flushIntervalMs ?? 120;
 
   const inFlight = new Map<MessageId, AbortController>();
 
@@ -334,6 +352,7 @@ export function startRuntimeListener(
     let explicitFilesContext = '';
     let explicitTerminalContext = '';
     let pluginContext = '';
+    let pluginStatusContext = '';
     let selectedSkillsContext = '';
     try {
       projectContext = await getProjectContextBlock(projectId);
@@ -408,6 +427,16 @@ export function startRuntimeListener(
       });
     }
     try {
+      pluginStatusContext = getPluginStatusContextBlock(projectId, text);
+    } catch (err) {
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'plugin status context build failed',
+        detail: { error: err instanceof Error ? err.message : String(err) },
+      });
+    }
+    try {
       selectedSkillsContext = getSelectedSkillsBlock(detail.skillIds);
     } catch (err) {
       devConsole.log({
@@ -422,6 +451,7 @@ export function startRuntimeListener(
       projectContext,
       projectContextTree,
       pluginContext,
+      pluginStatusContext,
       selectedSkillsContext,
       explicitContext,
       explicitFilesContext,
@@ -456,7 +486,7 @@ export function startRuntimeListener(
     let lastSpeechDeltaAt = 0;
     let speechDeltaTimer: ReturnType<typeof setTimeout> | null = null;
     let speechDeltaStarted = false;
-    const SPEECH_DELTA_MS = 120;
+    const SPEECH_DELTA_MS = 280;
 
     const flushSpeechDelta = () => {
       speechDeltaTimer = null;
@@ -604,8 +634,9 @@ export function startRuntimeListener(
       // textToParts() splits the text on action-proposal fences so the
       // chat thread renders inline Approve/Cancel cards alongside prose.
       const finalText = response.text || acc;
+      const finalParts = textToParts(finalText, text);
       await bindings.updateMessage(placeholder.id, {
-        parts: textToParts(finalText),
+        parts: finalParts,
         usage: {
           input_tokens: response.usage.input_tokens,
           output_tokens: response.usage.output_tokens,
@@ -663,7 +694,7 @@ export function startRuntimeListener(
           model: response.model,
           usage: response.usage,
           textChars: finalText.length,
-          partCount: textToParts(finalText).length,
+          partCount: finalParts.length,
         },
       });
       void notifyDone(

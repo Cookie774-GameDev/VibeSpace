@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getPluginContextBlock } from './context';
+import { getPluginContextBlock, getPluginStatusContextBlock } from './context';
 import { usePluginStore } from './store';
 
 describe('plugin terminal context', () => {
@@ -56,5 +56,36 @@ describe('plugin terminal context', () => {
     expect(block).toContain('GitHub');
     expect(block).toContain('Slack');
     expect(block).toContain('mentioned, not connected');
+  });
+
+  it('summarizes connected plugin status without secrets for plugin questions', () => {
+    usePluginStore.setState({
+      connections: {
+        github: {
+          pluginId: 'github',
+          state: 'connected',
+          enabled: true,
+          enabledProjectIds: ['project-a'],
+          accountLabel: 'octocat',
+          configuredFields: ['token'],
+          updatedAt: Date.now(),
+        },
+        slack: {
+          pluginId: 'slack',
+          state: 'connected',
+          enabled: false,
+          enabledProjectIds: ['*'],
+          accountLabel: 'workspace',
+          configuredFields: ['botToken'],
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const block = getPluginStatusContextBlock('project-a');
+    expect(block).toContain('GitHub [connected, enabled here]');
+    expect(block).toContain('Slack [connected, disabled]');
+    expect(block).not.toContain('token');
+    expect(block).not.toContain('botToken');
   });
 });

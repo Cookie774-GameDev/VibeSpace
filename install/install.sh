@@ -190,14 +190,14 @@ get_latest_version() {
 asset_pattern() {
   local os="$1" arch="$2" format="$3"
   case "$os/$format" in
-    linux/deb)      printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.deb$' ;;
-    linux/rpm)      printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64).*\.rpm$' ;;
-    linux/appimage) printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64).*\.AppImage$' ;;
+    linux/deb)      printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64|linux).*\.deb$' ;;
+    linux/rpm)      printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(x86_64|amd64|linux).*\.rpm$' ;;
+    linux/appimage) printf '%s' '(^|/).*(VibeSpace|vibesspace|jarvis|Jarvis)(%20One|[-_ ]?One)?.*(amd64|x86_64|linux).*\.AppImage$' ;;
     macos/dmg)
       if [ "$arch" = "aarch64" ]; then
-        printf '%s' '(^|/).*(VibeSpace|Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64).*\.dmg$'
+        printf '%s' '(^|/).*(VibeSpace|Jarvis|jarvis)(%20One|[-_ ]?One)?.*(aarch64|arm64|universal|macos).*\.dmg$'
       else
-        printf '%s' '(^|/).*(VibeSpace|Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64).*\.dmg$'
+        printf '%s' '(^|/).*(VibeSpace|Jarvis|jarvis)(%20One|[-_ ]?One)?.*(x64|x86_64|amd64|universal|macos).*\.dmg$'
       fi
       ;;
     *) return 1 ;;
@@ -242,6 +242,25 @@ resolve_download_url() {
       printf "%s" "$asset"
       return
     fi
+    if [ "$os" = "linux" ]; then
+      local all_linux_assets
+      all_linux_assets=$(printf "%s" "$response" \
+        | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
+        | sed -E 's/.*"browser_download_url":[[:space:]]*"([^"]*)".*/\1/' \
+        | grep -Ei '\.(AppImage|deb|rpm)$' || true)
+      if [ -n "$all_linux_assets" ]; then
+        fail "Release v${version} has Linux assets, but none matched ${format}/${arch}."
+        printf "\n"
+        printf "  ${YELLOW}Available Linux assets:${RESET}\n"
+        printf "%s" "$all_linux_assets" | while read -r url; do
+          printf "    - %s\n" "$(basename "$url")"
+        done
+        printf "\n"
+        warn "Try JARVIS_FORMAT=appimage, deb, or rpm."
+        exit 1
+      fi
+    fi
+
     # For macOS, try to find any available DMG if the specific arch isn't available
     if [ "$os" = "macos" ]; then
       # List all available assets for better error reporting
@@ -333,10 +352,10 @@ Type=Application
 Name=VibeSpace
 Comment=The AI workspace for every model, agent, voice and task
 Exec=jarvis %U
-Icon=jarvis
+Icon=${target}
 Terminal=false
 Categories=Office;Utility;
-StartupWMClass=jarvis
+StartupWMClass=VibeSpace
 EOF
   ok "Desktop entry: $desktop"
 }
@@ -361,11 +380,18 @@ install_dmg() {
     exit 1
   fi
   step "Copying to ${target_dir}..."
+  local target_app="${target_dir}/$(basename "$app")"
   if [ ${#SUDO[@]} -gt 0 ]; then
     "${SUDO[@]}" mkdir -p "$target_dir"
+    if [ -d "$target_app" ]; then
+      "${SUDO[@]}" rm -rf "$target_app"
+    fi
     "${SUDO[@]}" cp -R "$app" "$target_dir/"
   else
     mkdir -p "$target_dir"
+    if [ -d "$target_app" ]; then
+      rm -rf "$target_app"
+    fi
     cp -R "$app" "$target_dir/"
   fi
   hdiutil detach "$mountpoint" -force >/dev/null 2>&1 || true
@@ -375,7 +401,7 @@ install_dmg() {
   else
     xattr -dr com.apple.quarantine "${target_dir}/$(basename "$app")" || true
   fi
-  ok "Installed: ${target_dir}/$(basename "$app")"
+  ok "Installed: ${target_app}"
   warn "First launch may still require Finder -> Open until the app is notarized."
   warn "After the first 'Open', macOS remembers the trust for future updates."
 }

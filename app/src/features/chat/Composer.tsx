@@ -328,6 +328,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
   const apiKeys = useAuthStore((s) => s.apiKeys);
   const offlineMode = useAuthStore((s) => s.offlineMode);
+  const plan = useAuthStore((s) => s.plan);
   const projectId = useAuthStore((s) => s.projectId);
   const terminalPickerActive = optionPickerCtx?.cmd.cmd === 'terminal';
   const pluginPickerActive = optionPickerCtx?.cmd.cmd === 'plug';
@@ -341,25 +342,34 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
 
   const accessibleProviders = useMemo(
-    () => getAccessibleProviders(apiKeys, offlineMode),
-    [apiKeys, offlineMode],
+    () => getAccessibleProviders(apiKeys, offlineMode, plan),
+    [apiKeys, offlineMode, plan],
   );
 
+  const chatModelReady = accessibleProviders.includes(provider);
+
   useEffect(() => {
-    if (accessibleProviders.length === 0) return;
-    if (!accessibleProviders.includes(provider)) {
-      const nextProvider = accessibleProviders[0]!;
-      setDefaultProvider(nextProvider);
-      setSelectedModel(
-        nextProvider,
-        defaultModelForProvider(nextProvider, defaultLocalModel),
-      );
+    if (!chatModelReady) return;
+    const options = getAccessibleModelOptions(
+      provider,
+      apiKeys,
+      offlineMode,
+      defaultLocalModel,
+      plan,
+    );
+    if (options.length === 0) return;
+    const current = selectedModels[provider] || defaultModelForProvider(provider, defaultLocalModel);
+    if (!options.some((option) => option.id === current)) {
+      setSelectedModel(provider, options[0]!.id);
     }
   }, [
-    accessibleProviders,
+    chatModelReady,
     provider,
+    apiKeys,
+    offlineMode,
     defaultLocalModel,
-    setDefaultProvider,
+    plan,
+    selectedModels,
     setSelectedModel,
   ]);
 
@@ -1616,7 +1626,13 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
               <div className="flex items-center gap-1 px-2 pb-2 pt-0.5">
                 <ModelPicker
                   provider={provider}
-                  model={selectedModels[provider] || defaultModelForProvider(provider, defaultLocalModel)}
+                  model={
+                    chatModelReady
+                      ? selectedModels[provider] ||
+                        defaultModelForProvider(provider, defaultLocalModel)
+                      : ''
+                  }
+                  modelReady={chatModelReady}
                   open={modelPickerOpen}
                   onOpenChange={setModelPickerOpen}
                   onChange={(nextProvider, nextModel) => {
@@ -1724,18 +1740,27 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 interface ModelPickerProps {
   provider: ProviderId;
   model: string;
+  modelReady: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onChange: (provider: ProviderId, model: string) => void;
 }
 
-function ModelPicker({ provider, model, open, onOpenChange, onChange }: ModelPickerProps) {
+function ModelPicker({
+  provider,
+  model,
+  modelReady,
+  open,
+  onOpenChange,
+  onChange,
+}: ModelPickerProps) {
   const apiKeys = useAuthStore((s) => s.apiKeys);
   const offlineMode = useAuthStore((s) => s.offlineMode);
+  const plan = useAuthStore((s) => s.plan);
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
   const providers = useMemo(
-    () => getAccessibleProviders(apiKeys, offlineMode),
-    [apiKeys, offlineMode],
+    () => getAccessibleProviders(apiKeys, offlineMode, plan),
+    [apiKeys, offlineMode, plan],
   );
 
   return (
@@ -1749,7 +1774,9 @@ function ModelPicker({ provider, model, open, onOpenChange, onChange }: ModelPic
           aria-label="Choose model"
         >
           <Sparkles className="h-3.5 w-3.5 shrink-0" />
-          <span className="text-metadata">{PROVIDER_LABELS[provider]} / {model}</span>
+          <span className="text-metadata">
+            {modelReady ? `${PROVIDER_LABELS[provider]} / ${model}` : 'No model selected'}
+          </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
         </Button>
       </PopoverTrigger>
@@ -1765,11 +1792,17 @@ function ModelPicker({ provider, model, open, onOpenChange, onChange }: ModelPic
         <ul className="flex flex-col max-h-[320px] overflow-y-auto scrollbar-hidden">
           {providers.length === 0 ? (
             <li className="px-2 py-2 text-secondary text-muted-foreground">
-              Add an API key in Settings or download a local model to chat.
+              No model selected. Add an API key, use your subscription, or download a local model.
             </li>
           ) : null}
           {providers.map((p) => {
-            const options = getAccessibleModelOptions(p, apiKeys, offlineMode, defaultLocalModel);
+            const options = getAccessibleModelOptions(
+              p,
+              apiKeys,
+              offlineMode,
+              defaultLocalModel,
+              plan,
+            );
             if (options.length === 0) return null;
             return (
             <li key={p} className="mb-1">

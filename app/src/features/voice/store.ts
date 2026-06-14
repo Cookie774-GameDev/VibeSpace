@@ -24,6 +24,8 @@ export interface FinalTranscript {
   ts: number;
 }
 
+const MAX_FINAL_TRANSCRIPTS = 24;
+
 interface VoiceStore {
   /** Current voice state machine position - drives the orb visual. */
   state: VoiceState;
@@ -68,7 +70,9 @@ export const useVoiceStore = create<VoiceStore>((set) => ({
     const trimmed = text.trim();
     if (!trimmed) return;
     set((s) => ({
-      finalTranscript: [...s.finalTranscript, { text: trimmed, ts: Date.now() }],
+      finalTranscript: [...s.finalTranscript, { text: trimmed, ts: Date.now() }].slice(
+        -MAX_FINAL_TRANSCRIPTS,
+      ),
       partialTranscript: '',
     }));
   },

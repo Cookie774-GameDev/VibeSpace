@@ -64,3 +64,59 @@ export function getPluginContextBlock(
     ...lines,
   ].join('\n');
 }
+
+function pluginQuestionMentions(text: string): boolean {
+  return /\b(plugin|plugins|connector|connectors|integration|integrations)\b/i.test(text);
+}
+
+function connectionAvailability(
+  pluginId: string,
+  projectId: string | null,
+  connections: ReturnType<typeof usePluginStore.getState>['connections'],
+): string {
+  const connection = connections[pluginId];
+  if (!connection || connection.state !== 'connected') return 'not connected';
+  if (!connection.enabled) return 'connected, disabled';
+  if (
+    connection.enabledProjectIds.includes('*') ||
+    Boolean(projectId && connection.enabledProjectIds.includes(projectId))
+  ) {
+    return 'connected, enabled here';
+  }
+  return 'connected, not enabled for this project';
+}
+
+export function getPluginStatusContextBlock(
+  projectId: string | null,
+  userText?: string,
+): string {
+  if (userText && !pluginQuestionMentions(userText)) return '';
+
+  const connections = usePluginStore.getState().connections;
+  const connectedIds = new Set(Object.keys(connections));
+  if (connectedIds.size === 0) {
+    return [
+      'Plugin status for this workspace:',
+      '- No plugins are connected yet.',
+      'Use `settings.plugins` when the user wants to connect or review plugins.',
+    ].join('\n');
+  }
+
+  const lines = PLUGIN_CATALOG.filter((plugin) => connectedIds.has(plugin.id))
+    .slice(0, MAX_CONTEXT_PLUGINS)
+    .map((plugin) => {
+      const connection = connections[plugin.id];
+      const status = connectionAvailability(plugin.id, projectId, connections);
+      const account = connection?.accountLabel ? ` as ${connection.accountLabel}` : '';
+      const tools = plugin.tools.map((tool) => tool.name).join(', ') || 'no tools';
+      return `- ${plugin.name} [${status}]${account}: ${tools}`;
+    });
+
+  return [
+    'Plugin status for this workspace:',
+    'Credentials are stored in the OS keychain and are not available to the model.',
+    'Do not claim a plugin tool ran unless an approved `plugin.call` action returned a result.',
+    'Use `settings.plugins` when the user asks to connect, enable, or review plugins.',
+    ...lines,
+  ].join('\n');
+}

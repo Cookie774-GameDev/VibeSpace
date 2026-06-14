@@ -33,18 +33,36 @@ try {
 # PS 5.1 does not interpret `e as ESC; build it from [char]27 so colors work everywhere.
 $ESC = [char]27
 function Write-Banner {
-    $line   = '-' * 60
+    $line   = '═' * 66
     $cyan   = "$ESC[38;5;51m"
+    $blue   = "$ESC[38;5;39m"
     $violet = "$ESC[38;5;141m"
+    $pink   = "$ESC[38;5;213m"
+    $orange = "$ESC[38;5;214m"
     $dim    = "$ESC[2m"
+    $bold   = "$ESC[1m"
     $reset  = "$ESC[0m"
     Write-Host ""
-    Write-Host "$cyan$line$reset"
-    Write-Host "$violet  V I B E S P A C E $reset$dim  (terminal command: Jarvis)$reset"
-    Write-Host "$cyan  the AI workspace for every model, agent, voice & task$reset"
-    Write-Host "$dim  https://github.com/$JarvisRepo$reset"
-    Write-Host "$cyan$line$reset"
+    Write-Host "$orange╔$line╗$reset"
+    Write-Host "$orange║$reset  $pink$bold V I B E S P A C E $reset  $dim(force update + launch)$reset                       $orange║$reset"
+    Write-Host "$orange║$reset  $cyan██████╗ ██╗   ██╗$blue  the AI workspace for every model, agent, voice & task $orange║$reset"
+    Write-Host "$orange║$reset  $cyan██╔══██╗██║   ██║$violet  terminal command after install: $bold Jarvis $reset$orange                 ║$reset"
+    Write-Host "$orange║$reset  $cyan██████╔╝██║   ██║$dim  https://github.com/$JarvisRepo $reset$orange        ║$reset"
+    Write-Host "$orange╚$line╝$reset"
     Write-Host ""
+}
+
+function Write-NeonPulse {
+    param([string]$Message = 'charging updater')
+    $frames = @('✦', '✧', '◆', '◇', '◈', '◇', '◆', '✧')
+    $colors = @("$ESC[38;5;51m", "$ESC[38;5;39m", "$ESC[38;5;141m", "$ESC[38;5;213m", "$ESC[38;5;214m")
+    for ($i = 0; $i -lt 18; $i++) {
+        $color = $colors[$i % $colors.Count]
+        $frame = $frames[$i % $frames.Count]
+        Write-Host ("`r  {0}{1} {2}...{3}" -f $color, $frame, $Message, "$ESC[0m") -NoNewline
+        Start-Sleep -Milliseconds 45
+    }
+    Write-Host "`r  $(' ' * 70)`r" -NoNewline
 }
 
 function Write-Step ($msg) {
@@ -62,6 +80,16 @@ function Write-Warn ($msg) {
 function Write-Fail ($msg) {
     Write-Host "  XX  " -NoNewline -ForegroundColor Red
     Write-Host $msg -ForegroundColor Red
+}
+
+function Get-InstallerScriptRoot {
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        return $PSScriptRoot
+    }
+    if ($MyInvocation.MyCommand.Path) {
+        return (Split-Path -Parent $MyInvocation.MyCommand.Path)
+    }
+    return $null
 }
 
 # --- Helpers --------------------------------------------------------------
@@ -144,7 +172,7 @@ function Get-DownloadUrl ($version, $format) {
     if ($format -eq 'msi') {
         return "$JarvisDownloads/v$version/VibeSpace_${version}_x64_en-US.msi"
     } else {
-        return "$JarvisDownloads/v$version/VibeSpace_${version}_x64-setup.exe"
+        return "$JarvisDownloads/v$version/VibeSpace-$version-Windows-x64.exe"
     }
 }
 
@@ -202,6 +230,55 @@ function Get-LocalInstaller ($format) {
     throw "No installer found in $dir matching $($patterns -join ' or ')."
 }
 
+function Invoke-NeonDownload {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$OutFile
+    )
+
+    $request = [System.Net.HttpWebRequest]::Create($Url)
+    $request.UserAgent = 'jarvis-installer'
+    $request.AllowAutoRedirect = $true
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 300000
+    $response = $request.GetResponse()
+    $total = [int64]$response.ContentLength
+    $stream = $response.GetResponseStream()
+    $fileStream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    $buffer = New-Object byte[] (1024 * 128)
+    $downloaded = [int64]0
+    $lastDraw = [datetime]::MinValue
+    $started = Get-Date
+    $bars = @('▱▱▱▱▱▱▱▱▱▱▱▱', '▰▱▱▱▱▱▱▱▱▱▱▱', '▰▰▱▱▱▱▱▱▱▱▱▱', '▰▰▰▱▱▱▱▱▱▱▱▱', '▰▰▰▰▱▱▱▱▱▱▱▱', '▰▰▰▰▰▱▱▱▱▱▱▱', '▰▰▰▰▰▰▱▱▱▱▱▱', '▰▰▰▰▰▰▰▱▱▱▱▱', '▰▰▰▰▰▰▰▰▱▱▱▱', '▰▰▰▰▰▰▰▰▰▱▱▱', '▰▰▰▰▰▰▰▰▰▰▱▱', '▰▰▰▰▰▰▰▰▰▰▰▱', '▰▰▰▰▰▰▰▰▰▰▰▰')
+    try {
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $fileStream.Write($buffer, 0, $read)
+            $downloaded += $read
+            $now = Get-Date
+            if (($now - $lastDraw).TotalMilliseconds -gt 90) {
+                $mb = [math]::Round($downloaded / 1MB, 2)
+                $elapsed = [math]::Max(($now - $started).TotalSeconds, 0.1)
+                $speed = [math]::Round(($downloaded / 1MB) / $elapsed, 1)
+                if ($total -gt 0) {
+                    $pct = [math]::Min(100, [math]::Round(($downloaded / $total) * 100, 1))
+                    $barIndex = [math]::Min($bars.Count - 1, [math]::Floor($pct / 100 * ($bars.Count - 1)))
+                    $line = "  $ESC[38;5;213mVibeSpace$ESC[0m $ESC[38;5;51m$($bars[$barIndex])$ESC[0m $pct%  $mb MB  $speed MB/s"
+                } else {
+                    $pulse = $bars[([int]($downloaded / 131072)) % $bars.Count]
+                    $line = "  $ESC[38;5;213mVibeSpace$ESC[0m $ESC[38;5;51m$pulse$ESC[0m $mb MB  $speed MB/s"
+                }
+                Write-Host ("`r{0,-90}" -f $line) -NoNewline
+                $lastDraw = $now
+            }
+        }
+    } finally {
+        $fileStream.Dispose()
+        if ($stream) { $stream.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+    Write-Host ("`r{0,-90}" -f "  $ESC[38;5;82mVibeSpace download complete$ESC[0m")
+}
+
 function Save-DownloadFile ($url, $outFile) {
     Write-Step "Downloading: $url"
     $tmp = "$outFile.partial"
@@ -211,7 +288,8 @@ function Save-DownloadFile ($url, $outFile) {
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
-            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 300 -Headers $headers
+            Write-NeonPulse "opening GitHub release stream"
+            Invoke-NeonDownload -Url $url -OutFile $tmp
             Move-Item -LiteralPath $tmp -Destination $outFile -Force
             $size = [math]::Round((Get-Item $outFile).Length / 1MB, 2)
             Write-Ok "Downloaded $size MB"
@@ -334,14 +412,52 @@ function Get-InstalledJarvisExe {
     return $null
 }
 
+function Stop-RunningVibeSpace {
+    $names = @('jarvis', 'VibeSpace', 'Jarvis One')
+    $processes = @()
+    foreach ($name in $names) {
+        $processes += @(Get-Process -Name $name -ErrorAction SilentlyContinue)
+    }
+    $processes = @($processes | Sort-Object Id -Unique)
+    if ($processes.Count -eq 0) {
+        return
+    }
+
+    Write-Step "Closing running VibeSpace before update..."
+    foreach ($proc in $processes) {
+        try {
+            if ($proc.MainWindowHandle -ne 0) {
+                [void]$proc.CloseMainWindow()
+            }
+        } catch {
+            # Continue to timed wait / force stop below.
+        }
+    }
+
+    Start-Sleep -Milliseconds 900
+    foreach ($proc in $processes) {
+        try {
+            $fresh = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+            if ($fresh) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            # Best effort; the installer may still be able to replace files.
+        }
+    }
+}
+
 function Get-TerminalBootSource {
     param(
         [string]$VersionHint
     )
 
-    $localBoot = Join-Path $PSScriptRoot '..\tools\terminal_boot\jarvis_boot_forever.py'
-    if (Test-Path -LiteralPath $localBoot) {
-        return Get-Content -LiteralPath $localBoot -Raw -Encoding UTF8
+    $scriptRoot = Get-InstallerScriptRoot
+    if ($scriptRoot) {
+        $localBoot = Join-Path $scriptRoot '..\tools\terminal_boot\jarvis_boot_forever.py'
+        if (Test-Path -LiteralPath $localBoot) {
+            return Get-Content -LiteralPath $localBoot -Raw -Encoding UTF8
+        }
     }
 
     $headers = @{ 'User-Agent' = 'jarvis-installer' }
@@ -376,9 +492,12 @@ function Get-TerminalBootAssetSource {
         [string]$VersionHint
     )
 
-    $localBoot = Join-Path $PSScriptRoot "..\tools\terminal_boot\$FileName"
-    if ($PSScriptRoot -and (Test-Path -LiteralPath $localBoot)) {
-        return Get-Content -LiteralPath $localBoot -Raw -Encoding UTF8
+    $scriptRoot = Get-InstallerScriptRoot
+    if ($scriptRoot) {
+        $localBoot = Join-Path $scriptRoot "..\tools\terminal_boot\$FileName"
+        if (Test-Path -LiteralPath $localBoot) {
+            return Get-Content -LiteralPath $localBoot -Raw -Encoding UTF8
+        }
     }
 
     $headers = @{ 'User-Agent' = 'jarvis-installer' }
@@ -723,6 +842,7 @@ if ($wv2) {
 # Choose installer source
 $tmpDir = $null
 $installerPath = $null
+$version = $null
 
 if ($env:JARVIS_LOCAL -eq '1') {
     Write-Step "Using LOCAL build (JARVIS_LOCAL=1)"
@@ -754,7 +874,7 @@ if ($dryrun) {
 }
 
 $installSplash = $null
-$splashVersionHint = if ($env:JARVIS_VERSION) { $env:JARVIS_VERSION } else { '' }
+$splashVersionHint = if ($env:JARVIS_VERSION) { $env:JARVIS_VERSION } elseif ($version) { $version } else { '' }
 $installSplash = Initialize-InstallSplash -VersionHint $splashVersionHint
 
 # Admin check (only required for MSI per-machine installs)
@@ -763,6 +883,7 @@ if ($format -eq 'msi' -and -not (Test-IsAdmin)) {
 }
 
 # Run
+Stop-RunningVibeSpace
 $exit = Invoke-Installer -file $installerPath -format $format -silent $silent
 if ($exit -eq 0) {
     Write-Host ""

@@ -206,13 +206,18 @@ export function PhoneVoice() {
     return () => window.clearInterval(id);
   }, [configured]);
 
-  async function save(patch: Partial<PhoneSettings>, options: { silentLocal?: boolean } = {}) {
+  async function save(
+    patch: Partial<PhoneSettings>,
+    options: { silentLocal?: boolean; notify?: boolean } = {},
+  ) {
     const next = { ...settings, ...patch };
     setSettings(next);
     writePhoneSettingsDraft(next);
 
     if (!userId) {
-      if (!options.silentLocal) {
+      if (options.notify) {
+        toast.success('Auto saved', 'Phone settings saved on this device.');
+      } else if (!options.silentLocal) {
         toast.info('Saved locally', 'Phone settings will sync when VibeSpace Cloud sign-in is available.');
       }
       return;
@@ -241,6 +246,9 @@ export function PhoneVoice() {
           { onConflict: 'user_id' },
         );
       if (error) throw new Error(error.message);
+      if (options.notify) {
+        toast.success('Auto saved', 'Phone settings updated.');
+      }
     } catch (e) {
       toast.error('Save failed', (e as Error).message);
     } finally {
@@ -287,7 +295,9 @@ export function PhoneVoice() {
       {/* 4. BYOK */}
       <ByokCard
         keys={settings.byok_provider_keys ?? {}}
-        onChange={(byok_provider_keys) => save({ byok_provider_keys })}
+        onChange={(byok_provider_keys) =>
+          void save({ byok_provider_keys }, { notify: true })
+        }
         saving={saving}
       />
 
@@ -564,29 +574,40 @@ function AllowlistCard({
 function ByokCard({
   keys,
   onChange,
-  saving,
+  saving: _saving,
 }: {
   keys: NonNullable<PhoneSettings['byok_provider_keys']>;
   onChange: (next: NonNullable<PhoneSettings['byok_provider_keys']>) => void;
   saving: boolean;
 }) {
   const [local, setLocal] = useState(keys);
+  const onChangeRef = useRef(onChange);
 
   useEffect(() => {
     setLocal(keys);
   }, [keys]);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   const dirty = useMemo(
     () => JSON.stringify(local) !== JSON.stringify(keys),
     [local, keys],
   );
 
+  useEffect(() => {
+    if (!dirty) return;
+    const id = window.setTimeout(() => onChangeRef.current(local), 650);
+    return () => window.clearTimeout(id);
+  }, [dirty, local]);
+
   return (
     <section className="flex flex-col gap-3">
       <Label>Provider keys (BYOK)</Label>
       <p className="text-xs text-muted-foreground">
         Paste your own keys. When set, your keys override the operator defaults for your calls.
-        Recommended starter: a free Groq key — covers STT and LLM at $0.
+        Recommended starter: a free Groq key — covers STT and LLM at $0. Changes auto-save.
       </p>
 
       <div className="grid gap-2 max-w-xl">
@@ -631,16 +652,6 @@ function ByokCard({
           onChange={(v) => setLocal({ ...local, cartesia: v })}
         />
       </div>
-
-      <div>
-        <Button
-          size="sm"
-          disabled={!dirty || saving}
-          onClick={() => onChange(local)}
-        >
-          {saving ? 'Saving…' : dirty ? 'Save keys' : 'Saved'}
-        </Button>
-      </div>
     </section>
   );
 }
@@ -659,7 +670,6 @@ function KeyInput({
   onChange: (v: string) => void;
 }) {
   const [revealed, setRevealed] = useState(false);
-  const masked = value && !revealed ? '•'.repeat(Math.min(value.length, 28)) : '';
   return (
     <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
       <Label className="pt-2 text-xs">{label}</Label>
@@ -668,9 +678,11 @@ function KeyInput({
           <Input
             type={revealed ? 'text' : 'password'}
             placeholder={placeholder}
-            value={revealed ? value : masked || ''}
+            value={value}
             onChange={(e) => onChange(e.target.value)}
             className="font-mono text-xs"
+            autoComplete="off"
+            spellCheck={false}
           />
           <Button
             variant="outline"

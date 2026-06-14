@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ProviderId } from '@/types';
+import type { PlanId } from '@/lib/entitlements';
 import { useAuthStore } from '@/stores/auth';
 import { ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
 import { GOOGLE_DEFAULT_MODEL } from './providers/google';
@@ -42,6 +43,7 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   { provider: 'openai', id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
   { provider: 'anthropic', id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude 3.5 Sonnet' },
   { provider: 'anthropic', id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+  { provider: 'deepseek', id: 'deepseek-chat', label: 'DeepSeek V4 Flash' },
   { provider: 'mock', id: 'mock-default', label: 'Mock demo' },
 ];
 
@@ -86,10 +88,15 @@ function localModelsAvailable(): boolean {
   return _discoveredOllama.length > 0;
 }
 
-/** Providers the user can actually chat with right now (keys or installed local models). */
+function planIncludesHostedChat(plan: PlanId): boolean {
+  return plan !== 'free';
+}
+
+/** Providers the user can actually chat with right now (keys, local models, or paid hosted). */
 export function getAccessibleProviders(
   apiKeys: Partial<Record<ProviderId, string>>,
   offlineMode: boolean,
+  plan: PlanId = 'free',
 ): ProviderId[] {
   if (offlineMode) {
     return localModelsAvailable() ? ['ollama', 'local'] : [];
@@ -98,6 +105,11 @@ export function getAccessibleProviders(
   const providers: ProviderId[] = [];
   for (const provider of CLOUD_KEY_PROVIDERS) {
     if (hasCloudApiKey(provider, apiKeys)) providers.push(provider);
+  }
+  if (planIncludesHostedChat(plan)) {
+    for (const provider of ['google', 'deepseek'] as const) {
+      if (!providers.includes(provider)) providers.push(provider);
+    }
   }
   if (hasCloudApiKey('mock', apiKeys)) providers.push('mock');
   if (localModelsAvailable()) {
@@ -112,8 +124,9 @@ export function getAccessibleModelOptions(
   apiKeys: Partial<Record<ProviderId, string>>,
   offlineMode: boolean,
   localDefault = OLLAMA_DEFAULT_MODEL,
+  plan: PlanId = 'free',
 ): readonly ModelOption[] {
-  const accessible = getAccessibleProviders(apiKeys, offlineMode);
+  const accessible = getAccessibleProviders(apiKeys, offlineMode, plan);
   if (!accessible.includes(provider)) return [];
 
   if (provider === 'ollama' || provider === 'local') {
@@ -151,6 +164,7 @@ export function getModelOptions(provider: ProviderId): readonly ModelOption[] {
     auth.apiKeys,
     auth.offlineMode,
     auth.defaultLocalModel,
+    auth.plan,
   );
 }
 
@@ -164,6 +178,8 @@ export function defaultModelForProvider(provider: ProviderId, localModel = OLLAM
       return GOOGLE_DEFAULT_MODEL;
     case 'groq':
       return GROQ_DEFAULT_MODEL;
+    case 'deepseek':
+      return 'deepseek-chat';
     case 'ollama':
     case 'local':
       if (localModelsAvailable()) {

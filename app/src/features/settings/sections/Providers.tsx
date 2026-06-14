@@ -23,6 +23,10 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import {
+  isDefaultProviderSelectable,
+  planIncludesHostedChat,
+} from '@/lib/ai/agentProviderOptions';
 import { testProviderKey } from '@/lib/ai/testKey';
 import {
   getMonthlyAllProviderUsage,
@@ -245,6 +249,8 @@ const DEFAULT_PROVIDER_OPTIONS: { id: ProviderId; label: string; description: st
   { id: 'openai', label: 'OpenAI', description: 'Strong generalist with realtime voice.' },
   { id: 'google', label: 'Google', description: 'Long context, fast Flash tier.' },
   { id: 'groq', label: 'Groq', description: 'Sub-second open-weights inference.' },
+  { id: 'deepseek', label: 'DeepSeek', description: 'DeepSeek V4 Flash via subscription credits.' },
+  { id: 'ollama', label: 'Ollama (local)', description: 'Local models on this device.' },
   { id: 'xai', label: 'xAI', description: 'Grok models with strong reasoning.' },
   { id: 'openrouter', label: 'OpenRouter', description: 'Single key, hundreds of models.' },
   { id: 'mock', label: 'Mock', description: 'Built-in placeholder. No network calls.' },
@@ -256,6 +262,8 @@ export function Providers() {
   const clearApiKey = useAuthStore((s) => s.clearApiKey);
   const defaultProvider = useAuthStore((s) => s.defaultProvider);
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
+  const plan = useAuthStore((s) => s.plan);
+  const offlineMode = useAuthStore((s) => s.offlineMode);
   const usageByProvider = useLiveQuery(async () => {
     const totals = await getMonthlyAllProviderUsage(BYOK_PROVIDER_IDS);
     return BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
@@ -342,17 +350,25 @@ export function Providers() {
         <div role="radiogroup" aria-label="Default provider" className="grid gap-2 max-w-xl">
           {DEFAULT_PROVIDER_OPTIONS.map((opt) => {
             const selected = defaultProvider === opt.id;
-            const hasKey = opt.id === 'mock' || !!apiKeys[opt.id];
+            const selectable = isDefaultProviderSelectable(opt.id, apiKeys, offlineMode, plan);
+            const hasKey = opt.id === 'mock' ? Boolean(apiKeys.mock?.trim()) : Boolean(apiKeys[opt.id]?.trim());
+            const subscriptionHosted =
+              planIncludesHostedChat(plan) && (opt.id === 'google' || opt.id === 'deepseek');
             return (
               <button
                 type="button"
                 key={opt.id}
                 role="radio"
                 aria-checked={selected}
-                onClick={() => setDefaultProvider(opt.id)}
+                disabled={!selectable}
+                onClick={() => {
+                  if (!selectable) return;
+                  setDefaultProvider(opt.id);
+                }}
                 className={cn(
                   'flex items-center gap-3 rounded-md border bg-panel px-3 py-2 text-left transition-all duration-200',
                   'hover:bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                  !selectable && 'opacity-50 cursor-not-allowed hover:bg-panel',
                   selected
                     ? 'border-accent-cyan/50 shadow-[0_0_0_1px_hsl(var(--accent-cyan)/0.3)]'
                     : 'border-border',
@@ -371,7 +387,15 @@ export function Providers() {
                 <span className="flex-1 min-w-0">
                   <span className="flex items-center gap-2">
                     <span className="text-ui-strong text-foreground">{opt.label}</span>
-                    {!hasKey && opt.id !== 'mock' && <Badge variant="outline">No key</Badge>}
+                    {subscriptionHosted && !hasKey && (
+                      <Badge variant="outline" className="text-sage">
+                        Subscription
+                      </Badge>
+                    )}
+                    {!hasKey && opt.id !== 'mock' && opt.id !== 'ollama' && !subscriptionHosted && (
+                      <Badge variant="outline">No key</Badge>
+                    )}
+                    {!selectable && <Badge variant="outline">Unavailable</Badge>}
                   </span>
                   <span className="text-metadata text-muted-foreground block">
                     {opt.description}
@@ -392,14 +416,6 @@ interface ProviderKeyRowProps {
   onSave: (value: string) => void;
   onClear: () => void;
   usageData: ProviderUsageData | null;
-}
-
-function maskKey(key: string): string {
-  if (!key || key.length < 8) return key;
-  const prefix = key.slice(0, Math.min(6, key.indexOf('-') + 4 || 6));
-  const suffix = key.slice(-4);
-  const masked = '•'.repeat(Math.min(12, key.length - prefix.length - suffix.length));
-  return `${prefix}${masked}${suffix}`;
 }
 
 function emptyUsageTotals(): LocalUsageTotals {
@@ -602,19 +618,9 @@ const ProviderKeyRow = memo(function ProviderKeyRow({ row, value, onSave, onClea
               id={`key-${row.id}`}
               type={revealed ? 'text' : 'password'}
               placeholder={row.placeholder}
-              value={revealed ? draft : draft ? maskKey(draft) : ''}
-              onChange={(e) => {
-                if (revealed) {
-                  setDraft(e.target.value);
-                } else {
-                  setDraft(e.target.value);
-                  setRevealed(true);
-                }
-              }}
-              onFocus={() => {
-                setFocused(true);
-                if (draft && !revealed) setRevealed(true);
-              }}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
