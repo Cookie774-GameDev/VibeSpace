@@ -1,11 +1,11 @@
 # Supabase Setup
 
-Project ref: `tipeobvisjqvpbzcpckh`
+Replace `<your-project-ref>` with your Supabase project ref (Dashboard → Settings → General).
 
 ## 1. Link the CLI
 
 ```powershell
-npx supabase link --project-ref tipeobvisjqvpbzcpckh
+npx supabase link --project-ref <your-project-ref>
 ```
 
 ## 2. Push migrations (requires the DB password)
@@ -32,13 +32,7 @@ Migrations applied:
 - `0020_security_voice_promo_hardening.sql` — $1k pool bump (from $6k on live),
   promo settlement caps, admin self-check, client write deny on promo tables.
 
-To add $5k more credit later (pool → $6k):
-
-```sql
-update public.deepgram_promo_pool
-   set budget_usd = 6000, pause_at_usd = 5400, active = true, updated_at = now()
- where id = 1;
-```
+To adjust the launch promo pool budget after go-live, use the maintainer runbook SQL (not committed here — avoids exposing pause thresholds on a public repo).
 
 ## API keys — where each secret lives
 

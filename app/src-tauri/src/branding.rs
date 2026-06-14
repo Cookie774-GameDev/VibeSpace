@@ -27,6 +27,14 @@ fn load_window_icon() -> tauri::image::Image<'static> {
 }
 
 fn load_tray_icon() -> tauri::image::Image<'static> {
+    // Keep tray identical to the EXE / Start-menu icon on Windows.
+    #[cfg(windows)]
+    {
+        if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.ico")) {
+            return icon;
+        }
+    }
+
     tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
         .unwrap_or_else(|_| load_window_icon())
 }

@@ -40,8 +40,8 @@ describe('createTerminalOutputBuffer', () => {
 
 describe('stripOrphanEscapeFragments', () => {
   it('removes mid-line OSC palette garbage after PowerShell prompts', () => {
-    const input = 'PS C:\\Users\\viper>]4;0;rgb:2a2a/2020/1818[0[0[0[';
-    expect(stripOrphanEscapeFragments(input)).toBe('PS C:\\Users\\viper>');
+    const input = 'PS C:\\Users\\devuser>]4;0;rgb:2a2a/2020/1818[0[0[0[';
+    expect(stripOrphanEscapeFragments(input)).toBe('PS C:\\Users\\devuser>');
   });
 
   it('removes orphan mouse-tracking CSI fragments', () => {

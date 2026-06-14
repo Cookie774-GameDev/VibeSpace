@@ -29,24 +29,17 @@ The `0001_init.sql` file from earlier scaffolding has been replaced by the
 numbered migration set above. To bootstrap a fresh project, run the migrations
 in order — they are idempotent, so re-running is safe.
 
-## Active project (VibeSpace)
+## Desktop app env (maintainers)
 
-The desktop app's `app/.env.local` points at the live VibeSpace backend:
-
-```
-project_ref:  tipeobvisjqvpbzcpckh
-url:          https://tipeobvisjqvpbzcpckh.supabase.co
-region:       us-east-1
-display_name: VibeSpace (rename the Supabase dashboard project from VibeSpace when convenient)
-```
-
-Required client env vars in `app/.env.local`:
+Point `app/.env.local` at your Supabase project (Dashboard → Settings → General → Reference ID):
 
 ```
-VITE_SUPABASE_URL=https://tipeobvisjqvpbzcpckh.supabase.co
+VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<publishable key from Supabase → Project Settings → API>
 VITE_ENABLE_CLOUD_SYNC=true
 ```
+
+Do not commit real project refs or keys to git.
 
 Apply migrations through `0011_plugin_connections.sql` before enabling
 plugin metadata sync in production:

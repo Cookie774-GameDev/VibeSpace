@@ -17,13 +17,13 @@ npx supabase secrets set TWILIO_ACCOUNT_SID="AC..."
 npx supabase secrets set TWILIO_AUTH_TOKEN="..."
 npx supabase secrets set TWILIO_PHONE_NUMBER="+1..."
 npx supabase secrets set TWILIO_MESSAGING_SERVICE_SID="MG..."   # optional
-npx supabase secrets set APP_BASE_URL="https://tipeobvisjqvpbzcpckh.supabase.co"
+npx supabase secrets set APP_BASE_URL="https://<your-app-domain>"
 ```
 
 ## 3. Configure webhooks in Twilio
 
 - Voice number "A call comes in" / outbound TwiML URL →
-  `https://tipeobvisjqvpbzcpckh.supabase.co/functions/v1/twilio-voice-webhook`
+  `https://<your-project-ref>.supabase.co/functions/v1/twilio-voice-webhook`
 - Call status callback (set automatically by `call-start`) →
   `.../functions/v1/call-status`
 - Messaging webhook →

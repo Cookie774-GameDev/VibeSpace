@@ -22,7 +22,7 @@
 12. [Burn rates & headline minutes](#burn-rates--headline-minutes)
 13. [Billing draw order](#billing-draw-order)
 14. [When the pool runs out](#when-the-pool-runs-out)
-15. [Plan economics — 38% margin rule](#plan-economics--38-margin-rule)
+15. [Plan economics — internal](#plan-economics--internal-maintainers-only)
 16. [Customer-facing copy](#customer-facing-copy)
 17. [What NOT to say](#what-not-to-say)
 18. [Implementation & ops](#implementation--ops)
@@ -104,30 +104,20 @@ Paid subscribers (Orbit / Nova / Singularity) get **hosted AI message credits** 
 
 ### Message credits by tier
 
-| Tier | Credits/mo | Internal msg budget |
-|------|------------|---------------------|
-| Spark | 0 | $0 |
-| Orbit | **3,100** | $3.10 |
-| Nova | **15,500** | $15.50 |
-| Singularity | **31,000** | $31.00 |
+| Tier | Credits/mo |
+|------|------------|
+| Spark | 0 |
+| Orbit | **3,100** |
+| Nova | **15,500** |
+| Singularity | **31,000** |
 
 **BYOK always works on every tier** for any provider the user configures. Hosted DeepSeek is an **optional convenience** on paid plans, not a replacement for BYOK.
 
 **Server allowlist:** clients cannot pick a more expensive model on the hosted path — only `deepseek-chat` is permitted (`message-complete/index.ts`).
 
-### DeepSeek spend cap (fixed per tier)
+### Hosted chat limits
 
-Hosted chat is **not unlimited**. Each tier gets a **fixed monthly DeepSeek budget** — exactly **50% of total plan COGS** (the AI slice of the 62% rule):
-
-| Tier | Max company spend on DeepSeek/mo | Message credits shown to user |
-|------|----------------------------------|-------------------------------|
-| Orbit | **$3.10** | 3,100 |
-| Nova | **$15.50** | 15,500 |
-| Singularity | **$31.00** | 31,000 |
-
-**Provider:** DeepSeek V4 Flash (`deepseek-chat`). Actual token cost is settled after each completion (`deepseekActualCostUsd` in `budget.ts`) — cache hits cost less, so heavy users may get **more messages** before hitting the cap, but never more than the **$ budget** allows.
-
-**1 credit = $0.001** of company DeepSeek spend. When credits hit zero → throttle; client falls back to BYOK/local. **No overage billing.**
+Hosted chat is **not unlimited**. Each paid tier has a fixed monthly **message credit** bucket (see table above). When credits hit zero → throttle; client falls back to BYOK/local. **No overage billing.**
 
 ---
 
@@ -318,21 +308,9 @@ Paid tiers get **three separate monthly buckets**. Spark gets none (BYOK + local
 | **Tool publishing** | ✗ | ✗ | ✓ | ✓ |
 | **Priority routing** | ✗ | ✗ | ✓ | ✓ |
 
-### Internal USD budgets (all tiers)
+### Internal USD budgets (maintainers only)
 
-**Rule:** every paid tier allocates **62% of sticker price** to provider COGS and keeps **38% gross margin** *before* Stripe fees. After Stripe (~2.9% + $0.30/invoice), full-burn months land around **~32–35% net profit** per tier.
-
-COGS split: **50% AI (DeepSeek)** · **35% call/voice** · **15% SMS**.
-
-| Tier | Price | DeepSeek cap | Call/voice cap | SMS cap | COGS total | Gross margin (38%) |
-|------|-------|-------------|----------------|---------|------------|-------------------|
-| **Orbit** | $10 | **$3.10** | $2.17 | $0.93 | $6.20 | $3.80 |
-| **Nova** | $50 | **$15.50** | $10.85 | $4.65 | $31.00 | $19.00 |
-| **Singularity** | $100 | **$31.00** | $21.70 | $9.30 | $62.00 | $38.00 |
-
-User-facing credits/minutes are derived from these caps (e.g. $3.10 → 3,100 message credits at $0.001/credit). **These dollar caps are hard limits** — `reserve_message_budget` denies requests when exhausted.
-
-See [Plan economics — 38% margin rule](#plan-economics--38-margin-rule) for the full napkin math and DeepSeek specifics.
+Dollar caps, COGS splits, and margin targets are defined in `budget.ts` and migrations — see the **private maintainer runbook**, not this public doc. Customer-facing quotas are the credit/minute columns in the table above.
 
 ### Hosted AI by tier
 
@@ -399,57 +377,11 @@ Existing users **keep** whatever they already claimed until they use it up **or 
 
 ---
 
-## Plan economics — 38% margin rule
+## Plan economics — internal (maintainers only)
 
-**Locked policy (migration `0021`, `budget.ts`):** every paid tier must hit **38% gross margin before Stripe fees**. Provider COGS are capped at **62%** of sticker price. After Stripe (~2.9% + $0.30 per invoice), a subscriber who fully burns their quotas leaves roughly **~32–35% net profit** — target **~35%** in planning.
+> **This section is not published on the public GitHub repo.** Margin targets, COGS splits, pool pause thresholds, and unit-cost tables live in the private maintainer runbook. Public marketing uses **customer-facing copy** below only.
 
-### The formula
-
-```
-Sticker price (e.g. $10 Orbit)
-├── 62% COGS (provider spend) ──┬── 50% → DeepSeek V4 Flash (message bucket)
-│                               ├── 35% → Call/voice bucket (Twilio + Deepgram + …)
-│                               └── 15% → SMS bucket
-└── 38% gross margin (before Stripe)
-    └── after Stripe fees → ~35% net profit at full burn
-```
-
-### Full tier breakdown
-
-| Tier | Price | DeepSeek (50%) | Call/voice (35%) | SMS (15%) | COGS Σ | Margin 38% | ≈ Net after Stripe* |
-|------|-------|----------------|------------------|-----------|--------|------------|---------------------|
-| **Orbit** | $10 | $3.10 | $2.17 | $0.93 | $6.20 | $3.80 | **~$3.20 (~32%)** |
-| **Nova** | $50 | $15.50 | $10.85 | $4.65 | $31.00 | $19.00 | **~$17.25 (~35%)** |
-| **Singularity** | $100 | $31.00 | $21.70 | $9.30 | $62.00 | $38.00 | **~$34.80 (~35%)** |
-
-\*Approximate: Stripe `2.9% + $0.30` on monthly invoice, assuming subscriber uses **100%** of all three buckets. Partial use = higher margin. Over-burn is **rate-limited**, not billed — windows cap at 8% (5h) / 25% (week) / 100% (month).
-
-### DeepSeek V4 Flash unit economics
-
-Reference pricing in `budget.ts` (model `deepseek-chat`):
-
-| Token type | Price |
-|------------|-------|
-| Input (cache miss) | $0.14 / 1M tokens |
-| Input (cache hit) | $0.0028 / 1M tokens |
-| Output | $0.28 / 1M tokens |
-
-Reservations assume cache-miss worst case; settlement uses actual usage (cache hits refund budget). **You cannot swap hosted chat to a pricier model** — server allowlist is `deepseek-chat` only.
-
-**Example (Orbit $3.10 cap):** at ~500 input + ~80 output tokens per turn, a power user might get thousands of messages before hitting the dollar cap; a single huge context dump burns it faster. Credits are the user-friendly face of the **same dollar ceiling**.
-
-### Launch promo economics (separate)
-
-Launch Deepgram pool ($1k / $5k) is **marketing COGS**, not part of the 38% subscription math. Founders ($5 × 200) and Spark promo ($2 × 1,000) are funded from the promo pool, not from per-subscriber message/call budgets.
-
-### Launch pool math
-
-| Phase | Pool | Largest Spark liability | Paid launch liability (per subscriber) |
-|-------|------|-------------------------|----------------------------------------|
-| 1 | $1,000 | 200 × $5 = $1,000 | Orbit ~$0.34 · Nova ~$1.01 · Ultra ~$2.03 |
-| 2 | $5,000 | +1,000 × $2 = $2,000 | Orbit ~$2.03 · Nova ~$6.08 · Ultra ~$10.13 |
-
-Phase 2 prioritizes **subscription launch credits** (3h / 9h / 15h) over free-tier giveaways.
+For local reference, see your private ops wiki or the maintainer-only copy of this document.
 
 ---
 
@@ -492,8 +424,7 @@ Phase 2 prioritizes **subscription launch credits** (3h / 9h / 15h) over free-ti
 - ❌ “Path C” or “in-app phone call” for the voice module — **there is no in-app phone call**
 - ❌ “Paid tiers get Gemini/Claude hosted” — hosted chat is **DeepSeek V4 Flash** only
 - ❌ Calling local Kokoro voice module usage a “phone call” or Deepgram spend
-- ❌ “Unlimited hosted DeepSeek” — every tier has a **fixed dollar cap** ($3.10 / $15.50 / $31.00)
-- ❌ Implying COGS is 33% of sticker — correct rule is **62% COGS / 38% gross margin before Stripe**
+- ❌ “Unlimited hosted DeepSeek” — every tier has a **fixed monthly credit cap** on paid plans
 
 ---
 

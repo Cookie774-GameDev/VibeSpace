@@ -85,7 +85,7 @@ fly secrets set TWILIO_ACCOUNT_SID=AC... TWILIO_AUTH_TOKEN=...
 fly deploy
 ```
 
-Set Twilio number's voice webhook to `https://phone-jarvis-cloud.fly.dev/twiml`.
+Set Twilio number's voice webhook to `https://<your-app>.fly.dev/twiml`.
 
 Then:
 - Inbound: dial the number → AI picks up

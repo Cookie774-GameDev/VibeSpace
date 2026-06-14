@@ -104,3 +104,7 @@ phone-jarvis/cloud/audit/
 *.pem
 *.key
 secrets/
+
+# Maintainer-only logs (local paths, session notes — never publish)
+DEVLOG.md
+docs/SESSION_WORKLOG.md

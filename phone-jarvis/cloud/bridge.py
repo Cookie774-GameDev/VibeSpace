@@ -9,7 +9,7 @@ Frame protocol (JSON, one frame per WS message):
 
   desktop -> cloud:
     { "kind": "register", "token": "<jwt>", "daemon_version": "...",
-      "platform": "win32", "workspace_root": "C:\\\\Users\\\\viper",
+      "platform": "win32", "workspace_root": "C:\\\\Users\\\\example",
       "tools": [{"function": {"name": "fs.read", ...}}, ...] }
     { "kind": "tool_result", "call_id": "...", "ok": true,
       "result": {...}, "elapsed_ms": 38 }

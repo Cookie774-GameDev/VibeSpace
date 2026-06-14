@@ -29,7 +29,7 @@ npx supabase secrets set APP_BASE_URL="https://vibespaceos.com"
 Stripe dashboard → Developers → Webhooks → Add endpoint:
 
 ```
-https://tipeobvisjqvpbzcpckh.supabase.co/functions/v1/stripe-webhook
+https://<your-project-ref>.supabase.co/functions/v1/stripe-webhook
 ```
 
 Select events:

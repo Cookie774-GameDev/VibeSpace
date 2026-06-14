@@ -77,8 +77,8 @@ describe('stripAnsi', () => {
     expect(stripAnsi('PS C:\\Users\\dev> [I\nnext')).toBe('PS C:\\Users\\dev> \nnext');
     expect(stripAnsi('PS C:\\Users\\dev> [0[[0[0[0[\nnext')).toBe('PS C:\\Users\\dev> \nnext');
     expect(stripAnsi('PS C:\\Users\\dev> [0[I\nnext')).toBe('PS C:\\Users\\dev> \nnext');
-    expect(stripAnsi('PS C:\\Users\\viper>]4;0;rgb:2a2a/2020/1818[0[0[')).toBe(
-      'PS C:\\Users\\viper>',
+    expect(stripAnsi('PS C:\\Users\\devuser>]4;0;rgb:2a2a/2020/1818[0[0[')).toBe(
+      'PS C:\\Users\\devuser>',
     );
   });
 });
@@ -119,10 +119,10 @@ describe('terminalRestoreText', () => {
 
   it('sanitizes mid-line OSC palette garbage attached to a PowerShell prompt', () => {
     const restored = terminalRestoreText({
-      text: 'PS C:\\Users\\viper>]4;0;rgb:2a2a/2020/1818[0[0[\nnext line',
+      text: 'PS C:\\Users\\devuser>]4;0;rgb:2a2a/2020/1818[0[0[\nnext line',
     });
 
-    expect(restored).toBe('PS C:\\Users\\viper>\r\nnext line');
+    expect(restored).toBe('PS C:\\Users\\devuser>\r\nnext line');
     expect(restored).not.toContain(']4;');
     expect(restored).not.toContain('rgb:');
   });
