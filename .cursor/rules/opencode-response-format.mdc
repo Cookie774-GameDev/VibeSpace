@@ -1,0 +1,136 @@
+---
+description: OpenCode-style scannable response format — always use for every reply
+alwaysApply: true
+---
+
+# OpenCode Response Format (STRICT)
+
+Every response MUST follow this format. No exceptions. Do not skip sections when they apply.
+
+## 1. Opening (required)
+
+Start with **one sentence** that states the outcome or answer.
+
+Then immediately add a lead-in line:
+- After doing work: `Here's what was done:`
+- After explaining: `Here's the answer:`
+- After fixing: `Here's what was fixed:`
+- After investigating: `Here's what I found:`
+
+## 2. Action summary (required when work was done)
+
+Use labeled bullets. Format:
+
+`- **Label** – detail`
+
+Rules:
+- **Label** is bold, 1–4 words, describes the category
+- Use `→` for before/after changes (e.g. `23g → 80g`)
+- Use `✓` prefix for completed checklist items
+- Max 7 bullets per section; split into sub-sections if more
+- One idea per bullet — no compound sentences
+
+Example:
+```
+- **Variant weights** – all 8 lip glaze variants updated 23g → **80g**
+- **Shipping zones** – US, CA, UK configured ✓
+- **Policies** – refund and privacy pages pushed via Admin API ✓
+```
+
+## 3. Tables (required when 2+ files, items, or comparisons)
+
+Use markdown tables. Always use these column pairs:
+
+| Situation | Columns |
+|-----------|---------|
+| File changes | `File` \| `Changes` |
+| Status overview | `Item` \| `Status` |
+| Before/after | `Item` \| `Before` \| `After` |
+| Options | `Option` \| `Pros` \| `Cons` |
+
+Keep cell text short. Wrap filenames in backticks.
+
+Example:
+```
+| File | Changes |
+|------|---------|
+| `shipping-policy.md` | Removed UK 30-day reject section |
+| `README.md` | Updated shipping links |
+```
+
+## 4. Code and commands
+
+- Put all commands, scripts, and code in fenced blocks
+- Keep explanatory prose **outside** code blocks
+- Never mix long prose inside code fences
+
+## 5. Navigation paths
+
+When pointing to UI locations, use arrow chains:
+`Settings → Shipping and delivery → Manage rates`
+
+## 6. Verify / Next steps (required when actionable)
+
+End with a short section:
+
+```
+**Verify:**
+- Step 1
+- Step 2
+```
+
+Or:
+
+```
+**Next steps:**
+- Step 1
+- Step 2
+```
+
+Max 3 items. Only include when there is something to check or do.
+
+## 7. Strict prohibitions
+
+- NO walls of text — break at 3 sentences max per paragraph
+- NO skipping the opening summary sentence
+- NO burying the answer — lead with outcome, then detail
+- NO tables with 1 row — use a bullet instead
+- NO engagement bait ("let me know if...", "happy to help...")
+- NO excessive bolding — only labels, key values, and section headers
+- NO repeating the same info in prose and table
+
+## 8. Section headers
+
+Use `##` headers only when the response has 3+ distinct sections. Keep headers short:
+- `## Changes made`
+- `## Root cause`
+- `## How to fix`
+
+## 9. Short replies
+
+Even for simple yes/no or one-line answers:
+1. One-sentence answer first
+2. Optional 1–3 bullets for detail if needed
+
+Never reply with only a single word.
+
+## 10. Example full response shape
+
+```
+Fixed the GitHub MCP auth error.
+
+Here's what was fixed:
+
+- **Root cause** – corrupt OAuth token sent as malformed Authorization header
+- **Fix** – reset GitHub MCP credentials in Cursor Settings
+
+| Item | Status |
+|------|--------|
+| Stripe MCP | Connected ✓ |
+| Supabase MCP | Connected ✓ |
+| GitHub MCP | Needs re-auth |
+
+**Verify:**
+- Open Settings → MCP → GitHub → Connect
+- Reload window, then ask "list my repos"
+```
