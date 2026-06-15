@@ -1262,6 +1262,48 @@ button { font: inherit; color: inherit; }
   font: italic 420 0.95rem var(--font-display);
   color: var(--ink-faint);
 }
+
+/* multi-platform download cards */
+.dl__grid {
+  margin-top: 2.6rem;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.1rem;
+  text-align: left;
+}
+.dl__os {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.4rem 1.3rem;
+  border-radius: var(--r-md);
+}
+.dl__os-head { display: flex; align-items: center; gap: 0.85rem; }
+.dl__os-ic {
+  width: 2rem; height: 2rem; flex: none;
+  fill: var(--terracotta);
+  filter: drop-shadow(0 4px 12px rgba(217, 119, 87, 0.45));
+}
+.dl__os-name { margin: 0; font-size: 1.15rem; }
+.dl__os-meta { margin: 0.15rem 0 0; font-size: 0.78rem; color: var(--ink-faint); }
+.dl__os .cmd {
+  width: 100%;
+  border-radius: var(--r-sm, 12px);
+  font-size: 0.74rem;
+  padding: 0.7rem 0.85rem;
+  margin-top: auto;
+}
+.dl__os-link {
+  font-size: 0.82rem;
+  color: var(--ink-dim);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.dl__os-link:hover { color: var(--terracotta-hot); }
+
+@media (max-width: 720px) {
+  .dl__grid { grid-template-columns: 1fr; }
+}
 .dl__reqs {
   list-style: none;
   margin-top: 2.2rem;
