@@ -1277,6 +1277,7 @@ button { font: inherit; color: inherit; }
   gap: 1rem;
   padding: 1.4rem 1.3rem;
   border-radius: var(--r-md);
+  min-width: 0;
 }
 .dl__os-head { display: flex; align-items: center; gap: 0.85rem; }
 .dl__os-ic {
@@ -1288,11 +1289,13 @@ button { font: inherit; color: inherit; }
 .dl__os-meta { margin: 0.15rem 0 0; font-size: 0.78rem; color: var(--ink-faint); }
 .dl__os .cmd {
   width: 100%;
+  min-width: 0;
   border-radius: var(--r-sm, 12px);
   font-size: 0.74rem;
   padding: 0.7rem 0.85rem;
   margin-top: auto;
 }
+.dl__os .cmd__text { min-width: 0; }
 .dl__os-link {
   font-size: 0.82rem;
   color: var(--ink-dim);
