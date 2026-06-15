@@ -7,6 +7,13 @@ import { GOOGLE_DEFAULT_MODEL } from './providers/google';
 import { GROQ_DEFAULT_MODEL } from './providers/groq';
 import { OLLAMA_DEFAULT_MODEL } from './providers/ollama';
 import { OPENAI_DEFAULT_MODEL } from './providers/openai';
+import {
+  OPENROUTER_DEFAULT_MODEL,
+  DEEPSEEK_DEFAULT_MODEL,
+  MISTRAL_DEFAULT_MODEL,
+  TOGETHER_DEFAULT_MODEL,
+  XAI_DEFAULT_MODEL,
+} from './providers/compatibleInstances';
 
 export interface ModelOption {
   provider: ProviderId;
@@ -19,6 +26,11 @@ export const REAL_CHAT_PROVIDERS: readonly ProviderId[] = [
   'groq',
   'openai',
   'anthropic',
+  'openrouter',
+  'deepseek',
+  'mistral',
+  'together',
+  'xai',
   'ollama',
   'local',
   'mock',
@@ -29,6 +41,11 @@ const CLOUD_KEY_PROVIDERS: readonly ProviderId[] = [
   'groq',
   'openai',
   'anthropic',
+  'openrouter',
+  'deepseek',
+  'mistral',
+  'together',
+  'xai',
 ];
 
 export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
@@ -43,7 +60,13 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   { provider: 'openai', id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
   { provider: 'anthropic', id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude 3.5 Sonnet' },
   { provider: 'anthropic', id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
-  { provider: 'deepseek', id: 'deepseek-chat', label: 'DeepSeek V4 Flash' },
+  { provider: 'deepseek', id: 'deepseek-chat', label: 'DeepSeek V3 Chat' },
+  { provider: 'deepseek', id: 'deepseek-reasoner', label: 'DeepSeek R1' },
+  { provider: 'openrouter', id: OPENROUTER_DEFAULT_MODEL, label: 'Claude 3.5 Sonnet (OR)' },
+  { provider: 'openrouter', id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (OR)' },
+  { provider: 'mistral', id: MISTRAL_DEFAULT_MODEL, label: 'Mistral Large' },
+  { provider: 'together', id: TOGETHER_DEFAULT_MODEL, label: 'Llama 3.3 70B (Together)' },
+  { provider: 'xai', id: XAI_DEFAULT_MODEL, label: 'Grok 2' },
   { provider: 'mock', id: 'mock-default', label: 'Mock demo' },
 ];
 
@@ -92,6 +115,18 @@ function planIncludesHostedChat(plan: PlanId): boolean {
   return plan !== 'free';
 }
 
+/** Subscription-hosted providers available via `stack-complete` edge proxy. */
+const HOSTED_STACK_PROVIDERS: ProviderId[] = [
+  'google',
+  'deepseek',
+  'openai',
+  'anthropic',
+  'groq',
+  'mistral',
+  'openrouter',
+  'xai',
+];
+
 /** Providers the user can actually chat with right now (keys, local models, or paid hosted). */
 export function getAccessibleProviders(
   apiKeys: Partial<Record<ProviderId, string>>,
@@ -107,7 +142,7 @@ export function getAccessibleProviders(
     if (hasCloudApiKey(provider, apiKeys)) providers.push(provider);
   }
   if (planIncludesHostedChat(plan)) {
-    for (const provider of ['google', 'deepseek'] as const) {
+    for (const provider of HOSTED_STACK_PROVIDERS) {
       if (!providers.includes(provider)) providers.push(provider);
     }
   }
@@ -179,7 +214,15 @@ export function defaultModelForProvider(provider: ProviderId, localModel = OLLAM
     case 'groq':
       return GROQ_DEFAULT_MODEL;
     case 'deepseek':
-      return 'deepseek-chat';
+      return DEEPSEEK_DEFAULT_MODEL;
+    case 'openrouter':
+      return OPENROUTER_DEFAULT_MODEL;
+    case 'mistral':
+      return MISTRAL_DEFAULT_MODEL;
+    case 'together':
+      return TOGETHER_DEFAULT_MODEL;
+    case 'xai':
+      return XAI_DEFAULT_MODEL;
     case 'ollama':
     case 'local':
       if (localModelsAvailable()) {

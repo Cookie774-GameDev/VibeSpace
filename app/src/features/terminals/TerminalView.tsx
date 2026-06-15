@@ -48,7 +48,9 @@ import { useTerminalTranscriptStore } from './transcriptStore';
 import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
 import {
   buildAgentSpawnEnv,
+  buildTerminalAgentInjectionMessage,
   deliverAgentTerminalContext,
+  detectInteractiveAgentCli,
   resolveAgentForSlug,
 } from './agentPromptDelivery';
 import {
@@ -64,6 +66,7 @@ import {
 } from './terminalClearRegistry';
 import { TERMINAL_CLEAR_SUPPRESS_MS } from './terminalClear';
 import { createWebglDisposeTracker } from './terminalDispose';
+import { shouldSendTerminalResize, type TerminalGridSize } from './terminalGeometry';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
@@ -174,6 +177,8 @@ const JARVIS_THEME = {
   brightWhite: '#fff8ef',
 };
 
+const CURRENT_INPUT_FLUSH_MS = 160;
+
 function pickTheme() {
   if (typeof document === 'undefined') return DARK_THEME;
   const t = document.documentElement.getAttribute('data-theme');
@@ -184,6 +189,12 @@ function pickTheme() {
 
 function commandToInput(command: string): string {
   return command.endsWith('\n') || command.endsWith('\r') ? command : `${command}\r`;
+}
+
+function inputBeforeSubmit(data: string, currentInput: string): string {
+  const submitIdx = data.search(/[\r\n]/);
+  if (submitIdx === -1) return '';
+  return `${currentInput}${data.slice(0, submitIdx)}`.trim();
 }
 
 export function TerminalView({
@@ -222,6 +233,9 @@ export function TerminalView({
   const dictatingRef = useRef(false);
   const ignoreClearsUntilRef = useRef<number>(0);
   const suppressOutputUntilRef = useRef<number>(0);
+  const lastResizeSentRef = useRef<TerminalGridSize | null>(null);
+  const currentInputRef = useRef('');
+  const currentInputFlushTimerRef = useRef<number | null>(null);
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(existingSessionId ?? null);
   const [isFocused, setIsFocused] = useState(false);
@@ -278,6 +292,22 @@ export function TerminalView({
     setPowerUpTitle(title);
     if (powerUpTimerRef.current) clearTimeout(powerUpTimerRef.current);
     powerUpTimerRef.current = setTimeout(() => setPowerUpTitle(null), 1500);
+  };
+
+  const flushCurrentInput = () => {
+    const sid = sessionRef.current;
+    if (!sid) return;
+    useTerminalTranscriptStore.getState().setCurrentInput(sid, currentInputRef.current);
+  };
+
+  const scheduleCurrentInputFlush = () => {
+    if (currentInputFlushTimerRef.current != null) {
+      window.clearTimeout(currentInputFlushTimerRef.current);
+    }
+    currentInputFlushTimerRef.current = window.setTimeout(() => {
+      currentInputFlushTimerRef.current = null;
+      flushCurrentInput();
+    }, CURRENT_INPUT_FLUSH_MS);
   };
 
   // Re-tag the live transcript whenever the parent flips agentSlug. This
@@ -398,6 +428,9 @@ export function TerminalView({
         } catch {
           return;
         }
+        const nextSize = { rows: t.rows, cols: t.cols };
+        if (!shouldSendTerminalResize(lastResizeSentRef.current, nextSize)) return;
+        lastResizeSentRef.current = nextSize;
         invoke('terminal_resize', {
           sessionId: sid,
           rows: t.rows,
@@ -558,11 +591,14 @@ export function TerminalView({
         // Trace currently typed command prompt input
         const store = useTerminalTranscriptStore.getState();
         const currentSession = store.sessions[sid];
-        let currentInput = currentSession?.currentInput ?? '';
+        let currentInput = currentInputRef.current || currentSession?.currentInput || '';
+        const submittedInput = inputBeforeSubmit(data, currentInput);
+        let shouldFlushInputNow = false;
         for (let i = 0; i < data.length; i++) {
           const char = data[i];
           if (char === '\r' || char === '\n' || char === '\x03') {
             currentInput = '';
+            shouldFlushInputNow = true;
           } else if (char === '\x7f' || char === '\x08') {
             currentInput = currentInput.slice(0, -1);
           } else if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
@@ -570,7 +606,48 @@ export function TerminalView({
           }
         }
 
-        useTerminalTranscriptStore.getState().setCurrentInput(sid, currentInput);
+        currentInputRef.current = currentInput;
+        if (shouldFlushInputNow) {
+          if (currentInputFlushTimerRef.current != null) {
+            window.clearTimeout(currentInputFlushTimerRef.current);
+            currentInputFlushTimerRef.current = null;
+          }
+          flushCurrentInput();
+        } else {
+          scheduleCurrentInputFlush();
+        }
+
+        const slug = agentSlugRef.current;
+        if (
+          submittedInput &&
+          slug &&
+          detectInteractiveAgentCli({
+            command: currentSession?.command ?? startupCommand ?? command,
+            startupCommand,
+            transcript: currentSession?.text ?? '',
+          })
+        ) {
+          buildTerminalAgentInjectionMessage({
+            agentSlug: slug,
+            userInput: submittedInput,
+            cwd: cwdRef.current,
+            projectId: projectId ?? null,
+            projectName: projectName ?? null,
+            excludeSessionId: sid,
+          })
+            .then((message) =>
+              invoke('terminal_write', {
+                sessionId: sid,
+                data: `\x15${commandToInput(message)}`,
+              }),
+            )
+            .catch(() =>
+              invoke('terminal_write', { sessionId: sid, data }).catch(() => {
+                /* backend probably gone */
+              }),
+            );
+          return;
+        }
 
         invoke('terminal_write', { sessionId: sid, data }).catch(() => {
           /* ignore: backend probably gone */
@@ -896,6 +973,11 @@ export function TerminalView({
     return () => {
       cancelled = true;
       if (rafToken != null) cancelAnimationFrame(rafToken);
+      if (currentInputFlushTimerRef.current != null) {
+        window.clearTimeout(currentInputFlushTimerRef.current);
+        currentInputFlushTimerRef.current = null;
+      }
+      flushCurrentInput();
       if (outputRafToken != null) {
         cancelAnimationFrame(outputRafToken);
         flushTerminalOutput();
@@ -978,6 +1060,9 @@ export function TerminalView({
       } catch {
         return;
       }
+      const nextSize = { rows: term2.rows, cols: term2.cols };
+      if (!shouldSendTerminalResize(lastResizeSentRef.current, nextSize)) return;
+      lastResizeSentRef.current = nextSize;
       invoke('terminal_resize', {
         sessionId: sid,
         rows: term2.rows,

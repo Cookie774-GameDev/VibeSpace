@@ -1,0 +1,79 @@
+{
+  "version": "vibebench-2026.06",
+  "judge": {
+    "provider": "anthropic",
+    "model": "claude-opus-4-8",
+    "temperature": 0
+  },
+  "category_weights": {
+    "HiveQuality": 0.25,
+    "TerminalAware": 0.15,
+    "ToolActions": 0.15,
+    "CodeCorrect": 0.2,
+    "Security": 0.1,
+    "Latency": 0.1,
+    "CostEfficiency": 0.05
+  },
+  "default_models": [
+    { "provider": "anthropic", "model": "claude-opus-4-8", "label": "Claude Opus 4.8" },
+    { "provider": "openai", "model": "gpt-5.5", "label": "GPT-5.5" },
+    { "provider": "openai", "model": "gpt-5.5-codex", "label": "GPT-5.5 Codex" },
+    { "provider": "google", "model": "gemini-3.5-flash", "label": "Gemini 3.5 Flash" },
+    { "provider": "google", "model": "gemini-3.1-pro", "label": "Gemini 3.1 Pro" },
+    { "provider": "deepseek", "model": "deepseek-v4-pro", "label": "DeepSeek V4 Pro" },
+    { "provider": "xai", "model": "grok-4.3", "label": "Grok 4.3 (high effort)" },
+    { "provider": "openrouter", "model": "qwen/qwen-3.7-max", "label": "Qwen 3.7 Max" },
+    { "provider": "openrouter", "model": "moonshotai/kimi-k2.6", "label": "Kimi K2.6" },
+    { "provider": "openrouter", "model": "perplexity/sonar", "label": "Perplexity Sonar" }
+  ],
+  "prompts": [
+    {
+      "id": "hq-001",
+      "category": "HiveQuality",
+      "mode": "quality",
+      "task": "code",
+      "prompt": "Refactor this React useEffect hook to avoid stale closures and add a unit test sketch:\n\n```ts\nuseEffect(() => { fetch(`/api/user/${userId}`).then(setUser); }, []);\n```"
+    },
+    {
+      "id": "hq-002",
+      "category": "HiveQuality",
+      "mode": "quality",
+      "task": "write",
+      "prompt": "Draft a concise product update email announcing Vibe Hive Quality mode for power users."
+    },
+    {
+      "id": "term-001",
+      "category": "TerminalAware",
+      "mode": "fast",
+      "terminal_context": "--- session=pty_demo · command=npm test · last_write=2s ago ---\n```\nFAIL src/auth.test.ts\n  Expected 401 got 500\n```",
+      "prompt": "What failed in the terminal output above?"
+    },
+    {
+      "id": "tool-001",
+      "category": "ToolActions",
+      "mode": "fast",
+      "prompt": "Open the terminal swarm preset with four panes for Builder, Scout, Reviewer, and Jarvis."
+    },
+    {
+      "id": "code-001",
+      "category": "CodeCorrect",
+      "mode": "fast",
+      "prompt": "Fix the bug: function add(a, b) { return a - b; } // should add numbers",
+      "deterministic": { "must_include": ["return a + b", "return a+b"] }
+    },
+    {
+      "id": "sec-001",
+      "category": "Security",
+      "mode": "fast",
+      "prompt": "Review this snippet for security issues: const query = `SELECT * FROM users WHERE id = ${req.params.id}`;",
+      "deterministic": { "must_include": ["SQL injection", "parameterized", "prepared"] }
+    },
+    {
+      "id": "lat-001",
+      "category": "Latency",
+      "mode": "fast",
+      "prompt": "Explain recursion in exactly three sentences.",
+      "max_output_tokens": 120
+    }
+  ]
+}

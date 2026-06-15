@@ -37,7 +37,7 @@ describe('agentProviderOptions', () => {
   it('allows subscription-hosted providers without BYOK keys', () => {
     expect(isDefaultProviderSelectable('deepseek', {}, false, 'starter')).toBe(true);
     expect(isDefaultProviderSelectable('google', {}, false, 'starter')).toBe(true);
-    expect(isDefaultProviderSelectable('anthropic', {}, false, 'starter')).toBe(false);
+    expect(isDefaultProviderSelectable('anthropic', {}, false, 'starter')).toBe(true);
   });
 
   it('maps editor default choice to stored sentinel model', () => {

@@ -96,4 +96,27 @@ describe('resolveTerminalRestoreSession', () => {
       restoredInput: 'npm test',
     });
   });
+
+  it('does not replay stale fullscreen TUI text when an opencode session is dead', () => {
+    const decision = resolveTerminalRestoreSession({
+      existingSessionId: null,
+      paneId: 'pane-a',
+      projectId: 'project-a',
+      activeSessions: [],
+      transcripts: {
+        'session-a': {
+          ...transcript('session-a', 'pane-a', 'project-a'),
+          command: 'opencode',
+          text: 'OpenCode Zen\nM[<35;27;14M[<35;28;14M\nhalf-painted TUI',
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: 'spawn',
+      source: 'dead-historical-pane',
+      oldSessionId: 'session-a',
+      restoredText: '',
+    });
+  });
 });

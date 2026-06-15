@@ -84,8 +84,8 @@ describe('AI provider routing', () => {
 
   it('does not route unsupported advertised placeholders as real AI', () => {
     useAuthStore.setState({
-      apiKeys: { openrouter: 'sk-test' },
-      defaultProvider: 'openrouter',
+      apiKeys: { perplexity: 'sk-test' },
+      defaultProvider: 'perplexity',
     });
 
     expect(() => resolveProviderAndModel(defaultProviderAgent)).toThrow(NoModelSelectedError);

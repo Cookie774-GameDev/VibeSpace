@@ -28,7 +28,7 @@ const API_VERSION = '2023-06-01';
 
 /** Default Anthropic model used when an agent is `mock-default`-flagged but the
  *  user has an Anthropic key. Centralised so the router and provider agree. */
-export const ANTHROPIC_DEFAULT_MODEL = 'claude-3-5-sonnet-20241022';
+export const ANTHROPIC_DEFAULT_MODEL = 'claude-sonnet-4-20250514';
 
 /**
  * Map our flat LLMMessage list to Anthropic's `system` + `messages` schema.

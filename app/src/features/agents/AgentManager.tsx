@@ -31,7 +31,7 @@ import {
   getAgentEditorProviderOptions,
   type AgentEditorProviderChoice,
 } from '@/lib/ai/agentProviderOptions';
-import { getAccessibleModelOptions } from '@/lib/ai/models';
+import { getAccessibleModelOptions, useOllamaModelOptions, syncDiscoveredOllamaModels } from '@/lib/ai/models';
 
 /**
  * Tiny role-pill for swarm agents (Scout / Builder / Reviewer).
@@ -134,10 +134,26 @@ export function AgentManager() {
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const plan = useAuthStore((s) => s.plan);
   const defaultProvider = useAuthStore((s) => s.defaultProvider);
+  const ollamaOptions = useOllamaModelOptions();
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void import('@/lib/ai/providers/ollama').then(({ listOllamaModels, isOllamaReachable }) =>
+      isOllamaReachable().then((connected) => {
+        if (!connected || cancelled) return;
+        return listOllamaModels().then((models) => {
+          if (!cancelled) syncDiscoveredOllamaModels(models);
+        });
+      }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const providerOptions = React.useMemo(
     () => getAgentEditorProviderOptions({ apiKeys, offlineMode, plan, defaultProvider }),
-    [apiKeys, offlineMode, plan, defaultProvider],
+    [apiKeys, offlineMode, plan, defaultProvider, ollamaOptions],
   );
 
   const modelOptions = React.useMemo(() => {
@@ -149,7 +165,7 @@ export function AgentManager() {
       useAuthStore.getState().defaultLocalModel,
       plan,
     );
-  }, [draft, apiKeys, offlineMode, plan]);
+  }, [draft, apiKeys, offlineMode, plan, ollamaOptions]);
 
   const dirty = !!(draft && selectedAgent && draftDiffers(draft, selectedAgent));
 
@@ -417,9 +433,11 @@ export function AgentManager() {
                   ) : (
                     <p
                       id="agent-model"
-                      className="flex h-8 items-center rounded-md border border-dashed border-border px-2 text-secondary text-muted-foreground"
+                      className="flex min-h-8 items-center rounded-md border border-dashed border-accent-copper/35 bg-accent-copper/5 px-2 text-secondary text-muted-foreground"
                     >
-                      No models available — add a key or install a local model
+                      {ollamaOptions.length > 0
+                        ? 'Scanning local models…'
+                        : 'No models available — open Settings → Local Models to download one'}
                     </p>
                   )}
                 </div>

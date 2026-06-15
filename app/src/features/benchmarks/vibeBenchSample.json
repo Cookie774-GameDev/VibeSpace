@@ -1,0 +1,39 @@
+{
+  "run_id": "sample-vibebench-2026-06",
+  "suite_version": "vibebench-2026.06",
+  "started_at": "2026-06-15T12:00:00.000Z",
+  "models": [
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "label": "Claude Opus 4.8",
+      "vibe_score": 90.4,
+      "category_scores": { "HiveQuality": 93, "TerminalAware": 90, "ToolActions": 88, "CodeCorrect": 96, "Security": 92, "Latency": 70, "CostEfficiency": 65 },
+      "cost_usd": 0.52
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "label": "GPT-5.5",
+      "vibe_score": 88.7,
+      "category_scores": { "HiveQuality": 90, "TerminalAware": 95, "ToolActions": 94, "CodeCorrect": 91, "Security": 88, "Latency": 68, "CostEfficiency": 62 },
+      "cost_usd": 0.48
+    },
+    {
+      "provider": "google",
+      "model": "gemini-3.5-flash",
+      "label": "Gemini 3.5 Flash",
+      "vibe_score": 86.2,
+      "category_scores": { "HiveQuality": 88, "TerminalAware": 84, "ToolActions": 90, "CodeCorrect": 87, "Security": 85, "Latency": 94, "CostEfficiency": 90 },
+      "cost_usd": 0.14
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "label": "DeepSeek V4 Pro",
+      "vibe_score": 85.8,
+      "category_scores": { "HiveQuality": 86, "TerminalAware": 82, "ToolActions": 78, "CodeCorrect": 93, "Security": 84, "Latency": 88, "CostEfficiency": 96 },
+      "cost_usd": 0.06
+    }
+  ]
+}

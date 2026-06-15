@@ -81,6 +81,20 @@ describe('stripAnsi', () => {
       'PS C:\\Users\\devuser>',
     );
   });
+
+  it('removes screenshot-style orphan mouse report fragments from restored text', () => {
+    const input = 'prompt\nM[<35;27;14M[<35;28;14M[<35;29;14M\nready';
+    expect(stripAnsi(input)).toBe('prompt\n\nready');
+  });
+
+  it('removes prompt-line palette/control garbage without stripping normal commands', () => {
+    expect(stripAnsi('PS C:\\Users\\viper> [0[I[0[feffef[0[0[\n')).toBe(
+      'PS C:\\Users\\viper> \n',
+    );
+    expect(stripAnsi('PS C:\\Users\\viper> npm test [0]\n')).toBe(
+      'PS C:\\Users\\viper> npm test [0]\n',
+    );
+  });
 });
 
 describe('terminalRestoreText', () => {
@@ -125,6 +139,33 @@ describe('terminalRestoreText', () => {
     expect(restored).toBe('PS C:\\Users\\devuser>\r\nnext line');
     expect(restored).not.toContain(']4;');
     expect(restored).not.toContain('rgb:');
+  });
+
+  it('sanitizes screenshot-style mouse reports and prompt garbage before replay', () => {
+    const restored = terminalRestoreText({
+      text: [
+        'PS C:\\Users\\viper> [0[I[0[feffef[0[0[',
+        'M[<35;27;14M[<35;28;14M[<35;29;14M',
+        'PS C:\\Users\\viper> npm test [0]',
+      ].join('\n'),
+    });
+
+    expect(restored).toBe(
+      'PS C:\\Users\\viper> \r\n\r\nPS C:\\Users\\viper> npm test [0]',
+    );
+    expect(restored).not.toContain('[<35;');
+    expect(restored).not.toContain('[0[I');
+    expect(restored).not.toContain('feffef');
+  });
+
+  it('sanitizes orphan palette payload text after a restored prompt', () => {
+    const restored = terminalRestoreText({
+      text: 'PS C:\\Users\\viper> efeffefeffefefeffefefeffef[0[I[0\nready',
+    });
+
+    expect(restored).toBe('PS C:\\Users\\viper> \r\nready');
+    expect(restored).not.toContain('efeffe');
+    expect(restored).not.toContain('[0[I');
   });
 
   it('sanitizes legacy raw-only transcripts and caps replayed lines', () => {
@@ -222,6 +263,23 @@ describe('transcript store persistence performance', () => {
     expect(persisted).toContain('pty_debounce');
     expect(persisted).toContain('first\\nsecond\\n');
   });
+
+  it('does not mark a session active when only the draft input changes', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_input_activity', { agentSlug: 'builder', projectId: 'proj_a' });
+    store.appendOutput('pty_input_activity', 'prompt\n');
+    const before = getSessionTranscript('pty_input_activity')?.lastWriteAt;
+
+    vi.setSystemTime(20_000);
+    store.setCurrentInput('pty_input_activity', 'typing but no PTY output yet');
+
+    expect(getSessionTranscript('pty_input_activity')?.currentInput).toBe(
+      'typing but no PTY output yet',
+    );
+    expect(getSessionTranscript('pty_input_activity')?.lastWriteAt).toBe(before);
+  });
 });
 
 describe('transcript store — append + retrieve', () => {
@@ -235,6 +293,16 @@ describe('transcript store — append + retrieve', () => {
     expect(snap?.agentSlug).toBe('builder');
     expect(snap?.command).toBe('claude');
     expect(snap?.bytesSeen).toBeGreaterThan(0);
+  });
+
+  it('does not retain new raw escape buffers for persisted restore', () => {
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_raw_hot', { agentSlug: null, command: 'opencode' });
+    store.appendOutput('pty_raw_hot', '\x1B[?1049h\x1B[35mOpenCode Zen\x1B[0m\n');
+
+    const snap = getSessionTranscript('pty_raw_hot');
+    expect(snap?.text).toBe('OpenCode Zen\n');
+    expect(snap?.rawText).toBe('');
   });
 
   it('appends sequential output in order', () => {
@@ -484,6 +552,23 @@ describe('transcript persistence durability', () => {
     const after = window.localStorage.getItem(KEY);
     expect(after).not.toBeNull();
     expect(deserializeTranscriptSessions(after)?.pty_v?.text).toBe('precious history\n');
+  });
+
+  it('flushes pending transcript output when the app is hidden', () => {
+    vi.useFakeTimers();
+    const store = useTerminalTranscriptStore.getState();
+    store.registerSession('pty_hidden', { agentSlug: null });
+    store.appendOutput('pty_hidden', 'visible before close\n');
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    const persisted = deserializeTranscriptSessions(window.localStorage.getItem(KEY));
+    expect(persisted?.pty_hidden?.text).toBe('visible before close\n');
   });
 
   it('persists an intentional per-session clear (entry kept, transcript emptied)', () => {

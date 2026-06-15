@@ -39,6 +39,9 @@ import {
   type BenchmarkRow,
 } from './benchmarkData';
 import { BarChart } from './BarChart';
+import { VibeBenchPanel } from './VibeBenchPanel';
+
+type BenchmarkTab = 'external' | 'vibebench';
 
 type SortKey = 'arena_score' | 'cost' | 'context';
 
@@ -67,6 +70,7 @@ function licenseSeverity(row: BenchmarkRow): 'low' | 'med' | 'high' | 'info' {
 }
 
 export function BenchmarksPage() {
+  const [tab, setTab] = React.useState<BenchmarkTab>('external');
   const [rows, setRows] = React.useState<BenchmarkRow[]>([]);
   const [fromSnapshot, setFromSnapshot] = React.useState(false);
   const [fetchedAt, setFetchedAt] = React.useState<number | null>(null);
@@ -270,14 +274,38 @@ export function BenchmarksPage() {
             <h1 className="font-display text-foreground text-4xl font-semibold leading-tight">
               Benchmarks
             </h1>
+            <div className="flex gap-1 mt-1">
+              <button
+                type="button"
+                onClick={() => setTab('external')}
+                className={cn(
+                  'px-3 py-1 rounded-md text-secondary text-sm transition-colors',
+                  tab === 'external' ? 'bg-elevated text-foreground font-medium' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                External (LMArena)
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('vibebench')}
+                className={cn(
+                  'px-3 py-1 rounded-md text-secondary text-sm transition-colors',
+                  tab === 'vibebench' ? 'bg-elevated text-foreground font-medium' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                VibeBench
+              </button>
+            </div>
             <p className="text-secondary text-muted-foreground max-w-xl">
-              Free public leaderboards. BYOK to run any of them.
+              {tab === 'external'
+                ? 'Free public leaderboards. BYOK to run any of them.'
+                : 'VibeSpace vibe-coding benchmark — Vibe Hive, terminals, tools.'}
             </p>
           </div>
           <Button
             variant="outline"
             onClick={handleRefresh}
-            disabled={refreshing || loading}
+            disabled={refreshing || loading || tab === 'vibebench'}
             className={cn(
               'shrink-0',
               refreshing &&
@@ -291,6 +319,10 @@ export function BenchmarksPage() {
           </Button>
         </header>
 
+        {tab === 'vibebench' ? (
+          <VibeBenchPanel />
+        ) : (
+        <>
         {/* Snapshot warning panel — full width, only when we're on fallback */}
         {fromSnapshot && !loading && (
           <div className="cozy-card !py-3 !px-4 flex items-start gap-3 border-warning/40">
@@ -485,12 +517,16 @@ export function BenchmarksPage() {
             </table>
           </div>
         </section>
+        </>
+        )}
       </div>
 
+      {tab === 'external' && (
       <DetailDrawer
         row={selectedRow}
         onClose={() => setSelectedModel(null)}
       />
+      )}
     </div>
   );
 }

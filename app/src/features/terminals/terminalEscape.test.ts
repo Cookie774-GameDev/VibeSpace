@@ -48,6 +48,16 @@ describe('stripOrphanEscapeFragments', () => {
     const input = 'prompt\n[<35;43;16M[<35;34;14M\nready';
     expect(stripOrphanEscapeFragments(input)).toBe('prompt\n\nready');
   });
+
+  it('removes screenshot-style mouse report fragments that lost the opening bracket', () => {
+    const input = 'prompt\nM[<35;27;14M[<35;28;14M[<35;29;14M\nready';
+    expect(stripOrphanEscapeFragments(input)).toBe('prompt\n\nready');
+  });
+
+  it('removes orphan palette payload text after a restored PowerShell prompt', () => {
+    const input = 'PS C:\\Users\\viper> efeffefeffefefeffefefeffef[0[I[0';
+    expect(stripOrphanEscapeFragments(input)).toBe('PS C:\\Users\\viper> ');
+  });
 });
 
 describe('filterStartupTerminalOutput', () => {

@@ -20,11 +20,16 @@ describe('chat model catalog', () => {
       'groq',
       'openai',
       'anthropic',
+      'openrouter',
+      'deepseek',
+      'mistral',
+      'together',
+      'xai',
       'ollama',
       'local',
       'mock',
     ]);
-    expect(isRealChatProvider('openrouter')).toBe(false);
+    expect(isRealChatProvider('openrouter')).toBe(true);
   });
 
   it('filters chat models to installed local models and configured API keys', () => {
@@ -60,12 +65,19 @@ describe('chat model catalog', () => {
     expect(getAccessibleProviders(apiKeys, false, 'starter')).toEqual([
       'google',
       'deepseek',
+      'openai',
+      'anthropic',
+      'groq',
+      'mistral',
+      'openrouter',
+      'xai',
       'mock',
       'ollama',
       'local',
     ]);
     expect(getAccessibleModelOptions('deepseek', apiKeys, false, 'llama3.2', 'starter')).toEqual([
-      { provider: 'deepseek', id: 'deepseek-chat', label: 'DeepSeek V4 Flash' },
+      { provider: 'deepseek', id: 'deepseek-chat', label: 'DeepSeek V3 Chat' },
+      { provider: 'deepseek', id: 'deepseek-reasoner', label: 'DeepSeek R1' },
     ]);
   });
 });

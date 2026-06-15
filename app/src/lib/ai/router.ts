@@ -23,6 +23,13 @@ import { openaiProvider } from './providers/openai';
 import { googleProvider } from './providers/google';
 import { groqProvider } from './providers/groq';
 import { ollamaProvider, OLLAMA_DEFAULT_MODEL } from './providers/ollama';
+import {
+  openrouterProvider,
+  deepseekProvider,
+  mistralProvider,
+  togetherProvider,
+  xaiProvider,
+} from './providers/compatibleInstances';
 import { defaultModelForProvider, getDiscoveredOllamaModels, isRealChatProvider } from './models';
 import {
   agentUsesDefaultProvider,
@@ -91,12 +98,11 @@ const providers: Record<ProviderId, LLMProvider> = {
   // 'local' aliases the real Ollama adapter so an agent pinned to the
   // generic 'local' provider also runs against the user's local daemon.
   local: ollamaProvider,
-  // V2 — placeholder routing. Saved keys persist; runs go through mock.
-  xai: mockProvider,
-  openrouter: mockProvider,
-  deepseek: mockProvider,
-  mistral: mockProvider,
-  together: mockProvider,
+  xai: xaiProvider,
+  openrouter: openrouterProvider,
+  deepseek: deepseekProvider,
+  mistral: mistralProvider,
+  together: togetherProvider,
   // Local model daemon (no key, no internet). Real adapter.
   ollama: ollamaProvider,
   // V3 — placeholder routing. Saved keys persist; runs go through mock.

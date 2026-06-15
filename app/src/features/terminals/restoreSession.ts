@@ -61,6 +61,19 @@ function findHistoricalPaneTranscript(
   return matches[0] ?? null;
 }
 
+const INTERACTIVE_TUI_COMMAND_RE =
+  /\b(opencode|open-code|claude|codex|gemini|cursor-agent|cline|aider|goose|qwen|openai)\b/i;
+
+function restoredTextForDeadSession(
+  session: SessionTranscript | null | undefined,
+): string {
+  if (!session) return '';
+  if (session.command && INTERACTIVE_TUI_COMMAND_RE.test(session.command)) {
+    return '';
+  }
+  return terminalRestoreText(session);
+}
+
 export function resolveTerminalRestoreSession({
   existingSessionId,
   paneId,
@@ -83,7 +96,7 @@ export function resolveTerminalRestoreSession({
     const oldSession = transcripts[existingSessionId];
     return {
       kind: 'spawn',
-      restoredText: terminalRestoreText(oldSession),
+      restoredText: restoredTextForDeadSession(oldSession),
       restoredInput: oldSession?.currentInput ?? '',
       oldSessionId: existingSessionId,
       source: 'dead-existing-session',
@@ -108,7 +121,7 @@ export function resolveTerminalRestoreSession({
 
       return {
         kind: 'spawn',
-        restoredText: terminalRestoreText(historicalSession),
+        restoredText: restoredTextForDeadSession(historicalSession),
         restoredInput: historicalSession.currentInput ?? '',
         oldSessionId: historicalSession.sessionId,
         source: 'dead-historical-pane',

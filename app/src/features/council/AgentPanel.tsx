@@ -233,5 +233,11 @@ function MessagePart({ part }: { part: Part }): ReactElement {
           action: {part.action_id} ({part.status})
         </Badge>
       );
+    default:
+      return (
+        <Badge variant="outline" className="font-mono">
+          unsupported part
+        </Badge>
+      );
   }
 }

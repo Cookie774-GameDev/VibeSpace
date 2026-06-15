@@ -1,0 +1,40 @@
+{
+  "run_id": "sample-vibebench-2026-06",
+  "suite_version": "vibebench-2026.06",
+  "started_at": "2026-06-02T12:00:00.000Z",
+  "finished_at": "2026-06-02T12:45:00.000Z",
+  "models": [
+    {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "label": "Claude Sonnet 4",
+      "vibe_score": 87.4,
+      "category_scores": { "HiveQuality": 91, "TerminalAware": 85, "ToolActions": 78, "CodeCorrect": 88, "Security": 90, "Latency": 82, "CostEfficiency": 72 },
+      "cost_usd": 0.42
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "label": "GPT-4o",
+      "vibe_score": 85.1,
+      "category_scores": { "HiveQuality": 89, "TerminalAware": 83, "ToolActions": 80, "CodeCorrect": 86, "Security": 88, "Latency": 79, "CostEfficiency": 68 },
+      "cost_usd": 0.38
+    },
+    {
+      "provider": "google",
+      "model": "gemini-2.5-flash",
+      "label": "Gemini 2.5 Flash",
+      "vibe_score": 81.6,
+      "category_scores": { "HiveQuality": 84, "TerminalAware": 80, "ToolActions": 75, "CodeCorrect": 82, "Security": 85, "Latency": 92, "CostEfficiency": 88 },
+      "cost_usd": 0.12
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-reasoner",
+      "label": "DeepSeek R1",
+      "vibe_score": 83.2,
+      "category_scores": { "HiveQuality": 86, "TerminalAware": 78, "ToolActions": 72, "CodeCorrect": 91, "Security": 84, "Latency": 74, "CostEfficiency": 95 },
+      "cost_usd": 0.08
+    }
+  ]
+}

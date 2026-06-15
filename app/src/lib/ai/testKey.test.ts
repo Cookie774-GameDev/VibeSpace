@@ -168,13 +168,20 @@ describe('testProviderKey', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('returns unsupported for adapters without real validation', async () => {
-      for (const id of ['xai', 'openrouter', 'deepseek', 'cohere'] as const) {
+    it('validates OpenAI-compatible adapters with real endpoints', async () => {
+      for (const id of ['xai', 'openrouter', 'deepseek'] as const) {
+        fetchMock.mockResolvedValueOnce(okResponse({ data: [] }));
         const result = await testProviderKey(id, 'something');
-        expect(result.kind).toBe('unsupported');
+        expect(result.kind).toBe('ok');
         expect(result.provider).toBe(id);
       }
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('returns unsupported for adapters without real validation', async () => {
+      const result = await testProviderKey('cohere', 'something');
+      expect(result.kind).toBe('unsupported');
+      expect(result.provider).toBe('cohere');
     });
   });
 });

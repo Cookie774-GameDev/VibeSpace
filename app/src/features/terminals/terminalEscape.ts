@@ -139,10 +139,14 @@ export function stripOrphanEscapeFragments(data: string): string {
   return data
     .replace(/(^|[\r\n])(?:\]4;|\]10;|\]11;|\]12;)[^\r\n\x07]*(?:\x07)?/g, '$1')
     .replace(
+      /(>[^\S\r\n]*)(?=(?:[a-f0-9]{2,}|\[0|\[I){4,}(?:[^\w\r\n]|$))(?:[a-f0-9]+|\[0|\[I|\[)+[^\r\n]*(?=$|[\r\n])/gim,
+      '$1',
+    )
+    .replace(
       /(>[^\S\r\n]*)((?:\]4;|\]10;|\]11;|\]12;)[^\r\n\x07]*(?:\x07)?|(?:\[0|\[I|\[<)[^\r\n]*)(?=\s*$|[\r\n])/gm,
       '$1',
     )
-    .replace(/(?:^|[\r\n])(?:\[<[\d;]+[Mm])+/g, '\n');
+    .replace(/(?:^|[\r\n])(?:M?\[<[\d;]+[Mm])+/g, '\n');
 }
 
 /** Apply startup guards to a fully reassembled PTY chunk. */

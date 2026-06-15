@@ -317,6 +317,36 @@ async function testOllama(
  * server endpoint). Empty values map to `unconfigured` for every other
  * provider.
  */
+async function testOpenAICompatible(
+  provider: ProviderId,
+  baseUrl: string,
+  key: string,
+  signal?: AbortSignal,
+): Promise<ProviderTestResult> {
+  const url = `${baseUrl.replace(/\/+$/, '')}/models`;
+  try {
+    const res = await timedFetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${key}` },
+      signal,
+    });
+    if (res.ok) return { kind: 'ok', provider };
+    const body = await res.text().catch(() => '');
+    return {
+      kind: 'invalid',
+      provider,
+      status: res.status,
+      detail: summariseError(body) || `HTTP ${res.status}`,
+    };
+  } catch (err) {
+    return {
+      kind: 'network',
+      provider,
+      detail: (err as Error).message || 'unreachable',
+    };
+  }
+}
+
 export async function testProviderKey(
   provider: ProviderId,
   key: string,
@@ -343,10 +373,15 @@ export async function testProviderKey(
     // Adapters in the type union but not yet wired to real endpoints.
     // Returning `unsupported` keeps the UI honest about what's verified.
     case 'xai':
+      return testOpenAICompatible('xai', 'https://api.x.ai/v1', trimmed, signal);
     case 'openrouter':
+      return testOpenAICompatible('openrouter', 'https://openrouter.ai/api/v1', trimmed, signal);
     case 'deepseek':
+      return testOpenAICompatible('deepseek', 'https://api.deepseek.com', trimmed, signal);
     case 'mistral':
+      return testOpenAICompatible('mistral', 'https://api.mistral.ai/v1', trimmed, signal);
     case 'together':
+      return testOpenAICompatible('together', 'https://api.together.xyz/v1', trimmed, signal);
     case 'cohere':
     case 'perplexity':
     case 'fireworks':

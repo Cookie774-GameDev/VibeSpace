@@ -92,6 +92,11 @@ const ORPHAN_TAB_FRAGMENT = /(?:^|[\r\n])\[I(?=$|[\r\n])/g;
  */
 const ORPHAN_MIDLINE =
   /(>[^\S\r\n]*)((?:\]4;|\]10;|\]11;|\]12;)[^\r\n\x07]*(?:\x07)?|(?:\[0|\[I|\[<)[^\r\n]*)(?=\s*$|[\r\n])/gm;
+/** Mouse reports echoed after restore can lose the opening CSI bracket as `M[<...`. */
+const ORPHAN_MOUSE_REPORT_FRAGMENT = /(?:^|[\r\n])(?:M?\[<[\d;]+[Mm])+/g;
+/** Palette payloads can survive as bare hex-ish text when the leading OSC is lost. */
+const ORPHAN_PALETTE_PAYLOAD_AFTER_PROMPT =
+  /(>[^\S\r\n]*)(?=(?:[a-f0-9]{2,}|\[0|\[I){4,}(?:[^\w\r\n]|$))(?:[a-f0-9]+|\[0|\[I|\[)+[^\r\n]*(?=$|[\r\n])/gim;
 
 /**
  * Bare control-character regex. Keeps `\n`, `\r`, `\t` because they
@@ -115,7 +120,10 @@ export function stripAnsi(input: string): string {
     .replace(ORPHAN_CSI_NO_PARAM_FRAGMENT, '$1')
     .replace(ORPHAN_OSC_FRAGMENT, '$1')
     .replace(ORPHAN_DIGIT_REPEAT, '\n')
-    .replace(ORPHAN_TAB_FRAGMENT, '').replace(ORPHAN_MIDLINE, '$1')
+    .replace(ORPHAN_TAB_FRAGMENT, '')
+    .replace(ORPHAN_PALETTE_PAYLOAD_AFTER_PROMPT, '$1')
+    .replace(ORPHAN_MIDLINE, '$1')
+    .replace(ORPHAN_MOUSE_REPORT_FRAGMENT, '\n')
     .replace(CONTROL_CHARS, '');
 }
 
@@ -432,6 +440,9 @@ function scheduleTranscriptStorageFlush(): void {
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', flushTranscriptStorage);
   window.addEventListener('beforeunload', flushTranscriptStorage);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushTranscriptStorage();
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -489,7 +500,7 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
             [sessionId]: {
               ...cur,
               text: appendBounded(cur.text, cleaned.text),
-              rawText: appendBounded(cur.rawText ?? '', cleaned.rawText),
+              rawText: '',
               pendingEscape: cleaned.pendingEscape,
               bytesSeen: cur.bytesSeen + raw.length,
               lastWriteAt: Date.now(),
@@ -512,10 +523,11 @@ export const useTerminalTranscriptStore = create<TranscriptState>()(
             [sessionId]: {
               ...cur,
               currentInput,
-              lastWriteAt: Date.now(),
             },
           };
-          // Hot path (fires on every keystroke): no pruning here.
+          // Hot path (typing): do not update lastWriteAt. Draft input is
+          // persistence metadata, not PTY activity; bumping it wakes
+          // by-activity subscribers across 6-10 panes.
           return { sessions: nextSessions };
         });
         scheduleTranscriptStorageFlush();

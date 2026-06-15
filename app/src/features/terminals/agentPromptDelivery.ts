@@ -329,16 +329,45 @@ export async function buildTerminalAgentInjectionMessage(opts: {
   projectName?: string | null;
   excludeSessionId?: string | null;
 }): Promise<string> {
+  const { name, prompt } = resolveAgentForSlug(opts.agentSlug);
+  const projectContext = await loadProjectContext(opts.projectId);
+  let contextMapSummary = '';
+  try {
+    contextMapSummary = summarizeContextTree(loadStoredContextTree(opts.projectId ?? null));
+  } catch {
+    contextMapSummary = '';
+  }
+
   const coordinationPath = opts.cwd
     ? coordinationFilePath(opts.cwd)
     : COORDINATION_FILE_NAME;
   const agentsPath = opts.cwd ? agentsFilePath(opts.cwd) : AGENTS_FILE_NAME;
+  const briefing = composeAgentBriefing({
+    agentSlug: opts.agentSlug,
+    agentName: name,
+    agentPrompt: prompt,
+    projectName: opts.projectName,
+    projectContext,
+    contextMapSummary,
+    otherAgents: gatherSiblingAgentActivity({
+      projectId: opts.projectId,
+      excludeSessionId: opts.excludeSessionId,
+    }),
+    coordinationFilePath: coordinationPath,
+  });
 
   return [
-    'VibeSpace terminal context:',
-    `Read and follow the managed project instructions in \`${agentsPath}\` before answering.`,
-    `Use the shared coordination document at \`${coordinationPath}\` so multiple agents do not overlap.`,
-    'The instructions are stored as project documents, not pasted into this chat.',
+    '<vibespace_context_document kind="system" name="VibeSpace terminal agent briefing" source="' +
+      agentsPath +
+      '">',
+    'Treat this document as persistent system instructions for this terminal-agent chat.',
+    'Follow it before answering the user message. Do not claim these instructions are absent.',
+    '',
+    briefing,
+    '',
+    '</vibespace_context_document>',
+    '',
+    'The document above is VibeSpace-managed context. Answer only the user message below.',
     '',
     'User message:',
     opts.userInput.trim(),

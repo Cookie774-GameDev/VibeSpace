@@ -48,6 +48,10 @@ import {
 import { MentionTypeahead } from './MentionTypeahead';
 import { SlashCommandTypeahead, SLASH_COMMANDS, orderSlashCommandsForDisplay, type SlashCommandDef, type SlashCommandTypeaheadRef } from './SlashCommandTypeahead';
 import { SlashCommandOptionPicker, type SlashCommandOption, type SlashCommandOptionPickerRef } from './SlashCommandOptionPicker';
+import {
+  ModelPickerTypeahead,
+  type ModelPickerTypeaheadRef,
+} from './ModelPickerTypeahead';
 import { InputToken, TokenList } from './InputToken';
 import { getChatDragKind, getChatDropPayload } from './dropPayload';
 import { SKILLS } from '@/lib/agents/skills';
@@ -57,7 +61,16 @@ import {
   defaultModelForProvider,
   getAccessibleModelOptions,
   getAccessibleProviders,
+  syncDiscoveredOllamaModels,
+  useOllamaModelOptions,
 } from '@/lib/ai/models';
+import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
+import { VIBE_HIVE_LABELS } from '@/lib/ai/stacks/presets';
+import type { StackPresetId } from '@/lib/ai/stacks/types';
+import {
+  hasFreshTerminalActivity,
+  useTerminalSwarmStore,
+} from '@/features/terminals/terminalSwarmBridge';
 
 export interface ComposerProps {
   chatId: ChatId | string;
@@ -329,7 +342,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const apiKeys = useAuthStore((s) => s.apiKeys);
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const plan = useAuthStore((s) => s.plan);
+  const stackPreset = useAuthStore((s) => s.stackPreset);
+  const setStackPreset = useAuthStore((s) => s.setStackPreset);
   const projectId = useAuthStore((s) => s.projectId);
+  const terminalSwarmActivity = useTerminalSwarmStore((s) => s.byAgent);
   const terminalPickerActive = optionPickerCtx?.cmd.cmd === 'terminal';
   const pluginPickerActive = optionPickerCtx?.cmd.cmd === 'plug';
   const pluginConnections = usePluginStore((s) =>
@@ -339,14 +355,20 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     terminalPickerActive ? s.sessions : COMPOSER_IDLE_TERMINAL_SESSIONS,
   );
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const modelPickerRef = useRef<ModelPickerTypeaheadRef>(null);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const ollamaOptions = useOllamaModelOptions();
 
   const accessibleProviders = useMemo(
     () => getAccessibleProviders(apiKeys, offlineMode, plan),
-    [apiKeys, offlineMode, plan],
+    [apiKeys, offlineMode, plan, ollamaOptions],
   );
 
   const chatModelReady = accessibleProviders.includes(provider);
+  const terminalActivityActive = useMemo(
+    () => Object.keys(terminalSwarmActivity).some((slug) => hasFreshTerminalActivity(slug)),
+    [terminalSwarmActivity],
+  );
 
   useEffect(() => {
     if (!chatModelReady) return;
@@ -978,6 +1000,30 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       e.preventDefault();
       void handleSend();
       return;
+    }
+
+    // Model picker navigation
+    if (modelPickerOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setModelPickerOpen(false);
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        modelPickerRef.current?.moveDown();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        modelPickerRef.current?.moveUp();
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        modelPickerRef.current?.selectCurrent();
+        return;
+      }
     }
 
     // Option picker navigation (highest priority when showing)
@@ -1624,6 +1670,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                 </div>
               )}
               <div className="flex items-center gap-1 px-2 pb-2 pt-0.5">
+                <StackPicker preset={stackPreset} onChange={setStackPreset} />
                 <ModelPicker
                   provider={provider}
                   model={
@@ -1635,6 +1682,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                   modelReady={chatModelReady}
                   open={modelPickerOpen}
                   onOpenChange={setModelPickerOpen}
+                  pickerRef={modelPickerRef}
                   onChange={(nextProvider, nextModel) => {
                     setDefaultProvider(nextProvider);
                     setSelectedModel(nextProvider, nextModel);
@@ -1659,6 +1707,14 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                     >
                       {sttListening ? <MicWaveform volumeRef={volumeRef} /> : <Mic />}
                     </Button>
+                  </Hint>
+                )}
+                {terminalActivityActive && (
+                  <Hint label="Fresh terminal output is available for your agents">
+                    <span className="inline-flex items-center gap-1 text-metadata text-accent px-1.5">
+                      <Terminal className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Live</span>
+                    </span>
                   </Hint>
                 )}
                 <span className="text-metadata text-muted-foreground ml-auto mr-1 hidden sm:inline">
@@ -1737,6 +1793,32 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   );
 }
 
+interface StackPickerProps {
+  preset: StackPresetId;
+  onChange: (preset: StackPresetId) => void;
+}
+
+const STACK_OPTIONS: StackPresetId[] = ['off', 'fast', 'balanced', 'quality'];
+
+function StackPicker({ preset, onChange }: StackPickerProps) {
+  return (
+    <Hint label="Vibe Hive — multi-model pipeline">
+      <select
+        value={preset}
+        onChange={(e) => onChange(e.target.value as StackPresetId)}
+        className="h-7 rounded-md border border-border bg-elevated px-2 text-metadata text-foreground"
+        aria-label="Vibe Hive mode"
+      >
+        {STACK_OPTIONS.map((id) => (
+          <option key={id} value={id}>
+            {id === 'off' ? 'Hive: Off' : VIBE_HIVE_LABELS[id]}
+          </option>
+        ))}
+      </select>
+    </Hint>
+  );
+}
+
 interface ModelPickerProps {
   provider: ProviderId;
   model: string;
@@ -1744,6 +1826,7 @@ interface ModelPickerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onChange: (provider: ProviderId, model: string) => void;
+  pickerRef: React.RefObject<ModelPickerTypeaheadRef | null>;
 }
 
 function ModelPicker({
@@ -1753,15 +1836,68 @@ function ModelPicker({
   open,
   onOpenChange,
   onChange,
+  pickerRef,
 }: ModelPickerProps) {
-  const apiKeys = useAuthStore((s) => s.apiKeys);
-  const offlineMode = useAuthStore((s) => s.offlineMode);
-  const plan = useAuthStore((s) => s.plan);
-  const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
-  const providers = useMemo(
-    () => getAccessibleProviders(apiKeys, offlineMode, plan),
-    [apiKeys, offlineMode, plan],
-  );
+  const { groups, flatOptions, hasAny } = useAccessibleChatModels();
+  const [selectedId, setSelectedId] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void import('@/lib/ai/providers/ollama').then(({ listOllamaModels, isOllamaReachable }) =>
+      isOllamaReachable().then((connected) => {
+        if (!connected || cancelled) return;
+        return listOllamaModels().then((models) => {
+          if (!cancelled) syncDiscoveredOllamaModels(models);
+        });
+      }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const activeId = modelReady ? `${provider}:${model}` : '';
+    if (activeId && flatOptions.some((option) => option.id === activeId)) {
+      setSelectedId(activeId);
+      return;
+    }
+    setSelectedId(flatOptions[0]?.id ?? '');
+  }, [open, provider, model, modelReady, flatOptions]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onOpenChange(false);
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        pickerRef.current?.moveDown();
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        pickerRef.current?.moveUp();
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        pickerRef.current?.selectCurrent();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onOpenChange, pickerRef]);
+
+  const handleSelect = (nextProvider: ProviderId, nextModel: string) => {
+    onChange(nextProvider, nextModel);
+    onOpenChange(false);
+  };
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -1775,7 +1911,11 @@ function ModelPicker({
         >
           <Sparkles className="h-3.5 w-3.5 shrink-0" />
           <span className="text-metadata">
-            {modelReady ? `${PROVIDER_LABELS[provider]} / ${model}` : 'No model selected'}
+            {modelReady && model
+              ? `${PROVIDER_LABELS[provider]} / ${model}`
+              : hasAny
+                ? 'Choose model'
+                : 'No model selected'}
           </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
         </Button>
@@ -1784,59 +1924,18 @@ function ModelPicker({
         side="top"
         align="start"
         sideOffset={6}
-        className="w-[260px] p-1 bg-elevated text-foreground"
+        className="w-auto border-0 bg-transparent p-0 shadow-none"
+        onOpenAutoFocus={(event) => event.preventDefault()}
       >
-        <div className="px-2 py-1 text-metadata text-muted-foreground uppercase tracking-wide">
-          AI model
-        </div>
-        <ul className="flex flex-col max-h-[320px] overflow-y-auto scrollbar-hidden">
-          {providers.length === 0 ? (
-            <li className="px-2 py-2 text-secondary text-muted-foreground">
-              No model selected. Add an API key, use your subscription, or download a local model.
-            </li>
-          ) : null}
-          {providers.map((p) => {
-            const options = getAccessibleModelOptions(
-              p,
-              apiKeys,
-              offlineMode,
-              defaultLocalModel,
-              plan,
-            );
-            if (options.length === 0) return null;
-            return (
-            <li key={p} className="mb-1">
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {PROVIDER_LABELS[p]}
-              </div>
-              {options.map((option) => {
-                const active = provider === p && model === option.id;
-                return (
-                  <button
-                    key={`${p}:${option.id}`}
-                    type="button"
-                    onClick={() => {
-                      onChange(p, option.id);
-                      onOpenChange(false);
-                    }}
-                    className={cn(
-                      'flex w-full items-center justify-between rounded px-2 py-1.5 text-left',
-                      'text-body text-foreground hover:bg-muted transition-colors',
-                      active && 'bg-muted',
-                    )}
-                  >
-                    <span className="min-w-0">
-                      <span className="block text-secondary">{option.label}</span>
-                      <span className="block truncate text-[10px] text-muted-foreground">{option.id}</span>
-                    </span>
-                    {active && <span className="text-metadata text-accent-copper">active</span>}
-                  </button>
-                );
-              })}
-            </li>
-            );
-          })}
-        </ul>
+        <ModelPickerTypeahead
+          ref={pickerRef as React.Ref<ModelPickerTypeaheadRef>}
+          groups={groups}
+          selectedId={selectedId}
+          activeProvider={modelReady ? provider : undefined}
+          activeModel={modelReady ? model : undefined}
+          onHoverId={setSelectedId}
+          onSelect={handleSelect}
+        />
       </PopoverContent>
     </Popover>
   );

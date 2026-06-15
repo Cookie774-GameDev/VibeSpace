@@ -167,6 +167,15 @@ export const COST_RATES: Record<string, CostRates> = {
   'mock:default': { input_per_m: 0, output_per_m: 0 },
   'local:default': { input_per_m: 0, output_per_m: 0 },
   'ollama:default': { input_per_m: 0, output_per_m: 0 },
+
+  'openrouter:default': { input_per_m: 3, output_per_m: 15 },
+  'deepseek:deepseek-chat': { input_per_m: 0.14, output_per_m: 0.28 },
+  'deepseek:default': { input_per_m: 0.14, output_per_m: 0.28 },
+  'mistral:mistral-large-latest': { input_per_m: 2, output_per_m: 6 },
+  'mistral:default': { input_per_m: 2, output_per_m: 6 },
+  'together:default': { input_per_m: 0.88, output_per_m: 0.88 },
+  'xai:grok-2-1212': { input_per_m: 2, output_per_m: 10 },
+  'xai:default': { input_per_m: 2, output_per_m: 10 },
 };
 
 /** Look up cost rates for a (provider, model) pair, falling back to provider default then 0. */
