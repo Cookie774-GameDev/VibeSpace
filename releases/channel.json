@@ -1,10 +1,10 @@
 {
   "version": "0.1.41",
   "notes": "VibeSpace 0.1.41",
-  "pub_date": "2026-06-15T15:45:31.506Z",
+  "pub_date": "2026-06-15T15:57:35.362Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVDJwYTFzUUhGT3hzU2ZBTnhheXR0Y0VmVFJzM2RWenVwUm43M0plZDZna0cyUUk5OTFlcGhtTEw2SHB4dnExa2tieUp1K08xY2svUTltVXFVN2x2bkpNSWZCbm43ZndnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxNTM4MzMwCWZpbGU6VmliZVNwYWNlXzAuMS40MV94NjQtc2V0dXAuZXhlCmpCQi9sOUdpdHlWTHlTVG5reWRvOHorczFTUis5MXR5Z0ZQejdPUlJaSVBMb2MxU0lKOEFhc1djZnVoUTI5R2lET2MrcXVQUDRKWUJocFFkdVNqU0RnPT0K",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVDJwYTFzUUhGTzdXS2FQRjFWQVc0a0hFOHR0Q3lVQ3QrUHdCMGY2eTNLM01pSTNpY1dnWjhxdHhHOFFpd1lMR0FuZ0JlQ1R0Ykw5cXYxblhsdXV3cDFJNEk4ZytoOHdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxNTM4MDc1CWZpbGU6VmliZVNwYWNlXzAuMS40MV94NjQtc2V0dXAuZXhlCnJLcll0VGU1djhIVWtJcFExMUJtdUdVc2dzL1NWNDgrMm1uWHpjTTE4QzVCZVNNVFh3YzFVbVVob0pXWHRyUWEyVXJpM1NtVjBCa2tzeXlucHBoU0RBPT0K",
       "url": "https://github.com/Cookie774-GameDev/VibeSpace/releases/download/v0.1.41/VibeSpace-0.1.41-Windows-x64.exe"
     }
   }
