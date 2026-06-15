@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.39';
+export const CURRENT_VERSION = '0.1.40';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,39 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.40',
+    date: '2026-06-15',
+    headline: 'Vibe Hive multi-model stacks, VibeBench, June 2026 frontier models',
+    summary:
+      'Ships the agent work from this sprint: Vibe Hive pipelines that chain Opus 4.8, GPT-5.5, and Gemini 3.5 Flash; VibeBench leaderboard; terminal swarm bridge; and OpenAI-compatible provider routing.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Vibe Hive — Fast / Balanced / Quality / Custom multi-model stacks with stack timeline in chat and /hive slash command.',
+          'VibeBench — vibe-coding benchmark tab on Benchmarks with HiveQuality, terminal, tool, and code scoring.',
+          'Terminal swarm bridge — fan agent prompts across terminal tiles from one action.',
+          'Frontier June 2026 roster — Opus 4.8, GPT-5.5, Gemini 3.5 Flash, DeepSeek V4 Pro, Grok 4.3 in Quality preset.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Composer model picker typeahead and accessible chat models hook.',
+          'OpenAI-compatible providers (OpenRouter, DeepSeek, Mistral, Together, xAI) in router.',
+          'stack-complete edge function for subscription-hosted hive steps.',
+        ],
+      },
+      {
+        kind: 'shipped',
+        items: [
+          'Updater channel points to v0.1.40 signed Windows build.',
+          '482 tests passing across stacks, terminals, and router.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.39',
     date: '2026-06-14',
