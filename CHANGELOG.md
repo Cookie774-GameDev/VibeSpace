@@ -2,21 +2,23 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.40] - 2026-06-15
+## [0.1.41] - 2026-06-15
 
 ### Added
 
-- **Vibe Hive** — multi-model stacks (Fast / Balanced / Quality / Custom) with task classifier, stack timeline in chat, and `/hive` slash alias.
-- **June 2026 frontier roster** — Opus 4.8, GPT-5.5, Gemini 3.5 Flash, DeepSeek V4 Pro, Grok 4.3 pinned in Quality preset.
-- **VibeBench** — proprietary vibe-coding benchmark suite, local BYOK runner, Benchmarks page tab, Supabase batch tables.
-- **Terminal swarm bridge** — agent prompts can fan out across terminal tiles.
+- **Model picker typeahead** — keyboard-navigable grouped model picker in chat composer.
 - **OpenAI-compatible providers** — OpenRouter, DeepSeek, Mistral, Together, xAI wired into router.
-- **stack-complete** edge function — subscription-hosted hive steps with frontier allowlist.
+- **`useAccessibleChatModels`** — unified hook for subscription + BYOK model lists.
 
 ### Improved
 
-- Composer model picker typeahead, accessible chat models hook, agent manager and council panel polish.
-- Terminal geometry, transcript restore, escape handling, and agent prompt delivery.
+- **Terminals** — geometry helpers, session restore, escape handling, transcript store, agent prompt delivery.
+- **Agent manager** and council panel polish.
+- **API key validation** — expanded test-key coverage for new providers.
+
+### Removed
+
+- **Vibe Hive / VibeBench** — rolled back from mistaken v0.1.40 release; not shipping yet.
 
 ## [0.1.39] - 2026-06-14
 

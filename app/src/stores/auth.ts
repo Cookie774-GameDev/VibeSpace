@@ -8,7 +8,6 @@ import type {
   VoicePresetId,
 } from '@/types/common';
 import type { PlanId } from '@/lib/entitlements';
-import type { StackPresetId, StackStepSpec } from '@/lib/ai/stacks/types';
 import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import {
   SECRET_API_KEY_PROVIDERS,
@@ -82,18 +81,14 @@ interface AuthState {
    */
   voiceAutoApproveActions: boolean;
 
-  /** Subscription tier. Defaults to `free` for every install. The Stripe
+  /**
+   * Subscription tier. Defaults to `free` for every install. The Stripe
    * billing webhook will flip this once paid plans ship; today no code
    * path mutates it. Lives in the auth store so a future logout can
    * reset it cleanly. See `lib/entitlements.ts` for what each tier
    * unlocks.
    */
   plan: PlanId;
-
-  /** Vibe Hive mode — multi-model pipeline (off = single model). */
-  stackPreset: StackPresetId;
-  /** Custom stack steps when `stackPreset === 'custom'`. */
-  stackCustomSteps: StackStepSpec[];
 
   /** Telemetry opt-in */
   telemetryOptIn: boolean;
@@ -124,8 +119,6 @@ interface AuthState {
   setDefaultLocalModel: (m: string) => void;
   /** Set the active plan id. Will be called by the Stripe webhook handler when billing ships. */
   setPlan: (p: PlanId) => void;
-  setStackPreset: (preset: StackPresetId) => void;
-  setStackCustomSteps: (steps: StackStepSpec[]) => void;
 }
 
 function persistedLocalApiKeys(
@@ -181,8 +174,6 @@ export const useAuthStore = create<AuthState>()(
       jarvisAutoApprove: false,
       voiceAutoApproveActions: true,
       plan: 'free',
-      stackPreset: 'off',
-      stackCustomSteps: [],
       telemetryOptIn: false,
 
       setDisplayName: (n) => set({ displayName: n }),
@@ -232,8 +223,6 @@ export const useAuthStore = create<AuthState>()(
       setOfflineMode: (v) => set({ offlineMode: v }),
       setDefaultLocalModel: (m) => set({ defaultLocalModel: m.trim() || 'llama3.2' }),
       setPlan: (p) => set({ plan: p }),
-      setStackPreset: (preset) => set({ stackPreset: preset }),
-      setStackCustomSteps: (steps) => set({ stackCustomSteps: steps }),
     }),
     {
       name: 'jarvis-auth',
@@ -258,11 +247,9 @@ export const useAuthStore = create<AuthState>()(
         jarvisAutoApprove: s.jarvisAutoApprove,
         voiceAutoApproveActions: s.voiceAutoApproveActions,
         plan: s.plan,
-        stackPreset: s.stackPreset,
-        stackCustomSteps: s.stackCustomSteps,
         telemetryOptIn: s.telemetryOptIn,
       }),
-      version: 6,
+      version: 5,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -285,10 +272,6 @@ export const useAuthStore = create<AuthState>()(
         if (fromVersion < 5) {
           if (typeof state.jarvisAutoApprove !== 'boolean') state.jarvisAutoApprove = false;
           if (typeof state.voiceAutoApproveActions !== 'boolean') state.voiceAutoApproveActions = true;
-        }
-        if (fromVersion < 6) {
-          if (!state.stackPreset) state.stackPreset = 'off';
-          if (!Array.isArray(state.stackCustomSteps)) state.stackCustomSteps = [];
         }
         return state;
       },

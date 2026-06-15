@@ -1,7 +1,6 @@
 import { FileText, Image as ImageIcon } from 'lucide-react';
 import { ToolCallCard } from './ToolCallCard';
 import { ActionApprovalCard } from './ActionApprovalCard';
-import { StackTimeline } from './StackTimeline';
 import { parseActionBlocks } from '@/lib/actions';
 import type { Part } from '@/types';
 import type { MessageId } from '@/types/common';
@@ -143,15 +142,6 @@ export function MessagePart({
           )}
         </div>
       );
-    }
-
-    case 'stack_step': {
-      const firstIdx = allParts.findIndex((p) => p.kind === 'stack_step');
-      if (allParts.indexOf(part) !== firstIdx) return null;
-      const steps = allParts.filter(
-        (p): p is Extract<Part, { kind: 'stack_step' }> => p.kind === 'stack_step',
-      );
-      return <StackTimeline steps={steps} />;
     }
 
     case 'file_ref': {

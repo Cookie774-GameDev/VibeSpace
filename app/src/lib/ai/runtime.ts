@@ -20,7 +20,6 @@ import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { useUIStore } from '@/stores/ui';
 import { runAgent } from './router';
-import { runStack } from './stacks';
 import type { LLMMessage } from './types';
 import { applyPersona } from '@/features/agents/personas';
 import { applyAvailableActions, parseActionBlocks, autoApprovePendingActions } from '@/lib/actions';
@@ -479,7 +478,6 @@ export function startRuntimeListener(
     // cancel a pending timer before stamping the error suffix - otherwise a
     // late flush would overwrite "[cancelled]" with the partial accumulator.
     let acc = '';
-    const stackStepParts: Part[] = [];
     let lastFlush = 0;
     let pending = false;
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -534,7 +532,7 @@ export function startRuntimeListener(
       });
     }
 
-      const flushNow = () => {
+    const flushNow = () => {
       if (flushTimer) {
         clearTimeout(flushTimer);
         flushTimer = null;
@@ -545,9 +543,7 @@ export function startRuntimeListener(
         // Fire-and-forget: ordering of writes is preserved by the underlying
         // store; the final awaited write below stamps the canonical version.
         void bindings.updateMessage(placeholderId, {
-          parts: stackStepParts.length > 0
-            ? [...stackStepParts, { kind: 'text' as const, text: acc }]
-            : [{ kind: 'text', text: acc }],
+          parts: [{ kind: 'text', text: acc }],
         });
       }
     };
@@ -617,109 +613,6 @@ export function startRuntimeListener(
         },
       });
 
-      const historyForStack =
-        llmMessages.length > 0 && llmMessages[llmMessages.length - 1]!.role === 'user'
-          ? llmMessages.slice(0, -1)
-          : llmMessages;
-
-      const stackResult = await runStack({
-        agent: runnable,
-        userText: text,
-        history: historyForStack,
-        signal: controller.signal,
-        callbacks: {
-          onStepStart: (step) => {
-            acc = '';
-            useAgentStore.getState().setVerb(agent.id, step.label.toLowerCase());
-          },
-          onStepDelta: (_step, _i, _delta, stepAcc) => {
-            acc = stepAcc;
-            scheduleFlush();
-          },
-          onStepDone: (result) => {
-            stackStepParts.push({
-              kind: 'stack_step',
-              step_id: result.step.id,
-              label: result.step.label,
-              provider: result.provider,
-              model: result.model,
-              text: result.text,
-              status: 'done',
-              input_tokens: result.input_tokens,
-              output_tokens: result.output_tokens,
-              cost_usd: result.cost_usd,
-              duration_ms: result.durationMs,
-            });
-            acc = result.text;
-            flushNow();
-          },
-        },
-      });
-
-      if (stackResult) {
-        cancelPendingFlush();
-        const finalText = stackResult.finalText || acc;
-        const textParts = textToParts(finalText, text);
-        const finalParts: Part[] = [
-          ...stackStepParts,
-          ...textParts,
-        ];
-        await bindings.updateMessage(placeholder.id, {
-          parts: finalParts,
-          usage: {
-            input_tokens: stackResult.input_tokens,
-            output_tokens: stackResult.output_tokens,
-            cost_usd: stackResult.cost_usd,
-            provider: stackResult.provider,
-            model: stackResult.model,
-          },
-        });
-
-        if (detail.autoApproveActions && agent.slug === 'jarvis') {
-          try {
-            await autoApprovePendingActions(placeholder.id, chatId);
-          } catch (approveErr) {
-            devConsole.log({
-              channel: 'ai',
-              level: 'warn',
-              message: `Auto-approve actions failed: ${approveErr instanceof Error ? approveErr.message : String(approveErr)}`,
-              detail: { agent: agent.slug, messageId: placeholder.id },
-            });
-          }
-        }
-
-        useAgentStore.getState().setRunState(agent.id, 'done');
-        useAgentStore.getState().setVerb(agent.id, undefined);
-
-        try {
-          await maybeRenameChat(chatId as ChatId, finalText);
-        } catch {
-          // best-effort
-        }
-
-        devConsole.log({
-          channel: 'ai',
-          level: 'info',
-          message: `Vibe Hive done ← @${agent.slug} (${stackResult.preset}, ${stackResult.steps.length} steps)`,
-          durationMs: Date.now() - aiStart,
-          detail: {
-            agent: agent.slug,
-            preset: stackResult.preset,
-            taskType: stackResult.taskType,
-            steps: stackResult.steps.length,
-            usage: {
-              input_tokens: stackResult.input_tokens,
-              output_tokens: stackResult.output_tokens,
-              cost_usd: stackResult.cost_usd,
-            },
-          },
-        });
-        void notifyDone(
-          'jarvis',
-          `${agent.name} Vibe Hive complete`,
-          deriveChatTitle(finalText) || 'Vibe Hive pipeline finished.',
-        );
-      } else {
       const response = await runAgent({
         agent: runnable,
         messages: llmMessages,
@@ -825,7 +718,6 @@ export function startRuntimeListener(
           registerActiveStreamingVoiceSession(null);
           streamingVoice = null;
         }
-      }
       }
     } catch (err) {
       cancelSpeechDelta();

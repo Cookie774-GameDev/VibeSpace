@@ -65,12 +65,6 @@ import {
   useOllamaModelOptions,
 } from '@/lib/ai/models';
 import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
-import { VIBE_HIVE_LABELS } from '@/lib/ai/stacks/presets';
-import type { StackPresetId } from '@/lib/ai/stacks/types';
-import {
-  hasFreshTerminalActivity,
-  useTerminalSwarmStore,
-} from '@/features/terminals/terminalSwarmBridge';
 
 export interface ComposerProps {
   chatId: ChatId | string;
@@ -342,10 +336,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const apiKeys = useAuthStore((s) => s.apiKeys);
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const plan = useAuthStore((s) => s.plan);
-  const stackPreset = useAuthStore((s) => s.stackPreset);
-  const setStackPreset = useAuthStore((s) => s.setStackPreset);
   const projectId = useAuthStore((s) => s.projectId);
-  const terminalSwarmActivity = useTerminalSwarmStore((s) => s.byAgent);
   const terminalPickerActive = optionPickerCtx?.cmd.cmd === 'terminal';
   const pluginPickerActive = optionPickerCtx?.cmd.cmd === 'plug';
   const pluginConnections = usePluginStore((s) =>
@@ -365,10 +356,6 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   );
 
   const chatModelReady = accessibleProviders.includes(provider);
-  const terminalActivityActive = useMemo(
-    () => Object.keys(terminalSwarmActivity).some((slug) => hasFreshTerminalActivity(slug)),
-    [terminalSwarmActivity],
-  );
 
   useEffect(() => {
     if (!chatModelReady) return;
@@ -1670,7 +1657,6 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                 </div>
               )}
               <div className="flex items-center gap-1 px-2 pb-2 pt-0.5">
-                <StackPicker preset={stackPreset} onChange={setStackPreset} />
                 <ModelPicker
                   provider={provider}
                   model={
@@ -1707,14 +1693,6 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                     >
                       {sttListening ? <MicWaveform volumeRef={volumeRef} /> : <Mic />}
                     </Button>
-                  </Hint>
-                )}
-                {terminalActivityActive && (
-                  <Hint label="Fresh terminal output is available for your agents">
-                    <span className="inline-flex items-center gap-1 text-metadata text-accent px-1.5">
-                      <Terminal className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">Live</span>
-                    </span>
                   </Hint>
                 )}
                 <span className="text-metadata text-muted-foreground ml-auto mr-1 hidden sm:inline">
@@ -1790,32 +1768,6 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
         </Popover>
       </div>
     </div>
-  );
-}
-
-interface StackPickerProps {
-  preset: StackPresetId;
-  onChange: (preset: StackPresetId) => void;
-}
-
-const STACK_OPTIONS: StackPresetId[] = ['off', 'fast', 'balanced', 'quality'];
-
-function StackPicker({ preset, onChange }: StackPickerProps) {
-  return (
-    <Hint label="Vibe Hive — multi-model pipeline">
-      <select
-        value={preset}
-        onChange={(e) => onChange(e.target.value as StackPresetId)}
-        className="h-7 rounded-md border border-border bg-elevated px-2 text-metadata text-foreground"
-        aria-label="Vibe Hive mode"
-      >
-        {STACK_OPTIONS.map((id) => (
-          <option key={id} value={id}>
-            {id === 'off' ? 'Hive: Off' : VIBE_HIVE_LABELS[id]}
-          </option>
-        ))}
-      </select>
-    </Hint>
   );
 }
 

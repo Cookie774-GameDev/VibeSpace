@@ -52,20 +52,7 @@ export type Part =
       error?: string;
     }
   | { kind: 'image'; url: string; alt?: string }
-  | { kind: 'file_ref'; ref: ContextRef }
-  | {
-      kind: 'stack_step';
-      step_id: string;
-      label: string;
-      provider: ProviderId;
-      model: string;
-      text: string;
-      status: 'running' | 'done' | 'error';
-      input_tokens?: number;
-      output_tokens?: number;
-      cost_usd?: number;
-      duration_ms?: number;
-    };
+  | { kind: 'file_ref'; ref: ContextRef };
 
 /**
  * A single message in a chat thread.

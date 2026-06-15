@@ -47,7 +47,6 @@ import { ensureActiveChat } from '@/features/chat/chatLifecycle';
 import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import { DevConsoleHost } from '@/features/dev-console';
 import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
-import { startTerminalSwarmBridge } from '@/features/terminals/terminalSwarmBridge';
 import { UpdateWarningHost } from '@/features/updates/UpdateWarningHost';
 import { GlobalDictationOverlay } from '@/features/global-dictation/GlobalDictationOverlay';
 import type { Agent, AgentId, Message } from '@/types';
@@ -231,7 +230,6 @@ function useBoot() {
     let stopRuntime: (() => void) | undefined;
     let stopNotifications: (() => void) | undefined;
     let stopTerminalScheduler: (() => void) | undefined;
-    let stopTerminalSwarm: (() => void) | undefined;
     let stopSyncLoop: (() => void) | undefined;
     let stopCloudAuth: (() => void) | undefined;
     let cancelled = false;
@@ -349,7 +347,6 @@ function useBoot() {
       // Phase 5: background loops
       try { stopNotifications = startNotificationLoop(); } catch (err) { console.error('Failed to start notification loop:', err); }
       try { stopTerminalScheduler = initTerminalScheduler(); } catch (err) { console.error('Failed to start terminal scheduler:', err); }
-      try { stopTerminalSwarm = startTerminalSwarmBridge(); } catch (err) { console.error('Failed to start terminal swarm bridge:', err); }
 
       // Phase 6: Ollama model discovery (non-blocking)
       void import('@/lib/ai').then(({ listOllamaModels, syncDiscoveredOllamaModels, isOllamaReachable }) =>
@@ -372,7 +369,6 @@ function useBoot() {
       stopRuntime?.();
       stopNotifications?.();
       stopTerminalScheduler?.();
-      stopTerminalSwarm?.();
       stopSyncLoop?.();
       stopCloudAuth?.();
     };

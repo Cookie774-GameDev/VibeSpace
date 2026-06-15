@@ -15,8 +15,6 @@ export type {
 export { COST_RATES, ratesFor, estimateCost, estimateInputTokens } from './types';
 
 export { runAgent } from './router';
-export { runStack, VIBE_HIVE_LABELS, STACK_PRESET_LABELS, classifyStackTask } from './stacks';
-export type { StackPresetId, StackRunResult, StackStepSpec } from './stacks';
 export {
   startRuntimeListener,
   type RuntimeBindings,

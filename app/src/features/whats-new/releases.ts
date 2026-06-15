@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.40';
+export const CURRENT_VERSION = '0.1.41';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -340,34 +340,31 @@ export const SECTION_META: Record<
  */
 export const RELEASES: readonly Release[] = [
   {
-    version: '0.1.40',
+    version: '0.1.41',
     date: '2026-06-15',
-    headline: 'Vibe Hive multi-model stacks, VibeBench, June 2026 frontier models',
+    headline: 'Agent fixes, model picker, provider routing — Vibe Hive held back',
     summary:
-      'Ships the agent work from this sprint: Vibe Hive pipelines that chain Opus 4.8, GPT-5.5, and Gemini 3.5 Flash; VibeBench leaderboard; terminal swarm bridge; and OpenAI-compatible provider routing.',
+      'Ships terminal reliability, composer model picker typeahead, and OpenAI-compatible provider routing from parallel agent work. Rolls back the accidental Vibe Hive / VibeBench bundle from v0.1.40.',
     sections: [
       {
         kind: 'feature',
         items: [
-          'Vibe Hive — Fast / Balanced / Quality / Custom multi-model stacks with stack timeline in chat and /hive slash command.',
-          'VibeBench — vibe-coding benchmark tab on Benchmarks with HiveQuality, terminal, tool, and code scoring.',
-          'Terminal swarm bridge — fan agent prompts across terminal tiles from one action.',
-          'Frontier June 2026 roster — Opus 4.8, GPT-5.5, Gemini 3.5 Flash, DeepSeek V4 Pro, Grok 4.3 in Quality preset.',
+          'Model picker typeahead — grouped, keyboard-navigable model selection in chat.',
+          'OpenAI-compatible providers — DeepSeek, Mistral, Together, xAI, OpenRouter in router.',
         ],
       },
       {
         kind: 'improvement',
         items: [
-          'Composer model picker typeahead and accessible chat models hook.',
-          'OpenAI-compatible providers (OpenRouter, DeepSeek, Mistral, Together, xAI) in router.',
-          'stack-complete edge function for subscription-hosted hive steps.',
+          'Terminal geometry, session restore, escape handling, and transcript store fixes.',
+          'Agent prompt delivery improvements for terminal-bound agents.',
+          'Agent manager and council panel polish.',
         ],
       },
       {
         kind: 'shipped',
         items: [
-          'Updater channel points to v0.1.40 signed Windows build.',
-          '482 tests passing across stacks, terminals, and router.',
+          'Updater channel rolled back from v0.1.40; this build replaces it without Vibe Hive.',
         ],
       },
     ],

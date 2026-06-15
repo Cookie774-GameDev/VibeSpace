@@ -18,7 +18,7 @@ function streamingSize(message: Message | undefined): number {
   if (!message) return 0;
   let n = 0;
   for (const p of message.parts as Part[]) {
-    if (p.kind === 'text' || p.kind === 'reasoning' || p.kind === 'stack_step') n += p.text.length;
+    if (p.kind === 'text' || p.kind === 'reasoning') n += p.text.length;
     else if (p.kind === 'tool_call') n += JSON.stringify(p.args).length;
     else if (p.kind === 'tool_result') n += JSON.stringify(p.result ?? p.error ?? '').length;
   }
