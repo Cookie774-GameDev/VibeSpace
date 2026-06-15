@@ -39,6 +39,8 @@ const PLAN_PAGE_BACKGROUNDS: Record<PlanId, string> = {
   pro: 'bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.28),transparent_40%),radial-gradient(circle_at_bottom_right,rgba(252,211,77,0.12),transparent_36%),linear-gradient(180deg,rgba(146,64,14,0.16),transparent)]',
   ultra:
     'bg-[radial-gradient(circle_at_center,rgba(124,58,237,0.5),transparent_50%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.32),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(236,72,153,0.22),transparent_40%),linear-gradient(180deg,rgba(15,23,42,0.6),transparent)]',
+  apex:
+    'bg-[radial-gradient(circle_at_center,rgba(255,133,0,0.45),transparent_46%),radial-gradient(circle_at_top_right,rgba(236,72,153,0.34),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.24),transparent_42%),linear-gradient(180deg,rgba(8,10,15,0.72),transparent)]',
 };
 
 export function Plans() {
@@ -473,6 +475,90 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
                 </Button>
               ) : (
                 <Button variant="secondary" size="sm" disabled className="w-full bg-slate-900 border-purple-500/25 text-slate-400">
+                  Available Soon
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </article>
+    );
+  }
+
+  // Supernova Card (Apex - $200)
+  if (plan.id === 'apex') {
+    return (
+      <article
+        className="group relative flex min-h-[480px] flex-col overflow-hidden rounded-[26px] transition-all duration-300 hover:-translate-y-2"
+        aria-label={`${plan.label} plan, $${plan.priceUsd} per month`}
+      >
+        <div className="absolute -inset-[2px] rounded-[26px] bg-gradient-to-r from-orange-400 via-fuchsia-500 via-blue-500 to-orange-300 opacity-90 blur-[1px] transition-opacity duration-300 group-hover:opacity-100 animate-[plan-border-flow_4s_linear_infinite] bg-[length:220%_auto] z-0 shadow-[0_0_34px_rgba(255,133,0,0.35)]" />
+        <div className="relative z-20 flex h-full w-full flex-col gap-5 overflow-hidden rounded-[24px] border border-orange-300/25 bg-slate-950 p-5 text-white">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,133,0,0.32),transparent_28%),radial-gradient(circle_at_82%_22%,rgba(236,72,153,0.22),transparent_26%),radial-gradient(circle_at_50%_88%,rgba(59,130,246,0.24),transparent_34%)]" />
+          <div className="absolute inset-x-8 top-10 h-px bg-gradient-to-r from-transparent via-orange-200/70 to-transparent" />
+          <div className="relative z-10 flex h-full flex-col gap-5">
+            <header className="space-y-2">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                  <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-orange-300/40 bg-orange-500/15 shadow-[0_0_28px_rgba(255,133,0,0.25)]">
+                    <Sparkles className="h-5 w-5 text-orange-200 animate-pulse" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                      <h3 className="font-display text-page-title tracking-tight text-white">{plan.label}</h3>
+                      <Badge className="whitespace-nowrap border-none bg-gradient-to-r from-orange-400 via-fuchsia-500 to-blue-500 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
+                        Hive flagship
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-secondary leading-snug text-orange-50/80">
+                      {plan.tagline}
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0 whitespace-nowrap text-right">
+                  <span className="bg-gradient-to-r from-orange-200 via-white to-blue-200 bg-clip-text font-display text-page-title text-transparent">
+                    ${plan.priceUsd}
+                  </span>
+                  <span className="block font-sans text-[10px] text-orange-100/60">/mo</span>
+                </div>
+              </div>
+              {isCurrent && (
+                <Badge className="whitespace-nowrap border border-orange-300/40 bg-orange-500/20 text-orange-100">
+                  Current Plan
+                </Badge>
+              )}
+            </header>
+
+            <Separator className="bg-orange-200/20" />
+
+            <ul className="flex flex-col gap-2.5 text-secondary text-orange-50/90">
+              {plan.features.map((line) => (
+                <li
+                  key={line}
+                  className="flex items-start gap-2.5 rounded-xl border border-orange-300/10 bg-white/[0.03] px-3 py-2"
+                >
+                  <Check className="mt-1 h-3.5 w-3.5 shrink-0 text-orange-200" aria-hidden />
+                  <span className="flex-1 text-[11px] font-medium leading-relaxed">{line}</span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-auto flex flex-col gap-2 pt-2">
+              {isCurrent ? (
+                <span className="py-2 text-center text-metadata font-medium text-orange-100/75">
+                  Active. Managed via Stripe receipts.
+                </span>
+              ) : billingReady ? (
+                <Button
+                  variant="accent"
+                  size="sm"
+                  onClick={onUpgrade}
+                  className="w-full border-none bg-gradient-to-r from-orange-400 via-fuchsia-500 to-blue-500 font-bold text-white shadow-[0_0_28px_rgba(255,133,0,0.3)] transition-all hover:scale-[1.02] hover:shadow-[0_0_38px_rgba(255,133,0,0.5)]"
+                >
+                  <Zap className="h-3.5 w-3.5" /> Upgrade — ${plan.priceUsd}/mo
+                </Button>
+              ) : (
+                <Button variant="secondary" size="sm" disabled className="w-full bg-slate-900 text-orange-100/60">
                   Available Soon
                 </Button>
               )}

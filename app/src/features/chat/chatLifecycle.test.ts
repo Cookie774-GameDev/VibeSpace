@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { deriveChatTitle, isDefaultChatTitle } from './chatLifecycle';
+import {
+  deriveChatTitle,
+  formatBranchChatTitle,
+  isDefaultChatTitle,
+  messagesThroughBranchPoint,
+} from './chatLifecycle';
+import type { Message, MessageId } from '@/types';
 
 describe('isDefaultChatTitle', () => {
   it('recognises placeholder titles', () => {
@@ -20,5 +26,34 @@ describe('deriveChatTitle', () => {
   it('returns empty for unusable text', () => {
     expect(deriveChatTitle('')).toBe('');
     expect(deriveChatTitle('ok')).toBe('');
+  });
+});
+
+describe('formatBranchChatTitle', () => {
+  it('prefixes the source title', () => {
+    expect(formatBranchChatTitle('Deploy plan')).toBe('Branch: Deploy plan');
+  });
+
+  it('avoids stacking branch prefixes', () => {
+    expect(formatBranchChatTitle('Branch: Deploy plan')).toBe('Branch: Deploy plan · fork');
+  });
+});
+
+describe('messagesThroughBranchPoint', () => {
+  const messages = [
+    { id: 'msg_a' as MessageId, chat_id: 'cht_1' as never, role: 'user', parts: [], created_at: 1, updated_at: 1 },
+    { id: 'msg_b' as MessageId, chat_id: 'cht_1' as never, role: 'assistant', parts: [], created_at: 2, updated_at: 2 },
+    { id: 'msg_c' as MessageId, chat_id: 'cht_1' as never, role: 'user', parts: [], created_at: 3, updated_at: 3 },
+  ] satisfies Message[];
+
+  it('returns history through the selected message', () => {
+    expect(messagesThroughBranchPoint(messages, 'msg_b' as MessageId).map((m) => m.id)).toEqual([
+      'msg_a',
+      'msg_b',
+    ]);
+  });
+
+  it('returns empty when the message is missing', () => {
+    expect(messagesThroughBranchPoint(messages, 'msg_z' as MessageId)).toEqual([]);
   });
 });

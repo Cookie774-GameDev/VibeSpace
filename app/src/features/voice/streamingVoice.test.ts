@@ -8,14 +8,21 @@ import {
 
 const mocks = vi.hoisted(() => ({
   speakWithSettings: vi.fn(async () => undefined),
+  authState: {
+    voiceEngine: 'system',
+    voicePreset: 'jarvis-prime',
+  },
+  kokoroStream: {
+    enqueue: vi.fn(),
+    complete: vi.fn(async () => undefined),
+    stop: vi.fn(),
+  },
+  createKokoroStreamingPlayer: vi.fn(),
 }));
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: {
-    getState: () => ({
-      voiceEngine: 'system',
-      voicePreset: 'jarvis-prime',
-    }),
+    getState: () => mocks.authState,
   },
 }));
 
@@ -26,6 +33,7 @@ vi.mock('@/stores/ui', () => ({
 }));
 
 vi.mock('./voiceRouter', () => ({
+  createKokoroStreamingPlayer: mocks.createKokoroStreamingPlayer,
   registerActiveStreamingVoiceSession: vi.fn(),
   speakWithSettings: mocks.speakWithSettings,
   stopAllVoiceOutput: vi.fn(),
@@ -36,6 +44,13 @@ import { StreamingVoiceSession } from './streamingVoice';
 describe('StreamingVoiceSession lifecycle', () => {
   beforeEach(() => {
     mocks.speakWithSettings.mockClear();
+    mocks.authState.voiceEngine = 'system';
+    mocks.authState.voicePreset = 'jarvis-prime';
+    mocks.kokoroStream.enqueue.mockClear();
+    mocks.kokoroStream.complete.mockClear();
+    mocks.kokoroStream.stop.mockClear();
+    mocks.createKokoroStreamingPlayer.mockReset();
+    mocks.createKokoroStreamingPlayer.mockReturnValue(mocks.kokoroStream);
   });
 
   afterEach(() => {
@@ -82,5 +97,28 @@ describe('StreamingVoiceSession lifecycle', () => {
 
     window.removeEventListener(STREAMING_VOICE_END_EVENT, onEnd);
     expect(ends).toHaveLength(1);
+  });
+
+  it('uses the Kokoro streaming player instead of serial speak calls', async () => {
+    mocks.authState.voiceEngine = 'kokoro';
+    const events: string[] = [];
+    const onStart = () => events.push('start');
+    const onEnd = () => events.push('end');
+    window.addEventListener(STREAMING_VOICE_START_EVENT, onStart);
+    window.addEventListener(STREAMING_VOICE_END_EVENT, onEnd);
+
+    const session = new StreamingVoiceSession();
+    session.onDelta('First sentence. ');
+    session.onDelta('First sentence. Second sentence.');
+    await session.onComplete('First sentence. Second sentence.');
+
+    window.removeEventListener(STREAMING_VOICE_START_EVENT, onStart);
+    window.removeEventListener(STREAMING_VOICE_END_EVENT, onEnd);
+
+    expect(mocks.createKokoroStreamingPlayer).toHaveBeenCalledWith('jarvis-prime');
+    expect(mocks.kokoroStream.enqueue).toHaveBeenCalledTimes(2);
+    expect(mocks.kokoroStream.complete).toHaveBeenCalledTimes(1);
+    expect(mocks.speakWithSettings).not.toHaveBeenCalled();
+    expect(events).toEqual(['start', 'end']);
   });
 });

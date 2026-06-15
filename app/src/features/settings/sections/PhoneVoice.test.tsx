@@ -63,7 +63,7 @@ describe('PhoneVoice autosave', () => {
     render(<PhoneVoice />);
 
     const groqInput = await screen.findByPlaceholderText('gsk_…');
-    fireEvent.change(groqInput, { target: { value: 'gsk_test_autosave_key' } });
+    fireEvent.change(groqInput, { target: { value: 'groq-test-autosave-key' } });
 
     await vi.waitFor(
       () =>

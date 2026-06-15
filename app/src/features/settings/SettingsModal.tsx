@@ -18,6 +18,7 @@ import {
   Moon,
   Bell,
   Sparkles,
+  Network,
   HardDriveDownload,
   Accessibility as AccessibilityIcon,
   Blocks,
@@ -41,6 +42,7 @@ const LocalModels = lazy(() =>
   import('./sections/LocalModels').then((m) => ({ default: m.LocalModels })),
 );
 const Plans = lazy(() => import('./sections/Plans').then((m) => ({ default: m.Plans })));
+const Hive = lazy(() => import('./sections/Hive').then((m) => ({ default: m.Hive })));
 const Appearance = lazy(() => import('./sections/Appearance').then((m) => ({ default: m.Appearance })));
 const Voice = lazy(() => import('./sections/Voice').then((m) => ({ default: m.Voice })));
 const PhoneVoice = lazy(() => import('./sections/PhoneVoice').then((m) => ({ default: m.PhoneVoice })));
@@ -71,6 +73,7 @@ const TABS: TabDef[] = [
   { id: 'account', label: 'Account', icon: User2 },
   { id: 'plans', label: 'Plans', icon: Sparkles },
   { id: 'providers', label: 'Providers', icon: KeyRound },
+  { id: 'hive', label: 'Hive', icon: Network },
   { id: 'plugins', label: 'Plugins', icon: Blocks },
   { id: 'localmodels', label: 'Local Models', icon: HardDriveDownload },
   { id: 'appearance', label: 'Appearance', icon: Palette },
@@ -125,6 +128,9 @@ function SettingsTabPanels({ tab, visited }: { tab: SettingsTab; visited: Readon
       </CachedTabPanel>
       <CachedTabPanel id="providers" active={tab === 'providers'} visited={visited.has('providers')}>
         <Providers />
+      </CachedTabPanel>
+      <CachedTabPanel id="hive" active={tab === 'hive'} visited={visited.has('hive')}>
+        <Hive />
       </CachedTabPanel>
       <CachedTabPanel id="plugins" active={tab === 'plugins'} visited={visited.has('plugins')}>
         <Plugins />

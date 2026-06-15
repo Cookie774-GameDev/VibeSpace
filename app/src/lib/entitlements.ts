@@ -44,7 +44,7 @@ import {
   UNLIMITED_LOCAL_KOKORO_LINE,
 } from '@/lib/callVoiceMarketing';
 
-export type PlanId = 'free' | 'starter' | 'pro' | 'ultra';
+export type PlanId = 'free' | 'starter' | 'pro' | 'ultra' | 'apex';
 
 export interface AdminIdentity {
   email?: string | null;
@@ -213,11 +213,43 @@ const ULTRA: PlanDef = {
   priorityRouting: true,
 };
 
+const APEX: PlanDef = {
+  id: 'apex',
+  label: 'Supernova',
+  priceUsd: 200,
+  tagline: 'The Hive flagship · double Singularity capacity',
+  features: [
+    'Everything in Singularity',
+    '62,000 hosted AI credits / mo for Hive and chat',
+    'AI phone minutes: ~434 worst-case phone minutes / mo',
+    UNLIMITED_LOCAL_KOKORO_LINE,
+    GLOBAL_DICTATION_LINE,
+    'SMS to your phone (~1,860 texts/mo included)',
+    'Highest priority hosted routing for Hive Quality and Hive High',
+    'Custom quota buckets for AI credits, call time, and messages',
+  ],
+  hostedModels: [
+    ...ULTRA.hostedModels,
+    'claude-opus-4-8',
+    'gpt-5.5',
+    'gpt-5.5-codex',
+    'gemini-3.5-flash',
+    'grok-4.3',
+    'deepseek-v4-pro',
+  ],
+  voiceMinutesPerMonth: 434,
+  jarvisCall: true,
+  cloudSync: true,
+  toolPublishing: true,
+  priorityRouting: true,
+};
+
 export const PLANS: Record<PlanId, PlanDef> = {
   free: FREE,
   starter: STARTER,
   pro: PRO,
   ultra: ULTRA,
+  apex: APEX,
 };
 
 /** Order used for rendering — Free first, then ascending price. */
@@ -226,6 +258,7 @@ export const PLAN_ORDER: ReadonlyArray<PlanId> = [
   'starter',
   'pro',
   'ultra',
+  'apex',
 ];
 
 /* --------------------------------------------------------------------------

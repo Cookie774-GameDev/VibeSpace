@@ -8,6 +8,13 @@ import type {
   VoicePresetId,
 } from '@/types/common';
 import type { PlanId } from '@/lib/entitlements';
+import {
+  DEFAULT_CUSTOM_STEPS,
+} from '@/lib/ai/stacks/presets';
+import type {
+  StackPresetId,
+  StackStepSpec,
+} from '@/lib/ai/stacks/types';
 import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import {
   SECRET_API_KEY_PROVIDERS,
@@ -89,6 +96,10 @@ interface AuthState {
    * unlocks.
    */
   plan: PlanId;
+  /** Active Hive preset for chat-only multi-model stacks. */
+  stackPreset: StackPresetId;
+  /** User-defined Custom Hive steps. Contains model IDs/prompts, never API keys. */
+  stackCustomSteps: StackStepSpec[];
 
   /** Telemetry opt-in */
   telemetryOptIn: boolean;
@@ -119,6 +130,8 @@ interface AuthState {
   setDefaultLocalModel: (m: string) => void;
   /** Set the active plan id. Will be called by the Stripe webhook handler when billing ships. */
   setPlan: (p: PlanId) => void;
+  setStackPreset: (preset: StackPresetId) => void;
+  setStackCustomSteps: (steps: StackStepSpec[]) => void;
 }
 
 function persistedLocalApiKeys(
@@ -174,6 +187,8 @@ export const useAuthStore = create<AuthState>()(
       jarvisAutoApprove: false,
       voiceAutoApproveActions: true,
       plan: 'free',
+      stackPreset: 'off',
+      stackCustomSteps: DEFAULT_CUSTOM_STEPS,
       telemetryOptIn: false,
 
       setDisplayName: (n) => set({ displayName: n }),
@@ -223,6 +238,18 @@ export const useAuthStore = create<AuthState>()(
       setOfflineMode: (v) => set({ offlineMode: v }),
       setDefaultLocalModel: (m) => set({ defaultLocalModel: m.trim() || 'llama3.2' }),
       setPlan: (p) => set({ plan: p }),
+      setStackPreset: (preset) => set({ stackPreset: preset }),
+      setStackCustomSteps: (steps) =>
+        set({
+          stackCustomSteps: steps.map((step) => ({
+            ...step,
+            id: step.id.trim() || crypto.randomUUID(),
+            label: step.label.trim() || 'Hive step',
+            model: step.model.trim(),
+            systemAppend: step.systemAppend.trim(),
+            provider_options: step.provider_options ? { ...step.provider_options } : undefined,
+          })),
+        }),
     }),
     {
       name: 'jarvis-auth',
@@ -247,9 +274,11 @@ export const useAuthStore = create<AuthState>()(
         jarvisAutoApprove: s.jarvisAutoApprove,
         voiceAutoApproveActions: s.voiceAutoApproveActions,
         plan: s.plan,
+        stackPreset: s.stackPreset,
+        stackCustomSteps: s.stackCustomSteps,
         telemetryOptIn: s.telemetryOptIn,
       }),
-      version: 5,
+      version: 6,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;

@@ -24,6 +24,7 @@
  *   VITE_STRIPE_CHECKOUT_STARTER     per-tier override for $5 Starter
  *   VITE_STRIPE_CHECKOUT_PRO         per-tier override for $20 Pro
  *   VITE_STRIPE_CHECKOUT_ULTRA       per-tier override for $100 Ultra
+ *   VITE_STRIPE_CHECKOUT_APEX        per-tier override for $200 Supernova
  *
  * The per-tier values win over the legacy fallback, so a deployment
  * with the new four-tier ladder doesn't need to special-case the env.
@@ -40,6 +41,7 @@ const TIER_ENV: Partial<Record<PlanId, string>> = {
   starter: 'VITE_STRIPE_CHECKOUT_STARTER',
   pro: 'VITE_STRIPE_CHECKOUT_PRO',
   ultra: 'VITE_STRIPE_CHECKOUT_ULTRA',
+  apex: 'VITE_STRIPE_CHECKOUT_APEX',
 };
 
 /**

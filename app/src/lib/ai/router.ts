@@ -212,6 +212,9 @@ export function resolveProviderAndModel(agent: Agent): { provider: LLMProvider; 
   }
   const local = resolveLocalFallback(auth);
   if (local) return local;
+  if (provId === 'mock' && mockProvider.isAvailable()) {
+    return { provider: mockProvider, model: agent.model.model || 'mock-default' };
+  }
   throw new NoModelSelectedError();
 }
 

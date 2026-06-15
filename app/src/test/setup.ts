@@ -11,7 +11,7 @@
  *   3. Reset persisted Zustand stores between test files so a stale
  *      `localStorage` value from one suite doesn't leak into another.
  */
-import { afterEach, vi } from 'vitest';
+import { vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async () => undefined),
@@ -49,13 +49,5 @@ if (typeof globalThis.crypto.randomUUID !== 'function') {
   });
 }
 
-// Best-effort: clear persisted Zustand stores between tests so each
-// test file starts from defaults. Stores key off `localStorage` keys
-// like `jarvis-auth`, `jarvis-ui`, etc.
-afterEach(() => {
-  try {
-    localStorage.clear();
-  } catch {
-    /* not available in all environments */
-  }
-});
+// Persisted Zustand state is cleared in suites that need isolation (see each
+// test file's beforeEach). Vitest 4 rejects lifecycle hooks in setupFiles.

@@ -48,7 +48,6 @@ import { useTerminalTranscriptStore } from './transcriptStore';
 import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
 import {
   buildAgentSpawnEnv,
-  buildTerminalAgentInjectionMessage,
   deliverAgentTerminalContext,
   detectInteractiveAgentCli,
   resolveAgentForSlug,
@@ -366,6 +365,34 @@ export function TerminalView({
     let startupRestoreMode = false;
     const webglDispose = createWebglDisposeTracker();
 
+    const isInteractiveAgentSession = (sid: string): boolean => {
+      const currentSession = useTerminalTranscriptStore.getState().sessions[sid];
+      return detectInteractiveAgentCli({
+        command: currentSession?.command ?? startupCommand ?? command,
+        startupCommand,
+        transcript: currentSession?.text ?? '',
+      });
+    };
+
+    const ensureAgentBriefingForSession = (sid: string): void => {
+      const slug = agentSlugRef.current;
+      const sessionCwd = cwdRef.current;
+      if (!slug || !sessionCwd || !isInteractiveAgentSession(sid)) return;
+      void deliverAgentTerminalContext({
+        cwd: sessionCwd,
+        agentSlug: slug,
+        projectId: projectId ?? null,
+        projectName: projectName ?? null,
+        excludeSessionId: sid,
+      }).then((result) => {
+        if (result.ok) {
+          deliveredSlugRef.current = slug;
+        } else if (result.error) {
+          console.warn('[Jarvis] agent briefing refresh failed:', result.error);
+        }
+      });
+    };
+
     const resetTerminalSurface = () => {
       outputBuffer.flush();
       pendingOutput = '';
@@ -575,6 +602,8 @@ export function TerminalView({
         textarea.addEventListener('focus', () => {
           focusedRef.current = true;
           setIsFocused(true);
+          const sid = sessionRef.current;
+          if (sid) ensureAgentBriefingForSession(sid);
           onFocusRef.current?.();
         });
         textarea.addEventListener('blur', () => {
@@ -617,36 +646,16 @@ export function TerminalView({
           scheduleCurrentInputFlush();
         }
 
-        const slug = agentSlugRef.current;
         if (
           submittedInput &&
-          slug &&
+          agentSlugRef.current &&
           detectInteractiveAgentCli({
             command: currentSession?.command ?? startupCommand ?? command,
             startupCommand,
             transcript: currentSession?.text ?? '',
           })
         ) {
-          buildTerminalAgentInjectionMessage({
-            agentSlug: slug,
-            userInput: submittedInput,
-            cwd: cwdRef.current,
-            projectId: projectId ?? null,
-            projectName: projectName ?? null,
-            excludeSessionId: sid,
-          })
-            .then((message) =>
-              invoke('terminal_write', {
-                sessionId: sid,
-                data: `\x15${commandToInput(message)}`,
-              }),
-            )
-            .catch(() =>
-              invoke('terminal_write', { sessionId: sid, data }).catch(() => {
-                /* backend probably gone */
-              }),
-            );
-          return;
+          ensureAgentBriefingForSession(sid);
         }
 
         invoke('terminal_write', { sessionId: sid, data }).catch(() => {

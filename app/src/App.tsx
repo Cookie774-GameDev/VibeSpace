@@ -43,7 +43,8 @@ import { startRuntimeListener } from '@/lib/ai/runtime';
 import { messageRepo, agentRepo, chatRepo, openDb, db } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
 import { getDefaultAgents } from '@/features/agents';
-import { ensureActiveChat } from '@/features/chat/chatLifecycle';
+import { ensureActiveChat, branchChatFromMessage } from '@/features/chat/chatLifecycle';
+import type { ChatId, MessageId } from '@/types/common';
 import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import { DevConsoleHost } from '@/features/dev-console';
 import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
@@ -688,9 +689,28 @@ function WorkspaceRoot() {
       }
     };
 
+    const handleBranch = async (event: Event) => {
+      const detail = (event as CustomEvent<{ messageId: string; chatId: string }>).detail;
+      if (!detail?.messageId || !detail?.chatId) return;
+      try {
+        await branchChatFromMessage({
+          chatId: detail.chatId as ChatId,
+          messageId: detail.messageId as MessageId,
+        });
+        toast.success('Branched', 'Opened a new chat from that message — continue from here.');
+      } catch (err) {
+        toast.error(
+          'Branch failed',
+          err instanceof Error ? err.message : 'Could not branch from this message.',
+        );
+      }
+    };
+
     window.addEventListener('jarvis:new-chat', handleNewChat);
+    window.addEventListener('jarvis:branch', handleBranch);
     return () => {
       window.removeEventListener('jarvis:new-chat', handleNewChat);
+      window.removeEventListener('jarvis:branch', handleBranch);
     };
   }, []);
 

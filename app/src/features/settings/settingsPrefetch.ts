@@ -2,6 +2,7 @@ export type SettingsTab =
   | 'account'
   | 'plans'
   | 'providers'
+  | 'hive'
   | 'plugins'
   | 'localmodels'
   | 'appearance'
@@ -19,6 +20,7 @@ const TAB_IMPORTS: Record<SettingsTab, () => Promise<unknown>> = {
   account: () => import('./sections/Account'),
   plans: () => import('./sections/Plans'),
   providers: () => import('./sections/Providers'),
+  hive: () => import('./sections/Hive'),
   plugins: () => import('@/features/plugins/Plugins'),
   localmodels: () => import('./sections/LocalModels'),
   appearance: () => import('./sections/Appearance'),

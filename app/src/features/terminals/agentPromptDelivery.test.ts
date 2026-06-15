@@ -304,7 +304,7 @@ describe('interactive CLI injection helpers', () => {
     ).toBe(false);
   });
 
-  it('builds a persistent document envelope with the selected agent prompt and user message', async () => {
+  it('does not inline the agent briefing into an interactive CLI message', async () => {
     useAgentStore.getState().registerAgent(
       makeAgent('critic', 'Critic', 'You are the Critic. The code word is APPLE.'),
     );
@@ -317,11 +317,9 @@ describe('interactive CLI injection helpers', () => {
       projectName: 'VibeSpace',
     });
 
-    expect(message).toContain('<vibespace_context_document');
-    expect(message).toContain('source="C:\\repo\\AGENTS.md"');
-    expect(message).toContain('You are the Critic. The code word is APPLE.');
-    expect(message).toContain('Project context blob: ship v2 safely.');
-    expect(message).toContain('User message:\nwhat is your code word?');
+    expect(message).toBe('what is your code word?');
+    expect(message).not.toContain('<vibespace_context_document');
+    expect(message).not.toContain('The code word is APPLE.');
   });
 });
 
@@ -441,6 +439,25 @@ describe('deliverAgentTerminalContext', () => {
     expect(secondWrite).toContain('new prompt v2');
     expect(secondWrite).not.toContain('old prompt v1');
     expect(secondWrite.split(MANAGED_BLOCK_START)).toHaveLength(2);
+  });
+
+  it('skips writing AGENTS.md when the managed briefing is already current', async () => {
+    useAgentStore.getState().registerAgent(makeAgent('coder', 'Coder', 'stable prompt'));
+    fsMocks.readTextFile.mockImplementation(async (path: string) => notFound(path));
+    fsMocks.writeTextFile.mockImplementation(async (path: string) => okWrite(path));
+
+    await deliverAgentTerminalContext({ cwd: CWD, agentSlug: 'coder' });
+    const currentAgentsMd = writtenContent(AGENTS)!;
+
+    fsMocks.readTextFile.mockImplementation(async (path: string) =>
+      path === AGENTS ? okRead(path, currentAgentsMd) : okRead(path, 'existing claims'),
+    );
+    fsMocks.writeTextFile.mockClear();
+
+    const result = await deliverAgentTerminalContext({ cwd: CWD, agentSlug: 'coder' });
+
+    expect(result.ok).toBe(true);
+    expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
   });
 
   it('removes the managed block when the agent is cleared', async () => {

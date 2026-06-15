@@ -34,7 +34,7 @@ describe('plugin runtime', () => {
         return new Response('{}', { status: 200 });
       }
       if (url.includes('stripe.com')) {
-        expect(headers.get('Authorization')).toBe(`Basic ${btoa('sk_test_abc:')}`);
+        expect(headers.get('Authorization')).toBe(`Basic ${btoa('stripe-test-key:')}`);
         return new Response(JSON.stringify({ object: 'balance' }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
@@ -51,7 +51,7 @@ describe('plugin runtime', () => {
     await setPluginCredential('mailchimp', 'api_key', 'key-us19');
     await expect(testPluginConnection('mailchimp')).resolves.toMatchObject({ ok: true });
 
-    await setPluginCredential('stripe', 'secret_key', 'sk_test_abc');
+    await setPluginCredential('stripe', 'secret_key', 'stripe-test-key');
     await expect(testPluginConnection('stripe')).resolves.toMatchObject({ ok: true });
 
     expect(fetchMock).toHaveBeenCalled();

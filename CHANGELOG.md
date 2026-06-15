@@ -2,6 +2,29 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.42] - 2026-06-15
+
+### Added
+
+- **Hive** — multi-model chat stacks (Fast / Balanced / Quality / High / Custom) with `StackTimeline` UI.
+- **`/hive` and `/stack` slash commands** — per-message preset and task-type overrides.
+- **Settings → Hive** — preset picker and custom step editor.
+- **Ultra + Supernova tiers** — expanded plan ladder with AI credit allocations.
+- **`hostedStack.ts` + `stack-complete`** — subscription-hosted frontier models for Hive steps without BYOK.
+- **AI credit bucket migration** — `0026_hive_ai_credits.sql` with reserve/settle RPCs.
+- **Docs** — `docs/HIVE.md`, subscription quota/credit plan references.
+
+### Improved
+
+- **Voice routing** — unified `voiceRouter` layer; streaming voice and plan alignment.
+- **Terminals** — prompt delivery refactor and TerminalView fixes.
+- **Billing** — `planLimits`, `entitlements`, Stripe checkout tiers updated.
+
+### Fixed
+
+- **Router** — explicit `mock`/`mock-default` agents work when no cloud keys are configured.
+- **Vitest 4** — removed lifecycle hooks from global setup file.
+
 ## [0.1.41] - 2026-06-15
 
 ### Added

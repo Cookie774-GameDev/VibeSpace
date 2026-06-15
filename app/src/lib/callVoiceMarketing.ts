@@ -3,7 +3,7 @@
  * All welcome credits are Deepgram-only: calls, Jarvis voice, global STT.
  */
 
-export type CallVoicePlanId = 'free' | 'starter' | 'pro' | 'ultra';
+export type CallVoicePlanId = 'free' | 'starter' | 'pro' | 'ultra' | 'apex';
 export type PromoPhase = 'launch_1k' | 'scale_5k';
 
 export const USD_PER_PHONE_MINUTE_DISPLAY = 0.1;
@@ -15,6 +15,7 @@ export const CALL_VOICE_BUDGET_USD: Record<CallVoicePlanId, number> = {
   starter: 2.17,
   pro: 10.85,
   ultra: 21.7,
+  apex: 43.4,
 };
 
 export const PHONE_MINUTES_BY_PLAN: Record<CallVoicePlanId, number> = {
@@ -22,6 +23,7 @@ export const PHONE_MINUTES_BY_PLAN: Record<CallVoicePlanId, number> = {
   starter: 22,
   pro: 109,
   ultra: 217,
+  apex: 434,
 };
 
 export const DEEPGRAM_PROMO_POOL_USD: Record<PromoPhase, number> = {
@@ -53,12 +55,14 @@ export const DEEPGRAM_PROMO_SECONDS: Record<PromoPhase, Record<CallVoicePlanId, 
     starter: 1800,
     pro: 5400,
     ultra: 10800,
+    apex: 21600,
   },
   scale_5k: {
     free: SPARK_PROMO_SECONDS,
     starter: 10800,
     pro: 32400,
     ultra: 54000,
+    apex: 108000,
   },
 };
 
@@ -68,12 +72,14 @@ export const DEEPGRAM_PROMO_MINUTES_DISPLAY: Record<PromoPhase, Record<CallVoice
     starter: 30,
     pro: 90,
     ultra: 180,
+    apex: 360,
   },
   scale_5k: {
     free: 120,
     starter: 180,
     pro: 540,
     ultra: 900,
+    apex: 1800,
   },
 };
 
@@ -106,6 +112,7 @@ export const DEEPGRAM_PROMO_LABEL: Record<CallVoicePlanId, string | null> = {
   starter: deepgramPromoLabel('starter'),
   pro: deepgramPromoLabel('pro'),
   ultra: deepgramPromoLabel('ultra'),
+  apex: deepgramPromoLabel('apex'),
 };
 
 export const FOUNDER_REWARD_HEADLINE =
@@ -121,7 +128,7 @@ export const SPARK_PHASE2_TRY_LINE =
   '$2 Deepgram credit — ~20 min AI calls · ~2+ hr speech-to-text · ~45+ min Jarvis voice';
 
 export const SCALE_5K_PAID_PROMO_LINE =
-  'At $5k pool — Orbit 3 hr · Nova 9 hr · Singularity 15 hr launch Deepgram credit (subscriptions)';
+  'At $5k pool — Orbit 3 hr · Nova 9 hr · Singularity 15 hr · Supernova 30 hr launch Deepgram credit (subscriptions)';
 
 export const SPARK_NO_FREE_CREDIT_LINE =
   'Unlimited local Kokoro · BYOK for cloud · first 200 get $5 Deepgram launch credit';

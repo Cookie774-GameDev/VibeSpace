@@ -723,6 +723,13 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       await addSystem(`AI model changed to ${PROVIDER_LABELS[wanted]} / ${wantedModel}.`);
       return true;
     }
+    if (cmd === 'hive') {
+      if (rest) return false;
+      await addSystem(
+        'Hive is ready. Send /hive fast, /hive balanced, /hive quality, /hive high, or /hive custom followed by your message.',
+      );
+      return true;
+    }
     const routes: Record<string, string> = {
       files: 'files',
       explorer: 'files',

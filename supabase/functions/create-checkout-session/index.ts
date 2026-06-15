@@ -1,6 +1,6 @@
 // @ts-nocheck
 // create-checkout-session: starts a Stripe Checkout for a selected plan.
-// The client sends ONLY a plan id ('starter'|'pro'|'ultra'); the price is
+// The client sends ONLY a plan id ('starter'|'pro'|'ultra'|'apex'); the price is
 // resolved server-side from secrets. Never trust a client-supplied amount.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.46.2';
@@ -17,6 +17,7 @@ const PRICE_FOR_PLAN: Record<string, string | undefined> = {
   starter: Deno.env.get('STRIPE_STARTER_PRICE_ID') ?? Deno.env.get('STRIPE_PRICE_STARTER'),
   pro: Deno.env.get('STRIPE_PRO_PRICE_ID') ?? Deno.env.get('STRIPE_PRICE_PRO'),
   ultra: Deno.env.get('STRIPE_ULTRA_PRICE_ID') ?? Deno.env.get('STRIPE_PRICE_ULTRA'),
+  apex: Deno.env.get('STRIPE_APEX_PRICE_ID') ?? Deno.env.get('STRIPE_PRICE_APEX'),
 };
 
 Deno.serve(async (req: Request): Promise<Response> => {

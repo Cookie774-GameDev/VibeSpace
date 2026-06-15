@@ -303,7 +303,7 @@ dashboard but invalidates existing sessions.
 
 1. Sign up at [console.groq.com](https://console.groq.com) — no card.
 2. Create an API key under "API Keys".
-3. Save it as `GROQ_API_KEY=gsk_...`.
+3. Save it as `GROQ_API_KEY=<groq-api-key>`.
 
 Free tier: 30 req/min, 14k req/day per key. Plenty for one user.
 
@@ -340,8 +340,8 @@ fly launch --copy-config --no-deploy
 # Set every secret:
 fly secrets set \
   SUPABASE_URL="https://xxx.supabase.co" \
-  SUPABASE_SERVICE_ROLE_KEY="eyJhb..." \
-  GROQ_API_KEY="gsk_..." \
+  SUPABASE_SERVICE_ROLE_KEY="<supabase-service-role-key>" \
+  GROQ_API_KEY="<groq-api-key>" \
   CARTESIA_API_KEY="..." \
   LIVEKIT_URL="wss://your-project.livekit.cloud" \
   LIVEKIT_API_KEY="APIxxx" \

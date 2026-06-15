@@ -17,7 +17,7 @@ import {
   UNLIMITED_LOCAL_KOKORO_LINE,
 } from '@/lib/callVoiceMarketing';
 
-export type BillingPlanId = 'free' | 'starter' | 'pro' | 'ultra';
+export type BillingPlanId = 'free' | 'starter' | 'pro' | 'ultra' | 'apex';
 
 export interface PublicPlan {
   id: BillingPlanId;
@@ -69,9 +69,18 @@ export const PUBLIC_PLANS: Record<BillingPlanId, PublicPlan> = {
     smsTexts: 1000,
     blurb: `${callVoiceBucketLine('ultra')}. ${UNLIMITED_LOCAL_KOKORO_LINE}. Maximum AI messages and SMS.`,
   },
+  apex: {
+    id: 'apex',
+    label: 'Supernova',
+    priceUsd: 200,
+    messageCredits: 62000,
+    callMinutes: PHONE_MINUTES_BY_PLAN.apex,
+    smsTexts: 1860,
+    blurb: `${callVoiceBucketLine('apex')}. ${UNLIMITED_LOCAL_KOKORO_LINE}. Double Singularity for Hive-heavy work.`,
+  },
 };
 
-export const BILLING_PLAN_ORDER: ReadonlyArray<BillingPlanId> = ['free', 'starter', 'pro', 'ultra'];
+export const BILLING_PLAN_ORDER: ReadonlyArray<BillingPlanId> = ['free', 'starter', 'pro', 'ultra', 'apex'];
 
 /** One spend bucket as returned by the get-message-usage edge function. */
 export interface UsageBucket {

@@ -3,7 +3,7 @@
 
 export const COST_PER_SECOND_USD = 0.00025; // ~$0.015/min, OpenAI gpt-4o-mini-tts
 
-export type PlanId = 'free' | 'starter' | 'pro' | 'ultra';
+export type PlanId = 'free' | 'starter' | 'pro' | 'ultra' | 'apex';
 
 /** Deepgram Aura-1 (aura-orion-en / aura-luna-en): ~$15/1M chars ≈ $0.01125/min. */
 export const DEEPGRAM_COST_PER_SECOND_USD = 0.0001875;
@@ -14,6 +14,7 @@ export const DEEPGRAM_PROMO_SECONDS: Record<PlanId, number> = {
   starter: 1800,
   pro: 5400,
   ultra: 10800,
+  apex: 21600,
 };
 
 export const DEEPGRAM_PROMO_POOL_USD = 1200; // $1.2k ceiling ($200 reward headroom)
@@ -28,6 +29,7 @@ export const PLAN_BUDGET_USD: Record<PlanId, number> = {
   starter: 2,
   pro: 10,
   ultra: 20,
+  apex: 40,
 };
 
 export function secondsForBudget(budgetUsd: number): number {
@@ -41,9 +43,11 @@ export function planForPriceId(priceId: string | null | undefined): PlanId | nul
   const starter = env?.get('STRIPE_STARTER_PRICE_ID') ?? env?.get('STRIPE_PRICE_STARTER');
   const pro = env?.get('STRIPE_PRO_PRICE_ID') ?? env?.get('STRIPE_PRICE_PRO');
   const ultra = env?.get('STRIPE_ULTRA_PRICE_ID') ?? env?.get('STRIPE_PRICE_ULTRA');
+  const apex = env?.get('STRIPE_APEX_PRICE_ID') ?? env?.get('STRIPE_PRICE_APEX');
   if (priceId === starter) return 'starter';
   if (priceId === pro) return 'pro';
   if (priceId === ultra) return 'ultra';
+  if (priceId === apex) return 'apex';
   return null;
 }
 

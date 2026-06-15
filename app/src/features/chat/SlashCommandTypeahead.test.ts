@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { HelpCircle, Terminal, Wrench } from 'lucide-react';
-import { orderSlashCommandsForDisplay, type SlashCommandDef } from './SlashCommandTypeahead';
+import {
+  SLASH_COMMANDS,
+  orderSlashCommandsForDisplay,
+  type SlashCommandDef,
+} from './SlashCommandTypeahead';
 
 describe('orderSlashCommandsForDisplay', () => {
   it('matches the grouped visual order used by the slash dropdown', () => {
@@ -15,5 +19,16 @@ describe('orderSlashCommandsForDisplay', () => {
       'tools',
       'help',
     ]);
+  });
+
+  it('includes Hive as an action command for the chat composer', () => {
+    const hive = SLASH_COMMANDS.find((cmd) => cmd.cmd === 'hive');
+
+    expect(hive).toMatchObject({
+      cmd: 'hive',
+      category: 'action',
+      hasOptions: true,
+    });
+    expect(SLASH_COMMANDS.some((cmd) => cmd.cmd === 'vibehive')).toBe(false);
   });
 });

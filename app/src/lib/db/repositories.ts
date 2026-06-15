@@ -366,6 +366,9 @@ export const chatRepo = {
 
 export type MessageCreateInput = Omit<Message, 'id' | 'created_at' | 'updated_at'> & {
   id?: MessageId;
+  /** Preserve ordering when copying messages into a branched chat. */
+  created_at?: number;
+  updated_at?: number;
 };
 
 /**
@@ -400,7 +403,7 @@ export const messageRepo = {
     return db.messages.where('chat_id').equals(chatId).count();
   },
   async create(input: MessageCreateInput): Promise<Message> {
-    const ts = now();
+    const ts = input.created_at ?? now();
     const row: Message = {
       id: input.id ?? newMessageId(),
       chat_id: input.chat_id,
@@ -410,7 +413,7 @@ export const messageRepo = {
       parent_id: input.parent_id,
       usage: input.usage,
       created_at: ts,
-      updated_at: ts,
+      updated_at: input.updated_at ?? ts,
     };
     await db.messages.add(row);
     // Bump the parent chat's updated_at so chat lists reorder by recency.

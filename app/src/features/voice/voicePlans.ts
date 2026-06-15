@@ -6,7 +6,7 @@
  * and the cost model mirror used to render quotas. Never trust these for gating.
  */
 
-export type VoicePlanId = 'free' | 'starter' | 'pro' | 'ultra';
+export type VoicePlanId = 'free' | 'starter' | 'pro' | 'ultra' | 'apex';
 
 export const COST_PER_SECOND_USD = 0.00025; // mirrors edge function + migration
 
@@ -30,6 +30,7 @@ export const VOICE_PLANS: Record<VoicePlanId, VoicePlanInfo> = {
   starter: { id: 'starter', label: 'Starter', priceUsd: 10, callVoiceBudgetUsd: 2.17, cloudSecondsMax: seconds(2.17) },
   pro: { id: 'pro', label: 'Pro', priceUsd: 50, callVoiceBudgetUsd: 10.85, cloudSecondsMax: seconds(10.85) },
   ultra: { id: 'ultra', label: 'Ultra', priceUsd: 100, callVoiceBudgetUsd: 21.7, cloudSecondsMax: seconds(21.7) },
+  apex: { id: 'apex', label: 'Supernova', priceUsd: 200, callVoiceBudgetUsd: 43.4, cloudSecondsMax: seconds(43.4) },
 };
 
 // ─── Voice providers (independent of chat providers) ─────────────────────────
@@ -119,6 +120,7 @@ export const DEEPGRAM_LAUNCH_PROMO: Record<
   starter: { seconds: 1800, minutesLabel: '30 min', maxCostUsd: 0.34 },
   pro: { seconds: 5400, minutesLabel: '90 min', maxCostUsd: 1.01 },
   ultra: { seconds: 10800, minutesLabel: '3 hr', maxCostUsd: 2.03 },
+  apex: { seconds: 21600, minutesLabel: '6 hr', maxCostUsd: 4.05 },
 };
 
 export const DEEPGRAM_PROMO_POOL_USD = 1200; // $1.2k ceiling ($200 reward headroom)

@@ -30,6 +30,11 @@ const defaultProviderAgent: Agent = {
 
 describe('AI provider routing', () => {
   beforeEach(() => {
+    try {
+      localStorage.clear();
+    } catch {
+      /* jsdom */
+    }
     syncDiscoveredOllamaModels([]);
     useAuthStore.setState({
       apiKeys: {},

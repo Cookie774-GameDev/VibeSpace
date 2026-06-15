@@ -1,5 +1,6 @@
 import { useAuthStore } from './auth';
 import { secureDeleteApiKey, secureGetApiKey } from '@/lib/security/secureApiKeys';
+import { DEFAULT_CUSTOM_STEPS } from '@/lib/ai/stacks/presets';
 
 describe('useAuthStore API key persistence', () => {
   beforeEach(async () => {
@@ -11,6 +12,8 @@ describe('useAuthStore API key persistence', () => {
       speakReplies: true,
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: 2000,
+      stackPreset: 'off',
+      stackCustomSteps: DEFAULT_CUSTOM_STEPS,
     });
     await secureDeleteApiKey('groq');
   });
@@ -83,5 +86,30 @@ describe('useAuthStore API key persistence', () => {
   it('defaults new installs to hands-free voice with a two-second pause', () => {
     expect(useAuthStore.getState().voiceAutoListenOnOpen).toBe(true);
     expect(useAuthStore.getState().voiceSilenceDelayMs).toBe(2000);
+  });
+
+  it('persists Hive preset and custom steps without API keys', () => {
+    useAuthStore.getState().setStackPreset('custom');
+    useAuthStore.getState().setStackCustomSteps([
+      {
+        id: 'secure-step',
+        label: 'Secure step',
+        provider: 'openai',
+        model: 'gpt-5.5',
+        systemAppend: 'Never expose secrets.',
+        temperature: 0.2,
+      },
+    ]);
+
+    const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
+    expect(persisted).toContain('"stackPreset":"custom"');
+    expect(persisted).toContain('"model":"gpt-5.5"');
+    expect(persisted).not.toContain('sk_');
+    expect(persisted).not.toContain('service_role');
+  });
+
+  it('defaults Hive to off with documented custom steps', () => {
+    expect(useAuthStore.getState().stackPreset).toBe('off');
+    expect(useAuthStore.getState().stackCustomSteps).toEqual(DEFAULT_CUSTOM_STEPS);
   });
 });

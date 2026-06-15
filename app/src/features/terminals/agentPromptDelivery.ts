@@ -329,49 +329,10 @@ export async function buildTerminalAgentInjectionMessage(opts: {
   projectName?: string | null;
   excludeSessionId?: string | null;
 }): Promise<string> {
-  const { name, prompt } = resolveAgentForSlug(opts.agentSlug);
-  const projectContext = await loadProjectContext(opts.projectId);
-  let contextMapSummary = '';
-  try {
-    contextMapSummary = summarizeContextTree(loadStoredContextTree(opts.projectId ?? null));
-  } catch {
-    contextMapSummary = '';
-  }
-
-  const coordinationPath = opts.cwd
-    ? coordinationFilePath(opts.cwd)
-    : COORDINATION_FILE_NAME;
-  const agentsPath = opts.cwd ? agentsFilePath(opts.cwd) : AGENTS_FILE_NAME;
-  const briefing = composeAgentBriefing({
-    agentSlug: opts.agentSlug,
-    agentName: name,
-    agentPrompt: prompt,
-    projectName: opts.projectName,
-    projectContext,
-    contextMapSummary,
-    otherAgents: gatherSiblingAgentActivity({
-      projectId: opts.projectId,
-      excludeSessionId: opts.excludeSessionId,
-    }),
-    coordinationFilePath: coordinationPath,
-  });
-
-  return [
-    '<vibespace_context_document kind="system" name="VibeSpace terminal agent briefing" source="' +
-      agentsPath +
-      '">',
-    'Treat this document as persistent system instructions for this terminal-agent chat.',
-    'Follow it before answering the user message. Do not claim these instructions are absent.',
-    '',
-    briefing,
-    '',
-    '</vibespace_context_document>',
-    '',
-    'The document above is VibeSpace-managed context. Answer only the user message below.',
-    '',
-    'User message:',
-    opts.userInput.trim(),
-  ].join('\n');
+  // Interactive CLIs (OpenCode, Claude, Codex, etc.) own their input box.
+  // VibeSpace delivers the agent briefing through AGENTS.md/env vars, never by
+  // pasting a giant system prompt into the user's active message.
+  return opts.userInput.trim();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -514,6 +475,7 @@ export async function deliverAgentTerminalContext(opts: {
 
     const merged = mergeManagedBlock(existing, wrapManagedBlock(briefing));
     if (merged == null) return { ...base, ok: true };
+    if (existing === merged) return { ...base, ok: true };
     const write = await writeTextFile(agentsPath, merged);
     return write.ok ? { ...base, ok: true } : { ...base, error: write.error.raw ?? write.error.code };
   } catch (err) {

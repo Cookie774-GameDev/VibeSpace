@@ -13,24 +13,28 @@ describe('PUBLIC_PLANS', () => {
     expect(PUBLIC_PLANS.starter.priceUsd).toBe(10);
     expect(PUBLIC_PLANS.pro.priceUsd).toBe(50);
     expect(PUBLIC_PLANS.ultra.priceUsd).toBe(100);
+    expect(PUBLIC_PLANS.apex.priceUsd).toBe(200);
 
     expect(PUBLIC_PLANS.free.messageCredits).toBe(0);
     expect(PUBLIC_PLANS.starter.messageCredits).toBe(3100);
     expect(PUBLIC_PLANS.pro.messageCredits).toBe(15500);
     expect(PUBLIC_PLANS.ultra.messageCredits).toBe(31000);
+    expect(PUBLIC_PLANS.apex.messageCredits).toBe(62000);
 
     expect(PUBLIC_PLANS.starter.callMinutes).toBe(22);
     expect(PUBLIC_PLANS.pro.callMinutes).toBe(109);
     expect(PUBLIC_PLANS.ultra.callMinutes).toBe(217);
+    expect(PUBLIC_PLANS.apex.callMinutes).toBe(434);
 
     expect(PUBLIC_PLANS.free.smsTexts).toBe(0);
     expect(PUBLIC_PLANS.starter.smsTexts).toBe(100);
     expect(PUBLIC_PLANS.pro.smsTexts).toBe(500);
     expect(PUBLIC_PLANS.ultra.smsTexts).toBe(1000);
+    expect(PUBLIC_PLANS.apex.smsTexts).toBe(1860);
   });
 
-  it('orders plans free -> ultra', () => {
-    expect(BILLING_PLAN_ORDER).toEqual(['free', 'starter', 'pro', 'ultra']);
+  it('orders plans free -> apex', () => {
+    expect(BILLING_PLAN_ORDER).toEqual(['free', 'starter', 'pro', 'ultra', 'apex']);
   });
 });
 

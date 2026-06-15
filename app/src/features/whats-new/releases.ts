@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.41';
+export const CURRENT_VERSION = '0.1.42';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,40 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.42',
+    date: '2026-06-15',
+    headline: 'Hive stacks, Ultra tiers, voice routing, and agent fixes',
+    summary:
+      'Re-ships Hive multi-model chat pipelines (Fast / Balanced / Quality / High), subscription tier expansion, AI credit bucket migration, and accumulated voice, terminal, and billing fixes from parallel agent work.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Hive — sequential multi-model chat stacks with collapsible step timeline in threads.',
+          '/hive and /stack slash overrides — preset and task type per message (e.g. /hive quality code …).',
+          'Settings → Hive — preset picker and custom step editor.',
+          'Ultra + Supernova plan tiers with expanded AI credit allocations.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Hosted Hive steps via stack-complete edge function when subscribed without BYOK.',
+          'Voice routing unified through voiceRouter; streaming voice and plan alignment fixes.',
+          'Terminal prompt delivery and TerminalView stability improvements.',
+          'Subscription docs — AI credit bucket, quota sliders, and PAYG plan references.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Mock-default test agents route correctly when no cloud keys are configured.',
+          'Vitest 4 setup compatibility (no lifecycle hooks in global setup file).',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.41',
     date: '2026-06-15',

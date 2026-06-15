@@ -46,7 +46,6 @@ export function MessageBubble({ message, compact = false }: MessageBubbleProps) 
     window.dispatchEvent(
       new CustomEvent('jarvis:branch', { detail: { messageId: message.id, chatId: message.chat_id } }),
     );
-    toast.info('Branched from this message');
   };
 
   // System: centered, faint, dashed border

@@ -264,7 +264,7 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
     provider: 'Stripe',
     authType: 'api_key',
     fields: [
-      token('secret_key', 'Secret key', 'sk_live_... or sk_test_...', 'Use a restricted key when possible.'),
+      token('secret_key', 'Secret key', '<stripe-restricted-key>', 'Use a restricted key when possible.'),
     ],
     credentialUrl: 'https://dashboard.stripe.com/apikeys',
     docsUrl: 'https://docs.stripe.com/keys',

@@ -27,6 +27,7 @@ import { useVoiceStore } from './store';
 
 let activePlaybackAbort: AbortController | null = null;
 let activeStreamingSession: StreamingVoiceSession | null = null;
+const KOKORO_STREAM_SYNTH_AHEAD = 2;
 
 export function registerActiveStreamingVoiceSession(
   session: StreamingVoiceSession | null,
@@ -171,6 +172,142 @@ export interface SpeakWithSettingsOptions {
   voicePreset?: VoicePresetId;
   text?: string;
   signal?: AbortSignal;
+}
+
+interface KokoroStreamItem {
+  text: string;
+  audio?: Promise<{ audio: string; mime: string }>;
+}
+
+export interface KokoroStreamingPlayer {
+  enqueue(text: string): void;
+  complete(): Promise<void>;
+  stop(): void;
+}
+
+class KokoroStreamingPlayerImpl implements KokoroStreamingPlayer {
+  private readonly ttsPreset: VoiceTtsPreset;
+  private readonly voicePreset: VoicePresetId;
+  private readonly controller = new AbortController();
+  private readonly items: KokoroStreamItem[] = [];
+  private readonly ready: Promise<boolean>;
+  private playbackLoop: Promise<void> | null = null;
+  private wakePlayback: (() => void) | null = null;
+  private completing = false;
+  private stopped = false;
+  private inFlightSynth = 0;
+
+  constructor(voicePreset: VoicePresetId) {
+    this.voicePreset = voicePreset;
+    this.ttsPreset = voicePresetToTtsPreset(voicePreset);
+    this.ready = (async () => {
+      if (await kokoroLocalProvider.isAvailable()) return true;
+      return ensureKokoroReadyForSpeech();
+    })();
+  }
+
+  enqueue(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed || this.stopped) return;
+    this.items.push({ text: trimmed });
+    this.pumpSynthesis();
+    this.ensurePlaybackLoop();
+    this.wake();
+  }
+
+  async complete(): Promise<void> {
+    this.completing = true;
+    this.ensurePlaybackLoop();
+    this.wake();
+    await this.playbackLoop;
+  }
+
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.controller.abort();
+    this.items.length = 0;
+    this.wake();
+    kokoroLocalProvider.stop();
+    stopSpeech();
+  }
+
+  private ensurePlaybackLoop(): void {
+    if (!this.playbackLoop) {
+      this.playbackLoop = this.playQueuedAudio();
+    }
+  }
+
+  private pumpSynthesis(): void {
+    while (!this.stopped && this.inFlightSynth < KOKORO_STREAM_SYNTH_AHEAD) {
+      const next = this.items.find((item) => !item.audio);
+      if (!next) return;
+      this.inFlightSynth += 1;
+      next.audio = this.ready
+        .then((ready) => {
+          if (!ready) throw new Error('kokoro_unavailable');
+          return getCachedKokoroAudio(next.text, this.ttsPreset);
+        })
+        .finally(() => {
+          this.inFlightSynth = Math.max(0, this.inFlightSynth - 1);
+          this.pumpSynthesis();
+          this.wake();
+        });
+    }
+  }
+
+  private async playQueuedAudio(): Promise<void> {
+    while (!this.stopped) {
+      const item = this.items[0];
+      if (!item) {
+        if (this.completing) return;
+        await this.waitForWork();
+        continue;
+      }
+
+      this.pumpSynthesis();
+      if (!item.audio) {
+        await this.waitForWork();
+        continue;
+      }
+      const audio = item.audio;
+      try {
+        const result = await audio;
+        if (this.stopped || this.controller.signal.aborted) return;
+        await playBase64Audio(result.audio, result.mime || 'audio/wav', {
+          volume: 1,
+          signal: this.controller.signal,
+        });
+      } catch {
+        if (this.stopped || this.controller.signal.aborted) return;
+        await speakText(item.text, {
+          voicePreset: this.voicePreset,
+          engine: 'system',
+        });
+      } finally {
+        if (this.items[0] === item) this.items.shift();
+        this.pumpSynthesis();
+      }
+    }
+  }
+
+  private waitForWork(): Promise<void> {
+    return new Promise((resolve) => {
+      this.wakePlayback = resolve;
+    });
+  }
+
+  private wake(): void {
+    const wake = this.wakePlayback;
+    this.wakePlayback = null;
+    wake?.();
+  }
+}
+
+export function createKokoroStreamingPlayer(
+  voicePreset: VoicePresetId,
+): KokoroStreamingPlayer {
+  return new KokoroStreamingPlayerImpl(voicePreset);
 }
 
 export async function speakWithSettings(

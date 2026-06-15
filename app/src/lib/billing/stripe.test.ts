@@ -26,6 +26,7 @@ const ENV_KEYS = [
   'VITE_STRIPE_CHECKOUT_STARTER',
   'VITE_STRIPE_CHECKOUT_PRO',
   'VITE_STRIPE_CHECKOUT_ULTRA',
+  'VITE_STRIPE_CHECKOUT_APEX',
 ] as const;
 
 function clearEnv() {
@@ -52,6 +53,11 @@ describe('getCheckoutUrl', () => {
   it('returns the per-tier env var when set', () => {
     setEnv('VITE_STRIPE_CHECKOUT_PRO', 'https://buy.stripe.com/pro-link');
     expect(getCheckoutUrl('pro')).toBe('https://buy.stripe.com/pro-link');
+  });
+
+  it('returns the Apex/Supernova checkout URL when configured', () => {
+    setEnv('VITE_STRIPE_CHECKOUT_APEX', 'https://buy.stripe.com/apex-link');
+    expect(getCheckoutUrl('apex')).toBe('https://buy.stripe.com/apex-link');
   });
 
   it('falls back to VITE_STRIPE_CHECKOUT_URL when the per-tier var is unset', () => {

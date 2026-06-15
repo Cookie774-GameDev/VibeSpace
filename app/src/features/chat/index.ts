@@ -11,6 +11,9 @@ export { Composer } from './Composer';
 export { EmptyChat } from './EmptyChat';
 export {
   ensureActiveChat,
+  branchChatFromMessage,
+  formatBranchChatTitle,
+  messagesThroughBranchPoint,
   deriveChatTitle,
   isDefaultChatTitle,
   maybeRenameChat,

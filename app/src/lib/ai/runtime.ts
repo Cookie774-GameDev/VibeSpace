@@ -33,6 +33,14 @@ import { createStreamingVoiceSession, type StreamingVoiceSession } from '@/featu
 import { registerActiveStreamingVoiceSession } from '@/features/voice/voiceRouter';
 import { deriveChatTitle, maybeRenameChat } from '@/features/chat/chatLifecycle';
 import { composeSkillAddenda, resolveSkills } from '@/lib/agents/skills';
+import {
+  classifyStackTask,
+  effectiveStackPreset,
+  parseStackSlashCommand,
+} from './stacks/classifier';
+import { stepsForPreset } from './stacks/presets';
+import { runStack } from './stacks/runner';
+import type { StackStepResult } from './stacks/types';
 
 import {
   getProjectContextBlock,
@@ -249,6 +257,22 @@ function textToParts(text: string, userText?: string): Part[] {
   // was filtered (shouldn't happen, but a parser change could regress).
   if (parts.length === 0) return [{ kind: 'text', text }];
   return parts;
+}
+
+function stackStepToPart(step: StackStepResult): Part {
+  return {
+    kind: 'stack_step',
+    step_id: step.id,
+    label: step.label,
+    provider: step.provider,
+    model: step.model,
+    text: step.text,
+    status: step.status,
+    input_tokens: step.input_tokens,
+    output_tokens: step.output_tokens,
+    cost_usd: step.cost_usd,
+    duration_ms: step.duration_ms,
+  };
 }
 
 function textToSpeechOutput(text: string): string {
@@ -531,6 +555,11 @@ export function startRuntimeListener(
         voicePreset: voiceSettings.voicePreset,
       });
     }
+    const stackSlash = parseStackSlashCommand(text);
+    const stackText = stackSlash.matched ? stackSlash.text : text;
+    const authState = useAuthStore.getState();
+    const stackPreset = effectiveStackPreset(authState.stackPreset, stackSlash.preset);
+    const stackTaskType = stackSlash.taskType ?? classifyStackTask(stackText);
 
     const flushNow = () => {
       if (flushTimer) {
@@ -613,19 +642,67 @@ export function startRuntimeListener(
         },
       });
 
-      const response = await runAgent({
-        agent: runnable,
-        messages: llmMessages,
-        signal: controller.signal,
-        onChunk: (chunk) => {
-          if (chunk.delta && chunk.delta.length > 0) {
-            acc += chunk.delta;
-            scheduleFlush();
-            scheduleSpeechDelta();
-          }
-          if (chunk.done) flushNow();
-        },
-      });
+      const stackSteps = stepsForPreset(
+        stackPreset,
+        stackTaskType,
+        authState.stackCustomSteps,
+      );
+      const stackRan = stackSteps.length > 0;
+      const response = stackRan
+        ? await runStack({
+            agent: runnable,
+            userText: stackText,
+            history: llmMessages.filter((message, index, all) => {
+              const isTrailingSameUser =
+                index === all.length - 1 &&
+                message.role === 'user' &&
+                message.content.trim() === text.trim();
+              return !isTrailingSameUser;
+            }),
+            steps: stackSteps,
+            signal: controller.signal,
+            onStep: (step) => {
+              acc = step.text;
+              if (placeholderId) {
+                void bindings.updateMessage(placeholderId, {
+                  parts: [
+                    ...stackSteps
+                      .slice(0, stackSteps.findIndex((item) => item.id === step.id))
+                      .map((spec) => ({
+                        kind: 'stack_step' as const,
+                        step_id: spec.id,
+                        label: spec.label,
+                        provider: spec.provider,
+                        model: spec.model,
+                        text: '',
+                        status: 'running' as const,
+                      })),
+                    stackStepToPart(step),
+                    { kind: 'text' as const, text: step.text },
+                  ],
+                });
+              }
+            },
+          }).then((result) => ({
+            text: result.finalText,
+            usage: result.usage,
+            provider: result.steps.at(-1)?.provider ?? runnable.model.provider,
+            model: result.steps.at(-1)?.model ?? runnable.model.model,
+            stackResult: result,
+          }))
+        : await runAgent({
+            agent: runnable,
+            messages: llmMessages,
+            signal: controller.signal,
+            onChunk: (chunk) => {
+              if (chunk.delta && chunk.delta.length > 0) {
+                acc += chunk.delta;
+                scheduleFlush();
+                scheduleSpeechDelta();
+              }
+              if (chunk.done) flushNow();
+            },
+          }).then((result) => ({ ...result, stackResult: null }));
 
       // Make sure no scheduled flush fires after the canonical write below.
       cancelPendingFlush();
@@ -634,7 +711,12 @@ export function startRuntimeListener(
       // textToParts() splits the text on action-proposal fences so the
       // chat thread renders inline Approve/Cancel cards alongside prose.
       const finalText = response.text || acc;
-      const finalParts = textToParts(finalText, text);
+      const finalParts = response.stackResult
+        ? [
+            ...response.stackResult.steps.map(stackStepToPart),
+            ...textToParts(finalText, stackText),
+          ]
+        : textToParts(finalText, text);
       await bindings.updateMessage(placeholder.id, {
         parts: finalParts,
         usage: {

@@ -25,7 +25,9 @@
 15. [Plan economics — internal](#plan-economics--internal-maintainers-only)
 16. [Customer-facing copy](#customer-facing-copy)
 17. [What NOT to say](#what-not-to-say)
-18. [Implementation & ops](#implementation--ops)
+18. [Quota sliders — customize your monthly pool](#quota-sliders--customize-your-monthly-pool)
+19. [Pay-as-you-go add-ons (optional)](#pay-as-you-go-add-ons-optional)
+20. [Implementation & ops](#implementation--ops)
 
 ---
 
@@ -37,8 +39,11 @@
 | `starter` | **Orbit** | $10 | |
 | `pro` | **Nova** | $50 | |
 | `ultra` | **Singularity** | $100 | |
+| `apex` | **Supernova** | $200 | Planned — 2× Singularity pool |
 
 **Monthly sticker prices never change** during launch promos. Only the **one-time Deepgram launch bonus** increases when the company pool scales to $5k.
+
+**Quota sliders (planned):** Paid subscribers can **reallocate** their fixed monthly pool across AI credits, call time, and SMS in **Settings → Plans**. See [§Quota sliders](#quota-sliders--customize-your-monthly-pool).
 
 ---
 
@@ -117,7 +122,7 @@ Paid subscribers (Orbit / Nova / Singularity) get **hosted AI message credits** 
 
 ### Hosted chat limits
 
-Hosted chat is **not unlimited**. Each paid tier has a fixed monthly **message credit** bucket (see table above). When credits hit zero → throttle; client falls back to BYOK/local. **No overage billing.**
+Hosted chat is **not unlimited**. Each paid tier has a fixed monthly **AI credit** bucket (slider-adjustable — see below). When credits hit zero → throttle; client falls back to BYOK/local, or **opt-in PAYG** if enabled. **No silent overage.**
 
 ---
 
@@ -357,7 +362,7 @@ When a user consumes cloud voice / calls / STT, the server tries sources in this
 2. **Paid tier one-time launch Deepgram promo** (30m → 15h depending on phase)
 3. **Monthly call/voice bucket** (paid tiers only)
 4. **BYOK Deepgram key** (user-supplied)
-5. **Throttle** — no surprise overage bills
+5. **Throttle** — no surprise bills (unless user enabled **PAYG add-ons**)
 
 Admins bypass billing (`billingSource = admin`).
 
@@ -413,6 +418,61 @@ For local reference, see your private ops wiki or the maintainer-only copy of th
 
 ---
 
+## Quota sliders — customize your monthly pool
+
+**Settings → Plans** · *Planned — see [`docs/plans/SUBSCRIPTION_QUOTA_SLIDERS_AND_PAYG.md`](plans/SUBSCRIPTION_QUOTA_SLIDERS_AND_PAYG.md)*
+
+Each paid tier includes a **fixed monthly value pool**. Three sliders let users **reallocate** that pool across:
+
+| Slider | Bucket | Pays for |
+|--------|--------|----------|
+| **AI credits** | Hosted inference + Hive | Chat composer, agents, council, Hive stack steps |
+| **Call time** | Call/voice bucket | Jarvis Call (PSTN), cloud voice module TTS, speech-to-text |
+| **Messages** | SMS bucket | Text segments |
+
+### Rules
+
+- **Total is fixed** per tier — sliders cannot exceed the plan cap (zero-sum redistribution).
+- **Defaults** match today's balanced split (50% AI / 35% call / 15% SMS COGS).
+- **Supernova ($200)** = **2× Singularity** total pool to split (defaults double; same ratios).
+- **Reset each billing cycle** — usage counters zeroed; sliders return to tier defaults (or saved preset if enabled).
+- **No rollover** between buckets — unused AI does not become call minutes.
+
+### Default allocations (slider center position)
+
+| Tier | AI credits | Call (headline min) | SMS |
+|------|------------|---------------------|-----|
+| Orbit | 3,100 | ~22 | ~93 |
+| Nova | 15,500 | ~109 | ~465 |
+| Singularity | 31,000 | ~217 | ~930 |
+| Supernova | **62,000** | **~434** | **~1,860** |
+
+**Example:** A Singularity user who lives in Hive slides **AI credits up** and reduces call + SMS — same $100/mo, different mix.
+
+---
+
+## Pay-as-you-go add-ons (optional)
+
+When a monthly bucket is exhausted, users can **opt in** to **add-on credits** — distinct from the subscription pool.
+
+| Rule | Detail |
+|------|--------|
+| **No silent overage** | Nothing bills past the monthly pool unless the user explicitly enables PAYG |
+| **User picks bucket** | Top up **AI credits**, **call minutes**, or **SMS** independently |
+| **Pricing** | Provider base cost **+ 5% VibeSpace fee** |
+
+**Formula:**
+
+```text
+addon_charge_usd = base_inference_cost_usd × 1.05
+```
+
+**Billing (design):** Separate Stripe line item or prepaid pack — not mixed into the recurring subscription charge.
+
+**Without PAYG:** Same as today — bucket empty → BYOK / local Kokoro / throttle.
+
+---
+
 ## What NOT to say
 
 - ❌ “Everyone gets $2 free”
@@ -425,6 +485,8 @@ For local reference, see your private ops wiki or the maintainer-only copy of th
 - ❌ “Paid tiers get Gemini/Claude hosted” — hosted chat is **DeepSeek V4 Flash** only
 - ❌ Calling local Kokoro voice module usage a “phone call” or Deepgram spend
 - ❌ “Unlimited hosted DeepSeek” — every tier has a **fixed monthly credit cap** on paid plans
+- ❌ “We'll charge your card automatically when you run out” — **no silent overage**; PAYG requires explicit opt-in
+- ❌ “Unused AI rolls into phone minutes next month” — **no rollover** between buckets
 
 ---
 
@@ -495,6 +557,14 @@ Wire auth signup webhook to call:
 | **Global STT (`Ctrl+CapsLock`)** | designed | ✓ fallback | **TODO** — currently BYOK-only in app |
 | **Hosted DeepSeek V4 Flash chat** | — | ✓ message credits | **Live** (`message-complete`) |
 | **7-day Spark expiry + lock-back** | — | — | **TODO** — `expires_at` on claim |
+
+---
+
+## See also
+
+- [`docs/plans/AI_CREDIT_BUCKET_AND_ULTRA_TIER.md`](plans/AI_CREDIT_BUCKET_AND_ULTRA_TIER.md) — planned $200 Supernova tier + unified AI credit bucket (not yet implemented).
+- [`docs/plans/SUBSCRIPTION_QUOTA_SLIDERS_AND_PAYG.md`](plans/SUBSCRIPTION_QUOTA_SLIDERS_AND_PAYG.md) — quota sliders + PAYG add-on spec (planning).
+- [`docs/HIVE.md`](HIVE.md) — Hive draws from the user's **AI slider allocation**.
 
 ---
 

@@ -6,9 +6,11 @@ import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { pullNewSpeechSegments, pullRemainingSpeech } from './textCleanup';
 import {
+  createKokoroStreamingPlayer,
   registerActiveStreamingVoiceSession,
   speakWithSettings,
   stopAllVoiceOutput,
+  type KokoroStreamingPlayer,
 } from './voiceRouter';
 import {
   SPEECH_SYNTHESIS_END_EVENT,
@@ -29,11 +31,14 @@ export class StreamingVoiceSession {
   private stopped = false;
   private readonly engine: VoiceEngine;
   private readonly voicePreset: VoicePresetId;
+  private readonly kokoroStream: KokoroStreamingPlayer | null;
 
   constructor(options: StreamingVoiceOptions = {}) {
     const state = useAuthStore.getState();
     this.engine = options.voiceEngine ?? state.voiceEngine ?? 'system';
     this.voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
+    this.kokoroStream =
+      this.engine === 'kokoro' ? createKokoroStreamingPlayer(this.voicePreset) : null;
     registerActiveStreamingVoiceSession(this);
   }
 
@@ -63,7 +68,11 @@ export class StreamingVoiceSession {
     if (remainder.trim()) {
       this.enqueue(remainder);
     }
-    await this.queue;
+    if (this.kokoroStream) {
+      await this.kokoroStream.complete();
+    } else {
+      await this.queue;
+    }
     if (this.started && !this.stopped) {
       window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
       window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
@@ -78,6 +87,7 @@ export class StreamingVoiceSession {
       window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
       window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
     }
+    this.kokoroStream?.stop();
   }
 
   stop(): void {
@@ -87,6 +97,16 @@ export class StreamingVoiceSession {
   }
 
   private enqueue(text: string): void {
+    if (this.kokoroStream) {
+      if (!this.started) {
+        this.started = true;
+        window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT));
+        window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT));
+      }
+      this.kokoroStream.enqueue(text);
+      return;
+    }
+
     this.queue = this.queue.then(async () => {
       if (this.stopped) return;
       if (!this.started) {

@@ -71,6 +71,11 @@ function agent(id: string, slug: string, systemPrompt: string): Agent {
 describe('startRuntimeListener agent routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    try {
+      localStorage.clear();
+    } catch {
+      /* jsdom */
+    }
     mocks.streamingSession.onDelta.mockClear();
     mocks.streamingSession.onComplete.mockClear();
     mocks.streamingSession.stop.mockClear();
@@ -78,6 +83,11 @@ describe('startRuntimeListener agent routing', () => {
       speakReplies: false,
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
+      stackPreset: 'off',
+      plan: 'free',
+      apiKeys: {},
+      defaultProvider: 'mock',
+      offlineMode: false,
     });
     useUIStore.setState({ voiceModalOpen: true });
     mocks.runAgent.mockResolvedValue({
@@ -446,6 +456,76 @@ describe('startRuntimeListener agent routing', () => {
           action_id: 'settings.open',
           status: 'pending',
         }),
+      ]),
+    );
+
+    stop();
+  });
+
+  it('runs Hive Quality from a /Hive slash prefix and writes stack step parts', async () => {
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_hive_quality' as ChatId;
+    const placeholderId = 'msg_hive_quality_assistant' as MessageId;
+    const updateMessage = vi.fn(async () => undefined);
+    const userMessage: Message = {
+      id: 'msg_hive_quality_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: '/Hive quality explain the release' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.runAgent
+      .mockResolvedValueOnce({
+        text: 'draft',
+        usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
+        provider: 'anthropic',
+        model: 'claude-opus-4-8',
+      })
+      .mockResolvedValueOnce({
+        text: 'critique',
+        usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
+        provider: 'openai',
+        model: 'gpt-5.5',
+      })
+      .mockResolvedValueOnce({
+        text: 'final',
+        usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
+        provider: 'google',
+        model: 'gemini-3.5-flash',
+      });
+
+    const stop = startRuntimeListener({
+      getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+      getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => [userMessage]),
+      appendMessage: vi.fn(async (msg) => ({
+        ...msg,
+        id: placeholderId,
+        created_at: 2,
+        updated_at: 2,
+      })),
+      updateMessage,
+    });
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: { chatId, text: '/Hive quality explain the release' },
+      }),
+    );
+
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(3));
+    const updateCalls = updateMessage.mock.calls as unknown as Array<
+      [MessageId, { parts: Part[] }]
+    >;
+    const finalWrite = updateCalls[updateCalls.length - 1]?.[1];
+    if (!finalWrite) throw new Error('expected final Hive write');
+    expect(finalWrite.parts.filter((part) => part.kind === 'stack_step')).toHaveLength(3);
+    expect(finalWrite.parts.at(-1)).toEqual({ kind: 'text', text: 'final' });
+    expect(mocks.runAgent.mock.calls[0][0].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: 'user', content: 'explain the release' }),
       ]),
     );
 

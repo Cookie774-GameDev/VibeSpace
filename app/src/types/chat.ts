@@ -21,6 +21,20 @@ export type ActionStatus =
 export type Part =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
+  | {
+      kind: 'stack_step';
+      step_id: string;
+      label: string;
+      provider: ProviderId;
+      model: string;
+      text: string;
+      status: 'running' | 'done' | 'error';
+      input_tokens?: number;
+      output_tokens?: number;
+      cost_usd?: number;
+      duration_ms?: number;
+      credits_used?: number;
+    }
   | { kind: 'tool_call'; tool: string; args: Record<string, unknown>; call_id: string }
   | { kind: 'tool_result'; call_id: string; result?: unknown; error?: string }
   | {

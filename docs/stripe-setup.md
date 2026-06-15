@@ -4,23 +4,25 @@ Use **test mode** only until launch. No live charges during setup/testing.
 
 ## 1. Create products + recurring prices
 
-In the Stripe dashboard (test mode) → Products, create three monthly prices:
+In the Stripe dashboard (test mode) → Products, create four monthly prices:
 
 | Plan | Price | Note |
 |------|-------|------|
 | Starter | $10.00 / month | 2,500 AI message credits + 25 call min |
 | Pro | $50.00 / month | 12,500 credits + 125 call min |
 | Ultra | $100.00 / month | 25,000 credits + 250 call min |
+| Supernova | $200.00 / month | 62,000 AI credits + 434 call min + 1,860 SMS |
 
 Copy each **Price ID** (`price_...`).
 
 ## 2. Set Supabase secrets
 
 ```powershell
-npx supabase secrets set STRIPE_SECRET_KEY="sk_test_..."
+npx supabase secrets set STRIPE_SECRET_KEY="<stripe-secret-key>"
 npx supabase secrets set STRIPE_STARTER_PRICE_ID="price_..."
 npx supabase secrets set STRIPE_PRO_PRICE_ID="price_..."
 npx supabase secrets set STRIPE_ULTRA_PRICE_ID="price_..."
+npx supabase secrets set STRIPE_APEX_PRICE_ID="price_..."
 npx supabase secrets set APP_BASE_URL="https://vibespaceos.com"
 ```
 
@@ -40,7 +42,7 @@ Select events:
 Copy the signing secret and set it:
 
 ```powershell
-npx supabase secrets set STRIPE_WEBHOOK_SECRET="whsec_..."
+npx supabase secrets set STRIPE_WEBHOOK_SECRET="<stripe-webhook-secret>"
 ```
 
 ## 4. Deploy
@@ -54,7 +56,7 @@ npx supabase functions deploy stripe-webhook --no-verify-jwt
 
 - Use Stripe CLI to forward events: `stripe listen --forward-to <webhook url>`.
 - Use test card `4242 4242 4242 4242`.
-- The app sends only a **plan name** (`starter`/`pro`/`ultra`); the price is
+- The app sends only a **plan name** (`starter`/`pro`/`ultra`/`apex`); the price is
   resolved server-side. Frontend-supplied prices are ignored.
 
 ## Security guarantees (implemented)
@@ -69,5 +71,5 @@ npx supabase functions deploy stripe-webhook --no-verify-jwt
 
 ## Blocked until you provide
 
-- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and the three price IDs.
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and the four price IDs.
 - A real test checkout + webhook round-trip (needs the above).

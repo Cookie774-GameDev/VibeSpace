@@ -62,6 +62,13 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     hasOptions: true,
   },
   {
+    cmd: 'hive',
+    description: 'Summon Hive model stacks',
+    icon: Sparkles,
+    category: 'action',
+    hasOptions: true,
+  },
+  {
     cmd: 'file',
     description: 'Attach a project file',
     icon: FileText,
