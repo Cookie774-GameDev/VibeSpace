@@ -36,6 +36,7 @@ export {
   stopAllVoiceOutput,
   warmVoiceEngine,
   ensureKokoroReadyForSpeech,
+  bootstrapKokoroVoiceOnLaunch,
 } from './voiceRouter';
 export { createStreamingVoiceSession, StreamingVoiceSession } from './streamingVoice';
 export type { SpeakTextOptions } from './speechSynthesis';

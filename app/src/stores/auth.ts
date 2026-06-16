@@ -6,6 +6,8 @@ import type {
   ProjectId,
   VoiceEngine,
   VoicePresetId,
+  ComposerSttProvider,
+  FasterWhisperModelId,
 } from '@/types/common';
 import type { PlanId } from '@/lib/entitlements';
 import {
@@ -25,7 +27,9 @@ import {
 } from '@/lib/security/secureApiKeys';
 import {
   VOICE_SILENCE_DELAY_MS_DEFAULT,
+  VOICE_LISTEN_TIMEOUT_MS_DEFAULT,
   clampVoiceSilenceDelayMs,
+  clampVoiceListenTimeoutMs,
 } from '@/features/voice/voiceConversation';
 
 interface AuthState {
@@ -78,6 +82,11 @@ interface AuthState {
   /** Milliseconds of silence after speech before Jarvis sends your message. */
   voiceSilenceDelayMs: number;
   /**
+   * Hands-free listen cap (ms). After this much time without speech, Jarvis stops
+   * listening. Ignored in click-to-talk mode.
+   */
+  voiceListenTimeoutMs: number;
+  /**
    * Chat auto-approve: when true, Jarvis action proposals run without
    * clicking Approve. Toggle with Shift+Tab on the chat route.
    */
@@ -87,6 +96,11 @@ interface AuthState {
    * run immediately (open terminals, navigate, etc.).
    */
   voiceAutoApproveActions: boolean;
+
+  /** Composer toolbar mic STT provider (chat dictation only). */
+  composerSttProvider: ComposerSttProvider;
+  /** Selected faster-whisper model when composerSttProvider is faster-whisper. */
+  fasterWhisperModel: FasterWhisperModelId;
 
   /**
    * Subscription tier. Defaults to `free` for every install. The Stripe
@@ -117,8 +131,11 @@ interface AuthState {
   setSpeakReplies: (enabled: boolean) => void;
   setVoiceAutoListenOnOpen: (enabled: boolean) => void;
   setVoiceSilenceDelayMs: (ms: number) => void;
+  setVoiceListenTimeoutMs: (ms: number) => void;
   setJarvisAutoApprove: (enabled: boolean) => void;
   setVoiceAutoApproveActions: (enabled: boolean) => void;
+  setComposerSttProvider: (provider: ComposerSttProvider) => void;
+  setFasterWhisperModel: (model: FasterWhisperModelId) => void;
   setWorkspaceId: (id: WorkspaceId | null) => void;
   setProjectId: (id: ProjectId | null) => void;
   setCloudSession: (s: AuthState['cloudSession']) => void;
@@ -180,12 +197,15 @@ export const useAuthStore = create<AuthState>()(
       defaultLocalModel: 'llama3.2',
       personaPreset: 'jarvis',
       voicePreset: 'jarvis-prime',
-      voiceEngine: 'system',
+      voiceEngine: 'kokoro',
       speakReplies: false,
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
+      voiceListenTimeoutMs: VOICE_LISTEN_TIMEOUT_MS_DEFAULT,
       jarvisAutoApprove: false,
       voiceAutoApproveActions: true,
+      composerSttProvider: 'system',
+      fasterWhisperModel: 'small',
       plan: 'free',
       stackPreset: 'off',
       stackCustomSteps: DEFAULT_CUSTOM_STEPS,
@@ -228,8 +248,12 @@ export const useAuthStore = create<AuthState>()(
       setVoiceAutoListenOnOpen: (enabled) => set({ voiceAutoListenOnOpen: enabled }),
       setVoiceSilenceDelayMs: (ms) =>
         set({ voiceSilenceDelayMs: clampVoiceSilenceDelayMs(ms) }),
+      setVoiceListenTimeoutMs: (ms) =>
+        set({ voiceListenTimeoutMs: clampVoiceListenTimeoutMs(ms) }),
       setJarvisAutoApprove: (enabled) => set({ jarvisAutoApprove: enabled }),
       setVoiceAutoApproveActions: (enabled) => set({ voiceAutoApproveActions: enabled }),
+      setComposerSttProvider: (provider) => set({ composerSttProvider: provider }),
+      setFasterWhisperModel: (model) => set({ fasterWhisperModel: model }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
       setProjectId: (id) => set({ projectId: id }),
       setCloudSession: (s) => set({ cloudSession: s }),
@@ -241,7 +265,7 @@ export const useAuthStore = create<AuthState>()(
       setStackPreset: (preset) => set({ stackPreset: preset }),
       setStackCustomSteps: (steps) =>
         set({
-          stackCustomSteps: steps.map((step) => ({
+          stackCustomSteps: steps.slice(0, 5).map((step) => ({
             ...step,
             id: step.id.trim() || crypto.randomUUID(),
             label: step.label.trim() || 'Hive step',
@@ -271,14 +295,17 @@ export const useAuthStore = create<AuthState>()(
         speakReplies: s.speakReplies,
         voiceAutoListenOnOpen: s.voiceAutoListenOnOpen,
         voiceSilenceDelayMs: s.voiceSilenceDelayMs,
+        voiceListenTimeoutMs: s.voiceListenTimeoutMs,
         jarvisAutoApprove: s.jarvisAutoApprove,
         voiceAutoApproveActions: s.voiceAutoApproveActions,
+        composerSttProvider: s.composerSttProvider,
+        fasterWhisperModel: s.fasterWhisperModel,
         plan: s.plan,
         stackPreset: s.stackPreset,
         stackCustomSteps: s.stackCustomSteps,
         telemetryOptIn: s.telemetryOptIn,
       }),
-      version: 6,
+      version: 9,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -301,6 +328,20 @@ export const useAuthStore = create<AuthState>()(
         if (fromVersion < 5) {
           if (typeof state.jarvisAutoApprove !== 'boolean') state.jarvisAutoApprove = false;
           if (typeof state.voiceAutoApproveActions !== 'boolean') state.voiceAutoApproveActions = true;
+        }
+        if (fromVersion < 7) {
+          if (typeof state.voiceListenTimeoutMs !== 'number') {
+            state.voiceListenTimeoutMs = VOICE_LISTEN_TIMEOUT_MS_DEFAULT;
+          }
+        }
+        if (fromVersion < 8 && state.voiceEngine === 'system') {
+          state.voiceEngine = 'kokoro';
+        }
+        if (fromVersion < 9) {
+          if (state.composerSttProvider !== 'system' && state.composerSttProvider !== 'faster-whisper') {
+            state.composerSttProvider = 'system';
+          }
+          if (!state.fasterWhisperModel) state.fasterWhisperModel = 'small';
         }
         return state;
       },

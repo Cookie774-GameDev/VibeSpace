@@ -18,7 +18,6 @@ import type { Agent, AgentId, Message, MessageId, Part } from '@/types';
 import type { ChatId, ProjectId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
-import { useUIStore } from '@/stores/ui';
 import { runAgent } from './router';
 import type { LLMMessage } from './types';
 import { applyPersona } from '@/features/agents/personas';
@@ -547,8 +546,7 @@ export function startRuntimeListener(
         speechDeltaTimer = null;
       }
     };
-    const shouldSpeakReply =
-      detail.speakReply === true && useUIStore.getState().voiceModalOpen;
+    const shouldSpeakReply = detail.speakReply === true;
     if (shouldSpeakReply) {
       streamingVoice = createStreamingVoiceSession({
         voiceEngine: voiceSettings.voiceEngine,

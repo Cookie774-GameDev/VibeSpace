@@ -55,12 +55,18 @@ export type VoicePresetId = 'jarvis-prime' | 'aurora' | 'atlas' | 'nova' | 'sent
 
 /**
  * Spoken voice engine:
- *  - 'system': any OS/browser voice (Windows Natural / online enhanced) — default.
+ *  - 'system': any OS/browser voice (Windows Natural / online enhanced) — fallback.
  *  - 'local':  restricts playback to locally-installed system voices.
- *  - 'kokoro': local Kokoro-82M neural TTS (downloads once); falls back to
- *              the Windows Natural system voice if unavailable.
+ *  - 'kokoro': local Kokoro-82M neural TTS (downloads once on first launch);
+ *              default engine. Falls back to local then Windows voices if unavailable.
  */
 export type VoiceEngine = 'system' | 'local' | 'kokoro' | 'deepgram';
+
+/** Composer toolbar mic — speech-to-text provider for chat dictation. */
+export type ComposerSttProvider = 'system' | 'faster-whisper';
+
+/** Local faster-whisper model sizes for offline composer dictation. */
+export type FasterWhisperModelId = 'tiny' | 'small' | 'large-v3';
 
 /**
  * Provider IDs we know about.

@@ -264,6 +264,7 @@ export function Providers() {
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const plan = useAuthStore((s) => s.plan);
   const offlineMode = useAuthStore((s) => s.offlineMode);
+  const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
   const usageByProvider = useLiveQuery(async () => {
     const totals = await getMonthlyAllProviderUsage(BYOK_PROVIDER_IDS);
     return BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
@@ -350,7 +351,7 @@ export function Providers() {
         <div role="radiogroup" aria-label="Default provider" className="grid gap-2 max-w-xl">
           {DEFAULT_PROVIDER_OPTIONS.map((opt) => {
             const selected = defaultProvider === opt.id;
-            const selectable = isDefaultProviderSelectable(opt.id, apiKeys, offlineMode, plan);
+            const selectable = isDefaultProviderSelectable(opt.id, apiKeys, offlineMode, plan, defaultLocalModel);
             const hasKey = opt.id === 'mock' ? Boolean(apiKeys.mock?.trim()) : Boolean(apiKeys[opt.id]?.trim());
             const subscriptionHosted =
               planIncludesHostedChat(plan) && (opt.id === 'google' || opt.id === 'deepseek');

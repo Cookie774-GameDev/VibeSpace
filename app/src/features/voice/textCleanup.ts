@@ -148,6 +148,42 @@ export function prepareForSpeech(
 }
 
 /** Completed sentences from streamed assistant text (no tiny partial chunks). */
+function tryPullStreamingPartial(
+  tail: string,
+  spokenCleanLength: number,
+): { segment: string; advance: number } | null {
+  const trimmedStart = tail.length - tail.trimStart().length;
+  const trimmed = tail.trimStart();
+  if (!trimmed) return null;
+
+  if (spokenCleanLength === 0) {
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      const partial = words.slice(0, 2).join(' ');
+      if (partial.length >= 6) {
+        const endInTail = trimmedStart + partial.length;
+        const trailingSpace = tail[endInTail] === ' ' ? 1 : 0;
+        return { segment: partial, advance: endInTail + trailingSpace };
+      }
+    }
+    if (trimmed.length >= 10) {
+      let cut = trimmed.lastIndexOf(' ', Math.min(trimmed.length, 28));
+      if (cut < 8) cut = Math.min(trimmed.length, 12);
+      const partial = trimmed.slice(0, cut).trim();
+      if (partial.length >= 8) {
+        return { segment: partial, advance: trimmedStart + cut };
+      }
+    }
+    return null;
+  }
+
+  if (trimmed.length >= 8) {
+    return { segment: trimmed, advance: trimmedStart + trimmed.length };
+  }
+
+  return null;
+}
+
 export function pullNewSpeechSegments(
   rawAccumulated: string,
   spokenCleanLength: number,
@@ -169,6 +205,14 @@ export function pullNewSpeechSegments(
     if (sentence.length >= 4) {
       segments.push(sentence);
       advance = match.index + match[0].length;
+    }
+  }
+
+  if (segments.length === 0) {
+    const partial = tryPullStreamingPartial(tail, spokenCleanLength);
+    if (partial) {
+      segments.push(partial.segment);
+      advance = partial.advance;
     }
   }
 

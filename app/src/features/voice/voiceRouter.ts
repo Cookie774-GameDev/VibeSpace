@@ -53,6 +53,35 @@ export function voicePresetToTtsPreset(preset: VoicePresetId): VoiceTtsPreset {
 const kokoroAudioCache = new Map<string, Promise<{ audio: string; mime: string }>>();
 const KOKORO_CACHE_MAX = 64;
 
+let kokoroBootstrapPromise: Promise<void> | null = null;
+
+/** Background Kokoro download on desktop launch (non-blocking, idempotent). */
+export async function bootstrapKokoroVoiceOnLaunch(): Promise<void> {
+  if (kokoroBootstrapPromise) return kokoroBootstrapPromise;
+  kokoroBootstrapPromise = (async () => {
+    try {
+      await import('@tauri-apps/api/core');
+    } catch {
+      return;
+    }
+    await ensureKokoroReadyForSpeech();
+  })().catch(() => {
+    /* download is best-effort; Windows/local voice remains fallback */
+  });
+  return kokoroBootstrapPromise;
+}
+
+async function speakInstalledVoiceFallback(
+  text: string,
+  voicePreset: VoicePresetId,
+): Promise<void> {
+  try {
+    await speakText(text, { voicePreset, engine: 'local' });
+  } catch {
+    await speakText(text, { voicePreset, engine: 'system' });
+  }
+}
+
 function trimKokoroCache(): void {
   while (kokoroAudioCache.size > KOKORO_CACHE_MAX) {
     const oldest = kokoroAudioCache.keys().next().value;
@@ -172,6 +201,8 @@ export interface SpeakWithSettingsOptions {
   voicePreset?: VoicePresetId;
   text?: string;
   signal?: AbortSignal;
+  /** When true, speak even if the voice modal is closed (e.g. chat speak-replies). */
+  allowBackground?: boolean;
 }
 
 interface KokoroStreamItem {
@@ -280,10 +311,7 @@ class KokoroStreamingPlayerImpl implements KokoroStreamingPlayer {
         });
       } catch {
         if (this.stopped || this.controller.signal.aborted) return;
-        await speakText(item.text, {
-          voicePreset: this.voicePreset,
-          engine: 'system',
-        });
+        await speakInstalledVoiceFallback(item.text, this.voicePreset);
       } finally {
         if (this.items[0] === item) this.items.shift();
         this.pumpSynthesis();
@@ -316,10 +344,10 @@ export async function speakWithSettings(
 ): Promise<void> {
   const trimmed = (options.text ?? text).trim();
   if (!trimmed) return;
-  if (!isVoiceModuleOpen()) return;
+  if (!options.allowBackground && !isVoiceModuleOpen()) return;
 
   const state = useAuthStore.getState();
-  const engine = options.voiceEngine ?? state.voiceEngine ?? 'system';
+  const engine = options.voiceEngine ?? state.voiceEngine ?? 'kokoro';
   const voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 
@@ -334,7 +362,7 @@ export async function speakWithSettings(
     if (!(await kokoroLocalProvider.isAvailable())) {
       const ready = await ensureKokoroReadyForSpeech();
       if (!ready) {
-        await speakText(trimmed, { voicePreset, engine: 'system' });
+        await speakInstalledVoiceFallback(trimmed, voicePreset);
         return;
       }
     }
@@ -347,6 +375,9 @@ export async function speakWithSettings(
         volume: 1,
         signal: controller.signal,
       });
+    } catch {
+      if (controller.signal.aborted) return;
+      await speakInstalledVoiceFallback(trimmed, voicePreset);
     } finally {
       endPlaybackAbortScope(controller);
     }
@@ -370,7 +401,7 @@ export async function previewVoiceWithSettings(
   stopAllVoiceOutput();
   const stale = () => generation !== voicePreviewGeneration;
 
-  const engine = voiceEngine ?? useAuthStore.getState().voiceEngine ?? 'system';
+  const engine = voiceEngine ?? useAuthStore.getState().voiceEngine ?? 'kokoro';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 
   if (engine === 'deepgram') {

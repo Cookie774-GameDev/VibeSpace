@@ -100,6 +100,15 @@ export function clearLiveTree(
   liveTreeCache.delete(keyFor(projectId));
 }
 
+/** Iterate cached pane trees (for persistence flush). */
+export function forEachLiveTree(
+  fn: (projectId: string | null, tree: PaneNode) => void,
+): void {
+  for (const [cacheKey, tree] of liveTreeCache.entries()) {
+    fn(cacheKey === '__default__' ? null : cacheKey, tree);
+  }
+}
+
 /**
  * Test/debug helper. Not exported through the barrel; only the unit
  * tests reach for this directly.

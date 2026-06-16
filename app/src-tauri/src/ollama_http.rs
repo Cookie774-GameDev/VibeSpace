@@ -14,7 +14,7 @@
 //! Only loopback endpoints are allowed (defense-in-depth, mirrors local_ai.rs).
 
 use std::io::{BufRead, BufReader};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::blocking::Client;
 use serde::Serialize;
@@ -137,6 +137,13 @@ pub fn ollama_pull_model(app: AppHandle, model: String) -> Result<(), String> {
 
         let reader = BufReader::new(resp);
         let mut saw_success = false;
+        let mut last_emit = Instant::now();
+        let mut emit_throttled = |p: PullProgress, force: bool| {
+            if force || last_emit.elapsed() >= Duration::from_millis(120) {
+                emit(p);
+                last_emit = Instant::now();
+            }
+        };
         for line in reader.lines() {
             let line = match line {
                 Ok(l) => l,
@@ -163,9 +170,22 @@ pub fn ollama_pull_model(app: AppHandle, model: String) -> Result<(), String> {
             if st == "success" {
                 saw_success = true;
             }
-            emit(PullProgress { status: st, total, completed, percent, done: false, error: None });
+            emit_throttled(
+                PullProgress { status: st, total, completed, percent, done: false, error: None },
+                false,
+            );
         }
-        emit(PullProgress { status: if saw_success { "success".into() } else { "success".into() }, total: None, completed: None, percent: Some(100.0), done: true, error: None });
+        emit_throttled(
+            PullProgress {
+                status: if saw_success { "success".into() } else { "success".into() },
+                total: None,
+                completed: None,
+                percent: Some(100.0),
+                done: true,
+                error: None,
+            },
+            true,
+        );
     });
 
     Ok(())

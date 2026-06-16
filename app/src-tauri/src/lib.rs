@@ -41,8 +41,10 @@
 
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use std::time::Duration;
 
 mod dictation;
+mod faster_whisper;
 mod fsread;
 mod terminal;
 mod credentials;
@@ -75,6 +77,11 @@ fn refresh_app_branding(app: tauri::AppHandle) {
 
 #[derive(Clone, serde::Serialize)]
 struct ReopenPayload {
+    reason: &'static str,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PersistPayload {
     reason: &'static str,
 }
 
@@ -115,6 +122,8 @@ fn show_dictation_window(app: &tauri::AppHandle) {
 /// crate works for future iOS / Android builds via `npx tauri ios|android`.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    branding::init_platform_branding();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             println!("[single-instance] Reusing existing Jarvis service instance");
@@ -151,8 +160,9 @@ pub fn run() {
 
             let tray_icon = branding::build_tray_icon();
 
-            let _tray = tauri::tray::TrayIconBuilder::new()
+            let _tray = tauri::tray::TrayIconBuilder::with_id(branding::TRAY_ICON_ID)
                 .icon(tray_icon)
+                .tooltip("VibeSpace")
                 .menu(&tray_menu)
                 .on_menu_event(|app, event| {
                     match event.id.as_ref() {
@@ -160,7 +170,12 @@ pub fn run() {
                             show_main_window(app, "tray-show");
                         }
                         "exit" => {
-                            std::process::exit(0);
+                            let _ = app.emit("jarvis:persist-now", PersistPayload { reason: "tray-exit" });
+                            let app_handle = app.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(Duration::from_millis(750));
+                                app_handle.exit(0);
+                            });
                         }
                         _ => {}
                     }
@@ -218,6 +233,12 @@ pub fn run() {
             credentials::credential_get,
             credentials::credential_delete,
             dictation::dictation_paste_text,
+            dictation::trigger_os_dictation,
+            faster_whisper::faster_whisper_model_path,
+            faster_whisper::faster_whisper_check_installed,
+            faster_whisper::faster_whisper_status,
+            faster_whisper::faster_whisper_download,
+            faster_whisper::faster_whisper_transcribe,
             launcher::install_terminal_launcher,
             local_ai::ollama_installation_status,
             local_ai::ollama_start,
@@ -242,5 +263,14 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, _event| {});
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let _ = app_handle.emit(
+                    "jarvis:persist-now",
+                    PersistPayload {
+                        reason: "exit-requested",
+                    },
+                );
+            }
+        });
 }

@@ -208,7 +208,7 @@ export function TerminalView({
   cols = 100,
   className,
   hideChrome = false,
-  fontSize = 13,
+  fontSize = 9,
   agentSlug,
   onReady,
   onPendingCommandSent,
@@ -361,6 +361,7 @@ export function TerminalView({
     const outputBuffer = createTerminalOutputBuffer();
     let handleVisible: (() => void) | null = null;
     let onClear: ((e: Event) => void) | null = null;
+    let onPersistNow: (() => void) | null = null;
     let unregisterPaneClear: (() => void) | null = null;
     let startupRestoreMode = false;
     const webglDispose = createWebglDisposeTracker();
@@ -529,6 +530,14 @@ export function TerminalView({
         if (!displayData) continue;
         queueTerminalOutput(displayData, chunk);
       }
+    };
+
+    const flushTerminalPersistenceNow = () => {
+      if (outputRafToken != null) {
+        cancelAnimationFrame(outputRafToken);
+        flushTerminalOutput();
+      }
+      flushCurrentInput();
     };
 
     const init = async () => {
@@ -941,6 +950,10 @@ export function TerminalView({
         resetTerminalSurface();
       };
       window.addEventListener('jarvis:terminal:clear', onClear);
+      onPersistNow = () => {
+        if (!cancelled) flushTerminalPersistenceNow();
+      };
+      window.addEventListener('jarvis:terminal:persist-now', onPersistNow);
 
       // Theme follower -- re-skin xterm whenever the app toggles dark/light.
       mutationObserver = new MutationObserver((muts) => {
@@ -1013,6 +1026,7 @@ export function TerminalView({
         window.removeEventListener('jarvis:terminals:visible', handleVisible);
       }
       if (onClear) window.removeEventListener('jarvis:terminal:clear', onClear);
+      if (onPersistNow) window.removeEventListener('jarvis:terminal:persist-now', onPersistNow);
       unregisterPaneClear?.();
       if (paneId) clearTerminalPaneSessionId(paneId);
       resizeObserver?.disconnect();

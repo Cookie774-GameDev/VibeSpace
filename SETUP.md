@@ -86,6 +86,18 @@ Source maintainers or fork builders can wire a separate backend for development:
 4. Run the database migrations from the repo root with `supabase db push` if you have the Supabase CLI, or apply the SQL files in `supabase/migrations/` from oldest to newest in the Supabase SQL editor.
 5. Restart `npm run jarvis`.
 
+## Security for developers
+
+When you clone this repo or run from source:
+
+- **Never commit secrets** — `.env`, `.env.local`, API keys, Stripe keys, Supabase service-role keys, and signing certificates stay local. Only `.env.example` (placeholders) belongs in git.
+- **Use your own backend for forks** — copy `.env.example` to `app/.env.local` and fill in *your* Supabase anon key and URL. Do not paste production VibeSpace credentials into a public fork or screenshot.
+- **Internal docs** — `docs/plans/` may describe unreleased product ideas. Treat it as private planning material; do not redistribute excerpts with customer data or live keys.
+- **Official installers** — release builds embed only the public anon key and app URL required for end users. Maintainer-only keys are injected at CI build time and are not in this repository.
+- **Before pushing** — run `git status` and confirm no `.env*` files (except `.env.example`) are staged. `.gitignore` already excludes them; double-check if you force-added files.
+
+If you find a secret in git history, rotate the key immediately and do not open a public issue with the value.
+
 ## AI Provider keys (BYOK)
 
 Three options:

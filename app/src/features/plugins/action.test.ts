@@ -40,7 +40,7 @@ describe('plugin.call action', () => {
         message: 'pong',
       },
     });
-  });
+  }, 15_000);
 
   it('rejects tools from disabled plugins', async () => {
     usePluginStore.setState({

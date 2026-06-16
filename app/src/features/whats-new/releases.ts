@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.42';
+export const CURRENT_VERSION = '0.1.43';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,38 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.43',
+    date: '2026-06-16',
+    headline: 'Composer STT, workspace flush, and Hive polish',
+    summary:
+      'Adds local faster-whisper speech-to-text in the chat composer, workspace persistence flush on hide and shutdown, StackPicker for Hive presets, and terminal, voice, and installer improvements from parallel agent work.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Composer STT — dictate into the chat composer with on-device faster-whisper (Settings → Composer STT).',
+          'StackPicker — switch Hive stack presets in-thread without leaving the composer.',
+          'Workspace flush — terminals and workspace state persist on hide, shutdown, and tray exit.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Voice routing respects app foreground; wake word and streaming polish.',
+          'Local models catalog and Settings → Local Models refresh.',
+          'UTF-8-safe Windows installer rewrite for irm | iex one-liner installs.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Hive stack presets, classifier, and stack-complete edge function alignment.',
+          'Terminal live cache and session restore stability.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.42',
     date: '2026-06-15',

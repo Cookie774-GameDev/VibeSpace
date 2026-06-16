@@ -264,6 +264,16 @@ class ModelManagerImpl {
     if (installed) {
       const { ok } = await this.verifyChecksums();
       if (ok) return true;
+      const manifest = await this.getModelManifest();
+      const invoke = await getInvoke();
+      if (manifest && invoke) {
+        try {
+          await invoke<void>('kokoro_download', { manifest });
+          if ((await this.verifyChecksums()).ok) return true;
+        } catch {
+          /* fall through to repair */
+        }
+      }
       await this.repairModel();
       return (await this.verifyChecksums()).ok;
     }

@@ -41,6 +41,8 @@ export interface LLMRequest {
   max_output_tokens?: number;
   /** Per-call override of the agent's temperature. */
   temperature?: number;
+  /** Provider-specific options such as Grok `reasoning_effort`. */
+  provider_options?: Record<string, unknown>;
   /** Cancellation. Provider must honor this and stop streaming. */
   signal?: AbortSignal;
   /**

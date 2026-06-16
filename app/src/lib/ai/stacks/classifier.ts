@@ -5,7 +5,7 @@ const PRESET_TOKENS = new Set<StackPresetId>([
   'fast',
   'balanced',
   'quality',
-  'high',
+  'ultra',
   'custom',
 ]);
 

@@ -2,6 +2,34 @@ import { useAuthStore } from './auth';
 import { secureDeleteApiKey, secureGetApiKey } from '@/lib/security/secureApiKeys';
 import { DEFAULT_CUSTOM_STEPS } from '@/lib/ai/stacks/presets';
 
+describe('composer STT defaults', () => {
+  it('defaults to system provider and small faster-whisper model', () => {
+    expect(useAuthStore.getInitialState().composerSttProvider).toBe('system');
+    expect(useAuthStore.getInitialState().fasterWhisperModel).toBe('small');
+  });
+});
+
+describe('voice defaults', () => {
+  it('defaults new installs to Kokoro neural voice', () => {
+    expect(useAuthStore.getInitialState().voiceEngine).toBe('kokoro');
+  });
+
+  it('migrates legacy system voice to Kokoro on v8', async () => {
+    window.localStorage.setItem(
+      'jarvis-auth',
+      JSON.stringify({
+        state: {
+          voiceEngine: 'system',
+          voicePreset: 'jarvis-prime',
+        },
+        version: 7,
+      }),
+    );
+    await useAuthStore.persist.rehydrate();
+    expect(useAuthStore.getState().voiceEngine).toBe('kokoro');
+  });
+});
+
 describe('useAuthStore API key persistence', () => {
   beforeEach(async () => {
     window.localStorage.clear();
@@ -111,5 +139,19 @@ describe('useAuthStore API key persistence', () => {
   it('defaults Hive to off with documented custom steps', () => {
     expect(useAuthStore.getState().stackPreset).toBe('off');
     expect(useAuthStore.getState().stackCustomSteps).toEqual(DEFAULT_CUSTOM_STEPS);
+  });
+
+  it('caps Custom Hive to five model steps', () => {
+    useAuthStore.getState().setStackCustomSteps(
+      Array.from({ length: 7 }, (_, index) => ({
+        id: `step-${index}`,
+        label: `Step ${index}`,
+        provider: 'google',
+        model: 'gemini-3.5-flash',
+        systemAppend: `Prompt ${index}`,
+      })),
+    );
+
+    expect(useAuthStore.getState().stackCustomSteps).toHaveLength(5);
   });
 });

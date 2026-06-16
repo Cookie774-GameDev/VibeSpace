@@ -154,6 +154,13 @@ describe('voice module gate', () => {
     expect(h.speakText).not.toHaveBeenCalled();
   });
 
+  it('speakWithSettings runs in the background when allowBackground is set', async () => {
+    voiceModalOpen = false;
+    h.speakText.mockResolvedValue(undefined);
+    await speakWithSettings('Hello from Jarvis.', { allowBackground: true });
+    expect(h.speakText).toHaveBeenCalledTimes(1);
+  });
+
   it('speakWithSettings runs when the voice module is open', async () => {
     voiceModalOpen = true;
     h.speakText.mockResolvedValue(undefined);

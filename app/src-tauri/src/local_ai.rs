@@ -625,8 +625,14 @@ pub fn ollama_installation_status() -> OllamaInstallationStatus {
 /// Starts the Ollama background server silently via `ollama serve`.
 /// Never launches the Ollama desktop GUI.
 #[tauri::command]
-pub fn ollama_start() -> Result<(), String> {
-    let result = ensure_ollama_ready_internal(None);
+pub async fn ollama_start() -> Result<(), String> {
+    let result = match tauri::async_runtime::spawn_blocking(|| ensure_ollama_ready_internal(None)).await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            return Err(format!("Ollama startup task failed: {err}"));
+        }
+    };
     if result.ready {
         Ok(())
     } else {
@@ -639,8 +645,19 @@ pub fn ollama_start() -> Result<(), String> {
 /// API-first Ollama bootstrap: detect install, start `ollama serve` silently,
 /// and wait until `/api/version` responds.
 #[tauri::command]
-pub fn ensure_ollama_ready(base_url: Option<String>) -> OllamaEnsureResult {
-    ensure_ollama_ready_internal(base_url)
+pub async fn ensure_ollama_ready(base_url: Option<String>) -> OllamaEnsureResult {
+    match tauri::async_runtime::spawn_blocking(move || ensure_ollama_ready_internal(base_url)).await
+    {
+        Ok(result) => result,
+        Err(err) => OllamaEnsureResult {
+            ready: false,
+            api_reachable: false,
+            installed: false,
+            version: None,
+            phase: "error".to_string(),
+            detail: Some(format!("Ollama setup task failed: {err}")),
+        },
+    }
 }
 
 /// Manual troubleshooting only. Opens the Ollama desktop app if installed.

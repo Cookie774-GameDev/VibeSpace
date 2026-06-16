@@ -38,8 +38,9 @@ export function isDefaultProviderSelectable(
   apiKeys: Partial<Record<ProviderId, string>>,
   offlineMode: boolean,
   plan: PlanId,
+  localDefault = '',
 ): boolean {
-  const accessible = getAccessibleProviders(apiKeys, offlineMode, plan);
+  const accessible = getAccessibleProviders(apiKeys, offlineMode, plan, localDefault);
   if (accessible.includes(provider)) return true;
   if (provider === 'mock') return Boolean(apiKeys.mock?.trim());
   if (planIncludesHostedChat(plan) && SUBSCRIPTION_HOSTED_PROVIDERS.includes(provider)) {
@@ -63,8 +64,14 @@ export function getAgentEditorProviderOptions(args: {
   offlineMode: boolean;
   plan: PlanId;
   defaultProvider: ProviderId;
+  defaultLocalModel?: string;
 }): AgentEditorProviderOption[] {
-  const accessible = getAccessibleProviders(args.apiKeys, args.offlineMode, args.plan);
+  const accessible = getAccessibleProviders(
+    args.apiKeys,
+    args.offlineMode,
+    args.plan,
+    args.defaultLocalModel ?? '',
+  );
   const options: AgentEditorProviderOption[] = [
     {
       id: 'default',

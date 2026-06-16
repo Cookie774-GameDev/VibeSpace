@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Hosted stack step — uses Supabase edge `stack-complete` when the user
  * has a paid plan but no BYOK key for the requested provider.
  */
@@ -14,6 +14,7 @@ export interface HostedStackRequest {
   messages: LLMMessage[];
   temperature?: number;
   max_output_tokens?: number;
+  provider_options?: Record<string, unknown>;
   signal?: AbortSignal;
   onChunk?: (chunk: LLMStreamChunk) => void;
 }
@@ -58,6 +59,7 @@ export async function runHostedStackStep(req: HostedStackRequest): Promise<Hoste
       messages: req.messages,
       temperature: req.temperature,
       max_tokens: req.max_output_tokens,
+      provider_options: req.provider_options,
       stream: true,
     }),
     signal: req.signal,

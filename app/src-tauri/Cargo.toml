@@ -1,6 +1,6 @@
 [package]
 name = "jarvis"
-version = "0.1.42"
+version = "0.1.43"
 description = "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant."
 authors = ["Jarvis"]
 edition = "2021"
@@ -31,10 +31,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 sha2 = "0.10"
+base64 = "0.22"
 
-# PTY terminal backend (slice 1 of Wave 4 â€” multi-pane terminal grid).
-# `portable-pty` gives us a single API across ConPTY (Windows 10 1809+) and
-# the Unix forkpty path; `nanoid` is used for short opaque session ids.
+# PTY terminal backend (slice 1 of Wave 4 — multi-pane terminal grid).
 portable-pty = "0.8"
 nanoid = "0.4"
 ort = { version = "2.0.0-rc.9", features = ["ndarray"], optional = true }
@@ -42,10 +41,16 @@ misaki-rs = { version = "0.3.0", default-features = false, optional = true }
 hound = { version = "3.5.1", optional = true }
 ndarray = { version = "0.16", optional = true }
 ndarray-npy = { version = "0.9.1", default-features = false, features = ["npz", "compressed_npz"], optional = true }
-base64 = { version = "0.22", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 # Default development profile â€“ optimise compile times.
 [profile.dev]
@@ -77,4 +82,4 @@ strip = true
 # of these native deps. The release build opts in with `--features kokoro`.
 # When the feature is off, `kokoro_speak` returns `engine_not_available` and the
 # app falls back to the Windows Natural voice — never a crash.
-kokoro = ["dep:ort", "dep:misaki-rs", "dep:hound", "dep:ndarray", "dep:ndarray-npy", "dep:base64"]
+kokoro = ["dep:ort", "dep:misaki-rs", "dep:hound", "dep:ndarray", "dep:ndarray-npy"]

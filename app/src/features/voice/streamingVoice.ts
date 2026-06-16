@@ -3,7 +3,6 @@
  */
 import type { VoiceEngine, VoicePresetId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
-import { useUIStore } from '@/stores/ui';
 import { pullNewSpeechSegments, pullRemainingSpeech } from './textCleanup';
 import {
   createKokoroStreamingPlayer,
@@ -35,7 +34,7 @@ export class StreamingVoiceSession {
 
   constructor(options: StreamingVoiceOptions = {}) {
     const state = useAuthStore.getState();
-    this.engine = options.voiceEngine ?? state.voiceEngine ?? 'system';
+    this.engine = options.voiceEngine ?? state.voiceEngine ?? 'kokoro';
     this.voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
     this.kokoroStream =
       this.engine === 'kokoro' ? createKokoroStreamingPlayer(this.voicePreset) : null;
@@ -44,10 +43,6 @@ export class StreamingVoiceSession {
 
   onDelta(accumulatedRaw: string): void {
     if (this.stopped || !accumulatedRaw.trim()) return;
-    if (!useUIStore.getState().voiceModalOpen) {
-      this.haltPlayback();
-      return;
-    }
     const { segments, nextSpokenCleanLength } = pullNewSpeechSegments(
       accumulatedRaw,
       this.spokenCleanLength,
@@ -59,7 +54,7 @@ export class StreamingVoiceSession {
   }
 
   async onComplete(finalRaw: string): Promise<void> {
-    if (this.stopped || !useUIStore.getState().voiceModalOpen) return;
+    if (this.stopped) return;
     const { remainder, nextSpokenCleanLength } = pullRemainingSpeech(
       finalRaw,
       this.spokenCleanLength,
@@ -117,6 +112,7 @@ export class StreamingVoiceSession {
       await speakWithSettings(text, {
         voiceEngine: this.engine,
         voicePreset: this.voicePreset,
+        allowBackground: true,
       });
     });
   }

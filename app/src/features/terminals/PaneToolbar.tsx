@@ -22,7 +22,7 @@ import { clearTerminalSession } from './terminalClear';
  * responsiveness and legibility control.
  */
 export const FONT_SIZES = [10, 11, 12, 13, 14, 16, 18, 20] as const;
-export const DEFAULT_FONT_SIZE = 13;
+export const DEFAULT_FONT_SIZE = 9;
 
 /** Build the T-key cycle with the settings baseline as the wrap target (replaces fixed 10px). */
 export function buildFontSizeCycle(baseline: number): readonly number[] {

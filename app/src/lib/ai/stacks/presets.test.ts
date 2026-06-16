@@ -9,27 +9,38 @@ describe('Hive presets', () => {
     const steps = stepsForPreset('quality', 'general');
 
     expect(steps.map((step) => [step.id, step.provider, step.model])).toEqual([
+      ['orient', 'xai', 'grok-4.3'],
       ['draft', 'anthropic', 'claude-opus-4-8'],
-      ['critique', 'openai', 'gpt-5.5'],
+      ['harden', 'openai', 'gpt-5.5-codex'],
+      ['polish', 'google', 'gemini-3.5-flash'],
+    ]);
+    expect(steps[0]).toMatchObject({
+      provider_options: { reasoning_effort: 'high' },
+    });
+  });
+
+  it('builds Ultra as the five-step Supernova stack', () => {
+    const steps = stepsForPreset('ultra', 'general');
+
+    expect(steps.map((step) => [step.id, step.provider, step.model])).toEqual([
+      ['plan', 'anthropic', 'claude-opus-4-8'],
+      ['implement', 'deepseek', 'deepseek-v4-pro'],
+      ['harden', 'openai', 'gpt-5.5-codex'],
+      ['security', 'anthropic', 'claude-opus-4-8'],
       ['polish', 'google', 'gemini-3.5-flash'],
     ]);
   });
 
-  it('builds High with Grok X High orientation and Codex hardening', () => {
-    const steps = stepsForPreset('high', 'general');
-
-    expect(steps).toHaveLength(4);
-    expect(steps[0]).toMatchObject({
-      id: 'orient',
-      provider: 'xai',
-      model: 'grok-4.3',
-      provider_options: { reasoning_effort: 'high' },
-    });
-    expect(steps[2]).toMatchObject({
-      id: 'harden',
-      provider: 'openai',
-      model: 'gpt-5.5-codex',
-    });
+  it('builds Fast and Balanced from the new simulation tier doc', () => {
+    expect(stepsForPreset('fast', 'general').map((step) => [step.provider, step.model])).toEqual([
+      ['google', 'gemini-3.5-flash'],
+      ['anthropic', 'claude-opus-4-8'],
+    ]);
+    expect(stepsForPreset('balanced', 'general').map((step) => [step.provider, step.model])).toEqual([
+      ['xai', 'grok-4.3'],
+      ['anthropic', 'claude-opus-4-8'],
+      ['google', 'gemini-3.5-flash'],
+    ]);
   });
 
   it('uses task overrides for Quality code work', () => {
@@ -39,6 +50,7 @@ describe('Hive presets', () => {
       ['plan', 'anthropic', 'claude-opus-4-8'],
       ['implement', 'deepseek', 'deepseek-v4-pro'],
       ['review', 'openai', 'gpt-5.5-codex'],
+      ['security', 'anthropic', 'claude-opus-4-8'],
     ]);
   });
 

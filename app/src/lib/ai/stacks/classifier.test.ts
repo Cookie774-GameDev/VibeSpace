@@ -31,9 +31,9 @@ describe('Hive classifier', () => {
       preset: 'quality',
       text: 'explain the release',
     });
-    expect(parseStackSlashCommand('/hive high research compare models')).toMatchObject({
+    expect(parseStackSlashCommand('/hive ultra research compare models')).toMatchObject({
       matched: true,
-      preset: 'high',
+      preset: 'ultra',
       taskType: 'research',
       text: 'compare models',
     });

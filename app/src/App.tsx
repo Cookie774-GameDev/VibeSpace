@@ -49,6 +49,7 @@ import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
 import { DevConsoleHost } from '@/features/dev-console';
 import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
 import { UpdateWarningHost } from '@/features/updates/UpdateWarningHost';
+import { flushWorkspacePersistence } from '@/lib/persistence/workspaceFlush';
 import { GlobalDictationOverlay } from '@/features/global-dictation/GlobalDictationOverlay';
 import type { Agent, AgentId, Message } from '@/types';
 
@@ -359,6 +360,11 @@ function useBoot() {
         })
       ).catch((err) => console.warn('[boot] Ollama model discovery failed:', err));
 
+      // Phase 6: Kokoro neural voice (background — default TTS, ~89 MB one-time)
+      void import('@/features/voice/voiceRouter')
+        .then(({ bootstrapKokoroVoiceOnLaunch }) => bootstrapKokoroVoiceOnLaunch())
+        .catch((err) => console.warn('[boot] Kokoro voice bootstrap failed:', err));
+
       // Report accumulated errors
       if (errors.length > 0 && !cancelled) {
         toast.warning(`${errors.length} startup issue${errors.length>1?'s':''}`, errors.slice(0,3).join('; ') + (errors.length>3 ? ` (+${errors.length-3} more)` : ''));
@@ -410,6 +416,7 @@ function useDesktopReopenLifecycle() {
     // When the app is closed (hidden to tray) or torn down, stop any in-flight
     // speech so Jarvis does not keep talking in the background.
     const stopAllSpeech = () => {
+      flushWorkspacePersistence('before-hide');
       try {
         window.speechSynthesis?.cancel();
       } catch {
@@ -421,12 +428,15 @@ function useDesktopReopenLifecycle() {
       void import('@/features/voice/TtsService')
         .then((m) => m.TtsService.stop())
         .catch(() => {});
+      handleVoiceModuleClosed();
+      useUIStore.getState().setVoiceModalOpen(false);
     };
     window.addEventListener('pagehide', stopAllSpeech);
 
     let disposed = false;
     let unlistenReopen: (() => void) | null = null;
     let unlistenHide: (() => void) | null = null;
+    let unlistenPersistNow: (() => void) | null = null;
     void import('@tauri-apps/api/event')
       .then(({ listen }) =>
         listen('jarvis:before-hide', () => stopAllSpeech()),
@@ -439,6 +449,22 @@ function useDesktopReopenLifecycle() {
         unlistenHide = unlisten;
       })
       .catch(() => {});
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<{ reason?: string }>('jarvis:persist-now', (event) => {
+          flushWorkspacePersistence(event.payload?.reason ?? 'desktop-persist');
+        }),
+      )
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenPersistNow = unlisten;
+      })
+      .catch(() => {
+        /* Web preview or test runtime without Tauri events. */
+      });
     void import('@tauri-apps/api/event')
       .then(({ listen }) =>
         listen<{ reason?: string }>('jarvis:reopen', (event) => {
@@ -460,6 +486,7 @@ function useDesktopReopenLifecycle() {
       disposed = true;
       unlistenReopen?.();
       unlistenHide?.();
+      unlistenPersistNow?.();
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('pagehide', stopAllSpeech);
       document.removeEventListener('visibilitychange', onVisibilityChange);

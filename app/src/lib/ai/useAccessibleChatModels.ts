@@ -37,7 +37,12 @@ export function buildModelPickerGroups(args: {
   plan: ReturnType<typeof useAuthStore.getState>['plan'];
   defaultLocalModel: string;
 }): ModelPickerGroup[] {
-  const providers = getAccessibleProviders(args.apiKeys, args.offlineMode, args.plan).filter(
+  const providers = getAccessibleProviders(
+    args.apiKeys,
+    args.offlineMode,
+    args.plan,
+    args.defaultLocalModel,
+  ).filter(
     (provider) => provider !== 'local',
   );
 

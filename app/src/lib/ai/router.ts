@@ -231,6 +231,7 @@ export async function runAgent(req: {
   onChunk?: (chunk: LLMStreamChunk) => void;
   temperature?: number;
   max_output_tokens?: number;
+  provider_options?: Record<string, unknown>;
 }): Promise<LLMResponse> {
   const { provider, model } = resolveProviderAndModel(req.agent);
 
@@ -259,6 +260,7 @@ export async function runAgent(req: {
     onChunk: wrappedOnChunk,
     temperature: req.temperature,
     max_output_tokens: req.max_output_tokens,
+    provider_options: req.provider_options,
   };
 
   let response: LLMResponse;

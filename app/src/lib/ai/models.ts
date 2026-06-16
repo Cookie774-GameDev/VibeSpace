@@ -107,8 +107,24 @@ function hasCloudApiKey(
   return Boolean(apiKeys[provider]?.trim());
 }
 
-function localModelsAvailable(): boolean {
-  return _discoveredOllama.length > 0;
+function resolveLocalModelNames(localDefault = ''): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const add = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    names.push(trimmed);
+  };
+  for (const name of _discoveredOllama) add(name);
+  add(localDefault);
+  return names;
+}
+
+function localModelsAvailable(localDefault = ''): boolean {
+  return resolveLocalModelNames(localDefault).length > 0;
 }
 
 function planIncludesHostedChat(plan: PlanId): boolean {
@@ -132,9 +148,10 @@ export function getAccessibleProviders(
   apiKeys: Partial<Record<ProviderId, string>>,
   offlineMode: boolean,
   plan: PlanId = 'free',
+  localDefault = '',
 ): ProviderId[] {
   if (offlineMode) {
-    return localModelsAvailable() ? ['ollama', 'local'] : [];
+    return localModelsAvailable(localDefault) ? ['ollama', 'local'] : [];
   }
 
   const providers: ProviderId[] = [];
@@ -147,7 +164,7 @@ export function getAccessibleProviders(
     }
   }
   if (hasCloudApiKey('mock', apiKeys)) providers.push('mock');
-  if (localModelsAvailable()) {
+  if (localModelsAvailable(localDefault)) {
     providers.push('ollama', 'local');
   }
   return providers;
@@ -161,11 +178,11 @@ export function getAccessibleModelOptions(
   localDefault = OLLAMA_DEFAULT_MODEL,
   plan: PlanId = 'free',
 ): readonly ModelOption[] {
-  const accessible = getAccessibleProviders(apiKeys, offlineMode, plan);
+  const accessible = getAccessibleProviders(apiKeys, offlineMode, plan, localDefault);
   if (!accessible.includes(provider)) return [];
 
   if (provider === 'ollama' || provider === 'local') {
-    return _discoveredOllama.map((name) => ({
+    return resolveLocalModelNames(localDefault).map((name) => ({
       provider: 'ollama' as const,
       id: name,
       label: name,
@@ -225,11 +242,12 @@ export function defaultModelForProvider(provider: ProviderId, localModel = OLLAM
       return XAI_DEFAULT_MODEL;
     case 'ollama':
     case 'local':
-      if (localModelsAvailable()) {
+      if (localModelsAvailable(localModel)) {
         const preferred = localModel.trim();
+        const names = resolveLocalModelNames(localModel);
         if (
           preferred &&
-          _discoveredOllama.some(
+          names.some(
             (name) =>
               name.toLowerCase() === preferred.toLowerCase() ||
               name.toLowerCase().startsWith(`${preferred.toLowerCase()}:`),
@@ -237,7 +255,7 @@ export function defaultModelForProvider(provider: ProviderId, localModel = OLLAM
         ) {
           return preferred;
         }
-        return _discoveredOllama[0] ?? (localModel || OLLAMA_DEFAULT_MODEL);
+        return names[0] ?? (localModel || OLLAMA_DEFAULT_MODEL);
       }
       return localModel || OLLAMA_DEFAULT_MODEL;
     default:

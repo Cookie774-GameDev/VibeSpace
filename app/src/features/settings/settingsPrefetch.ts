@@ -7,6 +7,7 @@ export type SettingsTab =
   | 'localmodels'
   | 'appearance'
   | 'voice'
+  | 'composerstt'
   | 'phone'
   | 'ambient'
   | 'notifications'
@@ -25,6 +26,7 @@ const TAB_IMPORTS: Record<SettingsTab, () => Promise<unknown>> = {
   localmodels: () => import('./sections/LocalModels'),
   appearance: () => import('./sections/Appearance'),
   voice: () => import('./sections/Voice'),
+  composerstt: () => import('./sections/ComposerStt'),
   phone: () => import('./sections/PhoneVoice'),
   ambient: () => import('./sections/Ambient'),
   notifications: () => import('./sections/Notifications'),

@@ -225,7 +225,7 @@ const APEX: PlanDef = {
     UNLIMITED_LOCAL_KOKORO_LINE,
     GLOBAL_DICTATION_LINE,
     'SMS to your phone (~1,860 texts/mo included)',
-    'Highest priority hosted routing for Hive Quality and Hive High',
+    'Highest priority hosted routing for Hive Quality and Hive Ultra',
     'Custom quota buckets for AI credits, call time, and messages',
   ],
   hostedModels: [

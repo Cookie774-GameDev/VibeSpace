@@ -34,3 +34,9 @@ This crops `app-icon-source.png` to a square, runs `tauri icon`, and syncs
 
 Runtime branding re-applies on focus, resize, tray restore, and a Windows watchdog
 so WebView2 cannot leave the generic placeholder on the taskbar.
+
+On Windows, `branding_windows.rs` also:
+
+- calls `SetCurrentProcessExplicitAppUserModelID` (`ai.jarvis.desktop`)
+- sets both `ICON_SMALL` and `ICON_BIG` via `WM_SETICON` from the embedded
+  `icon.ico` resource in the `.exe` (Tauri `set_icon` only sets the small icon)

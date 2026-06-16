@@ -5,7 +5,9 @@ import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
 import { containsWakePhrase, readWakeWordEnabled, WAKE_WORD_SETTING_EVENT } from './wakeWord';
 import { VOICE_EXCLUSIVE_START_EVENT, VOICE_EXCLUSIVE_STOP_EVENT } from './VoiceService';
-import { speakText, VOICE_ACKNOWLEDGEMENT_TEXT } from './speechSynthesis';
+import { speakWithSettings } from './voiceRouter';
+import { VOICE_ACKNOWLEDGEMENT_TEXT } from './speechSynthesis';
+import { useAppForeground } from './useAppForeground';
 
 interface SpeechRecognitionAlternative {
   transcript: string;
@@ -60,6 +62,7 @@ function getRecognitionCtor(): WakeSpeechRecognitionCtor | null {
 export function WakeWordHost() {
   const voiceModalOpen = useUIStore((state) => state.voiceModalOpen);
   const setVoiceModalOpen = useUIStore((state) => state.setVoiceModalOpen);
+  const appForeground = useAppForeground();
   const [enabled, setEnabled] = React.useState(() => readWakeWordEnabled());
   const [status, setStatus] = React.useState<WakeStatus>('listening');
   const recognitionRef = React.useRef<WakeSpeechRecognition | null>(null);
@@ -81,7 +84,7 @@ export function WakeWordHost() {
   }, []);
 
   React.useEffect(() => {
-    if (!enabled || voiceModalOpen) {
+    if (!enabled || voiceModalOpen || !appForeground) {
       stopRecognition(recognitionRef);
       clearRestart(restartTimerRef);
       return;
@@ -98,6 +101,7 @@ export function WakeWordHost() {
     const scheduleRestart = () => {
       clearRestart(restartTimerRef);
       if (disposed || !readWakeWordEnabled() || useUIStore.getState().voiceModalOpen) return;
+      if (document.visibilityState !== 'visible') return;
       restartTimerRef.current = window.setTimeout(startRecognition, 800);
     };
 
@@ -110,7 +114,7 @@ export function WakeWordHost() {
     };
 
     const startRecognition = () => {
-      if (disposed || recognitionRef.current) return;
+      if (disposed || recognitionRef.current || document.visibilityState !== 'visible') return;
       const recognition = new RecognitionCtor();
       recognition.continuous = true;
       recognition.interimResults = true;
@@ -128,13 +132,15 @@ export function WakeWordHost() {
           if (alternative?.transcript) transcripts.push(alternative.transcript);
         }
         if (!containsWakePhrase(transcripts.join(' '))) return;
+        if (!appForeground) return;
 
         setStatus('heard');
         toast.success('Hey Jarvis heard', 'Opening voice.');
         stopRecognition(recognitionRef);
         setVoiceModalOpen(true);
         window.setTimeout(() => {
-          void speakText(VOICE_ACKNOWLEDGEMENT_TEXT).catch((err) => {
+          if (document.visibilityState !== 'visible') return;
+          void speakWithSettings(VOICE_ACKNOWLEDGEMENT_TEXT, { allowBackground: true }).catch((err) => {
             toast.warning(
               'Voice acknowledgement unavailable',
               err instanceof Error ? err.message : 'Jarvis could not play the acknowledgement.',
@@ -181,7 +187,7 @@ export function WakeWordHost() {
       clearRestart(restartTimerRef);
       stopRecognition(recognitionRef);
     };
-  }, [enabled, setVoiceModalOpen, voiceModalOpen]);
+  }, [appForeground, enabled, setVoiceModalOpen, voiceModalOpen]);
 
   return null;
 }

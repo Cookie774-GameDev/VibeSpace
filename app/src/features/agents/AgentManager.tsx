@@ -134,6 +134,7 @@ export function AgentManager() {
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const plan = useAuthStore((s) => s.plan);
   const defaultProvider = useAuthStore((s) => s.defaultProvider);
+  const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
   const ollamaOptions = useOllamaModelOptions();
 
   React.useEffect(() => {
@@ -152,8 +153,15 @@ export function AgentManager() {
   }, []);
 
   const providerOptions = React.useMemo(
-    () => getAgentEditorProviderOptions({ apiKeys, offlineMode, plan, defaultProvider }),
-    [apiKeys, offlineMode, plan, defaultProvider, ollamaOptions],
+    () =>
+      getAgentEditorProviderOptions({
+        apiKeys,
+        offlineMode,
+        plan,
+        defaultProvider,
+        defaultLocalModel,
+      }),
+    [apiKeys, offlineMode, plan, defaultProvider, defaultLocalModel, ollamaOptions],
   );
 
   const modelOptions = React.useMemo(() => {

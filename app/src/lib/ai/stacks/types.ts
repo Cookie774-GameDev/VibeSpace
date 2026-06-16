@@ -1,6 +1,6 @@
 import type { ProviderId } from '@/types';
 
-export type StackPresetId = 'off' | 'fast' | 'balanced' | 'quality' | 'high' | 'custom';
+export type StackPresetId = 'off' | 'fast' | 'balanced' | 'quality' | 'ultra' | 'custom';
 
 export type StackTaskType = 'general' | 'write' | 'code' | 'review' | 'research';
 

@@ -161,6 +161,13 @@ class VoiceServiceImpl extends VoiceEmitter {
   private wantsActive = false;
   private langPref = 'en-US';
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  /** `null` disables the cap (push-to-talk). */
+  private inactivityTimeoutMs: number | null = 15_000;
+
+  setInactivityTimeoutMs(ms: number | null): void {
+    this.inactivityTimeoutMs = ms;
+    if (this.active) this.armInactivityTimer();
+  }
 
   private clearInactivityTimer(): void {
     if (this.inactivityTimer) clearTimeout(this.inactivityTimer);
@@ -169,13 +176,16 @@ class VoiceServiceImpl extends VoiceEmitter {
 
   private armInactivityTimer(): void {
     this.clearInactivityTimer();
+    if (this.inactivityTimeoutMs === null) return;
+    const timeoutMs = this.inactivityTimeoutMs;
     this.inactivityTimer = setTimeout(() => {
       this.wantsActive = false;
+      const seconds = Math.round(timeoutMs / 1000);
       this.emit('voice:timeout', {
-        reason: 'Speech-to-text stopped after 30 seconds without speech activity.',
+        reason: `Speech-to-text stopped after ${seconds} second${seconds === 1 ? '' : 's'} without speech activity.`,
       });
       this.stopListening();
-    }, 30_000);
+    }, timeoutMs);
   }
 
   /** True if the host browser supports the Web Speech API. */

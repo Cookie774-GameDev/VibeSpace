@@ -18,6 +18,8 @@ import {
   isOllamaReachable,
   listOllamaModelInfo,
   LOCAL_MODEL_CATALOG,
+  catalogDisplayName,
+  catalogFamilyName,
   ollamaBaseUrl,
   OLLAMA_DEFAULT_BASE,
   pullOllamaModel,
@@ -72,6 +74,53 @@ function subscribeToDownloads(cb: () => void): () => void {
   _downloadListeners.push(cb);
   return () => {
     _downloadListeners = _downloadListeners.filter((l) => l !== cb);
+  };
+}
+
+function formatPullProgress(model: string, progress: OllamaPullProgress | null): PullState {
+  const family = catalogFamilyName(model);
+  const display = catalogDisplayName(model);
+  if (!progress) {
+    return { model, status: `Preparing ${family}…` };
+  }
+
+  const raw = progress.status?.trim() ?? '';
+  const preparing =
+    raw === 'Preparing…' ||
+    raw.startsWith('Starting download') ||
+    /checking|installing|starting|waiting/i.test(raw);
+  if (preparing) {
+    return { ...progress, model, status: `Preparing ${family}…` };
+  }
+
+  const early =
+    progress.percent === undefined ||
+    progress.percent < 2 ||
+    /manifest|pulling/i.test(raw);
+  if (early) {
+    return { ...progress, model, status: `Downloading ${family}…` };
+  }
+
+  const detail = raw && raw !== 'success' ? ` — ${raw}` : '';
+  return { ...progress, model, status: `Downloading ${display}${detail}` };
+}
+
+function createPullProgressReporter(model: string, onUiUpdate: (state: PullState) => void) {
+  let lastUiAt = 0;
+  return (progress: OllamaPullProgress) => {
+    const next = formatPullProgress(model, progress);
+    const now = Date.now();
+    const force = Boolean(progress.done) || now - lastUiAt >= 150;
+    _downloads.set(model, {
+      status: progress.done ? 'done' : 'downloading',
+      progress: next,
+      abortController: _downloads.get(model)?.abortController,
+    });
+    notifyDownloadListeners();
+    if (force) {
+      lastUiAt = now;
+      onUiUpdate(next);
+    }
   };
 }
 
@@ -328,13 +377,14 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
 
     // Step 1: bootstrap Ollama if needed
     const controller = new AbortController();
+    const family = catalogFamilyName(model);
     _downloads.set(model, {
       status: 'downloading',
-      progress: { model, status: 'Preparing…' },
+      progress: { model, status: `Preparing ${family}…` },
       abortController: controller,
     });
     notifyDownloadListeners();
-    setPullState({ model, status: 'Preparing…' });
+    setPullState({ model, status: `Preparing ${family}…` });
 
     const ready = await ensureOllamaReady(controller.signal);
     if (!ready) {
@@ -350,36 +400,24 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
     setReachable(true);
 
     // Step 2: download
-    _downloads.set(model, {
-      status: 'downloading',
-      progress: { model, status: 'Starting download…' },
-      abortController: controller,
-    });
-    notifyDownloadListeners();
-    setPullState({ model, status: 'Starting download…' });
+    const reportPullProgress = createPullProgressReporter(model, setPullState);
+    reportPullProgress({ status: `Downloading ${family}…` });
 
     try {
       await pullOllamaModel(
         model,
-        (progress) => {
-          const next: PullState = { model, ...progress };
-          _downloads.set(model, {
-            status: progress.done ? 'done' : 'downloading',
-            progress: next,
-            abortController: controller,
-          });
-          notifyDownloadListeners();
-          setPullState(next);
-        },
+        reportPullProgress,
         controller.signal,
       );
+      const doneState = formatPullProgress(model, { status: 'success', done: true, percent: 100 });
       _downloads.set(model, {
         status: 'done',
-        progress: { model, status: 'success', done: true, percent: 100 },
+        progress: doneState,
       });
       notifyDownloadListeners();
+      setPullState(doneState);
       connectLocalModelToChat(model);
-      toast.success('Model ready', `${model} is installed and active in chat.`);
+      toast.success('Model ready', `${catalogDisplayName(model)} is installed and active in chat.`);
       await scan(false);
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') {
@@ -659,7 +697,7 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-ui-strong text-foreground">{model.name}</span>
+                    <span className="font-mono text-ui-strong text-foreground">{model.displayName}</span>
                     <Badge variant={model.recommended ? 'accent' : 'outline'}>{model.label}</Badge>
                     <Badge variant="outline">{model.size}</Badge>
                     {modelInstalled ? (
@@ -694,7 +732,7 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
                     disabled={anyDownloading || busy}
                   >
                     <Download className={cn('h-3.5 w-3.5', pullingThisModel && 'animate-pulse')} />
-                    {pullingThisModel ? 'Downloading' : downloadFailed ? 'Retry' : 'Download'}
+                    {pullingThisModel ? `Downloading ${catalogFamilyName(model.name)}` : downloadFailed ? 'Retry' : 'Download'}
                   </Button>
                 )}
               </div>
@@ -730,11 +768,12 @@ function ConnectionBadge({
 
 function PullProgressCard({ state, onCancel }: { state: PullState; onCancel: () => void }) {
   const percent = state.percent === undefined ? null : Math.round(state.percent);
+  const title = catalogDisplayName(state.model);
   return (
     <div className="max-w-2xl rounded-md border border-accent-cyan/35 bg-accent-cyan/5 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate font-mono text-ui-strong text-foreground">{state.model}</p>
+          <p className="truncate text-ui-strong text-foreground">{title}</p>
           <p className="truncate text-metadata text-muted-foreground">{state.status}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">

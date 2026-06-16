@@ -75,7 +75,7 @@ export type LeafBase = {
    * when nothing is attached.
    */
   connectedFiles?: string[];
-  /** Font size in px. Cycled by the pane toolbar. Defaults to 13 if absent. */
+  /** Font size in px. Cycled by the pane toolbar. Defaults to settings baseline if absent. */
   fontSize?: number;
 };
 

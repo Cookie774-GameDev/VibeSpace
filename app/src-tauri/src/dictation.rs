@@ -5,6 +5,12 @@ use std::{
     time::Duration,
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[tauri::command]
 pub fn dictation_paste_text(text: String) -> Result<(), String> {
     let clean = text.trim();
@@ -175,5 +181,58 @@ fn paste_clipboard() -> Result<(), String> {
         Ok(())
     } else {
         Err("xdotool paste failed".into())
+    }
+}
+
+/// Trigger the platform's native speech dictation UI when available.
+/// Windows: Win+H voice typing. macOS/Linux: returns an error (Web Speech is used in-app).
+#[tauri::command]
+pub fn trigger_os_dictation() -> Result<(), String> {
+    trigger_os_dictation_inner()
+}
+
+fn trigger_os_dictation_inner() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+            VK_H, VK_LWIN, VIRTUAL_KEY,
+        };
+
+        fn key_input(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: vk,
+                        wScan: 0,
+                        dwFlags: flags,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            }
+        }
+
+        let inputs = [
+            key_input(VK_LWIN, KEYBD_EVENT_FLAGS(0)),
+            key_input(VK_H, KEYBD_EVENT_FLAGS(0)),
+            key_input(VK_H, KEYBD_EVENT_FLAGS(0x0002)),
+            key_input(VK_LWIN, KEYBD_EVENT_FLAGS(0x0002)),
+        ];
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent == inputs.len() as u32 {
+            Ok(())
+        } else {
+            Err("Could not trigger Windows voice typing (Win+H).".into())
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err(
+            "Native OS dictation shortcut is only available on Windows. Use built-in Web Speech in the composer."
+                .into(),
+        )
     }
 }

@@ -191,6 +191,19 @@ async function getVoices(): Promise<SpeechSynthesisVoice[]> {
 export async function speakText(text: string, options: SpeakTextOptions = {}): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('Speech text must be non-empty.');
+
+  const state = useAuthStore.getState();
+  const engine = options.engine ?? state.voiceEngine ?? 'kokoro';
+  if (engine === 'kokoro') {
+    const { speakWithSettings } = await import('./voiceRouter');
+    await speakWithSettings(trimmed, {
+      voicePreset: options.voicePreset ?? state.voicePreset,
+      voiceEngine: 'kokoro',
+      allowBackground: true,
+    });
+    return;
+  }
+
   const synthesis = getSpeechSynthesis();
   if (!synthesis || typeof SpeechSynthesisUtterance === 'undefined') {
     throw new Error('Speech synthesis is not available in this runtime.');
@@ -202,8 +215,6 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
   if (requestId !== activeSpeechRequestId) return;
 
-  const state = useAuthStore.getState();
-  const engine = options.engine ?? state.voiceEngine ?? 'system';
   const preset = options.voicePreset ?? state.voicePreset ?? DEFAULT_VOICE_PRESET;
   const persona = options.persona ?? state.personaPreset ?? 'jarvis';
   const useVoiceProfile = options.voicePreset !== undefined || options.persona === undefined;
@@ -284,6 +295,6 @@ export function speakVoicePreview(
   text = VOICE_PREVIEW_TEXT,
   engine?: VoiceEngine,
 ): Promise<void> {
-  const resolvedEngine = engine ?? useAuthStore.getState().voiceEngine ?? 'system';
+  const resolvedEngine = engine ?? useAuthStore.getState().voiceEngine ?? 'kokoro';
   return speakText(text, { voicePreset: preset, engine: resolvedEngine });
 }

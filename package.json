@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.1.42",
+  "version": "0.1.43",
   "private": true,
   "description": "VibeSpace — the AI workspace where every model, agent, voice, and task lives under one roof. Jarvis voice and calling built in.",
   "license": "Apache-2.0",

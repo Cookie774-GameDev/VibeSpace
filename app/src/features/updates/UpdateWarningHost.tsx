@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Clock, Download } from 'lucide-react';
 import { checkForAppUpdate, getAutoUpdateEnabled } from '@/lib/updates';
+import { flushWorkspacePersistence } from '@/lib/persistence/workspaceFlush';
 import { toast } from '@/components/ui/toast';
 import { isTauri } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -68,6 +69,7 @@ export function UpdateWarningHost() {
     if (isUpdating) return;
     clearCountdown();
     setIsUpdating(true);
+    flushWorkspacePersistence('update-warning-countdown');
     toast.info('Installing update', 'Downloading and installing the signed update. Jarvis will relaunch shortly.');
     try {
       await checkForAppUpdate({ install: true });
@@ -137,6 +139,7 @@ export function UpdateWarningHost() {
   };
 
   const handleUpdateNow = () => {
+    flushWorkspacePersistence('update-now-button');
     void triggerSilentUpdate();
   };
 

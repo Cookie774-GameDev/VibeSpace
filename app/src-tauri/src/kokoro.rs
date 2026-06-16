@@ -31,12 +31,18 @@ use tauri::Emitter;
 
 const CHUNK: usize = 65_536;
 const PLACEHOLDER_SHA: &str = "REPLACE_WITH_REAL_SHA256";
+const MANIFEST_FILENAME: &str = "manifest.json";
+const DEFAULT_KOKORO_FILES: &[&str] = &[
+    "model_quantized.onnx",
+    "bm_george.bin",
+    "bf_emma.bin",
+];
 
 /// Last manifest seen by a download, so resume/repair can re-run without the
 /// frontend re-sending it.
 static LAST_MANIFEST: Mutex<Option<Manifest>> = Mutex::new(None);
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 pub struct ManifestFile {
     name: String,
     url: String,
@@ -52,7 +58,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 pub struct Manifest {
     files: Vec<ManifestFile>,
 }
@@ -226,6 +232,40 @@ fn download_file(app: &tauri::AppHandle, file: &ManifestFile, dir: &Path) -> Res
     }
     fs::rename(&part_path, &final_path).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn manifest_file_path() -> PathBuf {
+    model_dir().join(MANIFEST_FILENAME)
+}
+
+fn load_persisted_manifest() -> Option<Manifest> {
+    let text = fs::read_to_string(manifest_file_path()).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn persist_manifest(manifest: &Manifest) -> Result<(), String> {
+    fs::create_dir_all(model_dir()).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
+    fs::write(manifest_file_path(), json).map_err(|e| e.to_string())
+}
+
+fn resolve_manifest() -> Option<Manifest> {
+    if let Ok(guard) = LAST_MANIFEST.lock() {
+        if let Some(manifest) = guard.as_ref() {
+            return Some(manifest.clone());
+        }
+    }
+    let loaded = load_persisted_manifest()?;
+    if let Ok(mut guard) = LAST_MANIFEST.lock() {
+        *guard = Some(loaded.clone());
+    }
+    Some(loaded)
+}
+
+fn default_assets_installed(dir: &Path) -> bool {
+    DEFAULT_KOKORO_FILES
+        .iter()
+        .all(|name| dir.join(name).exists())
 }
 
 // ─── Real Kokoro-82M inference (feature = "kokoro") ────────────────────────────
@@ -640,14 +680,14 @@ pub fn kokoro_check_installed() -> InstalledCheck {
             }
         }
     }
-    let manifest = LAST_MANIFEST.lock().ok().and_then(|m| m.clone());
+    let manifest = resolve_manifest();
     let installed = match manifest {
         Some(m) => m
             .files
             .iter()
             .filter(|f| f.required)
             .all(|f| dir.join(&f.name).exists()),
-        None => files.iter().any(|f| f.ends_with(".onnx")),
+        None => default_assets_installed(&dir),
     };
     InstalledCheck { installed, files }
 }
@@ -655,12 +695,14 @@ pub fn kokoro_check_installed() -> InstalledCheck {
 #[tauri::command]
 pub fn kokoro_verify_checksums() -> ChecksumResult {
     let dir = model_dir();
-    let manifest = LAST_MANIFEST.lock().ok().and_then(|m| m.clone());
-    let Some(manifest) = manifest else {
-        return ChecksumResult {
-            ok: false,
-            corrupt: Vec::new(),
-        };
+    let manifest = match resolve_manifest() {
+        Some(manifest) => manifest,
+        None => {
+            return ChecksumResult {
+                ok: default_assets_installed(&dir),
+                corrupt: Vec::new(),
+            };
+        }
     };
     let mut corrupt = Vec::new();
     for f in &manifest.files {
@@ -697,6 +739,7 @@ pub fn kokoro_download(app: tauri::AppHandle, manifest: Manifest) -> Result<(), 
     if let Ok(mut slot) = LAST_MANIFEST.lock() {
         *slot = Some(manifest.clone());
     }
+    persist_manifest(&manifest)?;
     let dir = model_dir();
     for file in &manifest.files {
         download_file(&app, file, &dir)?;
@@ -706,11 +749,7 @@ pub fn kokoro_download(app: tauri::AppHandle, manifest: Manifest) -> Result<(), 
 
 #[tauri::command]
 pub fn kokoro_resume_download(app: tauri::AppHandle) -> Result<(), String> {
-    let manifest = LAST_MANIFEST
-        .lock()
-        .ok()
-        .and_then(|m| m.clone())
-        .ok_or_else(|| "no_manifest".to_string())?;
+    let manifest = resolve_manifest().ok_or_else(|| "no_manifest".to_string())?;
     let dir = model_dir();
     for file in &manifest.files {
         download_file(&app, file, &dir)?;
@@ -721,7 +760,7 @@ pub fn kokoro_resume_download(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn kokoro_delete_corrupt() -> Result<(), String> {
     let dir = model_dir();
-    let manifest = LAST_MANIFEST.lock().ok().and_then(|m| m.clone());
+    let manifest = resolve_manifest();
     if let Some(manifest) = manifest {
         for f in &manifest.files {
             let p = dir.join(&f.name);

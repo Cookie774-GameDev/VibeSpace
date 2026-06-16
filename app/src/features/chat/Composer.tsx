@@ -13,7 +13,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui';
 import { messageRepo } from '@/lib/db';
-import { cn, renderHotkey } from '@/lib/utils';
+import { cn, isTauri, renderHotkey } from '@/lib/utils';
 import { HOTKEYS } from '@/lib/hotkeys';
 import { buildUsageSummary } from '@/lib/usage/usageSummary';
 import { useAgentStore } from '@/stores/agents';
@@ -21,6 +21,22 @@ import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { VoiceService } from '@/features/voice/VoiceService';
 import { MicWaveform } from './MicWaveform';
+import {
+  cleanupAudioRecorder,
+  encodeWav,
+  FasterWhisperManager,
+  getAudioContextCtor,
+  getComposerSttProvider,
+  getFasterWhisperModel,
+  isSystemSttAvailable,
+  startBatchAudioRecorder,
+  STT_INACTIVITY_MS,
+  STT_ACTIVITY_RMS,
+  transcribeFasterWhisper,
+  transcribeGroq as transcribeGroqApi,
+  triggerWindowsNativeDictation,
+  type FasterWhisperRecorder,
+} from '@/features/composer-stt';
 import { JARVIS_COMMAND_CATALOG } from '@/features/assistant/commands';
 import { toast } from '@/components/ui/toast';
 import type { Agent, AgentId, ChatId, ProviderId } from '@/types';
@@ -52,6 +68,7 @@ import {
   ModelPickerTypeahead,
   type ModelPickerTypeaheadRef,
 } from './ModelPickerTypeahead';
+import { StackPicker } from './StackPicker';
 import { InputToken, TokenList } from './InputToken';
 import { getChatDragKind, getChatDropPayload } from './dropPayload';
 import { SKILLS } from '@/lib/agents/skills';
@@ -127,11 +144,6 @@ interface ConfirmedCommand {
   label: string;
 }
 
-type AudioContextCtor = typeof AudioContext;
-
-const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
-const STT_INACTIVITY_MS = 30_000;
-const STT_ACTIVITY_RMS = 0.015;
 const WINDOWS_FILE_PATH_RE =
   /[A-Za-z]:\\[^\r\n<>:"|?*]+?\.(?:json|cs|ts|tsx|js|jsx|md|txt|html|css|scss|py|rs|go|java|cpp|c|h|hpp|xml|yaml|yml|toml|ini|sql)\b/gi;
 
@@ -233,55 +245,6 @@ function extractMentionedAgentIds(text: string, agents: Record<string, Agent>): 
   return out;
 }
 
-function getAudioContextCtor(): AudioContextCtor | null {
-  if (typeof window === 'undefined') return null;
-  return window.AudioContext ?? ((window as unknown as { webkitAudioContext?: AudioContextCtor }).webkitAudioContext ?? null);
-}
-
-function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
-  const sampleCount = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const buffer = new ArrayBuffer(44 + sampleCount * 2);
-  const view = new DataView(buffer);
-  let offset = 0;
-  const writeString = (value: string) => {
-    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
-    offset += value.length;
-  };
-  writeString('RIFF');
-  view.setUint32(offset, 36 + sampleCount * 2, true); offset += 4;
-  writeString('WAVE');
-  writeString('fmt ');
-  view.setUint32(offset, 16, true); offset += 4;
-  view.setUint16(offset, 1, true); offset += 2;
-  view.setUint16(offset, 1, true); offset += 2;
-  view.setUint32(offset, sampleRate, true); offset += 4;
-  view.setUint32(offset, sampleRate * 2, true); offset += 4;
-  view.setUint16(offset, 2, true); offset += 2;
-  view.setUint16(offset, 16, true); offset += 2;
-  writeString('data');
-  view.setUint32(offset, sampleCount * 2, true); offset += 4;
-  for (const chunk of chunks) {
-    for (let i = 0; i < chunk.length; i += 1) {
-      const sample = Math.max(-1, Math.min(1, chunk[i] ?? 0));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      offset += 2;
-    }
-  }
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
-function cleanupAudioRecorder(
-  processor: ScriptProcessorNode | null,
-  source: MediaStreamAudioSourceNode | null,
-  context: AudioContext | null,
-  stream: MediaStream | null,
-): void {
-  try { processor?.disconnect(); } catch { /* already disconnected */ }
-  try { source?.disconnect(); } catch { /* already disconnected */ }
-  try { void context?.close(); } catch { /* already closed */ }
-  stream?.getTracks().forEach((t) => t.stop());
-}
-
 function pluginConnectionLabel(
   connection: { accountLabel?: string; configuredFields: string[] } | undefined,
 ): string | undefined {
@@ -304,7 +267,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const [attachedPlugins, setAttachedPlugins] = useState<string[]>([]);
   const [attachedContexts, setAttachedContexts] = useState<ContextAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  // V2 — speech-to-text in the composer.
+  // V2 ������ speech-to-text in the composer.
   const [sttListening, setSttListening] = useState(false);
   const [sttInterim, setSttInterim] = useState('');
   const composerSttEnabled = useUIStore((s) => s.composerStt);
@@ -326,6 +289,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const webSpeechAnalyserRef = useRef<AnalyserNode | null>(null);
   const webSpeechVolumeTimerRef = useRef<number | null>(null);
   const voiceReplyRequestedRef = useRef(false);
+  const batchRecorderRef = useRef<FasterWhisperRecorder | null>(null);
 
   const agents = useAgentStore((s) => s.agents);
   const provider = useAuthStore((s) => s.defaultProvider);
@@ -454,6 +418,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     clearAudioSilenceTimer();
     stopWebSpeechVolumeMeter();
     volumeRef.current = 0;
+    batchRecorderRef.current?.stop();
+    batchRecorderRef.current = null;
     const context = audioContextRef.current;
     const chunks = wavChunksRef.current;
     cleanupAudioRecorder(audioProcessorRef.current, audioSourceRef.current, audioContextRef.current, mediaStreamRef.current);
@@ -726,7 +692,16 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     if (cmd === 'hive') {
       if (rest) return false;
       await addSystem(
-        'Hive is ready. Send /hive fast, /hive balanced, /hive quality, /hive high, or /hive custom followed by your message.',
+        [
+          'Hive modes:',
+          '- /Hive fast   Gemini draft ��! Opus quick check',
+          '- /Hive balanced   Grok X High orient ��! Opus draft ��! Gemini polish',
+          '- /Hive quality   confirmed simulated Fable-beating stack (94.4)',
+          '- /Hive ultra   5-step Supernova stack for critical work',
+          '- /Hive custom   your Settings ��! Hive custom stack (max 5 models)',
+          '',
+          'Use it like: /Hive quality review this plan',
+        ].join('\n'),
       );
       return true;
     }
@@ -756,7 +731,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     }
     if (cmd === 'skills') {
       const available = Object.values(SKILLS)
-        .map((skill) => `- ${skill.name} (${skill.id}) — ${skill.description}`)
+        .map((skill) => `- ${skill.name} (${skill.id}) ������ ${skill.description}`)
         .join('\n');
       await addSystem(`Available skills:\n${available}\n\nType /skills and choose one from the dropdown to apply it to your next message.`);
       return true;
@@ -779,9 +754,9 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       await addSystem(`Jarvis command catalog (${JARVIS_COMMAND_CATALOG.length}):\n${JARVIS_COMMAND_CATALOG.map((c, i) => `${i + 1}. ${c}`).join('\n')}`);
       return true;
     }
-    // V3 — attach a context map to this chat.
-    // /contextmap           → list available maps
-    // /contextmap <name>    → attach the named map (prefix match)
+    // V3 ������ attach a context map to this chat.
+    // /contextmap           ������ list available maps
+    // /contextmap <name>    ������ attach the named map (prefix match)
     if (cmd === 'contextmap') {
       const projectId = useAuthStore.getState().projectId;
       const maps = projectId ? loadStoredContextMaps(projectId) : [];
@@ -829,8 +804,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       await addSystem(`Attached context map '${matched.name}'.`);
       return true;
     }
-    // V3 — attach a project file to this chat.
-    // /file <absolute path>  → attach the file
+    // V3 ������ attach a project file to this chat.
+    // /file <absolute path>  ������ attach the file
     if (cmd === 'file') {
       if (rest) {
         setAttachedFiles((cur) => (cur.includes(rest) ? cur : [...cur, rest]).slice(0, 8));
@@ -923,7 +898,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       }
       // Repo stamps id + timestamps + bumps parent chat.updated_at.
       // The runtime listener (started in App.tsx) will read history
-      // from the same store after we dispatch the event below — so it
+      // from the same store after we dispatch the event below ������ so it
       // sees the user turn we just wrote and skips creating its own
       // user message. (See runtime.ts: prior versions wrote a second
       // copy here, producing the duplicate-bubble bug surfaced in the
@@ -1190,7 +1165,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     return () => window.removeEventListener('jarvis:composer:insert-text', onInsertText as EventListener);
   }, [chatId]);
 
-  // ---------- V2 — speech-to-text wiring ----------
+  // ---------- V2 ������ speech-to-text wiring ----------
   // Subscribe to VoiceService events when the user toggles STT on. We keep
   // partials in a separate state so they show as a faded preview without
   // mutating the saved draft until they finalize.
@@ -1198,7 +1173,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     if (!sttListening) return;
 
     const offStart = VoiceService.on('voice:start', () => {
-      // intentionally empty — UI already reflects sttListening=true
+      // intentionally empty ������ UI already reflects sttListening=true
     });
     const offPartial = VoiceService.on('voice:partial', ({ text: partial }) => {
       setSttInterim(partial);
@@ -1226,7 +1201,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       }
     });
     const offEnd = VoiceService.on('voice:end', () => {
-      // Engine ended — sync our flag if the user didn't already turn off.
+      // Engine ended ������ sync our flag if the user didn't already turn off.
       if (!VoiceService.isListening() && !VoiceService.wantsListening()) {
         setSttListening(false);
         stopWebSpeechVolumeMeter();
@@ -1299,20 +1274,22 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   };
 
   const startStt = () => {
-    const groqKey = useAuthStore.getState().apiKeys.groq;
-    if (VoiceService.isSupported()) {
-      // Defensive: some Tauri WebView2 builds expose the API but throw a
-      // synchronous DOMException on `start()`. Don't flip the visible
-      // listening flag until we know the engine accepted the call — and
-      // never let the click handler propagate an unhandled exception, which
-      // would crash the React tree under StrictMode.
+    if (getComposerSttProvider() === 'faster-whisper') {
+      void startFasterWhisperStt();
+      return;
+    }
+    void startSystemStt();
+  };
+
+  const startSystemStt = async () => {
+    if (isSystemSttAvailable()) {
       try {
         setSttInterim('Listening with built-in speech recognition...');
         const started = VoiceService.startListening();
         if (!started) {
           setSttListening(false);
           setSttInterim('');
-          toast.warning('Voice unavailable', 'Built-in speech recognition could not start in this runtime.');
+          await trySystemSttFallbacks();
           return;
         }
         setSttListening(true);
@@ -1325,18 +1302,100 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       }
       return;
     }
+    await trySystemSttFallbacks();
+  };
+
+  const trySystemSttFallbacks = async () => {
+    if (isTauri) {
+      const triggered = await triggerWindowsNativeDictation();
+      if (triggered) {
+        toast.info('Windows voice typing', 'Speak now   Windows will type into the composer.');
+        return;
+      }
+    }
+    const groqKey = useAuthStore.getState().apiKeys.groq;
     if (groqKey && typeof navigator.mediaDevices?.getUserMedia === 'function' && getAudioContextCtor()) {
       void startGroqStt(groqKey);
       return;
     }
-    if (!groqKey) {
+    toast.warning(
+      'Voice unsupported',
+      'Free built-in speech recognition is not available. Add a Groq key or download a local model in Settings ��! Speech to Text.',
+    );
+  };
+
+  const startFasterWhisperStt = async () => {
+    const modelId = getFasterWhisperModel();
+    const installed = isTauri ? await FasterWhisperManager.checkInstalled(modelId) : false;
+    if (!installed) {
       toast.warning(
-        'Voice unsupported',
-        'Free built-in speech recognition is not available in this runtime. Add a Groq key to use Whisper dictation here.',
+        'Local model missing',
+        `Download the ${modelId} model in Settings ��! Speech to Text, or switch to system dictation.`,
       );
+      void startSystemStt();
       return;
     }
-    toast.warning('Voice unsupported', 'Speech-to-text is not available in this runtime.');
+    if (typeof navigator.mediaDevices?.getUserMedia !== 'function' || !getAudioContextCtor()) {
+      toast.warning('Microphone unavailable', 'Could not access the microphone for local dictation.');
+      void startSystemStt();
+      return;
+    }
+    try {
+      setSttInterim(`Listening with faster-whisper (${modelId})...`);
+      batchRecorderRef.current = await startBatchAudioRecorder(
+        (rms) => { volumeRef.current = rms; },
+        () => { void stopBatchStt(true); },
+      );
+      setSttListening(true);
+    } catch (err) {
+      setSttListening(false);
+      setSttInterim('');
+      toast.error('Voice error', err instanceof Error ? err.message : 'Could not start microphone.');
+      void startSystemStt();
+    }
+  };
+
+  const appendTranscript = (finalText: string) => {
+    if (!finalText) return;
+    voiceReplyRequestedRef.current = true;
+    setText((cur) => {
+      const sep = cur.length === 0 || /[ 	]$/.test(cur) ? '' : ' ';
+      return cur + sep + finalText;
+    });
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const stopBatchStt = async (fromInactivity = false) => {
+    clearAudioSilenceTimer();
+    stopWebSpeechVolumeMeter();
+    volumeRef.current = 0;
+    const recorder = batchRecorderRef.current;
+    batchRecorderRef.current = null;
+    const wav = recorder?.captureWav() ?? null;
+    recorder?.stop();
+    setSttListening(false);
+    if (!wav || wav.size === 0) {
+      setSttInterim('');
+      if (!fromInactivity) {
+        toast.warning('No speech captured', 'Try again and speak for at least one second.');
+      } else {
+        toast.info('Speech-to-text stopped', 'Stopped after 30 seconds without voice activity.');
+      }
+      return;
+    }
+    setSttInterim('Transcribing...');
+    try {
+      const text = await transcribeFasterWhisper(wav, getFasterWhisperModel());
+      appendTranscript(text);
+    } catch (err) {
+      toast.error(
+        'Local transcription failed',
+        err instanceof Error ? err.message : 'Falling back to system dictation.',
+      );
+      void startSystemStt();
+    } finally {
+      setSttInterim('');
+    }
   };
 
   const startGroqStt = async (apiKey: string) => {
@@ -1349,7 +1408,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       if (!AudioCtor) throw new Error('Audio recording is not available in this runtime.');
       const context = new AudioCtor();
       const source = context.createMediaStreamSource(stream);
-      // Use smaller buffer for lower latency — 2048 samples at 44.1kHz ≈ 46ms
+      // Use smaller buffer for lower latency ������ 2048 samples at 44.1kHz ������ 46ms
       // instead of 4096 samples at ~92ms. Shorter buffers mean faster activity
       // detection and smoother waveform updates.
       const processor = context.createScriptProcessor(2048, 1, 1);
@@ -1394,26 +1453,11 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   };
 
   const transcribeGroq = async (blob: Blob, apiKey: string) => {
-    if (blob.size === 0) return;
-    if (!apiKey) return;
+    if (blob.size === 0 || !apiKey) return;
     setSttInterim('Transcribing...');
     try {
-      const form = new FormData();
-      form.set('file', new File([blob], 'jarvis-dictation.wav', { type: 'audio/wav' }));
-      form.set('model', GROQ_STT_MODEL);
-      form.set('response_format', 'json');
-      const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body: form,
-      });
-      if (!res.ok) throw new Error(`Groq STT ${res.status}: ${(await res.text()).slice(0, 180)}`);
-      const data = await res.json() as { text?: string };
-      const finalText = (data.text ?? '').trim();
-      if (finalText) {
-        voiceReplyRequestedRef.current = true;
-        setText((cur) => `${cur}${cur && !/\s$/.test(cur) ? ' ' : ''}${finalText}`);
-      }
+      const finalText = await transcribeGroqApi(blob, apiKey);
+      appendTranscript(finalText);
     } catch (err) {
       toast.error('Groq transcription failed', err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -1424,6 +1468,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   };
 
   const stopStt = () => {
+    if (batchRecorderRef.current) {
+      void stopBatchStt(false);
+      return;
+    }
     setSttListening(false);
     setSttInterim('');
     clearAudioSilenceTimer();
@@ -1450,7 +1498,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     try {
       VoiceService.stopListening();
     } catch {
-      // ignore — engine may already be torn down
+      // ignore ������ engine may already be torn down
     }
   };
 
@@ -1504,7 +1552,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
             rel="noreferrer"
             className="text-accent-copper underline-offset-4 hover:underline"
           >
-            Get key →
+            Get key ������
           </a>
           <button
             type="button"
@@ -1684,6 +1732,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
                     }
                   }}
                 />
+                <StackPicker />
                 {composerSttEnabled && (
                   <Hint
                     label={sttListening ? 'Stop dictation' : 'Voice to text'}

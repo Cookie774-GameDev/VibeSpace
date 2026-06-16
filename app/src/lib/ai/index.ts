@@ -62,4 +62,4 @@ export {
   buildModelPickerGroups,
   MODEL_PROVIDER_LABELS,
 } from './useAccessibleChatModels';
-export { LOCAL_MODEL_CATALOG } from './localModelCatalog';
+export { LOCAL_MODEL_CATALOG, catalogDisplayName, catalogFamilyName } from './localModelCatalog';

@@ -284,7 +284,7 @@ const defaults: Pick<
   assistantOpen: false,
   whatsNewOpen: false,
   composerStt: true,
-  defaultTerminalFontSize: 13,
+  defaultTerminalFontSize: 9,
   notificationMaster: false,
   doneNotifications: {
     jarvis: false,

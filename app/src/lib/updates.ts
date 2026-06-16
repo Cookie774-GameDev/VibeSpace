@@ -1,4 +1,5 @@
 import { isTauri } from '@/lib/utils';
+import { flushWorkspacePersistence } from '@/lib/persistence/workspaceFlush';
 
 export const AUTO_UPDATE_KEY = 'jarvis-auto-update';
 
@@ -59,6 +60,8 @@ export async function checkForAppUpdate(options: {
     return { available: true, installed: false, version, notes };
   }
 
+  flushWorkspacePersistence('pre-update-install');
+
   let downloadedBytes = 0;
   let totalBytes: number | undefined;
   options.onProgress?.({ phase: 'downloading', downloadedBytes, totalBytes });
@@ -81,6 +84,7 @@ export async function checkForAppUpdate(options: {
   });
 
   options.onProgress?.({ phase: 'installed', downloadedBytes, totalBytes });
+  flushWorkspacePersistence('pre-update-relaunch');
 
   try {
     const { relaunch } = await import('@tauri-apps/plugin-process');

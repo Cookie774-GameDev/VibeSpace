@@ -20,6 +20,7 @@ import { SPEECH_SYNTHESIS_END_EVENT, SPEECH_SYNTHESIS_START_EVENT, STREAMING_VOI
 import { PERSONAS } from './personas';
 import { VoiceActivityWaveform } from './VoiceActivityWaveform';
 import { handleVoiceModuleClosed } from './voiceRouter';
+import { resolveVoiceListenTimeoutMs } from './voiceConversation';
 
 const STATE_LABEL: Record<VoiceState, string> = {
   idle: 'Ready',
@@ -277,6 +278,10 @@ export function VoiceModal() {
       return false;
     }
     listeningArmedRef.current = true;
+    const auth = useAuthStore.getState();
+    VoiceService.setInactivityTimeoutMs(
+      resolveVoiceListenTimeoutMs(auth.voiceAutoListenOnOpen, auth.voiceListenTimeoutMs),
+    );
     const started = VoiceService.startListening();
     useUIStore.getState().setVoiceListening(started);
     if (started) {
@@ -429,7 +434,14 @@ export function VoiceModal() {
         }
         useVoiceStore.getState().setState('error', message);
       }),
-      VoiceService.on('voice:timeout', () => restartListening()),
+      VoiceService.on('voice:timeout', () => {
+        if (!handsFree()) return;
+        if (pendingUtteranceRef.current.trim()) {
+          flushUtterance();
+          return;
+        }
+        stopListening('idle');
+      }),
     ];
 
     const onStreamingStart = () => {

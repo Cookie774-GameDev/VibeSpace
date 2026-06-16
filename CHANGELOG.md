@@ -2,6 +2,30 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.43] - 2026-06-16
+
+### Added
+
+- **Composer STT** — local faster-whisper speech-to-text in the chat composer with Settings → Composer STT.
+- **StackPicker** — in-thread Hive stack preset picker alongside StackTimeline.
+- **Workspace persistence flush** — terminal and workspace state saved on hide, shutdown, and tray exit.
+- **Faster-whisper Rust backend** — on-device STT pipeline in the Tauri shell.
+- **Hive benchmark tooling** — stack preset benchmarking helpers for quality tuning.
+- **Docs** — Vibe Hive pipeline tiers, terminal persistence, and shutdown/update tray behavior.
+
+### Improved
+
+- **Voice** — foreground-aware wake word and routing; text cleanup and conversation flow polish.
+- **Terminals** — live cache, geometry, and session persistence across navigation.
+- **Local models** — expanded catalog, settings UI, and Ollama HTTP integration.
+- **Branding** — Windows-specific branding module and installer icon docs.
+- **Installer** — UTF-8-safe `install.ps1` rewrite for PowerShell 5.1 one-liner installs.
+
+### Fixed
+
+- **Hive presets** — stack classifier, runner, and hosted-stack edge function alignment.
+- **Auth store** — provider key sync and entitlement checks for new voice/STT paths.
+
 ## [0.1.42] - 2026-06-15
 
 ### Added

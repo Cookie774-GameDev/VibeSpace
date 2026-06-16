@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest';
+import { useAuthStore } from '@/stores/auth';
 import {
   REAL_CHAT_PROVIDERS,
   defaultModelForProvider,
@@ -54,8 +55,15 @@ describe('chat model catalog', () => {
     expect(defaultModelForProvider('ollama', 'qwen2.5:3b')).toBe('qwen2.5:3b');
   });
 
-  it('returns empty ollama options until models are discovered', () => {
-    expect(getModelOptions('ollama')).toEqual([]);
+  it('includes configured local model before Ollama discovery completes', () => {
+    useAuthStore.setState({ defaultLocalModel: 'llama3.2' });
+    expect(getAccessibleProviders({}, false, 'free', 'llama3.2')).toEqual(['ollama', 'local']);
+    expect(getAccessibleModelOptions('ollama', {}, false, 'llama3.2')).toEqual([
+      { provider: 'ollama', id: 'llama3.2', label: 'llama3.2' },
+    ]);
+    expect(getModelOptions('ollama')).toEqual([
+      { provider: 'ollama', id: 'llama3.2', label: 'llama3.2' },
+    ]);
   });
 
   it('includes subscription-hosted providers when plan is paid', () => {

@@ -14,6 +14,7 @@ import {
   Mic,
   Phone,
   Keyboard,
+  AudioLines,
   Info,
   Moon,
   Bell,
@@ -46,6 +47,9 @@ const Hive = lazy(() => import('./sections/Hive').then((m) => ({ default: m.Hive
 const Appearance = lazy(() => import('./sections/Appearance').then((m) => ({ default: m.Appearance })));
 const Voice = lazy(() => import('./sections/Voice').then((m) => ({ default: m.Voice })));
 const PhoneVoice = lazy(() => import('./sections/PhoneVoice').then((m) => ({ default: m.PhoneVoice })));
+const ComposerStt = lazy(() =>
+  import('./sections/ComposerStt').then((m) => ({ default: m.ComposerStt })),
+);
 const Hotkeys = lazy(() => import('./sections/Hotkeys').then((m) => ({ default: m.Hotkeys })));
 const About = lazy(() => import('./sections/About').then((m) => ({ default: m.About })));
 const Ambient = lazy(() => import('./sections/Ambient').then((m) => ({ default: m.Ambient })));
@@ -78,6 +82,7 @@ const TABS: TabDef[] = [
   { id: 'localmodels', label: 'Local Models', icon: HardDriveDownload },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'voice', label: 'Voice', icon: Mic },
+  { id: 'composerstt', label: 'Speech to Text', icon: AudioLines },
   { id: 'phone', label: 'Phone & Voice', icon: Phone },
   { id: 'ambient', label: 'Ambient', icon: Moon },
   { id: 'notifications', label: 'Notifications', icon: Bell },
@@ -147,6 +152,13 @@ function SettingsTabPanels({ tab, visited }: { tab: SettingsTab; visited: Readon
       </CachedTabPanel>
       <CachedTabPanel id="voice" active={tab === 'voice'} visited={visited.has('voice')}>
         <Voice active={tab === 'voice'} />
+      </CachedTabPanel>
+      <CachedTabPanel
+        id="composerstt"
+        active={tab === 'composerstt'}
+        visited={visited.has('composerstt')}
+      >
+        <ComposerStt />
       </CachedTabPanel>
       <CachedTabPanel id="phone" active={tab === 'phone'} visited={visited.has('phone')}>
         <PhoneVoice />

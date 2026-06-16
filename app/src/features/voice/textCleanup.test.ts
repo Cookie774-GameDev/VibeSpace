@@ -97,13 +97,13 @@ describe('pullNewSpeechSegments', () => {
     expect(second.segments).toEqual(['How are you today?']);
   });
 
-  it('waits for a full sentence before speaking streamed partials', () => {
+  it('starts speaking early word chunks before a sentence ends', () => {
     const first = pullNewSpeechSegments('Today is', 0);
-    expect(first.segments).toEqual([]);
+    expect(first.segments).toEqual(['Today is']);
     const second = pullNewSpeechSegments('Today is Thursday', first.nextSpokenCleanLength);
-    expect(second.segments).toEqual([]);
-    const third = pullNewSpeechSegments('Today is Thursday.', first.nextSpokenCleanLength);
-    expect(third.segments).toEqual(['Today is Thursday.']);
+    expect(second.segments).toEqual(['Thursday']);
+    const complete = pullNewSpeechSegments('Today is Thursday.', 0);
+    expect(complete.segments).toEqual(['Today is Thursday.']);
   });
 });
 

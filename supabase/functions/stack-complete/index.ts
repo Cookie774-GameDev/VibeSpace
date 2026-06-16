@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 // stack-complete: subscription-hosted frontier models for Vibe Hive steps.
 // Auth ΓåÆ plan budget reserve ΓåÆ provider allowlist ΓåÆ stream SSE to client.
 
@@ -183,6 +183,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const system = String(body.system ?? '');
+  const providerOptions =
+    body.provider_options && typeof body.provider_options === 'object'
+      ? body.provider_options as Record<string, unknown>
+      : {};
   const chatMessages = system
     ? [{ role: 'system', content: system }, ...messages]
     : messages;
@@ -226,6 +230,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       messages: chatMessages,
       temperature: body.temperature ?? 0.5,
       max_tokens: body.max_tokens ?? 4096,
+      ...providerOptions,
     });
     if (!appAdmin) {
       await admin.rpc('settle_message_budget', { p_user_id: userId, p_reserved: estCost, p_actual: estCost });

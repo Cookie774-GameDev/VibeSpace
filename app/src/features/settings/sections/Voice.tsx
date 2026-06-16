@@ -43,8 +43,11 @@ import { cn } from '@/lib/utils';
 import { openSystemSpeechSettings } from '@/lib/tauri';
 import { readWakeWordEnabled, setWakeWordEnabled } from '@/features/voice/wakeWord';
 import {
+  VOICE_LISTEN_TIMEOUT_MS_MAX,
+  VOICE_LISTEN_TIMEOUT_MS_MIN,
   VOICE_SILENCE_DELAY_MS_MAX,
   VOICE_SILENCE_DELAY_MS_MIN,
+  voiceListenTimeoutLabel,
   voiceSilenceDelayLabel,
 } from '@/features/voice/voiceConversation';
 
@@ -73,6 +76,8 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
   const setVoiceAutoListenOnOpen = useAuthStore((s) => s.setVoiceAutoListenOnOpen);
   const voiceSilenceDelayMs = useAuthStore((s) => s.voiceSilenceDelayMs);
   const setVoiceSilenceDelayMs = useAuthStore((s) => s.setVoiceSilenceDelayMs);
+  const voiceListenTimeoutMs = useAuthStore((s) => s.voiceListenTimeoutMs);
+  const setVoiceListenTimeoutMs = useAuthStore((s) => s.setVoiceListenTimeoutMs);
   const jarvisAutoApprove = useAuthStore((s) => s.jarvisAutoApprove);
   const setJarvisAutoApprove = useAuthStore((s) => s.setJarvisAutoApprove);
   const voiceAutoApproveActions = useAuthStore((s) => s.voiceAutoApproveActions);
@@ -123,7 +128,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
 
   useEffect(() => {
     if (!canUseSystemVoice && voiceEngine === 'system') {
-      setVoiceEngine('local');
+      setVoiceEngine('kokoro');
     }
   }, [canUseSystemVoice, voiceEngine, setVoiceEngine]);
 
@@ -445,6 +450,34 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               <span>{voiceSilenceDelayLabel(VOICE_SILENCE_DELAY_MS_MAX)}</span>
             </div>
           </div>
+          {voiceAutoListenOnOpen ? (
+            <div className="rounded-md border border-border bg-panel p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Label htmlFor="voice-listen-timeout">Listen timeout (hands-free)</Label>
+                <span className="text-metadata font-medium text-foreground">
+                  {voiceListenTimeoutLabel(voiceListenTimeoutMs)}
+                </span>
+              </div>
+              <p className="mt-1 text-metadata text-muted-foreground">
+                How long Jarvis keeps listening without speech before stopping or sending what
+                you said.
+              </p>
+              <input
+                id="voice-listen-timeout"
+                type="range"
+                min={VOICE_LISTEN_TIMEOUT_MS_MIN}
+                max={VOICE_LISTEN_TIMEOUT_MS_MAX}
+                step={1000}
+                value={voiceListenTimeoutMs}
+                onChange={(event) => setVoiceListenTimeoutMs(Number(event.target.value))}
+                className="mt-3 w-full accent-[hsl(var(--accent-cyan))]"
+              />
+              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                <span>{voiceListenTimeoutLabel(VOICE_LISTEN_TIMEOUT_MS_MIN)}</span>
+                <span>{voiceListenTimeoutLabel(VOICE_LISTEN_TIMEOUT_MS_MAX)}</span>
+              </div>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-panel p-4">
             <div className="min-w-0">
               <Label htmlFor="voice-auto-approve-toggle">Auto-run Jarvis commands (voice)</Label>
@@ -771,8 +804,8 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
           <MicStatusPill status={micStatus} />
         </div>
         <p className="text-metadata text-muted-foreground">
-          Chat dictation uses free built-in speech recognition when available, or Groq Whisper when
-          you connect a Groq key.
+          Composer dictation is configured in Settings → Speech to Text. Jarvis voice and wake word
+          use the controls above.
         </p>
       </section>
     </div>

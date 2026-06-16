@@ -13,18 +13,7 @@ fn install_terminal_launcher_impl() -> Result<String, String> {
     let bin_dir = user_profile.join(".jarvis").join("bin");
     fs::create_dir_all(&bin_dir).map_err(io_err)?;
 
-    let exe_candidates = [
-        local_app_data
-            .join("Programs")
-            .join("VibeSpace")
-            .join("jarvis.exe"),
-        local_app_data.join("VibeSpace").join("jarvis.exe"),
-        local_app_data
-            .join("Programs")
-            .join("Jarvis One")
-            .join("jarvis.exe"),
-        local_app_data.join("Jarvis One").join("jarvis.exe"),
-    ];
+    let exe_candidates = windows_installed_exe_candidates(&local_app_data);
     write_windows_launcher_file(
         &bin_dir.join("jarvis_boot_forever.py"),
         windows_boot_python(),
@@ -71,6 +60,52 @@ fn env_path(key: &str) -> Result<PathBuf, String> {
 fn io_err(err: std::io::Error) -> String {
     format!("io: {err}")
 }
+
+#[cfg(target_os = "windows")]
+fn windows_installed_exe_candidates(local_app_data: &Path) -> Vec<PathBuf> {
+    let dirs = [
+        local_app_data.join("Programs").join("VibeSpace"),
+        local_app_data.join("VibeSpace"),
+        local_app_data
+            .join("Programs")
+            .join("Jarvis One"),
+        local_app_data.join("Jarvis One"),
+    ];
+    let names = ["jarvis.exe", "VibeSpace.exe"];
+    let mut out = Vec::with_capacity(dirs.len() * names.len());
+    for dir in dirs {
+        for name in names {
+            out.push(dir.join(name));
+        }
+    }
+    out
+}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_RESOLVE_EXE_PS: &str = r#"
+function Normalize-Version([string]$value) {
+  if ([string]::IsNullOrWhiteSpace($value)) { return [version]'0.0.0' }
+  $clean = ($value -replace '^v', '') -replace '[^0-9\.].*$', ''
+  try { return [version]$clean } catch { return [version]'0.0.0' }
+}
+
+function Resolve-InstalledJarvisExe([string[]]$candidates) {
+  $bestPath = $null
+  $bestVer = [version]'0.0.0'
+  $bestTime = [datetime]::MinValue
+  foreach ($candidate in $candidates) {
+    if (-not (Test-Path -LiteralPath $candidate)) { continue }
+    $item = Get-Item -LiteralPath $candidate
+    $ver = Normalize-Version $item.VersionInfo.ProductVersion
+    if ($ver -gt $bestVer -or ($ver -eq $bestVer -and $item.LastWriteTime -gt $bestTime)) {
+      $bestPath = $candidate
+      $bestVer = $ver
+      $bestTime = $item.LastWriteTime
+    }
+  }
+  return $bestPath
+}
+"#;
 
 #[cfg(target_os = "windows")]
 fn windows_cmd_launcher() -> &'static str {
@@ -179,6 +214,7 @@ fn windows_core_launcher(exe_candidates: &[PathBuf]) -> String {
     let candidates = powershell_candidate_array(exe_candidates);
 
     const TEMPLATE: &str = r#"$ErrorActionPreference = 'Stop'
+$$RESOLVE_EXE$$
 
 function Write-LaunchLog([string]$level, [string]$msg) {
     $c = @{'INFO'='Cyan';'WARN'='Yellow';'ERROR'='Red';'OK'='Green';'DIM'='Gray'}[$level]
@@ -192,10 +228,7 @@ Write-LaunchLog 'INFO' "Launch mode: $mode"
 
 if ($mode -eq 'production') {
     $jarvisCandidates = @($$CANDIDATES$$)
-    $jarvisExe = $null
-    foreach ($candidate in $jarvisCandidates) {
-        if (Test-Path -LiteralPath $candidate) { $jarvisExe = $candidate; break }
-    }
+    $jarvisExe = Resolve-InstalledJarvisExe $jarvisCandidates
     if (-not $jarvisExe) {
         Write-LaunchLog 'ERROR' 'Jarvis executable not found. Start VibeSpace once from Start Menu, then try again.'
         exit 1
@@ -261,7 +294,9 @@ if ($mode -eq 'production') {
 }
 "#;
 
-    TEMPLATE.replace("$$CANDIDATES$$", &candidates)
+    TEMPLATE
+        .replace("$$RESOLVE_EXE$$", WINDOWS_RESOLVE_EXE_PS)
+        .replace("$$CANDIDATES$$", &candidates)
 }
 
 #[cfg(target_os = "windows")]
@@ -274,13 +309,12 @@ fn windows_update_launcher(exe_candidates: &[PathBuf]) -> String {
 
     format!(
         r#"$ErrorActionPreference = 'Stop'
+{resolve_exe}
 $jarvisCandidates = @({candidates})
-$jarvisExe = $null
-foreach ($candidate in $jarvisCandidates) {{
-  if (Test-Path -LiteralPath $candidate) {{ $jarvisExe = $candidate; break }}
-}}
+$jarvisExe = Resolve-InstalledJarvisExe $jarvisCandidates
 if (-not $jarvisExe) {{ $jarvisExe = '{first}' }}
 $repo = 'Cookie774-GameDev/VibeSpace'
+$channelUrl = "https://raw.githubusercontent.com/$repo/main/releases/channel.json"
 $localInstaller = Join-Path $env:USERPROFILE 'projects\Jarvis\install\install.ps1'
 $remoteInstaller = "https://raw.githubusercontent.com/$repo/main/install/install.ps1"
 
@@ -310,14 +344,16 @@ if (Test-Path -LiteralPath $jarvisExe) {{
 }}
 
 try {{
-  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{{ 'User-Agent' = 'jarvis-terminal-launcher' }} -TimeoutSec 15
-  $latestVersion = Normalize-Version $release.tag_name
+  $jarvisExe = Resolve-InstalledJarvisExe $jarvisCandidates
+  if (-not $jarvisExe) {{ $jarvisExe = '{first}' }}
+  $channel = Invoke-RestMethod -Uri $channelUrl -Headers @{{ 'User-Agent' = 'jarvis-terminal-launcher' }} -TimeoutSec 15
+  $latestVersion = Normalize-Version $channel.version
   $installedVersion = Get-InstalledVersion
   if ($latestVersion -le $installedVersion) {{
     exit 0
   }}
 
-  Write-Host "[update] New version available: $($release.tag_name)" -ForegroundColor Cyan
+  Write-Host "[update] New version available: v$($channel.version)" -ForegroundColor Cyan
 
   $env:JARVIS_SILENT = '1'
   $env:JARVIS_FORMAT = 'nsis'
@@ -360,7 +396,10 @@ try {{
   Write-Warning ('Jarvis update check failed: ' + $_.Exception.Message)
   exit 0
 }}
-"#
+"#,
+        resolve_exe = WINDOWS_RESOLVE_EXE_PS,
+        candidates = candidates,
+        first = first,
     )
 }
 
@@ -549,10 +588,12 @@ mod tests {
     fn windows_launcher_uses_boot_wrapper_without_recursion() {
         let core = windows_core_launcher(&[
             PathBuf::from(r"C:\Users\Test\Programs\VibeSpace\jarvis.exe"),
+            PathBuf::from(r"C:\Users\Test\Programs\VibeSpace\VibeSpace.exe"),
             PathBuf::from(r"C:\Users\Test\VibeSpace\jarvis.exe"),
         ]);
         let update = windows_update_launcher(&[
             PathBuf::from(r"C:\Users\Test\Programs\VibeSpace\jarvis.exe"),
+            PathBuf::from(r"C:\Users\Test\Programs\VibeSpace\VibeSpace.exe"),
             PathBuf::from(r"C:\Users\Test\VibeSpace\jarvis.exe"),
         ]);
         let script = windows_powershell_launcher();
@@ -562,7 +603,10 @@ mod tests {
         assert!(core.contains("$jarvisCandidates = @("));
         assert!(core.contains("Start-Process -FilePath $jarvisExe"));
         assert!(update.contains(r"'C:\Users\Test\VibeSpace\jarvis.exe'"));
-        assert!(update.contains("releases/latest"));
+        assert!(update.contains("releases/channel.json"));
+        assert!(update.contains("Resolve-InstalledJarvisExe"));
+        assert!(core.contains("Resolve-InstalledJarvisExe"));
+        assert!(core.contains("VibeSpace.exe"));
         assert!(update.contains("install\\install.ps1"));
         assert!(script.contains("jarvis_boot_forever.py"));
         assert!(script.contains("JarvisCore.ps1"));

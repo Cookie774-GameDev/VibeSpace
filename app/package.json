@@ -1,6 +1,6 @@
 {
   "name": "@jarvis/app",
-  "version": "0.1.42",
+  "version": "0.1.43",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "tauri dev --features kokoro",
     "tauri:build": "tauri build --features kokoro",
     "icons:generate": "python scripts/crop-app-icon.py && tauri icon ./src-tauri/icons/app-icon-square.png && node scripts/sync-public-icons.mjs"
   },

@@ -1,11 +1,13 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
+import { useAuthStore } from '@/stores/auth';
 import { syncDiscoveredOllamaModels } from './models';
 import { buildModelPickerGroups, useAccessibleChatModels } from './useAccessibleChatModels';
 
 describe('useAccessibleChatModels', () => {
   beforeEach(() => {
     syncDiscoveredOllamaModels([]);
+    useAuthStore.setState({ defaultLocalModel: '', apiKeys: {} });
   });
 
   it('includes discovered Ollama models in picker groups', () => {

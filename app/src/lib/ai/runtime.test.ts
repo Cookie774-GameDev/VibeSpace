@@ -361,7 +361,7 @@ describe('startRuntimeListener agent routing', () => {
     stop();
   });
 
-  it('does not speak when the voice module is closed even if speakReply is true', async () => {
+  it('speaks when the voice module is closed if speakReply is true', async () => {
     useUIStore.setState({ voiceModalOpen: false });
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_closed_voice' as ChatId;
@@ -393,8 +393,8 @@ describe('startRuntimeListener agent routing', () => {
       new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello', speakReply: true } }),
     );
 
-    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
-    expect(mocks.streamingSession.onComplete).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mocks.streamingSession.onComplete).toHaveBeenCalledTimes(1));
+    expect(mocks.streamingSession.onComplete).toHaveBeenCalledWith('Hello there.');
 
     stop();
   });
@@ -477,16 +477,22 @@ describe('startRuntimeListener agent routing', () => {
     };
     mocks.runAgent
       .mockResolvedValueOnce({
+        text: 'orient',
+        usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
+        provider: 'xai',
+        model: 'grok-4.3',
+      })
+      .mockResolvedValueOnce({
         text: 'draft',
         usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
         provider: 'anthropic',
         model: 'claude-opus-4-8',
       })
       .mockResolvedValueOnce({
-        text: 'critique',
+        text: 'harden',
         usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
         provider: 'openai',
-        model: 'gpt-5.5',
+        model: 'gpt-5.5-codex',
       })
       .mockResolvedValueOnce({
         text: 'final',
@@ -515,13 +521,13 @@ describe('startRuntimeListener agent routing', () => {
       }),
     );
 
-    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(4));
     const updateCalls = updateMessage.mock.calls as unknown as Array<
       [MessageId, { parts: Part[] }]
     >;
     const finalWrite = updateCalls[updateCalls.length - 1]?.[1];
     if (!finalWrite) throw new Error('expected final Hive write');
-    expect(finalWrite.parts.filter((part) => part.kind === 'stack_step')).toHaveLength(3);
+    expect(finalWrite.parts.filter((part) => part.kind === 'stack_step')).toHaveLength(4);
     expect(finalWrite.parts.at(-1)).toEqual({ kind: 'text', text: 'final' });
     expect(mocks.runAgent.mock.calls[0][0].messages).toEqual(
       expect.arrayContaining([
