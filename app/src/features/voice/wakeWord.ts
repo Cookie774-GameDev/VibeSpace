@@ -1,3 +1,5 @@
+import { useAuthStore } from '@/stores/auth';
+
 export const WAKE_WORD_STORAGE_KEY = 'jarvis-wake-word';
 export const WAKE_WORD_SETTING_EVENT = 'jarvis:wake-word-setting';
 
@@ -41,4 +43,9 @@ export function setWakeWordEnabled(enabled: boolean): void {
     return;
   }
   window.dispatchEvent(new CustomEvent(WAKE_WORD_SETTING_EVENT, { detail: { enabled } }));
+}
+
+/** Wake-word auto-open is only allowed in hands-free mode with the wake toggle on. */
+export function isWakeWordAutoOpenAllowed(): boolean {
+  return readWakeWordEnabled() && useAuthStore.getState().voiceAutoListenOnOpen;
 }

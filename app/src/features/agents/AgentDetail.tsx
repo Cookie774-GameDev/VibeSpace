@@ -40,6 +40,9 @@ import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { chatRepo } from '@/lib/db';
 import type { AgentId, Agent, ProjectId, WorkspaceId } from '@/types';
+import { getProviderDisplayName } from '@/lib/ai/providerRegistry';
+import { getModelLabelForProvider } from '@/lib/ai/providerModelCatalog';
+import { useProviderConnectionContext } from '@/lib/ai/useProviderModelOptions';
 import { getAgentRole, ROLE_PERSONAS } from './personas';
 
 export function AgentDetail() {
@@ -52,6 +55,7 @@ export function AgentDetail() {
 
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const projectId = useAuthStore((s) => s.projectId) as ProjectId | null;
+  const providerCtx = useProviderConnectionContext();
 
   const agent: Agent | null = activeAgentId
     ? agents[activeAgentId as AgentId] ?? null
@@ -190,15 +194,18 @@ export function AgentDetail() {
                 <div className="text-metadata uppercase tracking-wider text-muted-foreground mb-1">
                   Provider
                 </div>
-                <div className="text-secondary text-foreground font-mono">
-                  {agent.model.provider}
+                <div className="text-secondary text-foreground">
+                  {getProviderDisplayName(agent.model.provider)}
                 </div>
               </div>
               <div>
                 <div className="text-metadata uppercase tracking-wider text-muted-foreground mb-1">
                   Model
                 </div>
-                <div className="text-secondary text-foreground font-mono truncate">
+                <div className="text-secondary text-foreground truncate">
+                  {getModelLabelForProvider(agent.model.provider, agent.model.model, providerCtx)}
+                </div>
+                <div className="font-mono text-[11px] text-muted-foreground truncate">
                   {agent.model.model}
                 </div>
               </div>

@@ -50,6 +50,10 @@ import {
   voiceListenTimeoutLabel,
   voiceSilenceDelayLabel,
 } from '@/features/voice/voiceConversation';
+import {
+  VOICE_COMMIT_PHRASE_MAX_LEN,
+  VOICE_COMMIT_PHRASE_MIN_LEN,
+} from '@/features/voice/voiceTurnCommit';
 
 type MicStatus = 'idle' | 'testing' | 'ok' | 'denied' | 'unavailable';
 type LocalVoiceStatus = 'idle' | 'checking' | 'ready' | 'missing' | 'unsupported';
@@ -78,6 +82,12 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
   const setVoiceSilenceDelayMs = useAuthStore((s) => s.setVoiceSilenceDelayMs);
   const voiceListenTimeoutMs = useAuthStore((s) => s.voiceListenTimeoutMs);
   const setVoiceListenTimeoutMs = useAuthStore((s) => s.setVoiceListenTimeoutMs);
+  const voiceEndTrigger = useAuthStore((s) => s.voiceEndTrigger);
+  const setVoiceEndTrigger = useAuthStore((s) => s.setVoiceEndTrigger);
+  const voiceCommitPhrase = useAuthStore((s) => s.voiceCommitPhrase);
+  const setVoiceCommitPhrase = useAuthStore((s) => s.setVoiceCommitPhrase);
+  const voiceCancelPhrase = useAuthStore((s) => s.voiceCancelPhrase);
+  const setVoiceCancelPhrase = useAuthStore((s) => s.setVoiceCancelPhrase);
   const jarvisAutoApprove = useAuthStore((s) => s.jarvisAutoApprove);
   const setJarvisAutoApprove = useAuthStore((s) => s.setJarvisAutoApprove);
   const voiceAutoApproveActions = useAuthStore((s) => s.voiceAutoApproveActions);
@@ -415,7 +425,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
             <VoiceConversationModeCard
               selected={voiceAutoListenOnOpen}
               title="Hands-free"
-              description="Open voice and just talk. Jarvis listens and replies after you pause."
+              description={`Speak your message, then say "${voiceCommitPhrase}" to send.`}
               onSelect={() => setVoiceAutoListenOnOpen(true)}
             />
             <VoiceConversationModeCard
@@ -425,6 +435,62 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               onSelect={() => setVoiceAutoListenOnOpen(false)}
             />
           </div>
+          {voiceAutoListenOnOpen ? (
+            <div className="flex flex-col gap-4 rounded-md border border-border bg-panel p-4">
+              <div>
+                <Label htmlFor="voice-commit-phrase">Send phrase</Label>
+                <p className="mt-1 text-metadata text-muted-foreground">
+                  Say this when your message is ready. Jarvis will not send until he hears it.
+                </p>
+                <Input
+                  id="voice-commit-phrase"
+                  value={voiceCommitPhrase}
+                  onChange={(event) => setVoiceCommitPhrase(event.target.value)}
+                  placeholder="send it"
+                  maxLength={VOICE_COMMIT_PHRASE_MAX_LEN}
+                  className="mt-2"
+                />
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  {VOICE_COMMIT_PHRASE_MIN_LEN}–{VOICE_COMMIT_PHRASE_MAX_LEN} characters.
+                </p>
+              </div>
+              <div>
+                <Label htmlFor="voice-cancel-phrase">Cancel phrase</Label>
+                <p className="mt-1 text-metadata text-muted-foreground">
+                  Say this to discard what you were saying without sending.
+                </p>
+                <Input
+                  id="voice-cancel-phrase"
+                  value={voiceCancelPhrase}
+                  onChange={(event) => setVoiceCancelPhrase(event.target.value)}
+                  placeholder="cancel"
+                  maxLength={VOICE_COMMIT_PHRASE_MAX_LEN}
+                  className="mt-2"
+                />
+              </div>
+              <div>
+                <Label>End message with</Label>
+                <p className="mt-1 text-metadata text-muted-foreground">
+                  Phrase mode prevents accidental sends while you pause to think.
+                </p>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <VoiceConversationModeCard
+                    selected={voiceEndTrigger === 'phrase'}
+                    title="Say a phrase"
+                    description={`Send only after "${voiceCommitPhrase}".`}
+                    onSelect={() => setVoiceEndTrigger('phrase')}
+                  />
+                  <VoiceConversationModeCard
+                    selected={voiceEndTrigger === 'silence'}
+                    title="Pause (silence)"
+                    description="Send after you stop talking for a few seconds."
+                    onSelect={() => setVoiceEndTrigger('silence')}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {!voiceAutoListenOnOpen || voiceEndTrigger === 'silence' ? (
           <div className="rounded-md border border-border bg-panel p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <Label htmlFor="voice-silence-delay">Pause before Jarvis responds</Label>
@@ -450,6 +516,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               <span>{voiceSilenceDelayLabel(VOICE_SILENCE_DELAY_MS_MAX)}</span>
             </div>
           </div>
+          ) : null}
           {voiceAutoListenOnOpen ? (
             <div className="rounded-md border border-border bg-panel p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -459,8 +526,8 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
                 </span>
               </div>
               <p className="mt-1 text-metadata text-muted-foreground">
-                How long Jarvis keeps listening without speech before stopping or sending what
-                you said.
+                How long Jarvis keeps listening without speech before stopping
+                {voiceEndTrigger === 'silence' ? ' or sending what you said' : ''}.
               </p>
               <input
                 id="voice-listen-timeout"

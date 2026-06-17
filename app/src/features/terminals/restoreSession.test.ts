@@ -119,4 +119,31 @@ describe('resolveTerminalRestoreSession', () => {
       restoredText: '',
     });
   });
+
+  it('does not replay stripped TUI transcript when reattaching an active agent CLI', () => {
+    const decision = resolveTerminalRestoreSession({
+      existingSessionId: 'session-a',
+      paneId: 'pane-a',
+      projectId: 'project-a',
+      activeSessions: [
+        {
+          ...backend('session-a', 'project-a'),
+          command: 'opencode',
+        },
+      ],
+      transcripts: {
+        'session-a': {
+          ...transcript('session-a', 'pane-a', 'project-a'),
+          command: 'opencode',
+          text: 'OpenCode Zen\nhalf-painted TUI from before route switch',
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: 'attach',
+      sessionId: 'session-a',
+      restoredText: '',
+    });
+  });
 });

@@ -141,14 +141,16 @@ describe('composeAgentBriefing', () => {
     expect(briefing).toContain('C:\\repo\\.jarvis-coordination.md');
   });
 
-  it('orders the agent prompt before the shared rules and coordination pointer', () => {
+  it('orders admin rules before the agent prompt and project context', () => {
     const briefing = composeAgentBriefing(baseInputs);
     const promptIdx = briefing.indexOf('## Your instructions');
     const rulesIdx = briefing.indexOf('## Shared rules');
-    const coordIdx = briefing.indexOf('## Coordination document');
+    const projectIdx = briefing.indexOf('## Project context');
     expect(promptIdx).toBeGreaterThan(-1);
-    expect(rulesIdx).toBeGreaterThan(promptIdx);
-    expect(coordIdx).toBeGreaterThan(rulesIdx);
+    expect(rulesIdx).toBeGreaterThan(-1);
+    expect(projectIdx).toBeGreaterThan(-1);
+    expect(rulesIdx).toBeLessThan(promptIdx);
+    expect(promptIdx).toBeLessThan(projectIdx);
   });
 
   it('omits empty optional sections', () => {
@@ -364,6 +366,8 @@ describe('gatherSiblingAgentActivity', () => {
 describe('deliverAgentTerminalContext', () => {
   const CWD = 'C:\\repo';
   const AGENTS = 'C:\\repo\\AGENTS.md';
+  const CLAUDE = 'C:\\repo\\CLAUDE.md';
+  const GEMINI = 'C:\\repo\\GEMINI.md';
   const COORD = 'C:\\repo\\.jarvis-coordination.md';
 
   const notFound = (path: string) => ({ ok: false as const, error: { code: 'not_found' as const }, path });
@@ -375,7 +379,7 @@ describe('deliverAgentTerminalContext', () => {
     return call?.[1];
   }
 
-  it('writes the coordination doc and an AGENTS.md containing the code word', async () => {
+  it('writes coordination and all supported instruction files containing the code word', async () => {
     useAgentStore.getState().registerAgent(makeAgent('coder', 'Coder', 'The code word is APPLE.'));
     fsMocks.readTextFile.mockImplementation(async (path: string) => notFound(path));
     fsMocks.writeTextFile.mockImplementation(async (path: string) => okWrite(path));
@@ -401,6 +405,16 @@ describe('deliverAgentTerminalContext', () => {
     expect(agentsMd).toContain('Shared operating rules for every agent');
     expect(agentsMd).toContain('Project context blob: ship v2 safely.');
     expect(agentsMd).toContain(COORD);
+
+    const claudeMd = writtenContent(CLAUDE);
+    expect(claudeMd).toContain(MANAGED_BLOCK_START);
+    expect(claudeMd).toContain('The code word is APPLE.');
+    expect(claudeMd).toContain('Shared operating rules for every agent');
+
+    const geminiMd = writtenContent(GEMINI);
+    expect(geminiMd).toContain(MANAGED_BLOCK_START);
+    expect(geminiMd).toContain('The code word is APPLE.');
+    expect(geminiMd).toContain('Shared operating rules for every agent');
   });
 
   it('does not overwrite an existing coordination doc', async () => {
@@ -448,9 +462,17 @@ describe('deliverAgentTerminalContext', () => {
 
     await deliverAgentTerminalContext({ cwd: CWD, agentSlug: 'coder' });
     const currentAgentsMd = writtenContent(AGENTS)!;
+    const currentClaudeMd = writtenContent(CLAUDE)!;
+    const currentGeminiMd = writtenContent(GEMINI)!;
 
     fsMocks.readTextFile.mockImplementation(async (path: string) =>
-      path === AGENTS ? okRead(path, currentAgentsMd) : okRead(path, 'existing claims'),
+      path === AGENTS
+        ? okRead(path, currentAgentsMd)
+        : path === CLAUDE
+          ? okRead(path, currentClaudeMd)
+          : path === GEMINI
+            ? okRead(path, currentGeminiMd)
+          : okRead(path, 'existing claims'),
     );
     fsMocks.writeTextFile.mockClear();
 
@@ -460,10 +482,10 @@ describe('deliverAgentTerminalContext', () => {
     expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
   });
 
-  it('removes the managed block when the agent is cleared', async () => {
+  it('removes the managed block from all instruction files when the agent is cleared', async () => {
     const existing = `# Keep me\n\n${wrapManagedBlock('stale briefing')}\n`;
     fsMocks.readTextFile.mockImplementation(async (path: string) =>
-      path === AGENTS ? okRead(path, existing) : notFound(path),
+      path === AGENTS || path === CLAUDE || path === GEMINI ? okRead(path, existing) : notFound(path),
     );
     fsMocks.writeTextFile.mockImplementation(async (path: string) => okWrite(path));
 
@@ -472,6 +494,12 @@ describe('deliverAgentTerminalContext', () => {
     const cleared = writtenContent(AGENTS);
     expect(cleared).toContain('# Keep me');
     expect(cleared).not.toContain(MANAGED_BLOCK_START);
+    const clearedClaude = writtenContent(CLAUDE);
+    expect(clearedClaude).toContain('# Keep me');
+    expect(clearedClaude).not.toContain(MANAGED_BLOCK_START);
+    const clearedGemini = writtenContent(GEMINI);
+    expect(clearedGemini).toContain('# Keep me');
+    expect(clearedGemini).not.toContain(MANAGED_BLOCK_START);
   });
 
   it('is a no-op when clearing and no managed block exists', async () => {

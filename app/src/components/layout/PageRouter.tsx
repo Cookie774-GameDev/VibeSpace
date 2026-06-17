@@ -209,21 +209,35 @@ const routeMap: Record<Route, React.LazyExoticComponent<React.ComponentType>> = 
 
 export function PageRouter() {
   const route = useUIStore((s) => s.route);
-  const Page = routeMap[route] ?? ChatRoute;
+  const visibleRoute = React.useDeferredValue(route);
+  const Page = routeMap[visibleRoute] ?? ChatRoute;
+  const [terminalMounted, setTerminalMounted] = React.useState(visibleRoute === 'terminal');
 
   React.useEffect(() => {
-    if (route === 'terminal') {
+    if (visibleRoute !== 'terminal') return;
+    setTerminalMounted(true);
+    const raf = window.requestAnimationFrame(() => {
       window.dispatchEvent(new CustomEvent('jarvis:terminals:visible'));
-    }
-  }, [route]);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [visibleRoute]);
+
+  const shouldRenderTerminal = terminalMounted || visibleRoute === 'terminal';
 
   return (
     <React.Suspense fallback={<PageLoading />}>
-      {route === 'terminal' ? (
-        <TerminalsPage />
-      ) : (
-        <Page key={route} />
-      )}
+      {shouldRenderTerminal ? (
+        <div
+          data-terminal-route-cache
+          aria-hidden={visibleRoute !== 'terminal'}
+          className={visibleRoute === 'terminal' ? 'h-full w-full' : 'hidden'}
+        >
+          <TerminalsPage />
+        </div>
+      ) : null}
+      {visibleRoute !== 'terminal' ? (
+        <Page key={visibleRoute} />
+      ) : null}
     </React.Suspense>
   );
 }

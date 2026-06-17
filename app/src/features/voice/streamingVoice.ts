@@ -9,6 +9,8 @@ import {
   registerActiveStreamingVoiceSession,
   speakWithSettings,
   stopAllVoiceOutput,
+  canVoiceModuleSpeak,
+  getActiveVoiceSessionId,
   type KokoroStreamingPlayer,
 } from './voiceRouter';
 import {
@@ -31,18 +33,29 @@ export class StreamingVoiceSession {
   private readonly engine: VoiceEngine;
   private readonly voicePreset: VoicePresetId;
   private readonly kokoroStream: KokoroStreamingPlayer | null;
+  private readonly sessionId: number;
 
   constructor(options: StreamingVoiceOptions = {}) {
     const state = useAuthStore.getState();
     this.engine = options.voiceEngine ?? state.voiceEngine ?? 'kokoro';
     this.voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
+    this.sessionId = getActiveVoiceSessionId();
     this.kokoroStream =
       this.engine === 'kokoro' ? createKokoroStreamingPlayer(this.voicePreset) : null;
     registerActiveStreamingVoiceSession(this);
   }
 
+  private isSessionLive(): boolean {
+    return (
+      !this.stopped &&
+      this.sessionId > 0 &&
+      this.sessionId === getActiveVoiceSessionId() &&
+      canVoiceModuleSpeak()
+    );
+  }
+
   onDelta(accumulatedRaw: string): void {
-    if (this.stopped || !accumulatedRaw.trim()) return;
+    if (!this.isSessionLive() || !accumulatedRaw.trim()) return;
     const { segments, nextSpokenCleanLength } = pullNewSpeechSegments(
       accumulatedRaw,
       this.spokenCleanLength,
@@ -54,7 +67,7 @@ export class StreamingVoiceSession {
   }
 
   async onComplete(finalRaw: string): Promise<void> {
-    if (this.stopped) return;
+    if (!this.isSessionLive()) return;
     const { remainder, nextSpokenCleanLength } = pullRemainingSpeech(
       finalRaw,
       this.spokenCleanLength,
@@ -68,7 +81,7 @@ export class StreamingVoiceSession {
     } else {
       await this.queue;
     }
-    if (this.started && !this.stopped) {
+    if (!this.stopped) {
       window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
       window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
     }
@@ -92,6 +105,7 @@ export class StreamingVoiceSession {
   }
 
   private enqueue(text: string): void {
+    if (!this.isSessionLive()) return;
     if (this.kokoroStream) {
       if (!this.started) {
         this.started = true;
@@ -103,7 +117,7 @@ export class StreamingVoiceSession {
     }
 
     this.queue = this.queue.then(async () => {
-      if (this.stopped) return;
+      if (!this.isSessionLive()) return;
       if (!this.started) {
         this.started = true;
         window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT));
@@ -112,7 +126,6 @@ export class StreamingVoiceSession {
       await speakWithSettings(text, {
         voiceEngine: this.engine,
         voicePreset: this.voicePreset,
-        allowBackground: true,
       });
     });
   }

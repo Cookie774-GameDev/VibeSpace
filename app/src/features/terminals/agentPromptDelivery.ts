@@ -15,6 +15,8 @@
  *      block" inside it (HTML-comment markers) so user-authored content
  *      around the block is never touched, and switching agents replaces
  *      only our block.
+ *      `CLAUDE.md` and `GEMINI.md` receive the same managed block for
+ *      CLIs whose instruction-file convention is provider-specific.
  *   2. Environment variables on the PTY (`JARVIS_AGENT_SLUG`, …) so
  *      shell prompts / wrappers / custom CLIs can also discover the
  *      assignment without parsing markdown.
@@ -49,6 +51,8 @@ import { useTerminalTranscriptStore } from './transcriptStore';
 /* -------------------------------------------------------------------------- */
 
 export const AGENTS_FILE_NAME = 'AGENTS.md';
+export const CLAUDE_FILE_NAME = 'CLAUDE.md';
+export const GEMINI_FILE_NAME = 'GEMINI.md';
 export const COORDINATION_FILE_NAME = '.jarvis-coordination.md';
 
 export const MANAGED_BLOCK_START = '<!-- VIBESPACE:AGENT-BRIEFING:START — managed by VibeSpace, do not edit between markers -->';
@@ -92,8 +96,20 @@ export function agentsFilePath(cwd: string): string {
   return joinPath(cwd, AGENTS_FILE_NAME);
 }
 
+export function claudeFilePath(cwd: string): string {
+  return joinPath(cwd, CLAUDE_FILE_NAME);
+}
+
+export function geminiFilePath(cwd: string): string {
+  return joinPath(cwd, GEMINI_FILE_NAME);
+}
+
 export function coordinationFilePath(cwd: string): string {
   return joinPath(cwd, COORDINATION_FILE_NAME);
+}
+
+function instructionFilePaths(cwd: string): string[] {
+  return [agentsFilePath(cwd), claudeFilePath(cwd), geminiFilePath(cwd)];
 }
 
 function clip(text: string, max: number): string {
@@ -148,12 +164,12 @@ export function composeAgentBriefing(inputs: AgentBriefingInputs): string {
       (inputs.projectName ? ` in the **${inputs.projectName}** project.` : '.'),
   );
 
+  sections.push(`## Shared rules for all VibeSpace agents\n${BASE_TERMINAL_AGENT_RULES}`);
+
   const prompt = inputs.agentPrompt.trim();
   if (prompt) {
     sections.push(`## Your instructions (${inputs.agentName})\n${clip(prompt, MAX_AGENT_PROMPT_CHARS)}`);
   }
-
-  sections.push(`## Shared rules for all VibeSpace agents\n${BASE_TERMINAL_AGENT_RULES}`);
 
   const projectContext = inputs.projectContext?.trim();
   if (projectContext) {
@@ -382,6 +398,7 @@ export function gatherSiblingAgentActivity(opts: {
 export interface AgentDeliveryResult {
   ok: boolean;
   agentsFilePath: string;
+  instructionFilePaths: string[];
   coordinationFilePath: string;
   /** Slug delivered, or null when the managed block was removed. */
   agentSlug: string | null;
@@ -421,27 +438,37 @@ export async function deliverAgentTerminalContext(opts: {
   projectName?: string | null;
   excludeSessionId?: string | null;
 }): Promise<AgentDeliveryResult> {
-  const agentsPath = agentsFilePath(opts.cwd);
+  const instructionPaths = instructionFilePaths(opts.cwd);
+  const agentsPath = instructionPaths[0]!;
   const coordinationPath = coordinationFilePath(opts.cwd);
   const base: AgentDeliveryResult = {
     ok: false,
     agentsFilePath: agentsPath,
+    instructionFilePaths: instructionPaths,
     coordinationFilePath: coordinationPath,
     agentSlug: opts.agentSlug,
   };
 
   try {
-    const existingRead = await readTextFile(agentsPath);
-    if (!existingRead.ok && existingRead.error.code === 'unavailable') {
+    const existingReads = await Promise.all(
+      instructionPaths.map(async (path) => ({ path, result: await readTextFile(path) })),
+    );
+    const unavailable = existingReads.find(
+      ({ result }) => !result.ok && result.error.code === 'unavailable',
+    );
+    if (unavailable) {
       return { ...base, error: 'File system bridge unavailable (not running in the desktop app).' };
     }
-    const existing = existingRead.ok ? existingRead.content : null;
 
     if (opts.agentSlug == null) {
-      const merged = mergeManagedBlock(existing, null);
-      if (merged == null) return { ...base, ok: true };
-      const write = await writeTextFile(agentsPath, merged);
-      return write.ok ? { ...base, ok: true } : { ...base, error: write.error.raw ?? write.error.code };
+      for (const { path, result } of existingReads) {
+        const existing = result.ok ? result.content : null;
+        const merged = mergeManagedBlock(existing, null);
+        if (merged == null) continue;
+        const write = await writeTextFile(path, merged);
+        if (!write.ok) return { ...base, error: write.error.raw ?? write.error.code };
+      }
+      return { ...base, ok: true };
     }
 
     // Ensure the shared coordination document exists (never overwrite).
@@ -473,11 +500,15 @@ export async function deliverAgentTerminalContext(opts: {
       coordinationFilePath: coordinationPath,
     });
 
-    const merged = mergeManagedBlock(existing, wrapManagedBlock(briefing));
-    if (merged == null) return { ...base, ok: true };
-    if (existing === merged) return { ...base, ok: true };
-    const write = await writeTextFile(agentsPath, merged);
-    return write.ok ? { ...base, ok: true } : { ...base, error: write.error.raw ?? write.error.code };
+    const block = wrapManagedBlock(briefing);
+    for (const { path, result } of existingReads) {
+      const existing = result.ok ? result.content : null;
+      const merged = mergeManagedBlock(existing, block);
+      if (merged == null || existing === merged) continue;
+      const write = await writeTextFile(path, merged);
+      if (!write.ok) return { ...base, error: write.error.raw ?? write.error.code };
+    }
+    return { ...base, ok: true };
   } catch (err) {
     return { ...base, error: err instanceof Error ? err.message : String(err) };
   }

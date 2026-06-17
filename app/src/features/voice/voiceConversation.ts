@@ -1,3 +1,8 @@
+/** How hands-free mode decides a user turn is complete. */
+export type VoiceEndTrigger = 'phrase' | 'silence';
+
+export const VOICE_END_TRIGGER_DEFAULT: VoiceEndTrigger = 'phrase';
+
 /** Default pause after you stop speaking before Jarvis sends your message. */
 export const VOICE_SILENCE_DELAY_MS_DEFAULT = 2000;
 

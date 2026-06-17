@@ -21,6 +21,16 @@ import { PERSONAS } from './personas';
 import { VoiceActivityWaveform } from './VoiceActivityWaveform';
 import { handleVoiceModuleClosed } from './voiceRouter';
 import { resolveVoiceListenTimeoutMs } from './voiceConversation';
+import {
+  modelSelectionContextFromAuth,
+  validateSendModelAccess,
+} from '@/lib/ai/modelSelection';
+import {
+  processVoiceFinalEvent,
+  shouldAutoSendOnSilence,
+  voiceListeningHint,
+  VOICE_REPLY_COOLDOWN_MS,
+} from './voiceTurnCommit';
 
 const STATE_LABEL: Record<VoiceState, string> = {
   idle: 'Ready',
@@ -203,6 +213,8 @@ export function VoiceModal() {
   const setOpen = useUIStore((state) => state.setVoiceModalOpen);
   const activeChatId = useUIStore((state) => state.activeChatId);
   const voiceAutoListenOnOpen = useAuthStore((state) => state.voiceAutoListenOnOpen);
+  const voiceEndTrigger = useAuthStore((state) => state.voiceEndTrigger);
+  const voiceCommitPhrase = useAuthStore((state) => state.voiceCommitPhrase);
   const [showTranscript, setShowTranscript] = React.useState(false);
   const messages = useChatMessages(open && showTranscript ? activeChatId : null);
   const state = useVoiceStore((voice) => voice.state);
@@ -214,9 +226,11 @@ export function VoiceModal() {
   const pendingUtteranceRef = React.useRef('');
   const utteranceTimerRef = React.useRef<number | null>(null);
   const restartTimerRef = React.useRef<number | null>(null);
+  const cooldownTimerRef = React.useRef<number | null>(null);
   const speakingRef = React.useRef(false);
   const streamingReplyRef = React.useRef(false);
   const listeningArmedRef = React.useRef(false);
+  const turnBusyRef = React.useRef(false);
   const personaCfg = PERSONAS[persona];
 
   // Drag state — primary-button drag on the panel chrome, clamped to viewport
@@ -318,17 +332,50 @@ export function VoiceModal() {
 
     const handsFree = () => useAuthStore.getState().voiceAutoListenOnOpen;
 
+    const clearUtteranceTimers = () => {
+      if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
+      utteranceTimerRef.current = null;
+    };
+
+    const releaseTurnAndRestart = () => {
+      turnBusyRef.current = false;
+      if (handsFree()) {
+        listeningArmedRef.current = true;
+        restartListening();
+      } else {
+        useVoiceStore.getState().setState('idle');
+      }
+    };
+
     const restartListening = () => {
+      if (turnBusyRef.current) return;
       if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
       if (!handsFree() && !listeningArmedRef.current) return;
       if (VoiceService.isListening() || VoiceService.wantsListening()) return;
       if (restartTimerRef.current !== null) window.clearTimeout(restartTimerRef.current);
       restartTimerRef.current = window.setTimeout(() => {
         restartTimerRef.current = null;
+        if (turnBusyRef.current) return;
         if (!useUIStore.getState().voiceModalOpen || speakingRef.current || !listeningArmedRef.current) return;
         if (VoiceService.isListening() || VoiceService.wantsListening()) return;
         startListening();
       }, 180);
+    };
+
+    const scheduleRestartAfterReply = () => {
+      if (cooldownTimerRef.current !== null) window.clearTimeout(cooldownTimerRef.current);
+      cooldownTimerRef.current = window.setTimeout(() => {
+        cooldownTimerRef.current = null;
+        turnBusyRef.current = false;
+        if (handsFree()) {
+          listeningArmedRef.current = true;
+          pendingUtteranceRef.current = '';
+          useVoiceStore.getState().setPartialTranscript('');
+          restartListening();
+        } else {
+          useVoiceStore.getState().setState('idle');
+        }
+      }, VOICE_REPLY_COOLDOWN_MS);
     };
 
     const disarmPushToTalk = () => {
@@ -338,18 +385,29 @@ export function VoiceModal() {
       useUIStore.getState().setVoiceListening(false);
     };
 
-    const flushUtterance = () => {
-      utteranceTimerRef.current = null;
-      const text = pendingUtteranceRef.current.trim();
+    const stopMicForTurn = () => {
+      VoiceService.stopListening();
+      useUIStore.getState().setVoiceListening(false);
+      clearUtteranceTimers();
+    };
+
+    const flushUtterance = (textOverride?: string) => {
+      clearUtteranceTimers();
+      if (turnBusyRef.current) return;
+
+      const text = (textOverride ?? pendingUtteranceRef.current).trim();
       pendingUtteranceRef.current = '';
       if (!text) return;
 
+      turnBusyRef.current = true;
       disarmPushToTalk();
+      stopMicForTurn();
       useVoiceStore.getState().setState('thinking');
       void (async () => {
         const target = await resolveVoiceChatTarget(text);
         if (!target) {
           useVoiceStore.getState().setState('error', 'Could not open a Jarvis chat.');
+          releaseTurnAndRestart();
           return;
         }
 
@@ -358,6 +416,21 @@ export function VoiceModal() {
         const messageText = target.messageText.trim();
         if (!messageText) {
           useVoiceStore.getState().setState('error', 'Say something for Jarvis to send.');
+          releaseTurnAndRestart();
+          return;
+        }
+
+        const auth = useAuthStore.getState();
+        const modelCheck = validateSendModelAccess(
+          messageText,
+          auth.chatModelSelection,
+          modelSelectionContextFromAuth(auth),
+          auth.stackCustomSteps,
+          { voice: true },
+        );
+        if (!modelCheck.ok) {
+          useVoiceStore.getState().setState('error', modelCheck.message);
+          releaseTurnAndRestart();
           return;
         }
 
@@ -367,7 +440,6 @@ export function VoiceModal() {
             role: 'user',
             parts: [{ kind: 'text', text: messageText }],
           });
-          const auth = useAuthStore.getState();
           window.dispatchEvent(
             new CustomEvent('jarvis:send', {
               detail: {
@@ -386,6 +458,7 @@ export function VoiceModal() {
             error instanceof Error ? error.message : 'Could not send.',
           );
           useVoiceStore.getState().setState('error', 'Could not send the voice message.');
+          releaseTurnAndRestart();
         }
       })();
     };
@@ -412,11 +485,49 @@ export function VoiceModal() {
         schedulePartial(text);
       }),
       VoiceService.on('voice:final', ({ text }) => {
+        if (turnBusyRef.current) return;
+
         useVoiceStore.getState().pushFinalTranscript(text);
-        pendingUtteranceRef.current = `${pendingUtteranceRef.current} ${text}`.trim();
-        if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
-        const delay = useAuthStore.getState().voiceSilenceDelayMs;
-        utteranceTimerRef.current = window.setTimeout(flushUtterance, delay);
+        const auth = useAuthStore.getState();
+        const action = processVoiceFinalEvent({
+          finalText: text,
+          currentDraft: pendingUtteranceRef.current,
+          turnBusy: turnBusyRef.current,
+          handsFree: auth.voiceAutoListenOnOpen,
+          endTrigger: auth.voiceEndTrigger,
+          commitPhrase: auth.voiceCommitPhrase,
+          cancelPhrase: auth.voiceCancelPhrase,
+        });
+
+        if (action.type === 'ignore') return;
+
+        if (action.type === 'cancel') {
+          pendingUtteranceRef.current = '';
+          clearUtteranceTimers();
+          useVoiceStore.getState().setPartialTranscript('');
+          return;
+        }
+
+        if (action.type === 'accumulate') {
+          pendingUtteranceRef.current = action.draft;
+          useVoiceStore.getState().setPartialTranscript(action.draft);
+          return;
+        }
+
+        if (action.type === 'commit') {
+          pendingUtteranceRef.current = '';
+          flushUtterance(action.messageText);
+          return;
+        }
+
+        pendingUtteranceRef.current = action.draft;
+        if (!shouldAutoSendOnSilence(auth.voiceAutoListenOnOpen, auth.voiceEndTrigger)) return;
+
+        clearUtteranceTimers();
+        utteranceTimerRef.current = window.setTimeout(
+          () => flushUtterance(),
+          auth.voiceSilenceDelayMs,
+        );
       }),
       VoiceService.on('voice:error', ({ kind, message }) => {
         if (kind === 'no_speech' || kind === 'aborted') {
@@ -436,9 +547,15 @@ export function VoiceModal() {
       }),
       VoiceService.on('voice:timeout', () => {
         if (!handsFree()) return;
-        if (pendingUtteranceRef.current.trim()) {
-          flushUtterance();
-          return;
+        const auth = useAuthStore.getState();
+        if (shouldAutoSendOnSilence(auth.voiceAutoListenOnOpen, auth.voiceEndTrigger)) {
+          if (pendingUtteranceRef.current.trim()) {
+            flushUtterance();
+            return;
+          }
+        } else {
+          pendingUtteranceRef.current = '';
+          useVoiceStore.getState().setPartialTranscript('');
         }
         stopListening('idle');
       }),
@@ -446,38 +563,28 @@ export function VoiceModal() {
 
     const onStreamingStart = () => {
       streamingReplyRef.current = true;
+      turnBusyRef.current = true;
       if (speakingRef.current) return;
       speakingRef.current = true;
-      VoiceService.stopListening();
-      useUIStore.getState().setVoiceListening(false);
+      stopMicForTurn();
       useVoiceStore.getState().setState('speaking');
     };
     const onStreamingEnd = () => {
       streamingReplyRef.current = false;
       speakingRef.current = false;
-      if (handsFree()) {
-        listeningArmedRef.current = true;
-        restartListening();
-      } else {
-        useVoiceStore.getState().setState('idle');
-      }
+      scheduleRestartAfterReply();
     };
     const onSpeechStart = () => {
       if (streamingReplyRef.current) return;
+      turnBusyRef.current = true;
       speakingRef.current = true;
-      VoiceService.stopListening();
-      useUIStore.getState().setVoiceListening(false);
+      stopMicForTurn();
       useVoiceStore.getState().setState('speaking');
     };
     const onSpeechEnd = () => {
       if (streamingReplyRef.current) return;
       speakingRef.current = false;
-      if (handsFree()) {
-        listeningArmedRef.current = true;
-        restartListening();
-      } else {
-        useVoiceStore.getState().setState('idle');
-      }
+      scheduleRestartAfterReply();
     };
     window.addEventListener(STREAMING_VOICE_START_EVENT, onStreamingStart);
     window.addEventListener(STREAMING_VOICE_END_EVENT, onStreamingEnd);
@@ -489,11 +596,13 @@ export function VoiceModal() {
       if (partialTimer !== null) window.clearTimeout(partialTimer);
       if (restartTimerRef.current !== null) window.clearTimeout(restartTimerRef.current);
       restartTimerRef.current = null;
-      if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
-      utteranceTimerRef.current = null;
+      if (cooldownTimerRef.current !== null) window.clearTimeout(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+      clearUtteranceTimers();
       pendingUtteranceRef.current = '';
       useVoiceStore.getState().clearTranscripts();
       listeningArmedRef.current = false;
+      turnBusyRef.current = false;
       streamingReplyRef.current = false;
       window.removeEventListener(STREAMING_VOICE_START_EVENT, onStreamingStart);
       window.removeEventListener(STREAMING_VOICE_END_EVENT, onStreamingEnd);
@@ -501,7 +610,12 @@ export function VoiceModal() {
       window.removeEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
       handleVoiceModuleClosed();
     };
-  }, [open, startListening, voiceAutoListenOnOpen]);
+  }, [open, startListening, voiceAutoListenOnOpen, stopListening]);
+
+  const listeningHint =
+    state === 'listening'
+      ? voiceListeningHint(voiceCommitPhrase, voiceAutoListenOnOpen, voiceEndTrigger)
+      : STATE_LABEL[state];
 
   React.useEffect(() => {
     const node = transcriptRef.current;
@@ -541,7 +655,10 @@ export function VoiceModal() {
         >
           <button
             type="button"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              handleVoiceModuleClosed();
+              setOpen(false);
+            }}
             className="absolute right-1.5 top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-label="Close Jarvis voice session"
             title="Close"
@@ -568,7 +685,7 @@ export function VoiceModal() {
                 state === 'listening'
                   ? 'Stop listening'
                   : voiceAutoListenOnOpen
-                    ? 'Hands-free — just speak'
+                    ? `Hands-free — say "${voiceCommitPhrase}" to send`
                     : 'Click to let Jarvis hear you'
               }
             >
@@ -592,7 +709,7 @@ export function VoiceModal() {
                       : 'bg-success shadow-[0_0_5px_hsl(var(--success)/0.75)]',
                   )}
                 />
-                {state === 'error' && errorMessage ? errorMessage : STATE_LABEL[state]}
+                {state === 'error' && errorMessage ? errorMessage : listeningHint}
               </span>
             </div>
             <div className="mx-auto min-w-0 flex-1">

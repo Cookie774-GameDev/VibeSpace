@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Theme } from '@/types/common';
 import { createDebouncedStateStorage } from '@/lib/persistence/debouncedStateStorage';
 import { safeLocalStorage, measureStorageSizes } from '@/lib/persistence/safeLocalStorage';
+import { syncVoiceModuleOpenState } from '@/features/voice/voiceRouter';
 
 const debouncedUiStorage = createDebouncedStateStorage(safeLocalStorage);
 
@@ -313,9 +314,18 @@ export const useUIStore = create<UIState>()(
       toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
       togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
       setPaletteOpen: (open) => set({ paletteOpen: open }),
-      toggleVoice: () => set((s) => ({ voiceModalOpen: !s.voiceModalOpen })),
+      toggleVoice: () =>
+        set((s) => {
+          const next = !s.voiceModalOpen;
+          syncVoiceModuleOpenState(next);
+          return { voiceModalOpen: next };
+        }),
       setVoiceListening: (v) => set({ voiceListening: v }),
-      setVoiceModalOpen: (v) => set({ voiceModalOpen: v }),
+      setVoiceModalOpen: (v) =>
+        set((s) => {
+          if (v !== s.voiceModalOpen) syncVoiceModuleOpenState(v);
+          return { voiceModalOpen: v };
+        }),
       setSettingsOpen: (v) => set({ settingsOpen: v }),
       setActiveChat: (id) => set({ activeChatId: id }),
       setActiveAgent: (id) => set({ activeAgentId: id }),

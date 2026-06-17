@@ -114,6 +114,20 @@ describe('useAuthStore API key persistence', () => {
   it('defaults new installs to hands-free voice with a two-second pause', () => {
     expect(useAuthStore.getState().voiceAutoListenOnOpen).toBe(true);
     expect(useAuthStore.getState().voiceSilenceDelayMs).toBe(2000);
+    expect(useAuthStore.getState().voiceEndTrigger).toBe('phrase');
+    expect(useAuthStore.getState().voiceCommitPhrase).toBe('send it');
+    expect(useAuthStore.getState().voiceCancelPhrase).toBe('cancel');
+  });
+
+  it('persists voice commit phrase settings', () => {
+    useAuthStore.getState().setVoiceEndTrigger('silence');
+    useAuthStore.getState().setVoiceCommitPhrase('go ahead');
+    useAuthStore.getState().setVoiceCancelPhrase('never mind');
+
+    const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
+    expect(persisted).toContain('"voiceEndTrigger":"silence"');
+    expect(persisted).toContain('"voiceCommitPhrase":"go ahead"');
+    expect(persisted).toContain('"voiceCancelPhrase":"never mind"');
   });
 
   it('persists Hive preset and custom steps without API keys', () => {
@@ -131,9 +145,26 @@ describe('useAuthStore API key persistence', () => {
 
     const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
     expect(persisted).toContain('"stackPreset":"custom"');
-    expect(persisted).toContain('"model":"gpt-5.5"');
+    expect(persisted).toContain('"chatModelSelection":{"mode":"hive","hiveId":"custom"}');
+    expect(persisted).toContain('"model":"gpt-4o-mini"');
     expect(persisted).not.toContain('sk_');
     expect(persisted).not.toContain('service_role');
+  });
+
+  it('persists explicit single-model chat selection', () => {
+    useAuthStore.getState().setChatModelSelection({
+      mode: 'single',
+      providerId: 'groq',
+      modelId: 'llama-3.3-70b-versatile',
+    });
+
+    const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
+    expect(persisted).toContain('"chatModelSelection":{"mode":"single","providerId":"groq","modelId":"llama-3.3-70b-versatile"}');
+    expect(persisted).toContain('"stackPreset":"off"');
+  });
+
+  it('defaults chat model selection to Choose model state', () => {
+    expect(useAuthStore.getInitialState().chatModelSelection).toEqual({ mode: 'none' });
   });
 
   it('defaults Hive to off with documented custom steps', () => {

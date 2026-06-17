@@ -61,13 +61,19 @@ import {
  *
  * Only used when the user assigns a role to a pane that has no command
  * yet. We never overwrite an existing command. With the trimmed
- * roster, only Coder implies a CLI — anything else falls back to the
- * platform shell.
+ * Coder/Builder use Claude, while review/scout-style panes use OpenCode.
+ * We only apply this to blank panes; existing user commands are never
+ * overwritten.
  */
-function commandForAgent(slug: string): string | undefined {
+export function commandForAgent(slug: string): string | undefined {
   switch (slug) {
     case 'coder':
+    case 'builder':
       return 'claude';
+    case 'scout':
+    case 'reviewer':
+    case 'critic':
+      return 'opencode';
     case 'jarvis':
     default:
       return undefined;

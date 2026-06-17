@@ -29,7 +29,7 @@ describe('agentProviderOptions', () => {
     });
     expect(options[0]).toEqual({
       id: 'default',
-      label: 'Default provider (Google)',
+      label: 'Default provider (Gemini)',
     });
     expect(options.map((o) => o.id)).toEqual(['default', 'google', 'ollama']);
   });

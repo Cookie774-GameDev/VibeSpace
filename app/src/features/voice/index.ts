@@ -33,6 +33,8 @@ export {
   cancelVoicePreview,
   handleVoiceModuleClosed,
   isVoiceModuleOpen,
+  canVoiceModuleSpeak,
+  syncVoiceModuleOpenState,
   stopAllVoiceOutput,
   warmVoiceEngine,
   ensureKokoroReadyForSpeech,

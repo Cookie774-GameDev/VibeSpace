@@ -29,6 +29,38 @@ let activePlaybackAbort: AbortController | null = null;
 let activeStreamingSession: StreamingVoiceSession | null = null;
 const KOKORO_STREAM_SYNTH_AHEAD = 2;
 
+/** Monotonic session id — bumped when the voice module opens; zeroed on close. */
+let activeVoiceSessionId = 0;
+let voiceModuleMarkedOpen = false;
+
+export function getActiveVoiceSessionId(): number {
+  return activeVoiceSessionId;
+}
+
+/** True only while the voice panel is open and its session has not been cancelled. */
+export function canVoiceModuleSpeak(): boolean {
+  return (
+    voiceModuleMarkedOpen &&
+    activeVoiceSessionId > 0 &&
+    useUIStore.getState().voiceModalOpen
+  );
+}
+
+/**
+ * Sync voice lifecycle when the panel opens or closes.
+ * Idempotent — safe from UI store, lifecycle host, and close handlers.
+ */
+export function syncVoiceModuleOpenState(isOpen: boolean): void {
+  if (isOpen) {
+    if (!voiceModuleMarkedOpen) {
+      voiceModuleMarkedOpen = true;
+      activeVoiceSessionId += 1;
+    }
+    return;
+  }
+  handleVoiceModuleClosed();
+}
+
 export function registerActiveStreamingVoiceSession(
   session: StreamingVoiceSession | null,
 ): void {
@@ -180,8 +212,18 @@ export function isVoiceModuleOpen(): boolean {
   return useUIStore.getState().voiceModalOpen;
 }
 
-/** Hard stop when the voice panel is dismissed — cuts playback and listening. */
+/** Hard stop when the voice panel is dismissed — cuts playback, listening, and in-flight voice AI. */
 export function handleVoiceModuleClosed(): void {
+  const wasOpen = voiceModuleMarkedOpen;
+  voiceModuleMarkedOpen = false;
+  activeVoiceSessionId = 0;
+  if (wasOpen && typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:cancel'));
+    } catch {
+      /* ignore */
+    }
+  }
   stopAllVoiceOutput();
   VoiceService.stopListening();
   useUIStore.getState().setVoiceListening(false);
@@ -344,7 +386,7 @@ export async function speakWithSettings(
 ): Promise<void> {
   const trimmed = (options.text ?? text).trim();
   if (!trimmed) return;
-  if (!options.allowBackground && !isVoiceModuleOpen()) return;
+  if (!options.allowBackground && !canVoiceModuleSpeak()) return;
 
   const state = useAuthStore.getState();
   const engine = options.voiceEngine ?? state.voiceEngine ?? 'kokoro';

@@ -1,9 +1,13 @@
 import { ChevronDown, Sparkles } from 'lucide-react';
-import type { Part } from '@/types';
+import type { Part, ProviderId } from '@/types';
+import { getProviderDisplayName } from '@/lib/ai/providerRegistry';
+import { getModelLabelForProvider } from '@/lib/ai/providerModelCatalog';
+import { useProviderConnectionContext } from '@/lib/ai/useProviderModelOptions';
 
 type StackStepPart = Extract<Part, { kind: 'stack_step' }>;
 
 export function StackTimeline({ steps }: { steps: StackStepPart[] }) {
+  const ctx = useProviderConnectionContext();
   if (steps.length === 0) return null;
   return (
     <details className="group relative overflow-hidden rounded-2xl border border-accent-copper/25 bg-elevated/80 p-3 shadow-[0_0_34px_hsl(var(--accent-copper)/0.12)]">
@@ -25,7 +29,8 @@ export function StackTimeline({ steps }: { steps: StackStepPart[] }) {
                   Step {index + 1} · {step.label}
                 </div>
                 <div className="font-mono text-[11px] text-muted-foreground">
-                  {step.provider} / {step.model}
+                  {getProviderDisplayName(step.provider)} /{' '}
+                  {getModelLabelForProvider(step.provider, step.model, ctx)}
                 </div>
               </div>
               <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">

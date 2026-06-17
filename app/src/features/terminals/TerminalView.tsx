@@ -584,6 +584,17 @@ export function TerminalView({
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
           webglDispose.disposeAddon();
+          requestAnimationFrame(() => {
+            if (cancelled) return;
+            const currentTerm = termRef.current;
+            if (!currentTerm) return;
+            try {
+              currentTerm.refresh(0, Math.max(0, currentTerm.rows - 1));
+            } catch {
+              /* renderer may already be switching; the refit below is best-effort */
+            }
+            dispatchResize();
+          });
         });
         webglDispose.setAddon(webgl);
         term.loadAddon(webgl);
@@ -762,7 +773,7 @@ export function TerminalView({
           // coordination doc) BEFORE the process starts whenever the
           // working directory is known, so a CLI spawned directly (e.g.
           // `opencode` as the pane command) reads it on session start.
-          if (slugAtSpawn && cwd) {
+          if (cwd) {
             const delivery = await deliverAgentTerminalContext({
               cwd,
               agentSlug: slugAtSpawn,
@@ -799,7 +810,7 @@ export function TerminalView({
 
           // The backend resolved a cwd we did not know up front — deliver
           // there now, before any startup command launches a CLI.
-          if (slugAtSpawn && !briefingDelivered && sessionCwd) {
+          if (!briefingDelivered && sessionCwd) {
             const delivery = await deliverAgentTerminalContext({
               cwd: sessionCwd,
               agentSlug: slugAtSpawn,
@@ -835,7 +846,7 @@ export function TerminalView({
           );
           // Keep the briefing fresh on re-attach: the assignment (or the
           // agent's editable prompt) may have changed while unmounted.
-          if (slugAtSpawn && sessionCwd) {
+          if (sessionCwd) {
             const delivery = await deliverAgentTerminalContext({
               cwd: sessionCwd,
               agentSlug: slugAtSpawn,

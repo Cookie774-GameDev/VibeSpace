@@ -4,6 +4,7 @@
 > **Repo:** `C:\Users\viper\VibeSpace`  
 > **Product version:** **0.1.42** (June 2026)  
 > **Upstream:** [github.com/Cookie774-GameDev/VibeSpace](https://github.com/Cookie774-GameDev/VibeSpace)  
+> **Multi-agent coordination:** [`docs/AGENT_COORDINATION.md`](AGENT_COORDINATION.md) — read before any code change; update after commits (see `.cursor/rules/agent-coordination.mdc`).  
 > **Do not commit secrets.** Never paste `.env`, API keys, or service-role credentials into tests or docs.
 
 **Naming:** **VibeSpace** is the product. **Jarvis** is the built-in voice assistant, command bar, and calling layer *inside* VibeSpace — not the product name. Internal npm scripts may still use `jarvis` (e.g. `npm run jarvis`).

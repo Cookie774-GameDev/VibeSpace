@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
     stop: vi.fn(),
   },
   createKokoroStreamingPlayer: vi.fn(),
+  canSpeak: true,
+  sessionId: 1,
 }));
 
 vi.mock('@/stores/auth', () => ({
@@ -37,6 +39,8 @@ vi.mock('./voiceRouter', () => ({
   registerActiveStreamingVoiceSession: vi.fn(),
   speakWithSettings: mocks.speakWithSettings,
   stopAllVoiceOutput: vi.fn(),
+  canVoiceModuleSpeak: () => mocks.canSpeak,
+  getActiveVoiceSessionId: () => mocks.sessionId,
 }));
 
 import { StreamingVoiceSession } from './streamingVoice';
@@ -46,6 +50,8 @@ describe('StreamingVoiceSession lifecycle', () => {
     mocks.speakWithSettings.mockClear();
     mocks.authState.voiceEngine = 'system';
     mocks.authState.voicePreset = 'jarvis-prime';
+    mocks.canSpeak = true;
+    mocks.sessionId = 1;
     mocks.kokoroStream.enqueue.mockClear();
     mocks.kokoroStream.complete.mockClear();
     mocks.kokoroStream.stop.mockClear();
@@ -97,6 +103,26 @@ describe('StreamingVoiceSession lifecycle', () => {
 
     window.removeEventListener(STREAMING_VOICE_END_EVENT, onEnd);
     expect(ends).toHaveLength(1);
+  });
+
+  it('emits end when completion has nothing to speak', async () => {
+    const ends: string[] = [];
+    const onEnd = () => ends.push('end');
+    window.addEventListener(STREAMING_VOICE_END_EVENT, onEnd);
+
+    const session = new StreamingVoiceSession();
+    await session.onComplete('   ');
+
+    window.removeEventListener(STREAMING_VOICE_END_EVENT, onEnd);
+    expect(ends).toHaveLength(1);
+    expect(mocks.speakWithSettings).not.toHaveBeenCalled();
+  });
+
+  it('ignores speech when the voice session is no longer live', () => {
+    const session = new StreamingVoiceSession();
+    mocks.canSpeak = false;
+    session.onDelta('Hello there.');
+    expect(mocks.speakWithSettings).not.toHaveBeenCalled();
   });
 
   it('uses the Kokoro streaming player instead of serial speak calls', async () => {

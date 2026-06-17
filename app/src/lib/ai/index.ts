@@ -62,4 +62,17 @@ export {
   buildModelPickerGroups,
   MODEL_PROVIDER_LABELS,
 } from './useAccessibleChatModels';
+export {
+  getProviderDisplayName,
+  formatProviderOptionLabel,
+  isProviderConnected,
+  HIVE_STACK_PROVIDERS,
+} from './providerRegistry';
+export {
+  getModelsForProvider,
+  validateProviderModelSelection,
+  resolveModelOnProviderChange,
+  loadProviderModels,
+} from './providerModelCatalog';
+export { useProviderModelOptions, useProviderConnectionContext } from './useProviderModelOptions';
 export { LOCAL_MODEL_CATALOG, catalogDisplayName, catalogFamilyName } from './localModelCatalog';

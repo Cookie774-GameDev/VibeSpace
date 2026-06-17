@@ -13,8 +13,18 @@ const mocks = vi.hoisted(() => ({
     onDelta: vi.fn(),
     onComplete: vi.fn(async () => undefined),
     stop: vi.fn(),
+    haltPlayback: vi.fn(),
   },
+  voiceCanSpeak: true,
 }));
+
+vi.mock('@/features/voice/voiceRouter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/voice/voiceRouter')>();
+  return {
+    ...actual,
+    canVoiceModuleSpeak: () => mocks.voiceCanSpeak,
+  };
+});
 
 vi.mock('./router', () => ({
   runAgent: mocks.runAgent,
@@ -51,6 +61,8 @@ vi.mock('./context', () => ({
 }));
 
 import { startRuntimeListener } from './runtime';
+import { selectionFromOption } from './modelSelection';
+import { DEFAULT_CUSTOM_STEPS } from './stacks/presets';
 
 function agent(id: string, slug: string, systemPrompt: string): Agent {
   return {
@@ -68,9 +80,12 @@ function agent(id: string, slug: string, systemPrompt: string): Agent {
   };
 }
 
+const activeStoppers: Array<() => void> = [];
+
 describe('startRuntimeListener agent routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.voiceCanSpeak = true;
     try {
       localStorage.clear();
     } catch {
@@ -79,15 +94,18 @@ describe('startRuntimeListener agent routing', () => {
     mocks.streamingSession.onDelta.mockClear();
     mocks.streamingSession.onComplete.mockClear();
     mocks.streamingSession.stop.mockClear();
+    mocks.streamingSession.haltPlayback.mockClear();
     useAuthStore.setState({
       speakReplies: false,
       voicePreset: 'jarvis-prime',
       voiceEngine: 'system',
       stackPreset: 'off',
+      stackCustomSteps: DEFAULT_CUSTOM_STEPS,
       plan: 'free',
-      apiKeys: {},
+      apiKeys: { mock: 'mock-skip-sentinel' },
       defaultProvider: 'mock',
       offlineMode: false,
+      chatModelSelection: selectionFromOption('mock', 'mock-default'),
     });
     useUIStore.setState({ voiceModalOpen: true });
     mocks.runAgent.mockResolvedValue({
@@ -98,6 +116,17 @@ describe('startRuntimeListener agent routing', () => {
     });
     mocks.chatGetById.mockResolvedValue(undefined);
   });
+
+  afterEach(() => {
+    while (activeStoppers.length > 0) {
+      activeStoppers.pop()!();
+    }
+  });
+
+  function trackListener(stop: () => void): () => void {
+    activeStoppers.push(stop);
+    return stop;
+  }
 
   it('uses the chat-bound active agent and its system prompt', async () => {
     const apple = agent('agent_apple', 'apple', 'Always answer with APPLE.');
@@ -113,7 +142,7 @@ describe('startRuntimeListener agent routing', () => {
       updated_at: 1,
     };
 
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === apple.id ? apple : id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'apple' ? apple : slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => apple),
@@ -125,7 +154,7 @@ describe('startRuntimeListener agent routing', () => {
         updated_at: 2,
       })),
       updateMessage: vi.fn(async () => undefined),
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {
@@ -156,7 +185,7 @@ describe('startRuntimeListener agent routing', () => {
       updated_at: 1,
     };
 
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === apple.id ? apple : id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'apple' ? apple : slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => jarvis),
@@ -168,7 +197,7 @@ describe('startRuntimeListener agent routing', () => {
         updated_at: 2,
       })),
       updateMessage: vi.fn(async () => undefined),
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {
@@ -199,7 +228,7 @@ describe('startRuntimeListener agent routing', () => {
       updated_at: 1,
     };
 
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === apple.id ? apple : id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) =>
         slug === 'apple-agent' ? apple : slug === 'jarvis' ? jarvis : null,
@@ -212,7 +241,7 @@ describe('startRuntimeListener agent routing', () => {
         updated_at: 2,
       })),
       updateMessage: vi.fn(async () => undefined),
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {
@@ -259,7 +288,7 @@ describe('startRuntimeListener agent routing', () => {
       model: 'mock-default',
     });
 
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => jarvis),
@@ -271,7 +300,7 @@ describe('startRuntimeListener agent routing', () => {
         updated_at: 2,
       })),
       updateMessage: vi.fn(async () => undefined),
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {
@@ -306,14 +335,14 @@ describe('startRuntimeListener agent routing', () => {
       provider: 'mock',
       model: 'mock-default',
     });
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => jarvis),
       getMessages: vi.fn(async () => [userMessage]),
       appendMessage: vi.fn(async (msg) => ({ ...msg, id: placeholderId, created_at: 2, updated_at: 2 })),
       updateMessage: vi.fn(async () => undefined),
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello', speakReply: true } }),
@@ -344,14 +373,14 @@ describe('startRuntimeListener agent routing', () => {
       provider: 'mock',
       model: 'mock-default',
     });
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => jarvis),
       getMessages: vi.fn(async () => [userMessage]),
       appendMessage: vi.fn(async (msg) => ({ ...msg, id: placeholderId, created_at: 2, updated_at: 2 })),
       updateMessage: vi.fn(async () => undefined),
-    });
+    }));
 
     window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello' } }));
 
@@ -361,7 +390,8 @@ describe('startRuntimeListener agent routing', () => {
     stop();
   });
 
-  it('speaks when the voice module is closed if speakReply is true', async () => {
+  it('does not speak when the voice module is closed even if speakReply is true', async () => {
+    mocks.voiceCanSpeak = false;
     useUIStore.setState({ voiceModalOpen: false });
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_closed_voice' as ChatId;
@@ -380,21 +410,69 @@ describe('startRuntimeListener agent routing', () => {
       provider: 'mock',
       model: 'mock-default',
     });
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => jarvis),
       getMessages: vi.fn(async () => [userMessage]),
       appendMessage: vi.fn(async (msg) => ({ ...msg, id: placeholderId, created_at: 2, updated_at: 2 })),
       updateMessage: vi.fn(async () => undefined),
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', { detail: { chatId, text: 'hello', speakReply: true } }),
     );
 
-    await vi.waitFor(() => expect(mocks.streamingSession.onComplete).toHaveBeenCalledTimes(1));
-    expect(mocks.streamingSession.onComplete).toHaveBeenCalledWith('Hello there.');
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
+    expect(mocks.streamingSession.onComplete).not.toHaveBeenCalled();
+
+    stop();
+  });
+
+  it('cancels an in-flight speakReply run when a new voice send arrives', async () => {
+    useUIStore.setState({ voiceModalOpen: true });
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_voice_replace' as ChatId;
+    let placeholderSeq = 0;
+    const signals: AbortSignal[] = [];
+    mocks.runAgent.mockImplementation(async (payload: { signal: AbortSignal }) => {
+      signals.push(payload.signal);
+      await new Promise<void>((resolve) => {
+        payload.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return {
+        text: `reply-${signals.length}`,
+        usage: { input_tokens: 1, output_tokens: 2, cost_usd: 0 },
+        provider: 'mock',
+        model: 'mock-default',
+      };
+    });
+
+    const stop = trackListener(startRuntimeListener({
+      getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+      getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => []),
+      appendMessage: vi.fn(async (msg) => ({
+        ...msg,
+        id: `msg_voice_${++placeholderSeq}` as MessageId,
+        created_at: placeholderSeq,
+        updated_at: placeholderSeq,
+      })),
+      updateMessage: vi.fn(async () => undefined),
+    }));
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', { detail: { chatId, text: 'first', speakReply: true } }),
+    );
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', { detail: { chatId, text: 'second', speakReply: true } }),
+    );
+
+    await vi.waitFor(() => expect(signals[0]?.aborted).toBe(true));
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
 
     stop();
   });
@@ -419,7 +497,7 @@ describe('startRuntimeListener agent routing', () => {
       model: 'llama3.2:1b',
     });
 
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => jarvis),
@@ -431,7 +509,7 @@ describe('startRuntimeListener agent routing', () => {
         updated_at: 2,
       })),
       updateMessage,
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {
@@ -463,6 +541,15 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('runs Hive Quality from a /Hive slash prefix and writes stack step parts', async () => {
+    useAuthStore.setState({
+      apiKeys: {
+        xai: 'xai-test',
+        anthropic: 'anthropic-test',
+        openai: 'openai-test',
+        google: 'google-test',
+      },
+      chatModelSelection: selectionFromOption('mock', 'mock-default'),
+    });
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_hive_quality' as ChatId;
     const placeholderId = 'msg_hive_quality_assistant' as MessageId;
@@ -501,7 +588,7 @@ describe('startRuntimeListener agent routing', () => {
         model: 'gemini-3.5-flash',
       });
 
-    const stop = startRuntimeListener({
+    const stop = trackListener(startRuntimeListener({
       getAgentById: (id) => (id === jarvis.id ? jarvis : null),
       getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
       getAgentForChat: vi.fn(async () => jarvis),
@@ -513,7 +600,7 @@ describe('startRuntimeListener agent routing', () => {
         updated_at: 2,
       })),
       updateMessage,
-    });
+    }));
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {

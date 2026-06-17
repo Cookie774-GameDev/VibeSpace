@@ -5,6 +5,7 @@ import {
   getAccessibleModelOptions,
   getAccessibleProviders,
 } from './models';
+import { getProviderDisplayName } from './providerRegistry';
 
 /** Stored on mock agents that should follow Settings → Default provider at runtime. */
 export const AGENT_DEFAULT_PROVIDER_MODEL = 'default-provider';
@@ -13,14 +14,11 @@ export type AgentEditorProviderChoice = ProviderId | 'default';
 
 const PROVIDER_LABELS: Partial<Record<ProviderId, string>> = {
   mock: 'Mock (demo)',
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  groq: 'Groq',
-  deepseek: 'DeepSeek',
-  ollama: 'Ollama (local)',
-  local: 'Local',
 };
+
+export function describeProviderLabel(provider: ProviderId): string {
+  return PROVIDER_LABELS[provider] ?? getProviderDisplayName(provider);
+}
 
 /** Providers included in paid hosted chat (BYOK not required). */
 const SUBSCRIPTION_HOSTED_PROVIDERS: readonly ProviderId[] = ['google', 'deepseek'];
@@ -51,7 +49,7 @@ export function isDefaultProviderSelectable(
 
 export function describeDefaultProviderLabel(defaultProvider: ProviderId): string {
   if (defaultProvider === 'mock') return 'Mock (demo)';
-  return PROVIDER_LABELS[defaultProvider] ?? defaultProvider;
+  return describeProviderLabel(defaultProvider);
 }
 
 export interface AgentEditorProviderOption {
@@ -83,7 +81,7 @@ export function getAgentEditorProviderOptions(args: {
     if (provider === 'local') continue;
     options.push({
       id: provider,
-      label: PROVIDER_LABELS[provider] ?? provider,
+      label: describeProviderLabel(provider),
     });
   }
 

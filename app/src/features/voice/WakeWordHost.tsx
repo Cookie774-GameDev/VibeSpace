@@ -3,11 +3,12 @@ import { toast } from '@/components/ui/toast';
 import { Avatar } from '@/components/ui/avatar';
 import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
-import { containsWakePhrase, readWakeWordEnabled, WAKE_WORD_SETTING_EVENT } from './wakeWord';
+import { containsWakePhrase, isWakeWordAutoOpenAllowed, readWakeWordEnabled, WAKE_WORD_SETTING_EVENT } from './wakeWord';
 import { VOICE_EXCLUSIVE_START_EVENT, VOICE_EXCLUSIVE_STOP_EVENT } from './VoiceService';
 import { speakWithSettings } from './voiceRouter';
 import { VOICE_ACKNOWLEDGEMENT_TEXT } from './speechSynthesis';
 import { useAppForeground } from './useAppForeground';
+import { useAuthStore } from '@/stores/auth';
 
 interface SpeechRecognitionAlternative {
   transcript: string;
@@ -62,6 +63,7 @@ function getRecognitionCtor(): WakeSpeechRecognitionCtor | null {
 export function WakeWordHost() {
   const voiceModalOpen = useUIStore((state) => state.voiceModalOpen);
   const setVoiceModalOpen = useUIStore((state) => state.setVoiceModalOpen);
+  const handsFreeEnabled = useAuthStore((state) => state.voiceAutoListenOnOpen);
   const appForeground = useAppForeground();
   const [enabled, setEnabled] = React.useState(() => readWakeWordEnabled());
   const [status, setStatus] = React.useState<WakeStatus>('listening');
@@ -84,7 +86,7 @@ export function WakeWordHost() {
   }, []);
 
   React.useEffect(() => {
-    if (!enabled || voiceModalOpen || !appForeground) {
+    if (!enabled || !handsFreeEnabled || voiceModalOpen || !appForeground) {
       stopRecognition(recognitionRef);
       clearRestart(restartTimerRef);
       return;
@@ -100,7 +102,7 @@ export function WakeWordHost() {
 
     const scheduleRestart = () => {
       clearRestart(restartTimerRef);
-      if (disposed || !readWakeWordEnabled() || useUIStore.getState().voiceModalOpen) return;
+      if (disposed || !isWakeWordAutoOpenAllowed() || useUIStore.getState().voiceModalOpen) return;
       if (document.visibilityState !== 'visible') return;
       restartTimerRef.current = window.setTimeout(startRecognition, 800);
     };
@@ -132,7 +134,7 @@ export function WakeWordHost() {
           if (alternative?.transcript) transcripts.push(alternative.transcript);
         }
         if (!containsWakePhrase(transcripts.join(' '))) return;
-        if (!appForeground) return;
+        if (!appForeground || !isWakeWordAutoOpenAllowed()) return;
 
         setStatus('heard');
         toast.success('Hey Jarvis heard', 'Opening voice.');
@@ -187,7 +189,7 @@ export function WakeWordHost() {
       clearRestart(restartTimerRef);
       stopRecognition(recognitionRef);
     };
-  }, [appForeground, enabled, setVoiceModalOpen, voiceModalOpen]);
+  }, [appForeground, enabled, handsFreeEnabled, setVoiceModalOpen, voiceModalOpen]);
 
   return null;
 }

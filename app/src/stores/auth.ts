@@ -13,6 +13,11 @@ import type { PlanId } from '@/lib/entitlements';
 import {
   DEFAULT_CUSTOM_STEPS,
 } from '@/lib/ai/stacks/presets';
+import {
+  sanitizeModelIdForInput,
+  validateProviderModelSelection,
+} from '@/lib/ai/providerModelCatalog';
+import { defaultModelForProvider } from '@/lib/ai/models';
 import type {
   StackPresetId,
   StackStepSpec,
@@ -28,9 +33,25 @@ import {
 import {
   VOICE_SILENCE_DELAY_MS_DEFAULT,
   VOICE_LISTEN_TIMEOUT_MS_DEFAULT,
+  VOICE_END_TRIGGER_DEFAULT,
   clampVoiceSilenceDelayMs,
   clampVoiceListenTimeoutMs,
+  type VoiceEndTrigger,
 } from '@/features/voice/voiceConversation';
+import {
+  VOICE_COMMIT_PHRASE_DEFAULT,
+  VOICE_CANCEL_PHRASE_DEFAULT,
+  clampVoiceCommitPhrase,
+  clampVoiceCancelPhrase,
+} from '@/features/voice/voiceTurnCommit';
+import {
+  EMPTY_CHAT_MODEL_SELECTION,
+  migrateLegacyModelSelection,
+  normalizeChatModelSelection,
+  selectionFromHive,
+  selectionFromOption,
+  type ChatModelSelection,
+} from '@/lib/ai/modelSelection';
 
 interface AuthState {
   /** Local-only profile (no cloud account) */
@@ -87,6 +108,15 @@ interface AuthState {
    */
   voiceListenTimeoutMs: number;
   /**
+   * Hands-free: how a user turn ends — say a commit phrase, or pause (silence).
+   * Click-to-talk always uses silence.
+   */
+  voiceEndTrigger: VoiceEndTrigger;
+  /** Phrase spoken to send a hands-free message (e.g. "send it"). */
+  voiceCommitPhrase: string;
+  /** Phrase spoken to discard the current draft without sending. */
+  voiceCancelPhrase: string;
+  /**
    * Chat auto-approve: when true, Jarvis action proposals run without
    * clicking Approve. Toggle with Shift+Tab on the chat route.
    */
@@ -114,6 +144,8 @@ interface AuthState {
   stackPreset: StackPresetId;
   /** User-defined Custom Hive steps. Contains model IDs/prompts, never API keys. */
   stackCustomSteps: StackStepSpec[];
+  /** Explicit chat model / Hive workflow selection (single source of truth). */
+  chatModelSelection: ChatModelSelection;
 
   /** Telemetry opt-in */
   telemetryOptIn: boolean;
@@ -132,6 +164,9 @@ interface AuthState {
   setVoiceAutoListenOnOpen: (enabled: boolean) => void;
   setVoiceSilenceDelayMs: (ms: number) => void;
   setVoiceListenTimeoutMs: (ms: number) => void;
+  setVoiceEndTrigger: (trigger: VoiceEndTrigger) => void;
+  setVoiceCommitPhrase: (phrase: string) => void;
+  setVoiceCancelPhrase: (phrase: string) => void;
   setJarvisAutoApprove: (enabled: boolean) => void;
   setVoiceAutoApproveActions: (enabled: boolean) => void;
   setComposerSttProvider: (provider: ComposerSttProvider) => void;
@@ -148,6 +183,7 @@ interface AuthState {
   /** Set the active plan id. Will be called by the Stripe webhook handler when billing ships. */
   setPlan: (p: PlanId) => void;
   setStackPreset: (preset: StackPresetId) => void;
+  setChatModelSelection: (selection: ChatModelSelection) => void;
   setStackCustomSteps: (steps: StackStepSpec[]) => void;
 }
 
@@ -202,6 +238,9 @@ export const useAuthStore = create<AuthState>()(
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
       voiceListenTimeoutMs: VOICE_LISTEN_TIMEOUT_MS_DEFAULT,
+      voiceEndTrigger: VOICE_END_TRIGGER_DEFAULT,
+      voiceCommitPhrase: VOICE_COMMIT_PHRASE_DEFAULT,
+      voiceCancelPhrase: VOICE_CANCEL_PHRASE_DEFAULT,
       jarvisAutoApprove: false,
       voiceAutoApproveActions: true,
       composerSttProvider: 'system',
@@ -209,6 +248,7 @@ export const useAuthStore = create<AuthState>()(
       plan: 'free',
       stackPreset: 'off',
       stackCustomSteps: DEFAULT_CUSTOM_STEPS,
+      chatModelSelection: EMPTY_CHAT_MODEL_SELECTION,
       telemetryOptIn: false,
 
       setDisplayName: (n) => set({ displayName: n }),
@@ -250,6 +290,12 @@ export const useAuthStore = create<AuthState>()(
         set({ voiceSilenceDelayMs: clampVoiceSilenceDelayMs(ms) }),
       setVoiceListenTimeoutMs: (ms) =>
         set({ voiceListenTimeoutMs: clampVoiceListenTimeoutMs(ms) }),
+      setVoiceEndTrigger: (trigger) =>
+        set({ voiceEndTrigger: trigger === 'silence' ? 'silence' : 'phrase' }),
+      setVoiceCommitPhrase: (phrase) =>
+        set({ voiceCommitPhrase: clampVoiceCommitPhrase(phrase) }),
+      setVoiceCancelPhrase: (phrase) =>
+        set({ voiceCancelPhrase: clampVoiceCancelPhrase(phrase) }),
       setJarvisAutoApprove: (enabled) => set({ jarvisAutoApprove: enabled }),
       setVoiceAutoApproveActions: (enabled) => set({ voiceAutoApproveActions: enabled }),
       setComposerSttProvider: (provider) => set({ composerSttProvider: provider }),
@@ -262,18 +308,68 @@ export const useAuthStore = create<AuthState>()(
       setOfflineMode: (v) => set({ offlineMode: v }),
       setDefaultLocalModel: (m) => set({ defaultLocalModel: m.trim() || 'llama3.2' }),
       setPlan: (p) => set({ plan: p }),
-      setStackPreset: (preset) => set({ stackPreset: preset }),
-      setStackCustomSteps: (steps) =>
-        set({
-          stackCustomSteps: steps.slice(0, 5).map((step) => ({
-            ...step,
-            id: step.id.trim() || crypto.randomUUID(),
-            label: step.label.trim() || 'Hive step',
-            model: step.model.trim(),
-            systemAppend: step.systemAppend.trim(),
-            provider_options: step.provider_options ? { ...step.provider_options } : undefined,
-          })),
+      setStackPreset: (preset) =>
+        set((s) => ({
+          stackPreset: preset,
+          chatModelSelection:
+            preset === 'off'
+              ? s.chatModelSelection.mode === 'hive'
+                ? EMPTY_CHAT_MODEL_SELECTION
+                : s.chatModelSelection
+              : selectionFromHive(preset),
+        })),
+      setChatModelSelection: (selection) =>
+        set((s) => {
+          const normalized = normalizeChatModelSelection(selection);
+          if (normalized.mode === 'single') {
+            return {
+              chatModelSelection: normalized,
+              defaultProvider: normalized.providerId,
+              selectedModels: {
+                ...s.selectedModels,
+                [normalized.providerId]: normalized.modelId,
+              },
+              stackPreset: 'off' as StackPresetId,
+            };
+          }
+          if (normalized.mode === 'hive') {
+            return {
+              chatModelSelection: normalized,
+              stackPreset: normalized.hiveId,
+            };
+          }
+          return {
+            chatModelSelection: EMPTY_CHAT_MODEL_SELECTION,
+            stackPreset: 'off' as StackPresetId,
+          };
         }),
+      setStackCustomSteps: (steps) =>
+        set((s) => ({
+          stackCustomSteps: steps.slice(0, 5).map((step) => {
+            const ctx = {
+              apiKeys: s.apiKeys,
+              offlineMode: s.offlineMode,
+              plan: s.plan,
+              defaultLocalModel: s.defaultLocalModel,
+            };
+            const model = sanitizeModelIdForInput(step.model);
+            const validation = validateProviderModelSelection(step.provider, model, ctx, {
+              allowCustom: true,
+            });
+            const resolvedModel =
+              model && (validation.ok || validation.isCustomModel)
+                ? model
+                : defaultModelForProvider(step.provider, s.defaultLocalModel);
+            return {
+              ...step,
+              id: step.id.trim() || crypto.randomUUID(),
+              label: step.label.trim() || 'Hive step',
+              model: resolvedModel,
+              systemAppend: step.systemAppend.trim(),
+              provider_options: step.provider_options ? { ...step.provider_options } : undefined,
+            };
+          }),
+        })),
     }),
     {
       name: 'jarvis-auth',
@@ -296,6 +392,9 @@ export const useAuthStore = create<AuthState>()(
         voiceAutoListenOnOpen: s.voiceAutoListenOnOpen,
         voiceSilenceDelayMs: s.voiceSilenceDelayMs,
         voiceListenTimeoutMs: s.voiceListenTimeoutMs,
+        voiceEndTrigger: s.voiceEndTrigger,
+        voiceCommitPhrase: s.voiceCommitPhrase,
+        voiceCancelPhrase: s.voiceCancelPhrase,
         jarvisAutoApprove: s.jarvisAutoApprove,
         voiceAutoApproveActions: s.voiceAutoApproveActions,
         composerSttProvider: s.composerSttProvider,
@@ -303,9 +402,10 @@ export const useAuthStore = create<AuthState>()(
         plan: s.plan,
         stackPreset: s.stackPreset,
         stackCustomSteps: s.stackCustomSteps,
+        chatModelSelection: s.chatModelSelection,
         telemetryOptIn: s.telemetryOptIn,
       }),
-      version: 9,
+      version: 11,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -342,6 +442,43 @@ export const useAuthStore = create<AuthState>()(
             state.composerSttProvider = 'system';
           }
           if (!state.fasterWhisperModel) state.fasterWhisperModel = 'small';
+        }
+        if (fromVersion < 10) {
+          if (state.voiceEndTrigger !== 'phrase' && state.voiceEndTrigger !== 'silence') {
+            state.voiceEndTrigger = VOICE_END_TRIGGER_DEFAULT;
+          }
+          if (typeof state.voiceCommitPhrase !== 'string' || !state.voiceCommitPhrase.trim()) {
+            state.voiceCommitPhrase = VOICE_COMMIT_PHRASE_DEFAULT;
+          } else {
+            state.voiceCommitPhrase = clampVoiceCommitPhrase(state.voiceCommitPhrase);
+          }
+          if (typeof state.voiceCancelPhrase !== 'string' || !state.voiceCancelPhrase.trim()) {
+            state.voiceCancelPhrase = VOICE_CANCEL_PHRASE_DEFAULT;
+          } else {
+            state.voiceCancelPhrase = clampVoiceCancelPhrase(state.voiceCancelPhrase);
+          }
+        }
+        if (fromVersion < 11) {
+          state.chatModelSelection = normalizeChatModelSelection(state.chatModelSelection);
+          if (state.chatModelSelection.mode === 'none') {
+            state.chatModelSelection = migrateLegacyModelSelection({
+              stackPreset: state.stackPreset ?? 'off',
+              defaultProvider: state.defaultProvider ?? 'google',
+              selectedModels: state.selectedModels ?? {},
+            });
+          }
+          if (state.chatModelSelection.mode === 'single') {
+            state.defaultProvider = state.chatModelSelection.providerId;
+            state.selectedModels = {
+              ...(state.selectedModels ?? {}),
+              [state.chatModelSelection.providerId]: state.chatModelSelection.modelId,
+            };
+            state.stackPreset = 'off';
+          } else if (state.chatModelSelection.mode === 'hive') {
+            state.stackPreset = state.chatModelSelection.hiveId;
+          } else {
+            state.stackPreset = 'off';
+          }
         }
         return state;
       },

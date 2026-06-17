@@ -148,6 +148,19 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn default_terminal_cwd() -> String {
+    std::env::var("USERPROFILE")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| std::env::var("HOME").ok().filter(|p| !p.trim().is_empty()))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(String::from))
+        })
+        .unwrap_or_default()
+}
+
 fn decode_terminal_bytes(pending_utf8: &mut Vec<u8>, chunk: &[u8]) -> Option<String> {
     if chunk.is_empty() && pending_utf8.is_empty() {
         return None;
@@ -250,15 +263,10 @@ pub async fn terminal_spawn(
             builder.env("JARVIS_EMBEDDED_TERMINAL", "1");
         }
     }
-    let resolved_cwd = if let Some(c) = cwd {
-        builder.cwd(&c);
-        c
-    } else {
-        std::env::current_dir()
-            .ok()
-            .and_then(|p| p.to_str().map(String::from))
-            .unwrap_or_default()
-    };
+    let resolved_cwd = cwd.unwrap_or_else(default_terminal_cwd);
+    if !resolved_cwd.is_empty() {
+        builder.cwd(&resolved_cwd);
+    }
     if let Some(env_map) = env {
         for (k, v) in env_map {
             builder.env(k, v);
@@ -523,7 +531,7 @@ pub async fn terminal_reconcile(
 
 #[cfg(test)]
 mod tests {
-    use super::decode_terminal_bytes;
+    use super::{decode_terminal_bytes, default_terminal_cwd};
 
     #[test]
     fn decode_terminal_bytes_holds_split_utf8_until_complete() {
@@ -536,6 +544,25 @@ mod tests {
             Some("⚡".to_string()),
         );
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn default_terminal_cwd_prefers_user_profile() {
+        let old_userprofile = std::env::var("USERPROFILE").ok();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("USERPROFILE", "C:\\Users\\JarvisTest");
+        std::env::set_var("HOME", "/home/other");
+
+        assert_eq!(default_terminal_cwd(), "C:\\Users\\JarvisTest");
+
+        match old_userprofile {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        match old_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]

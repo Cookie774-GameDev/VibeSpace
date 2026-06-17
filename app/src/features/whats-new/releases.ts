@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.43';
+export const CURRENT_VERSION = '0.1.44';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,38 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.44',
+    date: '2026-06-17',
+    headline: 'Terminals, voice turn-taking, and provider dropdowns',
+    summary:
+      'Production pass on terminal stability and agent prompts, hands-free voice turn-taking with session-safe TTS, and provider-aware model dropdowns with persisted selection across Hive and chat.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Provider/model dropdowns — Gemini, Groq, OpenAI, and Claude models from a registry; API-key gating in Settings → Providers.',
+          'Hands-free voice — say an end phrase to commit a turn; cancel phrase aborts; no pile-up of pending AI requests.',
+          'Terminal agent prompts — improved delivery to CLIs via managed context before PTY spawn.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Terminal scrollback isolation and route-switch refit stability.',
+          'Model selection persists visibly across composer, Hive, and chat.',
+          'Wake word only auto-opens voice in hands-free mode.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Voice streaming stops immediately when the voice panel closes.',
+          'Terminal restore session no longer bleeds history across panes.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.43',
     date: '2026-06-16',

@@ -52,14 +52,21 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   { provider: 'google', id: GOOGLE_DEFAULT_MODEL, label: 'Gemini 2.5 Flash Lite' },
   { provider: 'google', id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   { provider: 'google', id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+  { provider: 'google', id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+  { provider: 'google', id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
   { provider: 'groq', id: GROQ_DEFAULT_MODEL, label: 'Llama 3.3 70B Versatile' },
   { provider: 'groq', id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
   { provider: 'groq', id: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
   { provider: 'openai', id: OPENAI_DEFAULT_MODEL, label: 'GPT-4o Mini' },
   { provider: 'openai', id: 'gpt-4o', label: 'GPT-4o' },
   { provider: 'openai', id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+  { provider: 'openai', id: 'gpt-5.5', label: 'GPT-5.5' },
+  { provider: 'openai', id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
+  { provider: 'openai', id: 'gpt-5.5-codex', label: 'GPT-5.5 Codex' },
   { provider: 'anthropic', id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude 3.5 Sonnet' },
   { provider: 'anthropic', id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+  { provider: 'anthropic', id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+  { provider: 'anthropic', id: 'claude-fable-5', label: 'Claude Fable 5' },
   { provider: 'deepseek', id: 'deepseek-chat', label: 'DeepSeek V3 Chat' },
   { provider: 'deepseek', id: 'deepseek-reasoner', label: 'DeepSeek R1' },
   { provider: 'openrouter', id: OPENROUTER_DEFAULT_MODEL, label: 'Claude 3.5 Sonnet (OR)' },
@@ -67,6 +74,7 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   { provider: 'mistral', id: MISTRAL_DEFAULT_MODEL, label: 'Mistral Large' },
   { provider: 'together', id: TOGETHER_DEFAULT_MODEL, label: 'Llama 3.3 70B (Together)' },
   { provider: 'xai', id: XAI_DEFAULT_MODEL, label: 'Grok 2' },
+  { provider: 'xai', id: 'grok-4.3', label: 'Grok 4.3' },
   { provider: 'mock', id: 'mock-default', label: 'Mock demo' },
 ];
 
@@ -126,6 +134,8 @@ function resolveLocalModelNames(localDefault = ''): string[] {
 function localModelsAvailable(localDefault = ''): boolean {
   return resolveLocalModelNames(localDefault).length > 0;
 }
+
+export { localModelsAvailable };
 
 function planIncludesHostedChat(plan: PlanId): boolean {
   return plan !== 'free';

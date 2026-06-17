@@ -82,6 +82,15 @@ import {
   useOllamaModelOptions,
 } from '@/lib/ai/models';
 import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
+import {
+  formatChatModelSelectionLabel,
+  modelSelectionContextFromAuth,
+  selectionFromOption,
+  selectionOptionId,
+  validateSendModelAccess,
+  type ChatModelSelection,
+  type ModelSelectionContext,
+} from '@/lib/ai/modelSelection';
 
 export interface ComposerProps {
   chatId: ChatId | string;
@@ -294,6 +303,9 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const agents = useAgentStore((s) => s.agents);
   const provider = useAuthStore((s) => s.defaultProvider);
   const selectedModels = useAuthStore((s) => s.selectedModels);
+  const chatModelSelection = useAuthStore((s) => s.chatModelSelection);
+  const setChatModelSelection = useAuthStore((s) => s.setChatModelSelection);
+  const stackCustomSteps = useAuthStore((s) => s.stackCustomSteps);
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const setSelectedModel = useAuthStore((s) => s.setSelectedModel);
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
@@ -319,32 +331,10 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     [apiKeys, offlineMode, plan, ollamaOptions],
   );
 
-  const chatModelReady = accessibleProviders.includes(provider);
-
-  useEffect(() => {
-    if (!chatModelReady) return;
-    const options = getAccessibleModelOptions(
-      provider,
-      apiKeys,
-      offlineMode,
-      defaultLocalModel,
-      plan,
-    );
-    if (options.length === 0) return;
-    const current = selectedModels[provider] || defaultModelForProvider(provider, defaultLocalModel);
-    if (!options.some((option) => option.id === current)) {
-      setSelectedModel(provider, options[0]!.id);
-    }
-  }, [
-    chatModelReady,
-    provider,
-    apiKeys,
-    offlineMode,
-    defaultLocalModel,
-    plan,
-    selectedModels,
-    setSelectedModel,
-  ]);
+  const modelCtx = useMemo(
+    () => modelSelectionContextFromAuth({ apiKeys, offlineMode, plan, defaultLocalModel }),
+    [apiKeys, offlineMode, plan, defaultLocalModel],
+  );
 
   // Generate options for option picker based on current command
   const optionPickerOptions = useMemo<SlashCommandOption[]>(() => {
@@ -825,6 +815,18 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     const hasConfirmedCommands = confirmedCommands.length > 0;
     if ((!trimmed && attachedFiles.length === 0 && attachedTerminals.length === 0 && attachedPlugins.length === 0 && attachedContexts.length === 0 && !hasConfirmedCommands) || sending) return;
     if (await handleSlashCommand(trimmed)) return;
+
+    const auth = useAuthStore.getState();
+    const sendCheck = validateSendModelAccess(
+      trimmed,
+      auth.chatModelSelection,
+      modelSelectionContextFromAuth(auth),
+      auth.stackCustomSteps,
+    );
+    if (!sendCheck.ok) {
+      toast.error('Cannot send', sendCheck.message);
+      return;
+    }
 
     // Process confirmed commands before sending
     const skillIds = confirmedCommands
@@ -1713,22 +1715,15 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
               )}
               <div className="flex items-center gap-1 px-2 pb-2 pt-0.5">
                 <ModelPicker
-                  provider={provider}
-                  model={
-                    chatModelReady
-                      ? selectedModels[provider] ||
-                        defaultModelForProvider(provider, defaultLocalModel)
-                      : ''
-                  }
-                  modelReady={chatModelReady}
+                  selection={chatModelSelection}
+                  modelCtx={modelCtx}
                   open={modelPickerOpen}
                   onOpenChange={setModelPickerOpen}
                   pickerRef={modelPickerRef}
-                  onChange={(nextProvider, nextModel) => {
-                    setDefaultProvider(nextProvider);
-                    setSelectedModel(nextProvider, nextModel);
-                    if (nextProvider === 'ollama' || nextProvider === 'local') {
-                      selectLocalModelForChat(nextModel);
+                  onSelect={(next) => {
+                    setChatModelSelection(next);
+                    if (next.mode === 'single' && (next.providerId === 'ollama' || next.providerId === 'local')) {
+                      selectLocalModelForChat(next.modelId);
                     }
                   }}
                 />
@@ -1828,26 +1823,27 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
 }
 
 interface ModelPickerProps {
-  provider: ProviderId;
-  model: string;
-  modelReady: boolean;
+  selection: ChatModelSelection;
+  modelCtx: ModelSelectionContext;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onChange: (provider: ProviderId, model: string) => void;
+  onSelect: (selection: ChatModelSelection) => void;
   pickerRef: React.RefObject<ModelPickerTypeaheadRef | null>;
 }
 
 function ModelPicker({
-  provider,
-  model,
-  modelReady,
+  selection,
+  modelCtx,
   open,
   onOpenChange,
-  onChange,
+  onSelect,
   pickerRef,
 }: ModelPickerProps) {
-  const { groups, flatOptions, hasAny } = useAccessibleChatModels();
+  const { groups, flatOptions } = useAccessibleChatModels();
   const [selectedId, setSelectedId] = useState('');
+  const displayLabel = formatChatModelSelectionLabel(selection, modelCtx);
+  const activeProvider = selection.mode === 'single' ? selection.providerId : undefined;
+  const activeModel = selection.mode === 'single' ? selection.modelId : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -1867,13 +1863,13 @@ function ModelPicker({
 
   useEffect(() => {
     if (!open) return;
-    const activeId = modelReady ? `${provider}:${model}` : '';
+    const activeId = selectionOptionId(selection);
     if (activeId && flatOptions.some((option) => option.id === activeId)) {
       setSelectedId(activeId);
       return;
     }
-    setSelectedId(flatOptions[0]?.id ?? '');
-  }, [open, provider, model, modelReady, flatOptions]);
+    setSelectedId('');
+  }, [open, selection, flatOptions]);
 
   useEffect(() => {
     if (!open) return;
@@ -1903,7 +1899,7 @@ function ModelPicker({
   }, [open, onOpenChange, pickerRef]);
 
   const handleSelect = (nextProvider: ProviderId, nextModel: string) => {
-    onChange(nextProvider, nextModel);
+    onSelect(selectionFromOption(nextProvider, nextModel));
     onOpenChange(false);
   };
 
@@ -1918,13 +1914,7 @@ function ModelPicker({
           aria-label="Choose model"
         >
           <Sparkles className="h-3.5 w-3.5 shrink-0" />
-          <span className="text-metadata">
-            {modelReady && model
-              ? `${PROVIDER_LABELS[provider]} / ${model}`
-              : hasAny
-                ? 'Choose model'
-                : 'No model selected'}
-          </span>
+          <span className="text-metadata">{displayLabel}</span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
         </Button>
       </PopoverTrigger>
@@ -1939,8 +1929,8 @@ function ModelPicker({
           ref={pickerRef as React.Ref<ModelPickerTypeaheadRef>}
           groups={groups}
           selectedId={selectedId}
-          activeProvider={modelReady ? provider : undefined}
-          activeModel={modelReady ? model : undefined}
+          activeProvider={activeProvider}
+          activeModel={activeModel}
           onHoverId={setSelectedId}
           onSelect={handleSelect}
         />

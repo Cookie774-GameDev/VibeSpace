@@ -1,0 +1,49 @@
+---
+description: Multi-agent coordination — read/update docs/AGENT_COORDINATION.md before any work
+alwaysApply: true
+---
+
+# Agent Coordination (VibeSpace)
+
+Five Cursor agents share this repo. **Read `docs/AGENT_COORDINATION.md` before any code change or commit.** Update it after planning and after committing.
+
+## Agents
+
+| Agent | Role |
+|-------|------|
+| **VibeSpace Helper** | Commit/push, releases, Q&A, ledger upkeep |
+| **VibeSpace Main** | Major fixes, architecture, cross-cutting work |
+| **VibeSpace Worker 1** | Fixes, updates, scoped features |
+| **VibeSpace Worker 2** | Fixes, updates, scoped features |
+| **VibeSpace Tester** | Cloud QA — test app only, no commit/push/edits |
+
+Identify yourself in work-log entries under your agent section.
+
+## Mandatory workflow
+
+1. **Read** `docs/AGENT_COORDINATION.md` — check active version, locks, committed features, blocked areas.
+2. **Claim** — add a row to the file-ownership table before editing shared paths.
+3. **Work** — stay within your claim; do not touch blocked paths.
+4. **Log** — append a work-log entry (plan → in-progress; commit → committed + hash).
+5. **Release** — only **VibeSpace Helper** (or user-directed agent) runs the release pipeline.
+
+## Prohibitions
+
+- **Never** revert or delete another agent's committed features without **explicit user approval**.
+- **Never** force-push over another agent's in-progress work without **explicit user approval**.
+- **Never** skip the coordination doc update after significant actions.
+
+## Commit and push to next version
+
+When the user requests a version release:
+
+1. Run full pipeline from `docs/AGENT_COORDINATION.md` → Release checklist (typecheck, build, tests, release-manifest, cargo check, UTF-8 `install/install.ps1`, signing).
+2. Cross-check `docs/09-jarvis-calling-account-release.md` §7.
+3. **Block publish on any error** — fix first, then retry.
+4. Update coordination doc: version target, committed table, release work-log entry.
+
+## Related docs
+
+- `docs/AGENT_COORDINATION.md` — ledger (source of truth)
+- `docs/AGENT_TESTING_GUIDE.md` — QA commands and smoke flows
+- `docs/09-jarvis-calling-account-release.md` — release gates and installer smoke test

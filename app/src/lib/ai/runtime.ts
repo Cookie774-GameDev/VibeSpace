@@ -26,20 +26,28 @@ import { inferFallbackActionProposals } from '@/lib/actions/fallbackActions';
 import { buildAgentTerminalContext } from '@/features/terminals/agentContext';
 import { getPluginContextBlock, getPluginStatusContextBlock } from '@/features/plugins';
 import { devConsole } from '@/features/dev-console';
+import { toast } from '@/components/ui/toast';
 import { chatRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
 import { createStreamingVoiceSession, type StreamingVoiceSession } from '@/features/voice/streamingVoice';
+import { canVoiceModuleSpeak } from '@/features/voice/voiceRouter';
+import { STREAMING_VOICE_END_EVENT } from '@/features/voice/speechSynthesis';
 import { registerActiveStreamingVoiceSession } from '@/features/voice/voiceRouter';
 import { deriveChatTitle, maybeRenameChat } from '@/features/chat/chatLifecycle';
 import { composeSkillAddenda, resolveSkills } from '@/lib/agents/skills';
 import {
   classifyStackTask,
-  effectiveStackPreset,
   parseStackSlashCommand,
 } from './stacks/classifier';
 import { stepsForPreset } from './stacks/presets';
 import { runStack } from './stacks/runner';
 import type { StackStepResult } from './stacks/types';
+import {
+  applyChatModelSelectionToAgent,
+  modelSelectionContextFromAuth,
+  resolveActiveStackPreset,
+  validateSendModelAccess,
+} from './modelSelection';
 
 import {
   getProjectContextBlock,
@@ -305,6 +313,37 @@ export function startRuntimeListener(
     if (!detail || !detail.chatId || typeof detail.text !== 'string') return;
     const { chatId, text } = detail;
 
+    if (detail.speakReply === true && inFlight.size > 0) {
+      const count = inFlight.size;
+      for (const c of inFlight.values()) c.abort();
+      inFlight.clear();
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: `Voice send replaced ${count} in-flight run(s)`,
+        detail: { count },
+      });
+    }
+
+    const authState = useAuthStore.getState();
+    const modelCtx = modelSelectionContextFromAuth(authState);
+    const sendValidation = validateSendModelAccess(
+      text,
+      authState.chatModelSelection,
+      modelCtx,
+      authState.stackCustomSteps,
+      { voice: detail.speakReply === true },
+    );
+    if (!sendValidation.ok) {
+      toast.error('Cannot send', sendValidation.message);
+      return;
+    }
+
+    const stackSlash = parseStackSlashCommand(text);
+    const stackPreset = resolveActiveStackPreset(authState.chatModelSelection, stackSlash);
+    const stackText = stackSlash.matched ? stackSlash.text : text;
+    const stackTaskType = stackSlash.taskType ?? classifyStackTask(stackText);
+
     // Resolve agent: explicit agentId > composer-resolved mention >
     // textual @mention fallback > chat's active agent.
     let agent: Agent | null | undefined;
@@ -336,6 +375,14 @@ export function startRuntimeListener(
       const preset = useAuthStore.getState().personaPreset;
       runnable = applyPersona(agent, preset);
       runnable = applyAvailableActions(runnable);
+    }
+    const stackStepsEarly = stepsForPreset(
+      stackPreset,
+      stackTaskType,
+      authState.stackCustomSteps,
+    );
+    if (stackStepsEarly.length === 0) {
+      runnable = applyChatModelSelectionToAgent(runnable, authState.chatModelSelection);
     }
 
     // V3 — Splice in any terminal-pane transcript bound to this
@@ -513,7 +560,7 @@ export function startRuntimeListener(
 
     const flushSpeechDelta = () => {
       speechDeltaTimer = null;
-      if (!streamingVoice || !acc) return;
+      if (!streamingVoice || !acc || !canVoiceModuleSpeak()) return;
       lastSpeechDeltaAt = Date.now();
       streamingVoice.onDelta(acc);
     };
@@ -553,11 +600,11 @@ export function startRuntimeListener(
         voicePreset: voiceSettings.voicePreset,
       });
     }
-    const stackSlash = parseStackSlashCommand(text);
-    const stackText = stackSlash.matched ? stackSlash.text : text;
-    const authState = useAuthStore.getState();
-    const stackPreset = effectiveStackPreset(authState.stackPreset, stackSlash.preset);
-    const stackTaskType = stackSlash.taskType ?? classifyStackTask(stackText);
+    const stackSteps = stepsForPreset(
+      stackPreset,
+      stackTaskType,
+      authState.stackCustomSteps,
+    );
 
     const flushNow = () => {
       if (flushTimer) {
@@ -640,11 +687,6 @@ export function startRuntimeListener(
         },
       });
 
-      const stackSteps = stepsForPreset(
-        stackPreset,
-        stackTaskType,
-        authState.stackCustomSteps,
-      );
       const stackRan = stackSteps.length > 0;
       const response = stackRan
         ? await runStack({
@@ -786,7 +828,11 @@ export function startRuntimeListener(
         try {
           cancelSpeechDelta();
           flushSpeechDelta();
-          await streamingVoice.onComplete(finalText);
+          if (canVoiceModuleSpeak()) {
+            await streamingVoice.onComplete(finalText);
+          } else {
+            streamingVoice.haltPlayback();
+          }
         } catch (speechErr) {
           devConsole.log({
             channel: 'ai',
@@ -804,6 +850,9 @@ export function startRuntimeListener(
       streamingVoice?.stop();
       registerActiveStreamingVoiceSession(null);
       streamingVoice = null;
+      if (shouldSpeakReply) {
+        window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
+      }
       // Cancel any pending flush before stamping the suffix or it'll overwrite us.
       cancelPendingFlush();
 

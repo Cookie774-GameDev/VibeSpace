@@ -1,21 +1,22 @@
 import { useMemo } from 'react';
 import type { ProviderId } from '@/types';
 import { useAuthStore } from '@/stores/auth';
+import { getProviderDisplayName } from './providerRegistry';
 import {
   getAccessibleModelOptions,
   getAccessibleProviders,
   useOllamaModelOptions,
 } from './models';
 
-export const MODEL_PROVIDER_LABELS: Partial<Record<ProviderId, string>> = {
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  groq: 'Groq',
-  deepseek: 'DeepSeek',
-  ollama: 'Ollama (local)',
-  mock: 'Mock',
-};
+/** @deprecated Use getProviderDisplayName from providerRegistry */
+export const MODEL_PROVIDER_LABELS: Partial<Record<ProviderId, string>> = new Proxy(
+  {} as Partial<Record<ProviderId, string>>,
+  {
+    get(_target, prop: string) {
+      return getProviderDisplayName(prop as ProviderId);
+    },
+  },
+);
 
 export interface ModelPickerOption {
   /** `${provider}:${modelId}` — stable for keyboard nav */
@@ -58,7 +59,7 @@ export function buildModelPickerGroups(args: {
     if (models.length === 0) continue;
     groups.push({
       provider,
-      label: MODEL_PROVIDER_LABELS[provider] ?? provider,
+      label: getProviderDisplayName(provider),
       options: models.map((model) => ({
         id: `${provider}:${model.id}`,
         provider,

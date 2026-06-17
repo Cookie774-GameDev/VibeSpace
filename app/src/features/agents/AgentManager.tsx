@@ -31,7 +31,9 @@ import {
   getAgentEditorProviderOptions,
   type AgentEditorProviderChoice,
 } from '@/lib/ai/agentProviderOptions';
-import { getAccessibleModelOptions, useOllamaModelOptions, syncDiscoveredOllamaModels } from '@/lib/ai/models';
+import { getModelsForProvider } from '@/lib/ai/providerModelCatalog';
+import { useProviderConnectionContext } from '@/lib/ai/useProviderModelOptions';
+import { useOllamaModelOptions, syncDiscoveredOllamaModels } from '@/lib/ai/models';
 
 /**
  * Tiny role-pill for swarm agents (Scout / Builder / Reviewer).
@@ -152,6 +154,9 @@ export function AgentManager() {
     };
   }, []);
 
+  const providerCtx = useProviderConnectionContext();
+  const [advancedCustomModel, setAdvancedCustomModel] = React.useState(false);
+
   const providerOptions = React.useMemo(
     () =>
       getAgentEditorProviderOptions({
@@ -166,14 +171,16 @@ export function AgentManager() {
 
   const modelOptions = React.useMemo(() => {
     if (!draft || draft.providerChoice === 'default') return [];
-    return getAccessibleModelOptions(
-      draft.providerChoice,
-      apiKeys,
-      offlineMode,
-      useAuthStore.getState().defaultLocalModel,
-      plan,
+    return getModelsForProvider(draft.providerChoice, providerCtx, draft.model);
+  }, [draft, providerCtx, ollamaOptions]);
+
+  React.useEffect(() => {
+    if (!draft || draft.providerChoice === 'default') return;
+    const known = modelOptions.some(
+      (option) => option.id === draft.model && !option.isCustom,
     );
-  }, [draft, apiKeys, offlineMode, plan, ollamaOptions]);
+    if (!known && draft.model.trim()) setAdvancedCustomModel(true);
+  }, [selectedAgent?.id, draft?.model, draft?.providerChoice, modelOptions]);
 
   const dirty = !!(draft && selectedAgent && draftDiffers(draft, selectedAgent));
 
@@ -422,22 +429,33 @@ export function AgentManager() {
                       Follows Settings → Providers → Default provider
                     </p>
                   ) : modelOptions.length > 0 ? (
-                    <select
-                      id="agent-model"
-                      value={draft.model}
-                      onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                      className={cn(
-                        'flex h-8 w-full rounded-md border border-input bg-background px-2 text-body text-foreground',
-                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                        'transition-colors',
-                      )}
-                    >
-                      {modelOptions.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
+                    advancedCustomModel ? (
+                      <Input
+                        id="agent-model"
+                        value={draft.model}
+                        onChange={(e) => setDraft({ ...draft, model: e.target.value.trim() })}
+                        spellCheck={false}
+                        autoComplete="off"
+                      />
+                    ) : (
+                      <select
+                        id="agent-model"
+                        value={draft.model}
+                        onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                        className={cn(
+                          'flex h-8 w-full rounded-md border border-input bg-background px-2 text-body text-foreground',
+                          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                          'transition-colors',
+                        )}
+                      >
+                        {modelOptions.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                            {opt.isCustom ? ' (custom)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )
                   ) : (
                     <p
                       id="agent-model"
@@ -448,6 +466,16 @@ export function AgentManager() {
                         : 'No models available — open Settings → Local Models to download one'}
                     </p>
                   )}
+                  {draft.providerChoice !== 'default' && modelOptions.length > 0 ? (
+                    <label className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={advancedCustomModel}
+                        onChange={(event) => setAdvancedCustomModel(event.target.checked)}
+                      />
+                      Advanced: custom model ID
+                    </label>
+                  ) : null}
                 </div>
               </div>
 

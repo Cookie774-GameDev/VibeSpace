@@ -2,6 +2,27 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.44] - 2026-06-17
+
+### Added
+
+- **Provider/model registry** — provider-aware model dropdowns across Hive, agents, and settings (no manual Model ID typing by default).
+- **Hands-free voice turn-taking** — `voiceTurnCommit` end/cancel phrases; session-gated streaming TTS stops when the voice panel closes.
+- **Terminal reliability** — scrollback isolation, route-switch stability, and agent prompt delivery improvements.
+- **Dev desktop launcher** — `scripts/dev-desktop.ps1` fixes IPv4 Vite binding for Tauri dev.
+- **Agent coordination** — multi-agent ledger, rules, and terminal agent system docs.
+
+### Improved
+
+- **Model selection** — persisted chat/Hive model state; no silent Hive auto-default.
+- **Terminals** — tile refit, page-router stability tests, restore session hardening.
+- **Voice** — wake word gated on hands-free mode; instant stop on panel close.
+
+### Fixed
+
+- **Runtime tests** — voice speak-reply and Hive routing test alignment after lifecycle changes.
+- **Agent prompts** — terminal `agentPromptDelivery` path for selected agents.
+
 ## [0.1.43] - 2026-06-16
 
 ### Added

@@ -249,6 +249,7 @@ export function TileGrid({
     const focus = allLeaves.find((l) => l.id === fullscreenPaneId);
     return focus ? [focus] : allLeaves;
   }, [allLeaves, fullscreenPaneId]);
+  const didMountRef = React.useRef(false);
 
   const { cols, rows } = gridDimensions(leaves.length);
   const defaultTerminalFontSize = useUIStore((s) => s.defaultTerminalFontSize);
@@ -283,6 +284,14 @@ export function TileGrid({
   // defaults if nothing is saved). We intentionally don't depend on
   // `savedSizes` here — that would reset the displayed sizes mid-drag.
   React.useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    scheduleTerminalRefit();
+  }, [fullscreenPaneId]);
+
+  React.useEffect(() => {
     const loaded = loadSavedSizes(projectId);
     setSavedSizes(loaded);
     const s = loaded[layoutKey];
@@ -301,6 +310,7 @@ export function TileGrid({
       setSavedSizes({});
       setColSizes(defaultSizes(cols));
       setRowSizes(defaultSizes(rows));
+      scheduleTerminalRefit();
     };
     window.addEventListener('jarvis:reset-terminal-sizes', handleResetEvent);
     return () => {
@@ -376,6 +386,7 @@ export function TileGrid({
         persistSavedSizes(projectId, next);
         return next;
       });
+      scheduleTerminalRefit();
     };
 
     document.addEventListener('mousemove', onMove);
@@ -409,6 +420,7 @@ export function TileGrid({
       persistSavedSizes(projectId, updated);
       return updated;
     });
+    scheduleTerminalRefit();
   };
 
   const handleClose = (paneId: string) => {

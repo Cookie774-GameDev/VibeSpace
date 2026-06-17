@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { AGENT_DEFAULT_PROVIDER_MODEL } from './agentProviderOptions';
+import { selectionFromOption } from './modelSelection';
 import { syncDiscoveredOllamaModels } from './models';
 import { NoModelSelectedError, resolveProviderAndModel } from './router';
 
@@ -40,6 +41,7 @@ describe('AI provider routing', () => {
       apiKeys: {},
       defaultProvider: 'google',
       selectedModels: {},
+      chatModelSelection: { mode: 'none' },
       offlineMode: false,
       defaultLocalModel: 'llama3.2',
       plan: 'free',
@@ -49,8 +51,7 @@ describe('AI provider routing', () => {
   it('uses the pinned provider for built-in Jarvis when that key is available', () => {
     useAuthStore.setState({
       apiKeys: { google: 'AIza-test', groq: 'gsk_test' },
-      defaultProvider: 'groq',
-      selectedModels: { groq: 'llama-3.1-8b-instant' },
+      chatModelSelection: selectionFromOption('groq', 'llama-3.1-8b-instant'),
     });
 
     const resolved = resolveProviderAndModel(jarvis);
@@ -58,7 +59,7 @@ describe('AI provider routing', () => {
     expect(resolved.model).toBe('gemini-2.5-flash-lite');
   });
 
-  it('falls back to local models when a pinned provider is unavailable', () => {
+  it('throws when a pinned provider is unavailable instead of silently falling back', () => {
     syncDiscoveredOllamaModels(['qwen3:4b']);
     useAuthStore.setState({
       apiKeys: {},
@@ -66,20 +67,17 @@ describe('AI provider routing', () => {
       defaultLocalModel: 'qwen3:4b',
     });
 
-    const resolved = resolveProviderAndModel(jarvis);
-    expect(resolved.provider.id).toBe('ollama');
-    expect(resolved.model).toBe('qwen3:4b');
+    expect(() => resolveProviderAndModel(jarvis)).toThrow(NoModelSelectedError);
   });
 
   it('throws when no provider or local model is available', () => {
     expect(() => resolveProviderAndModel(jarvis)).toThrow(NoModelSelectedError);
   });
 
-  it('routes default-provider agents through the configured default provider', () => {
+  it('routes default-provider agents through the explicit chat model selection', () => {
     useAuthStore.setState({
       apiKeys: { groq: 'gsk_test' },
-      defaultProvider: 'groq',
-      selectedModels: { groq: 'llama-3.1-8b-instant' },
+      chatModelSelection: selectionFromOption('groq', 'llama-3.1-8b-instant'),
     });
 
     const resolved = resolveProviderAndModel(defaultProviderAgent);
@@ -96,12 +94,11 @@ describe('AI provider routing', () => {
     expect(() => resolveProviderAndModel(defaultProviderAgent)).toThrow(NoModelSelectedError);
   });
 
-  it('forces every agent through the selected Ollama model in fully local mode', () => {
+  it('forces offline mode through the explicitly selected local model only', () => {
     useAuthStore.setState({
       apiKeys: { google: 'cloud-key-that-must-not-be-used' },
-      defaultProvider: 'google',
       offlineMode: true,
-      defaultLocalModel: 'qwen3:4b',
+      chatModelSelection: selectionFromOption('ollama', 'qwen3:4b'),
     });
 
     const resolved = resolveProviderAndModel(jarvis);

@@ -37,17 +37,6 @@ function normalizeProjectId(projectId: string | null | undefined): string | null
   return projectId ?? null;
 }
 
-function isActiveBackendSession(
-  activeSessions: BackendTerminalInfo[],
-  sessionId: string,
-  projectId: string | null,
-): boolean {
-  return activeSessions.some((session) => (
-    session.sessionId === sessionId &&
-    normalizeProjectId(session.projectId) === projectId
-  ));
-}
-
 function findHistoricalPaneTranscript(
   transcripts: Record<string, SessionTranscript>,
   paneId: string,
@@ -64,11 +53,25 @@ function findHistoricalPaneTranscript(
 const INTERACTIVE_TUI_COMMAND_RE =
   /\b(opencode|open-code|claude|codex|gemini|cursor-agent|cline|aider|goose|qwen|openai)\b/i;
 
+function isInteractiveTuiCommand(command: string | null | undefined): boolean {
+  return typeof command === 'string' && INTERACTIVE_TUI_COMMAND_RE.test(command);
+}
+
 function restoredTextForDeadSession(
   session: SessionTranscript | null | undefined,
 ): string {
   if (!session) return '';
-  if (session.command && INTERACTIVE_TUI_COMMAND_RE.test(session.command)) {
+  if (isInteractiveTuiCommand(session.command)) {
+    return '';
+  }
+  return terminalRestoreText(session);
+}
+
+function restoredTextForActiveSession(
+  session: SessionTranscript | null | undefined,
+  backendInfo: BackendTerminalInfo | null | undefined,
+): string {
+  if (isInteractiveTuiCommand(session?.command) || isInteractiveTuiCommand(backendInfo?.command)) {
     return '';
   }
   return terminalRestoreText(session);
@@ -84,11 +87,18 @@ export function resolveTerminalRestoreSession({
   const normalizedProjectId = normalizeProjectId(projectId);
 
   if (existingSessionId) {
-    if (isActiveBackendSession(activeSessions, existingSessionId, normalizedProjectId)) {
+    const activeExisting = activeSessions.find((session) => (
+      session.sessionId === existingSessionId &&
+      normalizeProjectId(session.projectId) === normalizedProjectId
+    ));
+    if (activeExisting) {
       return {
         kind: 'attach',
         sessionId: existingSessionId,
-        restoredText: terminalRestoreText(transcripts[existingSessionId]),
+        restoredText: restoredTextForActiveSession(
+          transcripts[existingSessionId],
+          activeExisting,
+        ),
         source: 'existing-session',
       };
     }
@@ -110,11 +120,18 @@ export function resolveTerminalRestoreSession({
       normalizedProjectId,
     );
     if (historicalSession) {
-      if (isActiveBackendSession(activeSessions, historicalSession.sessionId, normalizedProjectId)) {
+      const activeHistorical = activeSessions.find((session) => (
+        session.sessionId === historicalSession.sessionId &&
+        normalizeProjectId(session.projectId) === normalizedProjectId
+      ));
+      if (activeHistorical) {
         return {
           kind: 'attach',
           sessionId: historicalSession.sessionId,
-          restoredText: terminalRestoreText(historicalSession),
+          restoredText: restoredTextForActiveSession(
+            historicalSession,
+            activeHistorical,
+          ),
           source: 'historical-pane',
         };
       }

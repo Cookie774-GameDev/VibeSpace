@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { ProviderModelSelect } from '@/components/ai/ProviderModelSelect';
 import { useAuthStore } from '@/stores/auth';
 import { DEFAULT_CUSTOM_STEPS } from '@/lib/ai/stacks/presets';
 import type { StackPresetId, StackStepSpec } from '@/lib/ai/stacks/types';
@@ -24,18 +25,6 @@ const PRESETS: Array<{
   { id: 'quality', label: 'Hive Quality', detail: 'Grok → Opus → Codex → Gemini', score: '94.4', badge: '+3.7 vs Fable 5', glow: 'from-accent-copper/30 to-fuchsia-500/15' },
   { id: 'ultra', label: 'Hive Ultra', detail: 'Opus → DeepSeek → Codex → Opus security → Gemini', score: '94.1', badge: 'Supernova', glow: 'from-orange-400/35 via-fuchsia-500/20 to-blue-500/20' },
   { id: 'custom', label: 'Hive Custom', detail: 'Your own model stack', score: '5 max', badge: 'Power user', glow: 'from-emerald-400/20 to-accent-copper/15' },
-];
-
-const PROVIDERS: ProviderId[] = [
-  'google',
-  'anthropic',
-  'openai',
-  'deepseek',
-  'xai',
-  'openrouter',
-  'groq',
-  'mistral',
-  'together',
 ];
 
 const MAX_CUSTOM_HIVE_STEPS = 5;
@@ -134,6 +123,14 @@ export function Hive() {
               type="button"
               variant="secondary"
               size="sm"
+              onClick={() => setStackPreset('custom')}
+            >
+              Use custom
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
               onClick={() => setStackCustomSteps(DEFAULT_CUSTOM_STEPS)}
             >
               Reset
@@ -142,7 +139,10 @@ export function Hive() {
               type="button"
               size="sm"
               disabled={stackCustomSteps.length >= MAX_CUSTOM_HIVE_STEPS}
-              onClick={() => setStackCustomSteps([...stackCustomSteps, newStep(stackCustomSteps.length)])}
+              onClick={() => {
+                setStackPreset('custom');
+                setStackCustomSteps([...stackCustomSteps, newStep(stackCustomSteps.length)]);
+              }}
             >
               <Plus className="h-3.5 w-3.5" /> Add step
             </Button>
@@ -178,30 +178,6 @@ export function Hive() {
                   />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-metadata text-muted-foreground">Provider</span>
-                  <select
-                    value={step.provider}
-                    onChange={(event) =>
-                      updateStep(index, { provider: event.target.value as ProviderId })
-                    }
-                    className="flex h-8 w-full rounded-md border border-input bg-background px-2.5 text-body text-foreground"
-                  >
-                    {PROVIDERS.map((provider) => (
-                      <option key={provider} value={provider}>
-                        {provider}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-metadata text-muted-foreground">Model ID</span>
-                  <Input
-                    value={step.model}
-                    onChange={(event) => updateStep(index, { model: event.target.value })}
-                    placeholder="gemini-3.5-flash"
-                  />
-                </label>
-                <label className="space-y-1">
                   <span className="text-metadata text-muted-foreground">Temperature</span>
                   <Input
                     type="number"
@@ -214,6 +190,15 @@ export function Hive() {
                     }
                   />
                 </label>
+              </div>
+              <div className="mt-3">
+                <ProviderModelSelect
+                  idPrefix={`hive-step-${index}`}
+                  providerId={step.provider}
+                  modelId={step.model}
+                  onProviderChange={(provider: ProviderId) => updateStep(index, { provider })}
+                  onModelChange={(model) => updateStep(index, { model })}
+                />
               </div>
               <label className="mt-3 block space-y-1">
                 <span className="text-metadata text-muted-foreground">Step instruction</span>

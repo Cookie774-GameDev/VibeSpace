@@ -23,7 +23,7 @@
  */
 import * as React from 'react';
 import { applyThemeToDocument, useUIStore } from '@/stores/ui';
-import { handleVoiceModuleClosed } from '@/features/voice/voiceRouter';
+import { handleVoiceModuleClosed, syncVoiceModuleOpenState } from '@/features/voice/voiceRouter';
 import { useAgentStore } from '@/stores/agents';
 import { AuthGate } from '@/features/auth';
 import { AppShell } from '@/components/layout';
@@ -632,7 +632,7 @@ function SettingsModalHost() {
 function VoiceModuleLifecycle() {
   const open = useUIStore((s) => s.voiceModalOpen);
   React.useEffect(() => {
-    if (!open) handleVoiceModuleClosed();
+    syncVoiceModuleOpenState(open);
   }, [open]);
   return null;
 }

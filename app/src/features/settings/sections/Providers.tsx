@@ -66,7 +66,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   },
   {
     id: 'google',
-    name: 'Google',
+    name: 'Gemini',
     hint: 'Gemini 2.5 Flash/Pro (free tier available)',
     placeholder: 'AIza...',
     freeKeyUrl: 'https://aistudio.google.com/apikey',
@@ -247,7 +247,7 @@ const BYOK_PROVIDER_IDS = BYOK_PROVIDERS.map((provider) => provider.id);
 const DEFAULT_PROVIDER_OPTIONS: { id: ProviderId; label: string; description: string }[] = [
   { id: 'anthropic', label: 'Anthropic', description: 'Best for reasoning and writing.' },
   { id: 'openai', label: 'OpenAI', description: 'Strong generalist with realtime voice.' },
-  { id: 'google', label: 'Google', description: 'Long context, fast Flash tier.' },
+  { id: 'google', label: 'Gemini', description: 'Long context, fast Flash tier.' },
   { id: 'groq', label: 'Groq', description: 'Sub-second open-weights inference.' },
   { id: 'deepseek', label: 'DeepSeek', description: 'DeepSeek V4 Flash via subscription credits.' },
   { id: 'ollama', label: 'Ollama (local)', description: 'Local models on this device.' },

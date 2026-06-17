@@ -90,10 +90,12 @@ vi.mock('./store', () => ({
 
 import {
   cancelVoicePreview,
+  handleVoiceModuleClosed,
   previewVoiceWithSettings,
   registerActiveStreamingVoiceSession,
   speakWithSettings,
   stopAllVoiceOutput,
+  syncVoiceModuleOpenState,
 } from './voiceRouter';
 
 describe('voiceRouter preview cancellation', () => {
@@ -145,17 +147,21 @@ describe('voice module gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     voiceModalOpen = true;
+    syncVoiceModuleOpenState(false);
+    syncVoiceModuleOpenState(true);
     useAuthStore.setState({ voiceEngine: 'system', voicePreset: 'jarvis-prime' });
   });
 
   it('speakWithSettings does nothing when the voice module is closed', async () => {
     voiceModalOpen = false;
+    syncVoiceModuleOpenState(false);
     await speakWithSettings('Hello from Jarvis.');
     expect(h.speakText).not.toHaveBeenCalled();
   });
 
   it('speakWithSettings runs in the background when allowBackground is set', async () => {
     voiceModalOpen = false;
+    syncVoiceModuleOpenState(false);
     h.speakText.mockResolvedValue(undefined);
     await speakWithSettings('Hello from Jarvis.', { allowBackground: true });
     expect(h.speakText).toHaveBeenCalledTimes(1);
@@ -163,8 +169,50 @@ describe('voice module gate', () => {
 
   it('speakWithSettings runs when the voice module is open', async () => {
     voiceModalOpen = true;
+    syncVoiceModuleOpenState(true);
     h.speakText.mockResolvedValue(undefined);
     await speakWithSettings('Hello from Jarvis.');
     expect(h.speakText).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('voice module lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceModalOpen = true;
+    syncVoiceModuleOpenState(false);
+    syncVoiceModuleOpenState(true);
+    registerActiveStreamingVoiceSession(null);
+  });
+
+  afterEach(() => {
+    registerActiveStreamingVoiceSession(null);
+    syncVoiceModuleOpenState(false);
+  });
+
+  it('handleVoiceModuleClosed stops playback and dispatches jarvis:cancel', () => {
+    const cancel = vi.fn();
+    window.addEventListener('jarvis:cancel', cancel);
+    registerActiveStreamingVoiceSession({ haltPlayback: h.haltPlayback } as never);
+
+    handleVoiceModuleClosed();
+
+    expect(h.haltPlayback).toHaveBeenCalled();
+    expect(h.stopSpeech).toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    window.removeEventListener('jarvis:cancel', cancel);
+  });
+
+  it('blocks speakWithSettings after the module closes even if UI flag lags', async () => {
+    voiceModalOpen = true;
+    h.speakText.mockResolvedValue(undefined);
+    await speakWithSettings('First line.');
+    expect(h.speakText).toHaveBeenCalledTimes(1);
+
+    handleVoiceModuleClosed();
+    h.speakText.mockClear();
+    voiceModalOpen = true;
+    await speakWithSettings('Should not play.');
+    expect(h.speakText).not.toHaveBeenCalled();
   });
 });

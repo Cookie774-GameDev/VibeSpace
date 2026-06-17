@@ -15,10 +15,11 @@ const OPTIONS: Array<{ id: StackPresetId; label: string; detail: string }> = [
 ];
 
 export function StackPicker() {
-  const preset = useAuthStore((s) => s.stackPreset);
+  const selection = useAuthStore((s) => s.chatModelSelection);
   const setPreset = useAuthStore((s) => s.setStackPreset);
-  const active = OPTIONS.find((option) => option.id === preset) ?? OPTIONS[0]!;
-  const score = benchmarkForPreset(preset);
+  const activeId = selection.mode === 'hive' ? selection.hiveId : 'off';
+  const active = OPTIONS.find((option) => option.id === activeId) ?? OPTIONS[0]!;
+  const score = benchmarkForPreset(activeId);
 
   return (
     <Popover>
@@ -26,10 +27,10 @@ export function StackPicker() {
         <Button
           type="button"
           size="sm"
-          variant={preset === 'off' ? 'ghost' : 'secondary'}
+          variant={activeId === 'off' ? 'ghost' : 'secondary'}
           className={cn(
             'h-7 gap-1.5 rounded-full px-2.5 text-[11px]',
-            preset !== 'off' && 'border-accent-copper/35 bg-accent-copper/10 text-accent-copper',
+            activeId !== 'off' && 'border-accent-copper/35 bg-accent-copper/10 text-accent-copper',
           )}
         >
           <Sparkles className="h-3.5 w-3.5" />
@@ -55,7 +56,7 @@ export function StackPicker() {
                 onClick={() => setPreset(option.id)}
                 className={cn(
                   'w-full rounded-xl border px-3 py-2 text-left transition-colors',
-                  option.id === preset
+                  option.id === activeId
                     ? 'border-accent-copper/60 bg-accent-copper/10'
                     : 'border-transparent hover:border-border hover:bg-muted/70',
                 )}
