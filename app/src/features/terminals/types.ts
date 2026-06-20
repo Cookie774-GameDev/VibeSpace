@@ -5,6 +5,8 @@
  * terminal grid host). Don't change shape without bumping
  * WAVE4_CONTRACTS.md.
  */
+import type { AgentCoordinationMode } from './agentCoordination';
+
 export interface TerminalViewProps {
   /** Existing session to attach to. `null`/`undefined` => spawn fresh on mount. */
   sessionId?: string | null;
@@ -51,6 +53,8 @@ export interface TerminalViewProps {
    * without losing what's already captured.
    */
   agentSlug?: string | null;
+  /** Controls terminal agent prompt/context delivery and coordination behavior. */
+  agentMode?: AgentCoordinationMode;
   /** Fired once the session is live (post-spawn or on attach). */
   onReady?: (sessionId: string) => void;
   /** Fired after a pending command has been written. */

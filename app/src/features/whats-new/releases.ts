@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.44';
+export const CURRENT_VERSION = '0.1.45';
 
 /**
  * Section type for grouping changelog items inside a release.
@@ -339,6 +339,39 @@ export const SECTION_META: Record<
  *     when it isn't obvious.
  */
 export const RELEASES: readonly Release[] = [
+  {
+    version: '0.1.45',
+    date: '2026-06-19',
+    headline: 'Skills catalog, Inspector panel, and agent coordination',
+    summary:
+      'Unified skills library with editor and /skills picker, rebuilt Inspector and Kanban milestones, native terminal agent coordination, Apex billing tier, and Windows trust documentation.',
+    sections: [
+      {
+        kind: 'feature',
+        items: [
+          'Unified skills catalog — built-in + custom skills with editor, preview, and /skills chat picker.',
+          'Inspector panel — Today, Quick Launch, Context, Tools Run, Trace milestones, and Active Work.',
+          'Terminal agent coordination — native project ledger, locks, and mode-aware prompt payloads for OpenCode CLIs.',
+          'Apex plan tier — subscription ladder update with checkout and entitlement wiring.',
+        ],
+      },
+      {
+        kind: 'improvement',
+        items: [
+          'Kanban rebuilt on milestone store with inspector-aligned cards and columns.',
+          'Hive balanced preset and frontier model registry polish.',
+          'Windows trust docs — publisher metadata, SHA-256 verify script, SmartScreen guidance.',
+        ],
+      },
+      {
+        kind: 'fix',
+        items: [
+          'Top-bar mic routes to composer STT, not the Jarvis voice module.',
+          'Terminal viewport and restore-session hardening across pane switches.',
+        ],
+      },
+    ],
+  },
   {
     version: '0.1.44',
     date: '2026-06-17',

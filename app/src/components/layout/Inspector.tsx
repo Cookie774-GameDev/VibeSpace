@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Boxes,
   CalendarDays,
+  ChevronDown,
   Clock,
   CircleDot,
   ExternalLink,
@@ -13,6 +14,8 @@ import {
   ListTodo,
   MessageSquare,
   PlayCircle,
+  Plus,
+  Radar,
   Sparkles,
   Sun,
   Tag,
@@ -21,8 +24,9 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
+import { Hint, Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { ChatThread, Composer } from '@/features/chat';
@@ -32,13 +36,24 @@ import { EmptyChat } from '@/features/chat/EmptyChat';
 // deep path until it surfaces in the barrel.
 import { useTodayEvents } from '@/features/schedule/hooks';
 import type { RecurrenceInstance } from '@/features/schedule/recurrence';
-import { useQuickLinks, launchLink } from '@/features/launcher';
+import { useQuickLinks, launchLink, QUICK_PRESETS } from '@/features/launcher';
 import { useTodayTasks } from '@/features/tasks';
+import { useUpcomingEvents } from '@/features/schedule/hooks';
+import {
+  InspectorActiveWorkPanel,
+  InspectorMilestonesPanel,
+  InspectorMiniEditor,
+  useWorkspaceOpenTasks,
+  openTaskCount,
+} from '@/features/inspector';
+import { useMilestonesStore } from '@/features/inspector/milestonesStore';
+import { runAction } from '@/lib/actions';
+import { useToolRunsStore } from '@/features/inspector/toolRunsStore';
 import { chatRepo, taskRepo, terminalSessionRepo, db } from '@/lib/db';
 import { toast } from '@/components/ui/toast';
-import { isTauri } from '@/lib/tauri';
 import { cn, formatClock, formatRelative } from '@/lib/utils';
 import type { QuickLink } from '@/types/quick-link';
+import type { VibeSpaceTask } from '@/features/inspector/types';
 import type { Task, TaskPriority, TaskStatus } from '@/types/task';
 import type { Chat } from '@/types/chat';
 import type { TerminalSession } from '@/types/terminal';
@@ -58,6 +73,8 @@ import {
   type ContextTreeNode,
   type ProjectContextTree,
 } from '@/features/context/tree';
+import { usePinnedStore } from '@/features/inspector/pinnedStore';
+import { openExternal, isTauri } from '@/lib/tauri';
 
 interface InspectorCustomTool {
   slug: string;
@@ -114,6 +131,9 @@ export function Inspector() {
   const toggleInspector = useUIStore((s) => s.toggleInspector);
   const [inspectorChatId, setInspectorChatId] = React.useState<string | null>(null);
   const [activeTab, setActiveTab] = React.useState('today');
+  const [traceView, setTraceView] = React.useState<'milestones' | 'timeline'>('milestones');
+  const [previewFilePath, setPreviewFilePath] = React.useState<string | null>(null);
+  const inspectorOpen = useUIStore((s) => s.inspectorOpen);
 
   const setInspectorOpen = React.useCallback(
     (open: boolean) => useUIStore.setState({ inspectorOpen: open }),
@@ -186,6 +206,11 @@ export function Inspector() {
     }
   }, [workspaceId, projectId]);
 
+  const activeInspectorChat = React.useMemo(
+    () => inspectorChats.find((chat) => chat.id === inspectorChatId) ?? null,
+    [inspectorChats, inspectorChatId],
+  );
+
   return (
     <motion.aside
       aria-label="Inspector"
@@ -213,30 +238,104 @@ export function Inspector() {
           {/* NEW — route-context strip. Renders nothing for chat/agents. */}
           <RouteContextStrip workspaceId={workspaceId} />
 
-          {/* 6-tab strip — Today is the home tab. The trigger override
-              tightens padding so labels still fit the 320px pane. */}
-          <div className="px-3 pt-3">
-            <TabsList className="grid w-full grid-cols-6">
-              <InspectorTab value="jarvis" icon={Sparkles} label="Jarvis" />
-              <InspectorTab value="today" icon={Sun} label="Today" />
-              <InspectorTab value="context" icon={Boxes} label="Context" />
-              <InspectorTab value="tools" icon={Wrench} label="Tools" />
-              <InspectorTab value="trace" icon={GitBranch} label="Trace" />
-              <InspectorTab value="refs" icon={Link2} label="Refs" />
-            </TabsList>
-          </div>
+          {/* 6-tab strip — icon-only triggers; labels live in tooltips. */}
+          <TooltipProvider delayDuration={400}>
+            <div className="px-3 pt-3">
+              <TabsList className="grid h-9 w-full grid-cols-6 gap-0.5 p-0.5">
+                <InspectorTab value="jarvis" icon={Sparkles} label="Jarvis" />
+                <InspectorTab value="today" icon={Sun} label="Today" />
+                <InspectorTab value="context" icon={Boxes} label="Context" />
+                <InspectorTab value="tools" icon={Wrench} label="Tools" />
+                <InspectorTab value="trace" icon={GitBranch} label="Trace" />
+                <InspectorTab value="live" icon={Radar} label="Active Work" />
+              </TabsList>
+            </div>
+          </TooltipProvider>
           <TabsContent
             value="jarvis"
             className="m-0 flex-1 data-[state=active]:flex data-[state=inactive]:hidden flex-col min-h-0 bg-background overflow-hidden border-t border-border"
           >
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-panel-soft shrink-0">
-              <span className="text-metadata font-medium text-foreground">Jarvis Chat</span>
+            <div className="flex items-center gap-1 border-b border-border bg-panel-soft px-2 py-1.5 shrink-0">
+              <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent-copper" aria-hidden />
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left transition-colors',
+                      'hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                    )}
+                    aria-label="Switch Jarvis chat"
+                  >
+                    <span className="truncate text-metadata font-medium text-foreground">
+                      {activeInspectorChat?.title?.trim() || 'Jarvis Chat'}
+                    </span>
+                    <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-[288px] p-1.5">
+                  <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                    Project chats
+                  </p>
+                  {inspectorChats.length === 0 ? (
+                    <p className="px-2 py-2 text-secondary text-muted-foreground">
+                      No chats yet. Start one with +.
+                    </p>
+                  ) : (
+                    <ul className="max-h-56 overflow-y-auto scrollbar-hidden">
+                      {inspectorChats.map((chat) => {
+                        const active = chat.id === inspectorChatId;
+                        return (
+                          <li key={chat.id}>
+                            <button
+                              type="button"
+                              onClick={() => setInspectorChatId(chat.id)}
+                              className={cn(
+                                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                                'hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                                active && 'bg-muted ring-1 ring-accent-copper/35',
+                              )}
+                            >
+                              <MessageSquare
+                                className={cn(
+                                  'h-3.5 w-3.5 shrink-0',
+                                  active ? 'text-accent-copper' : 'text-muted-foreground',
+                                )}
+                                aria-hidden
+                              />
+                              <span className="min-w-0 flex-1 truncate text-secondary text-foreground">
+                                {chat.title?.trim() || 'Untitled chat'}
+                              </span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                                {formatRelative(chat.updated_at)}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </PopoverContent>
+              </Popover>
+              <Hint label="New chat">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => void handleCreateChatInsideJarvisPanel()}
+                  aria-label="New chat"
+                  className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </Hint>
               <Button
+                type="button"
                 variant="ghost"
                 size="icon-sm"
                 onClick={toggleInspector}
                 aria-label="Close Jarvis panel"
-                className="h-5 w-5 rounded text-muted-foreground hover:text-foreground"
+                className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
               >
                 <XCircle className="h-3.5 w-3.5" />
               </Button>
@@ -271,7 +370,11 @@ export function Inspector() {
             value="context"
             className="m-0 flex-1 overflow-auto px-4 py-3 scrollbar-hidden"
           >
-            <InspectorContextPanel />
+            <InspectorContextPanel
+              inspectorOpen={inspectorOpen}
+              previewFilePath={previewFilePath}
+              onPreviewFile={setPreviewFilePath}
+            />
           </TabsContent>
           <TabsContent
             value="tools"
@@ -283,16 +386,13 @@ export function Inspector() {
             value="trace"
             className="m-0 flex-1 overflow-auto px-4 py-3 scrollbar-hidden"
           >
-            <Placeholder
-              title="Trace"
-              body="Workflow timeline with agent rows, tool spans, and token costs."
-            />
+            <InspectorMilestonesPanel view={traceView} onViewChange={setTraceView} />
           </TabsContent>
           <TabsContent
-            value="refs"
+            value="live"
             className="m-0 flex-1 overflow-auto px-4 py-3 scrollbar-hidden"
           >
-            <InspectorReferencesPanel workspaceId={workspaceId} />
+            <InspectorActiveWorkPanel workspaceId={workspaceId} />
           </TabsContent>
         </Tabs>
       </div>
@@ -307,16 +407,21 @@ interface InspectorTabProps {
 }
 
 /**
- * Tighter trigger so 5 labels fit at 320px pane width. Tooltip surfaces
- * the full label if the visible text feels cramped on smaller scales.
+ * Icon-only tab trigger for the 320px inspector strip. Full label in tooltip.
  */
 function InspectorTab({ value, icon: Icon, label }: InspectorTabProps) {
   return (
     <Tooltip delayDuration={500}>
       <TooltipTrigger asChild>
-        <TabsTrigger value={value} className="gap-1 px-1 text-metadata">
-          <Icon className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{label}</span>
+        <TabsTrigger
+          value={value}
+          aria-label={label}
+          className={cn(
+            'h-7 min-w-0 justify-center px-0',
+            'data-[state=active]:text-accent-copper',
+          )}
+        >
+          <Icon className="h-4 w-4 shrink-0" aria-hidden />
         </TabsTrigger>
       </TooltipTrigger>
       <TooltipContent side="bottom">{label}</TooltipContent>
@@ -337,16 +442,45 @@ function Placeholder({ title, body }: { title: string; body: string }) {
 // Resource tabs — real drag/drop sources for the Jarvis composer
 // ============================================================
 
-function InspectorContextPanel() {
+function InspectorContextPanel({
+  inspectorOpen,
+  previewFilePath,
+  onPreviewFile,
+}: {
+  inspectorOpen: boolean;
+  previewFilePath: string | null;
+  onPreviewFile: (path: string | null) => void;
+}) {
   const projectId = useAuthStore((s) => s.projectId);
   const setRoute = useUIStore((s) => s.setRoute);
+  const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
+  const pinFile = usePinnedStore((s) => s.pinFile);
+  const pinMap = usePinnedStore((s) => s.pinMap);
   const [tick, setTick] = React.useState(0);
+  const [dragOver, setDragOver] = React.useState(false);
+  const [contextMenu, setContextMenu] = React.useState<{
+    x: number;
+    y: number;
+    filePath?: string;
+    attachment?: ContextAttachment;
+    isMap?: boolean;
+    mapId?: string;
+    mapTitle?: string;
+    mapRoot?: string;
+  } | null>(null);
 
   React.useEffect(() => {
     const onUpdated = () => setTick((cur) => cur + 1);
     window.addEventListener('jarvis:context-tree-updated', onUpdated);
     return () => window.removeEventListener('jarvis:context-tree-updated', onUpdated);
   }, []);
+
+  React.useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [contextMenu]);
 
   const tree = React.useMemo(() => loadStoredContextTree(projectId), [projectId, tick]);
   const rows = React.useMemo(() => {
@@ -373,7 +507,29 @@ function InspectorContextPanel() {
   const mapPath = contextMapFilePath(tree.rootDir);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      className={cn('flex flex-col gap-4', dragOver && 'ring-1 ring-accent-copper/40 rounded-lg')}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault();
+          setDragOver(true);
+        }
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        setDragOver(false);
+        const file = e.dataTransfer.files?.[0] as File & { path?: string };
+        if (!file?.path) return;
+        e.preventDefault();
+        pinFile(file.path, file.name);
+        if (inspectorOpen) onPreviewFile(file.path);
+        toast.success('File added', file.name);
+      }}
+    >
+      {inspectorOpen && previewFilePath ? (
+        <InspectorMiniEditor filePath={previewFilePath} onClose={() => onPreviewFile(null)} />
+      ) : null}
+
       <Section
         label="Active map"
         icon={<Boxes className="h-3.5 w-3.5" />}
@@ -386,6 +542,24 @@ function InspectorContextPanel() {
           subtitle={tree.rootDir}
           icon={<Boxes className="h-3.5 w-3.5" />}
           onOpen={() => setRoute('context')}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu({
+              x: e.clientX,
+              y: e.clientY,
+              attachment: mapAttachment,
+              filePath: mapPath,
+              isMap: true,
+              mapId: tree.rootDir,
+              mapTitle: mapAttachment.title,
+              mapRoot: tree.rootDir,
+            });
+          }}
+          onPreview={
+            inspectorOpen && mapPath
+              ? () => onPreviewFile(mapPath)
+              : undefined
+          }
         />
       </Section>
 
@@ -413,9 +587,23 @@ function InspectorContextPanel() {
                       : <Boxes className="h-3.5 w-3.5" />}
                     meta={node.kind}
                     onOpen={() => {
+                      if (inspectorOpen && filePath) {
+                        onPreviewFile(filePath);
+                        return;
+                      }
                       if (filePath) setStoredContextSelectedFile(projectId, filePath);
                       setRoute('context');
                     }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        attachment,
+                        filePath,
+                      });
+                    }}
+                    onPreview={inspectorOpen && filePath ? () => onPreviewFile(filePath) : undefined}
                   />
                 </li>
               );
@@ -423,7 +611,86 @@ function InspectorContextPanel() {
           </ul>
         )}
       </Section>
+
+      {contextMenu ? (
+        <div
+          className="fixed z-[90] min-w-[180px] rounded-md border border-border bg-panel p-1 shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+        >
+          {contextMenu.filePath ? (
+            <ContextMenuItem
+              label="Preview in Inspector"
+              onClick={() => {
+                onPreviewFile(contextMenu.filePath!);
+                setContextMenu(null);
+              }}
+            />
+          ) : null}
+          {contextMenu.filePath ? (
+            <ContextMenuItem
+              label="Pin file"
+              onClick={() => {
+                pinFile(contextMenu.filePath!, contextMenu.attachment?.title);
+                setContextMenu(null);
+              }}
+            />
+          ) : null}
+          {contextMenu.isMap && contextMenu.mapId ? (
+            <ContextMenuItem
+              label="Pin context map"
+              onClick={() => {
+                pinMap({
+                  id: contextMenu.mapId!,
+                  title: contextMenu.mapTitle ?? 'Context map',
+                  rootDir: contextMenu.mapRoot ?? '',
+                });
+                setContextMenu(null);
+              }}
+            />
+          ) : null}
+          {contextMenu.filePath ? (
+            <ContextMenuItem
+              label="Copy path"
+              onClick={() => {
+                void navigator.clipboard.writeText(contextMenu.filePath!);
+                toast.success('Copied', 'Path copied to clipboard');
+                setContextMenu(null);
+              }}
+            />
+          ) : null}
+          {contextMenu.filePath && isTauri ? (
+            <ContextMenuItem
+              label="Reveal in Explorer"
+              onClick={() => {
+                void openExternal(contextMenu.filePath!);
+                setContextMenu(null);
+              }}
+            />
+          ) : null}
+          <ContextMenuItem
+            label="Open Context page"
+            onClick={() => {
+              setRoute('context');
+              setContextMenu(null);
+            }}
+          />
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function ContextMenuItem({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="w-full rounded px-2 py-1.5 text-left text-secondary hover:bg-muted hover:text-foreground"
+    >
+      {label}
+    </button>
   );
 }
 
@@ -431,9 +698,28 @@ function InspectorToolsPanel() {
   const setRoute = useUIStore((s) => s.setRoute);
   const projectId = useAuthStore((s) => s.projectId);
   const tools = useStoredInspectorTools();
+  const startRun = useToolRunsStore((s) => s.startRun);
+  const finishRun = useToolRunsStore((s) => s.finishRun);
+  const activeRunId = useToolRunsStore((s) => s.activeRunId);
   const sortedTools = React.useMemo(
     () => [...tools].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8),
     [tools],
+  );
+
+  const runTool = React.useCallback(
+    async (tool: InspectorCustomTool) => {
+      if (activeRunId) {
+        toast.warning('Tool running', 'Wait for the current tool run to finish.');
+        return;
+      }
+      const actionId = `custom.${tool.slug}`;
+      const runId = startRun(actionId, tool.name);
+      const res = await runAction(actionId, {}, { source: 'user' });
+      finishRun(runId, res.ok ? 'success' : 'error', res.ok ? undefined : res.error);
+      if (!res.ok) toast.error('Tool failed', res.error);
+      else toast.success('Tool finished', tool.name);
+    },
+    [activeRunId, finishRun, startRun],
   );
 
   return (
@@ -458,7 +744,9 @@ function InspectorToolsPanel() {
                 <CustomToolResourceRow
                   tool={tool}
                   projectId={projectId}
+                  running={activeRunId !== null}
                   onOpen={() => setRoute('tools')}
+                  onRun={() => void runTool(tool)}
                 />
               </li>
             ))}
@@ -623,6 +911,8 @@ function ContextResourceRow({
   icon,
   meta,
   onOpen,
+  onContextMenu,
+  onPreview,
 }: {
   attachment: ContextAttachment;
   filePath?: string;
@@ -631,12 +921,15 @@ function ContextResourceRow({
   icon: React.ReactNode;
   meta?: string;
   onOpen: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+  onPreview?: () => void;
 }) {
   return (
     <button
       type="button"
       draggable
       onClick={onOpen}
+      onContextMenu={onContextMenu}
       onDragStart={(event) => setContextDragData(event, attachment, filePath)}
       className={resourceButtonClass}
       title={subtitle}
@@ -651,6 +944,18 @@ function ContextResourceRow({
           {meta}
         </span>
       ) : null}
+      {onPreview ? (
+        <span
+          role="presentation"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPreview();
+          }}
+          className="text-[10px] text-accent-copper hover:underline"
+        >
+          Edit
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -662,6 +967,8 @@ function ToolResourceRow({
   icon,
   projectId,
   onOpen,
+  onRun,
+  running,
 }: {
   title: string;
   actionId: string;
@@ -669,6 +976,8 @@ function ToolResourceRow({
   icon: React.ReactNode;
   projectId: string | null;
   onOpen: () => void;
+  onRun?: () => void;
+  running?: boolean;
 }) {
   const attachment = React.useMemo(
     () => toolAttachment({ title, actionId, description, projectId }),
@@ -688,7 +997,25 @@ function ToolResourceRow({
         <span className="block truncate text-secondary text-foreground">{title}</span>
         <span className="block truncate text-metadata text-muted-foreground">{actionId}</span>
       </span>
-      <PlayCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      {onRun ? (
+        <span
+          role="presentation"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!running) onRun();
+          }}
+          className={cn(
+            'inline-flex items-center gap-0.5 text-[10px] uppercase tracking-wide',
+            running ? 'text-muted-foreground' : 'text-accent-copper hover:underline cursor-pointer',
+          )}
+          title={running ? 'Running…' : 'Run tool'}
+        >
+          <PlayCircle className="h-3.5 w-3.5" />
+          Run
+        </span>
+      ) : (
+        <PlayCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      )}
     </button>
   );
 }
@@ -697,10 +1024,14 @@ function CustomToolResourceRow({
   tool,
   projectId,
   onOpen,
+  onRun,
+  running,
 }: {
   tool: InspectorCustomTool;
   projectId: string | null;
   onOpen: () => void;
+  onRun: () => void;
+  running: boolean;
 }) {
   const actionId = `custom.${tool.slug}`;
   const stepCount = tool.steps?.length ?? 0;
@@ -714,6 +1045,8 @@ function CustomToolResourceRow({
       icon={<Wrench className="h-3.5 w-3.5" />}
       projectId={projectId}
       onOpen={onOpen}
+      onRun={onRun}
+      running={running}
     />
   );
 }
@@ -866,76 +1199,124 @@ const resourceButtonClass = cn(
  */
 function TodayPanel() {
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
+  const projectId = useAuthStore((s) => s.projectId);
+  const setRoute = useUIStore((s) => s.setRoute);
+  const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
 
-  // Today's schedule comes from the recurrence-aware feed so daily/weekly
-  // anchors light up correctly. Returns `RecurrenceInstance[]` (anchor +
-  // materialised repeats), not raw `EventRow[]`.
   const todayEvents = useTodayEvents(workspaceId);
+  const upcomingEvents = useUpcomingEvents(workspaceId, 7 * 24 * 60 * 60 * 1000, 8);
+  const scheduleEvents = todayEvents.length > 0 ? todayEvents : upcomingEvents;
 
-  const todayTasks = useTodayTasks();
+  const workspaceTasks = useWorkspaceOpenTasks(workspaceId, projectId);
+  const kanbanToday = useTodayTasks();
+  const openCount = openTaskCount(workspaceTasks);
+
   const quickLinks = useQuickLinks(workspaceId);
-
-  const recentLinks = React.useMemo(() => {
-    return [...quickLinks]
-      .sort((a, b) => (b.last_used_at ?? 0) - (a.last_used_at ?? 0))
-      .slice(0, 4);
-  }, [quickLinks]);
+  const launchLinks = React.useMemo(() => {
+    if (quickLinks.length > 0) {
+      return [...quickLinks].sort((a, b) => a.position - b.position).slice(0, 8);
+    }
+    if (!workspaceId) return [] as QuickLink[];
+    return QUICK_PRESETS.map((preset, index) => ({
+      id: `preset-${index}` as QuickLink['id'],
+      workspace_id: workspaceId!,
+      label: preset.label,
+      url: preset.url,
+      kind: preset.kind,
+      icon: preset.icon,
+      color_hue: preset.color_hue,
+      behavior: preset.behavior,
+      position: index,
+      tags: [],
+      created_at: 0,
+      updated_at: 0,
+    }));
+  }, [quickLinks, workspaceId]);
 
   return (
     <div className="flex flex-col gap-4 px-4 py-4">
-      <ScheduleSection events={todayEvents.slice(0, 5)} />
-      <TasksSection tasks={todayTasks.slice(0, 5)} />
-      <QuickLinksSection links={recentLinks} />
+      <ScheduleSection
+        events={scheduleEvents.slice(0, 5)}
+        emptyHint={todayEvents.length === 0 ? 'Nothing today — showing upcoming.' : undefined}
+        onOpenSchedule={() => setRoute('schedule')}
+      />
+      <WorkspaceTasksSection tasks={workspaceTasks.slice(0, 8)} totalOpen={openCount} kanbanToday={kanbanToday.length} />
+      <QuickLinksSection links={launchLinks} onManage={() => setLauncherOpen(true)} />
     </div>
   );
 }
 
 // ----- Section: schedule for today -----
 
-function ScheduleSection({ events }: { events: RecurrenceInstance[] }) {
+function ScheduleSection({
+  events,
+  emptyHint,
+  onOpenSchedule,
+}: {
+  events: RecurrenceInstance[];
+  emptyHint?: string;
+  onOpenSchedule?: () => void;
+}) {
   return (
     <Section
       label="Schedule"
       icon={<CalendarDays className="h-3 w-3" />}
-      hint={events.length > 0 ? `${events.length} today` : undefined}
+      hint={events.length > 0 ? `${events.length}` : undefined}
     >
       {events.length === 0 ? (
-        <EmptyState text="Cleared for focus." />
+        <div className="flex flex-col gap-2">
+          <EmptyState text="No events scheduled. Add one on the Schedule page." />
+          {onOpenSchedule ? (
+            <Button variant="ghost" size="sm" onClick={onOpenSchedule} className="justify-start">
+              <CalendarDays className="h-3.5 w-3.5" />
+              Open Schedule
+            </Button>
+          ) : null}
+        </div>
       ) : (
-        <ul className="flex flex-col gap-1.5">
-          {events.map((inst) => (
-            <li
-              key={`${inst.event.id}-${inst.instanceStartMs}`}
-              className="rounded-md border border-border bg-elevated px-2.5 py-2 flex items-center gap-2.5"
-            >
-              <span className="text-metadata font-mono text-accent-copper tabular-nums shrink-0 w-14">
-                {inst.event.all_day ? 'All day' : formatClock(inst.instanceStartMs)}
-              </span>
-              <span
-                className="text-secondary text-foreground truncate"
-                title={inst.event.title}
+        <>
+          {emptyHint ? <p className="text-metadata text-muted-foreground px-0.5">{emptyHint}</p> : null}
+          <ul className="flex flex-col gap-1.5">
+            {events.map((inst) => (
+              <li
+                key={`${inst.event.id}-${inst.instanceStartMs}`}
+                className="rounded-md border border-border bg-elevated px-2.5 py-2 flex items-center gap-2.5"
               >
-                {inst.event.title}
-              </span>
-            </li>
-          ))}
-        </ul>
+                <span className="text-metadata font-mono text-accent-copper tabular-nums shrink-0 w-14">
+                  {inst.event.all_day ? 'All day' : formatClock(inst.instanceStartMs)}
+                </span>
+                <span
+                  className="text-secondary text-foreground truncate"
+                  title={inst.event.title}
+                >
+                  {inst.event.title}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </Section>
   );
 }
 
-// ----- Section: open tasks -----
-
-function TasksSection({ tasks }: { tasks: Task[] }) {
+function WorkspaceTasksSection({
+  tasks,
+  totalOpen,
+  kanbanToday,
+}: {
+  tasks: VibeSpaceTask[];
+  totalOpen: number;
+  kanbanToday: number;
+}) {
   return (
     <Section
       label="Open tasks"
       icon={<ListTodo className="h-3 w-3" />}
-      hint={tasks.length > 0 ? `${tasks.length} due` : undefined}
+      hint={totalOpen > 0 ? `${totalOpen} active` : undefined}
     >
       {tasks.length === 0 ? (
-        <EmptyState text="No open tasks." />
+        <EmptyState text="No active work right now. Terminals, chats, tools, and milestones will appear here." />
       ) : (
         <ul className="flex flex-col gap-1.5">
           {tasks.map((t) => (
@@ -943,19 +1324,26 @@ function TasksSection({ tasks }: { tasks: Task[] }) {
               key={t.id}
               className="rounded-md border border-border bg-elevated px-2.5 py-2 flex items-center gap-2"
             >
-              <PriorityDot priority={t.priority} />
+              <span
+                className={cn(
+                  'h-2 w-2 rounded-full shrink-0',
+                  t.status === 'working' ? 'bg-accent-cyan animate-pulse' : 'bg-accent-copper',
+                )}
+                aria-hidden
+              />
               <span className="text-secondary text-foreground truncate flex-1" title={t.title}>
                 {t.title}
               </span>
-              {(t.due_at || t.scheduled_for) && (
-                <span className="text-metadata text-muted-foreground tabular-nums shrink-0">
-                  {formatClock((t.due_at ?? t.scheduled_for) as number)}
-                </span>
-              )}
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground shrink-0">
+                {t.source}
+              </span>
             </li>
           ))}
         </ul>
       )}
+      {kanbanToday > 0 ? (
+        <p className="text-metadata text-muted-foreground px-0.5">{kanbanToday} kanban task(s) due today</p>
+      ) : null}
     </Section>
   );
 }
@@ -974,14 +1362,14 @@ function PriorityDot({ priority }: { priority: TaskPriority }) {
 
 // ----- Section: recent quick-links -----
 
-function QuickLinksSection({ links }: { links: QuickLink[] }) {
+function QuickLinksSection({ links, onManage }: { links: QuickLink[]; onManage?: () => void }) {
   return (
     <Section
-      label="Recent"
+      label="Quick Launch"
       icon={<Sparkles className="h-3 w-3" />}
     >
       {links.length === 0 ? (
-        <EmptyState text="No pinned links yet." />
+        <EmptyState text="No quick launch items yet." />
       ) : (
         <div className="grid grid-cols-2 gap-1.5">
           {links.map((link) => (
@@ -989,6 +1377,12 @@ function QuickLinksSection({ links }: { links: QuickLink[] }) {
           ))}
         </div>
       )}
+      {onManage ? (
+        <Button variant="ghost" size="sm" onClick={onManage} className="justify-start mt-1">
+          <Plus className="h-3.5 w-3.5" />
+          Add website, app, or script
+        </Button>
+      ) : null}
     </Section>
   );
 }
@@ -1000,6 +1394,10 @@ function QuickLinkButton({ link }: { link: QuickLink }) {
 
   const onClick = React.useCallback(async () => {
     try {
+      if (link.id.startsWith('preset-')) {
+        await launchLink({ ...link, workspace_id: link.workspace_id });
+        return;
+      }
       await launchLink(link);
     } catch {
       /* launchLink toasts on failure */
@@ -1247,40 +1645,31 @@ function TerminalRow({ session }: { session: TerminalSession }) {
   );
 }
 
-// ----- Kanban — recent task transitions -----
+// ----- Kanban — recent milestone transitions -----
 
-function KanbanContextPanel({ workspaceId }: { workspaceId: WorkspaceId | null }) {
-  // Slice 8 may eventually expose a `useRecentKanbanTransitions` hook; until
-  // then we read the workspace task list and sort by `updated_at desc`.
-  const tasks =
-    useLiveQuery(
-      async () => {
-        if (!workspaceId) return [] as Task[];
-        const rows = await taskRepo.listByWorkspace(workspaceId);
-        return rows.sort((a, b) => b.updated_at - a.updated_at).slice(0, 10);
-      },
-      [workspaceId],
-      [] as Task[],
-    ) ?? [];
+function KanbanContextPanel(_props: { workspaceId: WorkspaceId | null }) {
+  const milestones = useMilestonesStore((s) =>
+    [...s.items].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10),
+  );
 
-  if (tasks.length === 0) {
+  if (milestones.length === 0) {
     return (
       <PlaceholderCard
-        title="Recent updates"
-        body="Move a card to see it here."
+        title="Recent milestones"
+        body="Add or move a milestone on the Kanban page to see it here."
       />
     );
   }
 
   return (
-    <StripCard eyebrow="Recent updates" hint={String(tasks.length)}>
+    <StripCard eyebrow="Recent milestones" hint={String(milestones.length)}>
       <ul className="flex flex-col gap-1.5">
-        {tasks.map((t) => (
+        {milestones.map((t) => (
           <li
             key={t.id}
             className="flex items-center gap-2 rounded-md bg-paper-soft px-2 py-1.5"
           >
-            <StatusDot status={t.status} />
+            <MilestoneStatusDot status={t.status} />
             <span
               className="text-secondary text-foreground truncate flex-1"
               title={t.title}
@@ -1288,13 +1677,23 @@ function KanbanContextPanel({ workspaceId }: { workspaceId: WorkspaceId | null }
               {t.title}
             </span>
             <span className="text-metadata text-muted-foreground tabular-nums shrink-0">
-              {formatRelative(t.updated_at)}
+              {formatRelative(t.updatedAt)}
             </span>
           </li>
         ))}
       </ul>
     </StripCard>
   );
+}
+
+function MilestoneStatusDot({ status }: { status: 'todo' | 'working' | 'done' }) {
+  const cls =
+    status === 'done'
+      ? 'text-accent-sage'
+      : status === 'working'
+        ? 'text-accent-copper'
+        : 'text-muted-foreground';
+  return <CircleDot className={cn('h-3 w-3 shrink-0', cls)} aria-hidden="true" />;
 }
 
 function StatusDot({ status }: { status: TaskStatus }) {

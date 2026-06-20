@@ -66,12 +66,23 @@ import {
 import { TERMINAL_CLEAR_SUPPRESS_MS } from './terminalClear';
 import { createWebglDisposeTracker } from './terminalDispose';
 import { shouldSendTerminalResize, type TerminalGridSize } from './terminalGeometry';
+import {
+  shouldAutoFollowTerminalOutput,
+  terminalUserHasScrolled,
+} from './terminalViewport';
 import { VoiceService } from '@/features/voice/VoiceService';
 import {
   CONTEXT_MIME,
   formatContextAttachmentForTerminal,
   parseContextAttachment,
 } from '@/features/context/tree';
+import {
+  heartbeatCoordinatedTerminal,
+  inferAgentProvider,
+  loadCoordinationSummary,
+  registerCoordinatedTerminal,
+} from './agentCoordinationClient';
+import type { AgentCoordinationMode } from './agentCoordination';
 
 /**
  * When the parent owns its own chrome (`<TileGrid>`'s pane-tile or the
@@ -210,6 +221,7 @@ export function TerminalView({
   hideChrome = false,
   fontSize = 9,
   agentSlug,
+  agentMode = 'default',
   onReady,
   onPendingCommandSent,
   onExit,
@@ -227,12 +239,14 @@ export function TerminalView({
   const cwdRef = useRef<string | null>(cwd ?? null);
   // Last agent slug whose briefing was written for this session's cwd.
   const deliveredSlugRef = useRef<string | null>(null);
+  const deliveredModeRef = useRef(agentMode);
   const exitFiredRef = useRef(false);
   const focusedRef = useRef(false);
   const dictatingRef = useRef(false);
   const ignoreClearsUntilRef = useRef<number>(0);
   const suppressOutputUntilRef = useRef<number>(0);
   const lastResizeSentRef = useRef<TerminalGridSize | null>(null);
+  const userHasScrolledRef = useRef(false);
   const currentInputRef = useRef('');
   const currentInputFlushTimerRef = useRef<number | null>(null);
 
@@ -243,6 +257,11 @@ export function TerminalView({
   const [powerUpTitle, setPowerUpTitle] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const powerUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const coordinationSummaryFor = async (
+    mode: AgentCoordinationMode,
+    sessionCwd: string | null | undefined,
+  ): Promise<string> => (mode === 'coordinated' ? loadCoordinationSummary(sessionCwd) : '');
 
   // Capture latest callbacks via refs so the mount effect doesn't re-run
   // on every prop change (which would re-spawn the PTY).
@@ -261,6 +280,7 @@ export function TerminalView({
   // output that arrived before that window had the wrong tag. Reading
   // through the ref eliminates the window.
   const agentSlugRef = useRef(agentSlug ?? null);
+  const agentModeRef = useRef(agentMode);
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
@@ -280,6 +300,9 @@ export function TerminalView({
     const slug = agentSlug ?? null;
     agentSlugRef.current = slug;
   }, [agentSlug]);
+  useEffect(() => {
+    agentModeRef.current = agentMode;
+  }, [agentMode]);
 
   useEffect(() => {
     return () => {
@@ -325,23 +348,72 @@ export function TerminalView({
     useTerminalTranscriptStore.getState().retagSession(sid, agentSlug ?? null);
 
     const slug = agentSlug ?? null;
-    if (deliveredSlugRef.current === slug) return;
+    const mode = agentMode;
+    if (deliveredSlugRef.current === slug && deliveredModeRef.current === mode) return;
     deliveredSlugRef.current = slug;
+    deliveredModeRef.current = mode;
     const sessionCwd = cwdRef.current;
     if (!sessionCwd) return;
-    void deliverAgentTerminalContext({
-      cwd: sessionCwd,
-      agentSlug: slug,
-      projectId: projectId ?? null,
-      projectName: projectName ?? null,
-      excludeSessionId: sid,
-    }).then((result) => {
+    void (async () => {
+      const coordinationSummary = await coordinationSummaryFor(mode, sessionCwd);
+      const result = await deliverAgentTerminalContext({
+        cwd: sessionCwd,
+        agentSlug: slug,
+        agentMode: mode,
+        terminalId: sid,
+        projectId: projectId ?? null,
+        projectName: projectName ?? null,
+        excludeSessionId: sid,
+        coordinationSummary,
+      });
       if (!result.ok && result.error) {
         console.warn('[Jarvis] agent briefing re-delivery failed:', result.error);
       }
-    });
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentSlug]);
+  }, [agentSlug, agentMode]);
+
+  useEffect(() => {
+    const sid = activeSessionId;
+    const sessionCwd = cwdRef.current;
+    const slug = agentSlug ?? null;
+    if (!sid || !sessionCwd || agentMode !== 'coordinated' || !slug) return;
+
+    const agentName = resolveAgentForSlug(slug).name;
+    const provider = inferAgentProvider(startupCommand ?? command);
+    let cancelled = false;
+    const base = {
+      cwd: sessionCwd,
+      mode: agentMode,
+      terminalId: sid,
+      paneId: paneId ?? null,
+      agentSlug: slug,
+      agentName,
+      provider,
+    };
+
+    void registerCoordinatedTerminal({
+      ...base,
+      summary: `${agentName} registered from terminal ${sid}.`,
+    }).then((result) => {
+      if (!cancelled && !result.ok && result.error) {
+        console.warn('[Jarvis] coordinated terminal registration failed:', result.error);
+      }
+    });
+
+    const heartbeatTimer = window.setInterval(() => {
+      void heartbeatCoordinatedTerminal(base).then((result) => {
+        if (!cancelled && !result.ok && result.error) {
+          console.warn('[Jarvis] coordinated terminal heartbeat failed:', result.error);
+        }
+      });
+    }, 30_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(heartbeatTimer);
+    };
+  }, [activeSessionId, agentMode, agentSlug, command, paneId, startupCommand]);
 
   useEffect(() => {
     const containerEl = containerRef.current;
@@ -352,6 +424,7 @@ export function TerminalView({
     let fit: FitAddon | null = null;
     let unlistenOutput: UnlistenFn | undefined;
     let unlistenExit: UnlistenFn | undefined;
+    let scrollListenerDispose: { dispose: () => void } | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let mutationObserver: MutationObserver | null = null;
     let rafToken: number | null = null;
@@ -377,21 +450,28 @@ export function TerminalView({
 
     const ensureAgentBriefingForSession = (sid: string): void => {
       const slug = agentSlugRef.current;
+      const mode = agentModeRef.current;
       const sessionCwd = cwdRef.current;
-      if (!slug || !sessionCwd || !isInteractiveAgentSession(sid)) return;
-      void deliverAgentTerminalContext({
-        cwd: sessionCwd,
-        agentSlug: slug,
-        projectId: projectId ?? null,
-        projectName: projectName ?? null,
-        excludeSessionId: sid,
-      }).then((result) => {
+      if (!sessionCwd || !isInteractiveAgentSession(sid)) return;
+      if (!slug && mode !== 'no-context') return;
+      void (async () => {
+        const result = await deliverAgentTerminalContext({
+          cwd: sessionCwd,
+          agentSlug: slug,
+          agentMode: mode,
+          terminalId: sid,
+          projectId: projectId ?? null,
+          projectName: projectName ?? null,
+          excludeSessionId: sid,
+          coordinationSummary: await coordinationSummaryFor(mode, sessionCwd),
+        });
         if (result.ok) {
           deliveredSlugRef.current = slug;
+          deliveredModeRef.current = mode;
         } else if (result.error) {
           console.warn('[Jarvis] agent briefing refresh failed:', result.error);
         }
-      });
+      })();
     };
 
     const resetTerminalSurface = () => {
@@ -488,22 +568,18 @@ export function TerminalView({
       if (!sid) return;
 
       try {
-        if (Date.now() < ignoreClearsUntilRef.current) {
-          // During the post-restore window, keep the viewport pinned to the
-          // latest content so the user lands on their prompt — not scrolled
-          // to wherever ConPTY's startup noise left the cursor. Fresh panes
-          // pin to the top so PowerShell's cursor-home prompt is visible.
-          termRef.current?.write(displayData, () => {
-            if (cancelled) return;
-            if (startupRestoreMode) {
-              termRef.current?.scrollToBottom();
-            } else {
-              termRef.current?.scrollToTop();
-            }
-          });
-        } else {
-          termRef.current?.write(displayData);
-        }
+        const currentTerm = termRef.current;
+        const shouldFollow = currentTerm
+          ? shouldAutoFollowTerminalOutput({
+              term: currentTerm,
+              userHasScrolled: userHasScrolledRef.current,
+            })
+          : false;
+        currentTerm?.write(displayData, () => {
+          if (cancelled || !shouldFollow) return;
+          termRef.current?.scrollToBottom();
+          userHasScrolledRef.current = false;
+        });
       } catch (err) {
         console.warn('[Jarvis] terminal render write failed:', err);
       }
@@ -610,6 +686,11 @@ export function TerminalView({
 
       termRef.current = term;
       fitRef.current = fit;
+      scrollListenerDispose = term.onScroll(() => {
+        const currentTerm = termRef.current;
+        if (!currentTerm) return;
+        userHasScrolledRef.current = terminalUserHasScrolled(currentTerm);
+      });
 
       if (paneId) {
         unregisterPaneClear = registerTerminalPaneClearHandler(paneId, () => {
@@ -734,6 +815,7 @@ export function TerminalView({
       let sessionCwd: string | null = cwd ?? null;
       let briefingDelivered = false;
       const slugAtSpawn = agentSlugRef.current;
+      const modeAtSpawn = agentModeRef.current;
       try {
         let activeSessions: BackendTerminalInfo[] = [];
         if (existingSessionId != null || paneId) {
@@ -777,8 +859,11 @@ export function TerminalView({
             const delivery = await deliverAgentTerminalContext({
               cwd,
               agentSlug: slugAtSpawn,
+              agentMode: modeAtSpawn,
+              terminalId: paneId ?? null,
               projectId: projectId ?? null,
               projectName: projectName ?? null,
+              coordinationSummary: await coordinationSummaryFor(modeAtSpawn, cwd),
             });
             briefingDelivered = delivery.ok;
             if (!delivery.ok && delivery.error) {
@@ -799,6 +884,7 @@ export function TerminalView({
               ? buildAgentSpawnEnv({
                   agentSlug: slugAtSpawn,
                   agentName: resolveAgentForSlug(slugAtSpawn).name,
+                  agentMode: modeAtSpawn,
                   cwd: cwd ?? null,
                   projectName: projectName ?? null,
                 })
@@ -814,9 +900,12 @@ export function TerminalView({
             const delivery = await deliverAgentTerminalContext({
               cwd: sessionCwd,
               agentSlug: slugAtSpawn,
+              agentMode: modeAtSpawn,
+              terminalId: sid,
               projectId: projectId ?? null,
               projectName: projectName ?? null,
               excludeSessionId: sid,
+              coordinationSummary: await coordinationSummaryFor(modeAtSpawn, sessionCwd),
             });
             briefingDelivered = delivery.ok;
             if (!delivery.ok && delivery.error) {
@@ -850,9 +939,12 @@ export function TerminalView({
             const delivery = await deliverAgentTerminalContext({
               cwd: sessionCwd,
               agentSlug: slugAtSpawn,
+              agentMode: modeAtSpawn,
+              terminalId: sid,
               projectId: projectId ?? null,
               projectName: projectName ?? null,
               excludeSessionId: sid,
+              coordinationSummary: await coordinationSummaryFor(modeAtSpawn, sessionCwd),
             });
             briefingDelivered = delivery.ok;
           }
@@ -893,6 +985,7 @@ export function TerminalView({
         // Record what's on disk so the agent-switch effect only rewrites
         // the briefing when the slug actually changes.
         deliveredSlugRef.current = slugAtSpawn;
+        deliveredModeRef.current = modeAtSpawn;
       }
       setActiveSessionId(sid);
       // Register the session in the transcript store so the by-agent
@@ -1044,6 +1137,7 @@ export function TerminalView({
       mutationObserver?.disconnect();
       unlistenOutput?.();
       unlistenExit?.();
+      scrollListenerDispose?.dispose();
       try {
         webglDispose.disposeTerminal(termRef.current);
       } catch {

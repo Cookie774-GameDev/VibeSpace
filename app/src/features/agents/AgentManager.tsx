@@ -101,7 +101,6 @@ export function AgentManager() {
   const registerMany = useAgentStore((s) => s.registerMany);
   const registerAgent = useAgentStore((s) => s.registerAgent);
   const unregisterAgent = useAgentStore((s) => s.unregisterAgent);
-  const updateAgent = useAgentStore((s) => s.updateAgent);
 
   const agentList = React.useMemo(() => {
     const arr = Object.values(agents);
@@ -127,8 +126,12 @@ export function AgentManager() {
   // Draft is reset whenever the *selection* changes (not when the agent
   // reference updates after a save).
   const [draft, setDraft] = React.useState<DraftState | null>(null);
+  const draftRef = React.useRef<DraftState | null>(null);
+  draftRef.current = draft;
   React.useEffect(() => {
-    setDraft(selectedAgent ? agentToDraft(selectedAgent) : null);
+    const next = selectedAgent ? agentToDraft(selectedAgent) : null;
+    setDraft(next);
+    draftRef.current = next;
     // Intentionally watch selectedAgent?.id, not the whole agent reference.
   }, [selectedAgent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -204,18 +207,29 @@ export function AgentManager() {
   };
 
   const handleSave = async () => {
-    if (!selectedAgent || !draft || !dirty) return;
+    const currentDraft = draftRef.current;
+    if (!selectedAgent || !currentDraft || !dirty) return;
     const patch: Partial<Agent> = {
-      name: draft.name,
-      description: draft.description,
-      system_prompt: draft.system_prompt,
-      model: { ...selectedAgent.model, provider: draft.provider, model: draft.model },
-      temperature: draft.temperature,
+      name: currentDraft.name,
+      description: currentDraft.description,
+      system_prompt: currentDraft.system_prompt,
+      model: {
+        ...selectedAgent.model,
+        provider: currentDraft.provider,
+        model: currentDraft.model,
+      },
+      temperature: currentDraft.temperature,
     };
     try {
-      const saved = await agentRepo.update(selectedAgent.id, patch);
-      updateAgent(selectedAgent.id, saved);
-      toast.success('Saved', `Updated "${draft.name}"`);
+      const existing = await agentRepo.getById(selectedAgent.id);
+      const saved = existing
+        ? await agentRepo.update(selectedAgent.id, patch)
+        : await agentRepo.create({ ...selectedAgent, ...patch, id: selectedAgent.id });
+      registerAgent(saved);
+      const syncedDraft = agentToDraft(saved);
+      setDraft(syncedDraft);
+      draftRef.current = syncedDraft;
+      toast.success('Saved', `Updated "${saved.name}"`);
     } catch (err) {
       toast.error('Save failed', err instanceof Error ? err.message : 'Could not save this agent.');
     }
@@ -367,7 +381,13 @@ export function AgentManager() {
                     Delete
                   </Button>
                 )}
-                <Button variant="accent" size="sm" onClick={handleSave} disabled={!dirty}>
+                <Button
+                  type="button"
+                  variant="accent"
+                  size="sm"
+                  onClick={() => void handleSave()}
+                  disabled={!dirty}
+                >
                   <Save className="h-3.5 w-3.5" />
                   Save
                 </Button>
@@ -384,7 +404,9 @@ export function AgentManager() {
                   <Input
                     id="agent-name"
                     value={draft.name}
-                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                    onChange={(e) =>
+                      setDraft((d) => (d ? { ...d, name: e.target.value } : d))
+                    }
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -392,7 +414,9 @@ export function AgentManager() {
                   <Input
                     id="agent-desc"
                     value={draft.description}
-                    onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                    onChange={(e) =>
+                      setDraft((d) => (d ? { ...d, description: e.target.value } : d))
+                    }
                   />
                 </div>
               </div>
@@ -433,7 +457,9 @@ export function AgentManager() {
                       <Input
                         id="agent-model"
                         value={draft.model}
-                        onChange={(e) => setDraft({ ...draft, model: e.target.value.trim() })}
+                        onChange={(e) =>
+                          setDraft((d) => (d ? { ...d, model: e.target.value.trim() } : d))
+                        }
                         spellCheck={false}
                         autoComplete="off"
                       />
@@ -441,7 +467,9 @@ export function AgentManager() {
                       <select
                         id="agent-model"
                         value={draft.model}
-                        onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                        onChange={(e) =>
+                          setDraft((d) => (d ? { ...d, model: e.target.value } : d))
+                        }
                         className={cn(
                           'flex h-8 w-full rounded-md border border-input bg-background px-2 text-body text-foreground',
                           'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
@@ -494,7 +522,7 @@ export function AgentManager() {
                   step={0.05}
                   value={draft.temperature}
                   onChange={(e) =>
-                    setDraft({ ...draft, temperature: Number(e.target.value) })
+                    setDraft((d) => (d ? { ...d, temperature: Number(e.target.value) } : d))
                   }
                   className="w-full"
                   style={{ accentColor: 'hsl(var(--accent-cyan))' }}
@@ -506,7 +534,9 @@ export function AgentManager() {
                 <Textarea
                   id="agent-prompt"
                   value={draft.system_prompt}
-                  onChange={(e) => setDraft({ ...draft, system_prompt: e.target.value })}
+                  onChange={(e) =>
+                    setDraft((d) => (d ? { ...d, system_prompt: e.target.value } : d))
+                  }
                   className="min-h-[260px] font-mono text-secondary leading-relaxed"
                 />
                 <div className="text-metadata text-muted-foreground">

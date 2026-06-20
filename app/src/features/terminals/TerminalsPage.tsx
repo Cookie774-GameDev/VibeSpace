@@ -55,6 +55,7 @@ import {
   captureLiveTree,
   getLiveTree,
 } from './terminalLiveCache';
+import { useTerminalTranscriptStore } from './transcriptStore';
 
 /**
  * Map an agent slug to a default CLI to spawn in a fresh pane.
@@ -77,6 +78,15 @@ export function commandForAgent(slug: string): string | undefined {
     case 'jarvis':
     default:
       return undefined;
+  }
+}
+
+export function forgetTerminalLeafSessions(
+  tree: PaneNode,
+  forgetSession: (sessionId: string) => void,
+): void {
+  for (const leaf of flattenLeaves(tree)) {
+    if (leaf.sessionId) forgetSession(leaf.sessionId);
   }
 }
 
@@ -287,6 +297,7 @@ export function TerminalsPage() {
   };
 
   const handleResetAllTerminals = () => {
+    const forgetSession = useTerminalTranscriptStore.getState().forgetSession;
     for (const leaf of flattenLeaves(tree)) {
       if (leaf.sessionId) {
         invoke('terminal_kill', { sessionId: leaf.sessionId }).catch(() => {
@@ -294,6 +305,7 @@ export function TerminalsPage() {
         });
       }
     }
+    forgetTerminalLeafSessions(tree, forgetSession);
     setTree(newLeaf({ command: defaultShell() }));
     setFullscreenPaneId(null);
     toast.success('Terminals reset', 'All terminals have been cleared.');

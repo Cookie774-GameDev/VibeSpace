@@ -24,6 +24,7 @@ import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { HOTKEYS } from '@/lib/hotkeys';
 import { cn, isMac } from '@/lib/utils';
+import { requestComposerSttFromToolbar } from '@/features/composer-stt';
 import { useCallStore } from '@/features/call/store';
 import { isCallConfigured, loadCallService } from '@/features/call';
 import { toast } from '@/components/ui/toast';
@@ -113,9 +114,10 @@ export function TopBar() {
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
   const toggleInspector = useUIStore((s) => s.toggleInspector);
   const voiceListening = useUIStore((s) => s.voiceListening);
+  const composerSttListening = useUIStore((s) => s.composerSttListening);
+  const composerSttEnabled = useUIStore((s) => s.composerStt);
   const setVoiceModalOpen = useUIStore((s) => s.setVoiceModalOpen);
   const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
-  const toggleVoice = useUIStore((s) => s.toggleVoice);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   // V2 — launcher + fullscreen
   const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
@@ -178,6 +180,16 @@ export function TopBar() {
   // cluster stays just: fullscreen, more, settings, avatar.
   const compactChrome = route === 'terminal' || chatFullscreen;
   const [overflowOpen, setOverflowOpen] = React.useState(false);
+
+  const toggleComposerStt = React.useCallback(() => {
+    if (!composerSttEnabled) {
+      toast.info('Voice to text disabled', 'Enable it in Settings → Accessibility.');
+      return;
+    }
+    if (!requestComposerSttFromToolbar()) {
+      toast.info('Voice to text disabled', 'Enable it in Settings → Accessibility.');
+    }
+  }, [composerSttEnabled]);
 
   return (
     <header
@@ -334,12 +346,12 @@ export function TopBar() {
           setOverflowOpen={setOverflowOpen}
           chatFullscreen={chatFullscreen}
           toggleChatFullscreen={toggleChatFullscreen}
-          voiceListening={voiceListening}
+          voiceListening={composerSttListening}
           setLauncherOpen={setLauncherOpen}
           setAssistantOpen={setAssistantOpen}
           openSchedule={() => setRoute('schedule')}
           setPaletteOpen={setPaletteOpen}
-          toggleVoice={toggleVoice}
+          toggleComposerStt={toggleComposerStt}
           setSettingsOpen={setSettingsOpen}
           setWhatsNewOpen={setWhatsNewOpen}
           hasUnseenWhatsNew={hasUnseenWhatsNew}
@@ -409,19 +421,19 @@ export function TopBar() {
             </Button>
           </Hint>
 
-          <Hint label="Voice" hotkey="Mod+Space">
+          <Hint label={composerSttListening ? 'Stop dictation' : 'Voice to text'} hotkey={HOTKEYS.COMPOSER_STT}>
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={toggleVoice}
-              aria-label="Voice"
-              aria-pressed={voiceListening}
+              onClick={toggleComposerStt}
+              aria-label={composerSttListening ? 'Stop dictation' : 'Start dictation'}
+              aria-pressed={composerSttListening}
               className="relative"
             >
               <Mic
-                className={cn('h-4 w-4 transition-colors', voiceListening && 'text-accent-cyan')}
+                className={cn('h-4 w-4 transition-colors', composerSttListening && 'text-accent-cyan')}
               />
-              {voiceListening && (
+              {composerSttListening && (
                 <span
                   aria-hidden
                   className="pointer-events-none absolute inset-0 rounded-md ring-2 ring-accent-cyan/60 animate-pulse"
@@ -519,7 +531,7 @@ interface CompactRightClusterProps {
   setAssistantOpen: (v: boolean) => void;
   openSchedule: () => void;
   setPaletteOpen: (v: boolean) => void;
-  toggleVoice: () => void;
+  toggleComposerStt: () => void;
   setSettingsOpen: (v: boolean) => void;
   setWhatsNewOpen: (v: boolean) => void;
   hasUnseenWhatsNew: boolean;
@@ -542,7 +554,7 @@ function CompactRightCluster(props: CompactRightClusterProps) {
     setAssistantOpen,
     openSchedule,
     setPaletteOpen,
-    toggleVoice,
+    toggleComposerStt,
     setSettingsOpen,
     setWhatsNewOpen,
     hasUnseenWhatsNew,
@@ -634,9 +646,9 @@ function CompactRightCluster(props: CompactRightClusterProps) {
                   )}
                 />
               }
-              label={voiceListening ? 'Voice (listening)' : 'Voice'}
-              hotkey="Mod+Space"
-              onClick={closeAfter(toggleVoice)}
+              label={voiceListening ? 'Voice to text (listening)' : 'Voice to text'}
+              hotkey={HOTKEYS.COMPOSER_STT}
+              onClick={closeAfter(toggleComposerStt)}
             />
             <CompactCallRow closeAfter={closeAfter} />
             <MenuRow

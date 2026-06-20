@@ -175,36 +175,20 @@ export const SKILLS: Record<string, Skill> = {
 
 /**
  * Resolve a list of skill ids to skill records, dropping unknowns.
- * Stable order matching the input list.
+ * Implemented in the unified catalog (presets + custom + overrides).
  */
-export function resolveSkills(ids: string[]): Skill[] {
-  const out: Skill[] = [];
-  for (const id of ids) {
-    const skill = SKILLS[id];
-    if (skill) out.push(skill);
-  }
-  return out;
-}
+export { resolveCatalogSkills as resolveSkills } from '@/features/skills/skillCatalog';
 
 /**
  * Compose a skill addendum block. Returned string is appended to the
  * agent body to form the effective system prompt. Empty addenda are skipped.
  */
 export function composeSkillAddenda(ids: string[]): string {
-  return resolveSkills(ids)
-    .map((s) => s.systemPromptAddendum.trim())
-    .filter(Boolean)
-    .join('\n\n');
+  const { composeCatalogSkillAddenda } = require('@/features/skills/skillCatalog') as typeof import('@/features/skills/skillCatalog');
+  return composeCatalogSkillAddenda(ids);
 }
 
-/**
- * The complete tool allowlist for an agent — union of every skill's tools.
- * Returned set is sorted for determinism.
- */
 export function unionSkillTools(ids: string[]): string[] {
-  const set = new Set<string>();
-  for (const skill of resolveSkills(ids)) {
-    for (const tool of skill.tools) set.add(tool);
-  }
-  return Array.from(set).sort();
+  const { unionCatalogSkillTools } = require('@/features/skills/skillCatalog') as typeof import('@/features/skills/skillCatalog');
+  return unionCatalogSkillTools(ids);
 }

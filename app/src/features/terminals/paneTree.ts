@@ -21,6 +21,7 @@
  * resizable). `appendLeaf` returns the unchanged tree past the cap.
  * `gridDimensions` covers up to 16 to leave headroom for future bumps.
  */
+import type { AgentCoordinationMode } from './agentCoordination';
 
 let nextId = 1;
 function generateId(prefix: string): string {
@@ -67,6 +68,8 @@ export type LeafBase = {
   cwd?: string;
   /** Agent slug tag for swarm UI. See note above. */
   agentSlug?: string;
+  /** Context/coordination mode for the selected terminal agent. */
+  agentMode?: AgentCoordinationMode;
   /** Short, AI-given pane label (e.g. "auth-fix"). See note above. */
   name?: string;
   /**
@@ -125,6 +128,7 @@ export function newLeaf(seed?: Partial<LeafBase>): PaneNode {
     pendingCommandId: seed?.pendingCommandId,
     cwd: seed?.cwd,
     agentSlug: seed?.agentSlug,
+    agentMode: seed?.agentMode,
     name: seed?.name,
     connectedFiles: seed?.connectedFiles,
     fontSize: seed?.fontSize,
@@ -262,6 +266,7 @@ function newLeafBase(seed?: Partial<LeafBase>): LeafBase {
     pendingCommandId: seed?.pendingCommandId,
     cwd: seed?.cwd,
     agentSlug: seed?.agentSlug,
+    agentMode: seed?.agentMode,
     name: seed?.name,
     connectedFiles: seed?.connectedFiles,
     fontSize: seed?.fontSize,

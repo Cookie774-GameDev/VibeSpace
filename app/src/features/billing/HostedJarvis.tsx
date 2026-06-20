@@ -51,6 +51,7 @@ const TIER_LABELS: Record<Tier, string> = {
   plus: 'Plus',
   pro: 'Pro',
   ultra: 'Ultra',
+  apex: 'Supernova',
   'byok-only': 'BYOK only',
 };
 
@@ -60,6 +61,7 @@ const TIER_DESCRIPTIONS: Record<Tier, string> = {
   plus: '$5/month. Up to 1,500 hosted requests.',
   pro: 'Professional tier — bumped quota + priority routing.',
   ultra: 'Ultra tier — highest quota, fastest routing.',
+  apex: 'Supernova — 62,000 AI credits/mo, Hive Balance flagship.',
   'byok-only': 'Hosted proxy off. Requests use your own API keys.',
 };
 

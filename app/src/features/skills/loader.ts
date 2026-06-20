@@ -12,6 +12,8 @@ import { parseFrontmatter } from './parseFrontmatter';
 export interface SkillManifest {
   name: string;
   title: string;
+  /** Short picker blurb (built-in presets + custom skills). */
+  description?: string;
   kind: 'skill' | 'agent';
   trigger?:
     | 'on_message_received'
@@ -30,6 +32,13 @@ export interface SkillManifest {
   body: string;
   source: 'builtin' | 'project';
   filePath: string;
+  /** Stable catalog id (preset id or custom id). */
+  catalogId?: string;
+  isPreset?: boolean;
+  colorHue?: number;
+  emoji?: string;
+  /** Runtime instruction block injected via /skills. */
+  systemPromptAddendum?: string;
 }
 
 const SEVERITY_ORDER: Record<NonNullable<SkillManifest['severity']>, number> = {

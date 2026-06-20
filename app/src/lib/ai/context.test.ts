@@ -4,6 +4,8 @@ const fsMocks = vi.hoisted(() => ({
   readTextFileSample: vi.fn(),
   listDirectory: vi.fn(),
   writeTextFile: vi.fn(),
+  getStoredProjectRoot: vi.fn(),
+  loadCoordinationSummary: vi.fn(),
 }));
 
 vi.mock('@/lib/fs', () => ({
@@ -16,13 +18,27 @@ vi.mock('@/lib/db', () => ({
   projectRepo: { getById: vi.fn() },
 }));
 
+vi.mock('@/features/files/projectFiles', () => ({
+  getStoredProjectRoot: fsMocks.getStoredProjectRoot,
+}));
+
+vi.mock('@/features/terminals/agentCoordinationClient', () => ({
+  loadCoordinationSummary: fsMocks.loadCoordinationSummary,
+}));
+
 import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
-import { getExplicitFilesBlock, getExplicitTerminalBlock } from './context';
+import {
+  getExplicitFilesBlock,
+  getExplicitTerminalBlock,
+  getJarvisCoordinationContextBlock,
+} from './context';
 
 describe('AI explicit file context safeguards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useTerminalTranscriptStore.getState().reset();
+    fsMocks.getStoredProjectRoot.mockReturnValue('');
+    fsMocks.loadCoordinationSummary.mockResolvedValue('');
   });
 
   it('samples attached text files instead of reading them in full', async () => {
@@ -74,5 +90,20 @@ describe('AI explicit file context safeguards', () => {
     expect(block).toContain('only say yes when the visible output clearly shows completion');
     expect(block).toContain('current_input="npm run build"');
     expect(block).toContain('All tests passed');
+  });
+
+  it('builds bounded Jarvis coordination context from the stored project root', async () => {
+    fsMocks.getStoredProjectRoot.mockReturnValue('C:\\repo');
+    fsMocks.loadCoordinationSummary.mockResolvedValue(
+      `## Coordination Summary\n${'agent status '.repeat(500)}`,
+    );
+
+    const block = await getJarvisCoordinationContextBlock('project_a' as never);
+
+    expect(fsMocks.loadCoordinationSummary).toHaveBeenCalledWith('C:\\repo');
+    expect(block).toContain('Jarvis chat coordination awareness');
+    expect(block).toContain('Coordination Summary');
+    expect(block).toContain('coordination summary truncated');
+    expect(block.length).toBeLessThan(3_700);
   });
 });

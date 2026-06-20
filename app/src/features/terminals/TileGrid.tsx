@@ -65,6 +65,7 @@ import { TerminalContextMenu } from './TerminalContextMenu';
 import { clearTerminalSession } from './terminalClear';
 import { toast } from '@/components/ui/toast';
 import { useTerminalTranscriptStore } from './transcriptStore';
+import type { AgentCoordinationMode } from './agentCoordination';
 import {
   parseTerminalRef,
   serializeTerminalRef,
@@ -471,9 +472,14 @@ export function TileGrid({
       }
       return updateLeaf(currentTree, paneId, {
         agentSlug: slug ?? undefined,
+        agentMode: slug ? leaf?.agentMode ?? 'default' : undefined,
         command: nextCommand,
       });
     });
+  };
+
+  const handleAgentModeChange = (paneId: string, mode: AgentCoordinationMode) => {
+    onChange((currentTree) => updateLeaf(currentTree, paneId, { agentMode: mode }));
   };
 
   const handleFontSizeCycle = (paneId: string) => {
@@ -525,6 +531,7 @@ export function TileGrid({
       onAttach={(sid) => handleSessionAttach(leaf.id, sid)}
       onPendingCommandSent={() => handlePendingCommandSent(leaf.id)}
       onAgentChange={(slug) => handleAgentChange(leaf.id, slug)}
+      onAgentModeChange={(mode) => handleAgentModeChange(leaf.id, mode)}
       onFontSizeCycle={() => handleFontSizeCycle(leaf.id)}
       onFullscreenToggle={() => onFullscreenToggle?.(leaf.id)}
       onConnectedFilesChange={(next) =>
@@ -696,6 +703,7 @@ interface TileProps {
   onAttach: (sessionId: string) => void;
   onPendingCommandSent: () => void;
   onAgentChange: (slug: string | null) => void;
+  onAgentModeChange: (mode: AgentCoordinationMode) => void;
   onFontSizeCycle: () => void;
   onFullscreenToggle: () => void;
   onConnectedFilesChange: (next: string[]) => void;
@@ -722,6 +730,7 @@ function Tile({
   onAttach,
   onPendingCommandSent,
   onAgentChange,
+  onAgentModeChange,
   onFontSizeCycle,
   onFullscreenToggle,
   onConnectedFilesChange,
@@ -737,6 +746,22 @@ function Tile({
   const [contextMenu, setContextMenu] = React.useState<{ x: number; y: number } | null>(null);
   const [isEditingName, setIsEditingName] = React.useState(false);
   const [editNameValue, setEditNameValue] = React.useState('');
+  const tileRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const onFocusTerminal = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId: string; paneId?: string }>).detail;
+      if (!detail?.sessionId) return;
+      const matchesPane = detail.paneId != null && detail.paneId === leaf.id;
+      const matchesSession = detail.sessionId === leaf.sessionId;
+      if (!matchesPane && !matchesSession) return;
+      setIsFocused(true);
+      tileRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      window.setTimeout(() => setIsFocused(false), 2500);
+    };
+    window.addEventListener('jarvis:terminal:focus', onFocusTerminal as EventListener);
+    return () => window.removeEventListener('jarvis:terminal:focus', onFocusTerminal as EventListener);
+  }, [leaf.id, leaf.sessionId]);
 
   const handleAskJarvis = () => {
     window.dispatchEvent(
@@ -783,6 +808,7 @@ function Tile({
       const spawnedLeaf = newLeaf({
         command: currentLeaf.command || defaultCommand,
         agentSlug: currentLeaf.agentSlug,
+        agentMode: currentLeaf.agentMode,
         fontSize: currentLeaf.fontSize,
         projectId: currentLeaf.projectId ?? projectId ?? null,
       }) as Extract<PaneNode, { kind: 'leaf' }>;
@@ -1013,7 +1039,9 @@ function Tile({
   );
 
   return (
-    <div className={cn(
+    <div
+      ref={tileRef}
+      className={cn(
       "flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-lg border bg-panel shadow-soft transition-[border-color,box-shadow,outline-color] duration-300",
       isFocused ? "animate-terminal-focus border-accent-copper/80 ring-2 ring-accent-copper/30" : "border-border",
       isDragOver && "jarvis-terminal-drop-hover border-accent-copper border-2 shadow-lg ring-4 ring-accent-copper/40",
@@ -1089,7 +1117,9 @@ function Tile({
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <AgentRolePicker
             agentSlug={leaf.agentSlug ?? null}
+            agentMode={leaf.agentMode ?? 'default'}
             onChange={onAgentChange}
+            onModeChange={onAgentModeChange}
           />
           {isEditingName ? (
             <input
@@ -1164,6 +1194,7 @@ function Tile({
           cwd={leaf.cwd}
           fontSize={fontSize}
           agentSlug={leaf.agentSlug ?? null}
+          agentMode={leaf.agentMode ?? 'default'}
           onReady={onAttach}
           onPendingCommandSent={onPendingCommandSent}
           onFocus={() => setIsFocused(true)}

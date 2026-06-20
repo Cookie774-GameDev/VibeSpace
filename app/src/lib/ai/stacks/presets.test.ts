@@ -31,15 +31,20 @@ describe('Hive presets', () => {
     ]);
   });
 
-  it('builds Fast and Balanced from the new simulation tier doc', () => {
+  it('builds Fast from the two-step pipeline (internal, not exposed)', () => {
     expect(stepsForPreset('fast', 'general').map((step) => [step.provider, step.model])).toEqual([
       ['google', 'gemini-3.5-flash'],
       ['anthropic', 'claude-opus-4-8'],
     ]);
+  });
+
+  it('builds Balanced as the 5-step Hive Balance pipeline', () => {
     expect(stepsForPreset('balanced', 'general').map((step) => [step.provider, step.model])).toEqual([
-      ['xai', 'grok-4.3'],
-      ['anthropic', 'claude-opus-4-8'],
-      ['google', 'gemini-3.5-flash'],
+      ['google', 'gemini-3.5-flash-high'],
+      ['openrouter', 'minimax/minimax-m3'],
+      ['openrouter', 'zhipuai/glm-5.2'],
+      ['deepseek', 'deepseek-v4-pro-max'],
+      ['openai', 'gpt-5.4-mini'],
     ]);
   });
 

@@ -1,44 +1,10 @@
 import type { DragEvent, KeyboardEvent } from 'react';
-import { useMemo } from 'react';
-import { Clock } from 'lucide-react';
-import { Avatar } from '@/components/ui/avatar';
+import { Check, Clock, GripVertical } from 'lucide-react';
 import { cn, formatRelative } from '@/lib/utils';
-import type { Task, TaskPriority } from '@/types/task';
-import type { Project } from '@/lib/db/schema';
-import type { Agent } from '@/types/agent';
-
-/**
- * One draggable task card in the kanban grid. Renders a severity pill
- * derived from the task's priority, an optional due-date badge, the title
- * (clamped at 2 lines), one line of notes, and a footer with the project
- * chip + agent avatar + time-since-updated.
- *
- * `isDragging` — controlled by the parent so the visual hint tracks
- * `draggingTaskId` even after the source row reorders during drop.
- *
- * `reducedMotion` — when the user prefers reduced motion we keep the card
- * fully visible while dragging (the column ring still indicates the drop
- * target) so we don't mute it via opacity transitions.
- */
-
-const PRIORITY_TO_SEVERITY: Record<TaskPriority, 'crit' | 'high' | 'med' | 'low'> = {
-  urgent: 'crit',
-  high: 'high',
-  normal: 'med',
-  low: 'low',
-};
-
-const PRIORITY_LABEL: Record<TaskPriority, string> = {
-  urgent: 'Urgent',
-  high: 'High',
-  normal: 'Med',
-  low: 'Low',
-};
+import type { MilestoneItem } from '@/features/inspector/types';
 
 export interface KanbanCardProps {
-  task: Task;
-  project?: Project;
-  agent?: Agent;
+  item: MilestoneItem;
   isDragging?: boolean;
   reducedMotion?: boolean;
   onDragStart: (e: DragEvent<HTMLDivElement>) => void;
@@ -46,23 +12,21 @@ export interface KanbanCardProps {
   onClick: () => void;
 }
 
+const STATUS_LABEL = {
+  todo: 'Todo',
+  working: 'In progress',
+  done: 'Done',
+} as const;
+
 export function KanbanCard({
-  task,
-  project,
-  agent,
+  item,
   isDragging,
   reducedMotion,
   onDragStart,
   onDragEnd,
   onClick,
 }: KanbanCardProps) {
-  const sev = PRIORITY_TO_SEVERITY[task.priority];
-  const sevLabel = PRIORITY_LABEL[task.priority];
-
-  const dueLabel = useMemo(
-    () => (task.due_at !== undefined ? formatRelative(task.due_at) : null),
-    [task.due_at],
-  );
+  const done = item.status === 'done';
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -80,7 +44,7 @@ export function KanbanCard({
       onDragEnd={onDragEnd}
       onClick={onClick}
       onKeyDown={onKey}
-      aria-label={`Task: ${task.title}`}
+      aria-label={`Milestone: ${item.title}`}
       className={cn(
         'group cursor-grab select-none rounded-lg border border-border bg-paper p-3',
         'transition-shadow transition-colors',
@@ -89,71 +53,56 @@ export function KanbanCard({
         'active:cursor-grabbing',
         isDragging && !reducedMotion && 'opacity-40',
         isDragging && reducedMotion && 'ring-1 ring-accent-copper',
+        done && 'opacity-90',
       )}
     >
-      {/* Top row — severity pill + optional due date */}
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className={cn('sev-pill', sev)}>{sevLabel}</span>
-        {dueLabel && (
-          <span className="inline-flex items-center gap-1 text-metadata text-muted-foreground">
-            <Clock className="h-3 w-3" />
-            {dueLabel}
-          </span>
-        )}
-      </div>
-
-      {/* Title (2-line clamp) */}
-      <div className="font-medium text-body text-foreground line-clamp-2">{task.title}</div>
-
-      {/* Description (1-line clamp) */}
-      {task.notes && (
-        <div className="mt-1 line-clamp-1 text-secondary text-muted-foreground">{task.notes}</div>
-      )}
-
-      {/* Footer — project chip · agent avatar · time-since-updated */}
-      <div className="mt-3 flex items-center gap-2 text-metadata text-muted-foreground">
-        {project && <ProjectChip project={project} />}
-        <span className="ml-auto inline-flex items-center gap-1.5">
-          {agent && (
-            <Avatar
-              seed={agent.slug}
-              initials={agent.name.charAt(0)}
-              size={16}
-              title={agent.name}
-            />
+        <span
+          className={cn(
+            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-metadata',
+            item.status === 'working' && 'bg-accent-copper/15 text-accent-copper',
+            item.status === 'todo' && 'bg-muted/60 text-muted-foreground',
+            item.status === 'done' && 'bg-accent-copper/20 text-accent-copper',
           )}
-          <span title={new Date(task.updated_at).toLocaleString()}>
-            {formatRelative(task.updated_at)}
+        >
+          {done ? <Check className="h-3 w-3" /> : null}
+          {STATUS_LABEL[item.status]}
+        </span>
+        <span className="inline-flex items-center gap-1 text-metadata text-muted-foreground">
+          <Clock className="h-3 w-3" />
+          <span title={new Date(item.updatedAt).toLocaleString()}>
+            {formatRelative(item.updatedAt)}
           </span>
         </span>
       </div>
-    </div>
-  );
-}
 
-function ProjectChip({ project }: { project: Project }) {
-  const hue = project.color_hue;
-  if (hue === undefined) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-metadata text-muted-foreground">
-        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
-        {project.name}
-      </span>
-    );
-  }
-  return (
-    <span
-      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-metadata"
-      style={{
-        backgroundColor: `hsl(${hue} 40% 30% / 0.45)`,
-        color: `hsl(${hue} 60% 80%)`,
-      }}
-    >
-      <span
-        className="h-1.5 w-1.5 rounded-full"
-        style={{ backgroundColor: `hsl(${hue} 60% 60%)` }}
-      />
-      {project.name}
-    </span>
+      <div className="flex items-start gap-1.5">
+        <GripVertical
+          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70"
+          aria-hidden
+        />
+        <div className="min-w-0 flex-1">
+          <div
+            className={cn(
+              'font-medium text-body text-foreground line-clamp-2',
+              done && 'line-through text-muted-foreground',
+            )}
+          >
+            {item.title}
+          </div>
+          {item.description ? (
+            <div className="mt-1 line-clamp-2 text-secondary text-muted-foreground">
+              {item.description}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {item.completedAt ? (
+        <div className="mt-2 text-metadata text-muted-foreground">
+          Completed {formatRelative(item.completedAt)}
+        </div>
+      ) : null}
+    </div>
   );
 }

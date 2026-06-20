@@ -4,50 +4,33 @@ import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import type { Task, TaskStatus } from '@/types/task';
-import type { Project } from '@/lib/db/schema';
-import type { Agent } from '@/types/agent';
+import type { MilestoneItem, MilestoneStatus } from '@/features/inspector/types';
 import { KanbanCard } from './KanbanCard';
 
-/**
- * One kanban column. Owns the column header, the inline-create input, the
- * drop-zone visual + handlers, and the stack of cards.
- *
- * Drag math: the column is the drop target. We `preventDefault()` on
- * `dragover` so the browser allows a `drop`, and toggle a copper ring while
- * the drag is hovering. The column doesn't read `dataTransfer` itself; the
- * page hands us the active drag id via `draggingTaskId` so we can mute the
- * source card during the gesture.
- */
-
 export interface KanbanColumnProps {
-  status: TaskStatus;
+  status: MilestoneStatus;
   title: string;
-  tasks: Task[];
-  projects: Map<string, Project>;
-  agents: Map<string, Agent>;
-  draggingTaskId: string | null;
+  items: MilestoneItem[];
+  draggingItemId: string | null;
   reducedMotion: boolean;
-  onDragStartTask: (taskId: string) => void;
-  onDragEndTask: () => void;
-  onDropTask: (taskId: string, target: TaskStatus) => void;
-  onCreateTask: (status: TaskStatus, title: string) => Promise<void> | void;
-  onOpenTask: (task: Task) => void;
+  onDragStartItem: (itemId: string) => void;
+  onDragEndItem: () => void;
+  onDropItem: (itemId: string, target: MilestoneStatus) => void;
+  onCreateItem: (status: MilestoneStatus, title: string) => void;
+  onOpenItem: (item: MilestoneItem) => void;
 }
 
 export function KanbanColumn({
   status,
   title,
-  tasks,
-  projects,
-  agents,
-  draggingTaskId,
+  items,
+  draggingItemId,
   reducedMotion,
-  onDragStartTask,
-  onDragEndTask,
-  onDropTask,
-  onCreateTask,
-  onOpenTask,
+  onDragStartItem,
+  onDragEndItem,
+  onDropItem,
+  onCreateItem,
+  onOpenItem,
 }: KanbanColumnProps) {
   const [isOver, setIsOver] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -55,28 +38,25 @@ export function KanbanColumn({
   const dragDepth = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Reset hover state if the active drag ends elsewhere (e.g. dropped on
-  // another column). We can't rely on dragleave alone because nested
-  // children can fire enter/leave pairs that confuse the boolean.
   useEffect(() => {
-    if (!draggingTaskId) {
+    if (!draggingItemId) {
       dragDepth.current = 0;
       setIsOver(false);
     }
-  }, [draggingTaskId]);
+  }, [draggingItemId]);
 
   useEffect(() => {
     if (creating) inputRef.current?.focus();
   }, [creating]);
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
-    if (!draggingTaskId) return;
+    if (!draggingItemId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
   };
 
   const onDragEnter = (e: DragEvent<HTMLDivElement>) => {
-    if (!draggingTaskId) return;
+    if (!draggingItemId) return;
     e.preventDefault();
     dragDepth.current += 1;
     setIsOver(true);
@@ -91,19 +71,19 @@ export function KanbanColumn({
     e.preventDefault();
     dragDepth.current = 0;
     setIsOver(false);
-    const taskId = e.dataTransfer.getData('text/jarvis-task') || draggingTaskId;
-    if (!taskId) return;
-    onDropTask(taskId, status);
+    const itemId = e.dataTransfer.getData('text/jarvis-milestone') || draggingItemId;
+    if (!itemId) return;
+    onDropItem(itemId, status);
   };
 
-  const submitDraft = async () => {
-    const title = draft.trim();
-    if (!title) {
+  const submitDraft = () => {
+    const trimmed = draft.trim();
+    if (!trimmed) {
       setCreating(false);
       setDraft('');
       return;
     }
-    await onCreateTask(status, title);
+    onCreateItem(status, trimmed);
     setDraft('');
     setCreating(false);
   };
@@ -111,7 +91,7 @@ export function KanbanColumn({
   const onDraftKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      void submitDraft();
+      submitDraft();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       setCreating(false);
@@ -127,72 +107,67 @@ export function KanbanColumn({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={cn(
-        'flex h-full min-h-[320px] flex-col gap-4 rounded-xl bg-paper-soft p-6 shadow-soft',
+        'flex h-full min-h-[360px] flex-col gap-4 rounded-xl bg-paper-soft p-6 shadow-soft',
         'transition-[box-shadow] duration-150',
         isOver && 'ring-1 ring-accent-copper',
       )}
     >
-      {/* Header */}
       <header className="flex items-center justify-between gap-2">
         <div className="flex items-baseline gap-2">
           <h2 className="font-display text-page-title text-foreground">{title}</h2>
-          <span className="eyebrow" aria-label={`${tasks.length} tasks`}>
-            {tasks.length}
+          <span className="eyebrow" aria-label={`${items.length} milestones`}>
+            {items.length}
           </span>
         </div>
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label={`Add task to ${title}`}
-          title={`Add task to ${title}`}
+          aria-label={`Add milestone to ${title}`}
+          title={`Add milestone to ${title}`}
           onClick={() => setCreating((v) => !v)}
         >
           <Plus className="h-3.5 w-3.5" />
         </Button>
       </header>
 
-      {/* Inline create form */}
-      {creating && (
+      {creating ? (
         <div className="rounded-lg border border-border bg-paper p-2">
           <Input
             ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onDraftKey}
-            onBlur={() => void submitDraft()}
-            placeholder={`New task in ${title.toLowerCase()}`}
+            onBlur={submitDraft}
+            placeholder={`New milestone in ${title.toLowerCase()}`}
             className="h-7"
           />
         </div>
-      )}
+      ) : null}
 
-      {/* Body */}
       <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {tasks.length === 0 ? (
+        {items.length === 0 ? (
           <div
             className={cn(
               'flex flex-1 items-center justify-center rounded-lg border border-dashed border-border-mid/60 px-3 py-6 text-center text-secondary text-muted-foreground',
               isOver && 'border-accent-copper/60 text-foreground',
             )}
           >
-            Drop a task here, or hit + to add one.
+            Drop a milestone here, or hit + to add one.
           </div>
         ) : (
-          tasks.map((t) => (
+          items.map((item) => (
             <KanbanCard
-              key={t.id}
-              task={t}
-              project={t.project_id ? projects.get(t.project_id) : undefined}
-              agent={t.agent_owner ? agents.get(t.agent_owner) : undefined}
-              isDragging={draggingTaskId === t.id}
+              key={item.id}
+              item={item}
+              isDragging={draggingItemId === item.id}
               reducedMotion={reducedMotion}
               onDragStart={(e) => {
                 e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/jarvis-task', t.id);
-                onDragStartTask(t.id);
+                e.dataTransfer.setData('text/jarvis-milestone', item.id);
+                onDragStartItem(item.id);
               }}
-              onDragEnd={onDragEndTask}
-              onClick={() => onOpenTask(t)}
+              onDragEnd={onDragEndItem}
+              onClick={() => onOpenItem(item)}
             />
           ))
         )}

@@ -1,17 +1,14 @@
 /**
  * Singleton skill / agent registry.
  *
- * Wraps `loadAllSkills` + `loadAllAgents` with an in-memory map and a
- * subscribe API so the SkillsPage can react to toggles without
- * re-parsing every render.
- *
- * The contract (per Slice 5 spec) supports both `list/get/toggle` and
- * the alias names `getAll/setEnabled` so consumers from either naming
- * convention work without translation.
+ * Built-in presets + user custom skills come from `skillCatalog` /
+ * `skillsStore`. Legacy bundled `.md` agents are still loaded from disk.
  */
 
 import type { SkillManifest } from './loader';
-import { loadAllAgents, loadAllSkills } from './loader';
+import { getUnifiedSkillManifests } from './skillCatalog';
+import { loadAllAgents } from './loader';
+import { readSkillsStore } from './skillsStore';
 import { notifyDone } from '@/lib/notifications';
 
 type Listener = (entries: SkillManifest[]) => void;
@@ -19,7 +16,6 @@ type Listener = (entries: SkillManifest[]) => void;
 const entries = new Map<string, SkillManifest>();
 const listeners = new Set<Listener>();
 let loaded = false;
-let loadPromise: Promise<SkillManifest[]> | null = null;
 
 function notify(): void {
   const arr = Array.from(entries.values());
@@ -34,36 +30,41 @@ function notify(): void {
 
 function setEntries(arr: SkillManifest[]): void {
   entries.clear();
-  for (const m of arr) entries.set(m.name, m);
+  for (const m of arr) entries.set(m.catalogId ?? m.name, m);
   notify();
+}
+
+function refreshFromCatalog(): SkillManifest[] {
+  const skills = getUnifiedSkillManifests();
+  const agents = entries.size > 0 ? Array.from(entries.values()).filter((m) => m.kind === 'agent') : [];
+  const all = [...skills, ...agents];
+  setEntries(all);
+  return all;
 }
 
 export const skillRegistry = {
   /**
-   * Load builtins (and, in a future wave, the user's project `.jarvis/`).
-   * Idempotent — concurrent callers share the same in-flight Promise.
+   * Seed the unified catalog (16 presets + custom skills) and merge any
+   * bundled agent manifests. Idempotent.
    */
   async loadFromDisk(opts?: { projectRoot?: string }): Promise<SkillManifest[]> {
-    if (loadPromise) return loadPromise;
-    loadPromise = (async () => {
-      const [skills, agents] = await Promise.all([loadAllSkills(opts), loadAllAgents(opts)]);
-      const all = [...skills, ...agents];
-      setEntries(all);
-      loaded = true;
-      return all;
-    })();
-    try {
-      return await loadPromise;
-    } finally {
-      // Allow re-load via explicit `reload()` later; for now keep cached.
-      loadPromise = null;
-    }
+    const agents = await loadAllAgents(opts);
+    const skills = getUnifiedSkillManifests();
+    const all = [...skills, ...agents];
+    setEntries(all);
+    loaded = true;
+    return all;
   },
 
-  /** Force a re-read from disk on next call. */
-  reload(opts?: { projectRoot?: string }): Promise<SkillManifest[]> {
+  /** Re-read catalog + agent manifests. */
+  async reload(opts?: { projectRoot?: string }): Promise<SkillManifest[]> {
     loaded = false;
     return skillRegistry.loadFromDisk(opts);
+  },
+
+  /** Refresh in-memory manifests after store edits (no disk IO). */
+  refresh(): void {
+    refreshFromCatalog();
   },
 
   list(kind?: 'skill' | 'agent'): SkillManifest[] {
@@ -72,7 +73,6 @@ export const skillRegistry = {
     return arr.filter((m) => m.kind === kind);
   },
 
-  /** Alias of `list()` — kept for parity with code that already uses this name. */
   getAll(): SkillManifest[] {
     return Array.from(entries.values());
   },
@@ -83,13 +83,18 @@ export const skillRegistry = {
 
   toggle(name: string, enabled: boolean): void {
     const cur = entries.get(name);
-    if (!cur) return;
+    if (!cur || cur.kind !== 'skill') return;
+    const store = readSkillsStore();
+    if (cur.isPreset) {
+      store.setSkillEnabled(name, enabled, 'preset');
+    } else {
+      store.setSkillEnabled(name, enabled, 'custom');
+    }
     entries.set(name, { ...cur, enabled });
     notify();
     void notifyDone('skills', enabled ? 'Skill enabled' : 'Skill disabled', cur.title || cur.name);
   },
 
-  /** Alias of `toggle()` for the consumer that uses this name. */
   setEnabled(name: string, enabled: boolean): void {
     skillRegistry.toggle(name, enabled);
   },
@@ -101,7 +106,6 @@ export const skillRegistry = {
     };
   },
 
-  /** Inspector helper: has the initial load resolved? */
   isLoaded(): boolean {
     return loaded;
   },

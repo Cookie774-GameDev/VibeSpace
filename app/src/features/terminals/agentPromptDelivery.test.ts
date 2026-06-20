@@ -285,6 +285,17 @@ describe('buildAgentSpawnEnv', () => {
     const env = buildAgentSpawnEnv({ agentSlug: 'coder' });
     expect(env).toEqual({ JARVIS_AGENT_SLUG: 'coder' });
   });
+
+  it('returns no app-provided agent env vars in no-context mode', () => {
+    const env = buildAgentSpawnEnv({
+      agentSlug: 'coder',
+      agentName: 'Coder',
+      agentMode: 'no-context',
+      cwd: 'C:\\repo',
+      projectName: 'VibeSpace',
+    });
+    expect(env).toEqual({});
+  });
 });
 
 describe('interactive CLI injection helpers', () => {
@@ -415,6 +426,62 @@ describe('deliverAgentTerminalContext', () => {
     expect(geminiMd).toContain(MANAGED_BLOCK_START);
     expect(geminiMd).toContain('The code word is APPLE.');
     expect(geminiMd).toContain('Shared operating rules for every agent');
+  });
+
+  it('adds coordination summary to instruction files only in coordinated mode', async () => {
+    useAgentStore.getState().registerAgent(makeAgent('critic', 'Critic', 'Review carefully.'));
+    fsMocks.readTextFile.mockImplementation(async (path: string) => notFound(path));
+    fsMocks.writeTextFile.mockImplementation(async (path: string) => okWrite(path));
+
+    const result = await deliverAgentTerminalContext({
+      cwd: CWD,
+      agentSlug: 'critic',
+      agentMode: 'coordinated',
+      terminalId: 'tty-a',
+      coordinationSummary: '## Coordination Summary\n- Gemini owns AgentRolePicker.tsx',
+    });
+
+    expect(result.ok).toBe(true);
+    const agentsMd = writtenContent(AGENTS);
+    expect(agentsMd).toContain('## Terminal identity');
+    expect(agentsMd).toContain('tty-a');
+    expect(agentsMd).toContain('Gemini owns AgentRolePicker.tsx');
+  });
+
+  it('does not inject instructions or coordination files for fresh no-context mode', async () => {
+    useAgentStore.getState().registerAgent(makeAgent('coder', 'Coder', 'The code word is APPLE.'));
+    fsMocks.readTextFile.mockImplementation(async (path: string) => notFound(path));
+    fsMocks.writeTextFile.mockImplementation(async (path: string) => okWrite(path));
+
+    const result = await deliverAgentTerminalContext({
+      cwd: CWD,
+      agentSlug: 'coder',
+      agentMode: 'no-context',
+      coordinationSummary: 'Should never leak.',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
+  });
+
+  it('clears stale managed blocks in no-context mode without touching the coordination doc', async () => {
+    const existing = `# Keep me\n\n${wrapManagedBlock('stale APPLE briefing')}\n`;
+    fsMocks.readTextFile.mockImplementation(async (path: string) =>
+      path === AGENTS || path === CLAUDE || path === GEMINI ? okRead(path, existing) : notFound(path),
+    );
+    fsMocks.writeTextFile.mockImplementation(async (path: string) => okWrite(path));
+
+    const result = await deliverAgentTerminalContext({
+      cwd: CWD,
+      agentSlug: 'coder',
+      agentMode: 'no-context',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(writtenContent(AGENTS)).not.toContain('APPLE');
+    expect(writtenContent(CLAUDE)).not.toContain('APPLE');
+    expect(writtenContent(GEMINI)).not.toContain('APPLE');
+    expect(fsMocks.writeTextFile.mock.calls.some((call) => call[0] === COORD)).toBe(false);
   });
 
   it('does not overwrite an existing coordination doc', async () => {

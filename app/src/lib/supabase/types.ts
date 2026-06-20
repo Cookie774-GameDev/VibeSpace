@@ -34,9 +34,9 @@ export type Json =
  * `HostedJarvis.tsx` toggle still type-check; the DB check constraint
  * permits all of them.
  */
-export type Tier = 'free' | 'starter' | 'pro' | 'ultra' | 'plus' | 'byok-only';
+export type Tier = 'free' | 'starter' | 'pro' | 'ultra' | 'apex' | 'plus' | 'byok-only';
 export type UsageStatus = 'ok' | 'rate_limit' | 'error';
-export type SubscriptionPlan = 'free' | 'starter' | 'pro' | 'ultra';
+export type SubscriptionPlan = 'free' | 'starter' | 'pro' | 'ultra' | 'apex';
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
 export type MessageRole = 'user' | 'assistant' | 'agent' | 'system' | 'tool';
 export type TaskStatus =

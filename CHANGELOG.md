@@ -2,6 +2,27 @@
 
 All notable changes to Jarvis are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.45] - 2026-06-19
+
+### Added
+
+- **Unified skills catalog** — SkillEditor, markdown preview, built-in + custom skills; `/skills` picker uses one catalog.
+- **Inspector panel** — Today, Quick Launch, Context, Tools Run, Trace milestones, Active Work.
+- **Terminal agent coordination** — Rust-backed ledger, client locks, mode-aware `agentPromptPayload`.
+- **Apex billing tier** — plan limits, checkout, and Supabase migration `0027_apex_tier.sql`.
+- **Windows trust docs** — `docs/TRUST_AND_WINDOWS.md`, publisher metadata, `verify-release-checksum.ps1`.
+
+### Improved
+
+- **Kanban** — milestone-driven board aligned with Inspector trace store.
+- **Hive** — balanced preset and frontier model updates.
+- **Agent prompts** — richer terminal briefing delivery and tests.
+
+### Fixed
+
+- **Composer mic** — TopBar mic uses composer STT, separate from Jarvis voice module.
+- **Terminals** — viewport isolation and restore-session edge cases.
+
 ## [0.1.44] - 2026-06-17
 
 ### Added

@@ -126,6 +126,8 @@ interface UIState {
   // V2 — accessibility
   /** Show the speech-to-text mic button in the chat composer. */
   composerStt: boolean;
+  /** True while composer toolbar dictation is active (chat mic or top-bar mic). Transient. */
+  composerSttListening: boolean;
   /** Global default font size for newly spawned or unscaled terminal panes. */
   defaultTerminalFontSize: number;
 
@@ -205,6 +207,7 @@ interface UIState {
   setAssistantOpen: (v: boolean) => void;
   setWhatsNewOpen: (v: boolean) => void;
   setComposerStt: (v: boolean) => void;
+  setComposerSttListening: (v: boolean) => void;
   setDefaultTerminalFontSize: (v: number) => void;
   setNotificationMaster: (v: boolean) => void;
   setDoneNotification: (key: DoneNotificationKey, enabled: boolean) => void;
@@ -247,6 +250,7 @@ const defaults: Pick<
   | 'assistantOpen'
   | 'whatsNewOpen'
   | 'composerStt'
+  | 'composerSttListening'
   | 'defaultTerminalFontSize'
   | 'notificationMaster'
   | 'doneNotifications'
@@ -285,6 +289,7 @@ const defaults: Pick<
   assistantOpen: false,
   whatsNewOpen: false,
   composerStt: true,
+  composerSttListening: false,
   defaultTerminalFontSize: 9,
   notificationMaster: false,
   doneNotifications: {
@@ -377,6 +382,7 @@ export const useUIStore = create<UIState>()(
       setAssistantOpen: (v) => set({ assistantOpen: v }),
       setWhatsNewOpen: (v) => set({ whatsNewOpen: v }),
       setComposerStt: (v) => set({ composerStt: v }),
+      setComposerSttListening: (v) => set({ composerSttListening: v }),
       setDefaultTerminalFontSize: (v) =>
         set({ defaultTerminalFontSize: Math.max(1, Math.min(100, v)) }),
       setNotificationMaster: (v) => set({ notificationMaster: v }),

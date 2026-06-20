@@ -71,7 +71,7 @@ import {
 import { StackPicker } from './StackPicker';
 import { InputToken, TokenList } from './InputToken';
 import { getChatDragKind, getChatDropPayload } from './dropPayload';
-import { SKILLS } from '@/lib/agents/skills';
+import { getSkillPickerOptions, getAllCatalogSkills } from '@/features/skills/skillCatalog';
 import {
   REAL_CHAT_PROVIDERS,
   selectLocalModelForChat,
@@ -280,6 +280,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
   const [sttListening, setSttListening] = useState(false);
   const [sttInterim, setSttInterim] = useState('');
   const composerSttEnabled = useUIStore((s) => s.composerStt);
+  const setComposerSttListening = useUIStore((s) => s.setComposerSttListening);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const slashTypeaheadRef = useRef<SlashCommandTypeaheadRef>(null);
@@ -377,11 +378,11 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     }
 
     if (cmd === 'skills') {
-      return Object.values(SKILLS).map((skill) => ({
+      return getSkillPickerOptions().map((skill) => ({
         id: skill.id,
-        label: skill.name,
+        label: skill.emoji ? `${skill.emoji} ${skill.label}` : skill.label,
         description: skill.description,
-        metadata: skill.tools.length > 0 ? skill.tools.join(', ') : 'prompt',
+        metadata: skill.metadata,
       }));
     }
 
@@ -720,8 +721,8 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
       return true;
     }
     if (cmd === 'skills') {
-      const available = Object.values(SKILLS)
-        .map((skill) => `- ${skill.name} (${skill.id}) ������ ${skill.description}`)
+      const available = getAllCatalogSkills()
+        .map((skill) => `- ${skill.name} (${skill.id}) - ${skill.description}`)
         .join('\n');
       await addSystem(`Available skills:\n${available}\n\nType /skills and choose one from the dropdown to apply it to your next message.`);
       return true;
@@ -1520,17 +1521,25 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     };
   }, [sttListening]);
 
-  // Ctrl+CapsLock is dispatched globally; only the focused composer consumes it.
+  // Ctrl+CapsLock is dispatched globally; composer or top-bar mic consume it.
   useEffect(() => {
     const onToggle = (event: Event) => {
       if (!composerSttEnabled) return;
-      if (document.activeElement !== textareaRef.current) return;
+      const detail = (event as CustomEvent<{ source?: string }>).detail;
+      const fromToolbar = detail?.source === 'toolbar';
+      if (!fromToolbar && document.activeElement !== textareaRef.current) return;
       event.preventDefault?.();
+      if (fromToolbar) textareaRef.current?.focus();
       toggleStt();
     };
     window.addEventListener('jarvis:stt:toggle', onToggle);
     return () => window.removeEventListener('jarvis:stt:toggle', onToggle);
   }, [composerSttEnabled, sttListening]);
+
+  useEffect(() => {
+    setComposerSttListening(sttListening);
+    return () => setComposerSttListening(false);
+  }, [setComposerSttListening, sttListening]);
 
   return (
     <div className={cn('border-t border-border bg-panel', compact && 'text-[12px]')}>
@@ -1938,3 +1947,4 @@ function ModelPicker({
     </Popover>
   );
 }
+

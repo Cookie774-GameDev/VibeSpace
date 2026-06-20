@@ -17,12 +17,52 @@
  */
 import { quickLinkRepo } from '@/lib/db';
 import { toast } from '@/components/ui/toast';
+import { openExternal, isTauri } from '@/lib/tauri';
 import { useUIStore } from '@/stores/ui';
 import type { QuickLink } from '@/types/quick-link';
 
 export interface LaunchResult {
   ok: boolean;
   reason?: string;
+}
+
+function isHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
+}
+
+async function openTarget(link: QuickLink): Promise<LaunchResult> {
+  const raw = link.url.trim();
+  if (!raw) return { ok: false, reason: 'Empty target' };
+
+  if (link.kind === 'jarvis-action') {
+    return { ok: true };
+  }
+
+  if (link.kind === 'file' || link.kind === 'app') {
+    if (!isTauri) {
+      toast.warning('Desktop only', `${link.label} requires the VibeSpace desktop app.`);
+      return { ok: false, reason: 'Not in Tauri runtime' };
+    }
+    const path = raw.startsWith('file://') ? raw.slice('file://'.length) : raw;
+    try {
+      await openExternal(path);
+      return { ok: true };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Launch failed';
+      toast.error(`Could not open ${link.label}`, reason);
+      return { ok: false, reason };
+    }
+  }
+
+  const url = isHttpUrl(raw) ? raw : `https://${raw}`;
+  try {
+    await openExternal(url);
+    return { ok: true };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'Unknown launch error';
+    toast.error(`Could not open ${link.label}`, reason);
+    return { ok: false, reason };
+  }
 }
 
 /**
@@ -45,16 +85,7 @@ export async function launchLink(link: QuickLink): Promise<LaunchResult> {
     case 'soundcloud':
     case 'app':
     case 'file': {
-      try {
-        // V2 always opens externally. V3 will branch on `behavior` to drop
-        // into the in-app player or pip window.
-        window.open(link.url, '_blank', 'noopener,noreferrer');
-        return { ok: true };
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : 'Unknown launch error';
-        toast.error(`Could not open ${link.label}`, reason);
-        return { ok: false, reason };
-      }
+      return openTarget(link);
     }
 
     case 'jarvis-action': {

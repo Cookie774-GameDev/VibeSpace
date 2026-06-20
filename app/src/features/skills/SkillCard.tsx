@@ -8,18 +8,10 @@
  * Slice 5 owns the manifest + registry. We only consume `SkillManifest` here.
  */
 import * as React from 'react';
-import { Bot, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import type { SkillManifest } from '@/features/skills/loader';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
-
-const SEVERITY_LABEL: Record<NonNullable<SkillManifest['severity']>, string> = {
-  crit: 'CRIT',
-  high: 'HIGH',
-  med: 'MED',
-  low: 'LOW',
-  info: 'INFO',
-};
 
 /**
  * Pull the first prose paragraph out of a markdown body.
@@ -57,22 +49,25 @@ export function SkillCard({
   onSelect,
   onToggleEnabled,
 }: SkillCardProps) {
-  const severity = manifest.severity ?? 'info';
-  const Icon = manifest.kind === 'agent' ? Bot : Sparkles;
-  const summary = React.useMemo(() => firstProseParagraph(manifest.body), [manifest.body]);
+  const id = manifest.catalogId ?? manifest.name;
+  const hue = manifest.colorHue ?? 35;
+  const Icon = Sparkles;
+  const summary = React.useMemo(
+    () => manifest.description || firstProseParagraph(manifest.body),
+    [manifest.description, manifest.body],
+  );
 
   return (
     <div
       role="button"
       tabIndex={0}
       aria-pressed={selected}
-      onClick={() => onSelect(manifest.name)}
+      onClick={() => onSelect(id)}
       onKeyDown={(e) => {
-        // Only react to keys hitting the card itself, never inner controls.
         if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onSelect(manifest.name);
+          onSelect(id);
         }
       }}
       className={cn(
@@ -82,24 +77,25 @@ export function SkillCard({
         'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper',
         selected && 'ring-1 ring-accent-copper border-accent-copper/60',
       )}
+      style={{ borderLeftWidth: 3, borderLeftColor: `hsl(${hue}, 50%, 45%)` }}
     >
-      {/* Top row: severity pill + serif title */}
       <div className="flex items-start gap-2">
-        <span className={cn('sev-pill', severity, 'shrink-0 mt-0.5')}>
-          {SEVERITY_LABEL[severity]}
+        <span className="text-xl shrink-0 leading-none" aria-hidden>
+          {manifest.emoji ?? (manifest.isPreset ? '⚙️' : '✨')}
         </span>
         <div className="flex-1 min-w-0 font-display font-semibold text-foreground leading-tight text-[15px]">
           {manifest.title}
         </div>
       </div>
 
-      {/* Subtitle row: kind chip + Lucide icon + optional source tag */}
       <div className="flex items-center gap-1.5 text-metadata text-muted-foreground">
         <Icon className="h-3.5 w-3.5 text-accent-copper" />
-        <span className="uppercase tracking-wider font-semibold">{manifest.kind}</span>
-        {manifest.source === 'project' && (
+        <span className="uppercase tracking-wider font-semibold">
+          {manifest.isPreset ? 'preset' : 'custom'}
+        </span>
+        {manifest.source === 'project' && !manifest.isPreset && (
           <span className="ml-1 px-1.5 py-px rounded-sm border border-border text-[10px] font-medium">
-            project
+            local
           </span>
         )}
       </div>
@@ -130,7 +126,7 @@ export function SkillCard({
         >
           <Switch
             checked={!!manifest.enabled}
-            onCheckedChange={(v) => onToggleEnabled(manifest.name, v)}
+            onCheckedChange={(v) => onToggleEnabled(id, v)}
             aria-label={manifest.enabled ? 'Disable skill' : 'Enable skill'}
           />
         </div>

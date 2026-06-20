@@ -1,5 +1,5 @@
-import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { Sparkles, Target } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -12,59 +12,24 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/auth';
-import { useAgentStore } from '@/stores/agents';
-import { taskRepo } from '@/lib/db/repositories';
-import { cn } from '@/lib/utils';
-import type { Task, TaskPriority, TaskStatus } from '@/types/task';
-import type { ProjectId, TaskId, WorkspaceId } from '@/types/common';
-import type { Project } from '@/lib/db/schema';
+import { useMilestonesStore } from '@/features/inspector/milestonesStore';
+import { useWorkspaceOpenTasks } from '@/features/inspector/workspaceTasks';
+import { useWorkspaceAnalyticsStore } from '@/features/inspector/workspaceAnalytics';
+import { celebrate } from '@/features/celebrate';
+import { cn, formatRelative } from '@/lib/utils';
+import type { MilestoneItem, MilestoneStatus } from '@/features/inspector/types';
 import { KanbanColumn } from './KanbanColumn';
-import { useKanbanProjects, useKanbanTasks } from './hooks';
+import {
+  useKanbanMilestoneBuckets,
+  useKanbanMilestoneProgress,
+  useKanbanMilestones,
+} from './hooks';
+import { MILESTONE_COLUMNS } from './milestoneKanban';
 
-/**
- * Kanban page.
- *
- * Status mapping (existing TaskStatus is `'open' | 'in_progress' | 'blocked'
- * | 'done' | 'cancelled'`):
- *
- *   "Todo"        column ↔ status 'open'
- *   "In progress" column ↔ status 'in_progress'
- *   "Done"        column ↔ status 'done'
- *
- * `'blocked'` and `'cancelled'` are stashed in a small "Other" pop-out at
- * the bottom of the page so the main grid stays focused on actionable work.
- *
- * HTML5 drag is used for moves (no extra dep). On drop we run an optimistic
- * status override so the card jumps columns the instant the user releases,
- * then call `taskRepo.update` and let the live query catch up.
- */
-
-interface ColumnSpec {
-  status: TaskStatus;
-  title: string;
-}
-
-const MAIN_COLUMNS: ColumnSpec[] = [
-  { status: 'open', title: 'Todo' },
-  { status: 'in_progress', title: 'In progress' },
-  { status: 'done', title: 'Done' },
-];
-
-const PRIORITIES: TaskPriority[] = ['urgent', 'high', 'normal', 'low'];
-const PRIORITY_LABEL: Record<TaskPriority, string> = {
-  urgent: 'Urgent',
-  high: 'High',
-  normal: 'Normal',
-  low: 'Low',
-};
-
-const STATUSES: TaskStatus[] = ['open', 'in_progress', 'done', 'blocked', 'cancelled'];
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  open: 'Todo',
-  in_progress: 'In progress',
+const STATUS_LABEL: Record<MilestoneStatus, string> = {
+  todo: 'Todo',
+  working: 'In progress',
   done: 'Done',
-  blocked: 'Blocked',
-  cancelled: 'Cancelled',
 };
 
 const SELECT_CLASS =
@@ -83,7 +48,6 @@ function useReducedMotion(): boolean {
       m.addEventListener('change', onChange);
       return () => m.removeEventListener('change', onChange);
     }
-    // Older Safari fallback
     m.addListener(onChange);
     return () => m.removeListener(onChange);
   }, []);
@@ -92,37 +56,34 @@ function useReducedMotion(): boolean {
 
 export function KanbanPage() {
   const workspaceId = useAuthStore((s) => s.workspaceId);
-  const activeProjectId = useAuthStore((s) => s.projectId);
+  const projectId = useAuthStore((s) => s.projectId);
   const reducedMotion = useReducedMotion();
-  const agentsMap = useAgentStore((s) => s.agents);
 
-  // Project filter: 'all' or a ProjectId. Defaults to active project, or
-  // 'all' when no project is selected globally. Tracks the auth store
-  // value so flipping the active project updates the filter.
-  const [projectFilter, setProjectFilter] = useState<string>(activeProjectId ?? 'all');
-  useEffect(() => {
-    setProjectFilter(activeProjectId ?? 'all');
-  }, [activeProjectId]);
+  const items = useKanbanMilestones();
+  const addMilestone = useMilestonesStore((s) => s.addMilestone);
+  const updateMilestone = useMilestonesStore((s) => s.updateMilestone);
+  const removeMilestone = useMilestonesStore((s) => s.removeMilestone);
 
-  const tasks = useKanbanTasks(workspaceId, projectFilter);
-  const projects = useKanbanProjects(workspaceId);
+  const workspaceTasks = useWorkspaceOpenTasks(workspaceId, projectId);
+  const analytics = useWorkspaceAnalyticsStore((s) => s.snapshot());
 
-  // Optimistic status overrides keyed by task id. Set on drop so the card
-  // jumps columns immediately, cleared once the live query reports the
-  // same status (or the task has gone away).
-  const [optimistic, setOptimistic] = useState<Record<string, TaskStatus>>({});
-  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const progress = useKanbanMilestoneProgress(items);
+  const buckets = useKanbanMilestoneBuckets(items);
+
+  const [optimistic, setOptimistic] = useState<Record<string, MilestoneStatus>>({});
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [editingItem, setEditingItem] = useState<MilestoneItem | null>(null);
+  const [celebrateId, setCelebrateId] = useState<string | null>(null);
 
   useEffect(() => {
     setOptimistic((prev) => {
       const keys = Object.keys(prev);
       if (keys.length === 0) return prev;
       let dirty = false;
-      const next: Record<string, TaskStatus> = {};
+      const next: Record<string, MilestoneStatus> = {};
       for (const id of keys) {
-        const t = tasks.find((x) => x.id === id);
-        if (!t || t.status === prev[id]) {
+        const item = items.find((x) => x.id === id);
+        if (!item || item.status === prev[id]) {
           dirty = true;
           continue;
         }
@@ -130,445 +91,312 @@ export function KanbanPage() {
       }
       return dirty ? next : prev;
     });
-  }, [tasks]);
+  }, [items]);
 
-  // Apply optimistic overrides, then bucket by status with stable order
-  // by `updated_at` desc.
-  const buckets = useMemo<Record<TaskStatus, Task[]>>(() => {
-    const out: Record<TaskStatus, Task[]> = {
-      open: [],
-      in_progress: [],
-      blocked: [],
+  const displayBuckets = useMemo(() => {
+    const out: Record<MilestoneStatus, MilestoneItem[]> = {
+      todo: [],
+      working: [],
       done: [],
-      cancelled: [],
     };
-    for (const t of tasks) {
-      const override = optimistic[t.id];
-      const status = override ?? t.status;
-      const row: Task = override ? { ...t, status: override } : t;
-      out[status].push(row);
-    }
-    for (const key of Object.keys(out) as TaskStatus[]) {
-      out[key].sort((a, b) => b.updated_at - a.updated_at);
+    for (const col of MILESTONE_COLUMNS) {
+      out[col.status] = buckets[col.status].map((item) => {
+        const override = optimistic[item.id];
+        if (!override || override === item.status) return item;
+        return { ...item, status: override };
+      });
+      if (Object.keys(optimistic).length > 0) {
+        for (const [id, status] of Object.entries(optimistic)) {
+          if (status !== col.status) continue;
+          const source = items.find((i) => i.id === id);
+          if (!source || source.status === status) continue;
+          if (!out[col.status].some((i) => i.id === id)) {
+            out[col.status].push({ ...source, status });
+          }
+        }
+        out[col.status] = out[col.status]
+          .filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx)
+          .sort((a, b) => b.updatedAt - a.updatedAt);
+      }
     }
     return out;
-  }, [tasks, optimistic]);
+  }, [buckets, optimistic, items]);
 
-  const projectsMap = useMemo(() => {
-    const m = new Map<string, Project>();
-    for (const p of projects) m.set(p.id, p);
-    return m;
-  }, [projects]);
-
-  const agentsLookup = useMemo(() => {
-    const m = new Map<string, (typeof agentsMap)[keyof typeof agentsMap]>();
-    for (const a of Object.values(agentsMap)) m.set(a.id, a);
-    return m;
-  }, [agentsMap]);
-
-  // ---- handlers ----
-
-  const onDropTask = async (taskId: string, target: TaskStatus) => {
-    const current = tasks.find((t) => t.id === taskId);
+  const onDropItem = (itemId: string, target: MilestoneStatus) => {
+    const current = items.find((i) => i.id === itemId);
     if (!current || current.status === target) return;
-    setOptimistic((p) => ({ ...p, [taskId]: target }));
-    try {
-      await taskRepo.update(taskId as TaskId, {
-        status: target,
-        updated_at: Date.now(),
-      });
-    } catch (err) {
-      console.error('[Kanban] drop failed', err);
-      setOptimistic((p) => {
-        const { [taskId]: _drop, ...rest } = p;
-        return rest;
-      });
+    setOptimistic((p) => ({ ...p, [itemId]: target }));
+    updateMilestone(itemId, { status: target });
+    if (target === 'done' && current.status !== 'done') {
+      setCelebrateId(itemId);
+      celebrate('kanban_done', current.title);
+      window.setTimeout(() => setCelebrateId(null), 900);
     }
   };
 
-  const onCreateTask = async (status: TaskStatus, title: string) => {
-    if (!workspaceId) return;
-    // Pin a project_id when the filter is scoped to one, otherwise fall
-    // back to the workspace's active project (if any) so new cards land
-    // somewhere sensible.
-    const project_id =
-      projectFilter !== 'all'
-        ? (projectFilter as ProjectId)
-        : (activeProjectId ?? undefined);
-    try {
-      await taskRepo.create({
-        workspace_id: workspaceId as WorkspaceId,
-        project_id,
-        title,
-        status,
-        created_by: 'user_text',
-      });
-    } catch (err) {
-      console.error('[Kanban] create failed', err);
+  const onCreateItem = (status: MilestoneStatus, title: string) => {
+    const id = addMilestone(title);
+    if (status !== 'todo') {
+      updateMilestone(id, { status });
     }
   };
-
-  // ---- render ----
-
-  const totalMain =
-    buckets.open.length + buckets.in_progress.length + buckets.done.length;
-  const otherTasks = useMemo(
-    () =>
-      [...buckets.blocked, ...buckets.cancelled].sort(
-        (a, b) => b.updated_at - a.updated_at,
-      ),
-    [buckets.blocked, buckets.cancelled],
-  );
-  const isEmpty = !workspaceId || (totalMain === 0 && otherTasks.length === 0);
 
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
-      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-1">
-          <span className="eyebrow">Tasks · drag between columns</span>
+          <span className="eyebrow">Trace · milestones & workspace progress</span>
           <h1 className="font-display text-hero text-foreground">Kanban</h1>
+          <p className="text-secondary text-muted-foreground max-w-xl">
+            Same milestone board as the Inspector Trace panel — create checkpoints, drag across
+            columns, and track live workspace activity.
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <SeverityLegend />
-          <ProjectFilter
-            value={projectFilter}
-            onChange={setProjectFilter}
-            projects={projects}
-          />
-        </div>
+        <AnalyticsSummary
+          progress={progress}
+          liveOpen={workspaceTasks.length}
+          analytics={analytics}
+        />
       </header>
 
-      {isEmpty ? (
-        <EmptyKanbanState />
-      ) : (
-        <>
-          <div className="grid flex-1 grid-cols-1 gap-4 lg:grid-cols-3">
-            {MAIN_COLUMNS.map((col) => (
-              <KanbanColumn
-                key={col.status}
-                status={col.status}
-                title={col.title}
-                tasks={buckets[col.status]}
-                projects={projectsMap}
-                agents={agentsLookup}
-                draggingTaskId={draggingTaskId}
-                reducedMotion={reducedMotion}
-                onDragStartTask={setDraggingTaskId}
-                onDragEndTask={() => setDraggingTaskId(null)}
-                onDropTask={(id, target) => void onDropTask(id, target)}
-                onCreateTask={onCreateTask}
-                onOpenTask={setEditingTask}
-              />
-            ))}
-          </div>
-
-          {otherTasks.length > 0 && (
-            <OtherSection
-              blocked={buckets.blocked}
-              cancelled={buckets.cancelled}
-              onOpenTask={setEditingTask}
-            />
-          )}
-        </>
-      )}
-
-      <EditTaskDialog task={editingTask} onClose={() => setEditingTask(null)} />
-    </div>
-  );
-}
-
-// ============================================================
-// Page header bits
-// ============================================================
-
-interface ProjectFilterProps {
-  value: string;
-  onChange: (v: string) => void;
-  projects: Project[];
-}
-
-function ProjectFilter({ value, onChange, projects }: ProjectFilterProps) {
-  return (
-    <div className="flex items-center gap-2">
-      <Label htmlFor="kanban-project-filter" className="shrink-0">
-        Project
-      </Label>
-      <select
-        id="kanban-project-filter"
-        value={value}
-        onChange={(e: ChangeEvent<HTMLSelectElement>) => onChange(e.target.value)}
-        className={cn(SELECT_CLASS, 'min-w-[10rem]')}
-      >
-        <option value="all">All projects</option>
-        {projects.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-const SEV_DOTS: Array<{
-  key: 'crit' | 'high' | 'med' | 'low' | 'info';
-  label: string;
-}> = [
-  { key: 'crit', label: 'Critical' },
-  { key: 'high', label: 'High' },
-  { key: 'med', label: 'Medium' },
-  { key: 'low', label: 'Low' },
-  { key: 'info', label: 'Info' },
-];
-
-function SeverityLegend() {
-  return (
-    <div
-      className="flex items-center gap-2 text-metadata text-muted-foreground"
-      aria-label="Severity legend"
-    >
-      <span className="eyebrow">Severity</span>
-      <div className="flex items-center gap-1.5">
-        {SEV_DOTS.map((d) => (
-          <span
-            key={d.key}
-            className={cn('sev-pill', d.key)}
-            style={{
-              padding: 0,
-              width: 10,
-              height: 10,
-              borderRadius: 9999,
-              display: 'inline-block',
-            }}
-            title={d.label}
-            aria-label={d.label}
+      <div className="grid flex-1 grid-cols-1 gap-4 lg:grid-cols-3">
+        {MILESTONE_COLUMNS.map((col) => (
+          <KanbanColumn
+            key={col.status}
+            status={col.status}
+            title={col.title}
+            items={displayBuckets[col.status]}
+            draggingItemId={draggingItemId}
+            reducedMotion={reducedMotion}
+            onDragStartItem={setDraggingItemId}
+            onDragEndItem={() => setDraggingItemId(null)}
+            onDropItem={onDropItem}
+            onCreateItem={onCreateItem}
+            onOpenItem={setEditingItem}
           />
         ))}
       </div>
+
+      {workspaceTasks.length > 0 ? (
+        <LiveActivitySection tasks={workspaceTasks} />
+      ) : items.length === 0 ? (
+        <EmptyHint />
+      ) : null}
+
+      <EditMilestoneDialog
+        item={editingItem}
+        celebrating={editingItem ? celebrateId === editingItem.id : false}
+        onClose={() => setEditingItem(null)}
+        onSave={(patch) => {
+          if (!editingItem) return;
+          updateMilestone(editingItem.id, patch);
+          if (patch.status === 'done' && editingItem.status !== 'done') {
+            celebrate('kanban_done', editingItem.title);
+          }
+        }}
+        onRemove={() => {
+          if (!editingItem) return;
+          removeMilestone(editingItem.id);
+          setEditingItem(null);
+        }}
+      />
     </div>
   );
 }
 
-function EmptyKanbanState() {
+function AnalyticsSummary({
+  progress,
+  liveOpen,
+  analytics,
+}: {
+  progress: { done: number; total: number; open: number; percent: number };
+  liveOpen: number;
+  analytics: {
+    completedMilestones: number;
+  };
+}) {
   return (
-    <div className="flex flex-1 items-center justify-center">
-      <div className="cozy-card max-w-md text-center">
-        <div className="font-display text-page-title text-foreground">
-          No tasks yet.
-        </div>
-        <div className="mt-2 text-secondary text-muted-foreground">
-          Try the assistant:{' '}
-          <code className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-metadata text-foreground">
-            make a todo: ship the launcher tomorrow
-          </code>
-        </div>
-      </div>
+    <div className="cozy-card flex flex-wrap items-stretch gap-4 p-4 min-w-[280px]">
+      <StatBlock label="Milestones" value={`${progress.done}/${progress.total}`} hint="complete" />
+      <StatBlock label="Progress" value={`${progress.percent}%`} hint="of board" />
+      <StatBlock label="Live work" value={String(liveOpen)} hint="open items" />
+      <StatBlock
+        label="Session"
+        value={analytics.completedMilestones > 0 ? String(analytics.completedMilestones) : '—'}
+        hint="done (rollup)"
+      />
     </div>
   );
 }
 
-// ============================================================
-// Other (blocked + cancelled) pop-out
-// ============================================================
-
-interface OtherSectionProps {
-  blocked: Task[];
-  cancelled: Task[];
-  onOpenTask: (t: Task) => void;
+function StatBlock({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div className="flex min-w-[5.5rem] flex-col gap-0.5">
+      <span className="eyebrow">{label}</span>
+      <span className="font-display text-page-title text-foreground tabular-nums">{value}</span>
+      <span className="text-metadata text-muted-foreground">{hint}</span>
+    </div>
+  );
 }
 
-function OtherSection({ blocked, cancelled, onOpenTask }: OtherSectionProps) {
-  const [open, setOpen] = useState(false);
-  const total = blocked.length + cancelled.length;
-  const all = [...blocked, ...cancelled];
-
+function LiveActivitySection({
+  tasks,
+}: {
+  tasks: ReturnType<typeof useWorkspaceOpenTasks>;
+}) {
   return (
     <section className="rounded-xl bg-paper-soft p-4 shadow-soft">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 text-left"
-        aria-expanded={open}
-      >
-        <div className="flex items-baseline gap-2">
-          <h3 className="font-display text-ui-strong text-foreground">Other</h3>
-          <span className="eyebrow">{total}</span>
-        </div>
-        <span className="text-metadata text-muted-foreground">
-          Blocked {blocked.length} · Cancelled {cancelled.length} ·{' '}
-          {open ? 'hide' : 'show'}
-        </span>
-      </button>
-      {open && (
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          {all.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => onOpenTask(t)}
-              className="flex items-center gap-2 rounded-lg border border-border bg-paper p-2.5 text-left transition-shadow hover:shadow-soft"
-            >
-              <span
-                className={cn(
-                  'sev-pill',
-                  t.status === 'cancelled' ? 'info' : 'med',
-                )}
-              >
-                {t.status === 'cancelled' ? 'Cancelled' : 'Blocked'}
-              </span>
-              <span className="line-clamp-1 font-medium text-body text-foreground">
-                {t.title}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+      <header className="mb-3 flex items-center gap-2">
+        <Target className="h-4 w-4 text-accent-copper" />
+        <h3 className="font-display text-ui-strong text-foreground">Live workspace activity</h3>
+        <span className="eyebrow">{tasks.length}</span>
+      </header>
+      <p className="mb-3 text-secondary text-muted-foreground">
+        Read-only feed from terminals, chats, tools, and open Dexie tasks — same source as
+        Inspector → Today.
+      </p>
+      <ul className="grid gap-2 md:grid-cols-2">
+        {tasks.slice(0, 8).map((t) => (
+          <li
+            key={t.id}
+            className="flex items-center gap-2 rounded-lg border border-border bg-paper px-3 py-2"
+          >
+            <span className="eyebrow shrink-0">{t.source}</span>
+            <span className="line-clamp-1 text-secondary text-foreground">{t.title}</span>
+            <span className="ml-auto text-metadata text-muted-foreground shrink-0">
+              {formatRelative(t.updatedAt)}
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
 
-// ============================================================
-// Edit task dialog
-// ============================================================
-
-interface EditTaskDialogProps {
-  task: Task | null;
-  onClose: () => void;
+function EmptyHint() {
+  return (
+    <div className="cozy-card max-w-lg p-4">
+      <div className="flex items-start gap-3">
+        <Sparkles className="mt-0.5 h-4 w-4 text-accent-copper shrink-0" />
+        <div>
+          <p className="font-display text-ui-strong text-foreground">Start your first milestone</p>
+          <p className="mt-1 text-secondary text-muted-foreground">
+            Hit <strong className="text-foreground font-medium">+</strong> in any column above, or
+            add milestones from Inspector → Trace. Changes sync instantly across both views.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function EditTaskDialog({ task, onClose }: EditTaskDialogProps) {
+interface EditMilestoneDialogProps {
+  item: MilestoneItem | null;
+  celebrating: boolean;
+  onClose: () => void;
+  onSave: (patch: Partial<Pick<MilestoneItem, 'title' | 'description' | 'status'>>) => void;
+  onRemove: () => void;
+}
+
+function EditMilestoneDialog({
+  item,
+  celebrating,
+  onClose,
+  onSave,
+  onRemove,
+}: EditMilestoneDialogProps) {
   const [title, setTitle] = useState('');
-  const [notes, setNotes] = useState('');
-  const [dueLocal, setDueLocal] = useState('');
-  const [priority, setPriority] = useState<TaskPriority>('normal');
-  const [status, setStatus] = useState<TaskStatus>('open');
+  const [description, setDescription] = useState('');
+  const [status, setStatus] = useState<MilestoneStatus>('todo');
 
   useEffect(() => {
-    if (!task) return;
-    setTitle(task.title);
-    setNotes(task.notes ?? '');
-    setDueLocal(task.due_at ? msToLocalInput(task.due_at) : '');
-    setPriority(task.priority);
-    setStatus(task.status);
-  }, [task]);
+    if (!item) return;
+    setTitle(item.title);
+    setDescription(item.description ?? '');
+    setStatus(item.status);
+  }, [item]);
 
-  const onSave = async () => {
-    if (!task) return;
-    const trimmed = title.trim() || task.title;
-    const due_at = dueLocal ? localInputToMs(dueLocal) : undefined;
-    try {
-      await taskRepo.update(task.id, {
-        title: trimmed,
-        notes: notes.trim() ? notes : undefined,
-        due_at,
-        priority,
-        status,
-        updated_at: Date.now(),
-      });
-    } catch (err) {
-      console.error('[Kanban] save failed', err);
-    }
+  const handleSave = () => {
+    if (!item) return;
+    onSave({
+      title: title.trim() || item.title,
+      description: description.trim() || undefined,
+      status,
+    });
     onClose();
   };
 
   return (
     <Dialog
-      open={task !== null}
-      onOpenChange={(o) => {
-        if (!o) onClose();
+      open={item !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
       }}
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit task</DialogTitle>
+          <DialogTitle>Edit milestone</DialogTitle>
         </DialogHeader>
-        <div className="grid gap-3">
+        <div
+          className={cn(
+            'grid gap-3',
+            celebrating && 'ring-2 ring-accent-copper/50 rounded-lg p-1',
+          )}
+        >
           <div className="grid gap-1.5">
-            <Label htmlFor="kanban-edit-title">Title</Label>
+            <Label htmlFor="kanban-milestone-title">Title</Label>
             <Input
-              id="kanban-edit-title"
+              id="kanban-milestone-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="kanban-edit-notes">Description</Label>
+            <Label htmlFor="kanban-milestone-description">Description</Label>
             <Textarea
-              id="kanban-edit-notes"
+              id="kanban-milestone-description"
               rows={4}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Notes, acceptance criteria, links…"
             />
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="grid gap-1.5">
-              <Label htmlFor="kanban-edit-due">Due date</Label>
-              <Input
-                id="kanban-edit-due"
-                type="datetime-local"
-                value={dueLocal}
-                onChange={(e) => setDueLocal(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="kanban-edit-priority">Priority</Label>
-              <select
-                id="kanban-edit-priority"
-                value={priority}
-                onChange={(e) => setPriority(e.target.value as TaskPriority)}
-                className={SELECT_CLASS}
-              >
-                {PRIORITIES.map((p) => (
-                  <option key={p} value={p}>
-                    {PRIORITY_LABEL[p]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="kanban-edit-status">Status</Label>
+            <Label htmlFor="kanban-milestone-status">Status</Label>
             <select
-              id="kanban-edit-status"
+              id="kanban-milestone-status"
               value={status}
-              onChange={(e) => setStatus(e.target.value as TaskStatus)}
+              onChange={(e) => setStatus(e.target.value as MilestoneStatus)}
               className={SELECT_CLASS}
             >
-              {STATUSES.map((s) => (
+              {(['todo', 'working', 'done'] as MilestoneStatus[]).map((s) => (
                 <option key={s} value={s}>
                   {STATUS_LABEL[s]}
                 </option>
               ))}
             </select>
           </div>
+          {item ? (
+            <div className="text-metadata text-muted-foreground">
+              Created {formatRelative(item.createdAt)} · Updated {formatRelative(item.updatedAt)}
+              {item.completedAt ? ` · Completed ${formatRelative(item.completedAt)}` : null}
+            </div>
+          ) : null}
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
+        <DialogFooter className="gap-2 sm:justify-between">
+          <Button variant="ghost" className="text-destructive" onClick={onRemove}>
+            Delete
           </Button>
-          <Button variant="accent" onClick={() => void onSave()}>
-            Save
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="accent" onClick={handleSave}>
+              Save
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
-}
-
-// ============================================================
-// Helpers
-// ============================================================
-
-/** Convert unix ms to a value usable in `<input type="datetime-local">`. */
-function msToLocalInput(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
-}
-
-/** Inverse of `msToLocalInput`: parses the picker's local-time string. */
-function localInputToMs(s: string): number {
-  return new Date(s).getTime();
 }

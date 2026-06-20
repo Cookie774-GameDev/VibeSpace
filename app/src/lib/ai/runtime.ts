@@ -56,6 +56,7 @@ import {
   getExplicitContextBlock,
   getExplicitFilesBlock,
   getExplicitTerminalBlock,
+  getJarvisCoordinationContextBlock,
 } from './context';
 import type { TerminalRef } from '@/features/terminals/terminalRefs';
 import type { ContextAttachment } from '@/features/context/tree';
@@ -145,6 +146,27 @@ function getSelectedSkillsBlock(skillIds: string[] | undefined): string {
     list,
     addenda.trim() ? `\nSkill instructions:\n${addenda.trim()}` : '',
   ].filter(Boolean).join('\n');
+}
+
+const JARVIS_CHAT_ACTION_OVERLAY = [
+  '## Jarvis chat interface',
+  '',
+  'You are Jarvis inside the VibeSpace chat UI, not a terminal CLI.',
+  'Keep replies short, direct, and action-oriented.',
+  '',
+  'Rules:',
+  '- If the user asks you to change the app, navigate, open terminals, or run commands, say what you will do and emit an `action` block.',
+  '- Never answer app-control requests with JavaScript, shell snippets, pseudocode, or instructions for the user to run manually.',
+  '- Mutating app actions do not run until the user clicks Approve, so never claim they already happened.',
+  '- For "open N terminals", use `terminal.bulkOpen` with `{"count":N}`. If they say "with opencode", add `"command":"opencode"`.',
+  '- Use any provided terminal coordination summary as read-only awareness of active agents, locks, and recent work.',
+].join('\n');
+
+function applyJarvisChatActionOverlay(agent: Agent): Agent {
+  return {
+    ...agent,
+    system_prompt: (agent.system_prompt ?? '') + '\n\n' + JARVIS_CHAT_ACTION_OVERLAY,
+  };
 }
 
 function actionPartToLlmText(part: Extract<Part, { kind: 'action_proposal' }>): string {
@@ -375,6 +397,7 @@ export function startRuntimeListener(
       const preset = useAuthStore.getState().personaPreset;
       runnable = applyPersona(agent, preset);
       runnable = applyAvailableActions(runnable);
+      runnable = applyJarvisChatActionOverlay(runnable);
     }
     const stackStepsEarly = stepsForPreset(
       stackPreset,
@@ -421,6 +444,7 @@ export function startRuntimeListener(
     let explicitContext = '';
     let explicitFilesContext = '';
     let explicitTerminalContext = '';
+    let jarvisCoordinationContext = '';
     let pluginContext = '';
     let pluginStatusContext = '';
     let selectedSkillsContext = '';
@@ -486,6 +510,18 @@ export function startRuntimeListener(
         detail: { error: err instanceof Error ? err.message : String(err) },
       });
     }
+    if (agent.slug === 'jarvis') {
+      try {
+        jarvisCoordinationContext = await getJarvisCoordinationContextBlock(projectId);
+      } catch (err) {
+        devConsole.log({
+          channel: 'ai',
+          level: 'warn',
+          message: 'Jarvis coordination context fetch failed',
+          detail: { error: err instanceof Error ? err.message : String(err) },
+        });
+      }
+    }
     try {
       pluginContext = getPluginContextBlock(projectId, detail.pluginIds);
     } catch (err) {
@@ -526,6 +562,7 @@ export function startRuntimeListener(
       explicitContext,
       explicitFilesContext,
       explicitTerminalContext,
+      jarvisCoordinationContext,
       connectedFilesContext,
       terminalContext,
       getAiCompletionInstruction(),

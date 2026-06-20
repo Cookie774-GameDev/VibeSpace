@@ -53,7 +53,25 @@ describe('resolveTerminalRestoreSession', () => {
     if (decision.kind === 'attach') {
       expect(decision.sessionId).toBe('session-a');
       expect(decision.source).toBe('historical-pane');
-      expect(decision.restoredText).toContain('output from session-a');
+      expect(decision.restoredText).toBe('');
+    }
+  });
+
+  it('reattaches an explicitly known live session without visually replaying transcript text', () => {
+    const decision = resolveTerminalRestoreSession({
+      existingSessionId: 'session-a',
+      paneId: 'pane-a',
+      projectId: 'project-a',
+      activeSessions: [backend('session-a', 'project-a')],
+      transcripts: {
+        'session-a': transcript('session-a', 'pane-a', 'project-a'),
+      },
+    });
+
+    expect(decision.kind).toBe('attach');
+    if (decision.kind === 'attach') {
+      expect(decision.sessionId).toBe('session-a');
+      expect(decision.restoredText).toBe('');
     }
   });
 
@@ -108,6 +126,29 @@ describe('resolveTerminalRestoreSession', () => {
           ...transcript('session-a', 'pane-a', 'project-a'),
           command: 'opencode',
           text: 'OpenCode Zen\nM[<35;27;14M[<35;28;14M\nhalf-painted TUI',
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: 'spawn',
+      source: 'dead-historical-pane',
+      oldSessionId: 'session-a',
+      restoredText: '',
+    });
+  });
+
+  it('does not replay OpenCode TUI text when the CLI was launched inside PowerShell', () => {
+    const decision = resolveTerminalRestoreSession({
+      existingSessionId: null,
+      paneId: 'pane-a',
+      projectId: 'project-a',
+      activeSessions: [],
+      transcripts: {
+        'session-a': {
+          ...transcript('session-a', 'pane-a', 'project-a'),
+          command: 'powershell.exe',
+          text: 'PS C:\\repo> opencode\nOpenCode Zen\nctrl+p commands\n]4;0;rgb:aa/bb/cc',
         },
       },
     });

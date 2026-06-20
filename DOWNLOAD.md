@@ -66,11 +66,25 @@ sha256sum 'VibeSpace_0.1.31_amd64.deb'
 
 VibeSpace is local-first. External services are optional and only used for enabled features such as cloud sync, hosted models, Stripe billing, and Jarvis Call.
 
+## What's New (v0.1.44)
+
+- **Hive Balance** — the flagship multi-model pipeline is now live in Settings → Hive.
+  Five-model ensemble: Gemini 3.5 Flash High → MiniMax-M3 → GLM-5.2 → DeepSeek V4 Pro Max → GPT-5.4 mini.
+  Pricing: $4.38 / 1M input · $19.97 / 1M output (same output cost as Fable 5).
+  Requires Orbit ($10/mo) or higher. BYOK keys work at every tier.
+- **Supernova plan (Apex)** — new top tier at $200/mo with 62,000 hosted AI credits/mo,
+  434 phone minutes, and highest-priority Hive routing. Full schema support now in place.
+- **Dynamic Stripe Checkout** — upgrade buttons call the Supabase Edge Function when
+  you are signed in, creating a personalised Stripe session instead of a static link.
+  Existing static fallback links still work when cloud sync is off.
+- **Manage Subscription** — the Plans page now shows a "Manage Subscription" button
+  on your active plan card that opens the Stripe billing portal directly.
+
 ## After Installing
 
 1. Launch from Start Menu, `/Applications/VibeSpace`, or your Linux app menu.
 2. Sign in only if you need cloud sync, hosted access, Stripe billing, or Jarvis Call.
-3. Add BYOK provider keys in Settings -> Providers.
+3. Add BYOK provider keys in Settings → Providers.
 4. Useful hotkeys:
    - `Ctrl/Cmd + K` command palette
    - `Ctrl/Cmd + Space` voice push-to-talk
@@ -116,10 +130,29 @@ Manual installers replace the previous version in place and preserve user data:
 - macOS: `~/Library/Application Support/VibeSpace`
 - Linux: `~/.config/VibeSpace`
 
+## Windows security (free trust — no paid cert required)
+
+New desktop apps often trigger **SmartScreen** or antivirus prompts until Windows learns they are safe. VibeSpace is **open source**; you can verify every download yourself:
+
+1. Download only from [GitHub Releases](https://github.com/Cookie774-GameDev/VibeSpace/releases) or [vibespaceos.com](https://vibespaceos.com/).
+2. Open `SHA256SUMS.txt` on that release and compare to your file:
+
+   ```powershell
+   Get-FileHash -Algorithm SHA256 '.\VibeSpace_0.1.44_x64-setup.exe'
+   ```
+
+   Or run `.\scripts\verify-release-checksum.ps1 -Version 0.1.44 -InstallerPath .\VibeSpace_0.1.44_x64-setup.exe`.
+
+3. If Windows shows **Windows protected your PC**, click **More info** → **Run anyway** only after the hash matches.
+
+Full maintainer + user checklist: [`docs/TRUST_AND_WINDOWS.md`](docs/TRUST_AND_WINDOWS.md).
+
+Paid **code signing** (later) only changes the publisher label on the installer — it does not change app features or design.
+
 ## Troubleshooting
 
 **Windows protected your PC / Application Control blocked this file.**
-Use a trusted Authenticode-signed build or endpoint allowlisting. If policy allows, click More info -> Run anyway. Always verify SHA-256 before running.
+See [Windows security (free trust)](#windows-security-free-trust--no-paid-cert-required) above. For strict corporate AV, share the release URL and SHA-256 with IT for allowlisting. Authenticode signing (paid) reduces these warnings over time.
 
 **macOS says the developer cannot be verified.**
 Right-click `VibeSpace.app` in Finder -> Open -> Open. macOS remembers that trust for future launches. Production distribution should use Developer ID signing and notarization.

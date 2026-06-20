@@ -26,7 +26,7 @@ import type { Agent } from '@/types';
 import type { ActionDef, ActionParam } from './types';
 import { getBuiltinActions, CATEGORY_LABELS } from './registry';
 import { useToolStore } from '@/features/tools/toolStore';
-import { SKILLS } from '@/lib/agents/skills';
+import { getAllCatalogSkills } from '@/features/skills/skillCatalog';
 
 /**
  * One concise line per action for the catalogue. Keep the line under
@@ -64,7 +64,7 @@ export function buildAddendumText(): string {
 
   const all = [...builtins, ...customs];
   if (all.length === 0) return '';
-  const skills = Object.values(SKILLS);
+  const skills = getAllCatalogSkills();
 
   const byCategory = new Map<string, ActionDef[]>();
   for (const a of all) {
@@ -93,6 +93,8 @@ export function buildAddendumText(): string {
     '- These actions work no matter which model powers this chat (Ollama, Gemini, Claude, etc.).',
     '- When the user asks you to DO something in the app (open terminals, navigate, run a command),',
     '  emit an action block — do not pretend you already did it.',
+    '- Do not answer app-control requests with JavaScript, shell snippets, pseudocode, or manual instructions.',
+    '- A good app-control reply is one short sentence plus the required `action` block.',
     '- Use only ids from the list below; do not invent ids.',
     '- One action per fenced block. Multiple blocks per reply are fine.',
     '- If you need several actions, put them in the same reply so the UI can show one Approve all button.',

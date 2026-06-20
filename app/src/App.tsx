@@ -38,6 +38,7 @@ import { CallModal, startOutboundTrigger } from '@/features/call';
 import { useBridgeLifecycle } from '@/lib/bridge/useBridgeLifecycle';
 import { useIdleDetection, AmbientAudioHost } from '@/features/ambient';
 import { useLinkHotkeys } from '@/features/launcher';
+import { startWorkspaceAnalyticsClock } from '@/features/inspector/workspaceAnalytics';
 import { Toaster, toast } from '@/components/ui/toast';
 import { startRuntimeListener } from '@/lib/ai/runtime';
 import { messageRepo, agentRepo, chatRepo, openDb, db } from '@/lib/db';
@@ -146,9 +147,10 @@ async function syncPlanFromProfile(userId: string): Promise<void> {
       .maybeSingle();
     if (error || !data?.tier) return;
     const tier = data.tier === 'byok-only' ? 'free' : data.tier;
-    if (tier === 'free' || tier === 'starter' || tier === 'pro' || tier === 'ultra') {
+    const SYNCED_TIERS = new Set(['free', 'starter', 'pro', 'ultra', 'apex']);
+    if (SYNCED_TIERS.has(tier)) {
       const store = useAuthStore.getState();
-      if (store.plan !== tier) store.setPlan(tier);
+      if (store.plan !== tier) store.setPlan(tier as import('@/lib/entitlements').PlanId);
     }
   } catch (err) {
     console.warn('[billing] plan sync skipped:', err);
@@ -680,6 +682,8 @@ function WorkspaceRoot() {
   useBoot();
   useBridgeLifecycle();
   useDesktopReopenLifecycle();
+
+  React.useEffect(() => startWorkspaceAnalyticsClock(), []);
 
   // Wire outbound-call trigger so any feature can call `fireOutboundCall(...)`.
   // Default categories (manual + error) are toggled in Settings → Phone & Voice.

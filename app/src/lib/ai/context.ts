@@ -36,6 +36,8 @@ import {
   loadStoredContextTree,
   type ContextAttachment,
 } from '@/features/context/tree';
+import { getStoredProjectRoot } from '@/features/files/projectFiles';
+import { loadCoordinationSummary } from '@/features/terminals/agentCoordinationClient';
 
 /**
  * Cap on the total bytes of file content we splice into a single AI
@@ -47,6 +49,7 @@ import {
  */
 const TOTAL_FILE_BUDGET_BYTES = 16 * 1024;
 const FILE_SAMPLE_READ_BYTES = 64 * 1024;
+const JARVIS_COORDINATION_CONTEXT_CHARS = 3_200;
 const MEDIA_CONTEXT_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico', 'heic', 'heif',
   'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi',
@@ -94,6 +97,26 @@ export function getProjectContextTreeBlock(projectId: ProjectId | null): string 
   const tree = loadStoredContextTree(projectId);
   if (!tree) return '';
   return formatContextTreeForPrompt(tree);
+}
+
+export async function getJarvisCoordinationContextBlock(
+  projectId: ProjectId | null,
+): Promise<string> {
+  const projectRoot = getStoredProjectRoot(projectId);
+  if (!projectRoot.trim()) return '';
+  const summary = (await loadCoordinationSummary(projectRoot)).trim();
+  if (!summary) return '';
+  const bounded = summary.length <= JARVIS_COORDINATION_CONTEXT_CHARS
+    ? summary
+    : `${summary.slice(0, JARVIS_COORDINATION_CONTEXT_CHARS)}\n…[coordination summary truncated by VibeSpace]`;
+  return [
+    'Jarvis chat coordination awareness for the active project.',
+    'Treat this as read-only status context about terminal agents, claimed files, locks, and recent handoffs. Do not expose raw coordination files.',
+    '',
+    '```',
+    bounded,
+    '```',
+  ].join('\n');
 }
 
 /**

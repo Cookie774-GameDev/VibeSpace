@@ -473,8 +473,9 @@ export const agentRepo = {
     return row;
   },
   async update(id: AgentId, patch: Partial<Agent>): Promise<Agent> {
-    await db.agents.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
-    const row = await requireRow(() => db.agents.get(id), 'agent', id);
+    const existing = await requireRow(() => db.agents.get(id), 'agent', id);
+    const row: Agent = { ...existing, ...sanitizeUpdate(patch), updated_at: now() };
+    await db.agents.put(row);
     await syncUpdate('agents', row);
     return row;
   },

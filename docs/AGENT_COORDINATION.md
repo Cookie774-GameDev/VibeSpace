@@ -123,7 +123,7 @@ Append new entries at the **bottom** of the relevant agent section. Use [How to 
 | **Version** | v0.1.44 |
 | **Plan** | Fix terminal route-switch distortion, white fallback risk, scrollback isolation, and terminal-agent prompt delivery |
 | **Files touched** | `app/src/features/terminals/**`, `app/src/components/layout/PageRouter.tsx`, `docs/AGENT_COORDINATION.md` |
-| **Status** | in-progress |
+| **Status** | implemented locally; focused action/runtime/context tests, broader action/AI tests, typecheck, and edited-file lints passing |
 | **Commit** | — |
 
 #### 2026-06-17 — Terminal reliability follow-up from trace agents
@@ -137,9 +137,87 @@ Append new entries at the **bottom** of the relevant agent section. Use [How to 
 | **Status** | in-progress |
 | **Commit** | — |
 
+#### 2026-06-18 — Terminal swarm coordination system
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 9:41 AM CT |
+| **Version** | v0.1.44 |
+| **Plan** | Add opt-in coordinated terminal agent mode, no-context isolation, project-local coordination ledger, file-lock snapshots, and mode-aware CLI prompt delivery |
+| **Files touched** | `app/src/features/terminals/**`, `app/src-tauri/src/agent_coordination.rs`, `app/src-tauri/src/lib.rs`, `docs/AGENT_COORDINATION.md` |
+| **Status** | in-progress |
+| **Commit** | — |
+
+#### 2026-06-18 — Terminal swarm coordination implementation checkpoint
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 10:32 AM CT |
+| **Version** | v0.1.44 |
+| **Plan** | Implemented typed coordination helpers, native `.vibespace` persistence commands, mode-aware prompt delivery, picker mode UI, and coordinated terminal registration/heartbeat |
+| **Files touched** | `app/src/features/terminals/**`, `app/src-tauri/src/agent_coordination.rs`, `app/src-tauri/src/lib.rs`, `docs/AGENT_COORDINATION.md` |
+| **Status** | implemented locally; frontend verification passing; native verification partially blocked by Windows Application Control policy |
+| **Commit** | — |
+
+#### 2026-06-18 — Terminal scrollback real-terminal behavior fix
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 11:10 AM CT |
+| **Version** | v0.1.44 |
+| **Plan** | Fix terminal scroll-up lock and visual scrollback junk by separating xterm viewport behavior from transcript restore replay; preserve Jarvis transcript context and terminal coordination changes |
+| **Files touched** | `app/src/features/terminals/TerminalView.tsx`, `restoreSession.ts`, `restoreSession.test.ts`, `transcriptStore.ts`, `terminalViewport.ts`, `terminalViewport.test.ts`, `TerminalsPage.tsx`, `docs/AGENT_COORDINATION.md` |
+| **Status** | in-progress |
+| **Commit** | — |
+
+#### 2026-06-18 — Terminal scrollback implementation checkpoint
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 11:23 AM CT |
+| **Version** | v0.1.44 |
+| **Plan** | Implemented real-terminal scroll behavior: active attach skips visual transcript replay, dead OpenCode-in-shell replay is suppressed, output flush respects user scroll position, and reset forgets killed session transcripts |
+| **Files touched** | `TerminalView.tsx`, `restoreSession.ts`, `restoreSession.test.ts`, `terminalViewport.ts`, `terminalViewport.test.ts`, `TerminalsPage.tsx`, `TerminalsPage.reset.test.ts`, `docs/AGENT_COORDINATION.md` |
+| **Status** | implemented locally; `npm run test -- src/features/terminals` and `npm run typecheck` passing |
+| **Commit** | — |
+
+#### 2026-06-18 — Jarvis chat action routing fix
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 12:58 PM CT |
+| **Version** | v0.1.44 |
+| **Plan** | Make Jarvis chat produce approval-gated app action cards for commands like open five terminals, add chat-only concise action persona, and surface bounded coordination context |
+| **Files touched** | `app/src/lib/actions/fallbackActions.ts`, `fallbackActions.test.ts`, `promptAddendum.ts`, `app/src/lib/ai/runtime.ts`, `runtime.test.ts`, `context.ts`, `docs/AGENT_COORDINATION.md` |
+| **Status** | implemented locally; focused action/runtime/context tests, broader action/AI tests, typecheck, and edited-file lints passing |
+| **Commit** | — |
+
+#### 2026-06-18 — Billing hardening and Hive Balance rollout
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 6:05 PM CT → 6:55 PM CT |
+| **Version** | v0.1.44 |
+| **Plan** | Fix apex tier schema gaps, wire Supabase Edge Function checkout/portal, remove "Available Soon" for wired paths, add Hive Balance 5-model pipeline, hide fast/quality/ultra/custom presets, coerce old stored presets safely, gate Balance behind paid plan |
+| **Files touched** | `supabase/migrations/0027_apex_tier.sql` (new), `app/src/lib/supabase/types.ts`, `app/src/App.tsx`, `app/src/lib/billing/checkout.ts` (new), `app/src/lib/billing/checkout.test.ts` (new), `app/src/lib/supabase/apexTier.test.ts` (new), `app/src/features/settings/sections/Plans.tsx`, `app/src/features/settings/sections/Hive.tsx`, `app/src/features/billing/HostedJarvis.tsx`, `app/src/lib/ai/stacks/frontierModels.ts`, `app/src/lib/ai/stacks/presets.ts`, `app/src/lib/ai/stacks/presets.test.ts`, `app/src/lib/ai/stacks/hiveBalance.test.ts` (new), `DOWNLOAD.md` |
+| **Status** | implemented locally; frontend stress pass complete; native/Supabase live checks blocked by local environment; no commit/push per user instruction |
+| **Commit** | — (no commit per user instruction) |
+| **Test evidence** | `npm run test` → 107 files / 614 tests passed; `npm run typecheck` passed; `npm run build` passed; edited-file lints clean; `cargo test --lib` blocked by Windows Application Control policy; Supabase CLI not installed and `SUPABASE_DB_URL` missing |
+
 ---
 
 ### VibeSpace Worker 1
+
+#### 2026-06-18 — Kanban page rebuild on milestone store
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 |
+| **Version** | v0.1.44 |
+| **Plan** | Replace empty Dexie-task Kanban with full-page Inspector milestone board; shared zustand persist store |
+| **Files touched** | `app/src/features/kanban/**`, `Inspector.tsx` (KanbanContextPanel) |
+| **Status** | implemented locally; typecheck + kanban tests passing |
+| **Commit** | — |
 
 #### 2026-06-17 — Provider/model dropdown registry (URGENT)
 
@@ -178,13 +256,18 @@ Append new entries at the **bottom** of the relevant agent section. Use [How to 
 | **Status** | committed (tests passing) |
 | **Commit** | — |
 
----
+#### 2026-06-18 — Top-bar mic → composer STT (not Jarvis module)
 
 | Field | Value |
 |-------|-------|
-| **Timestamp** | 2026-06-16 |
-| **Version** | v0.1.43 |
-| **Plan** | Persist workspace/terminal on hide/shutdown/update; StackPicker UI; Hive preset/benchmark polish |
+| **Timestamp** | 2026-06-18 |
+| **Version** | v0.1.44 |
+| **Plan** | Top-right mic button triggers chat composer speech-to-text; no Jarvis voice modal |
+| **Files touched** | `TopBar.tsx`, `Composer.tsx`, `composerSttService.ts`, `stores/ui.ts` |
+| **Status** | committed (tests passing) |
+| **Commit** | — |
+
+---
 | **Files touched** | `app/src/lib/persistence/workspaceFlush.ts`, `app/src/features/chat/StackPicker.tsx`, `app/src/lib/ai/stacks/**`, `docs/HIVE_PIPELINE_SIMULATION_TIERS.md`, `docs/TERMINAL_PERSISTENCE_SHUTDOWN_UPDATE_TRAY.md` |
 | **Status** | committed (in `36fdbe5`) |
 | **Commit** | `36fdbe5` |
@@ -215,6 +298,10 @@ Append new entries at the **bottom** of the relevant agent section. Use [How to 
 | `app/src/features/terminals/**` | VibeSpace Main | v0.1.44 | in-progress | Urgent terminal stability, scrollback isolation, agent prompt delivery |
 | `app/src/components/layout/PageRouter.tsx` | VibeSpace Main | v0.1.44 | in-progress | Keep terminal surfaces stable across route switches |
 | `docs/AGENT_COORDINATION.md` | VibeSpace Main | v0.1.44 | in-progress | Coordination ledger for terminal reliability fix |
+| `app/src-tauri/src/agent_coordination.rs` | VibeSpace Main | v0.1.44 | in-progress | Native atomic project-local terminal agent coordination ledger |
+| `app/src-tauri/src/lib.rs` | VibeSpace Main | v0.1.44 | in-progress | Register terminal agent coordination commands only |
+| `app/src/features/terminals/agentCoordination*` | VibeSpace Main | v0.1.44 | in-progress | Typed terminal swarm state, locks, summaries, and tests |
+| `app/src/features/terminals/agentPromptPayload*` | VibeSpace Main | v0.1.44 | in-progress | Mode-aware terminal prompt payload builder |
 | `app/src/features/voice/voiceRouter.ts` | VibeSpace Worker 2 | v0.1.44 | in-progress | Voice module lifecycle + instant speech stop on close |
 | `app/src/features/voice/streamingVoice.ts` | VibeSpace Worker 2 | v0.1.44 | in-progress | Session-gated streaming TTS; no zombie playback |
 | `app/src/features/voice/WakeWordHost.tsx` | VibeSpace Worker 2 | v0.1.44 | in-progress | Gate wake word on hands-free mode only |
@@ -222,9 +309,42 @@ Append new entries at the **bottom** of the relevant agent section. Use [How to 
 | `app/src/stores/ui.ts` | VibeSpace Worker 2 | v0.1.44 | in-progress | Sync voice open/close with lifecycle |
 | `app/src/App.tsx` | VibeSpace Worker 2 | v0.1.44 | in-progress | VoiceModuleLifecycle backup sync |
 | `app/src/features/voice/VoiceModal.tsx` | VibeSpace Worker 2 | v0.1.44 | in-progress | Close button instant stop |
-| `app/src/lib/ai/runtime.ts` | VibeSpace Worker 2 | v0.1.44 | in-progress | Skip speech deltas when module closed |
+| `app/src/components/layout/TopBar.tsx` | VibeSpace Worker 2 | v0.1.44 | in-progress | Top-bar mic → composer STT (not Jarvis module) |
+| `app/src/features/composer-stt/composerSttService.ts` | VibeSpace Worker 2 | v0.1.44 | in-progress | Toolbar STT toggle helper |
+| `app/src/features/inspector/**` | VibeSpace Worker 2 | v0.1.44 | in-progress | Right-hand panel: Today, Quick Launch, Context, Tools Run, Trace milestones, Active Work |
+| `app/src/components/layout/Inspector.tsx` | VibeSpace Worker 2 | v0.1.44 | in-progress | Inspector wiring for production-ready right panel |
+| `app/src/features/launcher/launch.ts` | VibeSpace Worker 2 | v0.1.44 | in-progress | openExternal for Quick Launch URLs/apps/files |
+| `app/src/features/kanban/**` | VibeSpace Worker 1 | v0.1.44 | in-progress | Rebuild Kanban on Inspector milestone store |
+| `app/src/components/layout/Inspector.tsx` (KanbanContextPanel only) | VibeSpace Worker 1 | v0.1.44 | in-progress | Align inspector kanban strip with milestones |
+| `app/src/features/skills/**` | VibeSpace Worker (skills) | v0.1.44 | in-progress | Unified skills catalog, SkillsPage editor, /skills picker |
+| `app/src/lib/agents/skills.ts` | VibeSpace Worker (skills) | v0.1.44 | in-progress | resolveSkills delegates to unified catalog |
+| `app/src/features/chat/Composer.tsx` (/skills only) | VibeSpace Worker (skills) | v0.1.44 | in-progress | /skills picker reads unified catalog |
+| `app/src/lib/ai/runtime.ts` (skills block) | VibeSpace Worker (skills) | v0.1.44 | in-progress | getSelectedSkillsBlock via resolveCatalogSkills |
+| `app/src/lib/actions/promptAddendum.ts` (skills list) | VibeSpace Worker (skills) | v0.1.44 | in-progress | Available skills section from catalog |
 
-**Unclaimed dirty paths (CRITICAL — Worker 1 + Worker 2 both editing):** `app/src/lib/ai/**`, `app/src/stores/auth.ts`, `app/src/features/settings/sections/Hive.tsx`, `app/src/features/agents/**` (Worker 1 + Main overlap)
+#### 2026-06-18 — Skills system unification
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 |
+| **Version** | v0.1.44 |
+| **Plan** | Unified catalog (16 presets + custom), SkillsPage inline editor, /skills picker + runtime resolve, localStorage persistence |
+| **Files touched** | `features/skills/**`, `lib/agents/skills.ts`, `Composer.tsx`, `promptAddendum.ts` |
+| **Status** | complete (uncommitted) |
+| **Commit** | — |
+
+#### 2026-06-18 — Right-hand inspector panel production pass
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-18 |
+| **Version** | v0.1.44 |
+| **Plan** | Schedule/Open Tasks, Quick Launch fix, Context DnD+editor, Tools Run, Trace milestones, Active Work panel |
+| **Files touched** | `features/inspector/**`, `Inspector.tsx`, `launch.ts`, `TileGrid.tsx`, `App.tsx` |
+| **Status** | in-progress |
+| **Commit** | — |
+
+--- (CRITICAL — Worker 1 + Worker 2 both editing):** `app/src/lib/ai/**`, `app/src/stores/auth.ts`, `app/src/features/settings/sections/Hive.tsx`, `app/src/features/agents/**` (Worker 1 + Main overlap)
 
 **How to claim:** Add a row with `Status: in-progress` before editing. Remove or set `Status: committed` after merge/commit.
 

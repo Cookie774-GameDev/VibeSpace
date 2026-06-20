@@ -1,4 +1,5 @@
 import { terminalRestoreText, type SessionTranscript } from './transcriptStore';
+import { detectInteractiveAgentCli } from './agentPromptDelivery';
 
 export interface BackendTerminalInfo {
   sessionId: string;
@@ -50,28 +51,22 @@ function findHistoricalPaneTranscript(
   return matches[0] ?? null;
 }
 
-const INTERACTIVE_TUI_COMMAND_RE =
-  /\b(opencode|open-code|claude|codex|gemini|cursor-agent|cline|aider|goose|qwen|openai)\b/i;
-
-function isInteractiveTuiCommand(command: string | null | undefined): boolean {
-  return typeof command === 'string' && INTERACTIVE_TUI_COMMAND_RE.test(command);
+function isInteractiveTuiSession(
+  session: SessionTranscript | null | undefined,
+  backendInfo?: BackendTerminalInfo | null,
+): boolean {
+  return detectInteractiveAgentCli({
+    command: session?.command ?? backendInfo?.command,
+    startupCommand: backendInfo?.command,
+    transcript: session?.text,
+  });
 }
 
 function restoredTextForDeadSession(
   session: SessionTranscript | null | undefined,
 ): string {
   if (!session) return '';
-  if (isInteractiveTuiCommand(session.command)) {
-    return '';
-  }
-  return terminalRestoreText(session);
-}
-
-function restoredTextForActiveSession(
-  session: SessionTranscript | null | undefined,
-  backendInfo: BackendTerminalInfo | null | undefined,
-): string {
-  if (isInteractiveTuiCommand(session?.command) || isInteractiveTuiCommand(backendInfo?.command)) {
+  if (isInteractiveTuiSession(session)) {
     return '';
   }
   return terminalRestoreText(session);
@@ -95,10 +90,7 @@ export function resolveTerminalRestoreSession({
       return {
         kind: 'attach',
         sessionId: existingSessionId,
-        restoredText: restoredTextForActiveSession(
-          transcripts[existingSessionId],
-          activeExisting,
-        ),
+        restoredText: '',
         source: 'existing-session',
       };
     }
@@ -128,10 +120,7 @@ export function resolveTerminalRestoreSession({
         return {
           kind: 'attach',
           sessionId: historicalSession.sessionId,
-          restoredText: restoredTextForActiveSession(
-            historicalSession,
-            activeHistorical,
-          ),
+          restoredText: '',
           source: 'historical-pane',
         };
       }

@@ -19,6 +19,28 @@ function twoPaneTree(): PaneNode {
 }
 
 describe('paneTree change resolution', () => {
+  it('stores agent mode on leaves and preserves it through flat tree rebuilding', () => {
+    const first = newLeaf({ agentSlug: 'coder', agentMode: 'coordinated' });
+    const second = newLeaf({ agentSlug: 'critic', agentMode: 'no-context' });
+    const tree = fromLeaves([
+      first as Extract<PaneNode, { kind: 'leaf' }>,
+      second as Extract<PaneNode, { kind: 'leaf' }>,
+    ]);
+
+    const leaves = flattenLeaves(tree);
+    expect(leaves[0]?.agentMode).toBe('coordinated');
+    expect(leaves[1]?.agentMode).toBe('no-context');
+  });
+
+  it('updates agent mode without clearing the selected agent slug', () => {
+    const leaf = newLeaf({ agentSlug: 'coder', agentMode: 'default' }) as Extract<PaneNode, { kind: 'leaf' }>;
+    const tree = updateLeaf(leaf, leaf.id, { agentMode: 'no-context' });
+
+    const updated = flattenLeaves(tree)[0];
+    expect(updated?.agentSlug).toBe('coder');
+    expect(updated?.agentMode).toBe('no-context');
+  });
+
   it('merges concurrent async session attach updates against the latest tree', () => {
     let tree = twoPaneTree();
 

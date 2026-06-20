@@ -53,6 +53,7 @@ mod local_ai;
 mod kokoro;
 mod ollama_http;
 mod branding;
+mod agent_coordination;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -229,6 +230,12 @@ pub fn run() {
             terminal::terminal_move,
             terminal::terminal_list,
             terminal::terminal_reconcile,
+            agent_coordination::agent_coordination_snapshot,
+            agent_coordination::agent_coordination_register,
+            agent_coordination::agent_coordination_heartbeat,
+            agent_coordination::agent_coordination_lock_file,
+            agent_coordination::agent_coordination_release_file,
+            agent_coordination::agent_coordination_append_event,
             credentials::credential_set,
             credentials::credential_get,
             credentials::credential_delete,

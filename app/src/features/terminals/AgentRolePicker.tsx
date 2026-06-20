@@ -28,12 +28,17 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { AgentBadge } from '@/features/agents/AgentBadge';
+import type { AgentCoordinationMode } from './agentCoordination';
 
 export interface AgentRolePickerProps {
   /** Currently-tagged agent slug (e.g. 'builder'). null/undefined = no tag. */
   agentSlug?: string | null;
+  /** Context/coordination mode for this pane's selected agent. */
+  agentMode?: AgentCoordinationMode;
   /** Called with the new slug, or `null` to clear. */
   onChange: (slug: string | null) => void;
+  /** Called when the context/coordination mode changes. */
+  onModeChange?: (mode: AgentCoordinationMode) => void;
   /** Compact rendering for the pane chrome strip. */
   className?: string;
 }
@@ -66,7 +71,19 @@ function PickerRow({
   );
 }
 
-export function AgentRolePicker({ agentSlug, onChange, className }: AgentRolePickerProps) {
+const MODE_LABELS: Record<AgentCoordinationMode, string> = {
+  default: 'Default',
+  coordinated: 'Coordinated',
+  'no-context': 'No Context',
+};
+
+export function AgentRolePicker({
+  agentSlug,
+  agentMode = 'default',
+  onChange,
+  onModeChange,
+  className,
+}: AgentRolePickerProps) {
   const [open, setOpen] = React.useState(false);
   const agentsMap = useAgentStore((s) => s.agents);
 
@@ -100,17 +117,27 @@ export function AgentRolePicker({ agentSlug, onChange, className }: AgentRolePic
     setOpen(false);
   };
 
+  const chooseMode = (mode: AgentCoordinationMode) => {
+    onModeChange?.(mode);
+  };
+
+  const modeLabel = MODE_LABELS[agentMode];
+  const triggerLabel = selected
+    ? `Agent: ${selected.name} · ${modeLabel}`
+    : `Assign agent · ${modeLabel}`;
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={selected ? `Agent: ${selected.name}` : 'Assign agent'}
-          title={selected ? `Agent: ${selected.name}` : 'Assign an agent role'}
+          aria-label={triggerLabel}
+          title={triggerLabel}
           className={cn(
             'inline-flex h-5 items-center gap-1 rounded px-1.5 transition-colors',
             'text-metadata text-muted-foreground hover:bg-muted hover:text-foreground',
             selected && 'text-foreground',
+            agentMode === 'no-context' && 'bg-black/70 text-white ring-1 ring-white/15 hover:bg-black/85 hover:text-white',
             className,
           )}
         >
@@ -122,6 +149,16 @@ export function AgentRolePicker({ agentSlug, onChange, className }: AgentRolePic
               <span>Agent</span>
             </>
           )}
+          <span
+            className={cn(
+              'hidden rounded px-1 text-[9px] uppercase tracking-wide sm:inline',
+              agentMode === 'coordinated' && 'bg-accent-copper/15 text-accent-copper',
+              agentMode === 'default' && 'bg-muted text-muted-foreground',
+              agentMode === 'no-context' && 'bg-white/10 text-white',
+            )}
+          >
+            {modeLabel}
+          </span>
           <ChevronDown className="h-3 w-3 opacity-60" />
         </button>
       </PopoverTrigger>
@@ -162,6 +199,48 @@ export function AgentRolePicker({ agentSlug, onChange, className }: AgentRolePic
               </PickerRow>
             ))
           )}
+        </div>
+        <Separator className="my-1" />
+        <div className="px-2 py-1.5 text-metadata uppercase tracking-wide text-muted-foreground">
+          Agent mode
+        </div>
+        <div className="space-y-1">
+          <PickerRow active={agentMode === 'default'} onClick={() => chooseMode('default')}>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-foreground">Default</div>
+              <div className="text-metadata text-muted-foreground">
+                Normal terminal agent briefing.
+              </div>
+            </div>
+          </PickerRow>
+          <PickerRow active={agentMode === 'coordinated'} onClick={() => chooseMode('coordinated')}>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-foreground">Coordinated</div>
+              <div className="text-metadata text-muted-foreground">
+                Shared context, ledger, locks, and handoffs.
+              </div>
+            </div>
+          </PickerRow>
+          <button
+            type="button"
+            onClick={() => chooseMode('no-context')}
+            className={cn(
+              'w-full rounded border px-2 py-2 text-left transition-colors',
+              'border-white/10 bg-gradient-to-br from-black via-zinc-950 to-zinc-900 text-white shadow-inner',
+              'hover:border-white/25 hover:from-black hover:to-zinc-800',
+              agentMode === 'no-context' && 'ring-1 ring-white/30',
+            )}
+          >
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-medium">No Context</span>
+              <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide">
+                NO CONTEXT
+              </span>
+            </div>
+            <div className="text-metadata text-zinc-300">
+              Plain isolated agent. No project context or shared memory.
+            </div>
+          </button>
         </div>
       </PopoverContent>
     </Popover>

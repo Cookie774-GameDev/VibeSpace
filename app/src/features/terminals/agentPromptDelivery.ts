@@ -45,6 +45,8 @@ import { useAgentStore } from '@/stores/agents';
 import { composeSkillAddenda } from '@/lib/agents/skills';
 import { loadStoredContextTree, type ProjectContextTree } from '@/features/context/tree';
 import { useTerminalTranscriptStore } from './transcriptStore';
+import { buildAgentPromptPayload } from './agentPromptPayload';
+import type { AgentCoordinationMode } from './agentCoordination';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                 */
@@ -305,9 +307,11 @@ export function summarizeContextTree(tree: ProjectContextTree | null): string {
 export function buildAgentSpawnEnv(opts: {
   agentSlug: string;
   agentName?: string | null;
+  agentMode?: AgentCoordinationMode;
   cwd?: string | null;
   projectName?: string | null;
 }): Record<string, string> {
+  if (opts.agentMode === 'no-context') return {};
   const env: Record<string, string> = {
     JARVIS_AGENT_SLUG: opts.agentSlug,
   };
@@ -402,6 +406,7 @@ export interface AgentDeliveryResult {
   coordinationFilePath: string;
   /** Slug delivered, or null when the managed block was removed. */
   agentSlug: string | null;
+  agentMode?: AgentCoordinationMode;
   error?: string;
 }
 
@@ -434,19 +439,24 @@ async function loadProjectContext(projectId: string | null | undefined): Promise
 export async function deliverAgentTerminalContext(opts: {
   cwd: string;
   agentSlug: string | null;
+  agentMode?: AgentCoordinationMode;
+  terminalId?: string | null;
   projectId?: string | null;
   projectName?: string | null;
   excludeSessionId?: string | null;
+  coordinationSummary?: string | null;
 }): Promise<AgentDeliveryResult> {
   const instructionPaths = instructionFilePaths(opts.cwd);
   const agentsPath = instructionPaths[0]!;
   const coordinationPath = coordinationFilePath(opts.cwd);
+  const agentMode = opts.agentMode ?? 'default';
   const base: AgentDeliveryResult = {
     ok: false,
     agentsFilePath: agentsPath,
     instructionFilePaths: instructionPaths,
     coordinationFilePath: coordinationPath,
     agentSlug: opts.agentSlug,
+    agentMode,
   };
 
   try {
@@ -460,7 +470,7 @@ export async function deliverAgentTerminalContext(opts: {
       return { ...base, error: 'File system bridge unavailable (not running in the desktop app).' };
     }
 
-    if (opts.agentSlug == null) {
+    if (opts.agentSlug == null || agentMode === 'no-context') {
       for (const { path, result } of existingReads) {
         const existing = result.ok ? result.content : null;
         const merged = mergeManagedBlock(existing, null);
@@ -469,12 +479,6 @@ export async function deliverAgentTerminalContext(opts: {
         if (!write.ok) return { ...base, error: write.error.raw ?? write.error.code };
       }
       return { ...base, ok: true };
-    }
-
-    // Ensure the shared coordination document exists (never overwrite).
-    const coordinationRead = await readTextFile(coordinationPath);
-    if (!coordinationRead.ok && coordinationRead.error.code === 'not_found') {
-      await writeTextFile(coordinationPath, defaultCoordinationDoc(opts.projectName));
     }
 
     const { name, prompt } = resolveAgentForSlug(opts.agentSlug);
@@ -486,13 +490,17 @@ export async function deliverAgentTerminalContext(opts: {
       contextMapSummary = '';
     }
 
-    const briefing = composeAgentBriefing({
+    const payload = buildAgentPromptPayload({
+      mode: agentMode,
+      cwd: opts.cwd,
+      terminalId: opts.terminalId,
       agentSlug: opts.agentSlug,
       agentName: name,
       agentPrompt: prompt,
       projectName: opts.projectName,
       projectContext,
       contextMapSummary,
+      coordinationSummary: opts.coordinationSummary,
       otherAgents: gatherSiblingAgentActivity({
         projectId: opts.projectId,
         excludeSessionId: opts.excludeSessionId,
@@ -500,7 +508,16 @@ export async function deliverAgentTerminalContext(opts: {
       coordinationFilePath: coordinationPath,
     });
 
-    const block = wrapManagedBlock(briefing);
+    if (payload.shouldEnsureCoordinationDoc) {
+      // Ensure the shared coordination document exists (never overwrite).
+      const coordinationRead = await readTextFile(coordinationPath);
+      if (!coordinationRead.ok && coordinationRead.error.code === 'not_found') {
+        await writeTextFile(coordinationPath, defaultCoordinationDoc(opts.projectName));
+      }
+    }
+
+    const block = payload.managedBlock;
+    if (!payload.shouldWriteInstructionFiles || !block) return { ...base, ok: true };
     for (const { path, result } of existingReads) {
       const existing = result.ok ? result.content : null;
       const merged = mergeManagedBlock(existing, block);

@@ -13,6 +13,17 @@ export const HIVE_FRONTIER_MODELS = {
   kimi_k26: 'moonshotai/kimi-k2.6',
   perplexity_sonar: 'perplexity/sonar',
   mistral_large: 'mistral-large-latest',
+  // ── Hive Balance pipeline ──────────────────────────────────────────────────
+  /** Primary step: Gemini 3.5 Flash High — fast, accurate, cheap. */
+  google_flash_high: 'gemini-3.5-flash-high',
+  /** MiniMax-M3 — strong Chinese frontier model for cross-check. */
+  minimax_m3: 'minimax/minimax-m3',
+  /** GLM-5.2 — ZhipuAI's reasoning model for diverse ensemble. */
+  glm_52: 'zhipuai/glm-5.2',
+  /** DeepSeek V4 Pro Max — coding / reasoning harden step. */
+  deepseek_pro_max: 'deepseek-v4-pro-max',
+  /** GPT-5.4 mini xhigh — OpenAI lightweight final pass. */
+  openai_mini_xhigh: 'gpt-5.4-mini',
 } as const;
 
 export const GROK_HIGH_REASONING_EFFORT = 'high';

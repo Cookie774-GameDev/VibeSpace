@@ -29,6 +29,11 @@ import {
 } from '@/lib/entitlements';
 import { useAppAdmin } from '@/lib/admin';
 import { getCheckoutUrl, isStripeConfigured } from '@/lib/billing/stripe';
+import {
+  callCheckoutSession,
+  callCustomerPortal,
+  isBackendBillingConfigured,
+} from '@/lib/billing/checkout';
 import { openExternal } from '@/lib/tauri';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
@@ -46,9 +51,11 @@ const PLAN_PAGE_BACKGROUNDS: Record<PlanId, string> = {
 export function Plans() {
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const currentPlan = useAuthStore((s) => s.plan);
+  const cloudSession = useAuthStore((s) => s.cloudSession);
   const admin = useAppAdmin();
   const activePlanId = effectivePlan(currentPlan, admin);
-  const stripeReady = isStripeConfigured();
+  const stripeReady = isStripeConfigured() || isBackendBillingConfigured();
+  const isSignedIn = Boolean(cloudSession?.user_id);
 
   const openProvidersTab = () => {
     window.dispatchEvent(
@@ -57,11 +64,25 @@ export function Plans() {
   };
 
   const handleUpgrade = async (tier: PlanId) => {
+    // Prefer the dynamic Edge Function checkout when the user is signed in.
+    if (isSignedIn && isBackendBillingConfigured()) {
+      const result = await callCheckoutSession(tier);
+      if (result.ok) {
+        try {
+          await openExternal(result.url);
+        } catch (err) {
+          toast.error('Could not open checkout', (err as Error).message ?? 'Open the URL manually.');
+        }
+        return;
+      }
+      // If the backend failed, fall through to static URL or show toast.
+    }
+
     const url = getCheckoutUrl(tier);
     if (!url) {
       toast.info(
         'Checkout coming soon',
-        'Stripe links activate once the billing env vars are wired up.',
+        'Sign in or add Stripe env vars to activate billing.',
       );
       return;
     }
@@ -74,6 +95,25 @@ export function Plans() {
       );
     }
   };
+
+  const handleManageSubscription = async () => {
+    if (!isSignedIn || !isBackendBillingConfigured()) {
+      toast.info('Sign in required', 'Sign in with a cloud account to manage your subscription.');
+      return;
+    }
+    const result = await callCustomerPortal();
+    if (result.ok) {
+      try {
+        await openExternal(result.url);
+      } catch (err) {
+        toast.error('Could not open billing portal', (err as Error).message ?? 'Try again.');
+      }
+    } else {
+      toast.info('No subscription found', 'Upgrade to a paid plan to access the billing portal.');
+    }
+  };
+
+  void setSettingsOpen; // used by the outer modal
 
   return (
     <div className={cn('relative -m-4 flex flex-col gap-6 rounded-[28px] p-4', PLAN_PAGE_BACKGROUNDS[activePlanId])}>
@@ -105,8 +145,10 @@ export function Plans() {
             plan={PLANS[id]}
             isCurrent={id === activePlanId}
             checkoutUrl={getCheckoutUrl(id)}
+            backendReady={isSignedIn && isBackendBillingConfigured()}
             onAddKey={openProvidersTab}
             onUpgrade={() => void handleUpgrade(id)}
+            onManage={() => void handleManageSubscription()}
           />
         ))}
       </div>
@@ -147,12 +189,15 @@ interface PlanCardProps {
   plan: PlanDef;
   isCurrent: boolean;
   checkoutUrl: string | undefined;
+  /** True when the user is signed in and the Supabase backend is wired. */
+  backendReady: boolean;
   onAddKey: () => void;
   onUpgrade: () => void;
+  onManage: () => void;
 }
 
-function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCardProps) {
-  const billingReady = Boolean(checkoutUrl);
+function PlanCard({ plan, isCurrent, checkoutUrl, backendReady, onAddKey, onUpgrade, onManage }: PlanCardProps) {
+  const billingReady = backendReady || Boolean(checkoutUrl);
 
   // Spark Card (Free)
   if (plan.id === 'free') {
@@ -287,16 +332,16 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
           {/* CTA */}
           <div className="mt-auto flex flex-col gap-2 pt-2">
             {isCurrent ? (
-              <span className="text-metadata text-center text-muted-foreground/80 font-medium py-2">
-                Active. Managed via Stripe receipts.
-              </span>
+              <Button variant="secondary" size="sm" onClick={onManage} className="w-full border-accent-copper/30 text-accent-copper/80 hover:text-accent-copper">
+                Manage Subscription
+              </Button>
             ) : billingReady ? (
               <Button variant="accent" size="sm" onClick={onUpgrade} className="w-full bg-accent-copper hover:bg-accent-copper/90 text-white shadow-lg hover:shadow-accent-copper/20 hover:scale-[1.02] transition-all">
                 <Zap className="h-3.5 w-3.5" /> Upgrade — ${plan.priceUsd}/mo
               </Button>
             ) : (
-              <Button variant="secondary" size="sm" disabled className="w-full">
-                Available Soon
+              <Button variant="secondary" size="sm" onClick={onUpgrade} className="w-full">
+                Upgrade — ${plan.priceUsd}/mo
               </Button>
             )}
           </div>
@@ -370,16 +415,16 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
           {/* CTA */}
           <div className="mt-auto flex flex-col gap-2 pt-2">
             {isCurrent ? (
-              <span className="text-metadata text-center text-muted-foreground/80 font-medium py-2">
-                Active. Managed via Stripe receipts.
-              </span>
+              <Button variant="secondary" size="sm" onClick={onManage} className="w-full border-yellow-500/30 text-amber-400/80 hover:text-amber-400">
+                Manage Subscription
+              </Button>
             ) : billingReady ? (
               <Button variant="accent" size="sm" onClick={onUpgrade} className="w-full bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-450 hover:to-amber-550 text-white font-semibold shadow-lg hover:shadow-yellow-500/10 hover:scale-[1.02] transition-all">
                 <Zap className="h-3.5 w-3.5" /> Upgrade — ${plan.priceUsd}/mo
               </Button>
             ) : (
-              <Button variant="secondary" size="sm" disabled className="w-full">
-                Available Soon
+              <Button variant="secondary" size="sm" onClick={onUpgrade} className="w-full">
+                Upgrade — ${plan.priceUsd}/mo
               </Button>
             )}
           </div>
@@ -466,16 +511,16 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
             {/* CTA */}
             <div className="mt-auto flex flex-col gap-2 pt-2">
               {isCurrent ? (
-                <span className="text-metadata text-center text-slate-300 font-medium py-2">
-                  Active. Managed via Stripe receipts.
-                </span>
+                <Button variant="secondary" size="sm" onClick={onManage} className="w-full bg-slate-900 border-purple-500/30 text-purple-300/80 hover:text-purple-300">
+                  Manage Subscription
+                </Button>
               ) : billingReady ? (
                 <Button variant="accent" size="sm" onClick={onUpgrade} className="w-full bg-gradient-to-r from-purple-600 via-fuchsia-600 to-indigo-600 hover:from-purple-550 hover:to-indigo-550 text-white font-bold shadow-[0_0_20px_rgba(168,85,247,0.35)] hover:shadow-[0_0_30px_rgba(168,85,247,0.55)] hover:scale-[1.02] transition-all border-none">
                   <Zap className="h-3.5 w-3.5" /> Upgrade — ${plan.priceUsd}/mo
                 </Button>
               ) : (
-                <Button variant="secondary" size="sm" disabled className="w-full bg-slate-900 border-purple-500/25 text-slate-400">
-                  Available Soon
+                <Button variant="secondary" size="sm" onClick={onUpgrade} className="w-full bg-slate-900 border-purple-500/25 text-slate-300">
+                  Upgrade — ${plan.priceUsd}/mo
                 </Button>
               )}
             </div>
@@ -545,9 +590,9 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
 
             <div className="mt-auto flex flex-col gap-2 pt-2">
               {isCurrent ? (
-                <span className="py-2 text-center text-metadata font-medium text-orange-100/75">
-                  Active. Managed via Stripe receipts.
-                </span>
+                <Button variant="secondary" size="sm" onClick={onManage} className="w-full bg-slate-900 border-orange-300/30 text-orange-100/80 hover:text-orange-100">
+                  Manage Subscription
+                </Button>
               ) : billingReady ? (
                 <Button
                   variant="accent"
@@ -558,8 +603,8 @@ function PlanCard({ plan, isCurrent, checkoutUrl, onAddKey, onUpgrade }: PlanCar
                   <Zap className="h-3.5 w-3.5" /> Upgrade — ${plan.priceUsd}/mo
                 </Button>
               ) : (
-                <Button variant="secondary" size="sm" disabled className="w-full bg-slate-900 text-orange-100/60">
-                  Available Soon
+                <Button variant="secondary" size="sm" onClick={onUpgrade} className="w-full bg-slate-900 text-orange-100/60">
+                  Upgrade — ${plan.priceUsd}/mo
                 </Button>
               )}
             </div>
