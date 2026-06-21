@@ -54,6 +54,7 @@ import { useAuthStore } from '@/stores/auth';
 import {
   enqueueTerminalCommand,
   requestTerminalSwarm,
+  enqueueTerminalClose,
 } from '@/features/terminals/terminalCommandQueue';
 import type { TerminalRef } from '@/features/terminals/terminalRefs';
 import { taskRepo } from '@/lib/db/repositories';
@@ -493,6 +494,32 @@ const TERMINAL_ACTIONS: ActionDef[] = [
       return ok(
         `Opening ${count} terminal pane${count === 1 ? '' : 's'}${command ? ` with ${command}` : ''}.`,
       );
+    },
+  },
+  {
+    id: 'terminal.bulkClose',
+    category: 'terminal',
+    label: 'Close terminal panes',
+    description:
+      'Close the N most recently opened terminal panes. Use when the user asks to close, remove, or kill terminals.',
+    icon: Trash2,
+    destructive: true,
+    params: [
+      {
+        key: 'count',
+        label: 'Pane count',
+        type: 'number',
+        required: true,
+        default: 1,
+        help: 'How many panes to close (most recently opened first). Max 10.',
+      },
+    ],
+    run: async (params) => {
+      const rawCount = typeof params.count === 'number' ? params.count : 1;
+      const count = Math.min(10, Math.max(1, Math.floor(rawCount)));
+      enqueueTerminalClose(count);
+      navigateTo('terminal');
+      return ok(`Closing ${count} terminal pane${count === 1 ? '' : 's'}.`);
     },
   },
   {

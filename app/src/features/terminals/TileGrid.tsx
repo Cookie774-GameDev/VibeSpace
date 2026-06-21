@@ -56,6 +56,7 @@ import {
   closePane,
   gridDimensions,
   resizeAdjacentTracks,
+  resolvePaneAgentMode,
 } from './paneTree';
 import {
   PaneToolbar,
@@ -460,26 +461,23 @@ export function TileGrid({
     );
   };
 
-  const handleAgentChange = (paneId: string, slug: string | null) => {
-    // If the pane has no command yet and we're picking an agent that
-    // implies a CLI, pre-fill it. We never overwrite a user-set command.
+  const handleAgentSelection = (
+    paneId: string,
+    selection: { agentSlug: string | null; agentMode?: AgentCoordinationMode },
+  ) => {
     onChange((currentTree) => {
       const leaf = flattenLeaves(currentTree).find((l) => l.id === paneId);
       let nextCommand = leaf?.command;
-      if (slug && !leaf?.command) {
-        const suggested = defaultCommandForAgent?.(slug);
+      if (selection.agentSlug && !leaf?.command) {
+        const suggested = defaultCommandForAgent?.(selection.agentSlug);
         if (suggested) nextCommand = suggested;
       }
       return updateLeaf(currentTree, paneId, {
-        agentSlug: slug ?? undefined,
-        agentMode: slug ? leaf?.agentMode ?? 'default' : undefined,
+        agentSlug: selection.agentSlug ?? undefined,
+        agentMode: selection.agentMode,
         command: nextCommand,
       });
     });
-  };
-
-  const handleAgentModeChange = (paneId: string, mode: AgentCoordinationMode) => {
-    onChange((currentTree) => updateLeaf(currentTree, paneId, { agentMode: mode }));
   };
 
   const handleFontSizeCycle = (paneId: string) => {
@@ -530,8 +528,7 @@ export function TileGrid({
       onClose={() => handleClose(leaf.id)}
       onAttach={(sid) => handleSessionAttach(leaf.id, sid)}
       onPendingCommandSent={() => handlePendingCommandSent(leaf.id)}
-      onAgentChange={(slug) => handleAgentChange(leaf.id, slug)}
-      onAgentModeChange={(mode) => handleAgentModeChange(leaf.id, mode)}
+      onAgentSelection={(selection) => handleAgentSelection(leaf.id, selection)}
       onFontSizeCycle={() => handleFontSizeCycle(leaf.id)}
       onFullscreenToggle={() => onFullscreenToggle?.(leaf.id)}
       onConnectedFilesChange={(next) =>
@@ -702,8 +699,7 @@ interface TileProps {
   onClose: () => void;
   onAttach: (sessionId: string) => void;
   onPendingCommandSent: () => void;
-  onAgentChange: (slug: string | null) => void;
-  onAgentModeChange: (mode: AgentCoordinationMode) => void;
+  onAgentSelection: (selection: { agentSlug: string | null; agentMode?: AgentCoordinationMode }) => void;
   onFontSizeCycle: () => void;
   onFullscreenToggle: () => void;
   onConnectedFilesChange: (next: string[]) => void;
@@ -729,8 +725,7 @@ function Tile({
   onClose,
   onAttach,
   onPendingCommandSent,
-  onAgentChange,
-  onAgentModeChange,
+  onAgentSelection,
   onFontSizeCycle,
   onFullscreenToggle,
   onConnectedFilesChange,
@@ -1117,9 +1112,8 @@ function Tile({
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <AgentRolePicker
             agentSlug={leaf.agentSlug ?? null}
-            agentMode={leaf.agentMode ?? 'default'}
-            onChange={onAgentChange}
-            onModeChange={onAgentModeChange}
+            agentMode={resolvePaneAgentMode(leaf)}
+            onSelectionChange={onAgentSelection}
           />
           {isEditingName ? (
             <input
@@ -1194,7 +1188,7 @@ function Tile({
           cwd={leaf.cwd}
           fontSize={fontSize}
           agentSlug={leaf.agentSlug ?? null}
-          agentMode={leaf.agentMode ?? 'default'}
+          agentMode={resolvePaneAgentMode(leaf)}
           onReady={onAttach}
           onPendingCommandSent={onPendingCommandSent}
           onFocus={() => setIsFocused(true)}

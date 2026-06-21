@@ -639,7 +639,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     });
   };
 
-  const handleSlashCommand = async (trimmed: string): Promise<boolean> => {
+  const handleSlashCommand = async (trimmed: string): Promise<boolean | string> => {
     if (!trimmed.startsWith('/')) return false;
     const [cmdRaw, ...restParts] = trimmed.slice(1).split(/\s+/);
     const cmd = (cmdRaw ?? '').toLowerCase();
@@ -717,6 +717,11 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
         return true;
       }
       useUIStore.getState().setRoute(routes[cmd] as never);
+      if (rest) {
+        // Navigate to the surface as a side-effect, then continue the send with
+        // the remainder text so Jarvis can act on the stated task.
+        return rest;
+      }
       await addSystem(`Opened ${cmd}.`);
       return true;
     }
@@ -815,11 +820,15 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     const trimmed = text.trim();
     const hasConfirmedCommands = confirmedCommands.length > 0;
     if ((!trimmed && attachedFiles.length === 0 && attachedTerminals.length === 0 && attachedPlugins.length === 0 && attachedContexts.length === 0 && !hasConfirmedCommands) || sending) return;
-    if (await handleSlashCommand(trimmed)) return;
+    const slashResult = await handleSlashCommand(trimmed);
+    if (slashResult === true) return;
+    // When a route slash command has a remainder (e.g. "/terminals close 5 terminals"),
+    // handleSlashCommand returns the remainder text so we send it as the message.
+    const sendText = typeof slashResult === 'string' ? slashResult.trim() : trimmed;
 
     const auth = useAuthStore.getState();
     const sendCheck = validateSendModelAccess(
-      trimmed,
+      sendText,
       auth.chatModelSelection,
       modelSelectionContextFromAuth(auth),
       auth.stackCustomSteps,
@@ -884,7 +893,7 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
     setSending(true);
     try {
       if (nextAttachedTerminals.length > 0) {
-        const scheduled = parseTerminalScheduleRequest(trimmed);
+        const scheduled = parseTerminalScheduleRequest(sendText);
         if (scheduled) {
           scheduleTerminalCommandFromChat(nextAttachedTerminals, scheduled.command, scheduled.runAt);
           await messageRepo.create({
@@ -910,24 +919,24 @@ export function Composer({ chatId, placeholder, compact = false, disableRouteSla
         chat_id: chatId as ChatId,
         role: 'user',
         parts: [
-          { kind: 'text', text: trimmed || 'Attached context.' },
+          { kind: 'text', text: sendText || 'Attached context.' },
           ...attachedFiles.map((path) => ({ kind: 'file_ref' as const, ref: { kind: 'file' as const, id: path } })),
           ...nextAttachedTerminals.map((ref) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `terminal:${terminalRefKey(ref)}`, excerpt: `Terminal reference: ${terminalRefLabel(ref)}` } })),
           ...nextAttachedContexts.map((context) => ({ kind: 'file_ref' as const, ref: { kind: 'memory' as const, id: `context:${context.nodeId}`, excerpt: `Context: ${context.title}` } })),
         ],
       });
 
-      const mentionedAgentIds = extractMentionedAgentIds(trimmed, agents);
-      const mentionedPluginIds = extractPluginMentions(trimmed, PLUGIN_CATALOG);
+      const mentionedAgentIds = extractMentionedAgentIds(sendText, agents);
+      const mentionedPluginIds = extractPluginMentions(sendText, PLUGIN_CATALOG);
       const pluginIds = Array.from(new Set([...nextAttachedPlugins, ...mentionedPluginIds])).slice(0, 8);
       const messageFilePaths = Array.from(
-        new Set([...attachedFiles, ...extractAbsoluteFilePaths(trimmed)]),
+        new Set([...attachedFiles, ...extractAbsoluteFilePaths(sendText)]),
       ).slice(0, 8);
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
           detail: {
             chatId,
-            text: trimmed || 'Attached context.',
+            text: sendText || 'Attached context.',
             mentionedAgentIds,
             filePaths: messageFilePaths,
             terminalRefs: nextAttachedTerminals,

@@ -36,6 +36,7 @@ import {
   flattenLeaves,
   appendLeaf,
   fromLeaves,
+  closePane,
   MAX_PANES,
   resolvePaneTreeChange,
 } from './paneTree';
@@ -258,6 +259,14 @@ export function TerminalsPage() {
               command: defaultShell(),
               agentSlug: 'jarvis',
             });
+          } else if (item.kind === 'close') {
+            // Close the N most-recently-added leaves.
+            const leaves = flattenLeaves(next);
+            const toClose = leaves.slice(-Math.min(item.count, leaves.length));
+            for (const leaf of toClose) {
+              const closed = closePane(next, leaf.id);
+              if (closed) next = closed;
+            }
           }
         }
         return next;

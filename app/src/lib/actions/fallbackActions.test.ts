@@ -77,4 +77,42 @@ describe('inferFallbackActionProposals', () => {
   it('does not invent actions for vague requests', () => {
     expect(inferFallbackActionProposals('can you help me?', 'Sure.')).toEqual([]);
   });
+
+  it('proposes closing a stated number of terminal panes', () => {
+    const proposals = inferFallbackActionProposals(
+      'close 5 terminals',
+      'You can close terminals by clicking the X on each pane.',
+    );
+
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      action_id: 'terminal.bulkClose',
+      params: { count: 5 },
+      rationale: expect.stringMatching(/5 terminal/i),
+    });
+  });
+
+  it('proposes closing terminals when the request has a slash surface prefix', () => {
+    const proposals = inferFallbackActionProposals(
+      '/terminals close 5 terminals',
+      'To close terminals, click the X on each pane.',
+    );
+
+    expect(proposals[0]).toMatchObject({
+      action_id: 'terminal.bulkClose',
+      params: { count: 5 },
+    });
+  });
+
+  it('proposes closing all terminals for "close all terminals"', () => {
+    const proposals = inferFallbackActionProposals(
+      'close all terminals',
+      "Sure, I'll close all terminals.",
+    );
+
+    expect(proposals[0]).toMatchObject({
+      action_id: 'terminal.bulkClose',
+      params: { count: 10 },
+    });
+  });
 });

@@ -20,7 +20,11 @@ function proposal(
 }
 
 function normalized(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, ' ').trim();
+  // Strip a leading /surface-name prefix so "/terminals close 5" → "close 5"
+  // before keyword matching. Only strips a single word preceded by "/" at the
+  // very start to avoid mangling legitimate slash paths.
+  const stripped = text.replace(/^\/[a-z][a-z0-9-]*\s+/i, '');
+  return stripped.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function asksToOpenSettings(text: string): boolean {
@@ -75,6 +79,22 @@ function extractBulkOpenTerminalRequest(text: string): { count: number; command?
   return command ? { count, command } : { count };
 }
 
+function extractBulkCloseTerminalRequest(text: string): { count: number } | null {
+  // "close all terminals" → max 10
+  if (/\b(?:close|kill|remove|shut\s+down)\s+all\s+(?:terminals?|terminal\s+panes?|panes?)\b/.test(text)) {
+    return { count: 10 };
+  }
+  const countToken = '(\\d+|one|two|three|four|five|six|seven|eight|nine|ten)';
+  const patterns = [
+    new RegExp(`\\b(?:close|kill|remove|shut\\s+down)\\s+${countToken}\\s+(?:terminals?|terminal\\s+panes?|panes?)\\b`),
+    new RegExp(`\\b${countToken}\\s+(?:terminals?|terminal\\s+panes?|panes?)\\b.*\\b(?:close|kill|remove)\\b`),
+  ];
+  const matched = patterns.map((pattern) => pattern.exec(text)).find(Boolean);
+  const count = readTerminalCount(matched?.[1]);
+  if (!count) return null;
+  return { count };
+}
+
 /**
  * Deterministic safety net for tiny/local models that describe app actions in
  * prose but fail to emit the fenced `action` JSON needed to show approval cards.
@@ -117,6 +137,18 @@ export function inferFallbackActionProposals(
           ? { count: bulkOpen.count, command: bulkOpen.command }
           : { count: bulkOpen.count },
         `Open ${bulkOpen.count} terminal pane${bulkOpen.count === 1 ? '' : 's'}${bulkOpen.command ? ` with ${bulkOpen.command}` : ''} after user approval.`,
+      ),
+    );
+    return proposals;
+  }
+
+  const bulkClose = extractBulkCloseTerminalRequest(user);
+  if (bulkClose) {
+    proposals.push(
+      proposal(
+        'terminal.bulkClose',
+        { count: bulkClose.count },
+        `Close ${bulkClose.count === 10 ? 'all' : String(bulkClose.count)} terminal pane${bulkClose.count === 1 ? '' : 's'} after user approval.`,
       ),
     );
     return proposals;

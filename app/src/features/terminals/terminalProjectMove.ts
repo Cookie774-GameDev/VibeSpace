@@ -1,4 +1,5 @@
 import type { ProjectId } from '@/types/common';
+import type { AgentCoordinationMode } from './agentCoordination';
 import {
   MAX_PANES,
   type PaneNode,
@@ -82,6 +83,13 @@ function cleanFontSize(value: unknown): number | undefined {
   return value;
 }
 
+function cleanAgentMode(value: unknown): AgentCoordinationMode | undefined {
+  if (value === 'default' || value === 'coordinated' || value === 'no-context') {
+    return value;
+  }
+  return undefined;
+}
+
 function normalizeLeafForProject(
   raw: unknown,
   projectId: ProjectId | string | null,
@@ -110,6 +118,7 @@ function normalizeLeafForProject(
     startupCommand: cleanString(raw.startupCommand),
     cwd: cleanString(raw.cwd),
     agentSlug: cleanString(raw.agentSlug),
+    agentMode: cleanAgentMode(raw.agentMode),
     name: cleanString(raw.name),
     connectedFiles: cleanStringArray(raw.connectedFiles),
     fontSize: cleanFontSize(raw.fontSize),

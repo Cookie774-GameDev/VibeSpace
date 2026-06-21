@@ -40,8 +40,16 @@ export function useWorkspaceOpenTasks(workspaceId: WorkspaceId | null, projectId
     }, [workspaceId, projectId]) ?? [];
 
   const runStates = useAgentStore((s) => s.runStates);
-  const toolRuns = useToolRunsStore((s) => s.runs.filter((r) => r.status === 'running'));
-  const milestones = useMilestonesStore((s) => s.items.filter((i) => i.status !== 'done'));
+  const allToolRuns = useToolRunsStore((s) => s.runs);
+  const allMilestones = useMilestonesStore((s) => s.items);
+  const toolRuns = useMemo(
+    () => allToolRuns.filter((r) => r.status === 'running'),
+    [allToolRuns],
+  );
+  const milestones = useMemo(
+    () => allMilestones.filter((i) => i.status !== 'done'),
+    [allMilestones],
+  );
 
   return useMemo(() => {
     const now = Date.now();

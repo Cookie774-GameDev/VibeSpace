@@ -104,6 +104,8 @@ export function buildAddendumText(): string {
     '- To save a reusable command for later, use `custom.createTerminalCommand` or',
     '  `custom.createWorkflowTool` — still requires user approval first.',
     '- Terminal basics: "open terminals" means create new panes. "run a command in all terminals" means send text into existing panes. Never reuse one existing pane when the user asked for multiple new panes.',
+    '- Slash surface targeting: when the user writes `/surface action` (e.g., `/terminals close 5 terminals`), the `/surface` is context telling you which surface they are operating on — emit the appropriate action block for the stated task. Do not treat it as a request to only navigate or only explain.',
+    '- To close terminal panes, use `terminal.bulkClose` with `{"count": N}`. For "close all terminals", use count 10 (the max).',
     '- If the user attached/dragged a terminal, its transcript is already in your context — inspect and summarize it directly. Never claim you lack authorization to read attached terminals.',
     '- For "inspect this terminal" with an attachment, answer from the transcript first. Use `terminal.inspect` only when you need to refresh refs or the transcript block is missing.',
     '- If the user attached/dragged a terminal and asks to type or run something there, use `terminal.sendToRefs` with the paneId/sessionId from the attached-terminal context. Do not open a new pane.',

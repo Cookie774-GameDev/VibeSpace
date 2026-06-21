@@ -65,7 +65,7 @@ export function KanbanPage() {
   const removeMilestone = useMilestonesStore((s) => s.removeMilestone);
 
   const workspaceTasks = useWorkspaceOpenTasks(workspaceId, projectId);
-  const analytics = useWorkspaceAnalyticsStore((s) => s.snapshot());
+  const completedMilestones = useWorkspaceAnalyticsStore((s) => s.completedMilestones);
 
   const progress = useKanbanMilestoneProgress(items);
   const buckets = useKanbanMilestoneBuckets(items);
@@ -155,7 +155,7 @@ export function KanbanPage() {
         <AnalyticsSummary
           progress={progress}
           liveOpen={workspaceTasks.length}
-          analytics={analytics}
+          completedMilestones={completedMilestones}
         />
       </header>
 
@@ -207,13 +207,11 @@ export function KanbanPage() {
 function AnalyticsSummary({
   progress,
   liveOpen,
-  analytics,
+  completedMilestones,
 }: {
   progress: { done: number; total: number; open: number; percent: number };
   liveOpen: number;
-  analytics: {
-    completedMilestones: number;
-  };
+  completedMilestones: number;
 }) {
   return (
     <div className="cozy-card flex flex-wrap items-stretch gap-4 p-4 min-w-[280px]">
@@ -222,7 +220,7 @@ function AnalyticsSummary({
       <StatBlock label="Live work" value={String(liveOpen)} hint="open items" />
       <StatBlock
         label="Session"
-        value={analytics.completedMilestones > 0 ? String(analytics.completedMilestones) : '—'}
+        value={completedMilestones > 0 ? String(completedMilestones) : '—'}
         hint="done (rollup)"
       />
     </div>

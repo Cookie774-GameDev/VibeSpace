@@ -28,7 +28,13 @@ export function InspectorActiveWorkPanel({ workspaceId }: InspectorActiveWorkPan
   const projectId = useAuthStore((s) => s.projectId);
   const terminals = useLiveTerminalStatuses(workspaceId, projectId);
   const chats = useLiveChatStatuses(workspaceId, projectId);
-  const analytics = useWorkspaceAnalyticsStore();
+  const totalTokens = useWorkspaceAnalyticsStore((s) => s.totalTokens);
+  const estimatedTotalCostUsd = useWorkspaceAnalyticsStore((s) => s.estimatedTotalCostUsd);
+  const foregroundActiveMs = useWorkspaceAnalyticsStore((s) => s.foregroundActiveMs);
+  const backgroundRunningMs = useWorkspaceAnalyticsStore((s) => s.backgroundRunningMs);
+  const completedMilestones = useWorkspaceAnalyticsStore((s) => s.completedMilestones);
+  const toolRunCount = useWorkspaceAnalyticsStore((s) => s.toolRunCount);
+  const byModel = useWorkspaceAnalyticsStore((s) => s.byModel);
   const pinnedFiles = usePinnedStore((s) => s.files);
   const pinnedMaps = usePinnedStore((s) => s.maps);
   const unpinFile = usePinnedStore((s) => s.unpinFile);
@@ -80,19 +86,19 @@ export function InspectorActiveWorkPanel({ workspaceId }: InspectorActiveWorkPan
 
       <Section label="Analytics" icon={<Activity className="h-3.5 w-3.5" />}>
         <div className="rounded-md border border-border bg-elevated px-2.5 py-2 text-secondary space-y-1.5">
-          <Row label="Tokens (local)" value={analytics.totalTokens > 0 ? analytics.totalTokens.toLocaleString() : 'Not tracked yet'} />
+          <Row label="Tokens (local)" value={totalTokens > 0 ? totalTokens.toLocaleString() : 'Not tracked yet'} />
           <Row
             label="Est. cost"
-            value={analytics.estimatedTotalCostUsd > 0 ? `$${analytics.estimatedTotalCostUsd.toFixed(4)}` : 'Estimated when usage exists'}
+            value={estimatedTotalCostUsd > 0 ? `$${estimatedTotalCostUsd.toFixed(4)}` : 'Estimated when usage exists'}
           />
-          <Row label="Foreground" value={formatDurationMs(analytics.foregroundActiveMs)} />
-          <Row label="Background" value={formatDurationMs(analytics.backgroundRunningMs)} />
-          <Row label="Milestones done" value={String(analytics.completedMilestones)} />
-          <Row label="Tool runs" value={String(analytics.toolRunCount)} />
-          {analytics.byModel.length > 0 ? (
+          <Row label="Foreground" value={formatDurationMs(foregroundActiveMs)} />
+          <Row label="Background" value={formatDurationMs(backgroundRunningMs)} />
+          <Row label="Milestones done" value={String(completedMilestones)} />
+          <Row label="Tool runs" value={String(toolRunCount)} />
+          {byModel.length > 0 ? (
             <div className="pt-1 border-t border-border/60">
               <p className="text-metadata uppercase tracking-wide text-muted-foreground mb-1">By provider</p>
-              {analytics.byModel.slice(0, 4).map((row) => (
+              {byModel.slice(0, 4).map((row) => (
                 <Row
                   key={row.providerName}
                   label={row.providerName}

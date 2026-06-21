@@ -1648,8 +1648,10 @@ function TerminalRow({ session }: { session: TerminalSession }) {
 // ----- Kanban — recent milestone transitions -----
 
 function KanbanContextPanel(_props: { workspaceId: WorkspaceId | null }) {
-  const milestones = useMilestonesStore((s) =>
-    [...s.items].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10),
+  const milestoneItems = useMilestonesStore((s) => s.items);
+  const milestones = React.useMemo(
+    () => [...milestoneItems].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10),
+    [milestoneItems],
   );
 
   if (milestones.length === 0) {

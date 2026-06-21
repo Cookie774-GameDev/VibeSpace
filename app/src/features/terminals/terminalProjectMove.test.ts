@@ -73,4 +73,23 @@ describe('terminal project ownership repair', () => {
     expect(targetLeaves[0]?.sessionId).toBe('tty_a');
     expect(targetLeaves[0]?.projectId).toBe('proj_b');
   });
+
+  it('restores agentMode when loading a saved terminal tree', () => {
+    window.localStorage.setItem(
+      terminalTreeStorageKey('proj_a'),
+      JSON.stringify({
+        kind: 'leaf',
+        id: 'pane_coord',
+        sessionId: null,
+        projectId: 'proj_a',
+        command: 'powershell.exe',
+        agentSlug: 'coder',
+        agentMode: 'coordinated',
+      }),
+    );
+
+    const leaves = flattenLeaves(loadTerminalTreeForProject('proj_a'));
+    expect(leaves[0]?.agentSlug).toBe('coder');
+    expect(leaves[0]?.agentMode).toBe('coordinated');
+  });
 });

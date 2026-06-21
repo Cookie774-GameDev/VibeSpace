@@ -292,3 +292,15 @@ export function gridDimensions(n: number): { cols: number; rows: number } {
   if (n <= 12) return { cols: 4, rows: 3 };
   return { cols: 4, rows: 4 };
 }
+
+/**
+ * Resolve the effective coordination mode for a pane leaf.
+ * Plain shell panes (no slug) never inherit a stale coordinated/default mode.
+ */
+export function resolvePaneAgentMode(
+  leaf: Pick<LeafBase, 'agentSlug' | 'agentMode'>,
+): AgentCoordinationMode | undefined {
+  if (leaf.agentMode === 'no-context') return 'no-context';
+  if (leaf.agentSlug) return leaf.agentMode ?? 'default';
+  return undefined;
+}

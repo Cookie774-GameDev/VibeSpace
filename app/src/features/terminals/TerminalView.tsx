@@ -221,7 +221,7 @@ export function TerminalView({
   hideChrome = false,
   fontSize = 9,
   agentSlug,
-  agentMode = 'default',
+  agentMode,
   onReady,
   onPendingCommandSent,
   onExit,
@@ -230,6 +230,8 @@ export function TerminalView({
   projectId,
   projectName,
 }: TerminalViewProps): JSX.Element {
+  const resolvedAgentMode =
+    agentMode ?? (agentSlug ? 'default' : undefined);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -239,7 +241,7 @@ export function TerminalView({
   const cwdRef = useRef<string | null>(cwd ?? null);
   // Last agent slug whose briefing was written for this session's cwd.
   const deliveredSlugRef = useRef<string | null>(null);
-  const deliveredModeRef = useRef(agentMode);
+  const deliveredModeRef = useRef(resolvedAgentMode);
   const exitFiredRef = useRef(false);
   const focusedRef = useRef(false);
   const dictatingRef = useRef(false);
@@ -259,7 +261,7 @@ export function TerminalView({
   const powerUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const coordinationSummaryFor = async (
-    mode: AgentCoordinationMode,
+    mode: AgentCoordinationMode | undefined,
     sessionCwd: string | null | undefined,
   ): Promise<string> => (mode === 'coordinated' ? loadCoordinationSummary(sessionCwd) : '');
 
@@ -280,7 +282,7 @@ export function TerminalView({
   // output that arrived before that window had the wrong tag. Reading
   // through the ref eliminates the window.
   const agentSlugRef = useRef(agentSlug ?? null);
-  const agentModeRef = useRef(agentMode);
+  const agentModeRef = useRef(resolvedAgentMode);
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
@@ -301,8 +303,8 @@ export function TerminalView({
     agentSlugRef.current = slug;
   }, [agentSlug]);
   useEffect(() => {
-    agentModeRef.current = agentMode;
-  }, [agentMode]);
+    agentModeRef.current = resolvedAgentMode;
+  }, [resolvedAgentMode]);
 
   useEffect(() => {
     return () => {
@@ -348,7 +350,7 @@ export function TerminalView({
     useTerminalTranscriptStore.getState().retagSession(sid, agentSlug ?? null);
 
     const slug = agentSlug ?? null;
-    const mode = agentMode;
+    const mode = resolvedAgentMode;
     if (deliveredSlugRef.current === slug && deliveredModeRef.current === mode) return;
     deliveredSlugRef.current = slug;
     deliveredModeRef.current = mode;
@@ -371,20 +373,20 @@ export function TerminalView({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentSlug, agentMode]);
+  }, [agentSlug, resolvedAgentMode]);
 
   useEffect(() => {
     const sid = activeSessionId;
     const sessionCwd = cwdRef.current;
     const slug = agentSlug ?? null;
-    if (!sid || !sessionCwd || agentMode !== 'coordinated' || !slug) return;
+    if (!sid || !sessionCwd || resolvedAgentMode !== 'coordinated' || !slug) return;
 
     const agentName = resolveAgentForSlug(slug).name;
     const provider = inferAgentProvider(startupCommand ?? command);
     let cancelled = false;
     const base = {
       cwd: sessionCwd,
-      mode: agentMode,
+      mode: resolvedAgentMode,
       terminalId: sid,
       paneId: paneId ?? null,
       agentSlug: slug,
@@ -413,7 +415,7 @@ export function TerminalView({
       cancelled = true;
       window.clearInterval(heartbeatTimer);
     };
-  }, [activeSessionId, agentMode, agentSlug, command, paneId, startupCommand]);
+  }, [activeSessionId, resolvedAgentMode, agentSlug, command, paneId, startupCommand]);
 
   useEffect(() => {
     const containerEl = containerRef.current;

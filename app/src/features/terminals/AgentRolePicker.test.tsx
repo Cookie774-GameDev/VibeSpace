@@ -25,13 +25,13 @@ function makeAgent(slug: string, name: string): Agent {
   } as unknown as Agent;
 }
 
-describe('AgentRolePicker modes', () => {
+describe('AgentRolePicker', () => {
   beforeEach(() => {
     useAgentStore.setState({ agents: {}, runStates: {}, verbs: {}, tokens: {} });
     useAgentStore.getState().registerAgent(makeAgent('coder', 'Coder'));
   });
 
-  it('shows the selected mode in the trigger label', () => {
+  it('shows coordinated swarm label on the trigger when persisted', () => {
     render(
       <AgentRolePicker
         agentSlug="coder"
@@ -41,24 +41,57 @@ describe('AgentRolePicker modes', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /coder.*coordinated/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /coder.*swarm/i })).toBeTruthy();
   });
 
-  it('lets users select no-context mode from the popover', () => {
-    const onModeChange = vi.fn();
+  it('selects no-context as a single option from the list', () => {
+    const onSelectionChange = vi.fn();
     render(
       <AgentRolePicker
         agentSlug="coder"
         agentMode="default"
-        onChange={vi.fn()}
-        onModeChange={onModeChange}
+        onSelectionChange={onSelectionChange}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /coder.*default/i }));
-    fireEvent.click(screen.getByRole('button', { name: /plain isolated agent/i }));
+    fireEvent.click(screen.getByRole('button', { name: /assign agent/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^no context$/i }));
 
-    expect(onModeChange).toHaveBeenCalledWith('no-context');
-    expect(screen.getByText('NO CONTEXT')).toBeTruthy();
+    expect(onSelectionChange).toHaveBeenCalledWith({
+      agentSlug: null,
+      agentMode: 'no-context',
+    });
+  });
+
+  it('selects an agent with default context in one click', () => {
+    const onSelectionChange = vi.fn();
+    render(<AgentRolePicker onSelectionChange={onSelectionChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /assign agent/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^coder$/i }));
+
+    expect(onSelectionChange).toHaveBeenCalledWith({
+      agentSlug: 'coder',
+      agentMode: 'default',
+    });
+  });
+
+  it('selects shell as a single option with cleared mode', () => {
+    const onSelectionChange = vi.fn();
+    render(
+      <AgentRolePicker
+        agentSlug="coder"
+        agentMode="default"
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /assign agent/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^shell$/i }));
+
+    expect(onSelectionChange).toHaveBeenCalledWith({
+      agentSlug: null,
+      agentMode: undefined,
+    });
   });
 });

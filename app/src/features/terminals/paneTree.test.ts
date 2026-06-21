@@ -3,6 +3,7 @@ import {
   flattenLeaves,
   fromLeaves,
   newLeaf,
+  resolvePaneAgentMode,
   resizeAdjacentTracks,
   resolvePaneTreeChange,
   updateLeaf,
@@ -65,5 +66,23 @@ describe('resizeAdjacentTracks', () => {
     expect(next[1]).toBeCloseTo(0.35);
     expect(next[2]).toBeCloseTo(1);
     expect(next.reduce((sum, value) => sum + value, 0)).toBeCloseTo(3);
+  });
+});
+
+describe('resolvePaneAgentMode', () => {
+  it('returns undefined for plain shell panes', () => {
+    expect(resolvePaneAgentMode({})).toBeUndefined();
+    expect(resolvePaneAgentMode({ agentMode: 'coordinated' })).toBeUndefined();
+  });
+
+  it('preserves no-context without a slug', () => {
+    expect(resolvePaneAgentMode({ agentMode: 'no-context' })).toBe('no-context');
+  });
+
+  it('defaults named agents to default mode', () => {
+    expect(resolvePaneAgentMode({ agentSlug: 'coder' })).toBe('default');
+    expect(resolvePaneAgentMode({ agentSlug: 'coder', agentMode: 'coordinated' })).toBe(
+      'coordinated',
+    );
   });
 });

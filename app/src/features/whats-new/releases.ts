@@ -31,7 +31,7 @@ import { Sparkles, Wrench, Rocket, Package, AlertTriangle, type LucideIcon } fro
  * The version string is also what the auto-show flow stores in
  * localStorage so users only see each release's notes once.
  */
-export const CURRENT_VERSION = '0.1.45';
+export const CURRENT_VERSION = '0.1.46';
 
 /**
  * Section type for grouping changelog items inside a release.

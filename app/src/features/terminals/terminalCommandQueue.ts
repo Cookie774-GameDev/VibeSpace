@@ -57,6 +57,13 @@ export type TerminalCommand =
       kind: 'swarm';
       /** Stable id. */
       id: string;
+    }
+  | {
+      kind: 'close';
+      /** Stable id. */
+      id: string;
+      /** How many of the most-recently-added panes to close. Clamped 1–10. */
+      count: number;
     };
 
 interface TerminalCommandQueueState {
@@ -69,6 +76,9 @@ interface TerminalCommandQueueState {
 
   /** Append a swarm-preset request; returns the assigned id. */
   requestSwarm: () => string;
+
+  /** Append a close request for the N most-recent panes; returns the assigned id. */
+  requestClose: (count: number) => string;
 
   /**
    * Drain everything currently queued and return it. Resets the queue
@@ -103,6 +113,12 @@ export const useTerminalCommandQueue = create<TerminalCommandQueueState>(
       set((s) => ({ queue: [...s.queue, { kind: 'swarm', id }] }));
       return id;
     },
+    requestClose: (count) => {
+      const id = newId('tcls');
+      const clamped = Math.min(10, Math.max(1, Math.floor(count)));
+      set((s) => ({ queue: [...s.queue, { kind: 'close', id, count: clamped }] }));
+      return id;
+    },
     drain: () => {
       const items = get().queue;
       if (items.length === 0) return items;
@@ -130,4 +146,9 @@ export function broadcastTerminalCommand(
 /** Convenience for non-React callers — enqueue a swarm-preset request. */
 export function requestTerminalSwarm(): string {
   return useTerminalCommandQueue.getState().requestSwarm();
+}
+
+/** Close the N most-recently-added terminal panes. */
+export function enqueueTerminalClose(count: number): string {
+  return useTerminalCommandQueue.getState().requestClose(count);
 }

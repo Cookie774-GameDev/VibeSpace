@@ -443,3 +443,18 @@ Update **Active version target**, roll **Committed this version** into CHANGELOG
 ---
 
 *Maintained by all four agents. Last seeded: 2026-06-16 — v0.1.43 (`36fdbe5`, `023a69a`).*
+
+---
+
+### VibeSpace Worker 1 (subagent)
+
+#### 2026-06-21 — Jarvis slash-surface targeting + close-terminal action bugfix
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | 2026-06-21 08:44 AM CT |
+| **Version** | v0.1.44 |
+| **Plan** | (1) Add `terminal.bulkClose` registered action + queue plumbing. (2) Fix fallback detection for "close N terminals" + slash-prefix stripping. (3) Fix Composer route slash commands to pass remainder text to AI instead of discarding. (4) Update promptAddendum with surface-targeting and close guidance. |
+| **Files touched** | `app/src/features/terminals/terminalCommandQueue.ts`, `app/src/features/terminals/TerminalsPage.tsx`, `app/src/lib/actions/registry.ts`, `app/src/lib/actions/fallbackActions.ts`, `app/src/lib/actions/promptAddendum.ts`, `app/src/features/chat/Composer.tsx`, `app/src/lib/actions/fallbackActions.test.ts`, `app/src/lib/ai/runtime.test.ts` |
+| **Status** | implemented; 10/10 fallbackActions tests GREEN, 13/13 runtime tests GREEN, typecheck clean, no lints |
+| **Commit** | — |
