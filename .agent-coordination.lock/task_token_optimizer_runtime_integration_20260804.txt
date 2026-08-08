@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG1-TOKEN-RUNTIME-INTEGRATION-20260804
+controller=/root
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:00:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Connect the existing Token Optimize service to the canonical chat request, preserve the exact Off path, and render the privacy-safe optimization receipt.
+owned_paths=app/src/features/token-optimizer/browserPreferences.ts;app/src/features/token-optimizer/chatRuntimeBridge.ts;app/src/features/token-optimizer/modePreferences.ts;app/src/features/token-optimizer/modePreferences.test.ts;app/src/features/token-optimizer/TokenOptimizationChatControl.tsx;app/src/features/token-optimizer/TokenOptimizationGlobalSettings.tsx;app/src/features/token-optimizer/TokenOptimizationReceiptView.tsx;app/src/features/token-optimizer/reasoningModeBridge.ts;app/src/features/token-optimizer/reasoningModeBridge.test.ts;app/src/features/token-optimizer/index.ts;app/src/lib/ai/runtime.ts;app/src/lib/ai/intelligenceTelemetryRuntime.ts;app/src/lib/ai/intelligenceTelemetryRuntime.test.ts;app/src/types/chat.ts;app/src/features/chat/Composer.tsx;app/src/features/chat/MessagePart.tsx;app/src/features/chat/agentic-console/projection.ts
+exclusions=all other files;all unrelated dirty hunks;provider selection;model switching;external systems;Git staging/commit/push/branch;Computer Control
+verification=one final focused TypeScript/test command at the program boundary;git diff check in the final verification pass
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

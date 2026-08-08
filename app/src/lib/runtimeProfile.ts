@@ -311,7 +311,6 @@ const MONOCHROME_BROWSER_CASE_IDS = Object.freeze([
   'route:workbench',
   'settings:about',
   'settings:accessibility',
-  'settings:account',
   'settings:admin',
   'settings:allaboutme',
   'settings:ambient',

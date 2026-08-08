@@ -41,11 +41,15 @@ export {
   assertAllowedOllamaEndpoint,
   waitForOllamaReachable,
   pullOllamaModel,
+  removeOllamaModel,
+  verifyOllamaModelChat,
   validateModelName,
 } from './providers/ollama';
 export type {
   OllamaModelInfo,
   OllamaPullProgress,
+  OllamaPullOptions,
+  OllamaChatVerification,
   OllamaEnsureStatus,
   EnsureOllamaOptions,
 } from './providers/ollama';

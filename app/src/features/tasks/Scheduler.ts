@@ -6,6 +6,7 @@ import type {
   NotificationChannel,
 } from '@/types/task';
 import { newReminderId } from '@/lib/ids';
+import { formatUserTime } from '@/lib/timeFormat';
 
 /**
  * Inputs the smart scheduler reads from. All fields except `now` and
@@ -305,7 +306,7 @@ function smartReasonForOffset(fires: number, anchor: number, priority: TaskPrior
 
 function smartReasonForSoft(ts: number, priority: TaskPriority): string {
   const d = new Date(ts);
-  const clock = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const clock = formatUserTime(d);
   if (priority === 'urgent') return `Pinging you at ${clock} - flagged urgent without a hard deadline.`;
   if (priority === 'high') return `Coming back to this around ${clock} since it's high priority.`;
   return `Setting this for ${clock} - no hard deadline so picking a calm window.`;

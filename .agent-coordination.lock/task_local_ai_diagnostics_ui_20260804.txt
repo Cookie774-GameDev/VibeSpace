@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG1-LOCAL-AI-DIAGNOSTICS-UI-20260804
+controller=/root
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:44:28-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Show the privacy-safe local AI diagnostics defaults truthfully in the existing Telemetry settings without adding another settings surface.
+owned_paths=app/src/features/settings/sections/Telemetry.tsx;app/src/features/settings/sections/Telemetry.test.tsx
+exclusions=all other files;optional telemetry consent behavior;external exporters;cloud/backends;Git operations;Computer Control
+verification=add one focused assertion but do not run until the single final bounded verification pass
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

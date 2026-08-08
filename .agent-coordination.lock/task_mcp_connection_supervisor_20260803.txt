@@ -1,0 +1,11 @@
+task_id=VS-PR31-MG2-MCP-SUPERVISOR-20260803-B8
+controller=/root/browser_codex_audit
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T14:58:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement a trusted-config-only MCP connection supervisor and browser-action approval contract over the existing unified registry, with bounded reconnects, cancellation, authority-none returned content, and no live executor.
+owned_paths=app/src/lib/jarvis/unifiedMcpRegistry.ts;app/src/lib/jarvis/unifiedMcpRegistry.test.ts;app/src/lib/jarvis/mcpConnectionSupervisor.ts;app/src/lib/jarvis/mcpConnectionSupervisor.test.ts;app/src/lib/jarvis/browserActionApproval.ts;app/src/lib/jarvis/browserActionApproval.test.ts
+exclusions=all other files;live connectors/executors/browser sessions/network/credentials/user data;package/UI files;Git mutation;Computer Control;nested delegation
+status=DELEGATED_MCP_SUPERVISION

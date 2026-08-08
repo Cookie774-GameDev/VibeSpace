@@ -1,3 +1,4 @@
+import { afterEach, vi } from 'vitest';
 import { useAuthStore } from './auth';
 import { secureDeleteApiKey, secureGetApiKey } from '@/lib/security/secureApiKeys';
 import { DEFAULT_CUSTOM_STEPS } from '@/lib/ai/stacks/presets';
@@ -54,9 +55,9 @@ describe('Prompt Forge model preference', () => {
 });
 
 describe('composer STT defaults', () => {
-  it('defaults to system provider and small faster-whisper model', () => {
+  it('defaults to system provider and Whisper small.en Q8 local catalog id', () => {
     expect(useAuthStore.getInitialState().composerSttProvider).toBe('system');
-    expect(useAuthStore.getInitialState().fasterWhisperModel).toBe('small');
+    expect(useAuthStore.getInitialState().fasterWhisperModel).toBe('whisper-small-en-q8');
   });
 });
 
@@ -98,11 +99,11 @@ describe('automatic model routing preference', () => {
 });
 
 describe('voice defaults', () => {
-  it('defaults new installs to Kokoro neural voice', () => {
-    expect(useAuthStore.getInitialState().voiceEngine).toBe('kokoro');
+  it('defaults new installs to Jarvis High neural voice', () => {
+    expect(useAuthStore.getInitialState().voiceEngine).toBe('jarvis');
   });
 
-  it('migrates legacy system voice to Kokoro on v8', async () => {
+  it('migrates legacy system voice to Jarvis High', async () => {
     window.localStorage.setItem(
       'jarvis-auth',
       JSON.stringify({
@@ -114,7 +115,24 @@ describe('voice defaults', () => {
       }),
     );
     await useAuthStore.persist.rehydrate();
-    expect(useAuthStore.getState().voiceEngine).toBe('kokoro');
+    expect(useAuthStore.getState().voiceEngine).toBe('jarvis');
+  });
+
+  it('migrates Kokoro and retired personas to Jarvis', async () => {
+    window.localStorage.setItem(
+      'jarvis-auth',
+      JSON.stringify({
+        state: {
+          voiceEngine: 'kokoro',
+          voicePreset: 'jarvis-prime',
+          personaPreset: 'athena',
+        },
+        version: 14,
+      }),
+    );
+    await useAuthStore.persist.rehydrate();
+    expect(useAuthStore.getState().voiceEngine).toBe('jarvis');
+    expect(useAuthStore.getState().personaPreset).toBe('jarvis');
   });
 });
 
@@ -219,6 +237,7 @@ describe('useAuthStore API key persistence', () => {
   });
 
   it('persists Hive preset and custom steps without API keys', () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     useAuthStore.getState().setStackPreset('custom');
     useAuthStore.getState().setStackCustomSteps([
       {
@@ -237,6 +256,13 @@ describe('useAuthStore API key persistence', () => {
     expect(persisted).toContain('"model":"gpt-4o-mini"');
     expect(persisted).not.toContain('sk_');
     expect(persisted).not.toContain('service_role');
+    vi.unstubAllEnvs();
+  });
+
+  it('refuses Hive stack activation while the product is gated', () => {
+    useAuthStore.getState().setStackPreset('balanced');
+    expect(useAuthStore.getState().stackPreset).toBe('off');
+    expect(useAuthStore.getState().chatModelSelection).toEqual({ mode: 'none' });
   });
 
   it('persists explicit single-model chat selection', () => {

@@ -14,7 +14,6 @@ import {
 import { useAuthStore } from '@/stores/auth';
 import {
   assertAllowedOllamaEndpoint,
-  connectLocalModelToChat,
   listOllamaModelInfo,
   LOCAL_MODEL_CATALOG,
   catalogDisplayName,
@@ -22,8 +21,10 @@ import {
   ollamaBaseUrl,
   OLLAMA_DEFAULT_BASE,
   pullOllamaModel,
+  removeOllamaModel,
   syncDiscoveredOllamaModels,
   validateModelName,
+  verifyOllamaModelChat,
   type OllamaEnsureStatus,
   type OllamaModelInfo,
   type OllamaPullProgress,
@@ -31,6 +32,7 @@ import {
 import { bootstrapOllamaConnection, invalidateOllamaBootstrap } from '@/lib/ai/ollamaBootstrap';
 import {
   getNativeOllamaStatus,
+  installNativeOllamaWithConsent,
   openOllamaTroubleshooting,
   type NativeOllamaStatus,
 } from '@/lib/tauri';
@@ -42,6 +44,11 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import {
+  readLocalAgentPreferences,
+  writeLocalAgentPreferences,
+  type LocalAgentMode,
+} from '@/lib/ai/localAgentRuntime';
 
 interface PullState extends OllamaPullProgress {
   model: string;
@@ -147,19 +154,17 @@ function userFacingDownloadError(err: unknown): string {
   return `Download failed: ${msg.slice(0, 200)}`;
 }
 
-async function hasEnoughDiskSpace(): Promise<{ ok: boolean; availableBytes: number | null }> {
-  try {
-    if (typeof navigator !== 'undefined' && 'storage' in navigator) {
-      const estimate = await navigator.storage.estimate();
-      if (estimate.quota && estimate.usage !== undefined) {
-        const available = estimate.quota - estimate.usage;
-        return { ok: available > 10_000_000_000, availableBytes: available };
-      }
-    }
-  } catch {
-    /* not available */
-  }
-  return { ok: true, availableBytes: null };
+async function hasEnoughDiskSpace(
+  requiredBytes = 2_000_000_000,
+): Promise<{
+  ok: boolean;
+  availableBytes: number | null;
+  authoritative: boolean;
+  requiredBytes: number;
+}> {
+  // Always force a fresh probe on write actions so hours-old free space never blocks.
+  const { hasEnoughDiskSpaceForWrite } = await import('@/lib/diskSpace');
+  return hasEnoughDiskSpaceForWrite(requiredBytes, { force: true });
 }
 
 // ── Unified Ollama bootstrap ────────────────────────────────────────────
@@ -249,6 +254,7 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
   const [installed, setInstalled] = useState<OllamaModelInfo[]>([]);
   const [scanning, setScanning] = useState(false);
   const [pullState, setPullState] = useState<PullState | null>(null);
+  const [runtimePreferences, setRuntimePreferences] = useState(readLocalAgentPreferences);
   const autoStartAttemptedRef = useRef(false);
 
   const downloadMap = useSyncExternalStore(subscribeToDownloads, getDownloadSnapshot);
@@ -312,8 +318,11 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
   }
 
   function pickModel(name: string) {
-    connectLocalModelToChat(name);
-    toast.success('Local model active', `${name} is now used in chat.`);
+    setDefaultLocalModel(name);
+    toast.success(
+      'Fully Local fallback updated',
+      `${name} will be used when Fully Local Chat is enabled. Every installed model remains available in Chat.`,
+    );
   }
 
   function handleToggleOffline(enabled: boolean) {
@@ -333,13 +342,25 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
     );
   }
 
+  function setRuntimeMode(mode: LocalAgentMode) {
+    const next = { ...runtimePreferences, mode };
+    writeLocalAgentPreferences(next);
+    setRuntimePreferences(next);
+  }
+
+  function setCloudEscalationEnabled(enabled: boolean) {
+    const next = { ...runtimePreferences, cloudEscalationEnabled: enabled };
+    writeLocalAgentPreferences(next);
+    setRuntimePreferences(next);
+  }
+
   /**
    * Full pipeline: ensure Ollama is running, then download the model.
    * This is the function called by every Download button. It handles
    * the entire lifecycle — the user never has to manually start Ollama
    * or check connectivity first.
    */
-  async function downloadModel(model: string) {
+  async function downloadModel(model: string, force = false) {
     // Validate model name
     try {
       validateModelName(model);
@@ -363,13 +384,50 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
       }
     }
 
-    // Disk check
-    const diskCheck = await hasEnoughDiskSpace();
+    // Disk check — fresh every download/repair (never trust a stale free-space reading).
+    const catalogEntry = LOCAL_MODEL_CATALOG.find((entry) => entry.name === model);
+    const { sizeLabelToBytes, formatBytesShort } = await import('@/lib/diskSpace');
+    const requiredBytes =
+      catalogEntry?.approximateDownloadBytes ??
+      sizeLabelToBytes(catalogEntry?.size) ??
+      2_000_000_000;
+    const diskCheck = await hasEnoughDiskSpace(requiredBytes);
     if (!diskCheck.ok) {
-      toast.warning(
-        'Low disk space',
-        'Your available storage is low. The download may fail if space runs out.',
+      toast.error(
+        'Not enough disk space',
+        `Need about ${catalogEntry?.size ?? formatBytesShort(requiredBytes)} free (plus headroom). ` +
+          `Currently free: ${formatBytesShort(diskCheck.availableBytes)}. Free more storage and try again.`,
       );
+      return;
+    }
+
+    const installation = await getNativeOllamaStatus();
+    if (installation.installed === false) {
+      const accepted = window.confirm(
+        `Install Ollama from the official source to download ${catalogDisplayName(model)}? ` +
+          'This installs a local model runtime on this device. No model or private file is uploaded.',
+      );
+      if (!accepted) return;
+
+      _bootstrapState = {
+        phase: 'installing',
+        statusMsg: 'Installing Ollama from the official source…',
+      };
+      notifyBootstrap();
+      const installedRuntime = await installNativeOllamaWithConsent(ollamaBaseUrl());
+      if (!installedRuntime.ready) {
+        const detail = installedRuntime.detail || 'Ollama installation did not complete.';
+        _bootstrapState = {
+          phase: 'error',
+          statusMsg: 'Ollama installation failed',
+          error: detail,
+        };
+        notifyBootstrap();
+        toast.error('Ollama installation failed', detail);
+        return;
+      }
+      setNativeStatus({ installed: true, version: installedRuntime.version ?? undefined });
+      invalidateOllamaBootstrap();
     }
 
     // Step 1: bootstrap Ollama if needed
@@ -401,7 +459,20 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
     reportPullProgress({ status: `Downloading ${family}…` });
 
     try {
-      await pullOllamaModel(model, reportPullProgress, controller.signal);
+      await pullOllamaModel(model, reportPullProgress, controller.signal, { force });
+      const verifyingState = {
+        model,
+        status: `Verifying ${catalogDisplayName(model)} with a real local chat…`,
+        percent: 100,
+      };
+      _downloads.set(model, {
+        status: 'downloading',
+        progress: verifyingState,
+        abortController: controller,
+      });
+      notifyDownloadListeners();
+      setPullState(verifyingState);
+      await verifyOllamaModelChat(model, controller.signal);
       const doneState = formatPullProgress(model, { status: 'success', done: true, percent: 100 });
       _downloads.set(model, {
         status: 'done',
@@ -409,8 +480,10 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
       });
       notifyDownloadListeners();
       setPullState(doneState);
-      connectLocalModelToChat(model);
-      toast.success('Model ready', `${catalogDisplayName(model)} is installed and active in chat.`);
+      toast.success(
+        'Model ready',
+        `${catalogDisplayName(model)} is installed and available in the Chat model selector.`,
+      );
       await scan(false);
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') {
@@ -423,6 +496,43 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
       notifyDownloadListeners();
     } finally {
       setPullState(null);
+    }
+  }
+
+  async function verifyModel(model: string) {
+    const ready = await ensureOllamaReady();
+    if (!ready) {
+      toast.error('Ollama not available', _bootstrapState.error || 'Ollama is not running.');
+      return;
+    }
+    try {
+      await verifyOllamaModelChat(model);
+      toast.success('Model verified', `${catalogDisplayName(model)} completed a real local chat.`);
+    } catch (error) {
+      toast.error('Verification failed', userFacingDownloadError(error));
+    }
+  }
+
+  async function removeModel(model: string) {
+    if (
+      !window.confirm(
+        `Remove ${catalogDisplayName(model)} from this device? You can download it again later.`,
+      )
+    ) {
+      return;
+    }
+    const ready = await ensureOllamaReady();
+    if (!ready) {
+      toast.error('Ollama not available', _bootstrapState.error || 'Ollama is not running.');
+      return;
+    }
+    try {
+      await removeOllamaModel(model);
+      if (sameModel(defaultLocalModel, model)) setDefaultLocalModel('');
+      toast.success('Model removed', `${catalogDisplayName(model)} was removed from this device.`);
+      await scan(false);
+    } catch (error) {
+      toast.error('Could not remove model', userFacingDownloadError(error));
     }
   }
 
@@ -500,6 +610,54 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
           onCheckedChange={handleToggleOffline}
           aria-label="Toggle fully local chat"
         />
+      </section>
+
+      <section className="grid gap-3 rounded-md border border-border bg-panel px-4 py-3">
+        <div>
+          <h3 className="text-ui-strong text-foreground">Local agent mode</h3>
+          <p className="mt-0.5 text-metadata text-muted-foreground">
+            Fast minimizes reasoning for low latency. Deep uses bounded reasoning and verification
+            for difficult tasks.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2" role="group" aria-label="Local agent mode">
+          {(['fast', 'deep'] as const).map((mode) => (
+            <Button
+              key={mode}
+              type="button"
+              variant={runtimePreferences.mode === mode ? 'secondary' : 'ghost'}
+              aria-label={`${mode === 'fast' ? 'Fast' : 'Deep'} mode`}
+              aria-pressed={runtimePreferences.mode === mode}
+              onClick={() => setRuntimeMode(mode)}
+            >
+              {mode === 'fast' ? 'Fast' : 'Deep'}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-start justify-between gap-4 border-t border-border pt-3">
+          <div className="min-w-0">
+            <Label
+              htmlFor="local-cloud-escalation-toggle"
+              className={cn('text-ui-strong text-foreground', offlineMode && 'opacity-60')}
+            >
+              Offer cloud escalation
+            </Label>
+            <p className="mt-0.5 text-metadata text-muted-foreground">
+              After local inference fails, show the provider, model, and data categories for
+              approval. VibeSpace never sends data or switches models automatically.
+            </p>
+            {offlineMode ? (
+              <p className="mt-1 text-metadata text-accent-cyan">Disabled by Fully Local Chat.</p>
+            ) : null}
+          </div>
+          <Switch
+            id="local-cloud-escalation-toggle"
+            checked={!offlineMode && runtimePreferences.cloudEscalationEnabled}
+            onCheckedChange={setCloudEscalationEnabled}
+            disabled={offlineMode}
+            aria-label="Allow cloud escalation offers"
+          />
+        </div>
       </section>
 
       <Separator />
@@ -638,8 +796,9 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
             <div>
               <p className="text-ui-strong text-foreground">Ollama is not installed yet</p>
               <p className="text-metadata text-muted-foreground">
-                Click Download on any catalog model. Jarvis installs Ollama silently, pulls the
-                model, and connects it to chat automatically.
+                Click Download on any catalog model. VibeSpace asks for permission before installing
+                Ollama from its official source, then pulls the model and connects it to chat
+                automatically.
               </p>
             </div>
           </div>
@@ -700,43 +859,17 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
         </div>
 
         {installed.length > 0 ? (
-          <div
-            role="radiogroup"
-            aria-label="Installed local models"
-            className="grid max-w-xl gap-2"
-          >
+          <div role="list" aria-label="Installed local models" className="grid max-w-xl gap-2">
             {installed.map((model) => {
               const selected = sameModel(defaultLocalModel, model.name);
               return (
-                <button
-                  type="button"
+                <div
                   key={model.name}
-                  role="radio"
-                  aria-checked={selected}
-                  onClick={() => pickModel(model.name)}
+                  role="listitem"
                   className={cn(
-                    'flex items-center gap-3 rounded-md border bg-panel px-3 py-2 text-left transition-colors',
-                    'hover:bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                    selected
-                      ? 'border-accent-cyan/50 shadow-[0_0_0_1px_hsl(var(--accent-cyan)/0.3)]'
-                      : 'border-border',
+                    'flex items-center gap-3 rounded-md border border-border bg-panel px-3 py-2 text-left',
                   )}
                 >
-                  <span
-                    className={cn(
-                      'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
-                      selected
-                        ? 'border-transparent bg-accent-gradient [html[data-theme=monochrome]_&]:!bg-none [html[data-theme=monochrome]_&]:!bg-foreground'
-                        : 'border-border-mid bg-background',
-                    )}
-                  >
-                    {selected ? (
-                      <Check
-                        className="h-2.5 w-2.5 text-white [html[data-theme=monochrome]_&]:text-background"
-                        strokeWidth={3}
-                      />
-                    ) : null}
-                  </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-mono text-ui-strong text-foreground">
                       {model.name}
@@ -747,8 +880,17 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
                       </span>
                     ) : null}
                   </span>
-                  {selected ? <Badge variant="success">Selected</Badge> : null}
-                </button>
+                  <Badge variant="success">Available in Chat</Badge>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={selected}
+                    onClick={() => pickModel(model.name)}
+                  >
+                    {selected ? 'Local-only fallback' : 'Use for Fully Local'}
+                  </Button>
+                </div>
               );
             })}
           </div>
@@ -797,7 +939,7 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
               <div
                 key={model.name}
                 className={cn(
-                  'flex items-center justify-between gap-3 rounded-md border bg-panel px-3 py-3',
+                  'flex flex-col gap-3 rounded-md border bg-panel px-3 py-3 sm:flex-row sm:items-center sm:justify-between',
                   model.recommended ? 'border-accent-copper/40' : 'border-border',
                 )}
               >
@@ -822,21 +964,84 @@ export function LocalModels({ active = true }: { active?: boolean } = {}) {
                     ) : null}
                   </div>
                   <p className="mt-1 text-metadata text-muted-foreground">{model.blurb}</p>
+                  {model.hardware ? (
+                    <div className="mt-2 grid gap-1 text-metadata text-muted-foreground">
+                      <p>
+                        {model.size} download · {model.hardware.ram} · {model.hardware.vram}
+                      </p>
+                      <p>
+                        CPU-only: {model.hardware.cpuOnly} · Speed: {model.hardware.speedClass}
+                      </p>
+                      <p>
+                        {model.contextTokens
+                          ? `${Math.round(model.contextTokens / 1024)}K context`
+                          : 'Context varies'}{' '}
+                        · {model.license ?? 'See source for license'} ·{' '}
+                        {model.quantizationOptions?.join(', ') || 'Runtime default quantization'}
+                      </p>
+                      {model.sourceUrl ? (
+                        <a
+                          href={model.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex w-fit items-center gap-1 text-accent-copper underline-offset-4 hover:underline"
+                        >
+                          Official model source
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {downloadFailed && dlEntry?.error ? (
                     <p className="mt-1 text-metadata text-red-400">{dlEntry.error}</p>
                   ) : null}
                 </div>
                 {modelInstalled ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={() => pickModel(model.name)}
-                    disabled={sameModel(defaultLocalModel, model.name)}
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    {sameModel(defaultLocalModel, model.name) ? 'Selected' : 'Use'}
-                  </Button>
+                  <div className="flex w-full shrink-0 flex-wrap gap-1 sm:w-auto sm:justify-end">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => pickModel(model.name)}
+                      disabled={sameModel(defaultLocalModel, model.name)}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      {sameModel(defaultLocalModel, model.name)
+                        ? 'Local-only fallback'
+                        : 'Use for Fully Local'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void verifyModel(model.name)}
+                      disabled={anyDownloading || busy}
+                    >
+                      Verify
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void downloadModel(model.name, true)}
+                      disabled={anyDownloading || busy}
+                    >
+                      Repair
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void downloadModel(model.name, true)}
+                      disabled={anyDownloading || busy}
+                    >
+                      Update
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void removeModel(model.name)}
+                      disabled={anyDownloading || busy}
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 ) : (
                   <Button
                     variant="secondary"
@@ -922,6 +1127,10 @@ function PullProgressCard({ state, onCancel }: { state: PullState; onCancel: () 
           style={{ width: percent === null ? '18%' : `${percent}%` }}
         />
       </div>
+      <p className="mt-2 text-metadata text-muted-foreground">
+        Ollama does not support pausing a pull. Cancel is safe; retry restarts or reuses cached
+        layers when the runtime supports it.
+      </p>
       {state.completed !== undefined && state.total ? (
         <p className="mt-2 text-right text-metadata text-muted-foreground">
           {formatBytes(state.completed)} / {formatBytes(state.total)}

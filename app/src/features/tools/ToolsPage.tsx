@@ -25,6 +25,7 @@ import {
   Sparkles,
   Info,
   Workflow,
+  MonitorUp,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,6 +52,8 @@ import {
 } from './toolStore';
 import { getBuiltinActions, runAction } from '@/lib/actions';
 import type { ActionDef, ActionParam } from '@/lib/actions';
+import { OpenInTerminalDialog } from './open-in-terminal/OpenInTerminalDialog';
+import { CommandCenterToolCard } from './command-center/CommandCenterToolCard';
 
 /* --------------------------------------------------------------------------
  * Quick-start templates
@@ -590,6 +593,7 @@ export function ToolsPage() {
   const sorted = React.useMemo(() => [...tools].sort((a, b) => b.updatedAt - a.updatedAt), [tools]);
 
   const [editorOpen, setEditorOpen] = React.useState(false);
+  const [openInTerminalOpen, setOpenInTerminalOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<CustomTool | null>(null);
   const [templateSeed, setTemplateSeed] = React.useState<QuickTemplate | null>(null);
 
@@ -723,6 +727,31 @@ export function ToolsPage() {
           </div>
         </div>
 
+        <section className="mb-8" aria-labelledby="preloaded-tools-heading">
+          <h2 id="preloaded-tools-heading" className="mb-2 text-secondary font-medium text-foreground">
+            Preloaded tools
+          </h2>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setOpenInTerminalOpen(true)}
+              className="group flex min-h-36 w-full items-center gap-4 rounded-lg border border-border bg-paper px-4 py-4 text-left shadow-soft transition-[border-color,background-color,transform] hover:-translate-y-0.5 hover:border-accent-copper/50 hover:bg-paper-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transform-none motion-reduce:transition-none"
+            >
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-md border border-accent-copper/25 bg-accent-copper/10">
+                <MonitorUp className="h-5 w-5 text-accent-copper" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold text-foreground">Open in Terminal</span>
+                <span className="mt-0.5 block text-sm text-muted-foreground">
+                  Launch 1–10 installed terminal agents while preserving every existing session.
+                </span>
+              </span>
+              <span className="text-xs font-medium text-accent-copper">Open</span>
+            </button>
+            <CommandCenterToolCard />
+          </div>
+        </section>
+
         {/* Quick-start templates (always visible — they make new tools cheap) */}
         <div className="mb-8">
           <h2 className="text-secondary text-foreground font-medium mb-2">Quick start</h2>
@@ -798,6 +827,7 @@ export function ToolsPage() {
         initial={editing}
         templateSeed={templateSeed}
       />
+      <OpenInTerminalDialog open={openInTerminalOpen} onOpenChange={setOpenInTerminalOpen} />
     </div>
   );
 }

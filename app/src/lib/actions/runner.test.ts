@@ -36,6 +36,9 @@ import {
   createJarvisActionCatalog,
   DEFAULT_JARVIS_ACTION_REGISTRATIONS,
 } from '@/lib/jarvis/actions/catalog';
+import { canonicalizeBrowserJson } from '@/features/browser/browserActions';
+import { revokeBrowserGoalHostSession } from '@/features/browser/browserGoalIntegration';
+import { hashJarvisText } from '@/lib/jarvis/identity';
 
 describe('resolveAction', () => {
   it('finds built-in actions by id', () => {
@@ -342,6 +345,60 @@ describe('runAction', () => {
       { query: 'smoke fixture', maxResults: 1 },
       expect.objectContaining({ source: 'ai', signal }),
     );
+  });
+
+  it('routes canonical browser registrations only to a live scoped host', async () => {
+    revokeBrowserGoalHostSession();
+    const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'browser.navigate',
+    )!;
+    const beginExternalEffect = vi.fn();
+    const dispatcher = createJarvisRegisteredBuiltinDispatcher();
+    const parameters = { url: 'https://example.test/next' };
+
+    await expect(
+      dispatcher({
+        registration,
+        params: {
+          schemaVersion: 1,
+          reviewId: 'review-runner',
+          origin: 'https://example.test',
+          tabId: 'tab-runner',
+          frameId: null,
+          target: { currentUrl: 'https://example.test/start' },
+          parameters,
+          parametersHash: await hashJarvisText(canonicalizeBrowserJson(parameters)),
+          reviewedHash: 'reviewed-action-hash',
+          expectedEffect: 'Navigate the active browser tab.',
+          reviewedRisk: 'confirm',
+          capability: { id: 'browser.operator', operation: 'browser.navigate' },
+        },
+        context: {
+          source: 'ai',
+          accountId: 'account-runner',
+          runId: 'run-runner',
+          requestId: 'request-runner',
+          attemptNumber: 1,
+          approvalId: 'approval-runner',
+        },
+        execution: {
+          approval: {
+            runId: 'run-runner',
+            requestId: 'request-runner',
+            attemptNumber: 1,
+          },
+          initialLiveProof: { accountId: 'account-runner' },
+          beginExternalEffect,
+        } as never,
+      }),
+    ).resolves.toEqual({
+      kind: 'executor_returned',
+      result: {
+        ok: false,
+        error: 'An explicit browser host source registration is required.',
+      },
+    });
+    expect(beginExternalEffect).not.toHaveBeenCalled();
   });
 
   it('queues exactly one terminal command through issued authority and propagates cancellation', async () => {

@@ -1,0 +1,11 @@
+task_id=VS-PR31-MG2-BROWSER-RUNTIME-20260803-B7
+controller=/root/browser_codex_audit
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T13:16:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Build the next Browser Codex integration boundary: provider-neutral goal event normalization, unified MCP registry with connection health and capability snapshots, and a durable browser-goal runtime that composes existing issued authority, checkpoint persistence, untrusted-content policy, cancellation, and truthful completion without connecting live executors.
+owned_paths=app/src/lib/jarvis/nativeCapabilityBroker.ts;app/src/lib/jarvis/nativeCapabilityBroker.test.ts;app/src/lib/jarvis/goalCheckpoint.ts;app/src/lib/jarvis/goalCheckpoint.test.ts;app/src/lib/jarvis/truthfulCompletion.ts;app/src/lib/jarvis/truthfulCompletion.test.ts;app/src/lib/jarvis/goalCheckpointRepository.ts;app/src/lib/jarvis/goalCheckpointRepository.test.ts;app/src/lib/jarvis/untrustedContentPolicy.ts;app/src/lib/jarvis/untrustedContentPolicy.test.ts;app/src/lib/jarvis/nativeCapabilityAdapters.ts;app/src/lib/jarvis/nativeCapabilityAdapters.test.ts;app/src/lib/jarvis/providerGoalAdapter.ts;app/src/lib/jarvis/providerGoalAdapter.test.ts;app/src/lib/jarvis/unifiedMcpRegistry.ts;app/src/lib/jarvis/unifiedMcpRegistry.test.ts;app/src/lib/jarvis/browserGoalRuntime.ts;app/src/lib/jarvis/browserGoalRuntime.test.ts
+exclusions=all existing files;all live adapters;all Tauri/CDP/MCP/terminal/Git implementations;all UI;all databases;all external systems;all Git staging/commit/push/branch operations
+status=DELEGATED_BROWSER_RUNTIME

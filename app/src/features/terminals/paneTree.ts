@@ -60,6 +60,10 @@ export type LeafBase = {
   command?: string;
   /** Command typed into the shell immediately after a fresh pane is ready. */
   startupCommand?: string;
+  /** Ordered setup, provider, and optional prompt commands for a fresh pane. */
+  startupCommands?: string[];
+  /** Prevent native capacity handling from evicting an existing terminal. */
+  preserveExisting?: boolean;
   /** One-shot command to write into an already-mounted terminal. */
   pendingCommand?: string;
   /** Monotonic token so repeated identical commands still dispatch. */
@@ -126,6 +130,8 @@ export function newLeaf(seed?: Partial<LeafBase>): PaneNode {
     projectId: seed?.projectId,
     command: seed?.command,
     startupCommand: seed?.startupCommand,
+    startupCommands: seed?.startupCommands ? [...seed.startupCommands] : undefined,
+    preserveExisting: seed?.preserveExisting,
     pendingCommand: seed?.pendingCommand,
     pendingCommandId: seed?.pendingCommandId,
     executionId: seed?.executionId,
@@ -265,6 +271,8 @@ function newLeafBase(seed?: Partial<LeafBase>): LeafBase {
     projectId: seed?.projectId,
     command: seed?.command,
     startupCommand: seed?.startupCommand,
+    startupCommands: seed?.startupCommands ? [...seed.startupCommands] : undefined,
+    preserveExisting: seed?.preserveExisting,
     pendingCommand: seed?.pendingCommand,
     pendingCommandId: seed?.pendingCommandId,
     executionId: seed?.executionId,

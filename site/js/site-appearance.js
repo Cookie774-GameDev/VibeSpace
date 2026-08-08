@@ -89,7 +89,7 @@
 (function () {
   'use strict';
 
-  var VERSION = 'phase2-20260802-workspace-refresh';
+  var VERSION = 'phase2-20260802-desktop-motion';
   var scriptId = 'vs-phase2-system-script';
   var cssId = 'vs-phase2-system-css';
   var scriptRequested = false;

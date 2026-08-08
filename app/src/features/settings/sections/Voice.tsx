@@ -1,15 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import {
-  Mic,
-  MicOff,
-  AudioLines,
-  Check,
-  Cloud,
-  Download,
-  HardDrive,
-  Play,
-  RefreshCw,
-} from 'lucide-react';
+import { AudioLines, Check, Cloud, Download, HardDrive, Play, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
 import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
 import { PERSONAS } from '@/features/onboarding/steps/personas-data';
@@ -26,10 +16,18 @@ import { useAppAdmin } from '@/lib/admin';
 import { effectivePlan, planAllowsVoiceWithAdmin } from '@/lib/entitlements';
 import { getCombinedUsage } from '@/features/billing/planLimits';
 import { getDeepgramVoiceKey, getOpenAIVoiceKey, setVoiceApiKey } from '@/lib/security/voiceKeys';
-import { testDeepgramVoiceKey } from '@/features/voice/providers/deepgramSpeak';
+import {
+  DEEPGRAM_CREDENTIAL_EVENT,
+  saveDeepgramCredential,
+  type DeepgramCredentialSnapshot,
+} from '@/lib/deepgram';
 import { Input } from '@/components/ui/input';
 import { VOICE_PROFILES, type VoiceProfile } from '@/features/voice/voiceProfiles';
-import { ModelManager } from '@/features/voice/modelManager';
+import {
+  JARVIS_HIGH_MANIFEST,
+  JARVIS_HIGH_SOURCE_URL,
+  ModelManager,
+} from '@/features/voice/modelManager';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -42,11 +40,8 @@ import { cn } from '@/lib/utils';
 import { openSystemSpeechSettings } from '@/lib/tauri';
 import { readWakeWordEnabled, setWakeWordEnabled } from '@/features/voice/wakeWord';
 import {
-  VOICE_LISTEN_TIMEOUT_MS_MAX,
-  VOICE_LISTEN_TIMEOUT_MS_MIN,
   VOICE_SILENCE_DELAY_MS_MAX,
   VOICE_SILENCE_DELAY_MS_MIN,
-  voiceListenTimeoutLabel,
   voiceSilenceDelayLabel,
 } from '@/features/voice/voiceConversation';
 import {
@@ -54,24 +49,19 @@ import {
   VOICE_COMMIT_PHRASE_MIN_LEN,
 } from '@/features/voice/voiceTurnCommit';
 import { formatJarvisVerifiedNarration } from '@/lib/jarvis/response/templates';
+import { MicrophoneTestPanel } from '@/features/settings/components/MicrophoneTestPanel';
 
-type MicStatus = 'idle' | 'testing' | 'ok' | 'denied' | 'unavailable';
 type LocalVoiceStatus = 'idle' | 'checking' | 'ready' | 'missing' | 'unsupported';
-type KokoroStatus = 'idle' | 'downloading' | 'ready' | 'testing' | 'error';
+type JarvisVoiceStatus = 'idle' | 'downloading' | 'ready' | 'testing' | 'error';
 type VoiceSettingsFailureKind =
   | 'installed_voice_inspection'
-  | 'kokoro_test'
+  | 'jarvis_test'
   | 'local_voice_unavailable'
-  | 'microphone_access'
-  | 'microphone_capture'
-  | 'microphone_device'
-  | 'microphone_unknown'
-  | 'microphone_unavailable'
   | 'windows_speech_settings';
 
 const VOICE_ENGINE_LABELS: Readonly<Record<VoiceEngine, string>> = {
   deepgram: 'Deepgram',
-  kokoro: 'Kokoro',
+  jarvis: 'Jarvis High',
   local: 'Local',
   system: 'System',
 };
@@ -84,40 +74,15 @@ const VOICE_SETTINGS_FAILURE_DETAILS: Readonly<
     reason:
       'Installed voices could not be inspected. Check Windows speech voice packages, then try the check again',
   },
-  kokoro_test: {
-    actionLabel: 'Kokoro voice test',
+  jarvis_test: {
+    actionLabel: 'Jarvis High voice test',
     reason:
-      'The local neural voice could not synthesize the test phrase. Jarvis will use the Windows Natural voice; check the local model in Settings → Voice, then try again',
+      'The local Piper voice could not synthesize the test phrase. Jarvis will use the operating-system fallback; check the local model in Settings → Voice, then try again',
   },
   local_voice_unavailable: {
     actionLabel: 'Local voice availability',
     reason:
-      'This runtime does not provide system speech synthesis. Select Kokoro or another available voice engine in Settings → Voice',
-  },
-  microphone_access: {
-    actionLabel: 'Microphone permission test',
-    reason:
-      'Microphone access was not granted. Check the operating-system and VibeSpace microphone permissions, confirm an input device is available, then try again',
-  },
-  microphone_capture: {
-    actionLabel: 'Microphone capture',
-    reason:
-      'The selected microphone could not be opened. Close other apps using the device, check the input settings, then try again',
-  },
-  microphone_device: {
-    actionLabel: 'Microphone device check',
-    reason:
-      'No usable microphone input was found. Connect or enable an input device, confirm it is selected in the operating-system settings, then try again',
-  },
-  microphone_unknown: {
-    actionLabel: 'Microphone test',
-    reason:
-      'Microphone access could not be verified. Check permissions and the selected input device, then try again',
-  },
-  microphone_unavailable: {
-    actionLabel: 'Microphone availability',
-    reason:
-      'This runtime does not provide microphone access. Open VibeSpace in the desktop app or a browser with microphone support, then try again',
+      'This runtime does not provide system speech synthesis. Select Jarvis High or another available voice engine in Settings → Voice',
   },
   windows_speech_settings: {
     actionLabel: 'Windows speech settings',
@@ -144,23 +109,6 @@ function formatVoicePreviewFailure(engine: VoiceEngine): string {
   }).text;
 }
 
-function microphoneFailureKind(error: unknown): VoiceSettingsFailureKind {
-  const name =
-    error && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
-      ? error.name
-      : '';
-  if (['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(name)) {
-    return 'microphone_access';
-  }
-  if (['DevicesNotFoundError', 'NotFoundError'].includes(name)) {
-    return 'microphone_device';
-  }
-  if (['AbortError', 'NotReadableError', 'TrackStartError'].includes(name)) {
-    return 'microphone_capture';
-  }
-  return 'microphone_unknown';
-}
-
 /**
  * The two free local voice presets surfaced in Settings — Jarvis and Friday.
  * Derived from the shared VOICE_PROFILES list so selection/preview/persistence
@@ -182,8 +130,6 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
   const setVoiceAutoListenOnOpen = useAuthStore((s) => s.setVoiceAutoListenOnOpen);
   const voiceSilenceDelayMs = useAuthStore((s) => s.voiceSilenceDelayMs);
   const setVoiceSilenceDelayMs = useAuthStore((s) => s.setVoiceSilenceDelayMs);
-  const voiceListenTimeoutMs = useAuthStore((s) => s.voiceListenTimeoutMs);
-  const setVoiceListenTimeoutMs = useAuthStore((s) => s.setVoiceListenTimeoutMs);
   const voiceEndTrigger = useAuthStore((s) => s.voiceEndTrigger);
   const setVoiceEndTrigger = useAuthStore((s) => s.setVoiceEndTrigger);
   const voiceCommitPhrase = useAuthStore((s) => s.voiceCommitPhrase);
@@ -198,28 +144,28 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
   const admin = useAppAdmin();
   const activePlan = effectivePlan(plan, admin);
   const canUseSystemVoice = planAllowsVoiceWithAdmin(activePlan, admin);
-  const [deepgramDraft, setDeepgramDraft] = useState('');
+  const deepgramInputRef = useRef<HTMLInputElement>(null);
+  const [hasDeepgramDraft, setHasDeepgramDraft] = useState(false);
   const [deepgramConfigured, setDeepgramConfigured] = useState(false);
   const [deepgramTesting, setDeepgramTesting] = useState(false);
   const [systemOpenAIDraft, setSystemOpenAIDraft] = useState('');
   const [systemOpenAIConfigured, setSystemOpenAIConfigured] = useState(false);
-  const [systemDeepgramDraft, setSystemDeepgramDraft] = useState('');
+  const systemDeepgramInputRef = useRef<HTMLInputElement>(null);
+  const [hasSystemDeepgramDraft, setHasSystemDeepgramDraft] = useState(false);
   const [subscriptionIncluded, setSubscriptionIncluded] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState<VoicePresetId | null>(null);
   const previewSeqRef = useRef(0);
   const [localVoiceStatus, setLocalVoiceStatus] = useState<LocalVoiceStatus>('idle');
   const [localVoiceNames, setLocalVoiceNames] = useState<string[]>([]);
-  const [kokoroStatus, setKokoroStatus] = useState<KokoroStatus>('idle');
-  const [kokoroPercent, setKokoroPercent] = useState(0);
-  const [kokoroError, setKokoroError] = useState<string | null>(null);
+  const [jarvisStatus, setJarvisStatus] = useState<JarvisVoiceStatus>('idle');
+  const [jarvisPercent, setJarvisPercent] = useState(0);
+  const [jarvisError, setJarvisError] = useState<string | null>(null);
 
   const [wakeWord, setWakeWord] = useState<boolean>(() => readWakeWordEnabled());
   function toggleWake(v: boolean) {
     setWakeWord(v);
     setWakeWordEnabled(v);
   }
-
-  const [micStatus, setMicStatus] = useState<MicStatus>('idle');
 
   useEffect(() => {
     if (!active) return;
@@ -236,49 +182,38 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
     void getCombinedUsage().then((u) => {
       if (u) setSubscriptionIncluded(u.admin_unlimited || u.plan !== 'free');
     });
+    const onDeepgramCredentialChanged = (event: Event) => {
+      const snapshot = (event as CustomEvent<DeepgramCredentialSnapshot>).detail;
+      setDeepgramConfigured(Boolean(snapshot?.configured && snapshot.health !== 'invalid'));
+    };
+    window.addEventListener(DEEPGRAM_CREDENTIAL_EVENT, onDeepgramCredentialChanged);
+    return () => {
+      window.removeEventListener(DEEPGRAM_CREDENTIAL_EVENT, onDeepgramCredentialChanged);
+    };
   }, []);
 
   useEffect(() => {
     if (!canUseSystemVoice && voiceEngine === 'system') {
-      setVoiceEngine('kokoro');
+      setVoiceEngine('jarvis');
     }
   }, [canUseSystemVoice, voiceEngine, setVoiceEngine]);
 
-  async function testMic() {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setMicStatus('unavailable');
-      toast.error('Microphone unavailable', formatVoiceSettingsFailure('microphone_unavailable'));
-      return;
-    }
-    setMicStatus('testing');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Immediately stop tracks - we only wanted to confirm permission.
-      stream.getTracks().forEach((t) => t.stop());
-      setMicStatus('ok');
-      toast.success('Microphone ready', 'Permission granted and a track was opened.');
-    } catch (error) {
-      setMicStatus('denied');
-      toast.warning('Mic test failed', formatVoiceSettingsFailure(microphoneFailureKind(error)));
-    }
-  }
-
   async function saveDeepgramKey() {
-    const trimmed = deepgramDraft.trim();
+    const trimmed = deepgramInputRef.current?.value.trim() ?? '';
     if (!trimmed) {
       toast.warning('Enter your Deepgram API key first.');
       return;
     }
     setDeepgramTesting(true);
     try {
-      const ok = await testDeepgramVoiceKey(trimmed);
-      if (!ok) {
+      const result = await saveDeepgramCredential(trimmed);
+      if (result.health !== 'connected') {
         toast.error('Deepgram test failed', 'Check the key and try again.');
         return;
       }
-      await setVoiceApiKey('deepgram_voice', trimmed);
       setDeepgramConfigured(true);
-      setDeepgramDraft('');
+      if (deepgramInputRef.current) deepgramInputRef.current.value = '';
+      setHasDeepgramDraft(false);
       setVoiceEngine('deepgram');
       try {
         window.localStorage.setItem('jarvis.voice.cloudProvider', 'deepgram_tts');
@@ -305,21 +240,21 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
   }
 
   async function saveSystemDeepgramKey() {
-    const trimmed = systemDeepgramDraft.trim();
+    const trimmed = systemDeepgramInputRef.current?.value.trim() ?? '';
     if (!trimmed) {
       toast.warning('Enter your Deepgram API key first.');
       return;
     }
     setDeepgramTesting(true);
     try {
-      const ok = await testDeepgramVoiceKey(trimmed);
-      if (!ok) {
+      const result = await saveDeepgramCredential(trimmed);
+      if (result.health !== 'connected') {
         toast.error('Deepgram test failed', 'Check the key and try again.');
         return;
       }
-      await setVoiceApiKey('deepgram_voice', trimmed);
       setDeepgramConfigured(true);
-      setSystemDeepgramDraft('');
+      if (systemDeepgramInputRef.current) systemDeepgramInputRef.current.value = '';
+      setHasSystemDeepgramDraft(false);
       toast.success('Deepgram connected', 'Stored in the OS keychain — never synced or logged.');
     } finally {
       setDeepgramTesting(false);
@@ -385,7 +320,10 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
 
   function chooseVoiceEngine(engine: VoiceEngine) {
     if (engine === 'system' && !canUseSystemVoice) {
-      toast.info('System voice requires a paid plan', 'Local and Kokoro stay available on Spark.');
+      toast.info(
+        'System voice requires a paid plan',
+        'Jarvis High and the local fallback stay available on Spark.',
+      );
       return;
     }
     previewSeqRef.current += 1;
@@ -395,7 +333,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
     void warmVoiceEngine(engine);
     void previewVoice(voicePreset, engine);
     if (engine === 'local') void checkLocalVoices(false);
-    if (engine === 'kokoro') void downloadKokoro();
+    if (engine === 'jarvis') void downloadJarvisVoice();
     if (engine === 'deepgram') {
       try {
         window.localStorage.setItem('jarvis.voice.cloudProvider', 'deepgram_tts');
@@ -405,46 +343,46 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  async function downloadKokoro() {
-    setKokoroError(null);
+  async function downloadJarvisVoice() {
+    setJarvisError(null);
     const ready = await ModelManager.status();
     if (ready.ready) {
-      setKokoroStatus('ready');
+      setJarvisStatus('ready');
       return;
     }
-    setKokoroStatus('downloading');
-    setKokoroPercent(0);
-    const ok = await ModelManager.ensureKokoroReady((p) =>
-      setKokoroPercent(Math.max(0, Math.min(100, Math.round(p.percent)))),
+    setJarvisStatus('downloading');
+    setJarvisPercent(0);
+    const ok = await ModelManager.ensureJarvisReady((p) =>
+      setJarvisPercent(Math.max(0, Math.min(100, Math.round(p.percent)))),
     );
     const status = await ModelManager.status();
     if (ok && status.ready) {
-      setKokoroStatus('ready');
-      void warmVoiceEngine('kokoro');
+      setJarvisStatus('ready');
+      void warmVoiceEngine('jarvis');
     } else if (ok && !status.ready) {
-      setKokoroStatus('error');
-      setKokoroError(
-        'Model downloaded, but the neural runtime is not available in this build. Using the Windows Natural voice.',
+      setJarvisStatus('error');
+      setJarvisError(
+        'Model downloaded, but the Piper runtime is not available in this build. Using the operating-system fallback.',
       );
     } else {
-      setKokoroStatus('error');
-      setKokoroError('Download failed. Check your connection and try again.');
+      setJarvisStatus('error');
+      setJarvisError('Download failed. Check your connection and try again.');
     }
   }
 
-  async function testKokoro() {
-    setKokoroError(null);
-    setKokoroStatus('testing');
+  async function testJarvisVoice() {
+    setJarvisError(null);
+    setJarvisStatus('testing');
     try {
       cancelVoicePreview();
-      await previewVoiceWithSettings(voicePreset, 'kokoro');
-      setKokoroStatus('ready');
-      toast.success('Kokoro voice', 'Played the test phrase with the local neural voice.');
+      await previewVoiceWithSettings(voicePreset, 'jarvis');
+      setJarvisStatus('ready');
+      toast.success('Jarvis High voice', 'Played the bundled offline Jarvis preview.');
     } catch {
-      setKokoroStatus('error');
-      const message = formatVoiceSettingsFailure('kokoro_test');
-      setKokoroError(message);
-      toast.error('Kokoro test failed', message);
+      setJarvisStatus('error');
+      const message = formatVoiceSettingsFailure('jarvis_test');
+      setJarvisError(message);
+      toast.error('Jarvis High test failed', message);
     }
   }
 
@@ -477,9 +415,9 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
         <div>
           <Label>Jarvis voice</Label>
           <p className="mt-1 text-metadata text-muted-foreground">
-            Two free local presets — Jarvis and Friday. Used for previews, wake acknowledgement,
-            voice chat, and spoken replies. These voices use built-in system speech and do not
-            require an API key. Premium cloud voices (OpenAI) unlock on a paid plan.
+            Two local personas — Jarvis and Friday. Jarvis uses the default Jarvis High Piper model;
+            Friday uses an installed operating-system voice. Neither requires an API key. Premium
+            cloud voices remain explicit opt-ins.
           </p>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -569,7 +507,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               <div>
                 <Label>End message with</Label>
                 <p className="mt-1 text-metadata text-muted-foreground">
-                  Phrase mode prevents accidental sends while you pause to think.
+                  Choose explicit submission or one silence duration.
                 </p>
                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <VoiceConversationModeCard
@@ -585,26 +523,35 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
                     onSelect={() => setVoiceEndTrigger('silence')}
                   />
                 </div>
+                {voiceEndTrigger === 'phrase' ? (
+                  <p className="mt-3 text-metadata text-sage">
+                    No timeout — Jarvis keeps listening until you say "{voiceCommitPhrase}".
+                  </p>
+                ) : null}
               </div>
             </div>
           ) : null}
           {!voiceAutoListenOnOpen || voiceEndTrigger === 'silence' ? (
             <div className="rounded-md border border-border bg-panel p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <Label htmlFor="voice-silence-delay">Pause before Jarvis responds</Label>
+                <Label htmlFor="voice-silence-delay">
+                  {voiceAutoListenOnOpen ? 'Silence duration' : 'Pause before sending'}
+                </Label>
                 <span className="text-metadata font-medium text-foreground">
                   {voiceSilenceDelayLabel(voiceSilenceDelayMs)}
                 </span>
               </div>
               <p className="mt-1 text-metadata text-muted-foreground">
-                How long you stay quiet after speaking before Jarvis sends your message.
+                {voiceAutoListenOnOpen
+                  ? 'Jarvis sends after this much silence. This is the only timer used in pause mode.'
+                  : 'Jarvis sends after you stop speaking for this duration.'}
               </p>
               <input
                 id="voice-silence-delay"
                 type="range"
                 min={VOICE_SILENCE_DELAY_MS_MIN}
                 max={VOICE_SILENCE_DELAY_MS_MAX}
-                step={250}
+                step={1000}
                 value={voiceSilenceDelayMs}
                 onChange={(event) => setVoiceSilenceDelayMs(Number(event.target.value))}
                 className="mt-3 w-full accent-[hsl(var(--accent-cyan))]"
@@ -615,37 +562,9 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               </div>
             </div>
           ) : null}
-          {voiceAutoListenOnOpen ? (
-            <div className="rounded-md border border-border bg-panel p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <Label htmlFor="voice-listen-timeout">Listen timeout (hands-free)</Label>
-                <span className="text-metadata font-medium text-foreground">
-                  {voiceListenTimeoutLabel(voiceListenTimeoutMs)}
-                </span>
-              </div>
-              <p className="mt-1 text-metadata text-muted-foreground">
-                How long Jarvis keeps listening without speech before stopping
-                {voiceEndTrigger === 'silence' ? ' or sending what you said' : ''}.
-              </p>
-              <input
-                id="voice-listen-timeout"
-                type="range"
-                min={VOICE_LISTEN_TIMEOUT_MS_MIN}
-                max={VOICE_LISTEN_TIMEOUT_MS_MAX}
-                step={1000}
-                value={voiceListenTimeoutMs}
-                onChange={(event) => setVoiceListenTimeoutMs(Number(event.target.value))}
-                className="mt-3 w-full accent-[hsl(var(--accent-cyan))]"
-              />
-              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-                <span>{voiceListenTimeoutLabel(VOICE_LISTEN_TIMEOUT_MS_MIN)}</span>
-                <span>{voiceListenTimeoutLabel(VOICE_LISTEN_TIMEOUT_MS_MAX)}</span>
-              </div>
-            </div>
-          ) : null}
           <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-panel p-4">
             <div className="min-w-0">
-              <Label htmlFor="voice-auto-approve-toggle">Auto-run Jarvis commands (voice)</Label>
+              <Label htmlFor="voice-auto-approve-toggle">Auto-run command voice</Label>
               <p className="mt-1 text-metadata text-muted-foreground">
                 When on, voice requests like “open five terminals” run immediately without Approve
                 cards.
@@ -659,7 +578,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
           </div>
           <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-panel p-4">
             <div className="min-w-0">
-              <Label htmlFor="chat-auto-approve-toggle">Auto-run Jarvis commands (chat)</Label>
+              <Label htmlFor="chat-auto-approve-toggle">Auto-run Jarvis command chat</Label>
               <p className="mt-1 text-metadata text-muted-foreground">
                 Same for typed chat. Toggle quickly with {renderHotkey(HOTKEYS.JARVIS_BUBBLE)} while
                 chatting.
@@ -678,8 +597,8 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
         <div>
           <Label>Voice engine</Label>
           <p className="mt-1 text-metadata text-muted-foreground">
-            System uses the best available voice. Local restricts playback to voices installed on
-            this device.
+            Jarvis High is the default offline voice. OS local fallback uses only voices installed
+            on this device.
           </p>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -701,18 +620,18 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
           <VoiceEngineCard
             engine="local"
             selected={voiceEngine === 'local'}
-            title="Local only"
-            description="Never use an online speech voice"
+            title="OS local fallback"
+            description="Installed operating-system voices only"
             icon={<HardDrive className="h-4 w-4" />}
             onSelect={() => chooseVoiceEngine('local')}
           />
           <VoiceEngineCard
-            engine="kokoro"
-            selected={voiceEngine === 'kokoro'}
-            title="Kokoro"
-            description="Local neural voice (downloads once)"
+            engine="jarvis"
+            selected={voiceEngine === 'jarvis'}
+            title="Jarvis High"
+            description="Default offline Piper voice"
             icon={<AudioLines className="h-4 w-4" />}
-            onSelect={() => chooseVoiceEngine('kokoro')}
+            onSelect={() => chooseVoiceEngine('jarvis')}
           />
           <VoiceEngineCard
             engine="deepgram"
@@ -741,6 +660,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
             )}
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Input
+                ref={systemDeepgramInputRef}
                 type="password"
                 className="font-mono w-full sm:min-w-[240px] sm:flex-1"
                 placeholder={
@@ -761,14 +681,16 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
                 placeholder={
                   deepgramConfigured ? 'Deepgram key saved — paste to replace' : 'Deepgram API key'
                 }
-                value={systemDeepgramDraft}
-                onChange={(event) => setSystemDeepgramDraft(event.target.value)}
+                onChange={(event) =>
+                  setHasSystemDeepgramDraft(Boolean(event.currentTarget.value.trim()))
+                }
                 autoComplete="off"
+                data-jarvis-api-key="true"
               />
               <Button
                 type="button"
                 size="sm"
-                disabled={deepgramTesting}
+                disabled={deepgramTesting || !hasSystemDeepgramDraft}
                 onClick={() => void saveSystemDeepgramKey()}
               >
                 {deepgramTesting
@@ -788,17 +710,18 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
             </p>
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Input
+                ref={deepgramInputRef}
                 type="password"
                 className="font-mono w-full sm:min-w-[240px] sm:flex-1"
                 placeholder={deepgramConfigured ? 'Saved — paste to replace' : 'Deepgram API key'}
-                value={deepgramDraft}
-                onChange={(event) => setDeepgramDraft(event.target.value)}
+                onChange={(event) => setHasDeepgramDraft(Boolean(event.currentTarget.value.trim()))}
                 autoComplete="off"
+                data-jarvis-api-key="true"
               />
               <Button
                 type="button"
                 size="sm"
-                disabled={deepgramTesting}
+                disabled={deepgramTesting || !hasDeepgramDraft}
                 onClick={() => void saveDeepgramKey()}
               >
                 {deepgramTesting ? 'Testing…' : deepgramConfigured ? 'Update & test' : 'Connect'}
@@ -875,13 +798,13 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
             ) : null}
           </div>
         ) : null}
-        {voiceEngine === 'kokoro' ? (
+        {voiceEngine === 'jarvis' ? (
           <div className="rounded-md border border-border bg-panel p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex flex-wrap items-center gap-2">
-                <KokoroStatusBadge status={kokoroStatus} percent={kokoroPercent} />
+                <JarvisVoiceStatusBadge status={jarvisStatus} percent={jarvisPercent} />
                 <span className="text-metadata text-muted-foreground">
-                  Kokoro-82M neural voice · ~89 MB · downloads once on first use
+                  Jarvis High · {formatJarvisModelSize()} · downloads once on first use
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -889,38 +812,47 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => void downloadKokoro()}
-                  disabled={kokoroStatus === 'downloading' || kokoroStatus === 'ready'}
+                  onClick={() => void downloadJarvisVoice()}
+                  disabled={jarvisStatus === 'downloading' || jarvisStatus === 'ready'}
                 >
                   <Download
-                    className={cn('h-3.5 w-3.5', kokoroStatus === 'downloading' && 'animate-pulse')}
+                    className={cn('h-3.5 w-3.5', jarvisStatus === 'downloading' && 'animate-pulse')}
                   />
-                  {kokoroStatus === 'ready'
+                  {jarvisStatus === 'ready'
                     ? 'Downloaded'
-                    : kokoroStatus === 'downloading'
-                      ? `Downloading ${kokoroPercent}%`
+                    : jarvisStatus === 'downloading'
+                      ? `Downloading ${jarvisPercent}%`
                       : 'Download model'}
                 </Button>
                 <Button
                   type="button"
                   variant="secondary"
                   size="sm"
-                  onClick={() => void testKokoro()}
-                  disabled={kokoroStatus === 'downloading' || kokoroStatus === 'testing'}
+                  onClick={() => void testJarvisVoice()}
+                  disabled={jarvisStatus === 'downloading' || jarvisStatus === 'testing'}
                 >
                   <Play
-                    className={cn('h-3.5 w-3.5', kokoroStatus === 'testing' && 'animate-pulse')}
+                    className={cn('h-3.5 w-3.5', jarvisStatus === 'testing' && 'animate-pulse')}
                   />
-                  Test Kokoro voice
+                  Test Jarvis High voice
                 </Button>
               </div>
             </div>
-            {kokoroError ? (
-              <p className="mt-2 text-metadata text-warning">{kokoroError}</p>
+            {jarvisError ? (
+              <p className="mt-2 text-metadata text-warning">{jarvisError}</p>
             ) : (
               <p className="mt-2 text-metadata text-muted-foreground">
-                If Kokoro is unavailable, Jarvis automatically falls back to the Windows Natural
-                voice — it never blocks chat.
+                If Jarvis High is unavailable, VibeSpace automatically uses the operating-system
+                local voice fallback. Model by{' '}
+                <a
+                  className="underline underline-offset-2 hover:text-foreground"
+                  href={JARVIS_HIGH_SOURCE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Jack Kawell on Hugging Face
+                </a>
+                .
               </p>
             )}
           </div>
@@ -966,25 +898,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
 
       <Separator />
 
-      <section className="flex flex-col gap-4">
-        <Label>Microphone</Label>
-        <div className="flex items-center gap-3">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={testMic}
-            disabled={micStatus === 'testing'}
-          >
-            <AudioLines className="h-3.5 w-3.5" />
-            {micStatus === 'testing' ? 'Testing...' : 'Test microphone'}
-          </Button>
-          <MicStatusPill status={micStatus} />
-        </div>
-        <p className="text-metadata text-muted-foreground">
-          Composer dictation is configured in Settings → Speech to Text. Jarvis voice and wake word
-          use the controls above.
-        </p>
-      </section>
+      <MicrophoneTestPanel />
     </div>
   );
 }
@@ -1198,9 +1112,15 @@ function VoiceEngineCard({
   );
 }
 
-function KokoroStatusBadge({ status, percent }: { status: KokoroStatus; percent: number }) {
+function JarvisVoiceStatusBadge({
+  status,
+  percent,
+}: {
+  status: JarvisVoiceStatus;
+  percent: number;
+}) {
   const config: Record<
-    KokoroStatus,
+    JarvisVoiceStatus,
     { label: string; variant: 'outline' | 'success' | 'warning' }
   > = {
     idle: { label: 'Not downloaded', variant: 'outline' },
@@ -1211,6 +1131,12 @@ function KokoroStatusBadge({ status, percent }: { status: KokoroStatus; percent:
   };
   const item = config[status];
   return <Badge variant={item.variant}>{item.label}</Badge>;
+}
+
+export function formatJarvisModelSize(): string {
+  const modelBytes =
+    JARVIS_HIGH_MANIFEST.files.find((file) => file.name === 'jarvis-high.onnx')?.size_bytes ?? 0;
+  return `${(modelBytes / 1024 / 1024).toFixed(2)} MiB`;
 }
 
 function LocalVoiceStatusBadge({ status }: { status: LocalVoiceStatus }) {
@@ -1226,44 +1152,6 @@ function LocalVoiceStatusBadge({ status }: { status: LocalVoiceStatus }) {
   };
   const item = config[status];
   return <Badge variant={item.variant}>{item.label}</Badge>;
-}
-
-function MicStatusPill({ status }: { status: MicStatus }) {
-  if (status === 'idle') return null;
-  const map: Record<Exclude<MicStatus, 'idle'>, { label: string; cls: string; icon: ReactNode }> = {
-    testing: {
-      label: 'Requesting...',
-      cls: 'bg-info/10 text-info border-info/30',
-      icon: <AudioLines className="h-3 w-3 animate-pulse" />,
-    },
-    ok: {
-      label: 'OK',
-      cls: 'bg-success/10 text-success border-success/30',
-      icon: <Check className="h-3 w-3" />,
-    },
-    denied: {
-      label: 'Denied',
-      cls: 'bg-destructive/10 text-destructive border-destructive/30',
-      icon: <MicOff className="h-3 w-3" />,
-    },
-    unavailable: {
-      label: 'Unavailable',
-      cls: 'bg-warning/10 text-warning border-warning/30',
-      icon: <Mic className="h-3 w-3" />,
-    },
-  };
-  const entry = map[status];
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-metadata font-medium',
-        entry.cls,
-      )}
-    >
-      {entry.icon}
-      {entry.label}
-    </span>
-  );
 }
 
 // Re-export so tests/consumers can import the persona type if they need it.

@@ -19,6 +19,7 @@ import { quickLinkRepo } from '@/lib/db';
 import { toast } from '@/components/ui/toast';
 import { openExternal, isTauri } from '@/lib/tauri';
 import { useUIStore } from '@/stores/ui';
+import { useFullscreenStore } from '@/features/fullscreen/fullscreenStore';
 import type { QuickLink } from '@/types/quick-link';
 
 export interface LaunchResult {
@@ -108,7 +109,7 @@ export async function launchLink(link: QuickLink): Promise<LaunchResult> {
           ui.setAmbientActive(true);
           return { ok: true };
         case 'fullscreen':
-          ui.toggleChatFullscreen();
+          useFullscreenStore.getState().toggleFocus();
           return { ok: true };
         case 'voice':
           ui.toggleVoice();

@@ -56,6 +56,34 @@ describe('commandForAgent', () => {
     });
   });
 
+  it('preserves ordered startup writes and the native preserve-existing boundary', () => {
+    const next = applyTerminalCommandBatch(newLeaf(), [
+      {
+        kind: 'shell',
+        id: 'terminal_open_tool_1',
+        command: 'opencode',
+        startupCommands: [
+          "Set-Location -LiteralPath 'C:\\Work Tree'",
+          'opencode',
+          'Inspect the tests.',
+        ],
+        preserveExisting: true,
+        cwd: 'C:\\Work Tree',
+      },
+    ]);
+
+    expect(flattenLeaves(next).find((leaf) => leaf.executionId === 'terminal_open_tool_1')).toMatchObject({
+      startupCommand: 'opencode',
+      startupCommands: [
+        "Set-Location -LiteralPath 'C:\\Work Tree'",
+        'opencode',
+        'Inspect the tests.',
+      ],
+      preserveExisting: true,
+      cwd: 'C:\\Work Tree',
+    });
+  });
+
   it('does not present null or revoked reset authority as committed cancellation', () => {
     expect(
       summarizeTerminalResetCancellations([

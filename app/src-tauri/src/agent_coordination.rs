@@ -122,7 +122,9 @@ fn write_snapshot_files(
     locks_json: Option<String>,
     event_json: Option<String>,
 ) -> Result<CoordinationSnapshotFiles, String> {
-    let _guard = write_lock().lock().map_err(|_| "lock_poisoned".to_string())?;
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| "lock_poisoned".to_string())?;
     let root = require_project_root(&project_root)?;
     if let Some(content) = &state_json {
         validate_json_text(content)?;
@@ -158,8 +160,12 @@ fn read_snapshot_files(project_root: &Path) -> Result<CoordinationSnapshotFiles,
 }
 
 #[tauri::command]
-pub fn agent_coordination_snapshot(project_root: String) -> Result<CoordinationSnapshotFiles, String> {
-    let _guard = write_lock().lock().map_err(|_| "lock_poisoned".to_string())?;
+pub fn agent_coordination_snapshot(
+    project_root: String,
+) -> Result<CoordinationSnapshotFiles, String> {
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| "lock_poisoned".to_string())?;
     let root = require_project_root(&project_root)?;
     read_snapshot_files(&root)
 }
@@ -189,7 +195,12 @@ pub fn agent_coordination_lock_file(
     locks_json: String,
     event_json: String,
 ) -> Result<CoordinationSnapshotFiles, String> {
-    write_snapshot_files(project_root, Some(state_json), Some(locks_json), Some(event_json))
+    write_snapshot_files(
+        project_root,
+        Some(state_json),
+        Some(locks_json),
+        Some(event_json),
+    )
 }
 
 #[tauri::command]
@@ -199,7 +210,12 @@ pub fn agent_coordination_release_file(
     locks_json: String,
     event_json: String,
 ) -> Result<CoordinationSnapshotFiles, String> {
-    write_snapshot_files(project_root, Some(state_json), Some(locks_json), Some(event_json))
+    write_snapshot_files(
+        project_root,
+        Some(state_json),
+        Some(locks_json),
+        Some(event_json),
+    )
 }
 
 #[tauri::command]

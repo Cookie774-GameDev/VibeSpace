@@ -17,9 +17,11 @@ import {
 } from 'lucide-react';
 import { Badge, Button } from '@/components/ui';
 import { cn, formatRelative } from '@/lib/utils';
+import { formatUserDateTime, formatUserTime } from '@/lib/timeFormat';
 import type { ChatId } from '@/types/common';
-import { useJarvisTaskRunStore } from '@/features/jarvis-runs/taskRunStore';
 import type { ChatActivityEvent, ChatActivityKind, ChatActivityStatus } from './types';
+import { chatActivityPreferences } from './chatActivityPreferences';
+import { useUnifiedChatActivity } from './unifiedActivity';
 
 const KIND_ICON: Record<ChatActivityKind, typeof Bot> = {
   agent: Bot,
@@ -44,8 +46,6 @@ const STATUS_META: Record<
   cancelled: { label: 'Cancelled', variant: 'secondary', icon: <XCircle className="h-3 w-3" /> },
   error: { label: 'Failed', variant: 'destructive', icon: <XCircle className="h-3 w-3" /> },
 };
-
-const EMPTY_EVENTS: ChatActivityEvent[] = [];
 
 const COLLAPSE_KEY = 'jarvis.chatActivity.collapsed';
 
@@ -81,11 +81,7 @@ function formatDuration(ms: number): string {
 function formatClock(ms: number | undefined): string {
   if (ms == null) return '—';
   try {
-    return new Date(ms).toLocaleTimeString(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
-      second: '2-digit',
-    });
+    return formatUserTime(ms, { seconds: true });
   } catch {
     return '—';
   }
@@ -242,9 +238,12 @@ export function ChatActivityTimeline({
   chatId: ChatId | string;
   compact?: boolean;
 }) {
-  const events = useJarvisTaskRunStore(
-    (state) => state.activityByChat[String(chatId)] ?? EMPTY_EVENTS,
+  const activityPreferences = React.useSyncExternalStore(
+    chatActivityPreferences.subscribe,
+    chatActivityPreferences.getSnapshot,
+    chatActivityPreferences.getSnapshot,
   );
+  const events = useUnifiedChatActivity(String(chatId));
   // Default collapsed so the panel is a stats dashboard, not a wall of Done rows.
   const [collapsed, setCollapsed] = React.useState(() => {
     const stored = loadCollapsed();
@@ -267,6 +266,8 @@ export function ChatActivityTimeline({
 
   const feed = React.useMemo(() => selectActivityFeedEvents(events), [events]);
   const summary = React.useMemo(() => summarizeChatActivity(events, nowMs), [events, nowMs]);
+
+  if (!activityPreferences.showSessionPanel) return null;
 
   // Always render — empty chats and chats with no activity still show the dashboard.
   const toggle = () => {
@@ -376,7 +377,7 @@ export function ChatActivityTimeline({
                 {formatClock(summary.startedAt)}
               </span>
             }
-            hint={summary.startedAt ? new Date(summary.startedAt).toLocaleString() : undefined}
+            hint={summary.startedAt ? formatUserDateTime(summary.startedAt) : undefined}
           />
           <StatChip
             label={summary.isLive ? 'Running for' : 'Duration'}

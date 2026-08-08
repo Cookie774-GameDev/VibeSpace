@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "vibespace-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "USER_RELAY",
+        "class_name": "UserRelay"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["UserRelay"]
+    }
+  ],
+  "vars": {
+    "SUPABASE_URL": "https://tipeobvisjqvpbzcpckh.supabase.co",
+    "MCP_PUBLIC_URL": "https://vibespace-mcp.combatonline02.workers.dev/mcp",
+    "ALLOWED_ORIGINS": "https://chatgpt.com,https://chat.openai.com,https://vibespaceos.com"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  }
+}

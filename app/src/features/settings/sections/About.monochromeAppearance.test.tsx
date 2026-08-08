@@ -30,6 +30,10 @@ describe('About MonoChrome appearance', () => {
     expect(screen.getByRole('heading', { name: 'About' })).toBeTruthy();
     expect(screen.getByText('Build')).toBeTruthy();
     expect(screen.getByText('Resources')).toBeTruthy();
-    expect(screen.getByText(/Anonymous usage telemetry/)).toBeTruthy();
+    const credits = screen.getByRole('link', { name: /Open Source Credits/i });
+    expect(credits.getAttribute('href')).toBe(
+      'https://github.com/Cookie774-GameDev/VibeSpace/blob/main/docs/oss/THIRD_PARTY_NOTICES.md',
+    );
+    expect(screen.getByText(/Privacy and anonymous telemetry/)).toBeTruthy();
   });
 });

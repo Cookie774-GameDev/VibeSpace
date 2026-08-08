@@ -1,0 +1,725 @@
+/*
+ * Origami — VibeSpace's sculpted paper atelier.
+ *
+ * Presentation-only: targets existing semantic surfaces and never replaces
+ * component structure, data, handlers, terminal output, or message payloads.
+ */
+html[data-theme='origami'] {
+  --origami-paper: #f7f1e5;
+  --origami-paper-raised: #fffaf0;
+  --origami-ink: #373142;
+  --origami-muted: #746d7f;
+  --origami-line: #d8cfc2;
+  --origami-coral: #e78068;
+  --origami-sage: #91aaa0;
+  --origami-lavender: #9b89b5;
+  --origami-blue: #79aebb;
+  --origami-gold: #d6ae70;
+  --origami-shell-950: #34303f;
+  --origami-shell-900: #3e384b;
+  --origami-shell-800: #4b435b;
+  --origami-canvas: var(--origami-paper);
+  --origami-surface: #fbf6ec;
+  --origami-surface-raised: var(--origami-paper-raised);
+  --origami-border: var(--origami-line);
+  --origami-border-strong: #c9bcae;
+  --origami-text: var(--origami-ink);
+  --origami-text-muted: var(--origami-muted);
+  --origami-terracotta: var(--origami-coral);
+  --origami-terracotta-deep: #bd5d55;
+  --origami-mint: #a9c8b3;
+  --origami-lilac: var(--origami-lavender);
+  --origami-terminal-well: #302b39;
+  --origami-terminal-ink: #f7f0e7;
+  --origami-terminal-muted: #c2b8c3;
+  --origami-radius-control: 5px;
+  --origami-radius-card: 9px;
+  --origami-radius-panel: 13px;
+  --origami-shadow-soft: 2px 3px 0 rgb(76 61 79 / 0.08), 0 10px 24px rgb(67 52 73 / 0.07);
+  --origami-shadow-raised: 5px 7px 0 rgb(76 61 79 / 0.09), 0 18px 42px rgb(67 52 73 / 0.1);
+  --origami-motion-fast: 160ms ease-out;
+
+  --background: 36 60% 95%;
+  --background-warm: 34 64% 94%;
+  --panel: 35 64% 96%;
+  --elevated: 38 100% 98%;
+  --paper-soft: 35 72% 97%;
+  --paper-done: 92 27% 91%;
+  --border: 34 43% 82%;
+  --border-mid: 31 44% 72%;
+  --line-soft: 35 42% 88%;
+  --input: 34 43% 82%;
+  --ring: 16 66% 53%;
+  --foreground: 27 22% 21%;
+  --muted: 34 43% 91%;
+  --muted-foreground: 29 17% 42%;
+  --ink-faint: 29 13% 55%;
+  --accent: 16 66% 59%;
+  --accent-foreground: 38 100% 98%;
+  --accent-copper: 16 66% 59%;
+  --accent-amber: 37 58% 63%;
+  --accent-amber-soft: 37 58% 63% / 0.17;
+  --accent-cyan: 144 39% 65%;
+  --accent-violet: 281 31% 67%;
+  --rose: 14 58% 69%;
+  --terracotta: 16 66% 59%;
+  --honey: 37 58% 63%;
+  --sage: 96 16% 61%;
+  --sage-deep: 100 18% 42%;
+  --lavender: 281 31% 67%;
+  --cream: 38 100% 98%;
+  --primary: 16 66% 59%;
+  --primary-foreground: 38 100% 98%;
+  --secondary: 34 43% 91%;
+  --secondary-foreground: 27 22% 25%;
+  --destructive: 4 59% 50%;
+  --destructive-foreground: 38 100% 98%;
+  --success: 100 22% 43%;
+  --warning: 34 63% 45%;
+  --info: 205 43% 55%;
+  --radius-sm: var(--origami-radius-control);
+  --radius: 14px;
+  --radius-lg: var(--origami-radius-panel);
+  --shadow-soft: var(--origami-shadow-soft);
+  --shadow-lift: var(--origami-shadow-raised);
+  --shadow-cozy: var(--origami-shadow-raised);
+  color-scheme: light;
+}
+
+html[data-theme='origami'],
+html[data-theme='origami'] body,
+html[data-theme='origami'] #root {
+  min-height: 100%;
+  background: var(--origami-canvas);
+  color: var(--origami-text);
+}
+
+html[data-theme='origami'] body {
+  background-image:
+    linear-gradient(115deg, rgb(155 137 181 / 0.045) 0 1px, transparent 1px 100%),
+    radial-gradient(circle at 18% 12%, rgb(255 255 255 / 0.52), transparent 28%),
+    linear-gradient(180deg, var(--origami-paper), #eee7dc);
+  background-size:
+    42px 42px,
+    auto,
+    auto;
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+}
+
+html[data-theme='origami'] .font-display,
+html[data-theme='origami'] h1,
+html[data-theme='origami'] h2,
+html[data-theme='origami'] h3 {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-variation-settings:
+    'SOFT' 60,
+    'WONK' 0;
+  letter-spacing: -0.018em;
+}
+
+html[data-theme='origami'] :focus-visible {
+  outline: 2px solid var(--origami-terracotta-deep);
+  outline-offset: 2px;
+}
+
+html[data-theme='origami'] button,
+html[data-theme='origami'] input,
+html[data-theme='origami'] textarea,
+html[data-theme='origami'] [role='button'],
+html[data-theme='origami'] [role='tab'] {
+  transition:
+    color var(--origami-motion-fast),
+    border-color var(--origami-motion-fast),
+    background-color var(--origami-motion-fast),
+    box-shadow var(--origami-motion-fast),
+    transform var(--origami-motion-fast);
+}
+
+html[data-theme='origami'] button:hover:not(:disabled),
+html[data-theme='origami'] [role='button']:hover:not([aria-disabled='true']) {
+  border-color: var(--origami-border-strong);
+}
+
+html[data-theme='origami'] [data-monochrome-surface='app-shell'] {
+  background: var(--origami-paper);
+}
+
+html[data-theme='origami'] [data-monochrome-surface='top-bar'] {
+  --foreground: 263 15% 24%;
+  --muted-foreground: 260 9% 45%;
+  --border: 34 21% 80%;
+  --panel: 39 43% 96%;
+  --muted: 35 25% 90%;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 0.48), transparent 48%), var(--origami-paper) !important;
+  border-color: var(--origami-line) !important;
+  color: var(--origami-ink);
+  box-shadow: inset 0 -1px var(--origami-line);
+}
+
+html[data-theme='origami'] [data-nav-pane='true'] {
+  --foreground: 263 15% 24%;
+  --muted-foreground: 260 9% 45%;
+  --border: 34 21% 80%;
+  --panel: 39 43% 96%;
+  --elevated: 34 42% 92%;
+  --muted: 35 25% 90%;
+  --accent-copper: 8 69% 66%;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 0.62), transparent 34%),
+    linear-gradient(180deg, #faf4e8, #eee6dc) !important;
+  border-color: var(--origami-line) !important;
+  color: var(--origami-ink);
+  box-shadow: 7px 0 0 rgb(92 75 94 / 0.05);
+}
+
+html[data-theme='origami'] [data-nav-pane='true'] [aria-current='page'],
+html[data-theme='origami'] [data-nav-pane='true'] button.bg-muted,
+html[data-theme='origami'] [data-nav-pane='true'] button[class*='ring-accent'] {
+  background: linear-gradient(135deg, #f3c9b5, #eaa38e) !important;
+  border-color: #d98775 !important;
+  color: #4b3840 !important;
+  box-shadow: 2px 3px 0 rgb(97 66 78 / 0.12);
+}
+
+html[data-theme='origami'] [data-nav-pane='true'] .eyebrow {
+  color: var(--origami-lavender);
+  letter-spacing: 0.11em;
+}
+
+html[data-theme='origami'] [data-monochrome-surface='tab-strip'] {
+  --foreground: 263 15% 24%;
+  --muted-foreground: 260 9% 45%;
+  --border: 34 21% 80%;
+  --panel: 39 43% 96%;
+  --elevated: 34 42% 92%;
+  --muted: 35 25% 90%;
+  background: linear-gradient(180deg, #f8f2e7, #eee6dc) !important;
+  border-color: var(--origami-line) !important;
+  color: var(--origami-ink);
+}
+
+html[data-theme='origami']
+  [data-monochrome-surface='tab-strip']
+  [role='tab'][aria-selected='true'] {
+  background: var(--origami-paper-raised) !important;
+  border-color: var(--origami-line) !important;
+  border-radius: 12px 12px 0 0;
+  color: var(--origami-ink);
+}
+
+html[data-theme='origami'] main[aria-label='Workspace'] {
+  background:
+    linear-gradient(rgb(255 255 255 / 0.12), rgb(255 255 255 / 0.12)), var(--origami-canvas);
+}
+
+html[data-theme='origami'] [role='dialog'],
+html[data-theme='origami'] [role='menu'],
+html[data-theme='origami'] [role='listbox'],
+html[data-theme='origami'] [data-radix-popper-content-wrapper] > div {
+  border-color: var(--origami-border);
+  background-color: var(--origami-surface-raised);
+  box-shadow: var(--origami-shadow-raised);
+}
+
+html[data-theme='origami'] input,
+html[data-theme='origami'] textarea,
+html[data-theme='origami'] select {
+  border-color: var(--origami-border);
+  background-color: rgb(255 250 243 / 0.9);
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.8);
+}
+
+html[data-theme='origami'] .cozy-card,
+html[data-theme='origami'] [class*='shadow-soft'] {
+  border-color: var(--origami-border);
+  box-shadow: var(--origami-shadow-soft);
+}
+
+/* Chat — quiet paper stage; live chat lifecycle and composer stay untouched. */
+html[data-theme='origami'] [data-vibespace-page='chat'] {
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 53% 40%, rgb(255 255 255 / 0.76), transparent 31%),
+    linear-gradient(180deg, var(--origami-paper), #eee6dc);
+}
+
+html[data-theme='origami'] [data-vibespace-page='chat'] > :not(.origami-chat-decor) {
+  position: relative;
+  z-index: 2;
+}
+
+html[data-theme='origami'] [data-vibespace-page='chat'] [data-testid='jarvis-session-panel'] {
+  border: 1px solid var(--origami-border) !important;
+  border-radius: var(--origami-radius-panel) !important;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 0.28), transparent 54%), var(--origami-surface) !important;
+  box-shadow: var(--origami-shadow-soft) !important;
+}
+
+html[data-theme='origami'] [data-vibespace-page='chat'] [data-tour='chat-composer'] {
+  margin: 0 24px 22px;
+  border: 1px solid var(--origami-border);
+  border-radius: var(--origami-radius-card);
+  background: rgb(255 249 240 / 0.96);
+  box-shadow: var(--origami-shadow-soft);
+}
+
+html[data-theme='origami'] .origami-chat-decor {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+html[data-theme='origami'] .origami-chat-decor img {
+  position: absolute;
+  object-fit: contain;
+  opacity: 0.33;
+}
+
+html[data-theme='origami'] .origami-chat-decor__ribbon {
+  top: -3%;
+  right: 4%;
+  width: min(38vw, 540px);
+  opacity: 0.12 !important;
+}
+
+html[data-theme='origami'] .origami-chat-decor__crane {
+  top: 42%;
+  left: 50%;
+  width: clamp(80px, 9vw, 142px);
+  transform: translate(-50%, -50%);
+  opacity: 0.13 !important;
+}
+
+html[data-theme='origami'] .origami-chat-decor__foliage {
+  bottom: -1%;
+  left: -1%;
+  width: min(22vw, 320px);
+}
+
+html[data-theme='origami'] .origami-chat-decor__mountains {
+  right: 0;
+  bottom: -2%;
+  left: 0;
+  width: 100%;
+  height: 23%;
+  object-fit: cover !important;
+  object-position: bottom;
+  opacity: 0.18 !important;
+}
+
+html[data-theme='origami'] .origami-chat-decor__flower {
+  right: -1%;
+  bottom: -2%;
+  width: min(18vw, 270px);
+}
+
+html[data-theme='origami'] .origami-welcome-art {
+  position: absolute;
+  inset: 14% 16% 17%;
+  display: grid;
+  place-items: center;
+}
+
+html[data-theme='origami'] .origami-welcome-art__hero {
+  position: relative;
+  z-index: 1;
+  width: min(46vw, 620px);
+  max-height: 53vh;
+  opacity: 0.96;
+  filter: saturate(0.92);
+  transform: translateY(-2%);
+  animation: origami-settle 540ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+html[data-theme='origami'] .origami-welcome-art__hero--lotus {
+  width: min(39vw, 540px);
+}
+
+html[data-theme='origami'] .origami-welcome-art__shadow {
+  position: absolute;
+  bottom: 13%;
+  width: min(32vw, 430px);
+  height: 30px;
+  border-radius: 50%;
+  background: rgb(61 48 69 / 0.12);
+  filter: blur(13px);
+}
+
+@keyframes origami-settle {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.975);
+  }
+}
+
+/* Skills — compact registry rail and a flexible illustrated library stage. */
+html[data-theme='origami'] [data-monochrome-route='skills'] {
+  position: relative;
+  background: var(--origami-canvas);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='skills']
+  [data-monochrome-surface='skill-registry'] {
+  width: clamp(300px, 28vw, 390px);
+  border-color: var(--origami-border);
+  background: linear-gradient(180deg, var(--origami-surface), #f9ecdc);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='skills']
+  [data-monochrome-surface='skill-detail'] {
+  position: relative;
+  isolation: isolate;
+  background:
+    url('/assets/origami-chat/right-flower.webp') right 4% top 7% / min(25vw, 340px) auto no-repeat,
+    url('/assets/origami-chat/bottom-mountains.svg') center bottom / 100% 30% no-repeat,
+    linear-gradient(180deg, var(--origami-canvas), #faeddf);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='skills']
+  [data-monochrome-surface='skill-detail']
+  > div {
+  border-color: var(--origami-border);
+  border-radius: var(--origami-radius-panel);
+  background: rgb(255 249 240 / 0.94);
+  box-shadow: var(--origami-shadow-raised);
+}
+
+/* Tools — reference-aligned four-card quick start and mountain footer. */
+html[data-theme='origami'] [data-monochrome-route='tools'] {
+  position: relative;
+  isolation: isolate;
+  background:
+    url('/assets/origami-chat/bottom-mountains.svg') center bottom / 100% auto no-repeat,
+    linear-gradient(180deg, var(--origami-canvas), #faeddf) !important;
+}
+
+html[data-theme='origami'] [data-monochrome-route='tools']::after,
+html[data-theme='origami'] [data-monochrome-route='kanban']::after,
+html[data-theme='origami'] [data-monochrome-route='schedule']::after {
+  content: '';
+  position: fixed;
+  z-index: 0;
+  pointer-events: none;
+}
+
+html[data-theme='origami'] [data-monochrome-route='tools']::after {
+  right: 3%;
+  bottom: 0;
+  width: min(16vw, 230px);
+  height: min(25vh, 260px);
+  background: url('/assets/origami-chat/right-flower.webp') right bottom / contain no-repeat;
+  opacity: 0.28;
+}
+
+html[data-theme='origami'] [data-monochrome-route='tools'] > div {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+}
+
+html[data-theme='origami'] [data-monochrome-route='tools'] [data-monochrome-surface] {
+  border-color: var(--origami-border);
+}
+
+/* Files — split paper workspace with an editorial editor surface. */
+html[data-theme='origami'] [data-monochrome-route='files'] {
+  background: var(--origami-canvas);
+}
+
+html[data-theme='origami'] [data-monochrome-route='files'] [data-monochrome-surface='files-tree'] {
+  border-color: var(--origami-border);
+  background: linear-gradient(180deg, var(--origami-surface), #f9ecdc);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='files']
+  [data-monochrome-surface='files-editor'] {
+  background:
+    url('/assets/origami-chat/right-flower.webp') right 3% center / min(20vw, 280px) auto no-repeat,
+    var(--origami-canvas);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='files']
+  [data-monochrome-surface='files-editor']
+  textarea {
+  background: rgb(255 250 243 / 0.86);
+  caret-color: var(--origami-terracotta-deep);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='files']
+  [data-monochrome-surface='files-jarvis'] {
+  border-color: var(--origami-border);
+  background: rgb(255 249 240 / 0.94);
+  box-shadow: var(--origami-shadow-soft);
+}
+
+/* Kanban — equal paper cards with live metrics and restrained illustrated empties. */
+html[data-theme='origami'] [data-monochrome-route='kanban'] {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(180deg, var(--origami-canvas), #f9eee1);
+}
+
+html[data-theme='origami'] [data-monochrome-route='kanban']::after {
+  right: 1%;
+  bottom: 1%;
+  width: min(19vw, 300px);
+  height: min(24vh, 240px);
+  background: url('/assets/origami-chat/right-flower.webp') right bottom / contain no-repeat;
+  opacity: 0.17;
+}
+
+html[data-theme='origami'] [data-monochrome-route='kanban'] > * {
+  position: relative;
+  z-index: 1;
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='kanban']
+  [data-monochrome-surface='kanban-column'],
+html[data-theme='origami'] [data-monochrome-route='kanban'] .cozy-card {
+  border: 1px solid var(--origami-border);
+  border-radius: var(--origami-radius-card);
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 0.3), transparent 55%), var(--origami-surface);
+  box-shadow: var(--origami-shadow-soft);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='kanban']
+  [data-monochrome-surface='kanban-column']::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  border-top-right-radius: var(--origami-radius-card);
+  background:
+    linear-gradient(225deg, rgb(157 135 152 / 0.18), transparent 54%), var(--origami-paper);
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+  filter: drop-shadow(-1px 2px 1px rgb(66 54 72 / 0.12));
+  pointer-events: none;
+}
+
+/* Scheduler — two-thirds timeline, one-third form, stacked at narrow widths. */
+html[data-theme='origami'] [data-monochrome-route='schedule'] {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(180deg, var(--origami-canvas), #f9eee1);
+}
+
+html[data-theme='origami'] [data-monochrome-route='schedule']::after {
+  bottom: 0;
+  left: 0;
+  width: min(67vw, 980px);
+  height: min(29vh, 290px);
+  background:
+    url('/assets/origami-chat/left-foliage.webp') left bottom / auto 65% no-repeat,
+    url('/assets/origami-chat/bottom-mountains.svg') center bottom / 100% 100% no-repeat;
+  opacity: 0.25;
+}
+
+html[data-theme='origami'] [data-monochrome-route='schedule'] > * {
+  position: relative;
+  z-index: 1;
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='schedule']
+  [data-monochrome-surface='schedule-timeline'],
+html[data-theme='origami']
+  [data-monochrome-route='schedule']
+  [data-monochrome-surface='schedule-editor'] {
+  border-color: var(--origami-border);
+  border-radius: var(--origami-radius-card);
+  background: rgb(255 249 240 / 0.9);
+  box-shadow: var(--origami-shadow-soft);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='schedule']
+  [data-monochrome-surface='schedule-timeline'] {
+  min-height: 510px;
+}
+
+/* Jarvis voice — tactile paper module with live, data-driven waveform preserved. */
+html[data-theme='origami'] [data-vibespace-owned-chrome='voice'] {
+  border: 1px solid var(--origami-border-strong) !important;
+  border-radius: 24px !important;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 0.62), transparent 45%),
+    url('/assets/origami-chat/paper-base.webp') center / cover,
+    var(--origami-surface) !important;
+  color: var(--origami-text);
+  box-shadow: var(--origami-shadow-raised) !important;
+}
+
+html[data-theme='origami'] [data-vibespace-owned-chrome='voice']::before {
+  border-color: rgb(220 118 81 / 0.24) !important;
+  opacity: 0.7;
+}
+
+html[data-theme='origami'] [data-vibespace-owned-chrome='voice'] .jarvis-voice-orb-button {
+  background:
+    radial-gradient(circle at 35% 30%, #fff1c7 0 10%, transparent 28%),
+    conic-gradient(from 25deg, #d8ad69, #f2c178, #dc7651, #e4b366, #d8ad69);
+  box-shadow:
+    0 0 0 8px rgb(216 173 105 / 0.12),
+    0 0 28px rgb(220 118 81 / 0.2);
+}
+
+html[data-theme='origami'] [data-vibespace-owned-chrome='voice'] canvas {
+  filter: sepia(0.18) saturate(0.92);
+}
+
+/* Terminal — dark, readable terminal canvases inside the paper workspace. */
+html[data-theme='origami'] [data-monochrome-route='terminal'] {
+  background:
+    linear-gradient(rgb(251 244 233 / 0.89), rgb(251 244 233 / 0.89)),
+    url('/assets/origami-chat/paper-base.webp') center / 520px repeat;
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='terminal']
+  [data-monochrome-surface='terminal-toolbar'] {
+  border-color: var(--origami-border);
+  background: var(--origami-surface);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='terminal']
+  [data-monochrome-surface='terminal-grid'] {
+  background:
+    url('/assets/origami-chat/bottom-mountains.svg') center bottom / 100% 8% no-repeat,
+    transparent;
+}
+
+html[data-theme='origami'] [data-monochrome-route='terminal'] [data-terminal-drop='pane'] {
+  border-color: var(--origami-border-strong);
+  border-radius: 14px;
+  background: var(--origami-surface);
+  box-shadow: var(--origami-shadow-soft);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='terminal']
+  [data-terminal-drop='pane']
+  [role='status'] {
+  border-color: var(--origami-shell-800) !important;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 0.035), transparent 48%), var(--origami-terminal-well) !important;
+  color: var(--origami-terminal-ink);
+  box-shadow:
+    inset 0 1px rgb(255 255 255 / 0.05),
+    inset 0 -1px rgb(0 0 0 / 0.18);
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='terminal']
+  [data-terminal-drop='pane']
+  [role='status']
+  .text-foreground {
+  color: var(--origami-terminal-ink) !important;
+}
+
+html[data-theme='origami']
+  [data-monochrome-route='terminal']
+  [data-terminal-drop='pane']
+  [role='status']
+  .text-muted-foreground {
+  color: var(--origami-terminal-muted) !important;
+}
+
+html[data-theme='origami'] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html[data-theme='origami'] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html[data-theme='origami'] ::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgb(125 106 89 / 0.42);
+  background-clip: padding-box;
+}
+
+html[data-theme='origami'] ::-webkit-scrollbar-thumb:hover {
+  background: rgb(125 106 89 / 0.62);
+  background-clip: padding-box;
+}
+
+@media (max-width: 1100px) {
+  html[data-theme='origami']
+    [data-monochrome-route='skills']
+    [data-monochrome-surface='skill-registry'] {
+    width: 320px;
+  }
+
+  html[data-theme='origami'] [data-monochrome-route='schedule']::after {
+    opacity: 0.13;
+  }
+}
+
+@media (max-width: 760px) {
+  html[data-theme='origami'] [data-vibespace-page='chat'] [data-tour='chat-composer'] {
+    margin: 0 10px 10px;
+  }
+
+  html[data-theme='origami']
+    [data-monochrome-route='skills']
+    [data-monochrome-surface='skill-registry'] {
+    width: 100%;
+  }
+
+  html[data-theme='origami']
+    [data-monochrome-route='skills']
+    [data-monochrome-surface='skill-detail'],
+  html[data-theme='origami']
+    [data-monochrome-route='files']
+    [data-monochrome-surface='files-editor'] {
+    background-image: none;
+  }
+
+  html[data-theme='origami'] [data-monochrome-route='tools']::after,
+  html[data-theme='origami'] [data-monochrome-route='kanban']::after,
+  html[data-theme='origami'] [data-monochrome-route='schedule']::after {
+    display: none;
+  }
+
+  html[data-theme='origami'] .origami-welcome-art {
+    inset: 18% 5% 20%;
+  }
+
+  html[data-theme='origami'] .origami-welcome-art__hero {
+    width: min(82vw, 520px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme='origami'],
+  html[data-theme='origami'] *,
+  html[data-theme='origami'] *::before,
+  html[data-theme='origami'] *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

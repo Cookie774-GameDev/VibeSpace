@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe('Prompt Forge control', () => {
-  it('starts explicitly, stays secondary to Send, and exposes model/privacy configuration', () => {
+  it('starts explicitly, stays secondary to Send, and exposes model configuration without lock UI', () => {
     const onStart = vi.fn();
     const onSelectionChange = vi.fn();
     const onPrivacyModeChange = vi.fn();
@@ -54,6 +54,8 @@ describe('Prompt Forge control', () => {
           onAllowPublicResearchChange={vi.fn()}
           publicResearchAvailable
           offlineMode={false}
+          autoUpgradeOnSend={false}
+          onAutoUpgradeOnSendChange={vi.fn()}
           onStart={onStart}
           onCancel={vi.fn()}
         />
@@ -70,8 +72,13 @@ describe('Prompt Forge control', () => {
     const configure = screen.getByRole('button', { name: 'Configure Prompt Forge' });
     expect(configure.className).toContain('min-h-6');
     expect(configure.className).toContain('min-w-6');
+    // Lock icon removed — configure uses chevron only.
+    expect(configure.querySelector('svg.lucide-lock-keyhole')).toBeNull();
     fireEvent.click(configure);
-    expect(screen.getByText('Prompt Forge model')).toBeTruthy();
+    expect(screen.getByText('Prompt upgrade model')).toBeTruthy();
+    expect(screen.getByText('Upgrade automatically on Send')).toBeTruthy();
+    expect(screen.queryByRole('radiogroup', { name: 'Prompt Forge privacy' })).toBeNull();
+    expect(screen.queryByText('Privacy for this run')).toBeNull();
     fireEvent.click(screen.getByRole('radio', { name: /GPT-5.6 Sol/ }));
     expect(onSelectionChange).toHaveBeenCalledWith({
       mode: 'single',
@@ -79,8 +86,7 @@ describe('Prompt Forge control', () => {
       modelId: 'gpt-5.6-sol',
       connectionId: 'openai-codex',
     });
-    fireEvent.click(screen.getByRole('radio', { name: 'Provider allowed' }));
-    expect(onPrivacyModeChange).toHaveBeenCalledWith('provider_allowed');
+    expect(onPrivacyModeChange).not.toHaveBeenCalled();
   });
 
   it('shows a precise disabled reason and turns the active control into Cancel', () => {
@@ -102,6 +108,8 @@ describe('Prompt Forge control', () => {
           onAllowPublicResearchChange={vi.fn()}
           publicResearchAvailable
           offlineMode={false}
+          autoUpgradeOnSend={false}
+          onAutoUpgradeOnSendChange={vi.fn()}
           onStart={vi.fn()}
           onCancel={vi.fn()}
         />
@@ -132,6 +140,8 @@ describe('Prompt Forge control', () => {
           onAllowPublicResearchChange={vi.fn()}
           publicResearchAvailable
           offlineMode={false}
+          autoUpgradeOnSend={false}
+          onAutoUpgradeOnSendChange={vi.fn()}
           onStart={vi.fn()}
           onCancel={onCancel}
         />
@@ -142,7 +152,7 @@ describe('Prompt Forge control', () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
-  it('keeps public research disabled until a real research connection is available', () => {
+  it('does not expose lock or privacy controls in chat configure menu', () => {
     render(
       <TooltipProvider>
         <PromptForgeControl
@@ -161,6 +171,8 @@ describe('Prompt Forge control', () => {
           onAllowPublicResearchChange={vi.fn()}
           publicResearchAvailable={false}
           offlineMode={false}
+          autoUpgradeOnSend={false}
+          onAutoUpgradeOnSendChange={vi.fn()}
           onStart={vi.fn()}
           onCancel={vi.fn()}
         />
@@ -168,9 +180,8 @@ describe('Prompt Forge control', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Configure Prompt Forge' }));
-    expect(
-      screen.getByRole('checkbox', { name: /Allow public research/i }).hasAttribute('disabled'),
-    ).toBe(true);
-    expect(screen.getByText(/No research connection is currently available/i)).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /Allow public research/i })).toBeNull();
+    expect(screen.queryByText(/Privacy for this run/i)).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Prompt Forge privacy' })).toBeNull();
   });
 });

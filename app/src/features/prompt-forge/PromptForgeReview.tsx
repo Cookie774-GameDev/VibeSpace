@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, Copy, RefreshCw, RotateCcw, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { Button, Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui';
 import { cn } from '@/lib/utils';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import type { PromptForgeJob } from './contracts';
 import './sakura-prompt-forge.css';
 
@@ -291,7 +292,7 @@ export function PromptForgeReview({
                             {source.whySelected}
                           </p>
                           <p className="mt-1 text-metadata text-muted-foreground">
-                            Observed {new Date(source.observedAt).toLocaleString()}
+                            Observed {formatUserDateTime(source.observedAt)}
                           </p>
                         </div>
                         <Button

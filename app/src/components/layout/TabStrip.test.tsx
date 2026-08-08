@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatId } from '@/types';
-import { TabItem } from './TabStrip';
+import { FilesRouteTab, TabItem } from './TabStrip';
 
 describe('TabItem accessibility', () => {
   afterEach(cleanup);
@@ -29,10 +29,26 @@ describe('TabItem accessibility', () => {
     expect(tab.getAttribute('aria-pressed')).toBe('true');
     expect(tab.getAttribute('tabindex')).toBe('0');
     expect(tab.className).toContain('[html[data-theme=sakura]_&]:min-h-6');
+    expect(tab.querySelector('[data-thought-bloom-title]')).not.toBeNull();
 
     fireEvent.click(tab);
     fireEvent.click(close);
     expect(onActivate).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('FilesRouteTab', () => {
+  afterEach(cleanup);
+
+  it('shows the active filename without creating or changing chat tabs', () => {
+    render(<FilesRouteTab activePath="C:\\project\\src\\main.ts" />);
+    expect(screen.getByText('main.ts')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'New chat' })).toBeNull();
+  });
+
+  it('uses a neutral Files label before a file is open', () => {
+    render(<FilesRouteTab activePath={null} />);
+    expect(screen.getByText('Files')).toBeTruthy();
   });
 });

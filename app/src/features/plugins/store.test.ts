@@ -95,8 +95,8 @@ describe('plugin connection account scopes', () => {
     expect(selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a')).toEqual({});
     expect(localStorage.getItem('jarvis-plugin-connections')).not.toBeNull();
     expect(JSON.parse(localStorage.getItem('jarvis-plugin-connections-v2') ?? '{}')).toEqual({
-      state: { connectionsByAccount: {} },
-      version: 2,
+      state: { connectionsByAccount: {}, pinnedPluginIdsByAccount: {} },
+      version: 3,
     });
   });
 

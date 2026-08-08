@@ -42,9 +42,20 @@ export interface NotifyOptions {
   silent?: boolean;
   /** Show an in-app toast when native/browser delivery is unavailable. */
   fallbackToast?: boolean;
+  /** Optional click handler (browser Notification API only). */
+  onClick?: () => void;
 }
 
 export type NotificationPermissionState = NotificationPermission | 'unavailable';
+
+export type NotifyDeliveryChannel = 'native' | 'browser' | 'toast' | 'none';
+
+export interface NotifyResult {
+  channel: NotifyDeliveryChannel;
+  permission: NotificationPermissionState;
+  /** Human-readable outcome for Settings feedback. */
+  message: string;
+}
 
 function normalizeNotificationPermission(value: unknown): NotificationPermission {
   if (value === 'granted' || value === 'denied') return value;
@@ -57,7 +68,10 @@ export async function getNotificationPermission(): Promise<NotificationPermissio
       const granted = await tauriInvoke<boolean | null>(
         'plugin:notification|is_permission_granted',
       );
-      return granted === true ? 'granted' : 'default';
+      // Tauri plugin: true = granted, false = denied, null = not determined.
+      if (granted === true) return 'granted';
+      if (granted === false) return 'denied';
+      return 'default';
     } catch {
       return 'unavailable';
     }
@@ -95,30 +109,103 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
  * Send a user-facing notification. Routing:
  *   1. Native OS notification via `tauri-plugin-notification` (desktop).
  *   2. Browser `Notification` API (web).
- *   3. Last-resort in-app toast (always available).
+ *   3. Last-resort in-app toast (when fallbackToast is not false).
  */
 export async function notify(
   title: string,
   body?: string,
   options: NotifyOptions = {},
-): Promise<void> {
+): Promise<NotifyResult> {
+  let permission: NotificationPermissionState = 'unavailable';
+
   if (isTauri) {
     try {
-      if ((await requestNotificationPermission()) === 'granted') {
+      permission = await requestNotificationPermission();
+      if (permission === 'granted') {
         await tauriInvoke('plugin:notification|notify', {
           options: { title, body, silent: options.silent ?? false },
         });
-        return;
+        return {
+          channel: 'native',
+          permission,
+          message: 'Delivered as a desktop notification.',
+        };
+      }
+      if (permission === 'denied') {
+        if (options.fallbackToast !== false) {
+          try {
+            toast.info(title, body);
+            return {
+              channel: 'toast',
+              permission,
+              message:
+                'Desktop notifications are blocked. Showing an in-app toast instead. Enable notifications for VibeSpace in system settings.',
+            };
+          } catch {
+            /* fall through */
+          }
+        }
+        return {
+          channel: 'none',
+          permission,
+          message:
+            'Desktop notifications are blocked. Enable them for VibeSpace in your system settings, then try again.',
+        };
       }
     } catch (err) {
       console.warn('[tauri] notification failed, falling back', err);
     }
   } else if (typeof window !== 'undefined' && 'Notification' in window) {
     try {
-      const permission = await requestNotificationPermission();
+      permission = await requestNotificationPermission();
       if (permission === 'granted') {
-        new window.Notification(title, { body, silent: options.silent });
-        return;
+        const browserNote = new window.Notification(title, {
+          body,
+          silent: options.silent,
+        });
+        browserNote.onclick = () => {
+          try {
+            window.focus();
+            options.onClick?.();
+            window.dispatchEvent(
+              new CustomEvent('jarvis:notification-click', {
+                detail: { title, body },
+              }),
+            );
+          } catch {
+            /* ignore click handler failures */
+          }
+          try {
+            browserNote.close();
+          } catch {
+            /* ignore */
+          }
+        };
+        return {
+          channel: 'browser',
+          permission,
+          message: 'Delivered as a browser notification.',
+        };
+      }
+      if (permission === 'denied') {
+        if (options.fallbackToast !== false) {
+          try {
+            toast.info(title, body);
+            return {
+              channel: 'toast',
+              permission,
+              message:
+                'Browser notifications are blocked. Showing an in-app toast instead. Allow notifications for this site in the browser address bar.',
+            };
+          } catch {
+            /* fall through */
+          }
+        }
+        return {
+          channel: 'none',
+          permission,
+          message: 'Browser notifications are blocked. Allow them for this site, then try again.',
+        };
       }
     } catch (err) {
       console.warn('[browser] Notification failed, falling back to toast', err);
@@ -128,10 +215,27 @@ export async function notify(
   if (options.fallbackToast !== false) {
     try {
       toast.info(title, body);
+      return {
+        channel: 'toast',
+        permission,
+        message:
+          permission === 'unavailable'
+            ? 'OS notifications are unavailable here. Showing an in-app toast instead.'
+            : 'Could not open an OS notification. Showing an in-app toast instead.',
+      };
     } catch {
       /* nothing more we can do */
     }
   }
+
+  return {
+    channel: 'none',
+    permission,
+    message:
+      permission === 'denied'
+        ? 'Notifications are blocked and no fallback was allowed.'
+        : 'No notification channel was available.',
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -256,9 +360,7 @@ export async function startNativeOllama(): Promise<void> {
   await tauriInvoke('ollama_start');
 }
 
-export async function ensureNativeOllamaReady(
-  baseUrl?: string,
-): Promise<NativeOllamaEnsureResult> {
+export async function ensureNativeOllamaReady(baseUrl?: string): Promise<NativeOllamaEnsureResult> {
   if (!isTauri) {
     return {
       ready: false,
@@ -271,6 +373,34 @@ export async function ensureNativeOllamaReady(
 
   try {
     return await tauriInvoke<NativeOllamaEnsureResult>('ensure_ollama_ready', {
+      baseUrl: baseUrl ?? null,
+    });
+  } catch (err) {
+    return {
+      ready: false,
+      apiReachable: false,
+      installed: false,
+      phase: 'error',
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function installNativeOllamaWithConsent(
+  baseUrl?: string,
+): Promise<NativeOllamaEnsureResult> {
+  if (!isTauri) {
+    return {
+      ready: false,
+      apiReachable: false,
+      installed: false,
+      phase: 'error',
+      detail: 'Automatic Ollama installation is available only in the desktop app.',
+    };
+  }
+
+  try {
+    return await tauriInvoke<NativeOllamaEnsureResult>('install_ollama_with_consent', {
       baseUrl: baseUrl ?? null,
     });
   } catch (err) {

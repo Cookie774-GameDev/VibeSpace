@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { runAction } from '@/lib/actions';
 import { cn } from '@/lib/utils';
+import { formatUserTime } from '@/lib/timeFormat';
 import { formatClockRemaining, useClockStore } from './clockStore';
 
 function dueTime(dueAt: number): string {
-  return new Date(dueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return formatUserTime(dueAt);
 }
 
 export function ClockToolPanel() {

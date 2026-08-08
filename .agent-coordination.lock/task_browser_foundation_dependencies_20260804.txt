@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-BROWSER-FOUNDATION-DEPENDENCIES-20260804
+controller=/root
+parent_session_id=active-root-session
+acquired_at=2026-08-04T01:22:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Pin the selected stable MCP SDK and browser runtime/test foundations without downloading browser binaries into the default installer.
+owned_paths=package.json;app/package.json;package-lock.json;docs/oss/dependency-lock.json;docs/oss/THIRD_PARTY_NOTICES.md
+exclusions=all other dependencies;browser binary downloads;all Git operations;all production startup resolution;all external systems
+verification=npm package metadata and lockfile integrity;defer executable tests to final verification
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

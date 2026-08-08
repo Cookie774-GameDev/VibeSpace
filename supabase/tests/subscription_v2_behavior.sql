@@ -8,7 +8,8 @@
 -- no permanent changes.
 --
 -- Economics (COGS ≤ 33% sticker): DeepSeek 45% · call/voice 42.5% · SMS 12.5%.
--- Starter pool = 1.485 + 1.4025 + 0.4125 = 3.30 USD (~3,300 company credits).
+-- Owner-approved Starter pool = 2.475 + 2.3375 + 0.6875 = 5.50 USD
+-- (5,500 fungible company credits).
 -- Reserve windows use TOTAL pool (8% / 25% / 100%), not per-silo budgets.
 -- =============================================================================
 
@@ -33,29 +34,29 @@ begin
     into v_msg_budget, v_sms_budget, v_pool
     from public.subscription_plan_limits where plan = 'starter';
 
-  if v_msg_budget is distinct from 1.485 then
-    raise exception 'starter message budget should be 1.485, got %', v_msg_budget;
+  if v_msg_budget is distinct from 2.475 then
+    raise exception 'starter message budget should be 2.475, got %', v_msg_budget;
   end if;
-  if (select call_budget_usd from public.subscription_plan_limits where plan='pro') is distinct from 7.0125 then
-    raise exception 'pro call budget should be 7.0125';
+  if (select call_budget_usd from public.subscription_plan_limits where plan='pro') is distinct from 11.6875 then
+    raise exception 'pro call budget should be 11.6875';
   end if;
-  if (select sms_budget_usd from public.subscription_plan_limits where plan='ultra') is distinct from 4.125 then
-    raise exception 'ultra sms budget should be 4.125';
+  if (select sms_budget_usd from public.subscription_plan_limits where plan='ultra') is distinct from 6.875 then
+    raise exception 'ultra sms budget should be 6.875';
   end if;
-  if (select sms_count from public.subscription_plan_limits where plan='starter') <> 41 then
-    raise exception 'starter sms_count should be 41';
+  if (select sms_count from public.subscription_plan_limits where plan='starter') <> 0 then
+    raise exception 'starter legacy sms_count should be disabled';
   end if;
-  if (select message_credits from public.subscription_plan_limits where plan='starter') <> 1485 then
-    raise exception 'starter message_credits should be 1485';
+  if (select message_credits from public.subscription_plan_limits where plan='starter') <> 5500 then
+    raise exception 'starter unified credits should be 5500';
   end if;
-  if v_pool is distinct from 3.30 then
-    raise exception 'starter unified pool should be 3.30, got %', v_pool;
+  if v_pool is distinct from 5.50 then
+    raise exception 'starter unified pool should be 5.50, got %', v_pool;
   end if;
-  if public.unified_plan_budget_usd('starter') is distinct from 3.30 then
-    raise exception 'unified_plan_budget_usd(starter) should be 3.30';
+  if public.unified_plan_budget_usd('starter') is distinct from 5.50 then
+    raise exception 'unified_plan_budget_usd(starter) should be 5.50';
   end if;
-  if public.unified_plan_budget_usd('free') is distinct from 0 then
-    raise exception 'unified_plan_budget_usd(free) should be 0';
+  if public.unified_plan_budget_usd('free') is distinct from 1 then
+    raise exception 'unified_plan_budget_usd(free) should be 1';
   end if;
 
   -- ─── Seeding: tier change provisions all three buckets ───────────────────
@@ -73,19 +74,19 @@ begin
 
   if not exists (
     select 1 from public.sms_usage
-     where user_id = uid_starter and monthly_budget_usd = 0.4125
+     where user_id = uid_starter and monthly_budget_usd = 0.6875
   ) then
-    raise exception 'sms_usage not seeded with 0.4125 for starter';
+    raise exception 'sms_usage not seeded with 0.6875 for starter';
   end if;
 
-  -- ─── Free plan: every bucket rejects ─────────────────────────────────────
+  -- ─── Owner-approved Spark/free plan has a bounded $1 shared pool ─────────
   res := public.reserve_message_budget(uid_free, 0.001);
-  if (res->>'reason') is distinct from 'no_message_budget' then
-    raise exception 'free message reserve expected no_message_budget, got %', res;
+  if coalesce((res->>'ok')::boolean, false) is not true then
+    raise exception 'free message reserve should use the Spark pool: %', res;
   end if;
   res := public.reserve_sms_budget(uid_free, 0.01, 1);
-  if (res->>'reason') is distinct from 'no_sms_budget' then
-    raise exception 'free sms reserve expected no_sms_budget, got %', res;
+  if coalesce((res->>'ok')::boolean, false) is not true then
+    raise exception 'free sms reserve should use the Spark pool: %', res;
   end if;
 
   -- ─── In-cap reserve succeeds (0030 returns remaining_usd on pool) ────────
@@ -96,26 +97,26 @@ begin
   if (res->>'remaining_usd') is null then
     raise exception 'reserve should report remaining_usd: %', res;
   end if;
-  -- Pool 3.30 − 0.01 = 3.29
-  if abs((res->>'remaining_usd')::numeric - 3.29) > 0.001 then
-    raise exception 'expected remaining_usd ≈ 3.29 after 0.01 spend, got %', res->>'remaining_usd';
+  -- Pool 5.50 − 0.01 = 5.49
+  if abs((res->>'remaining_usd')::numeric - 5.49) > 0.001 then
+    raise exception 'expected remaining_usd ≈ 5.49 after 0.01 spend, got %', res->>'remaining_usd';
   end if;
 
-  -- ─── 5h window (8%% of pool 3.30 = 0.264) ────────────────────────────────
-  -- Already used 0.01 in this window; 0.26 would push past the 5h cap while
-  -- staying within weekly (0.825) and monthly (3.30).
-  res := public.reserve_message_budget(uid_starter, 0.26);
+  -- ─── 5h window (8%% of pool 5.50 = 0.44) ─────────────────────────────────
+  -- Already used 0.01 in this window; 0.44 would push past the 5h cap while
+  -- staying within weekly (1.375) and monthly (5.50).
+  res := public.reserve_message_budget(uid_starter, 0.44);
   if (res->>'reason') is distinct from 'window_5h_exceeded' then
     raise exception 'expected window_5h_exceeded, got %', res;
   end if;
-  if (res->>'remaining_usd')::numeric > 0.26 then
-    raise exception '5h remaining should be ≤ 0.254, got %', res->>'remaining_usd';
+  if (res->>'remaining_usd')::numeric > 0.43 then
+    raise exception '5h remaining should be ≤ 0.43, got %', res->>'remaining_usd';
   end if;
 
-  -- ─── Weekly window (25%% of pool 3.30 = 0.825) ───────────────────────────
+  -- ─── Weekly window (25%% of pool 5.50 = 1.375) ───────────────────────────
   update public.message_usage
      set window_5h_start = now(), window_5h_used_usd = 0,
-         window_week_start = now(), window_week_used_usd = 0.75
+         window_week_start = now(), window_week_used_usd = 1.30
    where user_id = uid_starter;
   res := public.reserve_message_budget(uid_starter, 0.10);
   if (res->>'reason') is distinct from 'window_weekly_exceeded' then
@@ -125,7 +126,7 @@ begin
   -- ─── Monthly pool cap (shared) still binds when windows are clear ────────
   -- used_usd on message alone near pool total exhausts fungible remaining.
   update public.message_usage
-     set used_usd = 3.25,
+     set used_usd = 5.45,
          window_5h_start = now(), window_5h_used_usd = 0,
          window_week_start = now(), window_week_used_usd = 0
    where user_id = uid_starter;
@@ -137,9 +138,9 @@ begin
   end if;
 
   -- ─── Fungibility: over the silo message_budget but under total pool ──────
-  -- message_budget_usd = 1.485; spending 1.50 via message still OK if pool left.
+  -- message_budget_usd = 2.475; spending 2.50 via message still works if pool remains.
   update public.message_usage
-     set used_usd = 1.50,
+     set used_usd = 2.50,
          window_5h_start = now(), window_5h_used_usd = 0,
          window_week_start = now(), window_week_used_usd = 0
    where user_id = uid_starter;
@@ -157,8 +158,8 @@ begin
   -- ─── Expired windows roll over automatically ─────────────────────────────
   update public.message_usage
      set used_usd = 0,
-         window_5h_start = now() - interval '6 hours', window_5h_used_usd = 0.264,
-         window_week_start = now() - interval '8 days', window_week_used_usd = 0.825
+         window_5h_start = now() - interval '6 hours', window_5h_used_usd = 0.44,
+         window_week_start = now() - interval '8 days', window_week_used_usd = 1.375
    where user_id = uid_starter;
   update public.call_usage set used_usd = 0 where user_id = uid_starter;
   update public.sms_usage set used_usd = 0, used_count = 0 where user_id = uid_starter;

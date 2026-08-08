@@ -109,7 +109,12 @@ export const OLLAMA_LOCAL_CONNECTION: Readonly<ProviderConnection> = Object.free
   displayName: 'Ollama Local',
   mode: 'local' as const,
   authSource: 'local-runtime',
+  // Images: vision-capable tags receive real multimodal payloads; text-only
+  // tags are still gated by modelSupportsVision / selectionSupportsVision.
+  // Files: paths are injected as local context (never cloud-uploaded).
   capabilities: capabilities({
+    images: true,
+    files: true,
     localOnly: true,
     subscriptionQuota: false,
   }),

@@ -40,6 +40,7 @@ vi.mock('@/stores/auth', () => ({
 
 vi.mock('@/lib/hotkeys', () => ({
   HOTKEYS: { NEW_TAB: 'Mod+T', CLOSE_TAB: 'Mod+W' },
+  useBoundHotkey: vi.fn(),
   useHotkey: vi.fn(),
 }));
 

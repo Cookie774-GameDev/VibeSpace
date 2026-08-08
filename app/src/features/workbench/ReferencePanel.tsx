@@ -35,7 +35,7 @@ export function ReferencePanel({ panel, onUpdate }: ReferencePanelProps) {
   }
 
   if (isEmbeddedSurfaceKind(panel.kind)) {
-    return <EmbeddedSurface kind={panel.kind} />;
+    return <EmbeddedSurface panel={panel} />;
   }
 
   return (

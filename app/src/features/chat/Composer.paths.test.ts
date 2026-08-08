@@ -6,6 +6,7 @@ import {
   buildSlashReferenceCommand,
   canvasSnapshotToImageAttachment,
   extractAbsoluteFilePaths,
+  getAppearanceCommandHelp,
   getQueuedMessageNotice,
   getThemeCommandHelp,
   mergeActiveCanvasSourcesForPromptForge,
@@ -59,21 +60,22 @@ describe('composer queued-run notice', () => {
     });
   });
 
-  it('keeps the standard queue notice for ordinary follow-up messages', () => {
-    expect(getQueuedMessageNotice('Summarize the result next.')).toEqual({
+  it('keeps mode-specific queue notices for ordinary follow-up messages', () => {
+    expect(getQueuedMessageNotice('Summarize the result next.', 'after-run')).toEqual({
       title: 'Message queued',
-      body: 'It will send automatically when Jarvis finishes the current reply (or use Send / Multitask).',
+      body: 'It will send when this reply fully finishes (Tab). Esc sends now · Esc×3 cancels the run.',
     });
+    expect(getQueuedMessageNotice('Nudge after tool.', 'after-tool').body).toMatch(/tool/i);
   });
 });
 
 describe('composer mention and slash confirmation helpers', () => {
-  it('shows only current canonical theme choices while parser aliases remain compatible', () => {
+  it('separates console profiles from the release-only global appearance picker', () => {
     expect(getThemeCommandHelp()).toBe(
-      'Available themes: Jarvis Core, VibeSpace, Default, MonoChrome, Sakura. Use /theme <name>.',
+      'Chat console themes: Paper White, Solar Sand, Sakura Mist, Icebound, VibeSpace Amber, Graphite, Midnight Blue, Monokai Ember, Matrix Moss, OLED Void. Use /theme <name>.',
     );
-    expect(getThemeCommandHelp()).not.toMatch(
-      /(?:,\s|\bthemes:\s)(?:Light|Dark|Core|Vibe|Terminal)(?:,|\.)/,
+    expect(getAppearanceCommandHelp()).toBe(
+      'Available appearances: Jarvis One, Default, MonoChrome, Warm. Use /themes or /appearance to choose.',
     );
   });
 
@@ -93,6 +95,7 @@ describe('composer mention and slash confirmation helpers', () => {
   it('turns page slash commands into chat reference tokens instead of navigation intents', () => {
     const agents = findSlashCommandDef('agents');
     const terminals = findSlashCommandDef('terminals');
+    // Hive is product-gated off by default — no reference token surface.
     const hive = findSlashCommandDef('hive');
 
     expect(agents && buildSlashReferenceCommand(agents)).toMatchObject({
@@ -105,11 +108,7 @@ describe('composer mention and slash confirmation helpers', () => {
       label: '/terminals: Terminal surface',
       value: 'reference:terminals',
     });
-    expect(hive && buildSlashReferenceCommand(hive)).toMatchObject({
-      cmd: 'hive',
-      label: '/hive: Hive Balanced',
-      value: 'reference:hive',
-    });
+    expect(hive).toBeUndefined();
   });
 
   it('resolves explicit Canvas picker and slash references into bounded attachment modes', () => {

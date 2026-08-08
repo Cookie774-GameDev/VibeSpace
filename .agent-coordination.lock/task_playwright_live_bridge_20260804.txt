@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-PLAYWRIGHT-LIVE-BRIDGE-20260804
+controller=/root/browser_live_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T02:25:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Connect the isolated Playwright worker and adapter to the canonical browser action host registration/dispatch seam without exposing process launch, raw selectors/evaluate, ambient profiles, or bypassing approval.
+owned_paths=app/src/features/browser/browserPlaywrightIntegration.ts;app/src/features/browser/browserPlaywrightIntegration.test.ts;app/src/features/browser/browserGoalIntegration.ts;app/src/features/browser/browserGoalIntegration.test.ts;app/src/features/browser/index.ts
+exclusions=all other files;all Rust;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all real browser/network execution during tests;raw Playwright/evaluate/selector APIs;Computer Control
+verification=add only focused deterministic mocked-host tests;do not run tests,typecheck,build,format,browser,or review commands;self-review once and hand off
+status=ASSIGNED

@@ -182,8 +182,26 @@ export function AccountPage() {
   const who = displayName?.trim() || cloudEmail || 'You';
 
   return (
-    <main className="mc7f-account-page h-full overflow-y-auto bg-background [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:bg-none [html[data-theme=monochrome]_&_*]:shadow-none">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-0 px-4 pb-10 pt-5 sm:px-6">
+    <main
+      className="mc7f-account-page h-full overflow-y-auto bg-background [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:bg-none [html[data-theme=monochrome]_&_*]:shadow-none"
+      data-warm-account-tab={tab}
+    >
+      <div
+        className="relative mx-auto flex w-full max-w-6xl flex-col gap-0 overflow-hidden px-4 pb-10 pt-5 sm:px-6"
+        data-warm-surface="account-scene-shell"
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 hidden [html[data-theme=warm]_&]:block"
+          data-warm-decoration="account-shared-scene"
+        >
+          <img
+            src="/assets/themes/warm/account-center/account-lake-panorama-v3-extended-selected.webp"
+            alt=""
+            decoding="async"
+            draggable={false}
+          />
+        </div>
         {/* Hero */}
         <header
           className="relative overflow-hidden rounded-3xl border border-border bg-slate-950 p-5 shadow-2xl sm:p-6 [html[data-theme=monochrome]_&]:rounded-none [html[data-theme=monochrome]_&]:border-l-2 [html[data-theme=monochrome]_&]:border-l-foreground/60 [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:shadow-none"
@@ -252,10 +270,11 @@ export function AccountPage() {
           <TabsContent value="profile" className="mt-0 focus-visible:ring-0">
             <PanelCard
               title="Profile"
-              subtitle="Sign in to VibeSpace Cloud and set how Jarvis addresses you."
+              subtitle="Edit how Jarvis addresses you, preview your avatar, and manage cloud sign-in."
               icon={<User2 className="h-5 w-5 text-accent-copper" />}
+              warmSurface="profile"
             >
-              <Account />
+              <Account profileOnly />
             </PanelCard>
           </TabsContent>
 
@@ -552,16 +571,21 @@ function PanelCard({
   subtitle,
   icon,
   action,
+  warmSurface,
   children,
 }: {
   title: string;
   subtitle: string;
   icon: React.ReactNode;
   action?: React.ReactNode;
+  warmSurface?: 'profile';
   children: React.ReactNode;
 }) {
   return (
-    <section className="sakura-account-panel rounded-3xl border border-border bg-panel p-5 shadow-soft sm:p-6">
+    <section
+      className="sakura-account-panel rounded-3xl border border-border bg-panel p-5 shadow-soft sm:p-6"
+      data-warm-surface={warmSurface}
+    >
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-elevated">

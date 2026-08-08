@@ -3,6 +3,11 @@ import { useWorkbenchStore } from './store';
 import { WORKBENCH_PANEL_KINDS, type WorkbenchPanelKind } from './types';
 import { WORKBENCH_DRAG_MIME } from './PanelPalette';
 import { WorkbenchPanel } from './WorkbenchPanel';
+import {
+  buildMinimapModel,
+  panCameraToWorldPoint,
+  worldPointFromMinimapClick,
+} from './workbenchMinimap';
 
 const kindSet = new Set<string>(WORKBENCH_PANEL_KINDS);
 
@@ -10,6 +15,7 @@ export function WorkbenchCanvas() {
   const rootRef = React.useRef<HTMLDivElement>(null);
   const panels = useWorkbenchStore((state) => state.panels);
   const view = useWorkbenchStore((state) => state.view);
+  const canvasSize = useWorkbenchStore((state) => state.canvasSize);
   const selectedIds = useWorkbenchStore((state) => state.selectedIds);
   const addPanel = useWorkbenchStore((state) => state.addPanel);
   const updatePanel = useWorkbenchStore((state) => state.updatePanel);
@@ -23,6 +29,45 @@ export function WorkbenchCanvas() {
   const fitView = useWorkbenchStore((state) => state.fitView);
   const undo = useWorkbenchStore((state) => state.undo);
   const redo = useWorkbenchStore((state) => state.redo);
+  const minimapRef = React.useRef<HTMLDivElement>(null);
+
+  const minimap = React.useMemo(
+    () =>
+      buildMinimapModel(
+        panels.map((p) => ({
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          width: p.width,
+          height: p.height,
+          minimized: p.minimized,
+        })),
+        view,
+        {
+          width: canvasSize.width || 1000,
+          height: canvasSize.height || 700,
+        },
+      ),
+    [panels, view, canvasSize.width, canvasSize.height],
+  );
+
+  const panMinimapToClient = React.useCallback(
+    (clientX: number, clientY: number) => {
+      const el = minimapRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const fractionX = (clientX - rect.left) / rect.width;
+      const fractionY = (clientY - rect.top) / rect.height;
+      const world = worldPointFromMinimapClick(fractionX, fractionY, minimap.bounds);
+      const next = panCameraToWorldPoint(world.x, world.y, view, {
+        width: canvasSize.width || rect.width,
+        height: canvasSize.height || 700,
+      });
+      setView(next);
+    },
+    [minimap.bounds, view, canvasSize.width, canvasSize.height, setView],
+  );
   const panning = React.useRef<null | { clientX: number; clientY: number; x: number; y: number }>(
     null,
   );
@@ -260,16 +305,75 @@ export function WorkbenchCanvas() {
           );
         })}
       </div>
-      <div className="workbench-minimap" aria-hidden="true">
-        {panels.slice(0, 24).map((panel) => (
-          <span
-            key={panel.id}
-            style={{
-              left: `${Math.max(3, Math.min(92, panel.x / 20))}%`,
-              top: `${Math.max(6, Math.min(86, panel.y / 10))}%`,
-            }}
+      {/* Interactive minimap: click to jump camera, double-click to fit all work.
+          Camera-only — never moves or spawns panels. */}
+      <div
+        ref={minimapRef}
+        className="workbench-minimap"
+        role="region"
+        aria-label="Workbench minimap"
+        data-testid="workbench-minimap"
+        title="Click to jump · Double-click to show all work (same as Recenter)"
+        onPointerDown={(event) => {
+          // Don't start canvas pan when using the minimap.
+          event.stopPropagation();
+          if (event.button !== 0) return;
+          panMinimapToClient(event.clientX, event.clientY);
+        }}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          // Recenter camera on all panels — work stays exactly where you left it.
+          fitView();
+        }}
+        onWheel={(event) => event.stopPropagation()}
+      >
+        <div className="workbench-minimap-stage">
+          {minimap.placements.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="workbench-minimap-panel"
+              style={item.style}
+              aria-label={`Focus panel from minimap`}
+              title="Jump to this panel"
+              onClick={(event) => {
+                event.stopPropagation();
+                const panel = panels.find((p) => p.id === item.id);
+                if (!panel) return;
+                const next = panCameraToWorldPoint(
+                  panel.x + panel.width / 2,
+                  panel.y + (panel.minimized ? 21 : panel.height / 2),
+                  view,
+                  {
+                    width: canvasSize.width || 1000,
+                    height: canvasSize.height || 700,
+                  },
+                );
+                setView(next);
+                selectPanel(item.id, false);
+                bringToFront(item.id);
+              }}
+            />
+          ))}
+          <div
+            className="workbench-minimap-viewport"
+            aria-hidden
+            style={minimap.viewportStyle}
           />
-        ))}
+        </div>
+        <button
+          type="button"
+          className="workbench-minimap-home"
+          aria-label="Show all work"
+          title="Show all work — recenters the camera only"
+          onClick={(event) => {
+            event.stopPropagation();
+            fitView();
+          }}
+        >
+          All
+        </button>
       </div>
       <div className="workbench-canvas-readout" aria-live="polite">
         {Math.round(view.zoom * 100)}% · {panels.length} panels

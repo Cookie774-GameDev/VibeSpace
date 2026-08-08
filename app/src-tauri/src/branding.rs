@@ -11,7 +11,7 @@ mod branding_windows;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, Window};
 
 static DEFERRED_REFRESH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -36,15 +36,21 @@ fn load_tray_icon() -> tauri::image::Image<'static> {
     load_window_icon()
 }
 
+fn should_apply_tauri_window_icon() -> bool {
+    !cfg!(windows)
+}
+
 /// Platform hooks before `tauri::Builder` runs (Windows AppUserModelID).
 pub fn init_platform_branding() {
     #[cfg(windows)]
     branding_windows::init_process_branding();
 }
 
-fn apply_window_icon_sync(window: &WebviewWindow) {
-    if let Err(err) = window.set_icon(load_window_icon()) {
-        eprintln!("[branding] failed to set window icon: {err}");
+fn apply_window_icon_sync(window: &Window) {
+    if should_apply_tauri_window_icon() {
+        if let Err(err) = window.set_icon(load_window_icon()) {
+            eprintln!("[branding] failed to set window icon: {err}");
+        }
     }
     #[cfg(windows)]
     branding_windows::apply_hwnd_icons(window);
@@ -59,7 +65,7 @@ fn refresh_tray_icon(app: &AppHandle) {
 }
 
 fn apply_app_branding_sync(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_window("main") {
         apply_window_icon_sync(&window);
     }
     refresh_tray_icon(app);
@@ -74,7 +80,7 @@ fn run_branding_on_main_thread(app: &AppHandle) {
 }
 
 /// Apply the embedded icon to a single window (no-op on failure).
-pub fn apply_window_icon(window: &WebviewWindow) {
+pub fn apply_window_icon(window: &Window) {
     let app = window.app_handle();
     run_branding_on_main_thread(&app);
     schedule_deferred_icon_refresh(&app);
@@ -108,11 +114,9 @@ pub fn build_tray_icon() -> tauri::image::Image<'static> {
 #[cfg(windows)]
 pub fn start_windows_icon_watchdog(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            run_branding_on_main_thread(&app);
-        }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        run_branding_on_main_thread(&app);
     });
 }
 
@@ -121,10 +125,15 @@ pub fn start_windows_icon_watchdog(_app: &AppHandle) {}
 
 #[cfg(test)]
 mod tests {
-    use super::TAURI_APP_IDENTIFIER;
+    use super::{should_apply_tauri_window_icon, TAURI_APP_IDENTIFIER};
 
     #[test]
     fn tauri_identifier_is_stable() {
         assert_eq!(TAURI_APP_IDENTIFIER, "ai.jarvis.desktop");
+    }
+
+    #[test]
+    fn windows_refreshes_do_not_allocate_new_tauri_icons() {
+        assert_eq!(should_apply_tauri_window_icon(), !cfg!(windows));
     }
 }

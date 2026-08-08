@@ -1,24 +1,24 @@
 /**
- * Kokoro ModelManager (frontend).
+ * Jarvis High model manager (frontend).
  *
  * Pure path-resolution logic lives here and is unit-tested. The heavy lifting
  * (download with progress, checksum verification, resume, repair) is delegated
- * to Tauri commands implemented in Rust (kokoro.rs), so it runs off the UI
+ * to Tauri commands implemented in Rust, so it runs off the UI
  * thread and survives partial downloads. When the Tauri bridge is unavailable
  * (e.g. running in a plain browser/test), every method degrades gracefully
  * instead of throwing, and the TtsService falls back to system TTS.
  *
  * Expected Rust command contract (added separately to src-tauri to avoid
  * clobbering another agent's in-flight changes):
- *   kokoro_model_path() -> string
- *   kokoro_check_installed() -> { installed: boolean, files: string[] }
- *   kokoro_verify_checksums() -> { ok: boolean, corrupt: string[] }
- *   kokoro_download(manifest) -> emits "kokoro:progress" events
- *   kokoro_resume_download()
- *   kokoro_repair()
- *   kokoro_delete_corrupt()
- *   kokoro_warmup()
- *   kokoro_status() -> { installed, ready }
+ *   jarvis_voice_model_path() -> string
+ *   jarvis_voice_check_installed() -> { installed: boolean, files: string[] }
+ *   jarvis_voice_verify_checksums() -> { ok: boolean, corrupt: string[] }
+ *   jarvis_voice_download(manifest) -> emits "jarvis-voice:progress" events
+ *   jarvis_voice_resume_download()
+ *   jarvis_voice_repair()
+ *   jarvis_voice_delete_corrupt()
+ *   jarvis_voice_warmup()
+ *   jarvis_voice_status() -> { installed, ready }
  */
 
 export type OS = 'windows' | 'macos' | 'linux';
@@ -35,6 +35,7 @@ export interface ModelManifest {
   model: string;
   version: string;
   runtime: string;
+  sourceUrl: string;
   files: ModelFile[];
   voices: string[];
 }
@@ -52,28 +53,25 @@ export interface DownloadProgress {
 }
 
 /**
- * Resolve the OS-specific Kokoro model directory. Pure function — the env
+ * Resolve the OS-specific Jarvis High model directory. Pure function — the env
  * values are injected so this is fully testable for all three platforms.
  */
-export function resolveModelPath(
-  os: OS,
-  env: { APPDATA?: string; HOME?: string } = {},
-): string {
+export function resolveModelPath(os: OS, env: { APPDATA?: string; HOME?: string } = {}): string {
   const sep = os === 'windows' ? '\\' : '/';
   const join = (...parts: string[]) => parts.join(sep);
   switch (os) {
     case 'windows': {
       const base = env.APPDATA ?? `${env.HOME ?? 'C:\\Users\\Default'}\\AppData\\Roaming`;
-      return join(base, 'VibeSpace', 'models', 'kokoro');
+      return join(base, 'VibeSpace', 'models', 'jarvis-high');
     }
     case 'macos': {
       const home = env.HOME ?? '/Users/Shared';
-      return join(home, 'Library', 'Application Support', 'VibeSpace', 'models', 'kokoro');
+      return join(home, 'Library', 'Application Support', 'VibeSpace', 'models', 'jarvis-high');
     }
     case 'linux':
     default: {
       const home = env.HOME ?? '/root';
-      return join(home, '.local', 'share', 'VibeSpace', 'models', 'kokoro');
+      return join(home, '.local', 'share', 'VibeSpace', 'models', 'jarvis-high');
     }
   }
 }
@@ -89,37 +87,31 @@ export function detectOS(platform: string): OS {
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 /**
- * Minimal Kokoro-82M v1.0 asset set: the int8 dynamic-quantized ONNX model
- * (~88 MB — the smallest variant that is stable on the static CPU onnxruntime;
- * the q8f16 variant crashes there) plus ONLY the two voices VibeSpace ships
- * (bm_george, bf_emma — ~0.5 MB each, raw float32). SHA-256 values were
- * computed locally from the real files. Total download ≈ 89 MB.
+ * Authoritative Jarvis High Piper artifacts. Sizes and SHA-256 values are
+ * verified against the upstream files; this manifest is intentionally pinned
+ * so a remote configuration cannot silently replace executable model input.
  */
-const KOKORO_HF = 'https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main';
-const DEFAULT_KOKORO_MANIFEST: ModelManifest = {
-  model: 'kokoro-82m',
-  version: '1.0-q8',
-  runtime: 'onnx',
+export const JARVIS_HIGH_SOURCE_URL =
+  'https://huggingface.co/jgkawell/jarvis/tree/main/en/en_GB/jarvis/high';
+const JARVIS_HIGH_HF = 'https://huggingface.co/jgkawell/jarvis/resolve/main/en/en_GB/jarvis/high';
+export const JARVIS_HIGH_MANIFEST: ModelManifest = {
+  model: 'jarvis-high',
+  version: '1.0.0',
+  runtime: 'piper',
+  sourceUrl: JARVIS_HIGH_SOURCE_URL,
   files: [
     {
-      name: 'model_quantized.onnx',
-      url: `${KOKORO_HF}/onnx/model_quantized.onnx`,
-      sha256: 'fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478',
-      size_bytes: 92361116,
+      name: 'jarvis-high.onnx',
+      url: `${JARVIS_HIGH_HF}/jarvis-high.onnx`,
+      sha256: '9791877d9c099fabbf30be2825e011451c39b3431e21e81e866f5b6507e72993',
+      size_bytes: 114_199_011,
       required: true,
     },
     {
-      name: 'bm_george.bin',
-      url: `${KOKORO_HF}/voices/bm_george.bin`,
-      sha256: 'c4b235a4c1f2cd3b939fed08b899ce9385638b763f7b73a59616c4fc9bd6c9bc',
-      size_bytes: 522240,
-      required: true,
-    },
-    {
-      name: 'bf_emma.bin',
-      url: `${KOKORO_HF}/voices/bf_emma.bin`,
-      sha256: '669fe0647f9dd04fcab92f1439a40eeb4c8b4ab1f82e4996fe3d918ce4a63b73',
-      size_bytes: 522240,
+      name: 'jarvis-high.onnx.json',
+      url: `${JARVIS_HIGH_HF}/jarvis-high.onnx.json`,
+      sha256: 'd0b8772d81c1da2fcdfd79e90bff027f46f040450e1deb89b43a9f6b1946c5a7',
+      size_bytes: 7_262,
       required: true,
     },
   ],
@@ -142,7 +134,7 @@ class ModelManagerImpl {
     const invoke = await getInvoke();
     if (!invoke) return null;
     try {
-      return await invoke<string>('kokoro_model_path');
+      return await invoke<string>('jarvis_voice_model_path');
     } catch {
       return null;
     }
@@ -152,7 +144,7 @@ class ModelManagerImpl {
     const invoke = await getInvoke();
     if (!invoke) return false;
     try {
-      const res = await invoke<{ installed: boolean }>('kokoro_check_installed');
+      const res = await invoke<{ installed: boolean }>('jarvis_voice_check_installed');
       return Boolean(res?.installed);
     } catch {
       return false;
@@ -163,40 +155,16 @@ class ModelManagerImpl {
     const invoke = await getInvoke();
     if (!invoke) return { ok: false, corrupt: [] };
     try {
-      return await invoke<{ ok: boolean; corrupt: string[] }>('kokoro_verify_checksums');
+      return await invoke<{ ok: boolean; corrupt: string[] }>('jarvis_voice_verify_checksums');
     } catch {
       return { ok: false, corrupt: [] };
     }
   }
 
-  /** Fetch the public model manifest from the model-manifest Edge Function. */
+  /** Return the checksum-pinned authoritative model manifest. */
   async getModelManifest(): Promise<ModelManifest | null> {
     if (this.manifestCache) return this.manifestCache;
-    try {
-      const base = import.meta.env.VITE_SUPABASE_URL;
-      if (base) {
-        const res = await fetch(`${base}/functions/v1/model-manifest`, {
-          signal: AbortSignal.timeout(8000),
-        });
-        if (res.ok) {
-          const manifest = (await res.json()) as ModelManifest & { status?: string };
-          if (
-            manifest.status !== 'unavailable' &&
-            Array.isArray(manifest.files) &&
-            manifest.files.length > 0
-          ) {
-            this.manifestCache = manifest;
-            return this.manifestCache;
-          }
-        }
-      }
-    } catch {
-      /* fall through to the built-in manifest */
-    }
-    // Built-in manifest: the canonical Kokoro-82M v1.0 ONNX assets with real,
-    // locally-verified SHA-256 checksums. Used when the server has no override
-    // configured, so the local neural voice works out of the box.
-    this.manifestCache = DEFAULT_KOKORO_MANIFEST;
+    this.manifestCache = JARVIS_HIGH_MANIFEST;
     return this.manifestCache;
   }
 
@@ -210,13 +178,15 @@ class ModelManagerImpl {
     if (onProgress) {
       try {
         const ev = await import('@tauri-apps/api/event');
-        unlisten = await ev.listen<DownloadProgress>('kokoro:progress', (e) => onProgress(e.payload));
+        unlisten = await ev.listen<DownloadProgress>('jarvis-voice:progress', (e) =>
+          onProgress(e.payload),
+        );
       } catch {
         /* progress events optional */
       }
     }
     try {
-      await invoke<void>('kokoro_download', { manifest });
+      await invoke<void>('jarvis_voice_download', { manifest });
       return true;
     } catch {
       return false;
@@ -229,7 +199,7 @@ class ModelManagerImpl {
     const invoke = await getInvoke();
     if (!invoke) return false;
     try {
-      await invoke<void>('kokoro_resume_download');
+      await invoke<void>('jarvis_voice_resume_download');
       return true;
     } catch {
       return false;
@@ -240,8 +210,8 @@ class ModelManagerImpl {
     const invoke = await getInvoke();
     if (!invoke) return false;
     try {
-      await invoke<void>('kokoro_delete_corrupt');
-      await invoke<void>('kokoro_repair');
+      await invoke<void>('jarvis_voice_delete_corrupt');
+      await invoke<void>('jarvis_voice_repair');
       return true;
     } catch {
       return false;
@@ -252,14 +222,14 @@ class ModelManagerImpl {
     const invoke = await getInvoke();
     if (!invoke) return { installed: false, ready: false };
     try {
-      return await invoke<ModelStatus>('kokoro_status');
+      return await invoke<ModelStatus>('jarvis_voice_status');
     } catch {
       return { installed: false, ready: false };
     }
   }
 
   /** Ensure the model is present + verified; download if missing. Non-throwing. */
-  async ensureKokoroReady(onProgress?: (p: DownloadProgress) => void): Promise<boolean> {
+  async ensureJarvisReady(onProgress?: (p: DownloadProgress) => void): Promise<boolean> {
     const installed = await this.checkModelInstalled();
     if (installed) {
       const { ok } = await this.verifyChecksums();
@@ -268,7 +238,7 @@ class ModelManagerImpl {
       const invoke = await getInvoke();
       if (manifest && invoke) {
         try {
-          await invoke<void>('kokoro_download', { manifest });
+          await invoke<void>('jarvis_voice_download', { manifest });
           if ((await this.verifyChecksums()).ok) return true;
         } catch {
           /* fall through to repair */
@@ -280,11 +250,11 @@ class ModelManagerImpl {
     return this.downloadModelWithProgress(onProgress);
   }
 
-  async warmupKokoro(): Promise<void> {
+  async warmupJarvis(): Promise<void> {
     const invoke = await getInvoke();
     if (!invoke) return;
     try {
-      await invoke<void>('kokoro_warmup');
+      await invoke<void>('jarvis_voice_warmup');
     } catch {
       /* best effort */
     }

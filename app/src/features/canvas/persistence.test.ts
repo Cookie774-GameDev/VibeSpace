@@ -160,6 +160,50 @@ describe('canvas Dexie persistence repository', () => {
       expect(canonical(loaded!)).toEqual(canonical(doc));
     });
 
+    it('round-trips a different ambience wallpaper for each Canvas document', async () => {
+      const scope = makeScope();
+      const first = parseCanvasDocument({
+        ...buildDocument(scope, 'docAmbienceOne', 'ambience-one'),
+        background: {
+          kind: 'plain',
+          color: '#ffffff',
+          wallpaper: {
+            id: 'warm-gradient',
+            paused: false,
+            interactive: true,
+            intensity: 0.8,
+            brightness: 0.65,
+            quality: 'high',
+          },
+        },
+      });
+      const second = parseCanvasDocument({
+        ...buildDocument(scope, 'docAmbienceTwo', 'ambience-two'),
+        background: {
+          kind: 'grid',
+          color: '#101820',
+          wallpaper: {
+            id: 'aurora',
+            paused: true,
+            interactive: false,
+            intensity: 0.4,
+            brightness: 0.3,
+            quality: 'low',
+          },
+        },
+      });
+
+      await repo.save(scope, first);
+      await repo.save(scope, second);
+
+      await expect(repo.load(scope, first.id)).resolves.toMatchObject({
+        background: { wallpaper: first.background.wallpaper },
+      });
+      await expect(repo.load(scope, second.id)).resolves.toMatchObject({
+        background: { wallpaper: second.background.wallpaper },
+      });
+    });
+
     it('writes one revision row per distinct saved revision', async () => {
       const scope = makeScope();
       const doc = buildDocument(scope, 'docRev', 'block');

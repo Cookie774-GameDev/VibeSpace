@@ -25,6 +25,10 @@ function persistedReference(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
 }
 
+function sha256Reference(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && /^sha256:[a-f0-9]{64}$/u.test(value));
+}
+
 /** @internal Validates only persisted file-operation results, never proposals or submissions. */
 export function isCanonicalFileArtifactResult(
   evidence: CanonicalFileActionEvidence,
@@ -50,6 +54,46 @@ export function isCanonicalFileArtifactResult(
   }
   if (evidence.actionId === 'files.read') {
     return persistedReference(data.path) && typeof data.content === 'string';
+  }
+  if (evidence.actionId === 'files.patch.apply') {
+    const operation =
+      data.operation === 'create' || data.operation === 'modify' || data.operation === 'delete'
+        ? data.operation
+        : null;
+    const hashesMatchOperation =
+      (operation === 'create' &&
+        data.beforeSha256 === null &&
+        typeof data.afterSha256 === 'string') ||
+      (operation === 'modify' &&
+        typeof data.beforeSha256 === 'string' &&
+        typeof data.afterSha256 === 'string' &&
+        data.beforeSha256 !== data.afterSha256) ||
+      (operation === 'delete' &&
+        typeof data.beforeSha256 === 'string' &&
+        data.afterSha256 === null);
+    return (
+      operation !== null &&
+      persistedReference(data.path) &&
+      sha256Reference(data.beforeSha256) &&
+      sha256Reference(data.afterSha256) &&
+      hashesMatchOperation &&
+      Array.isArray(data.changedPaths) &&
+      data.changedPaths.length === 1 &&
+      data.changedPaths[0] === data.path &&
+      persistedReference(data.previewId) &&
+      persistedReference(data.rollbackArtifactRef)
+    );
+  }
+  if (evidence.actionId === 'files.patch.rollback') {
+    return (
+      persistedReference(data.path) &&
+      sha256Reference(data.restoredSha256) &&
+      Array.isArray(data.changedPaths) &&
+      data.changedPaths.length === 1 &&
+      data.changedPaths[0] === data.path &&
+      persistedReference(data.previewId) &&
+      persistedReference(data.artifactRef)
+    );
   }
   return false;
 }
@@ -128,6 +172,12 @@ export const FILE_ACTIONS: ActionDef[] = [
       { key: 'path', label: 'Absolute file path', type: 'string', required: true },
       { key: 'content', label: 'File content', type: 'string', required: true },
       { key: 'root', label: 'Allowed project root', type: 'string', required: false },
+      {
+        key: 'attachToChat',
+        label: 'Attach the created file to the active chat',
+        type: 'boolean',
+        required: false,
+      },
     ],
     run: async (params) => {
       const resolved = await validatePath(params.path, params.root);
@@ -148,6 +198,11 @@ export const FILE_ACTIONS: ActionDef[] = [
             ? 'A file already exists at that path. Choose update, a numbered copy, or another name.'
             : describeFsError(created.error);
         return fail(message);
+      }
+      if (params.attachToChat === true && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:file:attach', { detail: { path: resolved.path } }),
+        );
       }
       return ok(`Created ${resolved.path}.`, { path: resolved.path, operation: 'create' });
     },

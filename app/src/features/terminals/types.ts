@@ -16,6 +16,10 @@ export interface TerminalViewProps {
   command?: string;
   /** Command typed into the shell after spawn/attach. */
   startupCommand?: string;
+  /** Ordered commands typed after a fresh shell becomes ready. */
+  startupCommands?: string[];
+  /** Refuse native terminal eviction when project capacity is reached. */
+  preserveExisting?: boolean;
   /** One-shot command requested by the assistant/action queue. */
   pendingCommand?: string;
   /** Token for repeated pending commands with identical text. */

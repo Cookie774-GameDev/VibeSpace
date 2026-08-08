@@ -27,6 +27,13 @@ import {
 import { PERSONAS } from './personas';
 import { JarvisVoiceHeader } from './JarvisVoiceHeader';
 import { JarvisVoiceTranscript } from './JarvisVoiceTranscript';
+import { ContextGalaxy } from '@/features/context/ContextGalaxy';
+import {
+  contextTreeToGalaxyData,
+  getContextGalaxySnapshot,
+  subscribeContextGalaxySnapshots,
+  type ContextGalaxySnapshot,
+} from '@/features/context/contextGalaxyRegistry';
 import { clampVoicePanelTranslation, shouldStartVoicePanelDrag } from './voicePanelDrag';
 import { handleVoiceModuleClosed, stopCurrentVoiceResponse } from './voiceRouter';
 import { resolveVoiceListenTimeoutMs } from './voiceConversation';
@@ -161,6 +168,7 @@ export function VoiceModal() {
   const localUserId = useAuthStore((state) => state.localUserId);
   const cloudAccountId = useAuthStore((state) => state.cloudSession?.user_id ?? null);
   const workspaceId = useAuthStore((state) => state.workspaceId);
+  const projectId = useAuthStore((state) => state.projectId);
   const agentRoster = useAgentStore((state) => state.agents);
   const voiceAutoListenOnOpen = useAuthStore((state) => state.voiceAutoListenOnOpen);
   const voiceEndTrigger = useAuthStore((state) => state.voiceEndTrigger);
@@ -174,6 +182,15 @@ export function VoiceModal() {
     () => new Set(),
   );
   const session = useVoiceStore((voice) => voice.session);
+  const liveGalaxySnapshot = React.useSyncExternalStore(
+    subscribeContextGalaxySnapshots,
+    () => getContextGalaxySnapshot(session?.accountId ?? null, projectId),
+    () => null,
+  );
+  const [persistedGalaxySnapshot, setPersistedGalaxySnapshot] =
+    React.useState<ContextGalaxySnapshot | null>(null);
+  const galaxySnapshot = liveGalaxySnapshot ?? persistedGalaxySnapshot;
+  const [galaxySelectedId, setGalaxySelectedId] = React.useState<string | null>(null);
   const messages = useChatMessages(open && showCommandCenter ? (session?.chatId ?? null) : null);
   const state = useVoiceStore((voice) => voice.state);
   const partial = useVoiceStore((voice) => voice.partialTranscript);
@@ -237,6 +254,47 @@ export function VoiceModal() {
     session && commandCenterBinding?.hostPort.accountId === session.accountId
       ? commandCenterBinding
       : undefined;
+  React.useEffect(() => {
+    setGalaxySelectedId(galaxySnapshot?.selectedId ?? galaxySnapshot?.nodes[0]?.id ?? null);
+  }, [galaxySnapshot?.mapId, galaxySnapshot?.selectedId, galaxySnapshot?.nodes]);
+  React.useEffect(() => {
+    if (!open || !showCommandCenter || !session || liveGalaxySnapshot) {
+      if (liveGalaxySnapshot) setPersistedGalaxySnapshot(null);
+      return;
+    }
+    let active = true;
+    void import('@/features/context/contextPersistence')
+      .then(({ ensureContextPersistence }) => ensureContextPersistence(projectId))
+      .then((state) => {
+        if (!active || state.accountId !== session.accountId || state.projectId !== projectId)
+          return;
+        const map =
+          state.maps.find(
+            (candidate) => candidate.id === state.selectedMapId && candidate.status === 'active',
+          ) ?? state.maps.find((candidate) => candidate.status === 'active');
+        if (!map) {
+          setPersistedGalaxySnapshot(null);
+          return;
+        }
+        const data = contextTreeToGalaxyData(map.tree);
+        setPersistedGalaxySnapshot({
+          accountId: state.accountId,
+          projectId: state.projectId,
+          mapId: map.id,
+          nodes: data.nodes,
+          edges: data.edges,
+          selectedId: data.nodes[0]?.id ?? null,
+          activityNodeIds: [],
+          updatedAt: Date.now(),
+        });
+      })
+      .catch(() => {
+        if (active) setPersistedGalaxySnapshot(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [liveGalaxySnapshot, open, projectId, session, showCommandCenter]);
   const commandCenterRegionId = React.useId();
   const handleCommandCenterEscape = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
@@ -370,7 +428,11 @@ export function VoiceModal() {
     listeningArmedRef.current = true;
     const auth = useAuthStore.getState();
     VoiceService.setInactivityTimeoutMs(
-      resolveVoiceListenTimeoutMs(auth.voiceAutoListenOnOpen, auth.voiceListenTimeoutMs),
+      resolveVoiceListenTimeoutMs(
+        auth.voiceAutoListenOnOpen,
+        auth.voiceEndTrigger,
+        auth.voiceSilenceDelayMs,
+      ),
     );
     const started = VoiceService.startListening();
     useUIStore.getState().setVoiceListening(started);
@@ -984,6 +1046,24 @@ export function VoiceModal() {
                   })
                 }
               />
+              {galaxySnapshot ? (
+                <section aria-label="Voice Context Map">
+                  <h3 className="sr-only">Context Map</h3>
+                  <ContextGalaxy
+                    nodes={galaxySnapshot.nodes}
+                    edges={galaxySnapshot.edges}
+                    selectedId={galaxySelectedId}
+                    activityNodeIds={galaxySnapshot.activityNodeIds}
+                    onSelect={setGalaxySelectedId}
+                    compact
+                    reducedMotion={reducedMotion}
+                  />
+                </section>
+              ) : (
+                <p className="border-t border-border/50 px-2 py-2 text-center text-xs text-muted-foreground">
+                  Context Map is not available for this project yet.
+                </p>
+              )}
               {eligibleCommandCenterBinding && session ? (
                 <JarvisCommandCenter
                   accountId={session.accountId}

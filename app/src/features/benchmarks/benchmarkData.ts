@@ -13,10 +13,7 @@
  */
 import type { ProviderId } from '@/types/common';
 import { nativeFetch } from '@/lib/nativeFetch';
-import {
-  LEADERBOARD_SNAPSHOT_ROWS,
-  LEADERBOARD_SNAPSHOT_TS,
-} from './leaderboardSnapshot20260711';
+import { LEADERBOARD_SNAPSHOT_ROWS, LEADERBOARD_SNAPSHOT_TS } from './leaderboardSnapshot20260711';
 
 export interface BenchmarkRow {
   model: string;
@@ -55,7 +52,9 @@ export function inferCapabilities(model: string): { image: boolean; video: boole
     /llama-?4|llama\s?4/.test(m);
   const image =
     video ||
-    /gpt-?4o|gpt-?4\.1|gpt-?4-turbo|gpt-?4-vision|gpt-?5|chatgpt-?4o|\bo1\b|\bo3\b|\bo4\b/.test(m) ||
+    /gpt-?4o|gpt-?4\.1|gpt-?4-turbo|gpt-?4-vision|gpt-?5|chatgpt-?4o|\bo1\b|\bo3\b|\bo4\b/.test(
+      m,
+    ) ||
     /claude[-\s]?3|claude[-\s]?4|claude.*opus|claude.*sonnet|claude.*haiku/.test(m) ||
     /grok[-\s]?2|grok[-\s]?3|grok[-\s]?4|grok.*vision/.test(m) ||
     /llama[-\s]?3\.2|llama.*vision/.test(m) ||
@@ -146,6 +145,26 @@ function enrichRows(rows: BenchmarkRow[]): BenchmarkRow[] {
   return rows.map(enrichRow);
 }
 
+function dedupeRows(rows: BenchmarkRow[]): BenchmarkRow[] {
+  const unique: BenchmarkRow[] = [];
+  const indexes = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = row.model.trim().toLocaleLowerCase();
+    const existingIndex = indexes.get(key);
+    if (existingIndex == null) {
+      indexes.set(key, unique.length);
+      unique.push(row);
+      continue;
+    }
+    if (row.arena_score > unique[existingIndex]!.arena_score) {
+      unique[existingIndex] = row;
+    }
+  }
+
+  return unique;
+}
+
 /** Provider IDs Jarvis can route through today. Used to gate the
  * "Use this model" button in the detail drawer. */
 const SUPPORTED_PROVIDERS: ReadonlyArray<ProviderId> = [
@@ -173,8 +192,9 @@ const LMARENA_ENDPOINTS = [
   'https://lmarena.ai/leaderboard/text/overall',
   'https://lmarena.ai/leaderboard',
 ] as const;
-const CACHE_KEY = 'jarvis-benchmark-cache-v4';
+const CACHE_KEY = 'jarvis-benchmark-cache-v5';
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour — live rows only
+const REQUIRED_MODEL_COUNT = 50;
 /** Reject cached rows whose Arena snapshot is older than this. */
 const MAX_ROW_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 12_000;
@@ -202,7 +222,7 @@ interface CacheEntry {
 function isLiveCacheEntry(entry: CacheEntry): boolean {
   if (entry.fromSnapshot) return false;
   if (typeof entry.cachedAt !== 'number') return false;
-  if (!Array.isArray(entry.rows) || entry.rows.length === 0) return false;
+  if (!Array.isArray(entry.rows) || entry.rows.length < REQUIRED_MODEL_COUNT) return false;
   if (Date.now() - entry.cachedAt > CACHE_TTL_MS) return false;
   if (entry.rows.some((r) => r.source === 'snapshot')) return false;
   const newestFetched = Math.max(...entry.rows.map((r) => r.fetched_at));
@@ -238,6 +258,15 @@ export interface FetchResult {
   fromSnapshot: boolean;
   reason?: string;
   cached?: boolean;
+  dataset: {
+    metricLabel: 'Arena score' | 'Artificial Analysis Intelligence Index';
+    sourceName: string;
+    sourceUrl: string;
+    benchmarkDate: number;
+    ingestedAt: number;
+    confidence: 'high' | 'medium';
+    normalizationNote: string;
+  };
 }
 
 /**
@@ -250,10 +279,10 @@ function normalize(raw: unknown, ts: number): BenchmarkRow[] {
   const candidates: unknown[] = Array.isArray(raw)
     ? raw
     : Array.isArray((raw as { models?: unknown }).models)
-    ? ((raw as { models: unknown[] }).models)
-    : Array.isArray((raw as { leaderboard?: unknown }).leaderboard)
-    ? ((raw as { leaderboard: unknown[] }).leaderboard)
-    : [];
+      ? (raw as { models: unknown[] }).models
+      : Array.isArray((raw as { leaderboard?: unknown }).leaderboard)
+        ? (raw as { leaderboard: unknown[] }).leaderboard
+        : [];
 
   const rows: BenchmarkRow[] = [];
   for (const c of candidates) {
@@ -281,7 +310,7 @@ function normalize(raw: unknown, ts: number): BenchmarkRow[] {
       fetched_at: ts,
     });
   }
-  return rows;
+  return dedupeRows(rows);
 }
 
 function pickString(o: Record<string, unknown>, keys: string[]): string | null {
@@ -381,7 +410,7 @@ export function normalizeWulong(raw: unknown, fallbackTs: number): BenchmarkRow[
     });
   }
 
-  return rows;
+  return dedupeRows(rows);
 }
 
 async function fetchLiveRows(now: number): Promise<BenchmarkRow[]> {
@@ -395,7 +424,11 @@ async function fetchLiveRows(now: number): Promise<BenchmarkRow[]> {
     if (!res.ok) throw new Error(`wulong: HTTP ${res.status}`);
     const data = (await res.json()) as unknown;
     const rows = normalizeWulong(data, now);
-    if (rows.length < 5) throw new Error(`wulong: only ${rows.length} models parsed`);
+    if (rows.length < REQUIRED_MODEL_COUNT) {
+      throw new Error(
+        `wulong: incomplete leaderboard (${rows.length}/${REQUIRED_MODEL_COUNT} models)`,
+      );
+    }
     return rows;
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
@@ -413,7 +446,11 @@ async function fetchLiveRows(now: number): Promise<BenchmarkRow[]> {
         ? ((await res.json()) as unknown)
         : extractLeaderboardJson(await res.text());
       const rows = normalize(data, now);
-      if (rows.length < 5) throw new Error(`${url}: schema not recognized`);
+      if (rows.length < REQUIRED_MODEL_COUNT) {
+        throw new Error(
+          `${url}: incomplete leaderboard (${rows.length}/${REQUIRED_MODEL_COUNT} models)`,
+        );
+      }
       return rows;
     } catch (err) {
       errors.push(err instanceof Error ? err.message : String(err));
@@ -428,12 +465,40 @@ async function fetchLiveRows(now: number): Promise<BenchmarkRow[]> {
  * use `force: true` (Refresh) to pull live Wu Long / LMArena data.
  */
 export async function fetchBenchmarks(opts?: { force?: boolean }): Promise<FetchResult> {
-  const curated = { rows: enrichRows(SNAPSHOT_ROWS), fromSnapshot: true };
+  const curated: FetchResult = {
+    rows: enrichRows(SNAPSHOT_ROWS),
+    fromSnapshot: true,
+    dataset: {
+      metricLabel: 'Artificial Analysis Intelligence Index',
+      sourceName: 'Artificial Analysis',
+      sourceUrl: 'https://artificialanalysis.ai/leaderboards/models',
+      benchmarkDate: SNAPSHOT_TS,
+      ingestedAt: Date.now(),
+      confidence: 'high',
+      normalizationNote:
+        'This snapshot is displayed as its own Intelligence Index dataset and is never numerically merged with Arena scores.',
+    },
+  };
 
   if (!opts?.force) {
     const cached = readCache();
     if (cached) {
-      return { rows: enrichRows(cached.rows), fromSnapshot: cached.fromSnapshot, cached: true };
+      const benchmarkDate = Math.max(...cached.rows.map((row) => row.fetched_at));
+      return {
+        rows: enrichRows(cached.rows),
+        fromSnapshot: cached.fromSnapshot,
+        cached: true,
+        dataset: {
+          metricLabel: 'Arena score',
+          sourceName: 'LMArena via Wu Long archive',
+          sourceUrl: WULONG_TEXT_LEADERBOARD,
+          benchmarkDate,
+          ingestedAt: cached.cachedAt,
+          confidence: 'medium',
+          normalizationNote:
+            'Arena rows are ranked only against the same Arena feed and are not merged with Intelligence Index scores.',
+        },
+      };
     }
     return curated;
   }
@@ -442,7 +507,20 @@ export async function fetchBenchmarks(opts?: { force?: boolean }): Promise<Fetch
   try {
     const rows = await fetchLiveRows(now);
     writeCache({ rows, fromSnapshot: false, cachedAt: now });
-    return { rows: enrichRows(rows), fromSnapshot: false };
+    return {
+      rows: enrichRows(rows),
+      fromSnapshot: false,
+      dataset: {
+        metricLabel: 'Arena score',
+        sourceName: 'LMArena via Wu Long archive',
+        sourceUrl: WULONG_TEXT_LEADERBOARD,
+        benchmarkDate: Math.max(...rows.map((row) => row.fetched_at)),
+        ingestedAt: now,
+        confidence: 'medium',
+        normalizationNote:
+          'Arena rows are ranked only against the same Arena feed and are not merged with Intelligence Index scores.',
+      },
+    };
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'Fetch failed';
     return { ...curated, reason };
@@ -468,6 +546,7 @@ export function clearBenchmarkCache(): void {
     // Drop legacy keys that may still hold frozen snapshot rows.
     localStorage.removeItem('jarvis-benchmark-cache');
     localStorage.removeItem('jarvis-benchmark-cache-v3');
+    localStorage.removeItem('jarvis-benchmark-cache-v4');
   } catch {
     /* ignore */
   }

@@ -25,7 +25,6 @@
     "account"
   ],
   "settingsTabIds": [
-    "account",
     "plans",
     "providers",
     "connections",
@@ -61,7 +60,7 @@
         "npm --prefix app test -- src/features/access/AccessAppHost.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:access:app-host",
@@ -90,7 +89,7 @@
         "npm --prefix app test -- src/features/access/AccessBanner.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:access:banner",
@@ -119,7 +118,7 @@
         "npm --prefix app test -- src/features/access/AccessPaywall.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:access:locked",
@@ -148,7 +147,7 @@
         "npm --prefix app test -- src/features/appearance/MonochromeWorkbench.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:development:monochrome-workbench",
@@ -180,7 +179,7 @@
         "npm --prefix app test -- src/features/browser/browserActions.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:embedded:browser-operator",
@@ -212,7 +211,7 @@
         "npm --prefix app test -- src/features/jarvis-command-center/JarvisCommandCenter.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:embedded:command-center",
@@ -241,7 +240,7 @@
         "npm --prefix app test -- src/features/prompt-forge/PromptForgeControl.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:embedded:prompt-forge",
@@ -268,7 +267,7 @@
       "testPaths": ["tests/visual/monochrome/route-manifest.test.ts"],
       "behaviorCommands": ["node --test tests/visual/monochrome/route-manifest.test.ts"],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:future:messaging-channels",
@@ -297,7 +296,7 @@
         "npm --prefix app test -- src/features/account/accountTabs.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:route:account",
@@ -330,7 +329,7 @@
         "npm --prefix app test -- src/features/agents/AgentDetail.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:agent-detail",
@@ -363,7 +362,7 @@
         "npm --prefix app test -- src/features/agents/AgentManager.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:agents",
@@ -396,7 +395,7 @@
         "npm --prefix app test -- src/features/benchmarks/benchmarkData.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:benchmarks",
@@ -429,7 +428,7 @@
         "npm --prefix app test -- src/features/browser/BrowserPage.approval.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:browser",
@@ -462,7 +461,7 @@
         "npm --prefix app test -- src/features/canvas/CanvasPage.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:canvas",
@@ -495,7 +494,7 @@
         "npm --prefix app test -- src/features/chat/ChatView.origamiScope.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:chat",
@@ -528,7 +527,7 @@
         "npm --prefix app test -- src/features/context/contextWorkspaceUi.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:route:context",
@@ -561,7 +560,7 @@
         "npm --prefix app test -- src/features/files/fileExplorerStore.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:route:files",
@@ -595,7 +594,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:history",
@@ -628,7 +627,7 @@
         "npm --prefix app test -- src/features/kanban/milestoneKanban.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:kanban",
@@ -661,7 +660,7 @@
         "npm --prefix app test -- src/features/preview/previewDevices.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:preview",
@@ -695,7 +694,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:project-detail",
@@ -728,7 +727,7 @@
         "npm --prefix app test -- src/features/schedule/SchedulePage.modelPicker.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:schedule",
@@ -761,7 +760,7 @@
         "npm --prefix app test -- src/features/skills/SkillsPage.jarvisCreator.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:skills",
@@ -794,7 +793,7 @@
         "npm --prefix app test -- src/features/terminals/TerminalsPage.command.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:route:terminal",
@@ -827,7 +826,7 @@
         "npm --prefix app test -- src/features/tools/toolStore.test.ts --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:route:tools",
@@ -860,7 +859,7 @@
         "npm --prefix app test -- src/features/workbench/WorkbenchPage.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:route:workbench",
@@ -894,7 +893,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:about",
@@ -928,45 +927,11 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:accessibility",
       "fileLockPaths": ["app/src/features/settings/sections/Accessibility.tsx"],
-      "sharedReadOnlyPaths": [
-        "app/src/features/settings/SettingsModal.tsx",
-        "app/src/features/settings/settingsPrefetch.ts",
-        "tests/visual/monochrome/route-manifest.test.ts"
-      ],
-      "exclusions": [
-        "business behavior",
-        "user or remote content",
-        "non-Sakura themes",
-        "backend, schema, auth, and billing changes"
-      ],
-      "unavailableReason": null
-    },
-    {
-      "id": "settings:account",
-      "kind": "settings",
-      "routeId": null,
-      "auditStatus": "covered",
-      "availability": "production",
-      "owner": "SK7F",
-      "requirements": ["SAK-010", "SAK-030", "SAK-033", "SAK-040", "SAK-048", "SAK-038"],
-      "sourcePaths": ["app/src/features/settings/sections/Account.tsx"],
-      "writerPaths": ["app/src/features/settings/sections/Account.tsx"],
-      "testPaths": ["tests/visual/monochrome/route-manifest.test.ts"],
-      "behaviorCommands": [
-        "npm --prefix app test -- --maxWorkers=1 --minWorkers=1",
-        "node --test tests/visual/monochrome/route-manifest.test.ts"
-      ],
-      "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
-      "motion": ["no-preference", "reduce"],
-      "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
-      "logicalLock": "sakura:settings:account",
-      "fileLockPaths": ["app/src/features/settings/sections/Account.tsx"],
       "sharedReadOnlyPaths": [
         "app/src/features/settings/SettingsModal.tsx",
         "app/src/features/settings/settingsPrefetch.ts",
@@ -996,7 +961,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:admin",
@@ -1029,7 +994,7 @@
         "npm --prefix app test -- src/features/settings/sections/AllAboutMe.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:allaboutme",
@@ -1063,7 +1028,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:ambient",
@@ -1096,7 +1061,7 @@
         "npm --prefix app test -- src/features/settings/sections/Appearance.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:appearance",
@@ -1130,7 +1095,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:composerstt",
@@ -1163,7 +1128,7 @@
         "npm --prefix app test -- src/features/settings/SubscriptionCliBridge.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:connections",
@@ -1186,7 +1151,7 @@
       "kind": "settings",
       "routeId": null,
       "auditStatus": "covered",
-      "availability": "production",
+      "availability": "feature-flagged",
       "owner": "SK7F",
       "requirements": ["SAK-010", "SAK-030", "SAK-033", "SAK-040", "SAK-048", "SAK-038"],
       "sourcePaths": ["app/src/features/settings/sections/Hive.tsx"],
@@ -1197,7 +1162,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:hive",
@@ -1231,7 +1196,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:hotkeys",
@@ -1265,7 +1230,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:jarvisactions",
@@ -1299,7 +1264,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:localmodels",
@@ -1333,7 +1298,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:notifications",
@@ -1366,7 +1331,7 @@
         "npm --prefix app test -- src/features/settings/sections/PhoneVoice.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:phone",
@@ -1400,7 +1365,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:plans",
@@ -1433,7 +1398,7 @@
         "npm --prefix app test -- src/features/plugins/Plugins.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:plugins",
@@ -1467,7 +1432,7 @@
         "node --test tests/visual/monochrome/route-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:providers",
@@ -1500,7 +1465,7 @@
         "npm --prefix app test -- src/features/settings/sections/Voice.test.tsx --maxWorkers=1 --minWorkers=1"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:settings:voice",

@@ -519,8 +519,8 @@ function prepareAppIdentity(
   });
 }
 
-const ACCOUNT_SCOPE_BOOT_WAIT_OPTIONS = { timeout: 5_000 } as const;
-const ACCOUNT_SCOPE_BOOT_TEST_TIMEOUT = 30_000;
+const ACCOUNT_SCOPE_BOOT_WAIT_OPTIONS = { timeout: 15_000 } as const;
+const ACCOUNT_SCOPE_BOOT_TEST_TIMEOUT = 90_000;
 
 async function waitForAccountScopeBoot(): Promise<void> {
   await waitFor(

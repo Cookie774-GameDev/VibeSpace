@@ -81,7 +81,13 @@ export const PUBLIC_PLANS: Record<BillingPlanId, PublicPlan> = {
   },
 };
 
-export const BILLING_PLAN_ORDER: ReadonlyArray<BillingPlanId> = ['free', 'starter', 'pro', 'ultra', 'apex'];
+export const BILLING_PLAN_ORDER: ReadonlyArray<BillingPlanId> = [
+  'free',
+  'starter',
+  'pro',
+  'ultra',
+  'apex',
+];
 
 /** One spend bucket as returned by the get-message-usage edge function. */
 export interface UsageBucket {
@@ -243,15 +249,32 @@ export function unifiedCreditsFromCombined(
   const phoneMinutesUsed = Math.max(0, usage.call?.used ?? 0);
   const smsUsed = Math.max(0, usage.sms?.used ?? 0);
 
+  const hasExplicitCredits =
+    Number.isFinite(usage.credits_included) &&
+    Number.isFinite(usage.credits_used) &&
+    Number.isFinite(usage.credits_remaining);
+  if (hasExplicitCredits) {
+    const included = Math.max(0, usage.credits_included ?? 0);
+    const used = Math.max(0, usage.credits_used ?? 0);
+    const remaining = Math.max(0, usage.credits_remaining ?? included - used);
+    return {
+      included,
+      used: Math.min(used, included || used),
+      remaining: Math.min(remaining, included),
+      percent: usagePercent(used, included || used || 1),
+      deepseekUsed,
+      phoneMinutesUsed,
+      smsUsed,
+    };
+  }
+
   const included =
     Math.max(0, usage.message?.included ?? 0) +
     Math.max(0, usage.call?.included ?? 0) * CREDITS_PER_PHONE_MINUTE +
     Math.max(0, usage.sms?.included ?? 0) * CREDITS_PER_SMS;
 
   const used =
-    deepseekUsed +
-    phoneMinutesUsed * CREDITS_PER_PHONE_MINUTE +
-    smsUsed * CREDITS_PER_SMS;
+    deepseekUsed + phoneMinutesUsed * CREDITS_PER_PHONE_MINUTE + smsUsed * CREDITS_PER_SMS;
 
   if (included <= 0 && used <= 0) {
     return {

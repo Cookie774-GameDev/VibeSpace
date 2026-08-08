@@ -60,6 +60,9 @@ describe('Jarvis action catalog', () => {
       })),
     ).toEqual([
       { id: 'file.search', risk: 'read-only', approval: 'never' },
+      { id: 'files.read', risk: 'read-only', approval: 'always' },
+      { id: 'files.create', risk: 'safe-write', approval: 'always' },
+      { id: 'files.edit', risk: 'safe-write', approval: 'always' },
       { id: 'github.identity', risk: 'read-only', approval: 'never' },
       { id: 'github.repository.read', risk: 'read-only', approval: 'never' },
       { id: 'github.issue.read', risk: 'read-only', approval: 'never' },
@@ -109,12 +112,146 @@ describe('Jarvis action catalog', () => {
         risk: 'external-side-effect',
         approval: 'always',
       },
+      { id: 'browser.readPage', risk: 'read-only', approval: 'never' },
+      { id: 'browser.navigate', risk: 'external-side-effect', approval: 'always' },
+      { id: 'browser.click', risk: 'external-side-effect', approval: 'always' },
+      { id: 'browser.type', risk: 'external-side-effect', approval: 'always' },
       { id: 'chat.model.switch', risk: 'external-side-effect', approval: 'always' },
       { id: 'mcp.invoke', risk: 'external-side-effect', approval: 'always' },
+      { id: 'creator.start', risk: 'safe-write', approval: 'always' },
       { id: 'terminal.create', risk: 'safe-write', approval: 'always' },
       { id: 'terminal.run', risk: 'external-side-effect', approval: 'always' },
       { id: 'task.cancel', risk: 'destructive', approval: 'always' },
     ]);
+  });
+
+  it('registers bounded project-file actions behind explicit approval', () => {
+    const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
+    const read = catalog.resolve('files.read');
+    const create = catalog.resolve('files.create');
+    const edit = catalog.resolve('files.edit');
+
+    expect(read).toMatchObject({
+      requiredCapabilities: ['files.read'],
+      risk: 'read-only',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'files.read' },
+    });
+    expect(create).toMatchObject({
+      requiredCapabilities: ['files.write'],
+      risk: 'safe-write',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'files.create' },
+    });
+    expect(edit).toMatchObject({
+      requiredCapabilities: ['files.write'],
+      risk: 'safe-write',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'files.edit' },
+    });
+    expect(read?.validateParameters({ path: 'C:\\safe\\input.txt' })).toEqual({
+      path: 'C:\\safe\\input.txt',
+    });
+    expect(
+      create?.validateParameters({
+        path: 'C:\\safe\\output.txt',
+        content: 'hello',
+        attachToChat: true,
+      }),
+    ).toEqual({
+      path: 'C:\\safe\\output.txt',
+      content: 'hello',
+      attachToChat: true,
+    });
+    expect(() => read?.validateParameters({ path: 'C:\\safe\\input.txt', secret: 'x' })).toThrow(
+      /unknown fields/i,
+    );
+  });
+
+  it('registers the bounded agent and skill creator launcher behind approval', () => {
+    const creator = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'creator.start',
+    );
+
+    expect(creator).toMatchObject({
+      requiredCapabilities: ['creator.open'],
+      risk: 'safe-write',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'creator.start' },
+    });
+    expect(creator?.validateParameters({ kind: 'agent' })).toEqual({ kind: 'agent' });
+    expect(creator?.validateParameters({ kind: 'skill' })).toEqual({ kind: 'skill' });
+    expect(() => creator?.validateParameters({ kind: 'terminal' })).toThrow(/kind/i);
+  });
+
+  it('publishes only fixed browser operations behind canonical review bindings', () => {
+    const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
+    expect(
+      ['browser.readPage', 'browser.navigate', 'browser.click', 'browser.type'].map((id) => {
+        const action = catalog.resolve(id)!;
+        return {
+          id,
+          capability: action.requiredCapabilities[0],
+          approval: action.approval,
+          exposed: action.exposeToAI,
+          executor: action.executor,
+        };
+      }),
+    ).toEqual([
+      {
+        id: 'browser.readPage',
+        capability: 'browser.operator',
+        approval: 'never',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.readPage' },
+      },
+      {
+        id: 'browser.navigate',
+        capability: 'browser.operator',
+        approval: 'always',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.navigate' },
+      },
+      {
+        id: 'browser.click',
+        capability: 'browser.operator',
+        approval: 'always',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.click' },
+      },
+      {
+        id: 'browser.type',
+        capability: 'browser.operator',
+        approval: 'always',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.type' },
+      },
+    ]);
+    expect(catalog.resolve('browser.evaluate')).toBeUndefined();
+    expect(catalog.resolve('browser.runJs')).toBeUndefined();
+
+    const navigate = catalog.resolve('browser.navigate')!;
+    const canonical = {
+      schemaVersion: 1,
+      reviewId: 'review-1',
+      origin: 'https://example.test',
+      tabId: 'tab-1',
+      frameId: null,
+      target: { currentUrl: 'https://example.test/start' },
+      parameters: { url: 'https://example.test/next' },
+      parametersHash: 'parameter-hash',
+      reviewedHash: 'reviewed-hash',
+      expectedEffect: 'Navigate the active browser tab.',
+      reviewedRisk: 'confirm',
+      capability: { id: 'browser.operator', operation: 'browser.navigate' },
+    };
+    expect(navigate.validateParameters(canonical)).toEqual(canonical);
+    expect(() =>
+      navigate.validateParameters({
+        ...canonical,
+        parameters: { url: 'https://example.test/next', expression: 'document.cookie' },
+      }),
+    ).toThrow(/unknown fields/i);
   });
 
   it('publishes one closed always-confirmed MCP invocation registration', () => {

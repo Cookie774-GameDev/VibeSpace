@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ProviderId } from '@/types';
 import type { PlanId } from '@/lib/entitlements';
 import { useAuthStore } from '@/stores/auth';
+import { OLLAMA_LOCAL_CONNECTION } from './adapters/nativeCatalog';
 import { ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
 import { GOOGLE_DEFAULT_MODEL } from './providers/google';
 import { GROQ_DEFAULT_MODEL } from './providers/groq';
@@ -221,7 +222,9 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
 // ── Dynamic Ollama model discovery ──────────────────────────────────────
 
 let _discoveredOllama: string[] = [];
+let _foundryModels: Array<{ id: string; label: string }> = [];
 let _discoveredListeners: Array<() => void> = [];
+let _foundryHydration: Promise<void> | null = null;
 
 /** Replace the set of discovered Ollama model names. Call after each scan. */
 export function syncDiscoveredOllamaModels(models: string[]): void {
@@ -233,19 +236,71 @@ export function getDiscoveredOllamaModels(): readonly string[] {
   return _discoveredOllama;
 }
 
+export function syncFoundryModelOptions(
+  models: ReadonlyArray<{ id: string; label: string }>,
+): void {
+  _foundryModels = models
+    .map((model) => ({ id: model.id.trim(), label: model.label.trim() }))
+    .filter(
+      (model, index, all) =>
+        model.id.startsWith('foundry:') &&
+        Boolean(model.label) &&
+        all.findIndex((candidate) => candidate.id === model.id) === index,
+    );
+  _discoveredListeners.forEach((fn) => fn());
+}
+
+export function getOllamaModelOptions(): ModelOption[] {
+  return [
+    ..._foundryModels.map((model) => ({
+      provider: 'ollama' as const,
+      id: model.id,
+      label: model.label,
+    })),
+    ..._discoveredOllama.map((name) => ({
+      provider: 'ollama' as const,
+      id: name,
+      label: name,
+    })),
+  ];
+}
+
+function hydrateFoundryModelOptions(): Promise<void> {
+  if (_foundryHydration) return _foundryHydration;
+  _foundryHydration = (async () => {
+    const { foundryModelOptions, loadJobs } = await import('@/features/model-foundry/modelHub');
+    let jobs = typeof window === 'undefined' ? [] : loadJobs(window.localStorage);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const nativeJobs = await invoke<unknown>('model_foundry_list_jobs');
+      if (Array.isArray(nativeJobs)) jobs = nativeJobs;
+    } catch {
+      // Browser preview and an unavailable native host use the durable snapshot.
+    }
+    syncFoundryModelOptions(foundryModelOptions(jobs));
+  })();
+  return _foundryHydration;
+}
+
 /** React hook: returns current discovered Ollama models as ModelOption[]. */
 export function useOllamaModelOptions(): ModelOption[] {
   const [, bump] = useState(0);
   useEffect(() => {
     const listener = () => bump((n) => n + 1);
     _discoveredListeners.push(listener);
+    void hydrateFoundryModelOptions();
     return () => {
       _discoveredListeners = _discoveredListeners.filter((l) => l !== listener);
     };
   }, []);
   return useMemo(
-    () => _discoveredOllama.map((name) => ({ provider: 'ollama' as const, id: name, label: name })),
-    [_discoveredOllama.length, _discoveredOllama.join('\0')],
+    () => getOllamaModelOptions(),
+    [
+      _discoveredOllama.length,
+      _discoveredOllama.join('\0'),
+      _foundryModels.length,
+      _foundryModels.map((model) => `${model.id}\0${model.label}`).join('\u0001'),
+    ],
   );
 }
 
@@ -258,7 +313,7 @@ function hasCloudApiKey(
   return Boolean(apiKeys[provider]?.trim());
 }
 
-function resolveLocalModelNames(localDefault = ''): string[] {
+function resolveLocalModelNames(_localDefault = ''): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
   const add = (name: string) => {
@@ -270,7 +325,6 @@ function resolveLocalModelNames(localDefault = ''): string[] {
     names.push(trimmed);
   };
   for (const name of _discoveredOllama) add(name);
-  add(localDefault);
   return names;
 }
 
@@ -353,6 +407,17 @@ export function selectLocalModelForChat(modelName: string, enableOffline = false
   auth.setDefaultProvider('ollama');
   auth.setSelectedModel('ollama', trimmed);
   auth.setSelectedModel('local', trimmed);
+  // Pin the composer chat selection to Ollama so send validation and the
+  // runtime actually use the local model (not a stale Google/Hive pick).
+  auth.setChatModelSelection({
+    mode: 'single',
+    providerId: 'ollama',
+    modelId: trimmed,
+    connectionId: OLLAMA_LOCAL_CONNECTION.id,
+    connectionMode: OLLAMA_LOCAL_CONNECTION.mode,
+    authSource: OLLAMA_LOCAL_CONNECTION.authSource,
+    capabilities: OLLAMA_LOCAL_CONNECTION.capabilities,
+  });
   if (enableOffline) auth.setOfflineMode(true);
 }
 

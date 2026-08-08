@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CONTEXT_MIME } from '@/features/context/tree';
-import {
-  FILE_MIME,
-  TERMINAL_MIME,
-  getChatDragKind,
-  getChatDropPayload,
-} from './dropPayload';
+import { FILE_MIME, TERMINAL_MIME, getChatDragKind, getChatDropPayload } from './dropPayload';
 
 function dataTransfer(types: string[], values: Record<string, string>) {
   return {
@@ -18,14 +13,13 @@ function dataTransfer(types: string[], values: Record<string, string>) {
 
 describe('chat drop payloads', () => {
   it('prefers rich context over file path when context rows provide both', () => {
-    const payload = getChatDropPayload(dataTransfer(
-      [CONTEXT_MIME, FILE_MIME, 'text/plain'],
-      {
+    const payload = getChatDropPayload(
+      dataTransfer([CONTEXT_MIME, FILE_MIME, 'text/plain'], {
         [CONTEXT_MIME]: '{"title":"Context file","summary":"Use this"}',
         [FILE_MIME]: 'C:\\repo\\src\\App.tsx',
         'text/plain': 'C:\\repo\\src\\App.tsx',
-      },
-    ));
+      }),
+    );
 
     expect(payload).toEqual({
       kind: 'context',
@@ -34,13 +28,12 @@ describe('chat drop payloads', () => {
   });
 
   it('prefers terminal references over text fallback', () => {
-    const payload = getChatDropPayload(dataTransfer(
-      [TERMINAL_MIME, 'text/plain'],
-      {
+    const payload = getChatDropPayload(
+      dataTransfer([TERMINAL_MIME, 'text/plain'], {
         [TERMINAL_MIME]: '{"sessionId":"term-1","label":"Claude"}',
         'text/plain': 'terminal:Claude',
-      },
-    ));
+      }),
+    );
 
     expect(payload).toEqual({
       kind: 'terminal',
@@ -49,13 +42,12 @@ describe('chat drop payloads', () => {
   });
 
   it('keeps plain file drags as file attachments', () => {
-    const payload = getChatDropPayload(dataTransfer(
-      [FILE_MIME, 'text/plain'],
-      {
+    const payload = getChatDropPayload(
+      dataTransfer([FILE_MIME, 'text/plain'], {
         [FILE_MIME]: 'D:\\project\\README.md',
         'text/plain': 'D:\\project\\README.md',
-      },
-    ));
+      }),
+    );
 
     expect(payload).toEqual({ kind: 'file', path: 'D:\\project\\README.md' });
   });
@@ -65,5 +57,18 @@ describe('chat drop payloads', () => {
     expect(getChatDragKind([TERMINAL_MIME, 'text/plain'])).toBe('terminal');
     expect(getChatDragKind(['text/plain'])).toBe('file');
     expect(getChatDragKind(['text/html'])).toBeNull();
+  });
+
+  it('recognizes OS photo/video/file drags so preventDefault can fire', () => {
+    expect(getChatDragKind(['Files'])).toBe('os-files');
+    expect(getChatDragKind(['Files', 'text/plain'])).toBe('os-files');
+    expect(getChatDragKind(['application/x-moz-file'])).toBe('os-files');
+  });
+
+  it('does not mis-read OS multi-file drops as a single text path', () => {
+    const payload = getChatDropPayload(
+      dataTransfer(['Files', 'text/plain'], { 'text/plain': 'photo.png' }),
+    );
+    expect(payload).toBeNull();
   });
 });

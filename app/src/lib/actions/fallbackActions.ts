@@ -68,27 +68,59 @@ function readTerminalCount(value: string | undefined): number | null {
 function extractBulkOpenTerminalRequest(text: string): { count: number; command?: string } | null {
   const countToken = '(\\d+|one|two|three|four|five|six|seven|eight|nine|ten)';
   const patterns = [
-    new RegExp(`\\b(?:open|create|spawn|make|launch|start)\\s+${countToken}\\s+(?:new\\s+)?(?:terminals?|terminal\\s+panes?|panes?)\\b`),
-    new RegExp(`\\b${countToken}\\s+(?:new\\s+)?(?:terminals?|terminal\\s+panes?|panes?)\\b.*\\b(?:open|create|spawn|make|launch|start)\\b`),
+    new RegExp(
+      `\\b(?:open|create|spawn|make|launch|start)\\s+${countToken}\\s+(?:new\\s+)?(?:terminals?|terminal\\s+panes?|panes?)\\b`,
+    ),
+    new RegExp(
+      `\\b${countToken}\\s+(?:new\\s+)?(?:terminals?|terminal\\s+panes?|panes?)\\b.*\\b(?:open|create|spawn|make|launch|start)\\b`,
+    ),
   ];
   const matched = patterns.map((pattern) => pattern.exec(text)).find(Boolean);
   const count = readTerminalCount(matched?.[1]);
   if (!count) return null;
 
-  const commandMatch = /\b(?:with|running|run|start(?:ing)?|using)\s+(opencode|open-code|claude|codex|gemini)\b/.exec(text);
+  const commandMatch =
+    /\b(?:with|running|run|start(?:ing)?|using)\s+(opencode|open-code|claude|codex|gemini)\b/.exec(
+      text,
+    );
   const command = commandMatch?.[1]?.replace('open-code', 'opencode');
   return command ? { count, command } : { count };
 }
 
+function extractSingleTerminalRunRequest(text: string): { command: string } | null {
+  const match =
+    /\b(?:open|create|start|launch)\s+(?:a|one|1)\s+(?:new\s+)?terminal\b(?:\s+(?:and|then))?\s+(?:run|execute|type)\s+([\s\S]+)$/i.exec(
+      text.trim(),
+    );
+  const command = match?.[1]
+    ?.replace(
+      /^(?:this\s+)?exact\s+(?:powershell|shell|terminal)?\s*command\s*:\s*/i,
+      '',
+    )
+    ?.replace(/\b(?:please|okay|ok)\b[.!?\s]*$/i, '')
+    .replace(/[.!?]+$/u, '')
+    .trim();
+  if (!command || command.length > 4_096) return null;
+  return { command };
+}
+
 function extractBulkCloseTerminalRequest(text: string): { count: number } | null {
   // "close all terminals" → max 10
-  if (/\b(?:close|kill|remove|shut\s+down)\s+all\s+(?:terminals?|terminal\s+panes?|panes?)\b/.test(text)) {
+  if (
+    /\b(?:close|kill|remove|shut\s+down)\s+all\s+(?:terminals?|terminal\s+panes?|panes?)\b/.test(
+      text,
+    )
+  ) {
     return { count: 10 };
   }
   const countToken = '(\\d+|one|two|three|four|five|six|seven|eight|nine|ten)';
   const patterns = [
-    new RegExp(`\\b(?:close|kill|remove|shut\\s+down)\\s+${countToken}\\s+(?:terminals?|terminal\\s+panes?|panes?)\\b`),
-    new RegExp(`\\b${countToken}\\s+(?:terminals?|terminal\\s+panes?|panes?)\\b.*\\b(?:close|kill|remove)\\b`),
+    new RegExp(
+      `\\b(?:close|kill|remove|shut\\s+down)\\s+${countToken}\\s+(?:terminals?|terminal\\s+panes?|panes?)\\b`,
+    ),
+    new RegExp(
+      `\\b${countToken}\\s+(?:terminals?|terminal\\s+panes?|panes?)\\b.*\\b(?:close|kill|remove)\\b`,
+    ),
   ];
   const matched = patterns.map((pattern) => pattern.exec(text)).find(Boolean);
   const count = readTerminalCount(matched?.[1]);
@@ -145,7 +177,8 @@ function extractOrchestrationRequest(text: string): OrchestrationRequest | null 
   if (roles.length < 2) return null;
 
   // Prompts: "for the [five] code reviewer agents, type this prompt: ..."
-  const promptPattern = /for\s+the\s+(?:\w+\s+)?([a-z][a-z ]{1,40}?)\s+agents?[,:]?\s*(?:please\s+)?(?:type|use|give(?:\s+them)?|send)\s+(?:this|the)\s+prompt[.:]?\s*([^.]+(?:\.[^]*?)?)(?=\s+for\s+the\s+|\s*$)/gi;
+  const promptPattern =
+    /for\s+the\s+(?:\w+\s+)?([a-z][a-z ]{1,40}?)\s+agents?[,:]?\s*(?:please\s+)?(?:type|use|give(?:\s+them)?|send)\s+(?:this|the)\s+prompt[.:]?\s*([^.]+(?:\.[^]*?)?)(?=\s+for\s+the\s+|\s*$)/gi;
   for (const match of text.matchAll(promptPattern)) {
     const slug = slugifyRole((match[1] ?? '').trim());
     const prompt = (match[2] ?? '').trim().replace(/[.\s]+$/, '');
@@ -160,7 +193,10 @@ function extractOrchestrationRequest(text: string): OrchestrationRequest | null 
     if (role) role.prompt = prompt;
   }
 
-  const commandMatch = /\b(?:open|run|start|launch)\s+(claude(?:\s+code)?|opencode|open-code|codex|gemini)\b/.exec(text);
+  const commandMatch =
+    /\b(?:open|run|start|launch)\s+(claude(?:\s+code)?|opencode|open-code|codex|gemini)\b/.exec(
+      text,
+    );
   const command = commandMatch
     ? commandMatch[1]!.replace(/\s+code$/, '').replace('open-code', 'opencode')
     : undefined;
@@ -185,8 +221,11 @@ function nextWholeHour(): number {
   return date.getTime();
 }
 
-function extractScheduleCreateRequest(text: string): { title: string; prompt: string; startAtMs: number; recurrence: string } | null {
-  if (!/\b(schedule|scheduled|every|daily|weekly|monthly|morning|evening|night)\b/.test(text)) return null;
+function extractScheduleCreateRequest(
+  text: string,
+): { title: string; prompt: string; startAtMs: number; recurrence: string } | null {
+  if (!/\b(schedule|scheduled|every|daily|weekly|monthly|morning|evening|night)\b/.test(text))
+    return null;
   if (!/\b(make|create|schedule|run|remind|check|summarize|review)\b/.test(text)) return null;
   const recurrence = /\bmonthly\b/.test(text)
     ? 'monthly'
@@ -195,11 +234,15 @@ function extractScheduleCreateRequest(text: string): { title: string; prompt: st
       : /\bdaily|every morning|every day|morning|evening|night\b/.test(text)
         ? 'daily'
         : 'once';
-  const title = text
-    .replace(/\b(make|create)\s+(?:a\s+)?schedule\s+(?:to|for)?\b/i, '')
-    .replace(/\bevery\s+(morning|day|evening|night|week|month|friday|monday|tuesday|wednesday|thursday|saturday|sunday)\b/i, '')
-    .trim()
-    .slice(0, 80) || 'Jarvis task';
+  const title =
+    text
+      .replace(/\b(make|create)\s+(?:a\s+)?schedule\s+(?:to|for)?\b/i, '')
+      .replace(
+        /\bevery\s+(morning|day|evening|night|week|month|friday|monday|tuesday|wednesday|thursday|saturday|sunday)\b/i,
+        '',
+      )
+      .trim()
+      .slice(0, 80) || 'Jarvis task';
   return {
     title: title.charAt(0).toUpperCase() + title.slice(1),
     prompt: text,
@@ -302,6 +345,18 @@ export function inferFallbackActionProposals(
     return proposals;
   }
 
+  const singleTerminalRun = extractSingleTerminalRunRequest(userText);
+  if (singleTerminalRun) {
+    proposals.push(
+      proposal(
+        'terminal.run',
+        singleTerminalRun,
+        `Open one terminal pane and run ${singleTerminalRun.command} after user approval.`,
+      ),
+    );
+    return proposals;
+  }
+
   const bulkOpen = extractBulkOpenTerminalRequest(user);
   if (bulkOpen) {
     proposals.push(
@@ -349,13 +404,20 @@ export function inferFallbackActionProposals(
     );
   }
 
+  const fileRead = extractFileReadRequest(userText);
+  if (fileRead) {
+    proposals.push(
+      proposal('files.read', { path: fileRead.path }, `Read ${fileRead.path} after user approval.`),
+    );
+  }
+
   const fileWrite = extractFileWriteRequest(userText, assistantText, {
     defaultDir: getCachedDefaultWriteDir(),
   });
   if (fileWrite) {
     proposals.push(
       proposal(
-        'files.write',
+        'files.create',
         { path: fileWrite.path, content: fileWrite.content },
         `Write ${fileWrite.path} after user approval.`,
       ),
@@ -365,8 +427,37 @@ export function inferFallbackActionProposals(
   return proposals.slice(0, 3);
 }
 
+export function extractFileReadRequest(userText: string): { path: string } | null {
+  const raw = userText.trim();
+  const pathMatch =
+    raw.match(/["'“”]((?:[A-Za-z]:[\\/][^"'“”]+|\\\\[^"'“”]+|\/[^"'“”]+))["'“”]/) ||
+    raw.match(/\b((?:[A-Za-z]:[\\/][^\s"'“”]+|\\\\[^\s"'“”]+|\/[^\s"'“”]+))/);
+  const intentText = pathMatch ? raw.replace(pathMatch[0], ' ') : raw;
+  if (!/\b(read|inspect|open|show|load|check)\b/i.test(intentText)) return null;
+  if (
+    !/\b(file|path|contents?|directly)\b/i.test(intentText) &&
+    !/\.[a-z0-9]{1,12}\b/i.test(raw)
+  ) {
+    return null;
+  }
+  let path = pathMatch?.[1]?.replace(/[.,;:]+$/, '').trim();
+  if (!path || path.length > 32_768) return null;
+  const pathLeaf = path.split(/[\\/]/).at(-1) ?? '';
+  if (!/\.[a-z0-9]{1,12}$/i.test(pathLeaf)) {
+    const directoryPath = path;
+    const requestedFilename = [...raw.matchAll(/\b([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9]{1,12})\b/g)]
+      .map((match) => match[1])
+      .find((filename) => filename && !directoryPath.includes(filename));
+    if (requestedFilename) {
+      path = `${directoryPath.replace(/[\\/]+$/u, '')}${directoryPath.includes('\\') ? '\\' : '/'}${requestedFilename}`;
+    }
+  }
+  if (path.length > 32_768) return null;
+  return { path };
+}
+
 /**
- * Infer a files.write proposal when the user clearly asks to create a text
+ * Infer a files.create proposal when the user clearly asks to create a text
  * file. Absolute path preferred; if missing, use the general default folder
  * (Downloads/Documents/VibeSpace). Tiny local models often refuse in prose
  * instead of emitting the action block — this is the safety net.
@@ -379,6 +470,13 @@ export function extractFileWriteRequest(
   const raw = userText.trim();
   if (!raw) return null;
   const lower = raw.toLowerCase();
+  if (
+    /\b(?:ledger|status summary|qualification report)\b/i.test(raw) &&
+    /\b(?:pass|fail|present|absent)\b/i.test(raw) &&
+    !/(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'“”]+/u.test(raw)
+  ) {
+    return null;
+  }
 
   // Must look like a create/write intent
   if (!/\b(make|create|write|save|generate|draft)\b/.test(lower)) return null;
@@ -413,21 +511,31 @@ export function extractFileWriteRequest(
   // Content: after "write/about" or remaining prose without the path/make-file boilerplate
   let content = '';
   const pathToken = pathMatch?.[0] ?? '';
-  const aboutMatch = raw.match(/\b(?:write|about|with|containing|that says?)\b[:\s]+([\s\S]+)/i);
+  const explicitContentMatch = raw.match(
+    /\b(?:that\s+)?(?:contains?|containing|says?)\s+(?:exactly\s*)?:\s*([\s\S]+)$/i,
+  );
+  const aboutMatch =
+    explicitContentMatch ??
+    raw.match(/\b(?:write|about|with|containing|that says?)\b[:\s]+([\s\S]+)/i);
   if (aboutMatch?.[1]) {
-    content = aboutMatch[1]
-      .replace(pathToken, ' ')
-      .replace(/["'“”]/g, ' ')
-      .replace(/\bok(ay)?\b/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    content = explicitContentMatch
+      ? explicitContentMatch[1].trim()
+      : aboutMatch[1]
+          .replace(pathToken, ' ')
+          .replace(/["'“”]/g, ' ')
+          .replace(/\bok(ay)?\b/gi, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
   }
 
   if (!content || content.length < 8) {
     // Strip path and boilerplate; use leftover as content seed
     content = raw
       .replace(pathToken, ' ')
-      .replace(/\b(make|create|write|save|generate|draft)\b[\s\S]{0,40}\b(file|txt|document)\b/gi, ' ')
+      .replace(
+        /\b(make|create|write|save|generate|draft)\b[\s\S]{0,40}\b(file|txt|document)\b/gi,
+        ' ',
+      )
       .replace(/\b(right\s+here|here|okay|please|and)\b/gi, ' ')
       .replace(/["'“”]/g, ' ')
       .replace(/\s+/g, ' ')

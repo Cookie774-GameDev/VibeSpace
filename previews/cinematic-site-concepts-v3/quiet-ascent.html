@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f6eddd" />
+    <meta
+      name="description"
+      content="The Quiet Ascent — an authentic VibeSpace product story through one continuous watercolor mountain world."
+    />
+    <title>The Quiet Ascent — VibeSpace Cinematic Direction 01</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preload" as="image" href="./assets/product/quick-launch.png" />
+    <link rel="stylesheet" href="./world.css" />
+    <link rel="stylesheet" href="./concepts.css" />
+  </head>
+  <body>
+    <main id="world" aria-label="The Quiet Ascent cinematic VibeSpace product story"></main>
+    <noscript>
+      <p>JavaScript is required for this scroll-directed cinematic reference.</p>
+    </noscript>
+    <script type="module">
+      import { mountWorld } from "./runtime/world-engine.mjs";
+      mountWorld(document.querySelector("#world"), "quiet-ascent");
+    </script>
+  </body>
+</html>

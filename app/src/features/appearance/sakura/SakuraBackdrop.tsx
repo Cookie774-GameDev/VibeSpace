@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useUIStore, type SakuraPetalSpeed } from '@/stores/ui';
 import { SakuraPetals } from './SakuraPetals';
 import { SakuraScene } from './SakuraScene';
 import {
@@ -63,10 +64,18 @@ function useSakuraVisibility(): SakuraVisibilitySnapshot {
 export interface SakuraBackdropViewProps {
   intensity: SakuraRouteIntensity;
   paused: boolean;
+  petalsEnabled?: boolean;
+  petalSpeed?: SakuraPetalSpeed;
   rendering: SakuraRenderingMode;
 }
 
-export function SakuraBackdropView({ intensity, paused, rendering }: SakuraBackdropViewProps) {
+export function SakuraBackdropView({
+  intensity,
+  paused,
+  petalsEnabled = true,
+  petalSpeed = 'normal',
+  rendering,
+}: SakuraBackdropViewProps) {
   return (
     <div
       aria-hidden="true"
@@ -74,11 +83,14 @@ export function SakuraBackdropView({ intensity, paused, rendering }: SakuraBackd
       data-sakura-backdrop=""
       data-sakura-intensity={intensity}
       data-sakura-paused={paused ? 'true' : 'false'}
+      data-sakura-petal-speed={petalSpeed}
       data-sakura-rendering={rendering}
       {...({ inert: '' } as Record<string, string>)}
     >
       <SakuraScene />
-      <SakuraPetals paused={paused} staticMode={rendering === 'static'} />
+      {petalsEnabled && (
+        <SakuraPetals paused={paused} speed={petalSpeed} staticMode={rendering === 'static'} />
+      )}
     </div>
   );
 }
@@ -88,6 +100,8 @@ export interface SakuraBackdropProps {
 }
 
 export function SakuraBackdrop({ route }: SakuraBackdropProps) {
+  const petalsEnabled = useUIStore((state) => state.sakuraPetalsEnabled);
+  const petalSpeed = useUIStore((state) => state.sakuraPetalSpeed);
   const visibility = useSakuraVisibility();
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
   const forcedColors = useMediaQuery('(forced-colors: active)');
@@ -124,6 +138,8 @@ export function SakuraBackdrop({ route }: SakuraBackdropProps) {
     <SakuraBackdropView
       intensity={resolveSakuraRouteIntensity(route)}
       paused={visibility.paused}
+      petalsEnabled={petalsEnabled}
+      petalSpeed={petalSpeed}
       rendering={rendering}
     />
   );

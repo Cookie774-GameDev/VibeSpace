@@ -59,7 +59,10 @@ describe('theme prepaint startup contract', () => {
   });
 
   it.each([
-    ['sakura', 'sakura', 'sakura'],
+    ['origami', 'default', 'dark'],
+    ['vibespace', 'default', 'dark'],
+    ['warm', 'warm', 'warm'],
+    ['sakura', 'default', 'dark'],
     ['monochrome', 'monochrome', 'monochrome'],
     ['light', 'monochrome', 'monochrome'],
     ['dark', 'default', 'dark'],

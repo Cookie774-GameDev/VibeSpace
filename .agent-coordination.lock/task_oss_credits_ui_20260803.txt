@@ -1,0 +1,11 @@
+task_id=VS-PR31-OSS-CREDITS-UI-20260803
+controller=/root
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T15:18:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Add a concise About-page open-source credits surface backed by a truthful status registry and the existing distribution notice documents.
+owned_paths=app/src/features/settings/sections/OpenSourceCredits.tsx;app/src/features/settings/sections/OpenSourceCredits.test.tsx;app/src/features/settings/sections/About.tsx;docs/oss/**
+exclusions=all other files;existing unrelated About hunks;network/external state;Git mutation;Computer Control
+status=IMPLEMENTING

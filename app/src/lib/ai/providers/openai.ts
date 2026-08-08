@@ -23,6 +23,7 @@ import {
 } from '../types';
 import { useAuthStore } from '@/stores/auth';
 import { parseSSE } from './sse';
+import { sanitizeReasoningProviderOptions } from '../reasoningControls';
 
 const API_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -42,6 +43,10 @@ function toOpenAiContent(content: string | LLMContentPart[]) {
 
 export function buildOpenAIRequestBody(req: LLMRequest) {
   const model = req.agent.model.model || OPENAI_DEFAULT_MODEL;
+  const reasoning = sanitizeReasoningProviderOptions(
+    { providerId: 'openai', modelId: model },
+    req.provider_options,
+  );
   const systemPrompt = systemPromptForRequest(req);
   const messages = [
     { role: 'system' as const, content: systemPrompt },
@@ -59,6 +64,7 @@ export function buildOpenAIRequestBody(req: LLMRequest) {
     stream_options: { include_usage: true },
     temperature: req.temperature ?? req.agent.temperature ?? 0.7,
     max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
+    ...reasoning,
   };
 }
 

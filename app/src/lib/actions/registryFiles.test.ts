@@ -215,4 +215,80 @@ describe('canonical file artifact result truth', () => {
       expect(isCanonicalFileArtifactResult(evidence, result)).toBe(false);
     }
   });
+
+  it('attaches an explicitly requested created file after persistence succeeds', async () => {
+    const attached = vi.fn();
+    window.addEventListener('jarvis:file:attach', attached);
+    const action = FILE_ACTIONS.find((item) => item.id === 'files.create')!;
+
+    const result = await action.run(
+      {
+        path: 'C:\\Projects\\FarmLife\\docs\\generated\\goal.md',
+        root: 'C:\\Projects\\FarmLife',
+        content: '# Goal',
+        attachToChat: true,
+      },
+      { source: 'ai' },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(attached).toHaveBeenCalledOnce();
+    expect((attached.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+      path: 'C:\\Projects\\FarmLife\\docs\\generated\\goal.md',
+    });
+    window.removeEventListener('jarvis:file:attach', attached);
+  });
+
+  it('accepts only exact persisted patch and rollback receipts', () => {
+    const patchEvidence = Object.freeze({
+      ...evidence,
+      actionId: 'files.patch.apply',
+    });
+    const receipt = {
+      path: 'src/auth.ts',
+      operation: 'modify',
+      beforeSha256: `sha256:${'a'.repeat(64)}`,
+      afterSha256: `sha256:${'b'.repeat(64)}`,
+      changedPaths: ['src/auth.ts'],
+      previewId: 'patch-request-1',
+      rollbackArtifactRef: 'jartifact_rollback-1',
+    };
+    expect(
+      isCanonicalFileArtifactResult(patchEvidence, {
+        ok: true,
+        summary: 'Applied.',
+        data: receipt,
+      }),
+    ).toBe(true);
+    expect(
+      isCanonicalFileArtifactResult(
+        Object.freeze({ ...patchEvidence, actionId: 'files.patch.rollback' }),
+        {
+          ok: true,
+          summary: 'Rolled back.',
+          data: {
+            path: receipt.path,
+            restoredSha256: receipt.beforeSha256,
+            changedPaths: receipt.changedPaths,
+            previewId: receipt.previewId,
+            artifactRef: receipt.rollbackArtifactRef,
+          },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isCanonicalFileArtifactResult(patchEvidence, {
+        ok: true,
+        summary: 'False paths.',
+        data: { ...receipt, changedPaths: ['src/other.ts'] },
+      }),
+    ).toBe(false);
+    expect(
+      isCanonicalFileArtifactResult(patchEvidence, {
+        ok: true,
+        summary: 'False hash.',
+        data: { ...receipt, afterSha256: 'not-a-hash' },
+      }),
+    ).toBe(false);
+  });
 });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import * as runtimeModule from './runtime';
 import {
   createAccountScopedPluginRuntime,
@@ -170,7 +171,7 @@ describe('account-scoped plugin runtime', () => {
         accountId: 'account-a',
         pluginId: 'supabase',
         fieldId: 'key',
-        value: 'sb_secret_synthetic_test_value',
+        value: syntheticCredentialFixture('sb_secret_', 'synthetic_test_value'),
       }),
     ).rejects.toThrow(/supabase_privileged_key_rejected/i);
     expect(request).not.toHaveBeenCalled();

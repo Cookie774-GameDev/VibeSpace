@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatModelSelection } from '@/lib/ai/modelSelection';
 import {
   parseJarvisModelSwitchIntent,
@@ -283,6 +283,7 @@ describe('planJarvisModelSwitch', () => {
   });
 
   it('prepares Hive Balanced only from verified online readiness', () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     const input = {
       intent: { kind: 'hive_balanced' } as const,
       current: selection('openai', 'current'),
@@ -308,9 +309,36 @@ describe('planJarvisModelSwitch', () => {
       status: 'unavailable',
       reason: 'offline_mode',
     });
+    vi.unstubAllEnvs();
+  });
+
+  it('fails Hive Balanced closed when the product is gated', () => {
+    expect(
+      planJarvisModelSwitch({
+        intent: { kind: 'hive_balanced' },
+        current: selection('openai', 'current'),
+        candidates: [candidate('openai', 'current')],
+        hiveBalanced: {
+          configured: true,
+          connected: true,
+          available: true,
+          supportsImages: true,
+          supportsTools: true,
+          allLocal: false,
+          costClass: 'standard',
+        },
+        offlineMode: false,
+        requirements: {},
+        policyRequiresApproval: false,
+      }),
+    ).toMatchObject({
+      status: 'not_configured',
+      reason: 'target_not_configured',
+    });
   });
 
   it('fails Hive Balanced closed on missing readiness or required capabilities', () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     const base = {
       intent: { kind: 'hive_balanced' } as const,
       current: selection('openai', 'current'),
@@ -341,9 +369,11 @@ describe('planJarvisModelSwitch', () => {
       status: 'unavailable',
       reason: 'required_capability_unavailable',
     });
+    vi.unstubAllEnvs();
   });
 
   it('derives Hive privacy, cost, and policy approval from verified readiness', () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     const result = planJarvisModelSwitch({
       intent: { kind: 'hive_balanced' },
       current: selection('ollama', 'llama3.2'),
@@ -367,6 +397,7 @@ describe('planJarvisModelSwitch', () => {
       target: { mode: 'hive', hiveId: 'balanced' },
       reasons: ['local_to_cloud', 'cost_increase', 'policy'],
     });
+    vi.unstubAllEnvs();
   });
 
   it('requires approval for privacy, cost, and policy changes before mutation', () => {

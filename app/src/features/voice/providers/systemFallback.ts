@@ -1,7 +1,7 @@
 /**
  * system_tts_fallback — wraps the browser/OS SpeechSynthesis API via the
  * existing speechSynthesis module. This is the universal safety net: it needs
- * no model download, no network, and no API key. Used when Kokoro isn't ready
+ * no model download, no network, and no API key. Used when Jarvis High isn't ready
  * and cloud voice is unavailable.
  */
 import type { SpeakChunkOptions, VoiceProvider } from './types';

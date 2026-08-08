@@ -23,7 +23,13 @@
  */
 import * as React from 'react';
 import { liveQuery } from 'dexie';
-import { applyThemeToDocument, resolveTheme, useUIStore, type Route } from '@/stores/ui';
+import {
+  applyAppBrightnessToDocument,
+  applyThemeToDocument,
+  resolveTheme,
+  useUIStore,
+  type Route,
+} from '@/stores/ui';
 import { handleVoiceModuleClosed, syncVoiceModuleOpenState } from '@/features/voice/voiceRouter';
 import { useAgentStore } from '@/stores/agents';
 import { AuthGate } from '@/features/auth';
@@ -126,7 +132,8 @@ import { getDefaultAgents } from '@/features/agents';
 import { ensureActiveChat, branchChatFromMessage } from '@/features/chat/chatLifecycle';
 import { MONOCHROME_CHAT_FIXTURE } from '@/features/chat/monochromeFixture';
 import type { ChatId, MessageId } from '@/types/common';
-import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
+import { useBoundHotkey } from '@/lib/hotkeys';
+import { FullscreenHost } from '@/features/fullscreen';
 import { DevConsoleHost } from '@/features/dev-console';
 import { initTerminalScheduler } from '@/features/terminals/terminalScheduler';
 import { TerminalCliRuntimeHost } from '@/features/terminals';
@@ -160,6 +167,11 @@ import {
   type MonochromeFixtureRequest,
   type MonochromeHandshakeEvidence,
 } from '@/lib/runtimeProfile';
+import { boundedMap } from '@/lib/concurrency/boundedMap';
+import {
+  CANONICAL_PROJECTION_READ_CONCURRENCY,
+  canonicalProjectionLimits,
+} from '@/stability/canonicalProjectionBudget';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
@@ -248,14 +260,17 @@ async function readCanonicalProjectionSnapshot(accountId: string): Promise<{
   events: JarvisEvent[];
 }> {
   const runs = await jarvisRunRepo.listByAccount(accountId, { limit: 500 });
-  const rows = await Promise.all(
-    runs.map(async (run) => {
+  const rows = await boundedMap(
+    runs,
+    CANONICAL_PROJECTION_READ_CONCURRENCY,
+    async (run) => {
+      const limits = canonicalProjectionLimits(run.status);
       const [events, artifacts] = await Promise.all([
-        jarvisEventRepo.listByRun(accountId, run.id, { limit: 500 }),
-        jarvisArtifactRepo.listByRun(accountId, run.id, 500),
+        jarvisEventRepo.listByRun(accountId, run.id, { limit: limits.events }),
+        jarvisArtifactRepo.listByRun(accountId, run.id, limits.artifacts),
       ]);
       return { run, events, artifacts };
-    }),
+    },
   );
   const activityByChat: Record<string, ChatActivityEvent[]> = {};
   const projections: JarvisTaskRunProjection[] = [];
@@ -1337,10 +1352,10 @@ function useBoot() {
           console.error('Failed to start clock engine:', err);
         }
 
-        // Phase 6: Kokoro neural voice (background — default TTS, ~89 MB one-time)
+        // Jarvis High Piper voice (background — verified one-time local model)
         void import('@/features/voice/voiceRouter')
-          .then(({ bootstrapKokoroVoiceOnLaunch }) => bootstrapKokoroVoiceOnLaunch())
-          .catch((err) => console.warn('[boot] Kokoro voice bootstrap failed:', err));
+          .then(({ bootstrapJarvisVoiceOnLaunch }) => bootstrapJarvisVoiceOnLaunch())
+          .catch((err) => console.warn('[boot] Jarvis High voice bootstrap failed:', err));
       }
 
       // Report accumulated errors
@@ -1826,48 +1841,37 @@ function useDesktopReopenLifecycle() {
 function GlobalHotkeysHost() {
   useGlobalHotkeys();
 
-  // V2 — fullscreen chat toggle.
-  const toggleChatFullscreen = useUIStore((s) => s.toggleChatFullscreen);
-  useHotkey(
-    HOTKEYS.TOGGLE_FULLSCREEN,
-    (e) => {
-      e.preventDefault();
-      toggleChatFullscreen();
-    },
-    { whenInputs: true },
-  );
-
-  // V2 — manual ambient toggle (Mod+Shift+.).
+  // V2 — manual ambient toggle.
   const setAmbientActive = useUIStore((s) => s.setAmbientActive);
   const ambientEnabled = useUIStore((s) => s.ambient);
-  useHotkey(HOTKEYS.AMBIENT_TOGGLE, (e) => {
+  useBoundHotkey('AMBIENT_TOGGLE', (e) => {
     e.preventDefault();
     if (!ambientEnabled) return;
     setAmbientActive(!useUIStore.getState().ambientActive);
   });
 
-  // V2 — Schedule (Mod+Shift+S).
+  // V2 — Schedule.
   const setRoute = useUIStore((s) => s.setRoute);
-  useHotkey(HOTKEYS.SCHEDULE, (e) => {
+  useBoundHotkey('SCHEDULE', (e) => {
     e.preventDefault();
     setRoute('schedule');
   });
 
-  // V2 — Launcher (Mod+Shift+L).
+  // V2 — Launcher.
   const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
-  useHotkey(HOTKEYS.LAUNCHER, (e) => {
+  useBoundHotkey('LAUNCHER', (e) => {
     e.preventDefault();
     setLauncherOpen(!useUIStore.getState().launcherOpen);
   });
 
-  // V2 — Jarvis Assistant (Mod+J).
+  // V2 — Assistant command bar.
   const setAssistantOpen = useUIStore((s) => s.setAssistantOpen);
-  useHotkey(HOTKEYS.ASSISTANT, (e) => {
+  useBoundHotkey('ASSISTANT', (e) => {
     e.preventDefault();
     setAssistantOpen(!useUIStore.getState().assistantOpen);
   });
-  useHotkey(
-    HOTKEYS.JARVIS_BUBBLE,
+  useBoundHotkey(
+    'JARVIS_BUBBLE',
     (e) => {
       e.preventDefault();
       if (useUIStore.getState().route === 'chat') {
@@ -1886,11 +1890,9 @@ function GlobalHotkeysHost() {
     { whenInputs: true },
   );
 
-  // V3 — Actions palette (Mod+Shift+A). Sister to Mod+K (general
-  // command palette) and Mod+Shift+L (launcher tiles); focused on
-  // running registered actions + custom user-authored tools.
+  // V3 — Actions palette. Sister to palette and launcher.
   const toggleActionsPalette = useUIStore((s) => s.toggleActionsPalette);
-  useHotkey(HOTKEYS.ACTIONS, (e) => {
+  useBoundHotkey('ACTIONS', (e) => {
     e.preventDefault();
     toggleActionsPalette();
   });
@@ -1948,7 +1950,8 @@ function CommandPaletteHost() {
 }
 
 export function resolveSettingsModalInitialTab(plan: RuntimePlan): SettingsTabMemoryValue {
-  return plan.isVisualTest ? (monochromeSettingsTabOverride ?? 'account') : getLastSettingsTab();
+  // Settings → Account was removed; Account Center is the profile route.
+  return plan.isVisualTest ? (monochromeSettingsTabOverride ?? 'plans') : getLastSettingsTab();
 }
 
 function SettingsModalHost({ plan }: { plan: RuntimePlan }) {
@@ -1995,10 +1998,15 @@ function ActionsPaletteHost() {
 
 function ThemeHost() {
   const theme = useUIStore((state) => state.theme);
+  const appBrightness = useUIStore((state) => state.appBrightness);
 
   React.useEffect(() => {
     applyThemeToDocument(theme);
   }, [theme]);
+
+  React.useEffect(() => {
+    applyAppBrightnessToDocument(appBrightness);
+  }, [appBrightness]);
 
   return null;
 }
@@ -2154,6 +2162,7 @@ function WorkspaceRoot() {
         <KernelSmokeReconstructedLiveEvidenceHost binding={commandCenterBinding} />
       ) : null}
       {plan.globalHotkeyEnabled ? <GlobalHotkeysHost /> : null}
+      {plan.isOrdinary ? <FullscreenHost /> : null}
       {plan.idleEnabled ? <IdleDetectionHost /> : null}
       <AppShell>
         <ActiveCanvas />
@@ -2991,6 +3000,8 @@ export function MonochromeFixtureController({
           onAllowPublicResearchChange={() => undefined}
           publicResearchAvailable={false}
           offlineMode
+          autoUpgradeOnSend={false}
+          onAutoUpgradeOnSendChange={() => undefined}
           onStart={() => undefined}
           onCancel={() => undefined}
         />
@@ -3105,6 +3116,7 @@ function AppContent({ plan }: { plan: RuntimePlan }) {
   if (view === 'pet-overlay') {
     return (
       <ErrorBoundary>
+        <ThemeHost />
         <React.Suspense fallback={null}>
           <PetOverlayWindow runtimeEffectsEnabled={plan.petEnabled} />
         </React.Suspense>

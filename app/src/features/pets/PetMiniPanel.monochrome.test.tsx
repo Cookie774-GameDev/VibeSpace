@@ -42,9 +42,8 @@ describe('PetMiniPanel MonoChrome appearance', () => {
     // The active tab keeps the aria-current hook the theme uses to drop its shadow.
     expect(source).toContain('pet-panel-nav-button');
     expect(source).toContain("aria-current={active ? 'page' : undefined}");
-    // The header already self-gates its own blur; keep that contract.
-    expect(source).toContain(
-      'pet-panel-top border-b border-border/80 bg-elevated/40 backdrop-blur-sm [html[data-theme=monochrome]_&]:backdrop-blur-none',
-    );
+    // The compact header uses no backdrop blur in any theme.
+    expect(source).toContain('pet-panel-top border-b border-border/80');
+    expect(source).not.toContain('pet-panel-top border-b border-border/80 bg-elevated/40');
   });
 });

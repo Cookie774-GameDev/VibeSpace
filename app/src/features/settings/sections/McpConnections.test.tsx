@@ -1,10 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RemoteMcpSetupConnection, RemoteMcpSetupRuntime } from '@/lib/mcp/remoteSetupRuntime';
+import type {
+  VibeSpaceGatewayConnection,
+  VibeSpaceMcpGateway,
+} from '@/lib/mcp/vibeSpaceGateway';
 import { McpConnections } from './McpConnections';
 
-function runtimeHarness(initial: readonly RemoteMcpSetupConnection[] = []) {
+function runtimeHarness(initial: readonly VibeSpaceGatewayConnection[] = []) {
   let snapshot = initial;
   const listeners = new Set<() => void>();
   const connect = vi.fn(async () => undefined);
@@ -25,7 +28,10 @@ function runtimeHarness(initial: readonly RemoteMcpSetupConnection[] = []) {
     listeners.forEach((listener) => listener());
   });
   const disconnect = vi.fn(async () => undefined);
-  const runtime: RemoteMcpSetupRuntime = {
+  const approve = vi.fn();
+  const reconnect = vi.fn(async () => undefined);
+  const revoke = vi.fn(async () => undefined);
+  const runtime: VibeSpaceMcpGateway = {
     getSnapshot: () => snapshot,
     subscribe: (listener) => {
       listeners.add(listener);
@@ -34,13 +40,29 @@ function runtimeHarness(initial: readonly RemoteMcpSetupConnection[] = []) {
     connect,
     setToolExposure,
     disconnect,
+    approve,
+    reconnect,
+    revoke,
+    getCapabilitySnapshot: () => ({
+      schemaVersion: 1,
+      accountId: 'account',
+      projectId: 'project',
+      connections: [],
+    }),
+    invoke: vi.fn(async () => {
+      throw new Error('Invocation is not used by this UI harness.');
+    }),
+    getReceipts: () => [],
   };
   return {
     runtime,
     connect,
     setToolExposure,
     disconnect,
-    publish(next: readonly RemoteMcpSetupConnection[]) {
+    approve,
+    reconnect,
+    revoke,
+    publish(next: readonly VibeSpaceGatewayConnection[]) {
       snapshot = next;
       listeners.forEach((listener) => listener());
     },
@@ -55,16 +77,22 @@ const connected = Object.freeze({
     Object.freeze({
       name: 'repo.read',
       description: 'Read repository files',
+      inputSchema: Object.freeze({ type: 'object', properties: {}, additionalProperties: false }),
       exposed: false,
     }),
     Object.freeze({
       name: 'repo.write',
       title: 'Write',
       description: 'Write repository files',
+      inputSchema: Object.freeze({ type: 'object', properties: {}, additionalProperties: false }),
       exposed: true,
     }),
   ]),
   exposedTools: Object.freeze(['repo.write']),
+  trust: 'approved' as const,
+  schemaDigest: '0123456789abcdef',
+  reconnectAttempt: 0,
+  durableApproval: true,
 });
 
 describe('McpConnections', () => {
@@ -123,12 +151,47 @@ describe('McpConnections', () => {
     expect(harness.setToolExposure).toHaveBeenLastCalledWith('reviewed-server', [
       'repo.read',
       'repo.write',
-    ]);
+    ], { confirmedByUser: true });
     fireEvent.click(write);
-    expect(harness.setToolExposure).toHaveBeenLastCalledWith('reviewed-server', ['repo.read']);
+    expect(harness.setToolExposure).toHaveBeenLastCalledWith(
+      'reviewed-server',
+      ['repo.read'],
+      { confirmedByUser: true },
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect reviewed-server' }));
     await waitFor(() => expect(harness.disconnect).toHaveBeenCalledWith('reviewed-server'));
+  });
+
+  it('shows trust health and requires explicit profile approval before tools appear', () => {
+    const harness = runtimeHarness([
+      Object.freeze({
+        ...connected,
+        trust: 'approval_required',
+        durableApproval: false,
+        exposedTools: Object.freeze([]),
+      }),
+    ]);
+    render(<McpConnections runtime={harness.runtime} />);
+
+    expect(screen.getByText('approval required')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve this exact profile' }));
+    expect(harness.approve).toHaveBeenCalledWith('reviewed-server', {
+      confirmedByUser: true,
+    });
+    expect(screen.queryByRole('checkbox', { name: 'Allow repo.read' })).toBeNull();
+  });
+
+  it('offers lazy reconnect and durable revocation for an approved offline profile', async () => {
+    const harness = runtimeHarness([
+      Object.freeze({ ...connected, state: 'disconnected' as const }),
+    ]);
+    render(<McpConnections runtime={harness.runtime} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect reviewed-server' }));
+    await waitFor(() => expect(harness.reconnect).toHaveBeenCalledWith('reviewed-server'));
+    fireEvent.click(screen.getByRole('button', { name: 'Forget approval reviewed-server' }));
+    await waitFor(() => expect(harness.revoke).toHaveBeenCalledWith('reviewed-server'));
   });
 
   it('never exposes a provider failure string', async () => {

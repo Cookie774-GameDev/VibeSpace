@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#342821" />
+    <meta
+      name="description"
+      content="The Living Desk — an authentic VibeSpace product story unfolding through paper, light, and one complete folio."
+    />
+    <title>The Living Desk — VibeSpace Cinematic Direction 02</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preload" as="image" href="./assets/product/quick-launch.png" />
+    <link rel="stylesheet" href="./world.css" />
+    <link rel="stylesheet" href="./concepts.css" />
+  </head>
+  <body>
+    <main id="world" aria-label="The Living Desk cinematic VibeSpace product story"></main>
+    <noscript>
+      <p>JavaScript is required for this scroll-directed cinematic reference.</p>
+    </noscript>
+    <script type="module">
+      import { mountWorld } from "./runtime/world-engine.mjs";
+      mountWorld(document.querySelector("#world"), "living-desk");
+    </script>
+  </body>
+</html>

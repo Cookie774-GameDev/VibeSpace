@@ -319,6 +319,7 @@ describe('chat.model.switch action', () => {
   });
 
   it('applies a verified Hive Balanced request and refuses it when readiness validation fails', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     const ready = setup({
       initial: state({
         chatModelSelection: selection('openai', 'current-premium'),
@@ -352,9 +353,11 @@ describe('chat.model.switch action', () => {
       error: 'Hive providers are not connected.',
     });
     expect(blocked.apply).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
   });
 
   it('passes requested capabilities through the final Hive readiness gate', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     const apply = vi.fn();
     const validate = vi.fn(
       (
@@ -391,9 +394,11 @@ describe('chat.model.switch action', () => {
       { images: false, tools: true },
     );
     expect(apply).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
   });
 
   it('refuses Hive when candidates do not prove every exact workflow model', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     const apply = vi.fn();
     const test = setup({
       candidates: [
@@ -411,6 +416,7 @@ describe('chat.model.switch action', () => {
       ok: false,
       error: expect.stringMatching(/no configured model/i),
     });
+    vi.unstubAllEnvs();
     expect(apply).not.toHaveBeenCalled();
   });
 

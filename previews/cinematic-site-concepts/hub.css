@@ -1,0 +1,219 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Manrope:wght@400;500;600&display=swap');
+
+:root {
+  color-scheme: dark;
+  font-family: Manrope, system-ui, sans-serif;
+  background: #080808;
+  color: #f3f0e9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(255,255,255,.026) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.026) 1px, transparent 1px),
+    #080808;
+  background-size: 44px 44px;
+}
+
+button, a { font: inherit; }
+
+.skip-link {
+  position: fixed;
+  z-index: 20;
+  top: 8px;
+  left: 8px;
+  padding: 10px 14px;
+  translate: 0 -160%;
+  background: #f3f0e9;
+  color: #080808;
+}
+
+.skip-link:focus { translate: 0; }
+
+.review-header {
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  align-items: center;
+  gap: 24px;
+  padding: 0 28px;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+  background: rgba(8,8,8,.88);
+  backdrop-filter: blur(16px);
+}
+
+.review-brand,
+.review-open {
+  color: inherit;
+  text-decoration: none;
+}
+
+.review-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+}
+
+.review-brand-mark {
+  width: 22px;
+  aspect-ratio: 1;
+  border: 1px solid #e57a42;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 6px #080808, inset 0 0 0 7px rgba(229,122,66,.5);
+}
+
+.review-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.review-heading span,
+.review-open,
+.review-hint {
+  font: 400 11px/1.4 "DM Mono", monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #9c9992;
+}
+
+.review-heading strong { font-size: 14px; font-weight: 500; }
+
+.review-open {
+  padding: 10px 0;
+  color: #f3f0e9;
+}
+
+.review-open:hover { color: #e57a42; }
+
+.review-open:focus-visible,
+.concept-rail button:focus-visible {
+  outline: 2px solid #f3f0e9;
+  outline-offset: 3px;
+}
+
+.review-shell {
+  min-height: calc(100vh - 76px);
+  display: grid;
+  grid-template-columns: minmax(210px, 17vw) 1fr;
+}
+
+.concept-rail {
+  padding: 20px 12px;
+  border-right: 1px solid rgba(255,255,255,.12);
+}
+
+.concept-rail button {
+  width: 100%;
+  min-height: 84px;
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  grid-template-rows: 1fr 1fr;
+  align-items: end;
+  gap: 0 10px;
+  padding: 14px 12px;
+  border: 0;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+  background: transparent;
+  color: #8b8882;
+  text-align: left;
+  cursor: pointer;
+  transition: color .25s ease, background .25s ease;
+}
+
+.concept-rail button span {
+  grid-row: 1 / 3;
+  align-self: center;
+  font: 400 10px "DM Mono", monospace;
+}
+
+.concept-rail button strong { font-size: 13px; font-weight: 500; }
+.concept-rail button small { font: 400 10px "DM Mono", monospace; }
+
+.concept-rail button:hover,
+.concept-rail button[aria-pressed="true"] {
+  color: #f3f0e9;
+  background: rgba(255,255,255,.045);
+}
+
+.concept-rail button[aria-pressed="true"] span { color: #e57a42; }
+
+.review-stage {
+  min-width: 0;
+  padding: 22px;
+}
+
+.review-meta {
+  min-height: 52px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 28px;
+  margin-bottom: 14px;
+}
+
+.review-meta p {
+  max-width: 680px;
+  margin: 0;
+  color: #bbb7ae;
+  font-size: 13px;
+}
+
+.review-meta div { text-align: right; }
+
+.review-meta span {
+  display: block;
+  margin-bottom: 5px;
+  color: #77736d;
+  font: 400 9px "DM Mono", monospace;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.review-meta strong { font-size: 18px; font-weight: 500; }
+
+#concept-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 185px);
+  min-height: 560px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: #050505;
+}
+
+.review-hint { margin: 10px 0 0; }
+
+@media (max-width: 840px) {
+  .review-header {
+    grid-template-columns: 1fr auto;
+    padding: 14px 16px;
+  }
+  .review-heading { display: none; }
+  .review-shell { display: block; }
+  .concept-rail {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(150px, 1fr);
+    overflow-x: auto;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255,255,255,.12);
+  }
+  .concept-rail button { min-height: 66px; }
+  .review-stage { padding: 12px; }
+  .review-meta p, .review-meta span { display: none; }
+  #concept-frame { height: calc(100vh - 190px); min-height: 480px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}

@@ -13,6 +13,7 @@ import {
   Globe,
   Server,
   Cloud,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
 import type { ProviderId } from '@/types/common';
@@ -24,9 +25,22 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { isDefaultProviderSelectable, planIncludesHostedChat } from '@/lib/ai/agentProviderOptions';
+import {
+  getModelsForProvider,
+  getProviderModelCacheState,
+  loadProviderModels,
+  refreshProviderModels,
+  type RegistryModelOption,
+} from '@/lib/ai/providerModelCatalog';
+import {
+  getProviderRegistryEntry,
+  type ProviderConnectionContext,
+} from '@/lib/ai/providerRegistry';
 import { testProviderKey } from '@/lib/ai/testKey';
 import { getMonthlyAllProviderUsage, type LocalUsageTotals } from '@/lib/usage/usageSummary';
 import { ProviderUsageCounter, type ProviderUsageData } from '../components/ProviderUsageCounter';
+import { DeepgramCredentialCard } from '../components/DeepgramCredentialCard';
+import { ConnectorBrandMark } from './ConnectorBrandMark';
 
 interface ProviderRow {
   id: ProviderId;
@@ -45,7 +59,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'anthropic',
     name: 'Anthropic',
-    hint: 'Claude Opus / Sonnet / Haiku',
+    hint: 'Live Claude catalog loads after connection',
     placeholder: 'sk-ant-...',
     category: 'major',
     color: 'from-orange-500/20 to-amber-500/20',
@@ -53,7 +67,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'openai',
     name: 'OpenAI',
-    hint: 'GPT-5, o3, embeddings, realtime',
+    hint: 'Live OpenAI catalog loads after connection',
     placeholder: 'sk-...',
     category: 'major',
     color: 'from-emerald-500/20 to-teal-500/20',
@@ -61,7 +75,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'google',
     name: 'Gemini',
-    hint: 'Gemini 2.5 Flash/Pro (free tier available)',
+    hint: 'Live Gemini catalog loads after connection',
     placeholder: 'AIza...',
     freeKeyUrl: 'https://aistudio.google.com/apikey',
     freeKeyLabel: 'Get a free key',
@@ -72,7 +86,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'groq',
     name: 'Groq',
-    hint: 'Llama 3.3 70B, sub-second TTFT, free tier',
+    hint: 'Live Groq model catalog loads after connection',
     placeholder: 'gsk_...',
     freeKeyUrl: 'https://console.groq.com/keys',
     freeKeyLabel: 'Get a free key (no card)',
@@ -150,7 +164,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'openrouter',
     name: 'OpenRouter',
-    hint: 'Multi-model gateway (200+ models)',
+    hint: 'Live OpenRouter catalog loads after connection',
     placeholder: 'sk-or-...',
     category: 'gateway',
     color: 'from-fuchsia-500/20 to-purple-500/20',
@@ -258,15 +272,59 @@ export function Providers() {
   const plan = useAuthStore((s) => s.plan);
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
-  const usageByProvider = useLiveQuery(async () => {
-    const totals = await getMonthlyAllProviderUsage(BYOK_PROVIDER_IDS);
-    return BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
-      (acc, provider) => {
-        acc[provider.id] = toProviderUsageData(totals[provider.id] ?? emptyUsageTotals());
-        return acc;
-      },
-      {},
-    );
+  const [usageRevision, setUsageRevision] = useState(0);
+  const usageSnapshot = useLiveQuery(async () => {
+    try {
+      const totals = await getMonthlyAllProviderUsage(BYOK_PROVIDER_IDS);
+      return {
+        data: BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
+          (acc, provider) => {
+            acc[provider.id] = toProviderUsageData(totals[provider.id] ?? emptyUsageTotals());
+            return acc;
+          },
+          {},
+        ),
+        error: null,
+        updatedAt: Date.now(),
+      };
+    } catch (error) {
+      return {
+        data: {} as Partial<Record<ProviderId, ProviderUsageData | null>>,
+        error: error instanceof Error ? error.message : 'Usage data could not be read.',
+        updatedAt: Date.now(),
+      };
+    }
+  }, [usageRevision]);
+  const providerContext = useMemo<ProviderConnectionContext>(
+    () => ({ apiKeys, offlineMode, plan, defaultLocalModel }),
+    [apiKeys, offlineMode, plan, defaultLocalModel],
+  );
+
+  useEffect(() => {
+    const focusProvider = (providerId: unknown) => {
+      if (typeof providerId !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,95}$/i.test(providerId)) {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        const input = document.getElementById(`key-${providerId}`);
+        input?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        input?.focus({ preventScroll: true });
+      });
+    };
+    try {
+      const pending = window.sessionStorage.getItem('vibespace.settings.provider-focus.v1');
+      if (pending) {
+        window.sessionStorage.removeItem('vibespace.settings.provider-focus.v1');
+        focusProvider(pending);
+      }
+    } catch {
+      // Direct event routing remains available when session storage is unavailable.
+    }
+    const onProviderFocus = (event: Event) => {
+      focusProvider((event as CustomEvent<{ providerId?: string }>).detail?.providerId);
+    };
+    window.addEventListener('jarvis:settings:provider', onProviderFocus);
+    return () => window.removeEventListener('jarvis:settings:provider', onProviderFocus);
   }, []);
 
   const groupedProviders = useMemo(() => {
@@ -290,13 +348,33 @@ export function Providers() {
         <p className="text-secondary text-muted-foreground mt-1">
           Bring your own keys. Stored locally and never leave this device until you make a request.
         </p>
-        <div className="flex items-center gap-2 mt-3">
+        <div className="flex flex-wrap items-center gap-2 mt-3">
           <Badge variant="outline" className="text-metadata">
-            {BYOK_PROVIDERS.length} providers
+            {BYOK_PROVIDERS.length + 1} providers
           </Badge>
           <Badge variant="outline" className="text-metadata text-sage">
             {Object.values(apiKeys).filter(Boolean).length} connected
           </Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto gap-1.5"
+            onClick={() => setUsageRevision((revision) => revision + 1)}
+            aria-label="Refresh provider usage"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh usage
+          </Button>
+          {usageSnapshot?.updatedAt ? (
+            <span className="text-metadata text-muted-foreground">
+              Last updated{' '}
+              {new Date(usageSnapshot.updatedAt).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+              })}
+            </span>
+          ) : null}
         </div>
       </header>
 
@@ -313,10 +391,11 @@ export function Providers() {
               <Icon className="h-4 w-4 text-accent-copper" />
               <h3 className="text-ui-strong text-foreground">{meta.label}</h3>
               <Badge variant="outline" className="text-metadata ml-auto">
-                {providers.length}
+                {providers.length + (category === 'major' ? 1 : 0)}
               </Badge>
             </div>
             <div className="grid gap-3">
+              {category === 'major' ? <DeepgramCredentialCard showUsage /> : null}
               {providers.map((p) => (
                 <ProviderKeyRow
                   key={p.id}
@@ -324,7 +403,17 @@ export function Providers() {
                   value={apiKeys[p.id] ?? ''}
                   onSave={(v) => setApiKey(p.id, v)}
                   onClear={() => clearApiKey(p.id)}
-                  usageData={usageByProvider?.[p.id] ?? null}
+                  usageData={usageSnapshot?.data[p.id] ?? null}
+                  usageStatus={
+                    usageSnapshot === undefined
+                      ? 'loading'
+                      : usageSnapshot.error
+                        ? 'error'
+                        : 'ready'
+                  }
+                  usageError={usageSnapshot?.error ?? undefined}
+                  usageUpdatedAt={usageSnapshot?.updatedAt ?? null}
+                  providerContext={providerContext}
                 />
               ))}
             </div>
@@ -416,6 +505,10 @@ interface ProviderKeyRowProps {
   onSave: (value: string) => void;
   onClear: () => void;
   usageData: ProviderUsageData | null;
+  usageStatus: 'loading' | 'ready' | 'error';
+  usageError?: string;
+  usageUpdatedAt: number | null;
+  providerContext: ProviderConnectionContext;
 }
 
 function emptyUsageTotals(): LocalUsageTotals {
@@ -448,6 +541,10 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
   onSave,
   onClear,
   usageData,
+  usageStatus,
+  usageError,
+  usageUpdatedAt,
+  providerContext,
 }: ProviderKeyRowProps) {
   const [draft, setDraft] = useState(value);
   const [revealed, setRevealed] = useState(false);
@@ -455,11 +552,31 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
   const [copied, setCopied] = useState(false);
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [models, setModels] = useState<RegistryModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
 
   useEffect(() => {
     setDraft(value);
     if (!value) setRevealed(false);
   }, [value]);
+
+  useEffect(() => {
+    let active = true;
+    if (!value && row.id !== 'ollama') {
+      setModels([]);
+      return;
+    }
+    setModelsLoading(true);
+    void loadProviderModels(row.id, providerContext).then((options) => {
+      if (active) {
+        setModels(options);
+        setModelsLoading(false);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [providerContext, row.id, value]);
 
   const dirty = draft !== value;
   const isSaved = !!value;
@@ -540,6 +657,13 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
     }
   }
 
+  async function handleRefreshModels() {
+    setModelsLoading(true);
+    const next = await refreshProviderModels(row.id, providerContext);
+    setModels(next);
+    setModelsLoading(false);
+  }
+
   return (
     <motion.div
       initial={false}
@@ -568,6 +692,12 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
       <div className="relative flex flex-col gap-3">
         {/* Header row */}
         <div className="flex items-start justify-between gap-3">
+          <ConnectorBrandMark
+            providerId={row.id}
+            connectionId={row.id}
+            title={`${row.name} logo`}
+            className="h-8 w-8"
+          />
           <div className="flex-1 min-w-0">
             <Label
               htmlFor={`key-${row.id}`}
@@ -615,6 +745,42 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
             ) : null}
           </AnimatePresence>
         </div>
+
+        {(isSaved || row.id === 'ollama') && (
+          <div className="flex flex-wrap items-center gap-2 text-metadata text-muted-foreground">
+            <span>
+              {modelsLoading
+                ? 'Loading official model catalog…'
+                : models.length > 0
+                  ? `${models
+                      .slice(0, 4)
+                      .map((model) => model.label)
+                      .join(' · ')}${models.length > 4 ? ` · +${models.length - 4}` : ''}`
+                  : 'No provider model catalog is available for this connection.'}
+            </span>
+            {getProviderRegistryEntry(row.id)?.supportsDynamicListing ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-accent-copper hover:text-accent-amber focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={() => void handleRefreshModels()}
+                disabled={modelsLoading}
+              >
+                <RefreshCw
+                  className={cn(
+                    'h-3 w-3',
+                    modelsLoading && 'animate-spin motion-reduce:animate-none',
+                  )}
+                />
+                Refresh models
+              </button>
+            ) : null}
+            {getProviderModelCacheState(row.id).error ? (
+              <span role="status" className="text-destructive">
+                Live catalog unavailable; showing last verified options.
+              </span>
+            ) : null}
+          </div>
+        )}
 
         {/* Input row */}
         <div className="flex items-center gap-2">
@@ -701,7 +867,15 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
         </div>
 
         {/* Usage counter */}
-        <ProviderUsageCounter providerId={row.id} usage={usageData} className="mt-1" />
+        <ProviderUsageCounter
+          providerId={row.id}
+          usage={usageData}
+          status={usageStatus}
+          source="vibespace"
+          error={usageError}
+          lastUpdated={usageUpdatedAt}
+          className="mt-1"
+        />
       </div>
     </motion.div>
   );

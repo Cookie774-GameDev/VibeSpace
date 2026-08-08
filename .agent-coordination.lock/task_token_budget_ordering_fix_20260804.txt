@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG1-TOKEN-BUDGET-ORDERING-FIX-20260804
+controller=/root
+parent_session_id=active-root-session
+acquired_at=2026-08-04T01:32:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Correct deterministic token candidate ordering so higher relevance and lower token cost are actually preferred.
+owned_paths=app/src/features/token-optimizer/tokenBudget.ts;app/src/features/token-optimizer/tokenOptimizer.test.ts
+exclusions=all other files;all unrelated dirty hunks;all Git operations
+verification=add one focused regression assertion;defer execution to final verification
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

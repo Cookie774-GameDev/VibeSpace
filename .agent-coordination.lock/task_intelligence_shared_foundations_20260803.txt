@@ -1,0 +1,11 @@
+task_id=VS-PR31-SHARED-FOUNDATIONS-20260803
+controller=/root
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T13:56:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Add shared off-by-default feature flags, privacy-safe local optimization telemetry contracts, ADR, and truthful OSS inventory scaffolding for both connected master goals.
+owned_paths=app/src/lib/ai/intelligenceUpgradeFlags.ts;app/src/lib/ai/intelligenceUpgradeFlags.test.ts;app/src/lib/ai/intelligenceTelemetry.ts;app/src/lib/ai/intelligenceTelemetry.test.ts;docs/architecture/adr-0031-ai-intelligence-browser-upgrade.md;docs/oss/THIRD_PARTY_NOTICES.md;docs/oss/dependency-lock.json;docs/oss/copied-code-inventory.md;docs/oss/grammar-license-inventory.md;app/package.json;package-lock.json
+exclusions=all other paths;package files;existing AI/runtime/router/settings/chat/telemetry/context files;agent-owned token-optimizer and native capability/goal files;Git staging/commit/push/branch;external systems;user data
+status=IMPLEMENTING

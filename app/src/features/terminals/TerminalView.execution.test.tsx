@@ -398,6 +398,20 @@ describe('TerminalView canonical execution truth', () => {
     expect(childSpawn).toBeGreaterThan(sessionCreation);
   });
 
+  it('keeps preserve-existing capacity native and writes ordered setup commands in sequence', () => {
+    const frontend = readFileSync(
+      resolve(process.cwd(), 'src/features/terminals/TerminalView.tsx'),
+      'utf8',
+    );
+    const backend = readFileSync(resolve(process.cwd(), 'src-tauri/src/terminal.rs'), 'utf8');
+
+    expect(frontend).toContain('preserveExisting: preserveExisting || undefined');
+    expect(frontend).toContain('for (const startupWrite of orderedStartupCommands)');
+    expect(frontend).toContain('data: commandToInput(startupWrite)');
+    expect(backend).toContain('preserve_existing: Option<bool>');
+    expect(backend).toContain('terminal: project capacity reached; existing terminals were preserved');
+  });
+
   it('regenerates the managed briefing and Context pack from supervised session changes', () => {
     const frontend = readFileSync(
       resolve(process.cwd(), 'src/features/terminals/TerminalView.tsx'),

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connect VibeSpace MCP</title>
+    <meta name="description" content="Review and approve a secure VibeSpace MCP connection." />
+    <meta name="theme-color" content="#171310" />
+    <link rel="icon" type="image/png" href="/images/vibespace-logo.png" />
+    <link rel="stylesheet" href="/css/style.css" />
+    <link rel="stylesheet" href="./oauth-consent.css" />
+  </head>
+  <body class="oauth-body">
+    <a class="skip-link" href="#main-content">Skip to authorization</a>
+    <main class="oauth-shell" id="main-content">
+      <section class="oauth-card" aria-labelledby="oauth-title">
+        <div class="oauth-brand">
+          <img src="/images/vibespace-logo.png" width="48" height="48" alt="" />
+          <div>
+            <span>VibeSpace</span>
+            <strong>Secure connection</strong>
+          </div>
+        </div>
+
+        <div id="loading-view" class="oauth-view" role="status">
+          <span class="oauth-spinner" aria-hidden="true"></span>
+          <h1 id="oauth-title">Checking this connection…</h1>
+          <p>VibeSpace is validating the request before showing any permissions.</p>
+        </div>
+
+        <div id="signin-view" class="oauth-view" hidden>
+          <p class="oauth-eyebrow">Account confirmation</p>
+          <h1>Sign in to connect VibeSpace MCP</h1>
+          <p>
+            Use the same VibeSpace account as the desktop app. Your password is sent only to
+            VibeSpace authentication and is never shared with the requesting client.
+          </p>
+          <form id="signin-form" class="oauth-form">
+            <label>
+              Email
+              <input id="email" name="email" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                minlength="8"
+                required
+              />
+            </label>
+            <button class="btn primary oauth-primary" type="submit">Continue</button>
+          </form>
+        </div>
+
+        <div id="consent-view" class="oauth-view" hidden>
+          <p class="oauth-eyebrow">Permission request</p>
+          <h1><span id="client-name">An application</span> wants to connect</h1>
+          <p>
+            This grants account identity to <strong>VibeSpace MCP</strong>. Local file access
+            remains limited to the workspace you explicitly share in VibeSpace.
+          </p>
+          <dl class="oauth-details">
+            <div>
+              <dt>Redirect destination</dt>
+              <dd id="redirect-uri"></dd>
+            </div>
+            <div>
+              <dt>Requested permissions</dt>
+              <dd><ul id="scope-list"></ul></dd>
+            </div>
+          </dl>
+          <div class="oauth-notice">
+            Reading requires a connected desktop workspace. Writes, terminal commands, and browser
+            changes are not granted silently and continue to require VibeSpace approval.
+          </div>
+          <div class="oauth-actions">
+            <button id="deny-button" class="btn ghost" type="button">Cancel</button>
+            <button id="approve-button" class="btn primary" type="button">
+              Connect VibeSpace MCP
+            </button>
+          </div>
+        </div>
+
+        <div id="error-view" class="oauth-view" hidden role="alert">
+          <p class="oauth-eyebrow">Connection stopped</p>
+          <h1>VibeSpace could not verify this request</h1>
+          <p id="error-message">The authorization request is missing or expired.</p>
+          <button id="retry-button" class="btn primary" type="button">Try again</button>
+        </div>
+
+        <p id="form-status" class="oauth-status" aria-live="polite"></p>
+      </section>
+      <p class="oauth-footnote">
+        VibeSpace MCP uses OAuth 2.1 with PKCE. You can revoke the connection from your VibeSpace
+        account or the connected client.
+      </p>
+    </main>
+    <script type="module" src="./oauth-consent.js"></script>
+  </body>
+</html>

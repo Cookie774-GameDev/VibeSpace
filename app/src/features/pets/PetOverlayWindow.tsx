@@ -25,7 +25,7 @@ export function PetOverlayWindow({ runtimeEffectsEnabled = true }: PetOverlayWin
   const reducedMotion = usePetSettingsStore((s) => s.reducedMotion);
   const sleepTimeoutMs = usePetSettingsStore((s) => s.sleepTimeoutMs);
   const idleFunIntervalMs = usePetSettingsStore((s) => s.idleFunIntervalMs);
-  const panelMode = usePetSettingsStore((s) => s.panelMode) ?? 'normal';
+  const panelMode = usePetSettingsStore((s) => s.panelMode) ?? 'always-on-top';
   const theme = useUIStore((s) => s.theme);
 
   React.useEffect(() => {
@@ -75,16 +75,21 @@ export function PetOverlayWindow({ runtimeEffectsEnabled = true }: PetOverlayWin
 
   React.useEffect(() => {
     if (!runtimeEffectsEnabled) return;
+    // Keep the pet above browsers / borderless games. OS exclusive-fullscreen
+    // can still cover all topmost HWNDs; reassert helps the common cases.
     const recoverTopmost = () => {
       if (document.visibilityState === 'hidden') return;
       void reassertPetOverlayTopmost().catch(() => undefined);
     };
     recoverTopmost();
-    const interval = window.setInterval(recoverTopmost, 45_000);
+    // Immediate follow-up — Windows/WebView2 sometimes drops topmost right after show.
+    const boot = window.setTimeout(recoverTopmost, 400);
+    const interval = window.setInterval(recoverTopmost, 12_000);
     window.addEventListener('focus', recoverTopmost);
     window.addEventListener('pageshow', recoverTopmost);
     document.addEventListener('visibilitychange', recoverTopmost);
     return () => {
+      window.clearTimeout(boot);
       window.clearInterval(interval);
       window.removeEventListener('focus', recoverTopmost);
       window.removeEventListener('pageshow', recoverTopmost);

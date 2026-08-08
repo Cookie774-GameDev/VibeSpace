@@ -1,0 +1,11 @@
+task_id=VS-PR31-MG1-TEMPORAL-CONTEXT-20260803
+controller=/root
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T14:18:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement a pure local-first temporal knowledge contract and mutation authority with provenance, revision checks, supersession, disputes, verification, and unavailable-source handling.
+owned_paths=app/src/features/temporal-context/**
+exclusions=all other paths;existing Context Map/Dexie/Tantivy/runtime/UI files;package files;agent-owned paths;Git staging/commit/push/branch;external systems;user data
+status=IMPLEMENTING

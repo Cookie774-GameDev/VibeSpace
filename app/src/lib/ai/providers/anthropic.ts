@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { useAuthStore } from '@/stores/auth';
 import { parseSSE } from './sse';
+import { sanitizeReasoningProviderOptions } from '../reasoningControls';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const API_VERSION = '2023-06-01';
@@ -113,13 +114,19 @@ function toAnthropicPayload(req: LLMRequest): {
 
 export function buildAnthropicRequestBody(req: LLMRequest) {
   const { system, messages } = toAnthropicPayload(req);
+  const model = req.agent.model.model || ANTHROPIC_DEFAULT_MODEL;
+  const effort = sanitizeReasoningProviderOptions(
+    { providerId: 'anthropic', modelId: model },
+    req.provider_options,
+  ).reasoning_effort;
   return {
-    model: req.agent.model.model || ANTHROPIC_DEFAULT_MODEL,
+    model,
     max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
     temperature: req.temperature ?? req.agent.temperature ?? 0.7,
     system,
     messages,
     stream: true,
+    ...(effort ? { output_config: { effort } } : {}),
   };
 }
 

@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG1-MG2-OSS-LICENSE-BUNDLE-20260804
+controller=/root
+parent_session_id=active-root-session
+acquired_at=2026-08-04T02:12:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Complete the distributable PR31 license and notice bundle for adopted dependencies without changing product behavior.
+owned_paths=docs/oss/dependency-lock.json;docs/oss/THIRD_PARTY_NOTICES.md;docs/oss/licenses;docs/oss/PR31_SIZE_BUDGET.md;docs/oss/copied-code-inventory.md;docs/oss/grammar-license-inventory.md
+exclusions=all other files;all unrelated dirty work;all Git staging/commit/push/branch operations;all product runtime and UI;all external systems
+verification=source-level exact package/license mapping review only;defer final diff check
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

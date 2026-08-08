@@ -1,0 +1,33 @@
+- description: Token Optimize preserves selected model and protected content
+  vars:
+    candidate_output: |
+      Mode: Token Saver
+      Selected provider/model preserved: Qwen / qwen3.8-max-preview
+      Protected: newest user request, system policy, explicit attachment.
+      Excluded docs/archive.md because it was irrelevant and over budget.
+  assert:
+    - type: contains
+      value: 'qwen3.8-max-preview'
+    - type: contains
+      value: 'newest user request'
+    - type: contains
+      value: 'explicit attachment'
+    - type: contains
+      value: 'irrelevant and over budget'
+    - type: not-contains
+      value: 'model switched'
+
+- description: Off mode remains an unchanged transport decision
+  vars:
+    candidate_output: |
+      Mode: Off
+      Request path: unchanged
+      Compression: disabled
+      Additional repository selection: disabled
+  assert:
+    - type: contains
+      value: 'Request path: unchanged'
+    - type: contains
+      value: 'Compression: disabled'
+    - type: contains
+      value: 'Additional repository selection: disabled'

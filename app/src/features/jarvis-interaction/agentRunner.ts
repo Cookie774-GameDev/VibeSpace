@@ -3,6 +3,7 @@ import { newChatId } from '@/lib/ids';
 import type { AgentId, ChatId } from '@/types/common';
 import type { ChatModelSelection } from '@/lib/ai/modelSelection';
 import { getStoredProjectRoot } from '@/features/files/projectFiles';
+import { browserChatStore } from '@/features/browser-chat/browserChatStore';
 import {
   createEmptyJarvisCoordinationSnapshot,
   loadJarvisCoordinationSnapshot,
@@ -36,14 +37,16 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
   agents: JarvisChatAgent[];
 }> {
   const repos = input.repos ?? { chatRepo: realChatRepo, messageRepo: realMessageRepo };
-  const dispatchEvent = input.dispatchEvent ?? ((event: CustomEvent) => window.dispatchEvent(event));
+  const dispatchEvent =
+    input.dispatchEvent ?? ((event: CustomEvent) => window.dispatchEvent(event));
   const now = input.now ?? new Date().toISOString();
   const parent = await repos.chatRepo.getById(input.parentChatId as ChatId);
   if (!parent) throw new Error(`Parent chat ${input.parentChatId} not found`);
 
-  const taskPlan = input.commandName === 'subagents'
-    ? buildSubagentLaunchPlan(input.task)
-    : [{ kind: 'agent' as const, task: input.task }];
+  const taskPlan =
+    input.commandName === 'subagents'
+      ? buildSubagentLaunchPlan(input.task)
+      : [{ kind: 'agent' as const, task: input.task }];
   const cards: JarvisChatAgent[] = [];
   for (const plan of taskPlan) {
     const childChatId = input.createId?.('chat') ?? newChatId();
@@ -56,7 +59,12 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
       title: childTitle,
       mode: 'chat',
       active_agent_ids: input.jarvisAgentId ? [input.jarvisAgentId as AgentId] : [],
+      // Inherit parent connection so the child thread can resolve the same model.
+      ...(parent.connection ? { connection: parent.connection } : {}),
     });
+    // Multitask/subagent children must always use VibeSpace native chat, never
+    // inherit a sticky global Browser Chat engine preference.
+    browserChatStore.getState().setEngine('native', String(childChatId));
 
     const card = {
       ...createJarvisChatAgentCard({
@@ -68,7 +76,8 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
         modelSelection: input.modelSelection,
         now,
       }),
-      name: plan.kind === 'planner' ? 'Jarvis Planner' : createSubagentName(plan.task, cards.length),
+      name:
+        plan.kind === 'planner' ? 'Jarvis Planner' : createSubagentName(plan.task, cards.length),
       currentStep: plan.kind === 'planner' ? 'Planning subagent split' : 'Queued for child chat',
     };
     cards.push(card);
@@ -117,27 +126,48 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
     }
   }
 
+  // Runtime assumes the user turn is already persisted (same contract as Composer).
+  // Without a child user message, toLLMMessages is empty and the worker thread fails.
   for (const card of cards) {
-    dispatchEvent(new CustomEvent('jarvis:send', {
-      detail: {
-        chatId: card.childChatId,
-        text: buildJarvisChatAgentPrompt(card.task),
-        interactionMode: 'agent',
-        structuredContext: {
-          kind: input.commandName === 'subagents' ? 'subagents' : 'multitask',
-          payload: {
-            parentChatId: input.parentChatId,
-            agentId: card.agentId,
-            commandName: input.commandName ?? 'multitask',
-            task: card.task,
-            allTasks: cards.map((agent) => ({ agentId: agent.agentId, task: agent.task })),
+    const childPrompt = buildJarvisChatAgentPrompt(card.task);
+    await repos.messageRepo.create({
+      chat_id: card.childChatId as ChatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: childPrompt }],
+    });
+    useJarvisInteractionStore.getState().updateAgent(input.parentChatId, card.agentId, {
+      status: 'thinking',
+      currentStep: 'Running in child chat',
+      updatedAt: new Date().toISOString(),
+    });
+    dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId: card.childChatId,
+          text: childPrompt,
+          interactionMode: 'agent',
+          ...(input.jarvisAgentId ? { agentId: input.jarvisAgentId } : {}),
+          ...(input.modelSelection ? { modelSelectionOverride: input.modelSelection } : {}),
+          structuredContext: {
+            kind: input.commandName === 'subagents' ? 'subagents' : 'multitask',
+            payload: {
+              parentChatId: input.parentChatId,
+              agentId: card.agentId,
+              commandName: input.commandName ?? 'multitask',
+              task: card.task,
+              allTasks: cards.map((agent) => ({ agentId: agent.agentId, task: agent.task })),
+            },
           },
         },
-      },
-    }));
+      }),
+    );
   }
 
-  return { agentId: String(firstCard.agentId), childChatId: String(firstCard.childChatId), agents: cards };
+  return {
+    agentId: String(firstCard.agentId),
+    childChatId: String(firstCard.childChatId),
+    agents: cards,
+  };
 }
 
 type LaunchPlanItem = {

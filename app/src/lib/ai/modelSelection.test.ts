@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import {
   applyChatModelSelectionToAgent,
@@ -12,6 +12,7 @@ import {
   validateChatModelSelection,
   validateSendModelAccess,
 } from './modelSelection';
+import { syncDiscoveredOllamaModels } from './models';
 import type { Agent } from '@/types';
 import type { ProviderCapabilities } from './adapters/types';
 import {
@@ -185,7 +186,7 @@ describe('modelSelection', () => {
     ).toEqual({ mode: 'hive', hiveId: 'balanced' });
   });
 
-  it('only activates Hive when explicitly selected', () => {
+  it('only activates Hive when explicitly selected and the product is enabled', () => {
     expect(
       resolveActiveStackPreset(EMPTY_CHAT_MODEL_SELECTION, {
         matched: false,
@@ -194,12 +195,21 @@ describe('modelSelection', () => {
         taskType: undefined,
       }),
     ).toBe('off');
+    // Default product gate forces multi-model stacks off.
+    expect(
+      resolveActiveStackPreset(
+        { mode: 'hive', hiveId: 'balanced' },
+        { matched: false, text: 'hi', preset: undefined, taskType: undefined },
+      ),
+    ).toBe('off');
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     expect(
       resolveActiveStackPreset(
         { mode: 'hive', hiveId: 'balanced' },
         { matched: false, text: 'hi', preset: undefined, taskType: undefined },
       ),
     ).toBe('balanced');
+    vi.unstubAllEnvs();
   });
 
   it('accepts the attested custom smoke Hive only while the native binding is active', () => {
@@ -221,7 +231,8 @@ describe('modelSelection', () => {
       defaultLocalModel: '',
     };
 
-    expect(resolveActiveStackPreset(selection, command)).toBe('balanced');
+    // Product gate: custom Hive is off unless kernel smoke binding is live.
+    expect(resolveActiveStackPreset(selection, command)).toBe('off');
     expect(validateSendModelAccess('hi', selection, ctx, steps).ok).toBe(false);
 
     activateKernelSmokeBinding({
@@ -306,7 +317,8 @@ describe('modelSelection', () => {
     }
   });
 
-  it('blocks local image attachments until local multimodal payloads are implemented', () => {
+  it('allows local image attachments for vision-capable Ollama models', () => {
+    syncDiscoveredOllamaModels(['llama3.2-vision']);
     const ctx = {
       apiKeys: {},
       offlineMode: true,
@@ -317,6 +329,24 @@ describe('modelSelection', () => {
     const send = validateSendModelAccess('describe this', selection, ctx, [], {
       attachments: { hasImages: true },
     });
+    expect(send.ok).toBe(true);
+  });
+
+  it('blocks local image attachments for text-only Ollama models', () => {
+    syncDiscoveredOllamaModels(['llama3.2:1b']);
+    const ctx = {
+      apiKeys: {},
+      offlineMode: true,
+      plan: 'free' as const,
+      defaultLocalModel: 'llama3.2:1b',
+    };
+    const selection = selectionFromOption('ollama', 'llama3.2:1b');
+    const send = validateSendModelAccess('describe this', selection, ctx, [], {
+      attachments: { hasImages: true },
+    });
     expect(send.ok).toBe(false);
+    if (!send.ok) {
+      expect(send.message).toMatch(/local model cannot process images|vision-capable/i);
+    }
   });
 });

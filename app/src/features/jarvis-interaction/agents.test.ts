@@ -5,13 +5,15 @@ import { createJarvisChatAgentCard, createJarvisChatAgentName } from './agents';
 import { launchJarvisChatAgent } from './agentRunner';
 
 describe('Jarvis chat agents', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     useUIStore.setState(useUIStore.getInitialState());
     useJarvisInteractionStore.setState({
       modesByChat: {},
       planSafeApprovalsByChat: {},
       agentsByChat: {},
     });
+    const { browserChatStore } = await import('@/features/browser-chat/browserChatStore');
+    browserChatStore.setState({ engine: 'browser', chatPreferences: {} });
   });
 
   it('creates deterministic readable names from tasks', () => {
@@ -62,29 +64,62 @@ describe('Jarvis chat agents', () => {
     });
 
     expect(result.childChatId).toBe('chat_fixed');
-    expect(chatRepo.create).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'chat_fixed',
-      workspace_id: 'workspace_1',
-      project_id: 'project_1',
-      active_agent_ids: ['agent_jarvis'],
-    }));
-    expect(messageRepo.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      chat_id: 'chat_parent',
-      role: 'user',
-      parts: [expect.objectContaining({ kind: 'text', text: '/multitask Review runtime modes' })],
-    }));
-    expect(messageRepo.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      role: 'assistant',
-      parts: [expect.objectContaining({ kind: 'agent_card' })],
-    }));
-    expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'jarvis:send',
-      detail: expect.objectContaining({
-        chatId: 'chat_fixed',
-        text: expect.stringContaining('Review runtime modes'),
-        interactionMode: 'agent',
+    expect(chatRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'chat_fixed',
+        workspace_id: 'workspace_1',
+        project_id: 'project_1',
+        active_agent_ids: ['agent_jarvis'],
       }),
-    }));
+    );
+    // Child threads must pin native VibeSpace chat (never sticky Browser Chat).
+    const { browserChatStore } = await import('@/features/browser-chat/browserChatStore');
+    expect(browserChatStore.getState().chatPreferences.chat_fixed?.engine).toBe('native');
+    expect(messageRepo.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        chat_id: 'chat_parent',
+        role: 'user',
+        parts: [expect.objectContaining({ kind: 'text', text: '/multitask Review runtime modes' })],
+      }),
+    );
+    expect(messageRepo.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        role: 'assistant',
+        parts: [expect.objectContaining({ kind: 'agent_card' })],
+      }),
+    );
+    // Child thread must get a persisted user turn before jarvis:send (runtime contract).
+    expect(messageRepo.create).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        chat_id: 'chat_fixed',
+        role: 'user',
+        parts: [
+          expect.objectContaining({
+            kind: 'text',
+            text: expect.stringContaining('Review runtime modes'),
+          }),
+        ],
+      }),
+    );
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'jarvis:send',
+        detail: expect.objectContaining({
+          chatId: 'chat_fixed',
+          text: expect.stringContaining('Review runtime modes'),
+          interactionMode: 'agent',
+          agentId: 'agent_jarvis',
+          modelSelectionOverride: {
+            mode: 'single',
+            providerId: 'google',
+            modelId: 'gemini-2.5-flash',
+          },
+        }),
+      }),
+    );
   });
 
   it('launches a planner plus derived subagent tasks without navigating away from the parent chat', async () => {
@@ -119,13 +154,30 @@ describe('Jarvis chat agents', () => {
 
     expect(result.agents).toHaveLength(3);
     expect(chatRepo.create).toHaveBeenCalledTimes(3);
-    const assistantMessage = messageRepo.create.mock.calls.find(([message]) => message.role === 'assistant')?.[0];
-    const cards = assistantMessage.parts.filter((part: { kind: string }) => part.kind === 'agent_card');
+    const assistantMessage = messageRepo.create.mock.calls.find(
+      ([message]) => message.role === 'assistant',
+    )?.[0];
+    const cards = assistantMessage.parts.filter(
+      (part: { kind: string }) => part.kind === 'agent_card',
+    );
     expect(cards).toHaveLength(3);
     expect(cards[0].agent.name).toMatch(/Planner/i);
     expect(cards.slice(1).map((part: { agent: { task: string } }) => part.agent.task)).toEqual([
       'Fix slash aliases',
       'panel close behavior',
+    ]);
+    // Parent command + parent cards + one user seed per child thread.
+    expect(messageRepo.create).toHaveBeenCalledTimes(5);
+    const childUserMessages = messageRepo.create.mock.calls
+      .map(([message]) => message)
+      .filter(
+        (message: { role: string; chat_id: string }) =>
+          message.role === 'user' && message.chat_id !== 'chat_parent',
+      );
+    expect(childUserMessages.map((m: { chat_id: string }) => m.chat_id)).toEqual([
+      'chat_0',
+      'chat_1',
+      'chat_2',
     ]);
     expect(dispatchEvent).toHaveBeenCalledTimes(3);
     expect(dispatchEvent.mock.calls.map(([event]) => event.detail.chatId)).toEqual([
@@ -133,6 +185,14 @@ describe('Jarvis chat agents', () => {
       'chat_1',
       'chat_2',
     ]);
+    for (const [event] of dispatchEvent.mock.calls) {
+      expect(event.detail.modelSelectionOverride).toEqual({
+        mode: 'single',
+        providerId: 'google',
+        modelId: 'gemini-2.5-flash',
+      });
+      expect(event.detail.agentId).toBe('agent_jarvis');
+    }
     expect(useJarvisInteractionStore.getState().agentsForChat('chat_parent')).toHaveLength(3);
     expect(useUIStore.getState().activeChatId).toBe('chat_parent');
   });

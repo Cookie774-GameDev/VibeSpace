@@ -3,6 +3,8 @@ import { flushWorkspacePersistence } from '@/lib/persistence/workspaceFlush';
 import { resolveRuntimePlan } from '@/lib/runtimeProfile';
 
 export const AUTO_UPDATE_KEY = 'jarvis-auto-update';
+export const UPDATE_RELEASE_CHANNEL = 'stable';
+export const UPDATE_RELEASES_URL = 'https://github.com/Cookie774-GameDev/VibeSpace/releases';
 
 export type UpdatePhase =
   | 'idle'
@@ -25,6 +27,8 @@ export interface UpdateResult {
   installed: boolean;
   version?: string;
   notes?: string;
+  notesUrl?: string;
+  releaseChannel: typeof UPDATE_RELEASE_CHANNEL;
 }
 
 /** A pending update returned by the updater check seam. `handle` is opaque. */
@@ -117,7 +121,7 @@ export async function checkForAppUpdate(
 
   if (!update) {
     options.onProgress?.({ phase: 'none' });
-    return { available: false, installed: false };
+    return { available: false, installed: false, releaseChannel: UPDATE_RELEASE_CHANNEL };
   }
 
   const version = update.version;
@@ -125,7 +129,14 @@ export async function checkForAppUpdate(
 
   if (!options.install) {
     options.onProgress?.({ phase: 'available' });
-    return { available: true, installed: false, version, notes };
+    return {
+      available: true,
+      installed: false,
+      version,
+      notes,
+      notesUrl: `${UPDATE_RELEASES_URL}/tag/v${version.replace(/^v/u, '')}`,
+      releaseChannel: UPDATE_RELEASE_CHANNEL,
+    };
   }
 
   // Row 2: persistence flush before install.
@@ -169,5 +180,51 @@ export async function checkForAppUpdate(
     console.warn('[updates] relaunch failed after install', err);
   }
 
-  return { available: true, installed: true, version, notes };
+  return {
+    available: true,
+    installed: true,
+    version,
+    notes,
+    notesUrl: `${UPDATE_RELEASES_URL}/tag/v${version.replace(/^v/u, '')}`,
+    releaseChannel: UPDATE_RELEASE_CHANNEL,
+  };
+}
+
+function parseReleaseVersion(value: string): { core: number[]; prerelease: string[] } {
+  const normalized = value.trim().replace(/^v/u, '');
+  const [coreText = '', prereleaseText = ''] = normalized.split('-', 2);
+  const core = coreText.split('.').map((part) => {
+    if (!/^\d+$/u.test(part)) throw new Error(`Invalid release version: ${value}`);
+    return Number(part);
+  });
+  if (core.length === 0 || core.some((part) => !Number.isSafeInteger(part))) {
+    throw new Error(`Invalid release version: ${value}`);
+  }
+  return { core, prerelease: prereleaseText ? prereleaseText.split('.') : [] };
+}
+
+export function compareReleaseVersions(left: string, right: string): number {
+  const a = parseReleaseVersion(left);
+  const b = parseReleaseVersion(right);
+  const length = Math.max(a.core.length, b.core.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (a.core[index] ?? 0) - (b.core[index] ?? 0);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    return a.prerelease.length === b.prerelease.length ? 0 : a.prerelease.length === 0 ? 1 : -1;
+  }
+  const prereleaseLength = Math.max(a.prerelease.length, b.prerelease.length);
+  for (let index = 0; index < prereleaseLength; index += 1) {
+    const leftPart = a.prerelease[index];
+    const rightPart = b.prerelease[index];
+    if (leftPart === undefined || rightPart === undefined) return leftPart === undefined ? -1 : 1;
+    if (leftPart === rightPart) continue;
+    const leftNumeric = /^\d+$/u.test(leftPart);
+    const rightNumeric = /^\d+$/u.test(rightPart);
+    if (leftNumeric && rightNumeric) return Math.sign(Number(leftPart) - Number(rightPart));
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftPart.localeCompare(rightPart);
+  }
+  return 0;
 }

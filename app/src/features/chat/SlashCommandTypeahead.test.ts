@@ -25,7 +25,7 @@ describe('orderSlashCommandsForDisplay', () => {
     ]);
   });
 
-  it('includes Hive as a chat command for the composer', () => {
+  it('archives Hive in the full table but hides it from product resolution by default', () => {
     const hive = SLASH_COMMANDS.find((cmd) => cmd.cmd === 'hive');
 
     expect(hive).toMatchObject({
@@ -34,6 +34,8 @@ describe('orderSlashCommandsForDisplay', () => {
       description: 'Reference Hive Balanced in chat',
     });
     expect(SLASH_COMMANDS.some((cmd) => cmd.cmd === 'vibehive')).toBe(false);
+    // Product gate: /hive is not findable while VITE_HIVE_ENABLED is off.
+    expect(findSlashCommandDef('hive')).toBeUndefined();
   });
 
   it('does not duplicate terminal navigation and attach commands', () => {
@@ -48,6 +50,7 @@ describe('orderSlashCommandsForDisplay', () => {
   });
 
   it('normalizes legacy slash spellings', () => {
+    expect(normalizeSlashCmd('mode')).toBe('mode');
     expect(normalizeSlashCmd('terminal')).toBe('terminals');
     expect(normalizeSlashCmd('contextmap')).toBe('context');
     expect(normalizeSlashCmd('subagent')).toBe('subagents');
@@ -59,9 +62,33 @@ describe('orderSlashCommandsForDisplay', () => {
     expect(normalizeSlashCmd('cearfile')).toBe('clearfiles');
   });
 
+  it('keeps Agent, Plan, and Ask under the explicit /permissions picker', () => {
+    expect(findSlashCommandDef('permissions')).toMatchObject({
+      cmd: 'permissions',
+      hasOptions: true,
+      argPlaceholder: 'agent | plan | ask',
+    });
+  });
+
+  it('registers /output for chat media inventory', () => {
+    expect(findSlashCommandDef('output')).toMatchObject({
+      cmd: 'output',
+      category: 'chat',
+    });
+  });
+
   it('marks /file as a project-file attach picker command', () => {
     expect(findSlashCommandDef('file')?.hasOptions).toBe(true);
     expect(isChatAttachSlashCmd('file')).toBe(true);
+  });
+
+  it('offers /md as a structured Markdown document generator', () => {
+    expect(findSlashCommandDef('md')).toMatchObject({
+      cmd: 'md',
+      category: 'chat',
+      takesArg: true,
+      hasOptions: true,
+    });
   });
 
   it('marks /canvas as a structured Canvas attachment picker', () => {
@@ -109,14 +136,54 @@ describe('orderSlashCommandsForDisplay', () => {
     expect(findSlashCommandDef('redo')?.cmd).toBe('redo');
   });
 
-  it('advertises Sakura in the local /theme utility command', () => {
+  it('separates scoped /theme profiles from global /appearance', () => {
     expect(findSlashCommandDef('theme')).toMatchObject({
       cmd: 'theme',
       category: 'utility',
       takesArg: true,
-      description: 'Switch Jarvis Core, VibeSpace, Default, MonoChrome, or Sakura',
-      argPlaceholder: 'jarvis | vibespace | default | monochrome | sakura',
+      description: 'Style this agentic chat console',
+      argPlaceholder: 'paper white | sakura mist | graphite | oled void',
     });
-    expect(JSON.stringify(findSlashCommandDef('theme'))).not.toMatch(/\b(?:light|dusk|blossom)\b/i);
+    expect(findSlashCommandDef('theme')?.hasOptions).toBe(true);
+    expect(findSlashCommandDef('themes')).toMatchObject({
+      cmd: 'themes',
+      category: 'utility',
+      takesArg: true,
+      hasOptions: true,
+      description: 'Choose the global VibeSpace appearance',
+    });
+    expect(findSlashCommandDef('appearance')).toMatchObject({
+      cmd: 'appearance',
+      category: 'utility',
+      takesArg: true,
+      hasOptions: true,
+      description: 'Switch the global VibeSpace appearance',
+    });
+  });
+
+  it('offers provider-aware effort and policy mode pickers', () => {
+    expect(findSlashCommandDef('effort')).toMatchObject({
+      cmd: 'effort',
+      category: 'chat',
+      takesArg: true,
+      hasOptions: true,
+    });
+    expect(findSlashCommandDef('mode')).toMatchObject({
+      cmd: 'mode',
+      category: 'chat',
+      takesArg: true,
+      hasOptions: true,
+    });
+  });
+
+  it('exposes Token Final Boss only through the /mode picker', () => {
+    expect(findSlashCommandDef('mode')).toMatchObject({
+      cmd: 'mode',
+      hasOptions: true,
+      argPlaceholder: 'token saver | normal | token final boss',
+    });
+    expect(findSlashCommandDef('token')).toBeUndefined();
+    expect(SLASH_COMMANDS.some((cmd) => cmd.label === 'Token Boss')).toBe(false);
+    expect(SLASH_COMMANDS.some((cmd) => cmd.displayCommand === '/token boss')).toBe(false);
   });
 });

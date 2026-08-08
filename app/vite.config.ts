@@ -153,6 +153,12 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     host: host || false,
+    fs: {
+      // Dependencies are hoisted one level above `app`. Fontsource CSS resolves
+      // its WOFF files through /@fs during development, so explicitly allow
+      // that exact dependency directory instead of broad filesystem access.
+      allow: [path.resolve(__dirname), path.resolve(__dirname, '../node_modules')],
+    },
     hmr: host
       ? {
           protocol: 'ws',
@@ -171,10 +177,13 @@ export default defineConfig({
 
   build: {
     // Tauri uses Chromium on Windows and WebKit on macOS / Linux
-    target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+    target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari14',
     // don't minify for debug builds
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
-    sourcemap: true,
+    // Keep production installers lean and avoid shipping application source.
+    // Release diagnostics can opt in explicitly without changing runtime code.
+    sourcemap:
+      process.env.TAURI_ENV_DEBUG === 'true' || process.env.VIBESPACE_BUILD_SOURCEMAPS === '1',
     // Bumped from the default 500kB to 700kB. We've split everything we
     // can without making cold loads more expensive than warm ones; the
     // Terminals page (xterm + addons + our pane chrome) is the

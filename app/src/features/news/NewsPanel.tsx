@@ -6,11 +6,22 @@
  *   - Kind chips: All · Models · News · YouTube
  *   - Cards: image, title, summary, source credit, open external link
  *
- * Content is 100% preloaded static catalog — no network news API.
+ * Uses the configured free-only hourly Worker when available and preserves the
+ * credited offline catalog as a resilient fallback.
  */
 import * as React from 'react';
 import './sakura-news.css';
-import { ExternalLink, Newspaper, Play, Sparkles, X, Cpu, Radio } from 'lucide-react';
+import {
+  AlertTriangle,
+  ExternalLink,
+  Newspaper,
+  Play,
+  RefreshCw,
+  Sparkles,
+  X,
+  Cpu,
+  Radio,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { openExternal } from '@/lib/tauri';
@@ -22,6 +33,12 @@ import {
   type NewsSectionId,
 } from './newsCatalog';
 import { countNewsBySection, formatNewsDate, getNewsFeed } from './newsSections';
+import {
+  configuredNewsApiUrl,
+  fetchLiveNews,
+  type LiveNewsItem,
+  type LiveNewsResponse,
+} from './newsApi';
 
 export interface NewsPanelProps {
   open: boolean;
@@ -52,7 +69,7 @@ function NewsCard({
   item,
   runtimeEffectsEnabled,
 }: {
-  item: NewsItem;
+  item: NewsItem | LiveNewsItem;
   runtimeEffectsEnabled: boolean;
 }) {
   const [imgFailed, setImgFailed] = React.useState(false);
@@ -76,7 +93,7 @@ function NewsCard({
         aria-label={`Open: ${item.title}`}
       >
         <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted">
-          {runtimeEffectsEnabled && !imgFailed ? (
+          {runtimeEffectsEnabled && item.imageUrl && !imgFailed ? (
             <img
               src={item.imageUrl}
               alt=""
@@ -128,6 +145,21 @@ function NewsCard({
             <span aria-hidden>·</span>
             <time dateTime={item.publishedAt}>{formatNewsDate(item.publishedAt)}</time>
           </div>
+          {'verification' in item ? (
+            <div className="flex flex-wrap gap-1 pt-1">
+              <span className="rounded-full border border-accent-cyan/30 bg-accent-cyan/10 px-1.5 py-0.5 text-[10px] text-accent-cyan">
+                {item.verification}
+              </span>
+              <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {item.platform}
+              </span>
+              {item.company ? (
+                <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  {item.company}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <p className="text-[10px] leading-snug text-muted-foreground/80 [html[data-theme=monochrome]_&]:text-muted-foreground">
             Credit: {item.credit}
             {item.imageCredit ? ` · Image: ${item.imageCredit}` : null}
@@ -146,6 +178,26 @@ export function NewsPanel({
 }: NewsPanelProps) {
   const [section, setSection] = React.useState<NewsSectionId>('today');
   const [kind, setKind] = React.useState<KindFilter>('all');
+  const [live, setLive] = React.useState<LiveNewsResponse | null>(null);
+  const [liveError, setLiveError] = React.useState<string | null>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const endpoint = React.useMemo(configuredNewsApiUrl, []);
+
+  const refresh = React.useCallback(async () => {
+    if (!endpoint || !runtimeEffectsEnabled) return;
+    setRefreshing(true);
+    try {
+      const response = await fetchLiveNews(endpoint);
+      setLive(response);
+      setLiveError(null);
+    } catch (error) {
+      setLiveError(
+        error instanceof Error ? error.message : 'Live news is temporarily unavailable.',
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }, [endpoint, runtimeEffectsEnabled]);
 
   // Reset to Today whenever the panel opens.
   React.useEffect(() => {
@@ -154,6 +206,11 @@ export function NewsPanel({
       setKind('all');
     }
   }, [open]);
+
+  React.useEffect(() => {
+    if (!open || !endpoint || !runtimeEffectsEnabled) return;
+    void refresh();
+  }, [endpoint, open, refresh, runtimeEffectsEnabled]);
 
   // Escape closes the panel.
   React.useEffect(() => {
@@ -169,8 +226,34 @@ export function NewsPanel({
   }, [open, onOpenChange, runtimeEffectsEnabled]);
 
   const feedOptions = React.useMemo(() => ({ now, kind }), [now, kind]);
-  const counts = React.useMemo(() => countNewsBySection({ now }), [now]);
-  const items = React.useMemo(() => getNewsFeed(section, feedOptions), [section, feedOptions]);
+  const offlineCounts = React.useMemo(() => countNewsBySection({ now }), [now]);
+  const liveBySection = React.useMemo(() => {
+    if (!live) return null;
+    const clock = (now ?? new Date()).getTime();
+    return live.items.reduce<Record<NewsSectionId, LiveNewsItem[]>>(
+      (grouped, item) => {
+        const ageDays = Math.max(0, (clock - Date.parse(item.publishedAt)) / 86_400_000);
+        const target: NewsSectionId = ageDays < 1 ? 'today' : ageDays <= 7 ? 'last_week' : 'more';
+        grouped[target].push(item);
+        return grouped;
+      },
+      { today: [], last_week: [], more: [] },
+    );
+  }, [live, now]);
+  const counts = liveBySection
+    ? {
+        today: liveBySection.today.length,
+        last_week: liveBySection.last_week.length,
+        more: liveBySection.more.length,
+      }
+    : offlineCounts;
+  const items = React.useMemo(
+    () =>
+      liveBySection
+        ? liveBySection[section].filter((item) => kind === 'all' || item.kind === kind)
+        : getNewsFeed(section, feedOptions),
+    [feedOptions, kind, liveBySection, section],
+  );
 
   if (!open) return null;
 
@@ -210,9 +293,21 @@ export function NewsPanel({
                 News
               </h2>
               <p className="mt-0.5 text-metadata text-muted-foreground">
-                Model drops, AI headlines, and YouTube — preloaded, with credits.
+                {live
+                  ? 'Free hourly AI headlines from verified sources.'
+                  : 'Offline snapshot with original-source credits.'}
               </p>
             </div>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => void refresh()}
+              disabled={!endpoint || refreshing}
+              aria-label="Refresh AI news"
+              title={endpoint ? 'Refresh AI news' : 'Set VITE_NEWS_API_URL to enable live news'}
+            >
+              <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+            </Button>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -287,11 +382,20 @@ export function NewsPanel({
 
         {/* Feed */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          {liveError ? (
+            <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-metadata text-foreground">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+              <span>{liveError} Showing the last available feed.</span>
+            </div>
+          ) : null}
           <p className="mb-2 px-1 text-metadata text-muted-foreground">
             {NEWS_SECTION_META[section].description}
           </p>
           {items.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-paper/50 px-4 py-12 text-center" data-sakura-state="empty">
+            <div
+              className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-paper/50 px-4 py-12 text-center"
+              data-sakura-state="empty"
+            >
               <Newspaper className="h-7 w-7 text-muted-foreground/50 [html[data-theme=monochrome]_&]:text-muted-foreground" />
               <p className="text-secondary text-muted-foreground">
                 Nothing in {NEWS_SECTION_META[section].label.toLowerCase()} yet.
@@ -317,8 +421,9 @@ export function NewsPanel({
 
         <footer className="shrink-0 border-t border-border bg-paper-soft px-4 py-2">
           <p className="text-[10px] leading-snug text-muted-foreground">
-            Curated offline snapshot. Stories open in your browser. Images and copy credited to the
-            original publishers (OpenAI, Meta, CNBC, Euronews, YouTube creators, etc.).
+            {live
+              ? `Free-only feed · Last ingestion ${formatNewsDate(live.lastCompletedAt ?? live.generatedAt ?? new Date().toISOString())}.`
+              : 'Curated offline snapshot. Stories open in your browser and retain original-publisher credits.'}
           </p>
         </footer>
       </aside>

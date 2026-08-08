@@ -8,13 +8,15 @@ describe('learning.md persistence', () => {
     const io: LearningFileIo = {
       resolveRoot: async () => 'C:\\app-data',
       createDirectory: async () => undefined,
-      readText: async (path) => path.endsWith('learning.md') ? '# Jarvis Learning\n\nold' : null,
-      writeText: async (path, value) => { writes.push([path, value]); },
+      readText: async (path) => (path.endsWith('learning.md') ? '# Jarvis Learning\n\nold' : null),
+      writeText: async (path, value) => {
+        writes.push([path, value]);
+      },
     };
 
     const saved = await saveLearningFile('account-a', '# Jarvis Learning\n\nnew', io);
 
-    expect(saved.path).toContain('Jarvis Memory');
+    expect(saved.path).toMatch(/^C:\\app-data\\Jarvis Memory\\account-[a-f0-9]{64}\\learning\.md$/);
     expect(saved.path).not.toContain('account-a');
     expect(saved.path).toMatch(/account-[a-f0-9]{64}[\\/]learning\.md$/);
     expect(writes.map(([path]) => path.split(/[\\/]/).pop())).toEqual([
@@ -43,15 +45,17 @@ describe('learning.md persistence', () => {
     const io: LearningFileIo = {
       resolveRoot: async () => 'C:\\app-data',
       createDirectory: async () => undefined,
-      readText: async (path) => path.endsWith('.bak')
-        ? '# Jarvis Learning\n\n- valid backup'
-        : 'not a learning file',
+      readText: async (path) =>
+        path.endsWith('.bak') ? '# Jarvis Learning\n\n- valid backup' : 'not a learning file',
       writeText,
     };
 
     const loaded = await loadLearningFile('account-a', io);
 
-    expect(loaded).toMatchObject({ recovered: true, markdown: '# Jarvis Learning\n\n- valid backup' });
+    expect(loaded).toMatchObject({
+      recovered: true,
+      markdown: '# Jarvis Learning\n\n- valid backup',
+    });
     expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/learning\.md$/), loaded.markdown);
   });
 
@@ -60,7 +64,8 @@ describe('learning.md persistence', () => {
     const io: LearningFileIo = {
       resolveRoot: async () => 'C:\\app-data',
       createDirectory: async () => undefined,
-      readText: async (path) => path.endsWith('.tmp') ? '# Jarvis Learning\n\n- recovered' : 'corrupt',
+      readText: async (path) =>
+        path.endsWith('.tmp') ? '# Jarvis Learning\n\n- recovered' : 'corrupt',
       writeText,
     };
     const loaded = await loadLearningFile('account-a', io);

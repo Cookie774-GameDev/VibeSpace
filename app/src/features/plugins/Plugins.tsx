@@ -2,9 +2,14 @@ import * as React from 'react';
 import './sakura-plugins.css';
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   KeyRound,
   Loader2,
+  Pin,
+  PinOff,
+  Plus,
   Search,
   Settings2,
   ShieldCheck,
@@ -31,10 +36,16 @@ import { useAuthStore } from '@/stores/auth';
 import { PLUGIN_CATALOG } from './catalog';
 import { usePluginManagementCapability } from './managementContext';
 import { pluginSearchBlob } from './providerRegistry';
-import { selectPluginConnectionsForAccount, usePluginStore } from './store';
+import {
+  selectPinnedPluginIdsForAccount,
+  selectPluginConnectionsForAccount,
+  usePluginStore,
+} from './store';
 import type { PluginConnection, PluginManifest } from './types';
 import { isConnectableStatus } from './types';
 import { PluginLogo } from './PluginLogo';
+import { McpConnections } from '@/features/settings/sections/McpConnections';
+import { PLUGIN_COMPATIBILITY_BY_ID } from './compatibilityMatrix';
 
 type Filter = 'all' | 'available' | 'connected' | 'planned';
 
@@ -43,6 +54,10 @@ const STATUS_LABELS = {
   not_connected: 'Not connected',
   needs_setup: 'Needs setup',
   error: 'Error',
+  connecting: 'Connecting',
+  awaiting_approval: 'Awaiting approval',
+  reauthorize: 'Reauthorize',
+  expired: 'Expired',
 } as const;
 
 function defaultConnectionState(plugin: PluginManifest): PluginConnection['state'] {
@@ -71,9 +86,16 @@ export function Plugins() {
     selectPluginConnectionsForAccount(state, accountId),
   );
   const setEnabled = usePluginStore((state) => state.setEnabled);
+  const pinnedPluginIds = usePluginStore((state) =>
+    selectPinnedPluginIdsForAccount(state, accountId),
+  );
+  const pinPlugin = usePluginStore((state) => state.pinPlugin);
+  const unpinPlugin = usePluginStore((state) => state.unpinPlugin);
+  const movePinnedPlugin = usePluginStore((state) => state.movePinnedPlugin);
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<Filter>('all');
   const [selected, setSelected] = React.useState<PluginManifest | null>(null);
+  const [mcpOpen, setMcpOpen] = React.useState(false);
 
   const visible = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -109,8 +131,22 @@ export function Plugins() {
             keeps them in memory for the session only).
           </p>
         </div>
-        <Badge variant={connectedCount ? 'success' : 'outline'}>{connectedCount} connected</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={connectedCount ? 'success' : 'outline'}>{connectedCount} connected</Badge>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label="Add MCP connection"
+            aria-expanded={mcpOpen}
+            onClick={() => setMcpOpen((open) => !open)}
+          >
+            <Plus />
+          </Button>
+        </div>
       </header>
+
+      {mcpOpen && <McpConnections />}
 
       <div className="rounded-lg border border-accent-cyan/20 bg-accent-cyan/5 p-3 flex gap-3">
         <ShieldCheck className="h-5 w-5 shrink-0 text-accent-cyan" />
@@ -149,8 +185,15 @@ export function Plugins() {
           const connection = connections[plugin.id];
           const connectionState = connection?.state ?? defaultConnectionState(plugin);
           const badgeLabel = statusBadgeLabel(plugin, connectionState);
+          const pinIndex = pinnedPluginIds.indexOf(plugin.id);
+          const isPinned = pinIndex >= 0;
           return (
-            <Card key={plugin.id} data-testid={`plugin-card-${plugin.id}`} data-sakura-surface="plugin-card" data-sakura-state={connectionState}>
+            <Card
+              key={plugin.id}
+              data-testid={`plugin-card-${plugin.id}`}
+              data-sakura-surface="plugin-card"
+              data-sakura-state={connectionState}
+            >
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -185,6 +228,32 @@ export function Plugins() {
                   <p className="text-metadata text-foreground">
                     Connected as {connection.accountLabel}
                   </p>
+                )}
+                {connection?.state === 'connected' && (
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-metadata text-muted-foreground">
+                    <dt>Scopes</dt>
+                    <dd className="truncate text-foreground/90">
+                      {plugin.requiredScopes?.length
+                        ? plugin.requiredScopes.join(' · ')
+                        : 'No provider scopes declared'}
+                    </dd>
+                    <dt>Connected / updated</dt>
+                    <dd className="text-foreground/90">
+                      {new Intl.DateTimeFormat(undefined, {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      }).format(connection.updatedAt)}
+                    </dd>
+                    <dt>Last successful check</dt>
+                    <dd className="text-foreground/90">
+                      {connection.lastTestedAt
+                        ? new Intl.DateTimeFormat(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          }).format(connection.lastTestedAt)
+                        : 'Not yet verified'}
+                    </dd>
+                  </dl>
                 )}
                 {connection?.error && (
                   <p role="alert" className="text-metadata text-destructive">
@@ -226,6 +295,52 @@ export function Plugins() {
                     )}
                   </Button>
                 </div>
+                {connection?.state === 'connected' && (
+                  <div className="flex items-center justify-end gap-1">
+                    {isPinned && (
+                      <>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Move ${plugin.name} pin up`}
+                          disabled={pinIndex === 0}
+                          onClick={() => movePinnedPlugin(accountId, plugin.id, -1)}
+                        >
+                          <ChevronUp />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Move ${plugin.name} pin down`}
+                          disabled={pinIndex === pinnedPluginIds.length - 1}
+                          onClick={() => movePinnedPlugin(accountId, plugin.id, 1)}
+                        >
+                          <ChevronDown />
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        if (isPinned) {
+                          unpinPlugin(accountId, plugin.id);
+                        } else if (!pinPlugin(accountId, plugin.id)) {
+                          toast.warning(
+                            'Pin limit reached',
+                            'Workbench supports up to 10 plugin pins.',
+                          );
+                        }
+                      }}
+                    >
+                      {isPinned ? <PinOff /> : <Pin />}
+                      {isPinned ? 'Unpin from Workbench' : 'Pin to Workbench'}
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
@@ -233,7 +348,10 @@ export function Plugins() {
       </div>
 
       {visible.length === 0 && (
-        <div className="rounded-lg border border-dashed border-border p-10 text-center text-secondary text-muted-foreground" data-sakura-state="empty">
+        <div
+          className="rounded-lg border border-dashed border-border p-10 text-center text-secondary text-muted-foreground"
+          data-sakura-state="empty"
+        >
           No plugins match this search.
         </div>
       )}
@@ -272,6 +390,7 @@ function PluginSetupDialog({
   if (!plugin) return null;
 
   const activePlugin = plugin;
+  const compatibility = PLUGIN_COMPATIBILITY_BY_ID[activePlugin.id];
   const configuredFields = new Set(connection?.configuredFields ?? []);
   const hasAutomatedTest = Boolean(activePlugin.httpTest) || activePlugin.authType === 'none';
   const providerConnectLabel =
@@ -386,6 +505,10 @@ function PluginSetupDialog({
             <p className="mt-1 text-metadata text-muted-foreground">
               Provider: {plugin.provider} · Auth: {plugin.authType.replace(/_/g, ' ')}
             </p>
+            <p className="mt-1 text-metadata text-muted-foreground">
+              Connection method: {compatibility.connectionClass.replace(/_/g, ' ')} ·{' '}
+              {compatibility.redirectMethod.replace(/_/g, ' ')}
+            </p>
           </div>
 
           {(plugin.requiredScopes?.length ?? 0) > 0 && (
@@ -400,7 +523,10 @@ function PluginSetupDialog({
                     key={scope}
                     className="break-all rounded border border-border/70 bg-background/60 px-2 py-1 font-mono text-metadata text-foreground"
                   >
-                    {scope}
+                    <span>{scope}</span>
+                    {compatibility.highRiskScopes.includes(scope) ? (
+                      <span className="ml-1 text-warning">· elevated permission</span>
+                    ) : null}
                   </li>
                 ))}
               </ul>

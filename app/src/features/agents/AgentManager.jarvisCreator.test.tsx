@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, AgentId } from '@/types';
 import { useAgentStore } from '@/stores/agents';
@@ -114,7 +114,9 @@ describe('AgentManager Jarvis creator integration', () => {
       temperature: 1.15,
     };
 
-    window.dispatchEvent(new CustomEvent(JARVIS_CREATOR_APPLY_AGENT_EVENT, { detail: draft }));
+    act(() => {
+      window.dispatchEvent(new CustomEvent(JARVIS_CREATOR_APPLY_AGENT_EVENT, { detail: draft }));
+    });
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveProperty('value', 'Launch Planner'));
     expect(screen.getByLabelText('Description')).toHaveProperty('value', 'Plans launches in tight phases.');
@@ -134,7 +136,9 @@ describe('AgentManager Jarvis creator integration', () => {
 
     const modelField = screen.getByLabelText('Model');
     expect(modelField.tagName).toBe('SELECT');
-    expect(screen.getByRole('option', { name: 'Gemini 2.5 Flash' })).toBeTruthy();
+    expect(
+      screen.getByRole('option', { name: 'Gemini 2.5 Flash (gemini-2.5-flash)' }),
+    ).toBeTruthy();
     expect(screen.queryByRole('checkbox', { name: /Advanced: custom model ID/i })).toBeNull();
     expect(screen.queryByDisplayValue('legacy-manual-model')).toBeNull();
   });

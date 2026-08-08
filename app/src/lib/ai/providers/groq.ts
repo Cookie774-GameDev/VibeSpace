@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { useAuthStore } from '@/stores/auth';
 import { parseSSE } from './sse';
+import { sanitizeReasoningProviderOptions } from '../reasoningControls';
 
 const API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -37,6 +38,33 @@ const API_URL = 'https://api.groq.com/openai/v1/chat/completions';
  * pin a different value via `agent.model.model`.
  */
 export const GROQ_DEFAULT_MODEL = 'llama-3.3-70b-versatile';
+
+export function buildGroqRequestBody(req: LLMRequest) {
+  const model = req.agent.model.model || GROQ_DEFAULT_MODEL;
+  const systemPrompt = systemPromptForRequest(req);
+  const messages = [
+    { role: 'system' as const, content: systemPrompt },
+    ...req.messages
+      .filter((message) => message.role !== 'system')
+      .map((message) => ({
+        role: message.role,
+        content: llmContentToText(message.content),
+      })),
+  ];
+  const reasoning = sanitizeReasoningProviderOptions(
+    { providerId: 'groq', modelId: model },
+    req.provider_options,
+  );
+  return {
+    model,
+    messages,
+    stream: true,
+    stream_options: { include_usage: true },
+    temperature: req.temperature ?? req.agent.temperature ?? 0.7,
+    max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
+    ...reasoning,
+  };
+}
 
 export const groqProvider: LLMProvider = {
   id: 'groq',
@@ -52,30 +80,7 @@ export const groqProvider: LLMProvider = {
     if (!apiKey) throw new Error('Groq API key not set');
 
     const model = req.agent.model.model || GROQ_DEFAULT_MODEL;
-    const systemPrompt = systemPromptForRequest(req);
-
-    // Same shape as OpenAI: system prompt as a leading system message,
-    // user/assistant messages follow. Strip any pre-existing system
-    // entries from the user list so we don't end up with duplicates.
-    const messages = [
-      { role: 'system' as const, content: systemPrompt },
-      ...req.messages
-        .filter((m) => m.role !== 'system')
-        .map((m) => ({
-          role: m.role,
-          content: llmContentToText(m.content),
-        })),
-    ];
-
-    const body = {
-      model,
-      messages,
-      stream: true,
-      // Groq honours stream_options.include_usage just like OpenAI.
-      stream_options: { include_usage: true },
-      temperature: req.temperature ?? req.agent.temperature ?? 0.7,
-      max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
-    };
+    const body = buildGroqRequestBody(req);
 
     const res = await fetch(API_URL, {
       method: 'POST',
@@ -149,7 +154,7 @@ export const groqProvider: LLMProvider = {
     }
 
     if (inputTokens === 0) {
-      const inputText = messages.map((m) => m.content).join('\n');
+      const inputText = body.messages.map((message) => message.content).join('\n');
       inputTokens = estimateInputTokens(inputText);
     }
     if (outputTokens === 0) outputTokens = estimateInputTokens(acc);

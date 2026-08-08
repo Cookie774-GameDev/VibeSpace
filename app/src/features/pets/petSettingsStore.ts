@@ -15,7 +15,7 @@ export type PetPanelMode = 'follow-pet' | 'always-on-top' | 'normal';
 export type PetAnimationLevel = 'off' | 'reduced' | 'calm' | 'normal' | 'playful';
 
 function resolvePetPanelMode(value: unknown): PetPanelMode {
-  return value === 'follow-pet' || value === 'always-on-top' ? value : 'normal';
+  return value === 'follow-pet' || value === 'normal' ? value : 'always-on-top';
 }
 
 function resolvePetAnimationLevel(value: unknown): PetAnimationLevel {
@@ -67,7 +67,7 @@ export const usePetSettingsStore = create<PetSettingsState>()(
       showDiagnostics: false,
       overlayVisible: true,
       characterId: NORMAL_AXO_RUNTIME_ID,
-      panelMode: 'normal',
+      panelMode: 'always-on-top',
       positionLocked: false,
       edgeSnapping: true,
       animationLevel: 'calm',

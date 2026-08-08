@@ -1,7 +1,11 @@
 import * as React from 'react';
 import { Monitor, RotateCw, Smartphone, Tablet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { getDevicePreset, orientSize } from '@/features/preview/previewDevices';
+import {
+  defaultOrientationForPreset,
+  getDevicePreset,
+  orientSize,
+} from '@/features/preview/previewDevices';
 import type { WorkbenchPanel } from './types';
 
 interface DevicePreviewPanelProps {
@@ -30,13 +34,14 @@ const PICKER_IDS = [
  */
 export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps) {
   const deviceId = panel.settings.previewDeviceId || 'iphone-15';
-  const orientation = panel.settings.previewOrientation || 'portrait';
+  const preset = getDevicePreset(deviceId);
+  const orientation =
+    panel.settings.previewOrientation || defaultOrientationForPreset(preset);
   const showFrame = panel.settings.previewShowFrame !== false;
   const zoom = Math.min(1, Math.max(0.25, Number(panel.settings.previewZoom || 0.5)));
   const doc = panel.settings.previewDocument || '<!doctype html><html><body><p>No content</p></body></html>';
   const label = panel.settings.previewLabel || 'Preview';
 
-  const preset = getDevicePreset(deviceId);
   const logical = orientSize(preset, orientation, 390, 844, 800, 600);
 
   const patch = (next: Record<string, unknown>) => {
@@ -74,7 +79,13 @@ export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps)
           <select
             aria-label="Device"
             value={deviceId}
-            onChange={(e) => patch({ previewDeviceId: e.target.value })}
+            onChange={(e) => {
+              const next = getDevicePreset(e.target.value);
+              patch({
+                previewDeviceId: e.target.value,
+                previewOrientation: defaultOrientationForPreset(next),
+              });
+            }}
           >
             {PICKER_IDS.map((id) => {
               const d = getDevicePreset(id);

@@ -139,7 +139,7 @@ export function buildAddendumText(): string {
     '',
     'Prefer these when the user wants app changes without manual clicking:',
     '- `settings.voice` — open Settings → Voice tab (UI only).',
-    '- `voice.setEngine` — params `engine`: system | local | kokoro | deepgram; optional `openSettings`: true.',
+    '- `voice.setEngine` — params `engine`: jarvis | local | system | deepgram; optional `openSettings`: true.',
     '- `voice.setPreset` — params `preset`: jarvis-prime | aurora | atlas | nova | sentinel.',
     '- `voice.configure` — set engine and/or preset in one step; opens Voice tab by default.',
     '- Example Deepgram switch: `voice.configure` with `{"engine":"deepgram","openSettings":true}`.',

@@ -32,6 +32,7 @@ import { Separator } from '@/components/ui/separator';
 import { toast } from '@/components/ui/toast';
 import { cn, formatCost, formatRelative, formatTokenCount } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
 import { fetchBenchmarks, isSupportedProvider, type BenchmarkRow } from './benchmarkData';
 import { BarChart } from './BarChart';
 import './sakura-benchmarks.css';
@@ -40,6 +41,8 @@ type SortKey = 'arena_score' | 'cost' | 'context';
 
 const PROVIDER_FILTER_ALL = '__all__';
 const TOP_N_FOR_CHART = 25;
+const WARM_BENCHMARK_SCENE_ASSET =
+  '/assets/themes/warm/benchmarks/continuation-v2/benchmark-scroll-composite-v2.webp';
 /** Show at least this many rows before collapsing the rest behind a button. */
 const MIN_VISIBLE_ROWS = 50;
 const SNAPSHOT_SOURCE_URL = 'https://artificialanalysis.ai/leaderboards/models';
@@ -93,12 +96,16 @@ function licenseSeverity(row: BenchmarkRow): 'low' | 'med' | 'high' | 'info' {
 }
 
 export function BenchmarksPage() {
+  const warmActive = useUIStore((state) => state.theme === 'warm');
   const [rows, setRows] = React.useState<BenchmarkRow[]>([]);
   const [fromSnapshot, setFromSnapshot] = React.useState(false);
   const [fetchedAt, setFetchedAt] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [errorReason, setErrorReason] = React.useState<string | null>(null);
+  const [dataset, setDataset] = React.useState<
+    Awaited<ReturnType<typeof fetchBenchmarks>>['dataset'] | null
+  >(null);
 
   const [providerFilter, setProviderFilter] = React.useState<string>(PROVIDER_FILTER_ALL);
   const [openOnly, setOpenOnly] = React.useState(false);
@@ -116,6 +123,7 @@ export function BenchmarksPage() {
     setFromSnapshot(result.fromSnapshot);
     setErrorReason(result.fromSnapshot ? (result.reason ?? null) : null);
     setFetchedAt(result.rows.length > 0 ? result.rows[0].fetched_at : Date.now());
+    setDataset(result.dataset ?? null);
   }, []);
 
   // Initial load.
@@ -162,40 +170,33 @@ export function BenchmarksPage() {
     };
   }, [applyResult, refreshing, loading]);
 
-  // Background polling. Arena ELO publishes weekly-ish, so 24h is the
-  // right cadence; faster just shows the same snapshot fallback toast on
-  // a loop. Forced fetch (skips cache) so we actually re-hit the upstream.
-  React.useEffect(() => {
-    const POLL_MS = 24 * 60 * 60 * 1000;
-    let cancelled = false;
-    const id = setInterval(() => {
-      if (cancelled || refreshing || loading) return;
-      void fetchBenchmarks({ force: true }).then((result) => {
-        if (!cancelled) applyResult(result);
-      });
-    }, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [applyResult, refreshing, loading]);
-
   const handleRefresh = React.useCallback(async () => {
     setRefreshing(true);
-    const result = await fetchBenchmarks({ force: true });
-    applyResult(result);
-    setRefreshing(false);
-    if (result.fromSnapshot) {
-      toast.warning(
-        'Using snapshot data',
-        result.reason
-          ? `Live fetch failed: ${result.reason}`
-          : 'Live fetch failed; showing frozen leaderboard.',
+    try {
+      const result = await fetchBenchmarks({ force: true });
+      applyResult(result);
+      if (result.fromSnapshot) {
+        toast.warning(
+          'Using snapshot data',
+          result.reason
+            ? `Live fetch failed: ${result.reason}`
+            : 'Live fetch failed; showing frozen leaderboard.',
+        );
+      } else {
+        toast.success('Benchmarks refreshed', `${result.rows.length} models loaded`);
+      }
+    } catch (error) {
+      toast.error(
+        'Benchmark refresh failed',
+        error instanceof Error ? error.message : 'The previous dataset remains available.',
       );
-    } else {
-      toast.success('Benchmarks refreshed', `${result.rows.length} models loaded`);
+    } finally {
+      setRefreshing(false);
     }
   }, [applyResult]);
+
+  const stale =
+    fetchedAt != null && Date.now() - fetchedAt > (fromSnapshot ? 30 : 7) * 24 * 60 * 60 * 1000;
 
   // Distinct providers, sorted alphabetically.
   const providers = React.useMemo(() => {
@@ -241,6 +242,15 @@ export function BenchmarksPage() {
       .sort((a, b) => b.arena_score - a.arena_score)
       .slice(0, TOP_N_FOR_CHART);
   }, [filtered]);
+  const chartRows = React.useMemo(
+    () =>
+      warmActive
+        ? fromSnapshot && providerFilter === PROVIDER_FILTER_ALL && !openOnly
+          ? filtered.slice(0, TOP_N_FOR_CHART)
+          : topForChart
+        : topForChart,
+    [filtered, fromSnapshot, openOnly, providerFilter, topForChart, warmActive],
+  );
 
   const visibleRows = React.useMemo(
     () => (showAll ? sorted : sorted.slice(0, MIN_VISIBLE_ROWS)),
@@ -272,11 +282,32 @@ export function BenchmarksPage() {
     <div
       data-monochrome-route="benchmarks"
       data-sakura-route="benchmarks"
+      data-warm-page="benchmarks"
       className="bg-paper-soft min-h-full w-full [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:font-sans [html[data-theme=monochrome]_&_.cozy-card]:rounded-sm [html[data-theme=monochrome]_&_.cozy-card]:border [html[data-theme=monochrome]_&_.cozy-card]:border-border-mid [html[data-theme=monochrome]_&_.cozy-card]:bg-panel [html[data-theme=monochrome]_&_.cozy-card]:shadow-none"
     >
-      <div className="max-w-7xl mx-auto px-6 py-8 flex flex-col gap-6">
+      <div
+        aria-hidden="true"
+        className="hidden [html[data-theme=warm]_&]:block"
+        data-warm-decoration="benchmarks-scene"
+      >
+        <img
+          alt=""
+          decoding="async"
+          draggable={false}
+          loading="eager"
+          role="presentation"
+          src={WARM_BENCHMARK_SCENE_ASSET}
+        />
+      </div>
+      <div
+        data-warm-surface="benchmarks-content"
+        className="max-w-7xl mx-auto px-6 py-8 flex flex-col gap-6"
+      >
         {/* Header */}
-        <header className="flex items-start justify-between gap-4 flex-wrap">
+        <header
+          data-warm-surface="benchmarks-header"
+          className="flex items-start justify-between gap-4 flex-wrap"
+        >
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-metadata text-muted-foreground uppercase tracking-wider">
               <span
@@ -305,6 +336,22 @@ export function BenchmarksPage() {
             <p className="text-secondary text-muted-foreground max-w-xl">
               Free public leaderboards. BYOK to run any of them.
             </p>
+            {dataset && (
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-metadata text-muted-foreground">
+                <a
+                  href={dataset.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-foreground underline-offset-2 hover:underline"
+                >
+                  {dataset.sourceName}
+                </a>
+                <span>Metric: {dataset.metricLabel}</span>
+                <span>Benchmark: {formatRelative(dataset.benchmarkDate)}</span>
+                <span>Ingested: {formatRelative(dataset.ingestedAt)}</span>
+                <span>Confidence: {dataset.confidence}</span>
+              </div>
+            )}
           </div>
           <Button
             variant="outline"
@@ -321,9 +368,23 @@ export function BenchmarksPage() {
           </Button>
         </header>
 
+        {stale && !loading && (
+          <div
+            data-warm-surface="benchmarks-warning"
+            className="cozy-card !px-4 !py-3 flex items-center gap-2 border-warning/40 text-secondary"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+            Benchmark data is stale. The last known dataset remains visible; use Refresh to retry
+            verified structured sources.
+          </div>
+        )}
+
         {/* Snapshot warning panel — full width, only when we're on fallback */}
         {fromSnapshot && !loading && (
-          <div className="cozy-card !py-3 !px-4 flex items-start gap-3 border-warning/40">
+          <div
+            data-warm-surface="benchmarks-warning"
+            className="cozy-card !py-3 !px-4 flex items-start gap-3 border-warning/40"
+          >
             <AlertTriangle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
             <div className="text-secondary text-foreground">
               {errorReason ? (
@@ -352,6 +413,7 @@ export function BenchmarksPage() {
         <section
           data-monochrome-surface="benchmarks-filters"
           data-sakura-surface="benchmarks-filters"
+          data-warm-surface="benchmarks-filters"
           className="flex flex-wrap items-end gap-4 [html[data-theme=monochrome]_&]:border-y [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:py-3"
         >
           <div className="flex flex-col gap-1.5">
@@ -419,6 +481,7 @@ export function BenchmarksPage() {
         <section
           data-monochrome-surface="benchmarks-chart"
           data-sakura-surface="benchmarks-chart"
+          data-warm-surface="benchmarks-chart"
           className="cozy-card !p-5"
         >
           <div className="flex items-baseline justify-between mb-4">
@@ -441,7 +504,7 @@ export function BenchmarksPage() {
               Loading leaderboard…
             </div>
           ) : (
-            <BarChart rows={topForChart} />
+            <BarChart rows={chartRows} height={warmActive ? 420 : undefined} />
           )}
         </section>
 
@@ -449,9 +512,15 @@ export function BenchmarksPage() {
         <section
           data-monochrome-surface="benchmarks-table"
           data-sakura-surface="benchmarks-table"
+          data-warm-table-mode={warmActive ? 'compact-scroll' : undefined}
           className="cozy-card !p-0 overflow-hidden"
         >
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-auto"
+            data-warm-region={warmActive ? 'benchmarks-table-scroll' : undefined}
+            tabIndex={warmActive ? 0 : undefined}
+            aria-label={warmActive ? `Leaderboard table, ${visibleRows.length} models` : undefined}
+          >
             <table className="w-full text-secondary [html[data-theme=monochrome]_&]:font-mono">
               <thead>
                 <tr className="border-b border-border bg-paper-soft text-metadata text-muted-foreground uppercase tracking-wider [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background">
@@ -482,9 +551,9 @@ export function BenchmarksPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((row) => (
+                {visibleRows.map((row, index) => (
                   <tr
-                    key={row.model}
+                    key={`${row.model}:${row.provider}:${index}`}
                     onClick={() => setSelectedModel(row.model)}
                     title={rowTooltip(row)}
                     className="border-b border-border/60 last:border-b-0 hover:bg-paper-soft cursor-pointer transition-colors [html[data-theme=monochrome]_&]:transition-none [html[data-theme=monochrome]_&]:hover:bg-muted"

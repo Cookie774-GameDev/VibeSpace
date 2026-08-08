@@ -1,21 +1,17 @@
 ﻿import * as React from 'react';
-import {
-  Bot,
-  ChevronDown,
-  ExternalLink,
-  GitFork,
-  X,
-} from 'lucide-react';
+import { Bot, ChevronDown, ExternalLink, GitFork, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { useUIStore } from '@/stores/ui';
 import type { Part } from '@/types/chat';
 import type { ChatId } from '@/types/common';
 import { useJarvisInteractionStore } from './sessionStore';
 import type { JarvisAgentStatus, JarvisChatAgent } from './types';
+import { openNativeChildChat } from './openNativeChildChat';
 
 type AgentPart = Extract<Part, { kind: 'agent_card' }>;
-const EMPTY_AGENTS: NonNullable<ReturnType<typeof useJarvisInteractionStore.getState>['agentsByChat'][string]> = [];
+const EMPTY_AGENTS: NonNullable<
+  ReturnType<typeof useJarvisInteractionStore.getState>['agentsByChat'][string]
+> = [];
 
 export interface AgentActivityCardProps {
   part: AgentPart;
@@ -46,9 +42,15 @@ const INACTIVE_STATUSES: JarvisAgentStatus[] = ['blocked', 'done', 'failed', 'ca
 const HEADER_STATUS = 'Live agent work for this chat';
 
 export function AgentActivityCard({ part }: AgentActivityCardProps) {
-  const agent = part.agent;
+  const persistedAgent = part.agent;
+  const liveAgent = useJarvisInteractionStore((state) =>
+    (state.agentsByChat[String(persistedAgent.parentChatId)] ?? []).find(
+      (candidate) => String(candidate.agentId) === String(persistedAgent.agentId),
+    ),
+  );
+  const agent = liveAgent ?? persistedAgent;
   const openChildChat = () => {
-    useUIStore.setState({ activeChatId: String(agent.childChatId), route: 'chat' });
+    openNativeChildChat(agent.childChatId);
   };
   return (
     <article
@@ -65,7 +67,9 @@ export function AgentActivityCard({ part }: AgentActivityCardProps) {
               {agent.name.toLowerCase().includes('planner') ? 'Planner' : 'Subagent'}
             </span>
             <span className="truncate text-ui-strong text-orange-100">{agent.name}</span>
-            <span className="shrink-0 text-metadata text-orange-100/45">{STATUS_LABELS[agent.status]}</span>
+            <span className="shrink-0 text-metadata text-orange-100/45">
+              {STATUS_LABELS[agent.status]}
+            </span>
           </div>
           <p className="mt-1 truncate text-secondary text-orange-50/85" title={agent.task}>
             {cleanTask(agent.task, agent.name)}
@@ -75,6 +79,12 @@ export function AgentActivityCard({ part }: AgentActivityCardProps) {
             <span aria-hidden>|</span>
             <span className="truncate">{agent.modelLabel}</span>
           </div>
+          <FileEvidenceDisclosure
+            filesRead={agent.filesRead ?? []}
+            filesEditing={agent.filesEditing ?? agent.lockedFiles}
+            diff={agent.diffSummary}
+            small
+          />
         </div>
         <Button
           type="button"
@@ -118,7 +128,9 @@ export function ChatAgentActivityPanel({
   className,
 }: ChatAgentActivityPanelProps) {
   const [expanded, setExpanded] = React.useState(true);
-  const [dismissedAt, setDismissedAt] = React.useState<string | null>(() => readDismissedAt(chatId));
+  const [dismissedAt, setDismissedAt] = React.useState<string | null>(() =>
+    readDismissedAt(chatId),
+  );
   React.useEffect(() => {
     setDismissedAt(readDismissedAt(chatId));
   }, [chatId]);
@@ -134,8 +146,8 @@ export function ChatAgentActivityPanel({
 
   // A dismissal hides the panel until newer agent work starts, and survives
   // route switches within the session instead of resetting on every remount.
-  const dismissed = dismissedAt !== null
-    && !panelAgents.some((agent) => agent.createdAt > dismissedAt);
+  const dismissed =
+    dismissedAt !== null && !panelAgents.some((agent) => agent.createdAt > dismissedAt);
 
   if (dismissed) return null;
   if (panelAgents.length === 0) return null;
@@ -215,7 +227,11 @@ export function ChatAgentActivityPanel({
             )}
             <div className="divide-y divide-orange-500/10">
               {subagentRows.map((agent, index) => (
-                <AgentActivityRow key={String(agent.agentId)} agent={agent} index={agentRows.length + index + 1} />
+                <AgentActivityRow
+                  key={String(agent.agentId)}
+                  agent={agent}
+                  index={agentRows.length + index + 1}
+                />
               ))}
             </div>
           </div>
@@ -237,10 +253,9 @@ function AgentActivityRow({ agent, index }: { agent: JarvisChatAgent; index: num
   const filesRead = agent.filesRead ?? [];
   const filesEditing = agent.filesEditing ?? agent.lockedFiles;
   const openChildChat = () => {
-    useUIStore.setState({ activeChatId: String(agent.childChatId), route: 'chat' });
+    openNativeChildChat(agent.childChatId);
   };
   const diff = agent.diffSummary;
-  const hasDiff = Boolean(diff && (diff.addedLines !== 0 || diff.removedLines !== 0));
 
   return (
     <article className="bg-gradient-to-r from-orange-950/25 via-black/20 to-transparent px-3 py-2">
@@ -253,10 +268,15 @@ function AgentActivityRow({ agent, index }: { agent: JarvisChatAgent; index: num
             <span className="shrink-0 rounded-full border border-orange-400/20 bg-black/20 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-orange-300/85">
               {labelForAgent(agent)}
             </span>
-            <span className="truncate text-ui-strong text-orange-50" title={cleanTask(agent.task, agent.name)}>
+            <span
+              className="truncate text-ui-strong text-orange-50"
+              title={cleanTask(agent.task, agent.name)}
+            >
               {agent.name}
             </span>
-            <span className="shrink-0 text-metadata text-orange-100/45">{STATUS_LABELS[agent.status]}</span>
+            <span className="shrink-0 text-metadata text-orange-100/45">
+              {STATUS_LABELS[agent.status]}
+            </span>
           </div>
           <p className="mt-1 line-clamp-2 text-secondary text-orange-50/85">
             {cleanTask(agent.task, agent.name)}
@@ -265,11 +285,9 @@ function AgentActivityRow({ agent, index }: { agent: JarvisChatAgent; index: num
             <span className="truncate">{agent.currentStep ?? STATUS_LABELS[agent.status]}</span>
             <span aria-hidden>|</span>
             <span className="truncate">{agent.modelLabel}</span>
-            <FilePill label="Read" files={filesRead} />
-            <FilePill label="Edit" files={filesEditing} />
           </div>
+          <FileEvidenceDisclosure filesRead={filesRead} filesEditing={filesEditing} diff={diff} />
         </div>
-        {hasDiff && diff ? <DiffCounts diff={diff} /> : null}
         <Button
           type="button"
           size="sm"
@@ -286,13 +304,43 @@ function AgentActivityRow({ agent, index }: { agent: JarvisChatAgent; index: num
   );
 }
 
-function FilePill({ label, files }: { label: string; files: string[] }) {
-  if (files.length === 0) return null;
+function FileEvidenceDisclosure({
+  filesRead,
+  filesEditing,
+  diff,
+  small = false,
+}: {
+  filesRead: string[];
+  filesEditing: string[];
+  diff?: JarvisChatAgent['diffSummary'];
+  small?: boolean;
+}) {
+  const hasDiff = Boolean(diff && (diff.addedLines !== 0 || diff.removedLines !== 0));
+  if (filesRead.length === 0 && filesEditing.length === 0 && !hasDiff) return null;
   return (
-    <span className="inline-flex max-w-[180px] items-center gap-1 rounded-full border border-orange-500/15 bg-black/20 px-1.5 py-0.5">
+    <details className="mt-1.5 rounded-lg border border-orange-500/15 bg-black/20 px-2 py-1 text-[10px] text-orange-100/65">
+      <summary className="cursor-pointer select-none text-orange-200/80">Files and changes</summary>
+      <div className="mt-1.5 space-y-1 border-t border-orange-500/10 pt-1.5">
+        {filesRead.length > 0 ? <FileEvidenceList label="Read" files={filesRead} /> : null}
+        {filesEditing.length > 0 ? <FileEvidenceList label="Changed" files={filesEditing} /> : null}
+        {hasDiff && diff ? <DiffCounts diff={diff} small={small} /> : null}
+      </div>
+    </details>
+  );
+}
+
+function FileEvidenceList({ label, files }: { label: string; files: string[] }) {
+  return (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-1.5">
       <span className="text-orange-300/80">{label}</span>
-      <span className="truncate">{summarizeFiles(files)}</span>
-    </span>
+      <ul className="min-w-0 space-y-0.5">
+        {files.map((file) => (
+          <li key={`${label}:${file}`} className="truncate font-mono" title={file}>
+            {file}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -305,7 +353,10 @@ function DiffCounts({
 }) {
   return (
     <span
-      className={cn('flex shrink-0 items-center justify-end gap-3 font-mono', small ? 'text-[10px]' : 'text-[12px]')}
+      className={cn(
+        'flex shrink-0 items-center justify-end gap-3 font-mono',
+        small ? 'text-[10px]' : 'text-[12px]',
+      )}
       aria-label="Line changes"
     >
       <span className="text-emerald-400">+{diff.addedLines}</span>
@@ -314,8 +365,6 @@ function DiffCounts({
   );
 }
 
-
-
 function cleanTask(task: string, fallback: string): string {
   const cleaned = task.replace(/^\/(?:multitask|subagents)\s+/i, '').trim();
   return cleaned || fallback;
@@ -323,15 +372,6 @@ function cleanTask(task: string, fallback: string): string {
 
 function labelForAgent(agent: JarvisChatAgent): 'Agent' | 'Subagent' {
   return /^\/subagents\b/i.test(agent.task) ? 'Subagent' : 'Agent';
-}
-
-function summarizeFiles(files: string[]): string {
-  const first = basename(files[0] ?? '');
-  return files.length > 1 ? `${first} +${files.length - 1}` : first;
-}
-
-function basename(file: string): string {
-  return file.split(/[\\/]/).pop() || file;
 }
 
 function isAgentWorking(agent: JarvisChatAgent): boolean {
@@ -353,4 +393,3 @@ function newerAgent(a: JarvisChatAgent, b: JarvisChatAgent): JarvisChatAgent {
   const bTime = Date.parse(b.updatedAt || b.createdAt);
   return bTime >= aTime ? { ...a, ...b } : { ...b, ...a };
 }
-

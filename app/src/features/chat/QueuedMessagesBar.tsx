@@ -1,12 +1,16 @@
 import { ArrowUp, Layers, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import {
+  queueFlushModeLabel,
+  shouldAutoSendQueuedOnRunStatus,
+  takeNextQueuedMessage,
+  type QueuedChatMessage,
+  type QueueFlushMode,
+} from './composerQueuePolicy';
 
-export interface QueuedChatMessage {
-  id: string;
-  text: string;
-  createdAt: number;
-}
+export type { QueuedChatMessage, QueueFlushMode };
+export { shouldAutoSendQueuedOnRunStatus, takeNextQueuedMessage };
 
 export function QueuedMessagesBar({
   messages,
@@ -32,8 +36,10 @@ export function QueuedMessagesBar({
       aria-label="Queued messages"
       className="mb-1.5 min-w-0 max-w-full rounded-lg border border-accent-copper/20 bg-background/70 px-1.5 py-1 shadow-[0_8px_20px_rgba(0,0,0,0.18)]"
     >
-      <div className="mb-0.5 flex items-center justify-between px-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-        <span>Queued</span>
+      <div className="mb-0.5 flex items-center justify-between gap-2 px-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <span className="min-w-0 truncate normal-case tracking-normal">
+          Enter after tool · Tab after full reply · Esc send now · Esc×3 cancel
+        </span>
         <span>{messages.length} queued</span>
       </div>
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -46,12 +52,29 @@ export function QueuedMessagesBar({
               'rounded-md border border-border/50 bg-panel/80 px-2 py-0.5',
             )}
           >
-            <p
-              className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] leading-5 text-foreground"
-              title={message.text}
-            >
-              {message.text}
-            </p>
+            <div className="min-w-0">
+              <span
+                className={cn(
+                  'mr-1.5 inline-flex shrink-0 rounded border px-1 py-px text-[9px] font-medium uppercase tracking-wide',
+                  message.flushMode === 'after-tool'
+                    ? 'border-accent-copper/40 bg-accent-copper/10 text-accent-copper'
+                    : 'border-border bg-muted/60 text-muted-foreground',
+                )}
+                title={
+                  message.flushMode === 'after-tool'
+                    ? 'Sends after the current tool finishes'
+                    : 'Sends when the full reply finishes'
+                }
+              >
+                {queueFlushModeLabel(message.flushMode)}
+              </span>
+              <span
+                className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] leading-5 text-foreground"
+                title={message.text}
+              >
+                {message.text}
+              </span>
+            </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-0.5 opacity-90 transition-opacity group-hover:opacity-100">
               {!isModelSwitch?.(message) ? (
                 <Button
@@ -129,21 +152,6 @@ export function buildQueuedMultitaskCommand(text: string): string {
   if (!trimmed) return '/multitask';
   const body = trimmed.replace(/^\/(?:multitask|subagents)\s+/i, '').trim() || trimmed;
   return `/multitask ${body}`;
-}
-
-/** Terminal Jarvis run statuses that should release the next queued message. */
-export function shouldAutoSendQueuedOnRunStatus(status: string | undefined): boolean {
-  return status === 'done' || status === 'error' || status === 'cancelled';
-}
-
-/** Pop the front of the queue (FIFO). */
-export function takeNextQueuedMessage(queue: QueuedChatMessage[]): {
-  next: QueuedChatMessage | null;
-  remaining: QueuedChatMessage[];
-} {
-  if (!queue.length) return { next: null, remaining: queue };
-  const [next, ...remaining] = queue;
-  return { next: next ?? null, remaining };
 }
 
 /**

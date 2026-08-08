@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "programId": "VS-PR31-INTELLIGENCE-AND-BROWSER-UPGRADE",
+  "scope": "PR31 additive dependencies and adapted code only",
+  "entries": [
+    {
+      "name": "gpt-tokenizer",
+      "repositoryUrl": "https://github.com/niieani/gpt-tokenizer",
+      "version": "3.4.0",
+      "gitCommit": "7f880f46bb34a644ec8f9b3069060b2d2f99e11c",
+      "license": "MIT",
+      "purpose": "Lazy exact-local token counting for explicitly supported OpenAI model families",
+      "integrity": "sha512-wxFLnhIXTDjYebd9A9pGl3e31ZpSypbpIJSOswbgop5jLte/AsZVDvjlbEuVFlsqZixVKqbcoNmRlFDf6pz/UQ=="
+    },
+    {
+      "name": "@huggingface/tokenizers",
+      "repositoryUrl": "https://github.com/huggingface/tokenizers.js",
+      "version": "0.1.3",
+      "gitCommit": "d6fc380d3d4efec25eb1a132bb0cf4f32d618b6c",
+      "license": "Apache-2.0",
+      "purpose": "Local tokenization of explicitly registered Qwen, DeepSeek, Llama, and Mistral assets",
+      "integrity": "sha512-8rF/RRT10u+kn7YuUbUg0OF30K8rjTc78aHpxT+qJ1uWSqxT1MHi8+9ltwYfkFYJzT/oS+qw3JVfHtNMGAdqyA=="
+    },
+    {
+      "name": "web-tree-sitter",
+      "repositoryUrl": "https://github.com/tree-sitter/tree-sitter",
+      "version": "0.26.11",
+      "gitCommit": "64402de2857cc197ecc4ca3bc144ea91fda7e72e",
+      "license": "MIT",
+      "purpose": "Lazy local structural parsing runtime",
+      "integrity": "sha512-Q5Dm3YTIXSXuH6FxX6RuzX2Qwpc4DPGiYMU87Wg5Z8OIStiQFiUex4zMDc0vBTw78EphaYJacncJghCHzbZptg=="
+    },
+    {
+      "name": "@repomix/tree-sitter-wasms",
+      "repositoryUrl": "https://github.com/repomix/tree-sitter-wasms",
+      "version": "0.1.17",
+      "gitCommit": "1876d74fb86d4e45efade2176b71d776f430e7e6",
+      "license": "Unlicense",
+      "purpose": "Pinned local TypeScript, TSX, JavaScript, Rust, and Python parser assets",
+      "integrity": "sha512-tc3HnFqdMF1pXhIMzG3aTaBDpIiHK2tPfn3fwqA6P3WTbHa+1EuuTubbKshvmN7xCHP5Ojz0/VW4R+XvR88KOw=="
+    },
+    {
+      "name": "tree-sitter-json",
+      "repositoryUrl": "https://github.com/tree-sitter/tree-sitter-json",
+      "version": "0.24.8",
+      "gitCommit": "ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24",
+      "license": "MIT",
+      "purpose": "Pinned local JSON parser asset",
+      "integrity": "sha512-Tc9ZZYwHyWZ3Tt1VEw7Pa2scu1YO7/d2BCBbKTx5hXwig3UfdQjsOPkPyLpDJOn/m1UBEWYAtSdGAwCSyagBqQ=="
+    },
+    {
+      "name": "@opentelemetry/api",
+      "repositoryUrl": "https://github.com/open-telemetry/opentelemetry-js",
+      "version": "1.9.1",
+      "gitCommit": "7e74509a4d848e94b2970bb5262dd3e8efeed0a2",
+      "license": "Apache-2.0",
+      "purpose": "Privacy-safe local AI trace API",
+      "integrity": "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="
+    },
+    {
+      "name": "@opentelemetry/sdk-trace-base",
+      "repositoryUrl": "https://github.com/open-telemetry/opentelemetry-js",
+      "version": "2.10.0",
+      "gitCommit": "76fa6b509e2b48d9cbee31cb37a2efc61dc4d384",
+      "license": "Apache-2.0",
+      "purpose": "Local-only bounded span processing with no network exporter by default",
+      "integrity": "sha512-GuYQQT7QD2EeO8lcZLRQzcbOyhqAzL+6WWTKTU9mSUBYBazkEDl+VrQcXQhbB08OWM9anD1aHleVadzulpOaUQ=="
+    },
+    {
+      "name": "@modelcontextprotocol/sdk",
+      "repositoryUrl": "https://github.com/modelcontextprotocol/typescript-sdk",
+      "version": "1.30.0",
+      "gitCommit": "2d889f2b329e46680ec9bdd565de4616c497825a",
+      "license": "MIT",
+      "purpose": "Pinned stable v1 MCP protocol foundation behind the VibeSpace gateway and trust boundary",
+      "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA=="
+    },
+    {
+      "name": "playwright-core",
+      "repositoryUrl": "https://github.com/microsoft/playwright",
+      "version": "1.61.1",
+      "gitCommit": "39e3553a4f283a41134d75d7e404484bd9e6865a",
+      "license": "Apache-2.0",
+      "purpose": "Pinned browser automation foundation for development fixtures and the separately packaged optional Browser Agent runtime; browser binaries are not downloaded into the default app",
+      "integrity": "sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg==",
+      "distribution": "development-and-optional-feature-pack"
+    },
+    {
+      "name": "@playwright/test",
+      "repositoryUrl": "https://github.com/microsoft/playwright",
+      "version": "1.61.1",
+      "gitCommit": "39e3553a4f283a41134d75d7e404484bd9e6865a",
+      "license": "Apache-2.0",
+      "purpose": "Deterministic development-only browser fixtures, accessibility checks, screenshots, traces, and recovery tests",
+      "integrity": "sha512-8nKv6+0RJSL9FE4jYOEGXnPeM/Hg12qZpmqzZjRh3qM0Y7c3z1mrOTfFLids72RDQYVh9WpLEfR5WdpNX4fkig==",
+      "distribution": "development-only"
+    },
+    {
+      "name": "promptfoo",
+      "repositoryUrl": "https://github.com/promptfoo/promptfoo",
+      "version": "0.121.20",
+      "gitCommit": "82ca3c24ec445cf1734face46042c187b659b954",
+      "license": "MIT",
+      "purpose": "Pinned development/CI-only deterministic Prompt Forge, retrieval, authority, and injection evaluations; excluded from the desktop dependency graph and installer",
+      "integrity": "sha512-EgUwvF+mc7JGkCrf2eeBOjDD7XcX4rFuY5VMk53G9cEz398BcWH0RkYiov/iGZJEuILv7wzPqxxXPvxzUBgsXQ==",
+      "distribution": "development-only"
+    }
+  ]
+}

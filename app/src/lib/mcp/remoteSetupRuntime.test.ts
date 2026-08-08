@@ -25,6 +25,7 @@ function setupHarness(options: { failDiscovery?: boolean } = {}) {
         },
       ]);
   const setToolExposure = vi.fn();
+  const invoke = vi.fn(async () => ({ content: [] }));
   const authorization = Object.freeze({
     endpoint: 'https://mcp.example.test/rpc',
     intent: 'connect_external_mcp' as const,
@@ -34,13 +35,13 @@ function setupHarness(options: { failDiscovery?: boolean } = {}) {
   const adapter = Object.freeze({ id: 'reviewed-server', start: vi.fn() });
   const createAdapter = vi.fn(() => adapter);
   const runtime = createRemoteMcpSetupRuntime({
-    manager: { register, start, listTools, setToolExposure },
+    manager: { register, start, listTools, setToolExposure, invoke },
     authorize,
     createAdapter,
   });
   return {
     runtime,
-    manager: { register, start, listTools, setToolExposure },
+    manager: { register, start, listTools, setToolExposure, invoke },
     authorize,
     authorization,
     adapter,
@@ -97,15 +98,19 @@ describe('remote MCP setup runtime', () => {
           {
             name: 'repo.read',
             description: 'Read repository files',
+            inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             exposed: false,
           },
           {
             name: 'repo.write',
             title: 'Write',
             description: 'Write repository files',
+            inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             exposed: false,
           },
         ],
+        resources: [],
+        prompts: [],
         exposedTools: [],
       },
     ]);
@@ -230,6 +235,7 @@ describe('remote MCP setup runtime', () => {
         start: manager.start.bind(manager),
         listTools,
         setToolExposure: manager.setToolExposure.bind(manager),
+        invoke: manager.invoke.bind(manager),
       },
       authorize: () =>
         Object.freeze({

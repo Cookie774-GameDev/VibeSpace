@@ -57,14 +57,19 @@ describe('chat model catalog', () => {
     expect(defaultModelForProvider('ollama', 'qwen2.5:3b')).toBe('qwen2.5:3b');
   });
 
-  it('includes configured local model before Ollama discovery completes', () => {
+  it('does not advertise a configured fallback until Ollama verifies it is installed', () => {
     useAuthStore.setState({ defaultLocalModel: 'llama3.2' });
-    expect(getAccessibleProviders({}, false, 'free', 'llama3.2')).toEqual(['ollama', 'local']);
-    expect(getAccessibleModelOptions('ollama', {}, false, 'llama3.2')).toEqual([
-      { provider: 'ollama', id: 'llama3.2', label: 'llama3.2' },
-    ]);
-    expect(getModelOptions('ollama')).toEqual([
-      { provider: 'ollama', id: 'llama3.2', label: 'llama3.2' },
+    expect(getAccessibleProviders({}, false, 'free', 'llama3.2')).toEqual([]);
+    expect(getAccessibleModelOptions('ollama', {}, false, 'llama3.2')).toEqual([]);
+    expect(getModelOptions('ollama')).toEqual([]);
+  });
+
+  it('makes every verified installed model available regardless of the local fallback', () => {
+    syncDiscoveredOllamaModels(['qwen3.5:4b', 'llama3.2:3b']);
+
+    expect(getAccessibleModelOptions('ollama', {}, false, 'stale:not-installed')).toEqual([
+      { provider: 'ollama', id: 'qwen3.5:4b', label: 'qwen3.5:4b' },
+      { provider: 'ollama', id: 'llama3.2:3b', label: 'llama3.2:3b' },
     ]);
   });
 

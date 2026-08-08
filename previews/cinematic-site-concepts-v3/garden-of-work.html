@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f6eddd" />
+    <meta
+      name="description"
+      content="The Garden of Work — an authentic VibeSpace product story growing from one intent into a living system."
+    />
+    <title>The Garden of Work — VibeSpace Cinematic Direction 03</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preload" as="image" href="./assets/product/quick-launch.png" />
+    <link rel="stylesheet" href="./world.css" />
+    <link rel="stylesheet" href="./concepts.css" />
+  </head>
+  <body>
+    <main id="world" aria-label="The Garden of Work cinematic VibeSpace product story"></main>
+    <noscript>
+      <p>JavaScript is required for this scroll-directed cinematic reference.</p>
+    </noscript>
+    <script type="module">
+      import { mountWorld } from "./runtime/world-engine.mjs";
+      mountWorld(document.querySelector("#world"), "garden-of-work");
+    </script>
+  </body>
+</html>

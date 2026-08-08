@@ -4,12 +4,17 @@ import {
   type RemoteMcpAuthorizationRequest,
 } from './remoteAuthorization';
 import {
-  createStreamableHttpMcpAdapter,
-  type StreamableHttpMcpAdapterOptions,
-} from './streamableHttpAdapter';
+  createMcpSdkClientAdapter,
+  type McpSdkCatalog,
+  type McpSdkClientAdapter,
+  type McpSdkPromptDescriptor,
+  type McpSdkResourceDescriptor,
+  type McpSdkToolClassification,
+} from './mcpSdkClientAdapter';
 import {
   jarvisMcpServerManager,
   type CanonicalMcpToolDescriptor,
+  type McpInvokeOptions,
   type McpServerAdapter,
   type McpServerManager,
   type McpServerRegistration,
@@ -21,6 +26,8 @@ const CONNECT_REQUEST_KEYS = new Set(['id', 'endpoint', 'confirmedByUser']);
 const FORBIDDEN_CREDENTIAL_KEY = /credential|token|secret|password|authorization|api.?key/i;
 const FORBIDDEN_PROCESS_KEY = /command|process|executable|argv|environment|working.?directory/i;
 const SAFE_CONNECTION_ERROR = 'Unable to connect to this MCP server.';
+const MAX_REMOTE_MCP_CONNECTIONS = 16;
+const MAX_EXPOSED_TOOLS = 64;
 
 export interface RemoteMcpConnectRequest {
   readonly id: string;
@@ -32,7 +39,9 @@ export interface RemoteMcpSetupTool {
   readonly name: string;
   readonly title?: string;
   readonly description: string;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
   readonly exposed: boolean;
+  readonly classification?: McpSdkToolClassification;
 }
 
 export type RemoteMcpSetupState = 'connecting' | 'connected' | 'failed';
@@ -42,6 +51,9 @@ export interface RemoteMcpSetupConnection {
   readonly endpoint: string;
   readonly state: RemoteMcpSetupState;
   readonly tools: readonly Readonly<RemoteMcpSetupTool>[];
+  readonly resources?: readonly Readonly<McpSdkResourceDescriptor>[];
+  readonly prompts?: readonly Readonly<McpSdkPromptDescriptor>[];
+  readonly schemaFingerprint?: string;
   readonly exposedTools: readonly string[];
   readonly error?: string;
 }
@@ -51,6 +63,7 @@ export interface RemoteMcpSetupRuntime {
   subscribe(listener: () => void): () => void;
   connect(request: RemoteMcpConnectRequest): Promise<void>;
   setToolExposure(id: string, toolNames: readonly string[]): void;
+  invoke(id: string, toolName: string, input: unknown, options?: McpInvokeOptions): Promise<unknown>;
   disconnect(id: string): Promise<void>;
 }
 
@@ -59,6 +72,13 @@ interface SetupManager {
   start(id: string): Promise<unknown>;
   listTools(id: string): Promise<readonly Readonly<CanonicalMcpToolDescriptor>[]>;
   setToolExposure(id: string, exposure: McpToolExposurePolicy): void;
+  invoke(id: string, toolName: string, input: unknown, options?: McpInvokeOptions): Promise<unknown>;
+}
+
+interface RemoteMcpAdapterOptions {
+  readonly id: string;
+  readonly endpoint: string;
+  readonly authorization: Readonly<RemoteMcpAuthorizationReceipt>;
 }
 
 export interface RemoteMcpSetupDependencies {
@@ -66,7 +86,9 @@ export interface RemoteMcpSetupDependencies {
   readonly authorize?: (
     request: RemoteMcpAuthorizationRequest,
   ) => Readonly<RemoteMcpAuthorizationReceipt>;
-  readonly createAdapter?: (options: StreamableHttpMcpAdapterOptions) => Readonly<McpServerAdapter>;
+  readonly createAdapter?: (
+    options: RemoteMcpAdapterOptions,
+  ) => Readonly<McpServerAdapter & Partial<Pick<McpSdkClientAdapter, 'getCatalog'>>>;
 }
 
 interface ManagedSetupConnection {
@@ -75,6 +97,9 @@ interface ManagedSetupConnection {
   state: RemoteMcpSetupState;
   disconnecting: boolean;
   tools: readonly Readonly<RemoteMcpSetupTool>[];
+  resources: readonly Readonly<McpSdkResourceDescriptor>[];
+  prompts: readonly Readonly<McpSdkPromptDescriptor>[];
+  schemaFingerprint?: string;
   exposedTools: readonly string[];
   error?: string;
   release(): Promise<void>;
@@ -127,14 +152,20 @@ function validatedConnectRequest(value: unknown): RemoteMcpConnectRequest {
 function frozenTools(
   tools: readonly Readonly<CanonicalMcpToolDescriptor>[],
   exposedTools: readonly string[] = [],
+  catalog?: McpSdkCatalog,
 ): readonly Readonly<RemoteMcpSetupTool>[] {
   const exposed = new Set(exposedTools);
+  const classification = new Map(catalog?.tools.map((tool) => [tool.name, tool.classification]));
   const result = tools.map((tool) =>
     Object.freeze({
       name: tool.name,
       ...(tool.title === undefined ? {} : { title: tool.title }),
       description: tool.description,
+      inputSchema: tool.inputSchema,
       exposed: exposed.has(tool.name),
+      ...(classification.get(tool.name) === undefined
+        ? {}
+        : { classification: classification.get(tool.name) }),
     }),
   );
   result.sort((left, right) =>
@@ -151,6 +182,11 @@ function snapshotConnection(
     endpoint: connection.endpoint,
     state: connection.state,
     tools: connection.tools,
+    resources: connection.resources,
+    prompts: connection.prompts,
+    ...(connection.schemaFingerprint === undefined
+      ? {}
+      : { schemaFingerprint: connection.schemaFingerprint }),
     exposedTools: connection.exposedTools,
     ...(connection.error === undefined ? {} : { error: connection.error }),
   });
@@ -161,7 +197,8 @@ export function createRemoteMcpSetupRuntime(
 ): RemoteMcpSetupRuntime {
   const manager = (dependencies.manager ?? jarvisMcpServerManager) as SetupManager;
   const authorize = dependencies.authorize ?? authorizeRemoteMcpConnection;
-  const createAdapter = dependencies.createAdapter ?? createStreamableHttpMcpAdapter;
+  const createAdapter = dependencies.createAdapter ?? ((options: RemoteMcpAdapterOptions) =>
+    createMcpSdkClientAdapter({ id: options.id, endpoint: options.endpoint }));
   const connections = new Map<string, ManagedSetupConnection>();
   const listeners = new Set<() => void>();
   let snapshot: readonly Readonly<RemoteMcpSetupConnection>[] = Object.freeze([]);
@@ -194,6 +231,9 @@ export function createRemoteMcpSetupRuntime(
       if (connections.has(request.id)) {
         throw new Error(`MCP server '${request.id}' is already configured.`);
       }
+      if (connections.size >= MAX_REMOTE_MCP_CONNECTIONS) {
+        throw new Error('Too many remote MCP servers are configured.');
+      }
       const authorization = authorize({
         endpoint: request.endpoint,
         confirmedByUser: true,
@@ -220,6 +260,8 @@ export function createRemoteMcpSetupRuntime(
         state: 'connecting',
         disconnecting: false,
         tools: Object.freeze([]),
+        resources: Object.freeze([]),
+        prompts: Object.freeze([]),
         exposedTools: Object.freeze([]),
         release,
       };
@@ -233,9 +275,15 @@ export function createRemoteMcpSetupRuntime(
           return;
         }
         const tools = await manager.listTools(request.id);
+        const catalog = typeof adapter.getCatalog === 'function'
+          ? await adapter.getCatalog()
+          : undefined;
         if (connections.get(request.id) !== connection) return;
         connection.state = 'connected';
-        connection.tools = frozenTools(tools);
+        connection.tools = frozenTools(tools, [], catalog);
+        connection.resources = Object.freeze([...(catalog?.resources ?? [])]);
+        connection.prompts = Object.freeze([...(catalog?.prompts ?? [])]);
+        connection.schemaFingerprint = catalog?.schemaFingerprint;
         emit();
       } catch {
         await release().catch(() => undefined);
@@ -245,6 +293,9 @@ export function createRemoteMcpSetupRuntime(
         if (connections.get(request.id) === connection) {
           connection.state = 'failed';
           connection.tools = Object.freeze([]);
+          connection.resources = Object.freeze([]);
+          connection.prompts = Object.freeze([]);
+          connection.schemaFingerprint = undefined;
           connection.exposedTools = Object.freeze([]);
           connection.error = SAFE_CONNECTION_ERROR;
           emit();
@@ -259,6 +310,9 @@ export function createRemoteMcpSetupRuntime(
       }
       if (!Array.isArray(requestedToolNames)) {
         throw new Error('Invalid remote MCP tool allowlist.');
+      }
+      if (requestedToolNames.length > MAX_EXPOSED_TOOLS) {
+        throw new Error('Remote MCP tool allowlist is too large.');
       }
       const discovered = new Set(connection.tools.map((tool) => tool.name));
       const toolNames = [...new Set(requestedToolNames)];
@@ -283,6 +337,16 @@ export function createRemoteMcpSetupRuntime(
         ),
       );
       emit();
+    },
+    async invoke(id, toolName, input, options) {
+      const connection = connections.get(id);
+      if (!connection || connection.state !== 'connected') {
+        throw new Error('Remote MCP server is not connected.');
+      }
+      if (!connection.exposedTools.includes(toolName)) {
+        throw new Error('Remote MCP tool is not exposed.');
+      }
+      return manager.invoke(id, toolName, input, options);
     },
     async disconnect(id) {
       const connection = connections.get(id);

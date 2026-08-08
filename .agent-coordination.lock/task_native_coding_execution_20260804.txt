@@ -1,0 +1,13 @@
+task_id=VS-PR31-MG2-NATIVE-CODING-EXECUTION-20260804
+controller=/root/browser_live_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:44:28-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement the native evidence-bound coding execution boundary so an authorized fixture repository can be inspected, previewed, patched, verified, checkpointed, resumed, and rolled back through injected native authorities.
+owned_paths=app/src/lib/jarvis/nativeFileCapabilityBroker.ts;app/src/lib/jarvis/nativeFileCapabilityBroker.test.ts;app/src/lib/jarvis/codingRunRuntime.ts;app/src/lib/jarvis/codingRunRuntime.test.ts;app/src/lib/jarvis/codingRunManifest.ts;app/src/lib/jarvis/codingRunManifest.test.ts;app/src/lib/actions/registryFiles.ts;app/src/lib/actions/registryFiles.test.ts;app/src/lib/fs.ts
+ownership_transfer=app/src/lib/jarvis/codingRunManifest.ts;app/src/lib/jarvis/codingRunManifest.test.ts transferred from /root for this exact coherent batch
+exclusions=all other files;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all direct process execution;all external systems;Computer Control
+verification=add only focused deterministic tests required by changed behavior;do not run tests,typecheck,build,format,or review commands;self-review once and hand off
+status=ASSIGNED

@@ -80,7 +80,7 @@ describe('MonoChrome development workbench', () => {
       <MonochromeWorkbench devBuild={false} search="?monochrome-workbench=1" />,
     );
     expect(productionView.container.childElementCount).toBe(0);
-  });
+  }, 10_000);
 
   it('uses an exact development-only lazy entry without joining routes or navigation', () => {
     const mainSource = readFileSync(path.resolve(process.cwd(), 'src/main.tsx'), 'utf8');

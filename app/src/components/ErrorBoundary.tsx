@@ -32,10 +32,32 @@ import * as React from 'react';
 import { AlertTriangle, RotateCw, Terminal as TerminalIcon, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { devConsole } from '@/features/dev-console/store';
+import { applySecretPolicy } from '@/lib/security/secretDetector';
+
+interface SafeBoundaryError {
+  name: string;
+  message: string;
+  stack?: string;
+}
+
+function safeBoundaryText(value: string, maxChars: number, fallback: string): string {
+  const redacted = applySecretPolicy(value, 'redact').text ?? fallback;
+  const bounded = redacted.slice(0, maxChars).trim();
+  return bounded || fallback;
+}
+
+export function sanitizeBoundaryError(error: Error): SafeBoundaryError {
+  const name = safeBoundaryText(error.name, 80, 'Error');
+  const message = safeBoundaryText(error.message, 2_000, 'A render error occurred.');
+  const stack = error.stack
+    ? safeBoundaryText(error.stack, 8_000, `${name}: ${message}`)
+    : undefined;
+  return { name, message, ...(stack ? { stack } : {}) };
+}
 
 interface ErrorBoundaryState {
   /** Last error caught, or null when the tree is healthy. */
-  error: Error | null;
+  error: SafeBoundaryError | null;
   /** React's componentStack (which component the error fired in). */
   componentStack: string | null;
 }
@@ -44,22 +66,20 @@ interface ErrorBoundaryProps {
   children: React.ReactNode;
 }
 
-export class ErrorBoundary extends React.Component<
-  ErrorBoundaryProps,
-  ErrorBoundaryState
-> {
+export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null, componentStack: null };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { error, componentStack: null };
+    return { error: sanitizeBoundaryError(error), componentStack: null };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
     // React's typing on info.componentStack is `string | null` — it can
     // be null in StrictMode dev re-renders. Default to empty so the UI
     // doesn't have to null-check.
-    const stack = info.componentStack ?? '';
-    this.setState({ componentStack: stack });
+    const safeError = sanitizeBoundaryError(error);
+    const componentStack = safeBoundaryText(info.componentStack ?? '', 6_000, '');
+    this.setState({ error: safeError, componentStack });
 
     // Mirror into the DevConsole feed. This is the single most useful
     // breadcrumb when the user reports a crash: the error sits next to
@@ -67,11 +87,11 @@ export class ErrorBoundary extends React.Component<
     devConsole.log({
       level: 'error',
       channel: 'react',
-      message: error.message || 'Render error',
+      message: safeError.message,
       detail: {
-        name: error.name,
-        stack: error.stack,
-        componentStack: stack,
+        name: safeError.name,
+        stack: safeError.stack,
+        componentStack,
       },
     });
 
@@ -80,7 +100,7 @@ export class ErrorBoundary extends React.Component<
     // because devConsole has already captured it.
     if (typeof window !== 'undefined') {
       // eslint-disable-next-line no-console
-      console.error('[ErrorBoundary]', error, stack);
+      console.error(`[ErrorBoundary] ${safeError.name}: ${safeError.message}`, componentStack);
     }
   }
 
@@ -139,20 +159,16 @@ export class ErrorBoundary extends React.Component<
               <AlertTriangle className="h-5 w-5" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-ui-strong text-foreground">
-                Something hit a snag
-              </h2>
+              <h2 className="text-ui-strong text-foreground">Something hit a snag</h2>
               <p className="text-metadata text-muted-foreground truncate">
-                Jarvis caught a render error before it could blank the
-                screen.
+                Jarvis caught a render error before it could blank the screen.
               </p>
             </div>
           </header>
 
           <div className="px-5 py-4 space-y-3">
             <div className="rounded-md border border-border bg-paper-soft px-3 py-2 font-mono text-secondary text-foreground">
-              <span className="text-muted-foreground">{err.name}:</span>{' '}
-              {err.message}
+              <span className="text-muted-foreground">{err.name}:</span> {err.message}
             </div>
 
             {err.stack && (
@@ -179,37 +195,18 @@ export class ErrorBoundary extends React.Component<
           </div>
 
           <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={this.handleCopy}
-              className="gap-1.5"
-            >
+            <Button variant="ghost" size="sm" onClick={this.handleCopy} className="gap-1.5">
               <Copy className="h-3.5 w-3.5" />
               Copy details
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={this.handleOpenConsole}
-              className="gap-1.5"
-            >
+            <Button variant="ghost" size="sm" onClick={this.handleOpenConsole} className="gap-1.5">
               <TerminalIcon className="h-3.5 w-3.5" />
               Open dev console
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={this.handleReset}
-            >
+            <Button variant="outline" size="sm" onClick={this.handleReset}>
               Try again
             </Button>
-            <Button
-              variant="accent"
-              size="sm"
-              onClick={this.handleReload}
-              className="gap-1.5"
-            >
+            <Button variant="accent" size="sm" onClick={this.handleReload} className="gap-1.5">
               <RotateCw className="h-3.5 w-3.5" />
               Reload app
             </Button>

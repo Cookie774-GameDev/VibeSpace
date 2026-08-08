@@ -1,0 +1,13 @@
+task_id=VS-PR31-MG2-BROWSER-CANONICAL-APPROVAL-LIVE-20260804
+controller=/root
+delegate=/root/mcp_gateway_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:00:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Replace the Browser review button's fail-closed placeholder with the existing canonical approval lifecycle and issued-execution path, preserving exact action/scope/hash/attempt binding and truthful settlement.
+owned_paths=app/src/features/browser/browserCanonicalApprovalRuntime.ts;app/src/features/browser/browserCanonicalApprovalRuntime.test.ts;app/src/features/browser/browserActions.ts;app/src/features/browser/browserActions.test.ts;app/src/features/browser/browserApprovalAdapter.ts;app/src/features/browser/browserApprovalAdapter.test.ts;app/src/features/browser/browserTypes.ts;app/src/features/browser/browserStore.ts;app/src/features/browser/browserStore.test.ts;app/src/features/browser/BrowserPage.tsx;app/src/features/browser/BrowserPage.approval.test.tsx;app/src/features/browser/index.ts
+exclusions=all other files;browserGoalIntegration.ts and its tests;MCP files;all unrelated dirty Browser/UI work;all Git operations;all external/network calls except the existing scoped browser host during real runtime execution;all process management;all coordination authority except this lock;Computer Control
+verification=add focused deterministic tests but do not run them;coordinator performs one final bounded verification pass
+status=IMPLEMENTING

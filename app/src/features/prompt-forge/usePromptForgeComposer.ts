@@ -511,8 +511,10 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
     async (
       regenerationInstructions?: string,
       originalDraftOverride?: string,
+      runOptions: Readonly<{ openReview?: boolean }> = {},
     ): Promise<PromptForgeJob | null> => {
       const originalDraft = originalDraftOverride ?? options.draft;
+      const openReview = runOptions.openReview !== false;
       if (
         !options.accountId ||
         !originalDraft.trim() ||
@@ -539,7 +541,7 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
       activeRunRef.current = activeRun;
       let activeService: ReturnType<typeof createPromptForgeService> | null = null;
       try {
-        const isRegeneration = originalDraftOverride !== undefined;
+        const isRegeneration = originalDraftOverride !== undefined && openReview;
         const excludedForRun = isRegeneration ? excludedSourceIds : [];
         if (!isRegeneration) setExcludedSourceIds([]);
         setError(null);
@@ -579,7 +581,7 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
         setStatus(completed.status);
         if (completed.status === 'ready' && completed.generatedDraft !== null) {
           setUpgradedDraft(completed.generatedDraft);
-          setReviewOpen(true);
+          if (openReview) setReviewOpen(true);
         } else {
           setError(errorMessage(completed));
         }
@@ -619,6 +621,41 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
       privacyMode,
       status,
     ],
+  );
+
+  /**
+   * Upgrade a draft for Send without opening the review dialog.
+   * Always returns text to send: upgraded on success, original on failure/cancel.
+   */
+  const upgradeForSend = useCallback(
+    async (
+      draft: string,
+    ): Promise<Readonly<{ text: string; upgraded: boolean; reason?: string }>> => {
+      const original = draft;
+      if (!original.trim()) return { text: original, upgraded: false, reason: 'empty' };
+      if (currentModelDisabledReason !== null) {
+        return {
+          text: original,
+          upgraded: false,
+          reason: currentModelDisabledReason,
+        };
+      }
+      const completed = await start(undefined, original, { openReview: false });
+      if (completed?.status === 'ready' && completed.generatedDraft?.trim()) {
+        return { text: completed.generatedDraft.trim(), upgraded: true };
+      }
+      if (completed?.status === 'cancelled') {
+        return { text: original, upgraded: false, reason: 'cancelled' };
+      }
+      return {
+        text: original,
+        upgraded: false,
+        reason:
+          (completed ? errorMessage(completed) : null) ??
+          'Prompt upgrade failed. Sending your original text.',
+      };
+    },
+    [currentModelDisabledReason, start],
   );
 
   const resumeRecovery = useCallback(async (): Promise<PromptForgeJob | null> => {
@@ -834,6 +871,7 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
           allowed,
       ),
     start,
+    upgradeForSend,
     resumeRecovery,
     confirmRecoveryContextChange,
     restoreRecoveryDraft,

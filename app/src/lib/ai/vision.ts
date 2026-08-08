@@ -40,6 +40,34 @@ export function isSupportedImagePath(pathOrName: string): boolean {
   return imageMimeTypeForPath(pathOrName) !== null;
 }
 
+/** True when the Ollama/local tag is a known multimodal/vision family. */
+export function ollamaModelSupportsVision(modelId: string): boolean {
+  const model = modelId.toLowerCase();
+  if (!model) return false;
+  return (
+    model.includes('vision') ||
+    model.includes('llava') ||
+    model.includes('bakllava') ||
+    model.includes('moondream') ||
+    model.includes('minicpm-v') ||
+    model.includes('minicpm_v') ||
+    model.includes('qwen2-vl') ||
+    model.includes('qwen2.5-vl') ||
+    model.includes('qwen2.5vl') ||
+    model.includes('qwen3-vl') ||
+    model.includes('qwen3vl') ||
+    model.includes('-vl') ||
+    model.includes('_vl') ||
+    // Gemma 3 vision tags only — bare gemma3 text sizes are not vision.
+    model.includes('gemma3-vision') ||
+    model.includes('gemma-3-vision') ||
+    /gemma-?3.*vision/.test(model) ||
+    model.includes('pixtral') ||
+    model.includes('llama3.2-vision') ||
+    model.includes('llama-3.2-vision')
+  );
+}
+
 export function modelSupportsVision(provider: ProviderId, modelId: string): boolean {
   const model = modelId.toLowerCase();
   switch (provider) {
@@ -67,6 +95,9 @@ export function modelSupportsVision(provider: ProviderId, modelId: string): bool
         model.includes('gpt-4.1') ||
         model.includes('vision')
       );
+    case 'ollama':
+    case 'local':
+      return ollamaModelSupportsVision(model);
     default:
       return false;
   }
@@ -97,7 +128,10 @@ export function describeVisionRequirement(selection: VisionSelection): string {
     return 'Hive Balanced cannot use image attachments yet because every pipeline step must support vision.';
   }
   if (selection.mode === 'single') {
-    return 'This model cannot process the attached image. Choose Gemini, GPT-4o/4.1/5, Claude 3+, or another vision-capable model.';
+    if (selection.providerId === 'ollama' || selection.providerId === 'local') {
+      return 'This local model cannot process images. Choose a vision-capable Ollama model (for example llava, llama3.2-vision, or qwen2.5-vl), or a cloud vision model.';
+    }
+    return 'This model cannot process the attached image. Choose Gemini, GPT-4o/4.1/5, Claude 3+, a local vision model, or another vision-capable model.';
   }
   return 'Choose a vision-capable model before attaching images.';
 }

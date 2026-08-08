@@ -7,6 +7,7 @@ describe('Sakura route intensity', () => {
     const expected: Record<Route, 'open' | 'standard' | 'quiet'> = {
       chat: 'open',
       agents: 'standard',
+      'model-foundry': 'quiet',
       'agent-detail': 'standard',
       'project-detail': 'standard',
       workbench: 'standard',

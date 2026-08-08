@@ -6,7 +6,7 @@
  */
 import { useAuthStore } from '@/stores/auth';
 import { isTauri } from '@/lib/utils';
-import { syncDiscoveredOllamaModels } from './models';
+import { getDiscoveredOllamaModels, syncDiscoveredOllamaModels } from './models';
 import {
   ensureOllamaReadySilent,
   invalidateOllamaReadyCache,
@@ -92,8 +92,13 @@ async function runBootstrap(options: OllamaBootstrapOptions = {}): Promise<Ollam
   }
 
   if (!status.ready) {
-    syncDiscoveredOllamaModels([]);
-    return { ready: false, status, modelCount: 0 };
+    // Keep the last verified catalog. A brief probe failure must not wipe
+    // discovered models and block chat sends while Ollama is still connected.
+    return {
+      ready: false,
+      status,
+      modelCount: getDiscoveredOllamaModels().length,
+    };
   }
 
   let models = await listOllamaModelInfo(options.signal);

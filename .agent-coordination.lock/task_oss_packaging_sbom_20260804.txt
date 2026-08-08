@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG1-MG2-OSS-PACKAGING-SBOM-20260804
+controller=/root/mcp_gateway_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T02:35:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Make the completed PR31 license/notice inventory distributable, add a deterministic PR31 SBOM/checker, and prove default-installer exclusion of Playwright browser binaries and CI-only tooling without changing installer scripts or product runtime.
+owned_paths=app/src-tauri/tauri.conf.json;scripts/pr31-oss-bundle.mjs;scripts/pr31-oss-bundle.test.mjs;docs/oss/sbom-pr31.cdx.json;docs/oss/browser-agent-feature-pack.json;package.json
+exclusions=all other files;all Rust;install/install.ps1;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all actual installer/build execution;all network;all external systems
+verification=add deterministic source-contract tests/check script but do not run tests,build,installer,format,or review commands;self-review once and hand off
+status=ASSIGNED

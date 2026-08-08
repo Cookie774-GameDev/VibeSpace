@@ -24,6 +24,7 @@ import {
   Type,
   Undo2,
   Upload,
+  Wallpaper,
 } from 'lucide-react';
 import { canvasBlockAccessibleLabel, canvasZoomAnnouncement } from './accessibility';
 import {
@@ -58,6 +59,11 @@ import { db } from '@/lib/db';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
+import { WallpaperHost } from '@/features/workbench/WallpaperHost';
+import { WallpaperPicker } from '@/features/workbench/WallpaperPicker';
+import { normalizeWallpaperConfig } from '@/features/workbench/wallpaperConfig';
+import type { WallpaperId, WorkbenchWallpaperConfig } from '@/features/workbench/types';
+import '@/features/workbench/workbench.css';
 import { compileCanvasAiContext } from './aiContext';
 import { publishActiveCanvasAiContextProvider } from './aiContextRegistry';
 import {
@@ -639,6 +645,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   const [selected, setSelected] = React.useState(createCanvasSelection);
   const [outlineOpen, setOutlineOpen] = React.useState(false);
   const [propertiesOpen, setPropertiesOpen] = React.useState(false);
+  const [wallpaperPickerOpen, setWallpaperPickerOpen] = React.useState(false);
   const [canvasSearchText, setCanvasSearchText] = React.useState('');
   const [canvasSearchObjectType, setCanvasSearchObjectType] = React.useState('');
   const [canvasSearchFrameId, setCanvasSearchFrameId] = React.useState('');
@@ -2548,6 +2555,49 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     );
   };
 
+  const setCanvasWallpaper = React.useCallback(
+    (id: WallpaperId, assetUrl?: string) => {
+      commit('style-change', 'Change Canvas wallpaper', (current, now) =>
+        withBackground(
+          current,
+          {
+            ...current.background,
+            wallpaper: normalizeWallpaperConfig({
+              ...current.background.wallpaper,
+              id,
+              assetUrl,
+            }),
+          },
+          now,
+        ),
+      );
+    },
+    [commit],
+  );
+
+  const configureCanvasWallpaper = React.useCallback(
+    (patch: Partial<WorkbenchWallpaperConfig>) => {
+      commit(
+        'style-change',
+        'Configure Canvas wallpaper',
+        (current, now) =>
+          withBackground(
+            current,
+            {
+              ...current.background,
+              wallpaper: normalizeWallpaperConfig({
+                ...current.background.wallpaper,
+                ...patch,
+              }),
+            },
+            now,
+          ),
+        'canvas:wallpaper-config',
+      );
+    },
+    [commit],
+  );
+
   const setZoom = (factor: number) => {
     setCamera((current) =>
       zoomCameraAtScreenPoint(current, CAMERA_VIEWPORT, CAMERA_CENTER, current.zoom * factor),
@@ -3606,6 +3656,17 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           </div>
         </details>
         <button
+          type="button"
+          aria-label="Canvas wallpapers"
+          aria-haspopup="dialog"
+          aria-expanded={wallpaperPickerOpen}
+          onClick={() => setWallpaperPickerOpen(true)}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <Wallpaper aria-hidden size={17} />
+          <span>Wallpapers</span>
+        </button>
+        <button
           ref={presentationTriggerRef}
           type="button"
           aria-label="Present canvas"
@@ -4072,13 +4133,14 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
               setSelected(clearCanvasSelection);
             }
           }}
-          className="relative min-h-0 flex-1 overflow-auto bg-muted/20 [html[data-theme=monochrome]_&]:border-y [html[data-theme=monochrome]_&]:border-border"
+          className="relative isolate min-h-0 flex-1 overflow-auto bg-muted/20 [html[data-theme=monochrome]_&]:border-y [html[data-theme=monochrome]_&]:border-border"
           style={{
             ...canvasBackgroundStyle(document.background),
             cursor: document.layoutMode === 'edgeless' && tool === 'hand' ? 'grab' : undefined,
             touchAction: document.layoutMode === 'edgeless' ? 'none' : undefined,
           }}
         >
+          <WallpaperHost config={document.background.wallpaper} />
           {blocks.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div
@@ -4863,6 +4925,14 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           </aside>
         ) : null}
       </div>
+      <WallpaperPicker
+        open={wallpaperPickerOpen}
+        onClose={() => setWallpaperPickerOpen(false)}
+        config={document.background.wallpaper}
+        onSetWallpaper={setCanvasWallpaper}
+        onConfigureWallpaper={configureCanvasWallpaper}
+        persistCustomVideo
+      />
     </div>
   );
 }

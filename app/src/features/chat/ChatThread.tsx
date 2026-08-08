@@ -1,16 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { Sparkles } from 'lucide-react';
+import { ArrowDown, Sparkles } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { useChatMessages } from './hooks';
 import { MessageBubble } from './MessageBubble';
-import { ChatActivityTimeline } from './activity';
+import { ChatActivityTimeline, useUnifiedChatActivity } from './activity';
 import { ChatAgentActivityPanel } from '@/features/jarvis-interaction/AgentActivityCard';
 import { JarvisTaskProgressCard } from '@/features/jarvis-runs/JarvisTaskProgressCard';
 import { JarvisMemoryStatus } from '@/features/jarvis-memory/JarvisMemoryStatus';
-import {
-  JarvisCommandCenter,
-  useJarvisCommandCenterBinding,
-} from '@/features/jarvis-command-center/JarvisCommandCenter';
+import { useJarvisCommandCenterBinding } from '@/features/jarvis-command-center/JarvisCommandCenter';
 import {
   acknowledgeJarvisApprovalNavigation,
   isCurrentJarvisApprovalNavigationTarget,
@@ -28,6 +26,8 @@ import type { ChatId, Message, Part } from '@/types';
 import type { JarvisCreatorKind } from '@/features/jarvis-creator/contracts';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_EVIDENCE } from '@/lib/jarvis/smoke/evidenceIds';
+import { AgenticConsole, AgenticConsoleErrorBoundary } from './agentic-console';
+import { CONSOLE_PREFERENCE_EVENT, loadConsolePreferences } from './agentic-console/preferences';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
@@ -146,6 +146,8 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   const hasCanonicalRun = hasProjectedCanonicalRun || Boolean(currentCanonicalRun);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyRef = useRef(true);
+  const [consoleView, setConsoleView] = useState(() => loadConsolePreferences().view);
+  const [hasNewActivityBelow, setHasNewActivityBelow] = useState(false);
   const fallbackAgents = useMemo(() => extractAgentCards(messages), [messages]);
   const creatorDraftKind = useMemo(() => detectCreatorDraftKind(messages), [messages]);
   const commandCenterHandlers = useMemo<JarvisCommandCenterHandlers>(() => {
@@ -171,6 +173,50 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
       },
     };
   }, [commandCenterBinding]);
+  const agenticSessionEvidence = useMemo(() => {
+    if (!currentCanonicalRun) return undefined;
+    const status = String(currentCanonicalRun.status);
+    return {
+      status,
+      currentOperation: status.replaceAll('_', ' '),
+      model: currentCanonicalRun.model?.modelId,
+      startedAt: currentCanonicalRun.createdAt,
+      endedAt: /done|complete|success|failed|error|cancelled/i.test(status)
+        ? currentCanonicalRun.updatedAt
+        : undefined,
+    };
+  }, [currentCanonicalRun]);
+  const agenticActions = useMemo(() => {
+    const run = currentCanonicalRun;
+    const binding = commandCenterBinding;
+    if (!run || !binding) return undefined;
+    const status = String(run.status);
+    const actions: {
+      cancel?: () => Promise<void>;
+      retry?: () => Promise<void>;
+      continue?: () => void;
+    } = {};
+    if (/running|queued|pending|streaming|active/i.test(status)) {
+      actions.cancel = async () => {
+        await commandCenterHandlers.cancelRun?.(binding.hostPort.accountId, run.id);
+      };
+    }
+    if (/failed|error|cancelled/i.test(status)) {
+      actions.retry = async () => {
+        await commandCenterHandlers.retryLogicalRun?.(binding.hostPort.accountId, run.id);
+      };
+    }
+    if (/awaiting_approval|blocked/i.test(status)) {
+      actions.continue = () => {
+        const approval = scrollRef.current?.querySelector<HTMLElement>(
+          '[data-approval-kind="canonical"][data-status="pending"]',
+        );
+        approval?.scrollIntoView({ block: 'center' });
+        approval?.focus({ preventScroll: true });
+      };
+    }
+    return Object.keys(actions).length ? actions : undefined;
+  }, [commandCenterBinding, commandCenterHandlers, currentCanonicalRun]);
 
   useEffect(() => {
     let disposed = false;
@@ -249,21 +295,40 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   }, [chatId, commandCenterBinding, currentCanonicalRun]);
 
   const tailSize = streamingSize(messages[messages.length - 1]);
+  const activityEvents = useUnifiedChatActivity(String(chatId));
+  useEffect(() => {
+    const refreshConsoleView = () => setConsoleView(loadConsolePreferences().view);
+    window.addEventListener(CONSOLE_PREFERENCE_EVENT, refreshConsoleView);
+    return () => window.removeEventListener(CONSOLE_PREFERENCE_EVENT, refreshConsoleView);
+  }, []);
 
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickyRef.current = distFromBottom < 80;
+    if (stickyRef.current) setHasNewActivityBelow(false);
   };
 
+  const activityTail = activityEvents[activityEvents.length - 1];
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     if (stickyRef.current) {
       el.scrollTop = el.scrollHeight;
+      setHasNewActivityBelow(false);
+    } else if (consoleView === 'agentic') {
+      setHasNewActivityBelow(true);
     }
-  }, [messages.length, tailSize]);
+  }, [activityTail?.id, activityTail?.status, consoleView, messages.length, tailSize]);
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickyRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    setHasNewActivityBelow(false);
+  };
 
   return (
     <div
@@ -274,6 +339,7 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
       aria-live="polite"
       aria-relevant="additions text"
       data-tour="chat-thread"
+      data-pet-chat-message-list={compact ? 'true' : undefined}
       data-sakura-surface="message-scroll"
       data-sik-evidence={
         KERNEL_SMOKE_ENABLED && hasCanonicalRun ? SIK_EVIDENCE.chatRunShell : undefined
@@ -292,34 +358,65 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
         className={
           compact
             ? 'flex w-full flex-col gap-3 px-2 py-3'
-            : 'mx-auto flex w-full max-w-[860px] flex-col gap-4 px-4 py-6'
+            : consoleView === 'agentic'
+              ? 'mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-3 py-3'
+              : 'mx-auto flex w-full max-w-[860px] flex-col gap-4 px-4 py-6'
         }
       >
-        {/* Top of every chat; scrolls away with messages (not sticky). */}
-        {!hasCanonicalRun ? <ChatActivityTimeline chatId={chatId} compact={compact} /> : null}
-        {messages.length === 0 ? (
-          <ThreadHint />
+        {consoleView === 'agentic' ? (
+          <AgenticConsoleErrorBoundary
+            fallback={
+              <>
+                {/* Fallback only: single classic mini command center if agentic projection fails. */}
+                <ChatActivityTimeline chatId={chatId} compact={compact} />
+                {messages.length === 0 ? (
+                  <ThreadHint />
+                ) : (
+                  <AnimatePresence initial={false}>
+                    {messages.map((message) => (
+                      <MessageBubble
+                        key={message.id}
+                        message={message}
+                        compact={compact}
+                        creatorDraftKind={creatorDraftKind}
+                      />
+                    ))}
+                  </AnimatePresence>
+                )}
+              </>
+            }
+          >
+            {/* Single top mini command center lives inside AgenticConsole SessionHeader. */}
+            <AgenticConsole
+              chatId={String(chatId)}
+              messages={messages}
+              activity={activityEvents}
+              compact={compact}
+              creatorDraftKind={creatorDraftKind}
+              sessionEvidence={agenticSessionEvidence}
+              actions={agenticActions}
+            />
+          </AgenticConsoleErrorBoundary>
         ) : (
-          <AnimatePresence initial={false}>
-            {messages.map((m) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                compact={compact}
-                creatorDraftKind={creatorDraftKind}
-              />
-            ))}
-          </AnimatePresence>
+          <>
+            {/* Classic path: one Jarvis session mini command center. */}
+            <ChatActivityTimeline chatId={chatId} compact={compact} />
+            {messages.length === 0 ? (
+              <ThreadHint />
+            ) : (
+              <AnimatePresence initial={false}>
+                {messages.map((message) => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    compact={compact}
+                    creatorDraftKind={creatorDraftKind}
+                  />
+                ))}
+              </AnimatePresence>
+            )}
+          </>
         )}
-        {hasCanonicalRun && commandCenterBinding ? (
-          <JarvisCommandCenter
-            accountId={commandCenterBinding.hostPort.accountId}
-            chatId={String(chatId)}
-            dataPort={commandCenterBinding.dataPort}
-            handlers={commandCenterHandlers}
-            compact={compact}
-          />
-        ) : null}
         <ChatAgentActivityPanel
           chatId={chatId}
           fallbackAgents={fallbackAgents}
@@ -330,10 +427,24 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
           <JarvisTaskProgressCard chatId={String(chatId)} compact={compact} />
         ) : null}
         <JarvisMemoryStatus chatId={String(chatId)} />
+        {consoleView === 'agentic' && hasNewActivityBelow ? (
+          <Button
+            type="button"
+            size="sm"
+            className="sticky bottom-4 z-20 mx-auto shadow-soft"
+            aria-label="Jump to latest activity"
+            onClick={jumpToLatest}
+          >
+            <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+            New activity below
+          </Button>
+        ) : null}
       </div>
     </div>
   );
 }
+
+const EMPTY_ACTIVITY: readonly never[] = [];
 
 function extractAgentCards(messages: readonly Message[]) {
   return messages.flatMap((message) =>

@@ -65,6 +65,33 @@ describe('inferFallbackActionProposals', () => {
     });
   });
 
+  it('proposes opening one terminal with a requested command', () => {
+    const proposals = inferFallbackActionProposals(
+      'Open a terminal and run Get-Location.',
+      'I opened the terminal and ran the command.',
+    );
+
+    expect(proposals[0]).toMatchObject({
+      action_id: 'terminal.run',
+      params: { command: 'Get-Location' },
+    });
+  });
+
+  it('prefers terminal.run for one terminal with an explicit PowerShell command', () => {
+    const command =
+      "Set-Content -LiteralPath 'C:\\Users\\viper\\Downloads\\terminal-proof.txt' -Value 'PROOF' -NoNewline";
+    const proposals = inferFallbackActionProposals(
+      `Open one terminal and run this exact PowerShell command: ${command}`,
+      'I cannot run commands.',
+    );
+
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      action_id: 'terminal.run',
+      params: { command },
+    });
+  });
+
   it('does not open terminals for vague terminal questions', () => {
     expect(
       inferFallbackActionProposals(
@@ -78,29 +105,103 @@ describe('inferFallbackActionProposals', () => {
     expect(inferFallbackActionProposals('can you help me?', 'Sure.')).toEqual([]);
   });
 
-  it('proposes files.write when the user asks to create a file at an absolute path', () => {
+  it('proposes files.create when the user asks to create a file at an absolute path', () => {
     const proposals = inferFallbackActionProposals(
       'Jarvis make me a file here: "C:\\Users\\viper\\Downloads" okay and write a short story about dogs in it',
       "I can't fulfill this request.",
     );
 
-    expect(proposals.some((p) => p.action_id === 'files.write')).toBe(true);
-    const write = proposals.find((p) => p.action_id === 'files.write');
+    expect(proposals.some((p) => p.action_id === 'files.create')).toBe(true);
+    const write = proposals.find((p) => p.action_id === 'files.create');
     expect(String(write?.params.path)).toMatch(/Downloads/i);
     expect(String(write?.params.path)).toMatch(/\.txt$/i);
     expect(String(write?.params.content).length).toBeGreaterThan(5);
   });
 
-  it('proposes files.write into a general default folder when no path is given', () => {
+  it('preserves content after an explicit exact-content marker', () => {
+    const proposals = inferFallbackActionProposals(
+      'Create a text file at "C:\\Users\\viper\\Downloads\\qualification.txt" that contains exactly: VibeSpace llama3.2 verified file action.',
+      'I cannot write files.',
+    );
+
+    expect(proposals[0]).toMatchObject({
+      action_id: 'files.create',
+      params: {
+        path: 'C:\\Users\\viper\\Downloads\\qualification.txt',
+        content: 'VibeSpace llama3.2 verified file action.',
+      },
+    });
+  });
+
+  it('does not infer a read action from the word read inside a create target filename', () => {
+    const proposals = inferFallbackActionProposals(
+      'Create C:\\Users\\viper\\Downloads\\vibespace-read-proof-817.txt that contains exactly: LOCAL_FILE_PROOF_817.',
+      'I cannot write files.',
+    );
+
+    expect(proposals.map(({ action_id }) => action_id)).toEqual(['files.create']);
+  });
+
+  it('joins an explicit directory with the requested filename for a file inspection', () => {
+    const proposals = inferFallbackActionProposals(
+      'Inspect C:\\Users\\viper\\Downloads and check whether vibespace-read-proof-817.txt exists.',
+      'I need to inspect that file.',
+    );
+
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      action_id: 'files.read',
+      params: {
+        path: 'C:\\Users\\viper\\Downloads\\vibespace-read-proof-817.txt',
+      },
+    });
+  });
+
+  it('does not strip markup quotes from explicitly exact file content', () => {
+    const proposals = inferFallbackActionProposals(
+      'Create a file at "C:\\Users\\viper\\Downloads\\game.html" that contains exactly: <!doctype html><button id="play">Play</button>',
+      'I cannot write files.',
+    );
+
+    expect(proposals[0]).toMatchObject({
+      action_id: 'files.create',
+      params: {
+        content: '<!doctype html><button id="play">Play</button>',
+      },
+    });
+  });
+
+  it('does not turn a capability ledger into a file-create action', () => {
+    const proposals = inferFallbackActionProposals(
+      'Give a compact qualification ledger. Mark memory recall, file create, file read, terminal execution, HTML generation, and multitask as PASS or FAIL.',
+      'Here is the requested ledger.',
+    );
+
+    expect(proposals).toEqual([]);
+  });
+
+  it('proposes files.create into a general default folder when no path is given', () => {
     const proposals = inferFallbackActionProposals(
       'Jarvis make me a file and write a short story about cats in it',
       "I can't write files.",
     );
 
-    expect(proposals.some((p) => p.action_id === 'files.write')).toBe(true);
-    const write = proposals.find((p) => p.action_id === 'files.write');
+    expect(proposals.some((p) => p.action_id === 'files.create')).toBe(true);
+    const write = proposals.find((p) => p.action_id === 'files.create');
     expect(String(write?.params.path)).toMatch(/jarvis-note\.txt$/i);
     expect(String(write?.params.content).toLowerCase()).toMatch(/cat/);
+  });
+
+  it('proposes files.read when the user asks to inspect an absolute file path', () => {
+    const proposals = inferFallbackActionProposals(
+      'Read this file directly: "C:\\Users\\viper\\Downloads\\source.txt"',
+      'I cannot access files on your computer.',
+    );
+
+    expect(proposals[0]).toMatchObject({
+      action_id: 'files.read',
+      params: { path: 'C:\\Users\\viper\\Downloads\\source.txt' },
+    });
   });
 
   it('proposes creating a Jarvis schedule from natural language', () => {

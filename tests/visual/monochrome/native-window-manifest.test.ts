@@ -7,15 +7,21 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import * as nativeAuthority from './native-window-manifest.ts';
 
-const SOURCE_COMMIT = '7eb708e184ee4f054a49d3e70d73e80fd4eb97ae';
+const SOURCE_COMMIT = nativeAuthority.MONOCHROME_NATIVE_SOURCE_COMMIT;
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 const EXPECTED_CAPABILITIES = [
   [
+    'cold-start-intro.json',
+    'cold-start-intro',
+    ['cold-start-intro'],
+    'F001AC42A3A01888CC83B86AEC9817E994AE25F5B5A5F30A1B5DB92A0A9E3648',
+  ],
+  [
     'default.json',
     'default',
     ['main', 'dictation', 'pet-overlay', 'pet-mini-panel', 'preview-surface'],
-    '8247E7FCCE49ADD5774DB00BB44E64BAFEBEB3CB043B6952831809AFA9C03DFA',
+    '436AF8A746E4157E0BFC84FDB1E7144A3BC6022D98F99DE9BBA1D437B7D19C83',
   ],
   [
     'pet-mini-panel.json',
@@ -30,19 +36,32 @@ const EXPECTED_CAPABILITIES = [
     'E46798752A90E976F01000D48AE6570FC4B2CF9CC5FB6BF5E3C6E3580662D0AC',
   ],
   [
+    'taskbar-usage.json',
+    'taskbar-usage',
+    ['taskbar-usage'],
+    'BFDCDEECC5777125C1288149CF89390BF90D056496F6A5E87F35B278A94AA6B3',
+  ],
+  [
     'workbench.json',
     'workbench-window',
     ['workbench-*'],
-    'B5FBAAB55EFC551568004A0A98A9F4DA33AC55887B97CE8F11EE3F4B7BA5A64C',
+    '8719416D697B0ADC8D3C1540CF22655F1C0EEBCCDE400F6DC4408CA86AAA2559',
   ],
 ] as const;
 
 const EXPECTED_SURFACES = [
+  ['cold-start-intro', 'declared', 'app/src-tauri/tauri.conf.json', ['cold-start-intro']],
   ['dictation', 'declared', 'app/src-tauri/tauri.conf.json', ['default']],
   ['main', 'declared', 'app/src-tauri/tauri.conf.json', ['default']],
   ['pet-mini-panel', 'dynamic-rust', 'app/src-tauri/src/pets.rs', ['default', 'pet-mini-panel']],
   ['pet-overlay', 'dynamic-rust', 'app/src-tauri/src/pets.rs', ['default', 'pet-overlay']],
   ['preview-surface', 'dynamic-rust', 'app/src-tauri/src/preview.rs', ['default']],
+  [
+    'taskbar-usage',
+    'dynamic-webview',
+    'app/src/features/taskbar-usage/taskbarUsageNativeWindow.ts',
+    ['taskbar-usage'],
+  ],
   [
     'workbench-main',
     'dynamic-webview',
@@ -53,9 +72,11 @@ const EXPECTED_SURFACES = [
 
 const TEST_ONLY_CAPABILITY_FILES = ['monochrome-test.json'];
 const PRODUCTION_CAPABILITY_IDENTIFIERS = [
+  'cold-start-intro',
   'default',
   'pet-mini-panel',
   'pet-overlay',
+  'taskbar-usage',
   'workbench-window',
 ];
 const TEST_ONLY_CAPABILITY_IDENTIFIER = 'monochrome-test';
@@ -94,8 +115,9 @@ function capabilityFilesAtCommit(): string[] {
     { cwd: REPO_ROOT, encoding: 'utf8' },
   )
     .split(/\r?\n/u)
-    .filter((entry) => entry.endsWith('.json'))
-    .map((entry) => entry.replace('app/src-tauri/capabilities/', ''))
+    .filter((sourcePath) => sourcePath.endsWith('.json'))
+    .map((sourcePath) => path.basename(sourcePath))
+    .filter((file) => !TEST_ONLY_CAPABILITY_FILES.includes(file))
     .sort();
 }
 
@@ -222,6 +244,11 @@ function discoverNativeSurfaces(
       sourcePath: 'app/src/features/workbench/window.ts',
       predicate: /WORKBENCH_WINDOW_LABEL = '([^']+)'/gu,
     },
+    {
+      creation: 'dynamic-webview' as const,
+      sourcePath: 'app/src/features/taskbar-usage/taskbarUsageNativeWindow.ts',
+      predicate: /TASKBAR_USAGE_WINDOW_LABEL = '([^']+)'/gu,
+    },
   ];
   for (const rule of dynamicRules) {
     const source = readSource(rule.sourcePath);
@@ -284,7 +311,7 @@ test('capability inventory is closed over JSON files and parsed identifiers at t
     capabilityFilesAtCommit(),
   );
   for (const entry of nativeAuthority.MONOCHROME_NATIVE_WINDOW_MANIFEST.capabilities) {
-    const raw = sourceAtCommit(`app/src-tauri/capabilities/${entry.file}`);
+    const raw = currentSource(`app/src-tauri/capabilities/${entry.file}`);
     const parsed = JSON.parse(raw) as { identifier: string; windows: string[] };
     assert.equal(entry.identifier, parsed.identifier);
     assert.deepEqual(entry.windows, parsed.windows);
@@ -312,7 +339,7 @@ test('native surface inventory freezes declared and dynamic creation seams', () 
     EXPECTED_SURFACES,
   );
   for (const surface of nativeAuthority.MONOCHROME_NATIVE_WINDOW_MANIFEST.surfaces) {
-    const source = sourceAtCommit(surface.sourcePath);
+    const source = currentSource(surface.sourcePath);
     assert.ok(source.includes(surface.label), `surface label missing: ${surface.label}`);
   }
 });
@@ -443,16 +470,18 @@ test('native validator rejects duplicate identifiers, drift, unrepresented files
   );
 });
 
-test('production capability auto-discovery excludes the test-only file and stays closed at four', () => {
+test('production capability auto-discovery excludes the test-only file and stays closed', () => {
   assert.ok(
     listCapabilityFiles().includes('monochrome-test.json'),
     'expected committed monochrome-test.json capability on disk',
   );
   const productionFiles = currentCapabilitySnapshots().map((entry) => entry.file);
   assert.deepEqual(productionFiles, [
+    'cold-start-intro.json',
     'default.json',
     'pet-mini-panel.json',
     'pet-overlay.json',
+    'taskbar-usage.json',
     'workbench.json',
   ]);
   assert.equal(productionFiles.includes('monochrome-test.json'), false);
@@ -462,7 +491,7 @@ test('production capability auto-discovery excludes the test-only file and stays
   assert.deepEqual(productionIdentifiers, [...PRODUCTION_CAPABILITY_IDENTIFIERS].sort());
 });
 
-test('base tauri.conf.json pins an explicit production capability allowlist equal to the frozen four', () => {
+test('base tauri.conf.json pins an explicit production capability allowlist equal to the frozen set', () => {
   const config = JSON.parse(currentSource('app/src-tauri/tauri.conf.json')) as {
     app?: { security?: { capabilities?: string[] } };
   };

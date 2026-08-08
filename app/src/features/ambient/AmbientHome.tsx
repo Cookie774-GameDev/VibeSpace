@@ -17,24 +17,9 @@
  */
 import * as React from 'react';
 import { useUIStore } from '@/stores/ui';
+import { formatAmbientClockParts } from '@/lib/timeFormat';
 import { QUOTES } from './quotes';
 import './sakura-ambient.css';
-
-/**
- * Format unix ms to local HH:MM (24h or 12h depending on locale, but we
- * pick 24h for tabular cleanliness when ambient).
- */
-function formatClock(d: Date): { h: string; m: string; date: string; secs: string } {
-  const h = d.getHours().toString().padStart(2, '0');
-  const m = d.getMinutes().toString().padStart(2, '0');
-  const secs = d.getSeconds().toString().padStart(2, '0');
-  const date = d.toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
-  return { h, m, secs, date };
-}
 
 /**
  * Render the ambient takeover. Mounted unconditionally; only renders content
@@ -45,6 +30,7 @@ function formatClock(d: Date): { h: string; m: string; date: string; secs: strin
 export function AmbientHome() {
   const ambient = useUIStore((s) => s.ambient);
   const ambientActive = useUIStore((s) => s.ambientActive);
+  const clockFormat = useUIStore((s) => s.clockFormat);
   const setAmbientActive = useUIStore((s) => s.setAmbientActive);
 
   const [now, setNow] = React.useState(() => new Date());
@@ -124,7 +110,7 @@ export function AmbientHome() {
 
   if (!ambient || !ambientActive) return null;
 
-  const { h, m, date } = formatClock(now);
+  const { h, m, period, date } = formatAmbientClockParts(now, clockFormat);
 
   return (
     <div
@@ -155,8 +141,17 @@ export function AmbientHome() {
           aria-live="polite"
         >
           {h}
-          <span className="opacity-60">:</span>
-          {m}
+          {m ? (
+            <>
+              <span className="opacity-60">:</span>
+              {m}
+            </>
+          ) : null}
+          {period ? (
+            <span className="ml-3 text-[0.35em] align-super tracking-[0.12em] opacity-70">
+              {period}
+            </span>
+          ) : null}
         </div>
 
         <div className="text-sm uppercase tracking-[0.32em] text-foreground/60 [html[data-theme=monochrome]_&]:font-mono [html[data-theme=monochrome]_&]:tracking-[0.14em]">

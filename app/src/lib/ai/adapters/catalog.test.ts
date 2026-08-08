@@ -194,6 +194,8 @@ describe('provider capability catalog', () => {
     }
     expect(getProviderConnectionDescriptor('ollama-local').capabilities).toEqual({
       ...native,
+      images: true,
+      files: true,
       localOnly: true,
     });
     expect(() => getProviderConnectionDescriptor('missing')).toThrowError(
@@ -300,6 +302,19 @@ describe('shell-free provider command vectors', () => {
       cwd: 'C:\\work space',
     });
     expect(invocation.args.join(' ')).not.toContain(prompt);
+  });
+
+  it('passes a validated Codex reasoning effort as a literal config argument', () => {
+    expect(
+      buildCodexInvocation({
+        prompt,
+        modelId: 'gpt-5.6-sol',
+        reasoningEffort: 'xhigh',
+      }).args,
+    ).toEqual(['exec', '--json', '--model', 'gpt-5.6-sol', '-c', 'model_reasoning_effort="xhigh"']);
+    expect(() =>
+      buildCodexInvocation({ prompt, reasoningEffort: 'high; Remove-Item C:\\' }),
+    ).toThrowError('Codex CLI reasoning effort is unsupported');
   });
 
   it('keeps Claude and OpenCode prompts on stdin', () => {

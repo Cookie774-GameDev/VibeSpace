@@ -14,6 +14,7 @@ const css = existsSync(cssPath) ? readFileSync(cssPath, 'utf8') : '';
 describe('Prompt Forge Sakura appearance', () => {
   it('adds presentation hooks without changing explicit start or configuration behavior', () => {
     const onStart = vi.fn();
+    const onModelSelectionChange = vi.fn();
     const onPrivacyModeChange = vi.fn();
     const rendered = render(
       <TooltipProvider>
@@ -26,13 +27,15 @@ describe('Prompt Forge Sakura appearance', () => {
           compact={false}
           modelSelection={{ mode: 'prefer_local' }}
           modelOptions={[]}
-          onModelSelectionChange={vi.fn()}
+          onModelSelectionChange={onModelSelectionChange}
           privacyMode="local_only"
           onPrivacyModeChange={onPrivacyModeChange}
           allowPublicResearch={false}
           onAllowPublicResearchChange={vi.fn()}
           publicResearchAvailable
           offlineMode={false}
+          autoUpgradeOnSend={false}
+          onAutoUpgradeOnSendChange={vi.fn()}
           onStart={onStart}
           onCancel={vi.fn()}
         />
@@ -45,8 +48,9 @@ describe('Prompt Forge Sakura appearance', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Configure Prompt Forge' }));
     expect(document.querySelector('[data-sakura-surface="prompt-forge-settings"]')).not.toBeNull();
-    fireEvent.click(screen.getByRole('radio', { name: 'Provider allowed' }));
-    expect(onPrivacyModeChange).toHaveBeenCalledWith('provider_allowed');
+    fireEvent.click(screen.getByRole('radio', { name: /Use current chat model/ }));
+    expect(onModelSelectionChange).toHaveBeenCalledWith({ mode: 'current_chat_model' });
+    expect(onPrivacyModeChange).not.toHaveBeenCalled();
   });
 
   it('marks recovery and review chrome while leaving prompt content explicitly preserved', () => {

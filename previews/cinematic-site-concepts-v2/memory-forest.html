@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03110D">
+  <title>The Memory Forest — VibeSpace</title>
+  <meta name="description" content="A seven-act cinematic memory ecology for VibeSpace.">
+  <link rel="stylesheet" href="experience.css">
+</head>
+<body data-world="memory-forest" data-active-act="0">
+  <a class="skip-link" href="#narrative">Skip to the story</a>
+  <div class="loader" data-loader aria-live="polite">
+    <span data-loader-label>Germinating memory</span>
+    <output data-loader-progress>000%</output>
+  </div>
+  <div class="entry-gate" data-entry-gate hidden>
+    <p>Roots established</p>
+    <button type="button" data-enter-sound>Enter with sound</button>
+    <button type="button" data-enter-silent>Enter silently</button>
+  </div>
+  <main class="experience" data-experience id="narrative">
+    <canvas id="world-canvas" aria-hidden="true"></canvas>
+    <div class="plate-stack" data-plate-stack aria-hidden="true"></div>
+    <div class="act-copy" data-act-copy></div>
+  </main>
+  <script type="module" src="runtime/experience.mjs"></script>
+</body>
+</html>

@@ -61,6 +61,8 @@ import {
   type PetReactionId,
 } from './petRuntimeEvents';
 import { cn } from '@/lib/utils';
+import { useUIStore } from '@/stores/ui';
+import { installPetContextMenuDismissal } from './petContextMenuDismissal';
 
 const DISPLAY = 128;
 const DEBUG_ANIMS: PetAnimId[] = [
@@ -108,12 +110,13 @@ export function PetOverlay({
   edgeSnapping: edgeSnappingProp,
 }: PetOverlayProps) {
   const hostRef = React.useRef<HTMLDivElement>(null);
+  const contextMenuRef = React.useRef<HTMLDivElement>(null);
   const playerRef = React.useRef(new PixiAtlasPlayer());
   const stateRef = React.useRef<PetMachineState>(createInitialPetState());
   const characterId = usePetSettingsStore((s) => s.characterId);
   const settingsPositionLocked = usePetSettingsStore((s) => s.positionLocked);
   const setPositionLocked = usePetSettingsStore((s) => s.setPositionLocked);
-  const panelMode = usePetSettingsStore((s) => s.panelMode) ?? 'normal';
+  const panelMode = usePetSettingsStore((s) => s.panelMode) ?? 'always-on-top';
   const settingsEdgeSnapping = usePetSettingsStore((s) => s.edgeSnapping);
   const settingsAnimationLevel = usePetSettingsStore((s) => s.animationLevel) ?? 'calm';
   const animationLevel = animationLevelOverride ?? settingsAnimationLevel;
@@ -356,6 +359,81 @@ export function PetOverlay({
   }, [enabled]);
 
   /**
+   * Recover when the sprite vanishes but the window/drag surface remains.
+   * Typical cause: WebGL context loss or a stopped ticker after long idle /
+   * GPU pressure. Soft-recover first; hard re-init + reload current anim
+   * when the canvas is unhealthy.
+   */
+  React.useEffect(() => {
+    if (!enabled || !motionPolicy.animationsEnabled) return;
+
+    let recovering = false;
+    const hardRecover = () => {
+      if (recovering) return;
+      recovering = true;
+      try {
+        lifecycleGenerationRef.current += 1;
+        animationRequestRef.current += 1;
+        disposeAll([playerRef.current]);
+        currentAnim.current = null;
+        initOnce.current = false;
+        playerRef.current = new PixiAtlasPlayer();
+        const anim = stateRef.current.anim;
+        void playAnimRef.current(anim).finally(() => {
+          recovering = false;
+        });
+      } catch {
+        recovering = false;
+      }
+    };
+
+    const softOrHardRecover = () => {
+      if (document.visibilityState === 'hidden') return;
+      const player = playerRef.current as PixiAtlasPlayer & {
+        ensureAliveRendering?: () => boolean;
+        isDestroyed?: boolean;
+      };
+      if (player.isDestroyed) {
+        hardRecover();
+        return;
+      }
+      if (typeof player.ensureAliveRendering === 'function' && player.ensureAliveRendering()) {
+        return;
+      }
+      // Missing soft-recovery API (tests) or unhealthy canvas → hard re-init.
+      if (typeof player.ensureAliveRendering === 'function') {
+        hardRecover();
+      }
+    };
+
+    const player = playerRef.current as PixiAtlasPlayer & {
+      setContextLostHandler?: (handler: (() => void) | null) => void;
+      ensureAliveRendering?: () => boolean;
+      isContextUnhealthy?: () => boolean;
+    };
+    player.setContextLostHandler?.(() => {
+      // Defer so contextrestored can finish before we tear down.
+      window.setTimeout(softOrHardRecover, 0);
+    });
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') softOrHardRecover();
+    };
+    const onPageShow = () => softOrHardRecover();
+    // Bounded health poll — cheap when healthy; recovers a blank but draggable pet.
+    const interval = window.setInterval(softOrHardRecover, 12_000);
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      playerRef.current.setContextLostHandler?.(null);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onPageShow);
+      window.clearInterval(interval);
+    };
+  }, [enabled, motionPolicy.animationsEnabled]);
+
+  /**
    * Boot / character mount — runs once per enabled+characterId.
    * Must NOT depend on playAnim identity or panelOpen (that re-fired welcome forever).
    */
@@ -578,6 +656,21 @@ export function PetOverlay({
   }, [enabled, motionPolicy.idleFunEnabled, setState]);
 
   const [ctxMenu, setCtxMenu] = React.useState<{ x: number; y: number } | null>(null);
+  const route = useUIStore((state) => state.route);
+  const routeRef = React.useRef(route);
+
+  React.useEffect(() => {
+    if (routeRef.current !== route) setCtxMenu(null);
+    routeRef.current = route;
+  }, [route]);
+
+  React.useEffect(() => {
+    if (!ctxMenu || !contextMenuRef.current) return;
+    return installPetContextMenuDismissal({
+      menuElement: contextMenuRef.current,
+      close: () => setCtxMenu(null),
+    });
+  }, [ctxMenu]);
 
   const openPanelNow = React.useCallback(() => {
     if (openingPanelRef.current) return;
@@ -690,6 +783,7 @@ export function PetOverlay({
   };
 
   const onPointerEnter = () => {
+    // Pointer tracking may still drive future behavior; never paint a status/hover dot.
     if (!pointerTracking || reactionRef.current) return;
     setRuntimeReaction('hover');
   };
@@ -905,21 +999,7 @@ export function PetOverlay({
         <span className="sr-only" role="status" aria-live="polite">
           {runtimeReaction === 'idle' ? 'Pet is idle' : `Pet status: ${runtimeReaction}`}
         </span>
-        {runtimeReaction !== 'idle' && (
-          <div
-            className={cn(
-              'pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 rounded-full border border-white/70 shadow-sm',
-              runtimeReaction === 'error' || runtimeReaction === 'blocked'
-                ? 'bg-destructive'
-                : runtimeReaction === 'success'
-                  ? 'bg-success'
-                  : 'bg-accent-copper',
-            )}
-            title={`Pet status: ${runtimeReaction}`}
-            aria-hidden
-            data-pet-reaction-indicator={runtimeReaction}
-          />
-        )}
+        {/* No floating status/hover dots — the sprite itself is the only visible chrome. */}
       </div>
       {debugMode && (
         <div
@@ -959,6 +1039,7 @@ export function PetOverlay({
       )}
       {ctxMenu && (
         <div
+          ref={contextMenuRef}
           className="fixed z-[90] min-w-[120px] rounded-lg border border-border bg-panel shadow-lg p-1"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
           data-pet-context-menu="true"

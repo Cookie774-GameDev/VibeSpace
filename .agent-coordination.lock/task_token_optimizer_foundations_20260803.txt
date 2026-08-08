@@ -1,0 +1,11 @@
+task_id=VS-PR31-MG1-TOKEN-ENGINES-20260803-A8
+controller=/root/native_intelligence_audit
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T13:11:54.8474127-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Connect the newly pinned gpt-tokenizer and Hugging Face tokenizers packages to reviewed exact-local Token Optimize engines, with lazy imports, exact model-family registration, tokenizer-asset injection, abort handling, bounded caches, and truthful provenance; retain provider-native counting ports for Claude and Gemini.
+owned_paths=app/src/features/token-optimizer/**
+exclusions=all existing files;package.json;package-lock.json;all chat UI;all settings UI;all provider adapters;all Context Map files;all Prompt Forge files;all product data;all external systems;all Git staging/commit/push/branch operations
+status=DELEGATED_PRODUCTION_TOKENIZER_ENGINES

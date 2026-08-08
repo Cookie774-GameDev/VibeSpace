@@ -169,6 +169,8 @@ export function applyTerminalCommandBatch(
         const seed = {
           command: defaultShell(),
           startupCommand: item.command || undefined,
+          startupCommands: item.startupCommands,
+          preserveExisting: item.preserveExisting,
           agentSlug: item.agentSlug ?? item.label,
           name: item.agentSlug ? item.label : undefined,
           cwd: item.cwd,
@@ -550,10 +552,10 @@ export function TerminalsPage() {
       <div
         data-monochrome-surface="terminal-toolbar"
         data-sakura-surface="terminal-toolbar"
-        className="shrink-0 flex flex-wrap items-center justify-between gap-3 px-3 py-1 border-b border-border bg-paper-soft [html[data-theme=monochrome]_&]:bg-panel"
+        className="flex shrink-0 flex-wrap items-center justify-between gap-1.5 border-b border-border bg-paper-soft px-2 py-0.5 [html[data-theme=monochrome]_&]:bg-panel"
       >
-        <div className="flex items-center gap-3 text-metadata text-muted-foreground">
-          <span className="font-display text-foreground text-secondary tracking-tight">
+        <div className="flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
+          <span className="font-display text-secondary tracking-tight text-foreground">
             Terminals
           </span>
           <span aria-hidden className="text-border-mid">
@@ -563,16 +565,16 @@ export function TerminalsPage() {
             {count} / {MAX_PANES} pane{count === 1 ? '' : 's'}
           </span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
             onClick={handleAddPane}
             disabled={atCap}
-            className="gap-1"
+            className="h-6 gap-0.5 px-1.5 text-[11px] leading-none"
             title={atCap ? `Max ${MAX_PANES} panes` : 'Add a pane'}
           >
-            <Plus className="h-3.5 w-3.5" /> Add pane
+            <Plus className="h-3 w-3" /> Add pane
           </Button>
           <Button
             variant="ghost"
@@ -582,7 +584,7 @@ export function TerminalsPage() {
             onMouseLeave={cancelHold}
             onTouchStart={startHold}
             onTouchEnd={endHold}
-            className="gap-1 relative overflow-hidden select-none active:bg-transparent hover:bg-panel-soft"
+            className="relative h-6 gap-0.5 overflow-hidden px-1.5 text-[11px] leading-none select-none active:bg-transparent hover:bg-panel-soft"
             title="Click to reset sizing, hold 2s to clear all panes"
           >
             <div
@@ -591,8 +593,8 @@ export function TerminalsPage() {
                 isHolding ? 'duration-[2000ms] ease-out w-full' : 'duration-75 w-0',
               )}
             />
-            <span className="relative z-10 flex items-center gap-1">
-              <RotateCcw className="h-3.5 w-3.5" /> Reset
+            <span className="relative z-10 flex items-center gap-0.5">
+              <RotateCcw className="h-3 w-3" /> Reset
             </span>
           </Button>
         </div>

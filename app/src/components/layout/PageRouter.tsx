@@ -78,6 +78,10 @@ const AgentsRoute = React.lazy(() =>
   import('@/features/agents').then((m) => ({ default: m.AgentManager })),
 );
 
+const ModelFoundryRoute = React.lazy(() =>
+  import('@/features/model-foundry').then((m) => ({ default: m.BuildYourOwnAIPage })),
+);
+
 const AgentDetailRoute = React.lazy(() =>
   import('@/features/agents')
     .then((m) => ({ default: m.AgentDetail }))
@@ -214,6 +218,7 @@ const routeMap: Record<Route, React.LazyExoticComponent<React.ComponentType>> = 
   kanban: KanbanPage,
   schedule: SchedulePage,
   agents: AgentsRoute,
+  'model-foundry': ModelFoundryRoute,
   'agent-detail': AgentDetailRoute,
   'project-detail': ProjectDetailRoute,
   context: ContextPage,

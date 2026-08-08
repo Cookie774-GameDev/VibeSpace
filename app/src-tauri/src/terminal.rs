@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,7 +32,98 @@ use tauri::{AppHandle, Emitter, State};
 /// while holding it; in practice we only hold it long enough to insert,
 /// remove, or clone an `Arc` out of a value.
 #[derive(Default)]
-pub struct TerminalState(pub Arc<AsyncMutex<HashMap<String, PtyHandle>>>);
+pub struct TerminalState(
+    pub Arc<AsyncMutex<HashMap<String, PtyHandle>>>,
+    Arc<StdMutex<HashMap<String, usize>>>,
+    Arc<AtomicUsize>,
+    Arc<AtomicBool>,
+);
+
+impl TerminalState {
+    /// Conservatively reports whether restarting the native process could
+    /// terminate a live PTY. A contended map is treated as active.
+    pub fn has_active_sessions(&self) -> bool {
+        self.0
+            .try_lock()
+            .map(|sessions| {
+                sessions.values().any(|handle| {
+                    handle.active.load(Ordering::SeqCst) && !handle.deleted.load(Ordering::SeqCst)
+                })
+            })
+            .unwrap_or(true)
+    }
+
+    fn begin_spawn(&self) -> Result<TerminalSpawnReservation, String> {
+        if self.3.load(Ordering::SeqCst) {
+            return Err("terminal: native recovery is in progress".to_string());
+        }
+        self.2.fetch_add(1, Ordering::SeqCst);
+        if self.3.load(Ordering::SeqCst) {
+            self.2.fetch_sub(1, Ordering::SeqCst);
+            return Err("terminal: native recovery is in progress".to_string());
+        }
+        Ok(TerminalSpawnReservation {
+            spawns_in_flight: Arc::clone(&self.2),
+        })
+    }
+
+    pub fn commit_restart(&self, timeout: std::time::Duration) -> bool {
+        if self
+            .3
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return false;
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        while self.2.load(Ordering::SeqCst) > 0 {
+            if std::time::Instant::now() >= deadline {
+                self.3.store(false, Ordering::SeqCst);
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        true
+    }
+
+    pub fn cancel_restart(&self) {
+        self.3.store(false, Ordering::SeqCst);
+    }
+}
+
+struct TerminalSpawnReservation {
+    spawns_in_flight: Arc<AtomicUsize>,
+}
+
+impl Drop for TerminalSpawnReservation {
+    fn drop(&mut self) {
+        self.spawns_in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct PreserveCapacityReservation {
+    counts: Arc<StdMutex<HashMap<String, usize>>>,
+    key: String,
+}
+
+impl Drop for PreserveCapacityReservation {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.key);
+            }
+        }
+    }
+}
+
+fn project_capacity_key(project_id: &Option<String>) -> String {
+    project_id
+        .as_ref()
+        .map(|id| format!("project:{id}"))
+        .unwrap_or_else(|| "project:<none>".to_string())
+}
 
 /// Per-session bookkeeping. Writer / master / child-killer each live behind
 /// their own async mutex + `Arc` so a long-running `write` can't block a
@@ -592,6 +683,7 @@ pub async fn terminal_spawn(
     project_id: Option<String>,
     project_name: Option<String>,
     cancellation_token: Option<String>,
+    preserve_existing: Option<bool>,
 ) -> Result<SpawnResponse, String> {
     let cancellation_token = match cancellation_token {
         Some(token) if valid_cancellation_token(&token) => Some(token),
@@ -599,8 +691,11 @@ pub async fn terminal_spawn(
         None => None,
     };
     let launch = terminal_launch_spec(command, startup_command)?;
+    let _spawn_reservation = state.begin_spawn()?;
     let cmd_str = launch.executable.clone();
     let mut evicted_targets = Vec::new();
+    let preserve_existing = preserve_existing.unwrap_or(false);
+    let mut capacity_reservation: Option<PreserveCapacityReservation> = None;
     {
         let map = state.0.lock().await;
         let mut project_sessions: Vec<(String, u64)> = map
@@ -619,7 +714,22 @@ pub async fn terminal_spawn(
             project_sessions.len(),
             MAX_TERMINAL_SESSIONS
         );
-        if project_sessions.len() >= MAX_TERMINAL_SESSIONS {
+        if preserve_existing {
+            let key = project_capacity_key(&project_id);
+            let mut counts = state.1.lock().unwrap_or_else(|e| e.into_inner());
+            let reserved = counts.get(&key).copied().unwrap_or(0);
+            if project_sessions.len() + reserved >= MAX_TERMINAL_SESSIONS {
+                return Err(
+                    "terminal: project capacity reached; existing terminals were preserved"
+                        .to_string(),
+                );
+            }
+            *counts.entry(key.clone()).or_insert(0) += 1;
+            capacity_reservation = Some(PreserveCapacityReservation {
+                counts: state.1.clone(),
+                key,
+            });
+        } else if project_sessions.len() >= MAX_TERMINAL_SESSIONS {
             // Sort by started_at ascending (oldest first)
             project_sessions.sort_by_key(|k| k.1);
             let evict_count = project_sessions.len() - MAX_TERMINAL_SESSIONS + 1;
@@ -786,6 +896,7 @@ pub async fn terminal_spawn(
     };
 
     state.0.lock().await.insert(session_id.clone(), handle);
+    drop(capacity_reservation);
     let _ = reader_start_tx.send(());
     let _ = waiter_start_tx.send(());
     Ok(SpawnResponse {
@@ -793,6 +904,21 @@ pub async fn terminal_spawn(
         cwd: response_cwd,
         startup_command_consumed: launch.startup_command_consumed,
     })
+}
+
+/// Validate an optional tool working directory before any terminal is queued.
+#[tauri::command]
+pub fn terminal_validate_directory(path: String) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return Err("terminal: invalid project directory".to_string());
+    }
+    let metadata = std::fs::metadata(trimmed)
+        .map_err(|_| "terminal: project directory does not exist".to_string())?;
+    if !metadata.is_dir() {
+        return Err("terminal: project path is not a directory".to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 /// Forward keystrokes (or any UTF-8 byte stream) into the PTY's stdin.
@@ -953,9 +1079,23 @@ mod tests {
     use super::{
         decode_terminal_bytes, default_terminal_cwd, emit_before_remove, terminal_launch_spec,
         valid_cancellation_token, validated_kill_request, ExitReason, KillRequest, KillRequestKind,
-        KillResultKind, KillStart, LifecycleArbiter, TerminalKillResult,
+        KillResultKind, KillStart, LifecycleArbiter, TerminalKillResult, TerminalState,
         MAX_CANCELLATION_TOKEN_BYTES,
     };
+
+    #[test]
+    fn restart_gate_waits_for_in_flight_spawns_and_blocks_new_ones() {
+        let state = TerminalState::default();
+        let spawn = state.begin_spawn().expect("initial spawn should reserve");
+
+        assert!(!state.commit_restart(std::time::Duration::ZERO));
+        drop(spawn);
+        assert!(state.commit_restart(std::time::Duration::ZERO));
+        assert!(state.begin_spawn().is_err());
+
+        state.cancel_restart();
+        assert!(state.begin_spawn().is_ok());
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

@@ -7,10 +7,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { Onboarding } from '@/features/onboarding';
 import { RequireModelAccess } from './RequireModelAccess';
-import {
-  kernelSmokeProvider,
-  subscribeKernelSmokeBinding,
-} from '@/lib/ai/providers/kernelSmoke';
+import { kernelSmokeProvider, subscribeKernelSmokeBinding } from '@/lib/ai/providers/kernelSmoke';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
@@ -66,8 +63,7 @@ export function AuthGate({ children }: AuthGateProps) {
 
   // Has the user connected a model yet? Cloud key, offline mode, or an
   // installed local Ollama model all satisfy the gate.
-  const hasModelAccess =
-    offlineMode || localModelOptions.length > 0 || hasProviderKeyAccess;
+  const hasModelAccess = offlineMode || localModelOptions.length > 0 || hasProviderKeyAccess;
 
   // 1. Generate a stable local user id on first run.
   useEffect(() => {
@@ -79,7 +75,9 @@ export function AuthGate({ children }: AuthGateProps) {
   // Start Ollama discovery before the model-access gate so local models can
   // satisfy hasModelAccess and the catalog is warm when the shell mounts.
   useEffect(() => {
-    void bootstrapOllamaConnection();
+    const controller = new AbortController();
+    void bootstrapOllamaConnection({ signal: controller.signal });
+    return () => controller.abort();
   }, []);
 
   // 2. Seed the local database (idempotent). Runs once we have a user id and
@@ -91,9 +89,7 @@ export function AuthGate({ children }: AuthGateProps) {
     (async () => {
       try {
         // @ts-ignore - module owned by another subagent, may not exist yet
-        const mod: { seedIfEmpty?: () => Promise<void> | void } = await import(
-          '@/lib/db/seed'
-        );
+        const mod: { seedIfEmpty?: () => Promise<void> | void } = await import('@/lib/db/seed');
         if (cancelled) return;
         await mod.seedIfEmpty?.();
       } catch {

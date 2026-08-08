@@ -1,0 +1,3 @@
+# No source API keys or AI keys are required.
+# Copy this file to `.dev.vars` only when testing optional local overrides.
+# EXTRA_FEEDS=[]

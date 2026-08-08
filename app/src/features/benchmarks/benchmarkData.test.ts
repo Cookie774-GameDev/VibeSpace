@@ -68,26 +68,63 @@ describe('benchmarkData live sources', () => {
     expect(rows[1]?.open_source).toBe(true);
   });
 
+  it('deduplicates repeated live model rows and keeps the strongest score', () => {
+    const rows = normalizeWulong(
+      {
+        models: [
+          { model: 'gemini-3.5-flash-high', vendor: 'Google', score: 1400, ci: 5 },
+          { model: 'gemini-3.5-flash-high', vendor: 'Google', score: 1412, ci: 4 },
+          { model: 'claude-opus', vendor: 'Anthropic', score: 1390, ci: 3 },
+        ],
+      },
+      Date.UTC(2026, 6, 11),
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.model).toBe('gemini-3.5-flash-high');
+    expect(rows[0]?.arena_score).toBe(1412);
+    expect(rows[1]?.model).toBe('claude-opus');
+  });
+
   it('returns live Wu Long rows when the API succeeds', async () => {
     mockedFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         meta: { fetched_at: '2026-06-22T07:01:02.283089+00:00' },
-        models: [
-          { model: 'claude-opus-4-6', vendor: 'Anthropic', score: 1499, ci: 4, votes: 1 },
-          { model: 'gpt-4o', vendor: 'OpenAI', score: 1400, ci: 5, votes: 1 },
-          { model: 'gemini-pro', vendor: 'Google', score: 1380, ci: 5, votes: 1 },
-          { model: 'llama-3', vendor: 'Meta', score: 1300, ci: 6, votes: 1 },
-          { model: 'mistral-large', vendor: 'Mistral', score: 1280, ci: 6, votes: 1 },
-        ],
+        models: Array.from({ length: 50 }, (_, index) => ({
+          model: index === 0 ? 'claude-opus-4-6' : `live-model-${index + 1}`,
+          vendor: index === 0 ? 'Anthropic' : 'OpenAI',
+          score: 1499 - index,
+          ci: 4,
+          votes: 1,
+        })),
       }),
       headers: { get: () => 'application/json' },
     } as unknown as Response);
 
     const result = await fetchBenchmarks({ force: true });
     expect(result.fromSnapshot).toBe(false);
-    expect(result.rows.length).toBeGreaterThanOrEqual(5);
+    expect(result.rows).toHaveLength(50);
     expect(result.rows[0]?.model).toBe('claude-opus-4-6');
+  });
+
+  it('keeps the complete Top 50 when a live source returns a partial leaderboard', async () => {
+    mockedFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        models: Array.from({ length: 20 }, (_, index) => ({
+          model: `partial-model-${index + 1}`,
+          vendor: 'OpenAI',
+          score: 1400 - index,
+        })),
+      }),
+      headers: { get: () => 'application/json' },
+    } as unknown as Response);
+
+    const result = await fetchBenchmarks({ force: true });
+    expect(result.fromSnapshot).toBe(true);
+    expect(result.rows).toHaveLength(50);
+    expect(result.reason).toContain('incomplete leaderboard (20/50 models)');
   });
 
   it('falls back to snapshot when every live source fails', async () => {
@@ -96,7 +133,7 @@ describe('benchmarkData live sources', () => {
     expect(result.fromSnapshot).toBe(true);
     expect(result.rows).toHaveLength(50);
     expect(result.rows[0]?.model).toBe('Claude Fable 5');
-    expect(result.rows[0]?.arena_score).toBe(60);
+    expect(result.rows[0]?.arena_score).toBe(68);
     expect(result.rows[0]?.cost_per_1m_input_usd).toBe(10);
     expect(result.rows[0]?.source).toBe('snapshot');
   });
@@ -108,6 +145,8 @@ describe('benchmarkData live sources', () => {
     expect(result.rows[0]?.model).toBe('Claude Fable 5');
     expect(result.rows[1]?.model).toBe('GPT-5.6 Sol');
     expect(result.rows[5]?.model).toBe('Grok 4.5');
+    expect(result.rows[9]?.model).toBe('Gemini 2.5 Pro');
+    expect(result.rows[9]?.arena_score).toBe(49.6);
     expect(result.rows[49]?.model).toBe('GPT-OSS 20B');
     // One unique model per row — no reasoning-variant duplicates.
     const names = result.rows.map((r) => r.model);

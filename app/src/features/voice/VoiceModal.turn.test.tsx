@@ -105,6 +105,7 @@ vi.mock('./voiceRouter', () => routerMocks);
 import { VoiceModal } from './VoiceModal';
 import { messageRepo } from '@/lib/db';
 import { useVoiceStore } from './store';
+import { VoiceService } from './VoiceService';
 import { selectionFromOption } from '@/lib/ai/modelSelection';
 import { DEFAULT_CUSTOM_STEPS } from '@/lib/ai/stacks/presets';
 import { JarvisCommandCenterProvider } from '@/features/jarvis-command-center/JarvisCommandCenter';
@@ -120,6 +121,11 @@ import type {
   JarvisEvent,
   JarvisRun,
 } from '@/features/jarvis-command-center/types';
+import type { ProjectId } from '@/types';
+import {
+  clearContextGalaxySnapshotsForTests,
+  publishContextGalaxySnapshot,
+} from '@/features/context/contextGalaxyRegistry';
 
 function emitVoice(event: string, payload?: unknown) {
   voiceListeners.handlers.get(event)?.forEach((fn) => fn(payload));
@@ -222,6 +228,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     useAuthStore.setState({
       localUserId: 'account-a',
       cloudSession: null,
+      projectId: 'project-a' as ProjectId,
       voiceAutoListenOnOpen: true,
       voiceEndTrigger: 'phrase',
       voiceCommitPhrase: 'send it',
@@ -238,8 +245,44 @@ describe('VoiceModal hands-free turn-taking', () => {
   });
 
   afterEach(() => {
+    clearContextGalaxySnapshotsForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('embeds the account-and-project-scoped Context galaxy directly below the transcript', async () => {
+    publishContextGalaxySnapshot({
+      accountId: 'account-a',
+      projectId: 'project-a',
+      mapId: 'map-a',
+      nodes: [
+        {
+          id: 'source-a',
+          label: 'Source A',
+          description: 'A retrieved source.',
+          parentId: null,
+          groupId: 'sources',
+          depth: 0,
+          order: 0,
+          radius: 12,
+        },
+      ],
+      edges: [],
+      selectedId: 'source-a',
+      activityNodeIds: ['source-a'],
+    });
+
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+
+    const transcript = screen.getByLabelText('Voice session transcript');
+    const galaxy = screen.getByRole('region', { name: 'Compact Context galaxy' });
+    expect(
+      transcript.compareDocumentPosition(galaxy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Use 2D fallback/i })).not.toBeNull();
+    expect(screen.getByRole('button', { name: /Source A/i }).dataset.contextActivity).toBe('true');
   });
 
   it('captures one immutable account/chat binding and keeps transcript and default sends pinned to it', async () => {
@@ -929,6 +972,22 @@ describe('VoiceModal hands-free turn-taking', () => {
     window.removeEventListener('jarvis:send', send as EventListener);
   });
 
+  it('disables the listening timeout while send-it mode is active', async () => {
+    render(<VoiceModal />);
+
+    await waitFor(() => expect(VoiceService.setInactivityTimeoutMs).toHaveBeenCalledWith(null));
+  });
+
+  it('uses the one configured duration for hands-free pause mode', async () => {
+    useAuthStore.setState({
+      voiceEndTrigger: 'silence',
+      voiceSilenceDelayMs: 60_000,
+    });
+    render(<VoiceModal />);
+
+    await waitFor(() => expect(VoiceService.setInactivityTimeoutMs).toHaveBeenCalledWith(60_000));
+  });
+
   it('sends exactly once when the commit phrase is spoken', async () => {
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
@@ -942,9 +1001,14 @@ describe('VoiceModal hands-free turn-taking', () => {
 
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(messageRepo.create).toHaveBeenCalledTimes(1);
-    const event = send.mock.calls[0]?.[0] as CustomEvent<{ text: string; speakReply: boolean }>;
+    const event = send.mock.calls[0]?.[0] as CustomEvent<{
+      text: string;
+      speakReply: boolean;
+      autoApproveActions: boolean;
+    }>;
     expect(event.detail.text).toBe('help me plan');
     expect(event.detail.speakReply).toBe(true);
+    expect(event.detail.autoApproveActions).toBe(true);
 
     window.removeEventListener('jarvis:send', send as EventListener);
   });

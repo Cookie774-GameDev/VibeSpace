@@ -176,15 +176,20 @@ export function useAccessibleChatModels() {
     const update = () => setConnectionRevision((value) => value + 1);
     window.addEventListener(AI_CONNECTION_STATE_EVENT, update);
     window.addEventListener(KERNEL_SMOKE_BINDING_EVENT, update);
-    void ensureExternalConnectionAutoDetection().catch(() => undefined);
+    if (!offlineMode) {
+      void ensureExternalConnectionAutoDetection().catch(() => undefined);
+    }
     return () => {
       window.removeEventListener(AI_CONNECTION_STATE_EVENT, update);
       window.removeEventListener(KERNEL_SMOKE_BINDING_EVENT, update);
     };
-  }, []);
+  }, [offlineMode]);
   const ollamaSignature = ollamaOptions.map((option) => option.id).join('\0');
 
   const groups = useMemo(() => {
+    const pickerConnections = offlineMode
+      ? PROVIDER_CONNECTIONS.filter((connection) => connection.mode === 'local')
+      : PROVIDER_CONNECTIONS;
     const legacy = buildModelPickerGroups({ apiKeys, offlineMode, plan, defaultLocalModel });
     const modelsByProvider: Record<string, { id: string; label: string }[]> = Object.fromEntries(
       legacy.map((group) => [
@@ -195,13 +200,13 @@ export function useAccessibleChatModels() {
     const smokeBindingActive = kernelSmokeProvider.isAvailable();
     if (
       smokeBindingActive &&
-      PROVIDER_CONNECTIONS.some((connection) => connection.providerId === KERNEL_SMOKE_PROVIDER_ID)
+      pickerConnections.some((connection) => connection.providerId === KERNEL_SMOKE_PROVIDER_ID)
     ) {
       modelsByProvider[KERNEL_SMOKE_PROVIDER_ID] = [
         { id: 'kernel-smoke-v1', label: 'Kernel Smoke v1' },
       ];
     }
-    for (const connection of PROVIDER_CONNECTIONS) {
+    for (const connection of pickerConnections) {
       if (connection.mode !== 'external-cli' || modelsByProvider[connection.providerId]?.length)
         continue;
       modelsByProvider[connection.providerId] = CHAT_MODEL_OPTIONS.filter(
@@ -212,7 +217,7 @@ export function useAccessibleChatModels() {
     const scanned = readConnectionPickerStates();
     const sessionScanned = readConnectionSessionPickerStates();
     const stateByConnection = Object.fromEntries(
-      PROVIDER_CONNECTIONS.map((connection) => {
+      pickerConnections.map((connection) => {
         let state: ConnectionPickerState;
         if (connection.providerId === KERNEL_SMOKE_PROVIDER_ID && smokeBindingActive) {
           state = { available: true, auth: 'authenticated' };
@@ -236,7 +241,7 @@ export function useAccessibleChatModels() {
       }),
     );
     return buildConnectionPickerGroups({
-      connections: PROVIDER_CONNECTIONS,
+      connections: pickerConnections,
       modelsByProvider,
       modelsByConnection: CONNECTION_MODEL_OPTIONS,
       stateByConnection,

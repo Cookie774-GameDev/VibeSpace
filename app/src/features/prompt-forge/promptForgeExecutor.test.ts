@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import type { LLMResponse } from '@/lib/ai/types';
 import type { RunAgentRequest } from '@/lib/ai/router';
 import type { ChatImageAttachment } from '@/lib/ai/vision';
@@ -136,11 +137,20 @@ describe('Prompt Forge model execution', () => {
       },
     });
     expect(received?.agent.system_prompt).toMatch(/untrusted source data/i);
+    expect(received?.agent.system_prompt).toMatch(
+      /instruct the downstream agent to perform the requested task now/i,
+    );
+    expect(received?.agent.system_prompt).toMatch(
+      /never ask the downstream agent to rewrite, improve, or explain the prompt/i,
+    );
     expect(received?.messages).toHaveLength(1);
     expect(received?.messages[0]?.content).toContain(job.originalDraft);
     expect(received?.messages[0]?.content).toContain('Additional regeneration instructions');
     expect(received?.messages[0]?.content).toContain(job.regenerationInstructions);
     expect(received?.messages[0]?.content).toContain(sourcePack.markdown);
+    expect(received?.messages[0]?.content).toMatch(
+      /make the result an executable instruction that tells the downstream agent to perform the original task/i,
+    );
     expect(received?.onChunk).toEqual(expect.any(Function));
   });
 
@@ -228,7 +238,7 @@ describe('Prompt Forge model execution', () => {
   it('rejects secrets in every provider-bound user field before invoking the model', async () => {
     const runModel = vi.fn(async () => response('must not run'));
     const executor = createPromptForgeExecutor({ runModel, now: () => 500 });
-    const secret = 'ghp_SyntheticCredentialValue1234567890';
+    const secret = syntheticCredentialFixture('ghp_', 'SyntheticCredentialValue1234567890');
 
     await expect(
       executor.execute({

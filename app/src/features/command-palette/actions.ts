@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { HOTKEYS } from '@/lib/hotkeys';
 import { useUIStore } from '@/stores/ui';
+import { useFullscreenStore } from '@/features/fullscreen/fullscreenStore';
 import { useAgentStore } from '@/stores/agents';
 import { toast } from '@/components/ui/toast';
 import type { PageId } from './store';
@@ -315,14 +316,14 @@ const STATIC_ACTIONS: Action[] = [
   // V2 ΓÇö Fullscreen workspace toggle
   {
     id: 'toggle-fullscreen',
-    label: 'Toggle fullscreen workspace',
-    description: 'Hide nav + tasks pane',
+    label: 'Toggle Workspace Focus Mode',
+    description: 'Hide non-essential workspace chrome',
     icon: Maximize2,
     hotkey: HOTKEYS.TOGGLE_FULLSCREEN,
     page: 'root',
     keywords: ['focus', 'distraction-free', 'maximize'],
     perform: ({ closePalette }) => {
-      useUIStore.getState().toggleChatFullscreen();
+      useFullscreenStore.getState().toggleFocus();
       closePalette();
     },
   },

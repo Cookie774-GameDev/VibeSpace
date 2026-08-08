@@ -182,6 +182,47 @@ describe('AgentActivityCard', () => {
     expect(useUIStore.getState().route).toBe('chat');
   });
 
+  it('reconciles a persisted inline card with the matching live child status', () => {
+    useJarvisInteractionStore.setState({
+      agentsByChat: {
+        chat_parent: [
+          {
+            ...agentPart.agent,
+            status: 'failed',
+            currentStep: 'Failed',
+            summary: 'The provider attempt ended before canonical completion.',
+            updatedAt: '2026-06-24T12:00:03.000Z',
+          },
+        ],
+      },
+    });
+
+    render(<AgentActivityCard part={agentPart} />);
+
+    expect(screen.getByText('failed')).toBeTruthy();
+    expect(screen.getByText('Failed')).toBeTruthy();
+    expect(screen.queryByText('thinking')).toBeNull();
+    expect(screen.queryByText('Reading context')).toBeNull();
+  });
+
+  it('keeps files read, files changed, and line evidence collapsed by default', () => {
+    useJarvisInteractionStore.setState({
+      agentsByChat: {
+        chat_parent: [agentPart.agent],
+      },
+    });
+
+    render(<ChatAgentActivityPanel chatId="chat_parent" />);
+
+    const disclosure = screen.getByText('Files and changes').closest('details');
+    expect(disclosure).toBeTruthy();
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.textContent).toContain('Composer.tsx');
+    expect(disclosure?.textContent).toContain('runtime.ts');
+    expect(disclosure?.textContent).toContain('+12');
+    expect(disclosure?.textContent).toContain('-3');
+  });
+
   it('dedupes duplicate agents by id in the connected panel', () => {
     const secondPart: Extract<Part, { kind: 'agent_card' }> = {
       ...agentPart,

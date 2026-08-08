@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { Sparkles, Copy, Edit2, Eraser, Columns, Rows, Trash2, Cat } from 'lucide-react';
+import { askAssistantLabel, useAssistantPersonaName } from '@/lib/assistantPersona';
 
 interface TerminalContextMenuProps {
   x: number;
@@ -28,6 +29,8 @@ export function TerminalContextMenu({
   onCloseTerminal,
   onSendToPetPanel,
 }: TerminalContextMenuProps) {
+  const assistantName = useAssistantPersonaName();
+  const askLabel = askAssistantLabel(assistantName);
   const menuRef = React.useRef<HTMLDivElement>(null);
 
   // Position adjustment to keep menu inside viewport bounds
@@ -100,7 +103,7 @@ export function TerminalContextMenu({
         className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-metadata hover:bg-accent-copper/10 hover:text-accent-copper transition-colors text-left"
       >
         <Sparkles className="h-3.5 w-3.5 text-accent-copper" />
-        <span>Ask Jarvis</span>
+        <span>{askLabel}</span>
       </button>
 
       {onSendToPetPanel && (

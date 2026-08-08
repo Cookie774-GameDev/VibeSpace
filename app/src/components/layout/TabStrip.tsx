@@ -38,10 +38,10 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AnimatePresence, motion } from 'motion/react';
-import { Pin, Plus, X } from 'lucide-react';
+import { FileText, Pin, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Hint } from '@/components/ui/tooltip';
-import { useHotkey, HOTKEYS } from '@/lib/hotkeys';
+import { useBoundHotkey, HOTKEYS } from '@/lib/hotkeys';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { db, chatRepo } from '@/lib/db';
@@ -56,6 +56,9 @@ import { usePetSettingsStore } from '@/features/pets/petSettingsStore';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_CONTROL } from '@/lib/jarvis/smoke/evidenceIds';
 import { useThemeMotionLayout, useThemeMotionTransition } from '@/features/appearance/themeMotion';
+import { ThoughtBloomTitle } from '@/features/rename-motion/ThoughtBloomTitle';
+import { basename } from '@/features/files/projectFiles';
+import { useFileWorkspace } from '@/features/files/fileWorkspaceStore';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
@@ -90,6 +93,7 @@ export function TabStrip() {
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const projectId = useAuthStore((s) => s.projectId) as ProjectId | null;
   const setProjectId = useAuthStore((s) => s.setProjectId);
+  const fileWorkspace = useFileWorkspace(projectId);
 
   // Live projection — same shape the nav sidebar uses, just trimmed
   // for the tab strip's narrow bar.
@@ -275,51 +279,55 @@ export function TabStrip() {
     [tabs, handleSelect],
   );
 
-  // Hotkeys
-  useHotkey(HOTKEYS.NEW_TAB, (e) => {
+  // Hotkeys (live-resolved from Settings → Hotkeys registry)
+  useBoundHotkey('NEW_TAB', (e) => {
     e.preventDefault();
     void handleNewTab();
   });
-  useHotkey(HOTKEYS.CLOSE_TAB, (e) => {
+  useBoundHotkey('CLOSE_TAB', (e) => {
     e.preventDefault();
     if (activeChatId) void handleClose(activeChatId as ChatId);
   });
-  useHotkey('Mod+1', (e) => {
+  useBoundHotkey('TAB_1', (e) => {
     e.preventDefault();
     switchToIndex(0);
   });
-  useHotkey('Mod+2', (e) => {
+  useBoundHotkey('TAB_2', (e) => {
     e.preventDefault();
     switchToIndex(1);
   });
-  useHotkey('Mod+3', (e) => {
+  useBoundHotkey('TAB_3', (e) => {
     e.preventDefault();
     switchToIndex(2);
   });
-  useHotkey('Mod+4', (e) => {
+  useBoundHotkey('TAB_4', (e) => {
     e.preventDefault();
     switchToIndex(3);
   });
-  useHotkey('Mod+5', (e) => {
+  useBoundHotkey('TAB_5', (e) => {
     e.preventDefault();
     switchToIndex(4);
   });
-  useHotkey('Mod+6', (e) => {
+  useBoundHotkey('TAB_6', (e) => {
     e.preventDefault();
     switchToIndex(5);
   });
-  useHotkey('Mod+7', (e) => {
+  useBoundHotkey('TAB_7', (e) => {
     e.preventDefault();
     switchToIndex(6);
   });
-  useHotkey('Mod+8', (e) => {
+  useBoundHotkey('TAB_8', (e) => {
     e.preventDefault();
     switchToIndex(7);
   });
-  useHotkey('Mod+9', (e) => {
+  useBoundHotkey('TAB_9', (e) => {
     e.preventDefault();
     switchToIndex(8);
   });
+
+  if (route === 'files') {
+    return <FilesRouteTab activePath={fileWorkspace.activePath} />;
+  }
 
   return (
     <div
@@ -374,6 +382,31 @@ export function TabStrip() {
             <Plus className="h-4 w-4" />
           </Button>
         </Hint>
+      </div>
+    </div>
+  );
+}
+
+export function FilesRouteTab({ activePath }: { activePath: string | null }) {
+  const label = activePath ? basename(activePath) : 'Files';
+  return (
+    <div
+      data-monochrome-surface="tab-strip"
+      data-sakura-shell-region="tab-strip"
+      className="sakura-shell-tab-strip flex h-8 shrink-0 items-stretch gap-1 border-b border-border bg-panel px-2"
+    >
+      <div
+        role="group"
+        aria-label="Files workspace"
+        className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden"
+      >
+        <div
+          className="flex h-7 max-w-[280px] items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-secondary text-foreground"
+          title={activePath ?? 'Files workspace'}
+        >
+          <FileText className="h-3 w-3 shrink-0 text-accent-copper" />
+          <span className="truncate">{label}</span>
+        </div>
       </div>
     </div>
   );
@@ -499,7 +532,7 @@ export function TabItem({
             }}
             className="min-w-0 flex-1 truncate text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring [html[data-theme=sakura]_&]:min-h-6"
           >
-            {tab.title}
+            <ThoughtBloomTitle title={tab.title} />
           </button>
         )}
         <button

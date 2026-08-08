@@ -684,7 +684,10 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       (value) => ({ kind: 'resolved' as const, value }),
       (error: unknown) => ({ kind: 'rejected' as const, error }),
     );
-    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(start).toHaveBeenCalledOnce();
+      expect(registeredOwners.has(`${turn.run.id}:provider`)).toBe(true);
+    });
 
     const cancellation = await runtime.kernel.requestCancellation({
       accountId: turn.accountId,

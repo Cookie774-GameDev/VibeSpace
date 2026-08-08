@@ -1,0 +1,13 @@
+task_id=VS-PR31-MG1-CONTEXT-REPOSITORY-LIVE-RETRIEVAL-20260804
+controller=/root
+delegate=/root/browser_live_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:00:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Build the bounded production retrieval seam that turns an active Context Map's relevant changed repository files into Tree-sitter-backed, evidence-bearing, token-budgeted repository context for the canonical chat runtime.
+owned_paths=app/src/features/context/repositoryRetrieval.ts;app/src/features/context/repositoryRetrieval.test.ts;app/src/features/repository-intelligence/defaultTreeSitterRuntime.ts;app/src/features/repository-intelligence/defaultTreeSitterRuntime.test.ts;app/src/features/repository-intelligence/index.ts
+exclusions=all other files;all pre-existing dirty ContextPage/index/theme/nightly work;app/src/lib/ai/runtime.ts;app/src/features/chat;all Git operations;all external/network/provider operations;all process management;all coordination authority except this lock;Computer Control
+verification=add focused deterministic tests but do not run them;coordinator performs one final bounded verification pass
+status=IMPLEMENTING

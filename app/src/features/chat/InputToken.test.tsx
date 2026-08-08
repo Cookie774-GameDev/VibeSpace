@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { InputToken } from './InputToken';
 
 describe('InputToken visual variants', () => {
@@ -20,5 +20,20 @@ describe('InputToken visual variants', () => {
     const token = screen.getByText('@builder').closest('div');
     expect(token?.className).toContain('jarvis-agent-token');
     expect(token?.className).toContain('from-cyan');
+  });
+
+  it('exposes an accessible activation target without making the remove button trigger it', () => {
+    const onActivate = vi.fn();
+    const onRemove = vi.fn();
+    render(
+      <InputToken type="file" label="notes.txt" onActivate={onActivate} onRemove={onRemove} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview notes.txt' }));
+    expect(onActivate).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onActivate).toHaveBeenCalledTimes(1);
   });
 });

@@ -10,6 +10,7 @@ import type {
   BrowserJsonValue,
   BrowserReviewedAction,
 } from './browserTypes';
+import type { BrowserCanonicalApprovalAuthority } from './browserCanonicalApprovalRuntime';
 
 export interface BrowserToolRequest {
   tool: string;
@@ -27,6 +28,7 @@ export interface BrowserToolResult {
 
 export const BROWSER_ACTION_VERSION = 1;
 export const BROWSER_REVIEW_TTL_MS = 5 * 60_000;
+const SAFE_CANONICAL_REVIEW_ID = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}$/u;
 
 export type BrowserReviewContext = {
   accountId: string;
@@ -435,6 +437,7 @@ function unavailableResult(
 export async function requestBrowserTool(
   req: BrowserToolRequest,
   cdp: CdpSession | null,
+  canonicalAuthority?: BrowserCanonicalApprovalAuthority,
 ): Promise<BrowserToolResult> {
   void cdp;
   const invalid = validateBrowserTool(req);
@@ -480,6 +483,15 @@ export async function requestBrowserTool(
   const risk = classifyRisk(req.tool, parameters);
   const requestedAt = Date.now();
   const frameId = normalizeOptionalText(parameters.frameId);
+  const canonicalReviewId = canonicalAuthority?.parent.context.callId;
+  if (
+    canonicalAuthority &&
+    (typeof canonicalReviewId !== 'string' ||
+      !SAFE_CANONICAL_REVIEW_ID.test(canonicalReviewId) ||
+      store.agentActions.some((candidate) => candidate.id === canonicalReviewId))
+  ) {
+    return unavailableResult(req.tool, { reason: 'canonical_parent_identity_invalid' });
+  }
   const base = {
     accountId: identity.accountId,
     requester,
@@ -498,7 +510,7 @@ export async function requestBrowserTool(
     'id' | 'parametersHash' | 'reviewedHash' | 'safeSummary' | 'status' | 'requestedAt' | 'result'
   >;
   const action: BrowserReviewedAction = {
-    id: `browser-action-${crypto.randomUUID()}`,
+    id: canonicalReviewId ?? `browser-action-${crypto.randomUUID()}`,
     ...base,
     parametersHash: await hashJarvisText(canonicalizeBrowserJson(parameters)),
     reviewedHash: await reviewedHashFor(base),
@@ -507,6 +519,20 @@ export async function requestBrowserTool(
     requestedAt,
   };
   store.enqueueAgentAction(action);
+  if (canonicalAuthority) {
+    try {
+      const { registerBrowserCanonicalApprovalAuthority } = await import(
+        './browserCanonicalApprovalRuntime'
+      );
+      registerBrowserCanonicalApprovalAuthority(action.id, canonicalAuthority);
+    } catch {
+      store.resolveAgentAction(action.id, 'unavailable', UNAVAILABLE_MESSAGE);
+      return unavailableResult(req.tool, {
+        actionId: action.id,
+        reason: 'canonical_authority_rejected',
+      });
+    }
+  }
 
   return unavailableResult(req.tool, { actionId: action.id, risk });
 }

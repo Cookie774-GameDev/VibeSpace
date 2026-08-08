@@ -1,0 +1,271 @@
+const DOWNLOAD_URL =
+  'https://github.com/Cookie774-GameDev/VibeSpace/releases/latest';
+
+function platePaths(id) {
+  return Array.from(
+    { length: 7 },
+    (_, index) => `assets/${id}/scene-${String(index + 1).padStart(2, '0')}.webp`,
+  );
+}
+
+export const WORLD_ORDER = [
+  'first-contact',
+  'memory-forest',
+  'machine-opera',
+];
+
+export const WORLDS = {
+  'first-contact': {
+    id: 'first-contact',
+    number: '01',
+    name: 'First Contact',
+    signature: 'Gravity lens',
+    thesis:
+      'An impossible object enters a fragmented workflow and changes the gravity around it.',
+    loader: {
+      label: 'Acquiring transmission',
+      retry: 'Retry transmission',
+      complete: 'Signal acquired',
+    },
+    palette: ['#020305', '#EAF7F3', '#6CE7DF', '#6657FF', '#FF542D'],
+    displayFont: 'Syne',
+    bodyFont: 'Manrope',
+    utilityFont: 'Sometype Mono',
+    instrument: 'Orbital trajectory',
+    score: 'signal',
+    downloadUrl: DOWNLOAD_URL,
+    assets: {
+      plates: platePaths('first-contact'),
+      texture: 'assets/first-contact/texture.webp',
+    },
+    acts: [
+      {
+        id: 'transmission',
+        eyebrow: 'Intercept / 001',
+        title: 'Something is approaching.',
+        body: 'The signal begins before the explanation.',
+        cue: 'Hold the frequency',
+        camera: { x: 0, y: 0, scale: 1.04, rotate: -0.5, depth: 0.18 },
+      },
+      {
+        id: 'atmosphere',
+        eyebrow: 'Atmosphere / 014',
+        title: 'Something has entered the workflow.',
+        body: 'A new environment arrives inside the noise between your tools.',
+        cue: 'Descend',
+        camera: { x: -3, y: 4, scale: 1.14, rotate: 0.3, depth: 0.3 },
+      },
+      {
+        id: 'debris',
+        eyebrow: 'Orbit / 037',
+        title: 'Your work was never meant to live this far apart.',
+        body: 'Chats, files, terminals, and models drift without a shared center.',
+        cue: 'Cross the debris field',
+        camera: { x: 4, y: -1, scale: 1.24, rotate: -0.7, depth: 0.46 },
+      },
+      {
+        id: 'monolith',
+        eyebrow: 'Gravity / 052',
+        title: 'One living space changes the gravity.',
+        body: 'VibeSpace pulls every active part of the project into one architecture.',
+        cue: 'Approach the object',
+        camera: { x: -1, y: -3, scale: 1.36, rotate: 0.4, depth: 0.62 },
+      },
+      {
+        id: 'awakening',
+        eyebrow: 'Intelligence / 071',
+        title: 'Ask once. The whole project answers.',
+        body: 'Jarvis follows the approved context to the exact source behind the answer.',
+        cue: 'Enter the aperture',
+        camera: { x: 3, y: 2, scale: 1.48, rotate: -0.2, depth: 0.74 },
+      },
+      {
+        id: 'assembly',
+        eyebrow: 'Coordination / 086',
+        title: 'Build in parallel. Review in one place.',
+        body: 'Agents, models, and terminals assemble the work while every proof stays attached.',
+        cue: 'Witness assembly',
+        camera: { x: -4, y: 1, scale: 1.62, rotate: 0.6, depth: 0.86 },
+      },
+      {
+        id: 'daybreak',
+        eyebrow: 'Release / 100',
+        title: 'Think. Build. Keep moving.',
+        body: 'The finished work leaves the system without losing the history that made it possible.',
+        cue: 'The signal is yours',
+        camera: { x: 0, y: 0, scale: 1.08, rotate: 0, depth: 1 },
+        cta: 'Download VibeSpace',
+      },
+    ],
+  },
+  'memory-forest': {
+    id: 'memory-forest',
+    number: '02',
+    name: 'The Memory Forest',
+    signature: 'Growth memory',
+    thesis:
+      'A living ecology grows the relationships that scattered work was always trying to remember.',
+    loader: {
+      label: 'Germinating memory',
+      retry: 'Regrow',
+      complete: 'Roots established',
+    },
+    palette: ['#03110D', '#F1F0E7', '#72E5A3', '#E5CD71', '#62537E'],
+    displayFont: 'Newsreader',
+    bodyFont: 'Instrument Sans',
+    utilityFont: 'IBM Plex Mono',
+    instrument: 'Archive growth rings',
+    score: 'forest',
+    downloadUrl: DOWNLOAD_URL,
+    assets: {
+      plates: platePaths('memory-forest'),
+      texture: 'assets/memory-forest/texture.webp',
+    },
+    acts: [
+      {
+        id: 'germination',
+        eyebrow: 'Specimen / Seed',
+        title: 'Memory begins underground.',
+        body: 'Before the first answer, a relationship takes root.',
+        cue: 'Let it germinate',
+        camera: { x: 0, y: 5, scale: 1.08, rotate: 0.2, depth: 0.16 },
+      },
+      {
+        id: 'falling-memory',
+        eyebrow: 'Specimen / Spore',
+        title: 'Nothing important should disappear.',
+        body: 'Conversations, files, decisions, and unfinished thoughts fall into the same soil.',
+        cue: 'Follow the fragments',
+        camera: { x: -4, y: -2, scale: 1.16, rotate: -0.4, depth: 0.28 },
+      },
+      {
+        id: 'first-root',
+        eyebrow: 'Specimen / Root',
+        title: 'VibeSpace notices what belongs together.',
+        body: 'One project-aware path begins to connect the pieces.',
+        cue: 'Trace the first root',
+        camera: { x: 4, y: 3, scale: 1.28, rotate: 0.5, depth: 0.42 },
+      },
+      {
+        id: 'archive',
+        eyebrow: 'Specimen / Rings',
+        title: 'Context becomes somewhere you can return to.',
+        body: 'The project keeps its history without turning that history into clutter.',
+        cue: 'Enter the archive',
+        camera: { x: -2, y: -4, scale: 1.4, rotate: -0.2, depth: 0.58 },
+      },
+      {
+        id: 'recall',
+        eyebrow: 'Specimen / Thread',
+        title: 'Ask the work. Keep the evidence.',
+        body: 'Jarvis follows a luminous thread back to the source, terminal, file, and decision.',
+        cue: 'Follow the living thread',
+        camera: { x: 3, y: 1, scale: 1.52, rotate: 0.3, depth: 0.72 },
+      },
+      {
+        id: 'cultivation',
+        eyebrow: 'Specimen / Branch',
+        title: 'Agents move faster when the memory is real.',
+        body: 'Approved history feeds the build. Rejected directions quietly fall away.',
+        cue: 'Cultivate the structure',
+        camera: { x: -3, y: 2, scale: 1.66, rotate: -0.5, depth: 0.86 },
+      },
+      {
+        id: 'canopy',
+        eyebrow: 'Specimen / Canopy',
+        title: 'The next move remembers the last.',
+        body: 'The finished project reaches daylight with every relationship intact.',
+        cue: 'Step into daylight',
+        camera: { x: 0, y: -1, scale: 1.12, rotate: 0, depth: 1 },
+        cta: 'Download VibeSpace',
+      },
+    ],
+  },
+  'machine-opera': {
+    id: 'machine-opera',
+    number: '03',
+    name: 'The Machine Opera',
+    signature: 'Causal machine',
+    thesis:
+      'Intent, coordination, execution, and approval become one visible physical performance.',
+    loader: {
+      label: 'Tuning the apparatus',
+      retry: 'Retune',
+      complete: 'House ready',
+    },
+    palette: ['#EFECE4', '#12110F', '#B7B0A5', '#23515B', '#DF351F'],
+    displayFont: 'League Gothic',
+    bodyFont: 'IBM Plex Sans',
+    utilityFont: 'Azeret Mono',
+    instrument: 'Seven-measure score',
+    score: 'machine',
+    downloadUrl: DOWNLOAD_URL,
+    assets: {
+      plates: platePaths('machine-opera'),
+      texture: 'assets/machine-opera/texture.webp',
+    },
+    acts: [
+      {
+        id: 'tuning',
+        eyebrow: 'Measure I / Tuning',
+        title: 'The house is listening.',
+        body: 'One hundred components wait for the first signal.',
+        cue: 'Raise the curtain',
+        camera: { x: 0, y: 0, scale: 1.04, rotate: 0, depth: 0.14 },
+      },
+      {
+        id: 'wire',
+        eyebrow: 'Measure II / Intent',
+        title: 'Start with the thought before it is tidy.',
+        body: 'A voice note, prompt, file, or rough plan enters as one vibrating wire.',
+        cue: 'Tension the wire',
+        camera: { x: -4, y: 2, scale: 1.13, rotate: -0.3, depth: 0.28 },
+      },
+      {
+        id: 'press',
+        eyebrow: 'Measure III / Source',
+        title: 'Bring the source with you.',
+        body: 'Every fragment is pressed into one continuous, legible ribbon.',
+        cue: 'Engage the press',
+        camera: { x: 5, y: -2, scale: 1.24, rotate: 0.35, depth: 0.42 },
+      },
+      {
+        id: 'ensemble',
+        eyebrow: 'Measure IV / Ensemble',
+        title: 'Every specialist enters on cue.',
+        body: 'Agents, models, tools, and terminals coordinate without hiding the handoffs.',
+        cue: 'Conduct the ensemble',
+        camera: { x: -3, y: -3, scale: 1.38, rotate: -0.2, depth: 0.58 },
+      },
+      {
+        id: 'organ',
+        eyebrow: 'Measure V / Execution',
+        title: 'Execution stays visible.',
+        body: 'Commands travel through the instrument and results return to the same score.',
+        cue: 'Open the pipes',
+        camera: { x: 3, y: 3, scale: 1.5, rotate: 0.25, depth: 0.72 },
+      },
+      {
+        id: 'review',
+        eyebrow: 'Measure VI / Proof',
+        title: 'Nothing ships from a black box.',
+        body: 'Evidence, diffs, and approvals meet in one quiet inspection chamber.',
+        cue: 'Pass the review gate',
+        camera: { x: -2, y: 1, scale: 1.62, rotate: -0.15, depth: 0.86 },
+      },
+      {
+        id: 'finale',
+        eyebrow: 'Measure VII / Finale',
+        title: 'Make the whole system move.',
+        body: 'The machine performs the completed project once, then places it in your hands.',
+        cue: 'Take the instrument',
+        camera: { x: 0, y: 0, scale: 1.1, rotate: 0, depth: 1 },
+        cta: 'Download VibeSpace',
+      },
+    ],
+  },
+};
+
+export function getWorld(id) {
+  return WORLDS[id] ?? WORLDS['first-contact'];
+}

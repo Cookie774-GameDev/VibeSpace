@@ -2190,21 +2190,32 @@
   }
 
   function enableScrollMotion() {
-    var targets = queryAll('#features, #swarm, #phone, #council, #foundry, #pricing, #download, #letter');
+    var targets = queryAll('main > section');
+    var stepSelector = '.sec-head, .vs2-section-head, .grid, .terminal-dashboard, .terminal-shell, .pricing-grid, .download-grid, .letter, .faq-list, .vs2-phone-layout, .vs2-team-story, .vs2-foundry-shell';
     var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduceMotion || !window.IntersectionObserver) {
-      targets.forEach(function (target) { target.classList.add('vs2-scroll-visible'); });
+      targets.forEach(function (target) {
+        target.classList.add('vs2-scroll-visible');
+        queryAll(stepSelector, target).forEach(function (child) { child.classList.add('vs2-scroll-step'); });
+      });
       return;
     }
 
-    targets.forEach(function (target) { target.classList.add('vs2-scroll-item'); });
+    targets.forEach(function (target, targetIndex) {
+      target.classList.add('vs2-scroll-item');
+      queryAll(stepSelector, target).forEach(function (child, childIndex) {
+        child.classList.add('vs2-scroll-step');
+        child.style.setProperty('--vs2-motion-delay', Math.min(420, childIndex * 72 + (targetIndex % 2) * 28) + 'ms');
+        child.style.setProperty('--vs2-motion-x', childIndex % 2 ? '20px' : '-20px');
+      });
+    });
     var observer = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (!entry.isIntersecting) return;
         entry.target.classList.add('vs2-scroll-visible');
         observer.unobserve(entry.target);
       });
-    }, { threshold: .12, rootMargin: '0px 0px -6% 0px' });
+    }, { threshold: .1, rootMargin: '0px 0px -4% 0px' });
     targets.forEach(function (target) { observer.observe(target); });
     registerCleanup(function () { observer.disconnect(); });
   }

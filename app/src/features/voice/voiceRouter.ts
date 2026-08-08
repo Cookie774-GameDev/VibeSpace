@@ -16,11 +16,9 @@ import {
   VOICE_PREVIEW_TEXT,
   preloadSpeechVoices,
 } from './speechSynthesis';
-import { kokoroLocalProvider } from './providers/kokoroLocal';
+import { jarvisHighLocalProvider } from './providers/jarvisHighLocal';
 import { playBase64Audio } from './audioPlayback';
 import { ModelManager } from './modelManager';
-import { VOICE_PRESETS } from './voicePlans';
-import { resolveKokoroSpeed } from './speechRate';
 import { TtsService } from './TtsService';
 import { deepgramTtsProvider } from './providers/deepgramTts';
 import type { StreamingVoiceSession } from './streamingVoice';
@@ -34,7 +32,9 @@ type VoiceTurnCancellationHandle = Readonly<{
   requestCancellation(): Promise<JarvisCancellationRequestResult>;
 }>;
 let activeVoiceTurnCancellation: VoiceTurnCancellationHandle | null = null;
-const KOKORO_STREAM_SYNTH_AHEAD = 2;
+const JARVIS_STREAM_SYNTH_AHEAD = 2;
+const JARVIS_PREVIEW_ASSET = '/voice/jarvis-high-preview.mp3';
+let bundledPreviewAudio: HTMLAudioElement | null = null;
 
 /** Monotonic session id — bumped when the voice module opens; zeroed on close. */
 let activeVoiceSessionId = 0;
@@ -106,41 +106,41 @@ export function voicePresetToTtsPreset(preset: VoicePresetId): VoiceTtsPreset {
   return preset === 'aurora' ? 'friday' : 'jarvis';
 }
 
-const kokoroAudioCache = new Map<string, Promise<{ audio: string; mime: string }>>();
-const KOKORO_CACHE_MAX = 64;
+const jarvisAudioCache = new Map<string, Promise<{ audio: string; mime: string }>>();
+const JARVIS_CACHE_MAX = 64;
 
-let kokoroBootstrapPromise: Promise<void> | null = null;
+let jarvisBootstrapPromise: Promise<void> | null = null;
 
 /**
- * Background Kokoro download on desktop launch (non-blocking, idempotent).
+ * Background Jarvis High download on desktop launch (non-blocking, idempotent).
  *
- * Not silent when it matters: if Kokoro is the user's SELECTED voice engine
+ * Not silent when it matters: if Jarvis High is the user's selected voice engine
  * and the model cannot be prepared (download failed, checksum mismatch,
  * engine not compiled), a toast explains that replies will fall back to the
  * installed system voice and points at Settings → Voice to retry. Users on
  * other engines are not nagged - the download stays best-effort for them.
  */
-export async function bootstrapKokoroVoiceOnLaunch(): Promise<void> {
-  if (kokoroBootstrapPromise) return kokoroBootstrapPromise;
-  kokoroBootstrapPromise = (async () => {
+export async function bootstrapJarvisVoiceOnLaunch(): Promise<void> {
+  if (jarvisBootstrapPromise) return jarvisBootstrapPromise;
+  jarvisBootstrapPromise = (async () => {
     try {
       await import('@tauri-apps/api/core');
     } catch {
       return;
     }
-    const ready = await ensureKokoroReadyForSpeech();
+    const ready = await ensureJarvisReadyForSpeech();
     // Only warn inside the real desktop app - the browser preview never has
-    // the Kokoro bridge, so the toast would be pure noise there.
-    if (!ready && isTauri && useAuthStore.getState().voiceEngine === 'kokoro') {
+    // the native bridge, so the toast would be pure noise there.
+    if (!ready && isTauri && useAuthStore.getState().voiceEngine === 'jarvis') {
       toast.warning(
-        'Kokoro voice not ready',
-        'The local neural voice model could not be prepared. Jarvis will use the installed system voice for now — open Settings → Voice to retry the download.',
+        'Jarvis High voice not ready',
+        'The local voice model could not be prepared. Jarvis will use the operating-system fallback for now — open Settings → Voice to retry the download.',
       );
     }
   })().catch(() => {
     /* download is best-effort; Windows/local voice remains fallback */
   });
-  return kokoroBootstrapPromise;
+  return jarvisBootstrapPromise;
 }
 
 async function speakInstalledVoiceFallback(
@@ -154,76 +154,72 @@ async function speakInstalledVoiceFallback(
   }
 }
 
-function trimKokoroCache(): void {
-  while (kokoroAudioCache.size > KOKORO_CACHE_MAX) {
-    const oldest = kokoroAudioCache.keys().next().value;
+function trimJarvisCache(): void {
+  while (jarvisAudioCache.size > JARVIS_CACHE_MAX) {
+    const oldest = jarvisAudioCache.keys().next().value;
     if (!oldest) break;
-    kokoroAudioCache.delete(oldest);
+    jarvisAudioCache.delete(oldest);
   }
 }
 
-async function synthesizeKokoroPhrase(
+async function synthesizeJarvisPhrase(
   text: string,
-  preset: VoiceTtsPreset,
+  _preset: VoiceTtsPreset,
 ): Promise<{ audio: string; mime: string }> {
   const invoke = await import('@tauri-apps/api/core')
     .then((m) => m.invoke as <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>)
     .catch(() => null);
-  if (!invoke) throw new Error('kokoro_unavailable');
+  if (!invoke) throw new Error('jarvis_voice_unavailable');
 
-  const voicePreset = VOICE_PRESETS[preset];
-  return invoke<{ audio: string; mime: string }>('kokoro_speak', {
+  return invoke<{ audio: string; mime: string }>('jarvis_voice_speak', {
     text,
-    voice: voicePreset.kokoroVoice,
-    speed: resolveKokoroSpeed(voicePreset.speed),
+    speed: 1,
   });
 }
 
-async function getCachedKokoroAudio(
+async function getCachedJarvisAudio(
   text: string,
   preset: VoiceTtsPreset,
 ): Promise<{ audio: string; mime: string }> {
   const key = `${preset}:${text}`;
-  let pending = kokoroAudioCache.get(key);
+  let pending = jarvisAudioCache.get(key);
   if (!pending) {
-    pending = synthesizeKokoroPhrase(text, preset);
-    kokoroAudioCache.set(key, pending);
-    trimKokoroCache();
-    pending.catch(() => kokoroAudioCache.delete(key));
+    pending = synthesizeJarvisPhrase(text, preset);
+    jarvisAudioCache.set(key, pending);
+    trimJarvisCache();
+    pending.catch(() => jarvisAudioCache.delete(key));
   }
   return pending;
 }
 
-export async function ensureKokoroReadyForSpeech(
+export async function ensureJarvisReadyForSpeech(
   onProgress?: (percent: number) => void,
 ): Promise<boolean> {
-  if (await kokoroLocalProvider.isAvailable()) {
-    await kokoroLocalProvider.warmup?.();
+  if (await jarvisHighLocalProvider.isAvailable()) {
+    await jarvisHighLocalProvider.warmup?.();
     return true;
   }
-  const ok = await ModelManager.ensureKokoroReady((p) => onProgress?.(p.percent));
+  const ok = await ModelManager.ensureJarvisReady((p) => onProgress?.(p.percent));
   if (!ok) return false;
-  await kokoroLocalProvider.warmup?.();
-  return kokoroLocalProvider.isAvailable();
+  await jarvisHighLocalProvider.warmup?.();
+  return jarvisHighLocalProvider.isAvailable();
 }
 
-/** Pre-synthesize Kokoro preview clips so Preview plays instantly. */
-export async function warmKokoroPreviewCache(
+/** Pre-synthesize phrases used outside the bundled immediate preview. */
+export async function warmJarvisSpeechCache(
   presets: VoiceTtsPreset[] = ['jarvis', 'friday'],
 ): Promise<void> {
-  if (!(await kokoroLocalProvider.isAvailable())) return;
+  if (!(await jarvisHighLocalProvider.isAvailable())) return;
   await Promise.all(
     presets.map((preset) =>
-      getCachedKokoroAudio(VOICE_PREVIEW_TEXT, preset).catch(() => undefined),
+      getCachedJarvisAudio(VOICE_PREVIEW_TEXT, preset).catch(() => undefined),
     ),
   );
 }
 
 export async function warmVoiceEngine(engine: VoiceEngine): Promise<void> {
-  if (engine === 'kokoro') {
-    if (await ensureKokoroReadyForSpeech()) {
-      await warmKokoroPreviewCache();
-    }
+  if (engine === 'jarvis') {
+    await ensureJarvisReadyForSpeech();
     return;
   }
   if (engine === 'system' || engine === 'local') {
@@ -240,7 +236,9 @@ function stopPlaybackOnly(): void {
   activePlaybackAbort = null;
   stopSpeech();
   TtsService.stop();
-  kokoroLocalProvider.stop();
+  jarvisHighLocalProvider.stop();
+  bundledPreviewAudio?.pause();
+  bundledPreviewAudio = null;
 }
 
 /** Bumped on every new preview or explicit cancel — in-flight previews check this. */
@@ -300,22 +298,22 @@ export interface SpeakWithSettingsOptions {
   allowBackground?: boolean;
 }
 
-interface KokoroStreamItem {
+interface JarvisStreamItem {
   text: string;
   audio?: Promise<{ audio: string; mime: string }>;
 }
 
-export interface KokoroStreamingPlayer {
+export interface JarvisStreamingPlayer {
   enqueue(text: string): void;
   complete(): Promise<void>;
   stop(): void;
 }
 
-class KokoroStreamingPlayerImpl implements KokoroStreamingPlayer {
+class JarvisStreamingPlayerImpl implements JarvisStreamingPlayer {
   private readonly ttsPreset: VoiceTtsPreset;
   private readonly voicePreset: VoicePresetId;
   private readonly controller = new AbortController();
-  private readonly items: KokoroStreamItem[] = [];
+  private readonly items: JarvisStreamItem[] = [];
   private readonly ready: Promise<boolean>;
   private playbackLoop: Promise<void> | null = null;
   private wakePlayback: (() => void) | null = null;
@@ -327,8 +325,8 @@ class KokoroStreamingPlayerImpl implements KokoroStreamingPlayer {
     this.voicePreset = voicePreset;
     this.ttsPreset = voicePresetToTtsPreset(voicePreset);
     this.ready = (async () => {
-      if (await kokoroLocalProvider.isAvailable()) return true;
-      return ensureKokoroReadyForSpeech();
+      if (await jarvisHighLocalProvider.isAvailable()) return true;
+      return ensureJarvisReadyForSpeech();
     })();
   }
 
@@ -354,7 +352,7 @@ class KokoroStreamingPlayerImpl implements KokoroStreamingPlayer {
     this.controller.abort();
     this.items.length = 0;
     this.wake();
-    kokoroLocalProvider.stop();
+    jarvisHighLocalProvider.stop();
     stopSpeech();
   }
 
@@ -365,14 +363,14 @@ class KokoroStreamingPlayerImpl implements KokoroStreamingPlayer {
   }
 
   private pumpSynthesis(): void {
-    while (!this.stopped && this.inFlightSynth < KOKORO_STREAM_SYNTH_AHEAD) {
+    while (!this.stopped && this.inFlightSynth < JARVIS_STREAM_SYNTH_AHEAD) {
       const next = this.items.find((item) => !item.audio);
       if (!next) return;
       this.inFlightSynth += 1;
       next.audio = this.ready
         .then((ready) => {
-          if (!ready) throw new Error('kokoro_unavailable');
-          return getCachedKokoroAudio(next.text, this.ttsPreset);
+          if (!ready) throw new Error('jarvis_voice_unavailable');
+          return getCachedJarvisAudio(next.text, this.ttsPreset);
         })
         .finally(() => {
           this.inFlightSynth = Math.max(0, this.inFlightSynth - 1);
@@ -427,8 +425,8 @@ class KokoroStreamingPlayerImpl implements KokoroStreamingPlayer {
   }
 }
 
-export function createKokoroStreamingPlayer(voicePreset: VoicePresetId): KokoroStreamingPlayer {
-  return new KokoroStreamingPlayerImpl(voicePreset);
+export function createJarvisStreamingPlayer(voicePreset: VoicePresetId): JarvisStreamingPlayer {
+  return new JarvisStreamingPlayerImpl(voicePreset);
 }
 
 export async function speakWithSettings(
@@ -440,7 +438,7 @@ export async function speakWithSettings(
   if (!options.allowBackground && !canVoiceModuleSpeak()) return;
 
   const state = useAuthStore.getState();
-  const engine = options.voiceEngine ?? state.voiceEngine ?? 'kokoro';
+  const engine = options.voiceEngine ?? state.voiceEngine ?? 'jarvis';
   const voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 
@@ -451,9 +449,13 @@ export async function speakWithSettings(
     return;
   }
 
-  if (engine === 'kokoro') {
-    if (!(await kokoroLocalProvider.isAvailable())) {
-      const ready = await ensureKokoroReadyForSpeech();
+  if (engine === 'jarvis') {
+    if (voicePreset === 'aurora') {
+      await speakInstalledVoiceFallback(trimmed, voicePreset);
+      return;
+    }
+    if (!(await jarvisHighLocalProvider.isAvailable())) {
+      const ready = await ensureJarvisReadyForSpeech();
       if (!ready) {
         await speakInstalledVoiceFallback(trimmed, voicePreset);
         return;
@@ -462,7 +464,7 @@ export async function speakWithSettings(
     const controller = beginPlaybackAbortScope();
     options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
     try {
-      const { audio, mime } = await getCachedKokoroAudio(trimmed, ttsPreset);
+      const { audio, mime } = await getCachedJarvisAudio(trimmed, ttsPreset);
       if (controller.signal.aborted) return;
       await playBase64Audio(audio, mime || 'audio/wav', {
         volume: 1,
@@ -494,7 +496,7 @@ export async function previewVoiceWithSettings(
   stopAllVoiceOutput();
   const stale = () => generation !== voicePreviewGeneration;
 
-  const engine = voiceEngine ?? useAuthStore.getState().voiceEngine ?? 'kokoro';
+  const engine = voiceEngine ?? useAuthStore.getState().voiceEngine ?? 'jarvis';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 
   if (engine === 'deepgram') {
@@ -512,24 +514,18 @@ export async function previewVoiceWithSettings(
     return;
   }
 
-  if (engine === 'kokoro') {
-    if (!(await kokoroLocalProvider.isAvailable())) {
-      const ready = await ensureKokoroReadyForSpeech();
-      if (stale()) return;
-      if (!ready) {
-        throw new Error('Kokoro is not ready. Download the model first.');
-      }
-    }
+  if (engine === 'jarvis' && voicePreset === 'jarvis-prime') {
+    const audio = new Audio(JARVIS_PREVIEW_ASSET);
+    bundledPreviewAudio = audio;
+    await audio.play();
+    if (stale()) audio.pause();
+    return;
+  }
+
+  if (engine === 'jarvis' && voicePreset === 'aurora') {
     if (stale()) return;
-    const { audio, mime } = await getCachedKokoroAudio(VOICE_PREVIEW_TEXT, ttsPreset);
-    if (stale()) return;
-    const controller = beginPlaybackAbortScope();
-    try {
-      await playBase64Audio(audio, mime || 'audio/wav', { volume: 1, signal: controller.signal });
-    } finally {
-      endPlaybackAbortScope(controller);
-      if (stale()) kokoroLocalProvider.stop();
-    }
+    await speakInstalledVoiceFallback(VOICE_PREVIEW_TEXT, voicePreset);
+    if (stale()) stopSpeech();
     return;
   }
 

@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG1-PROVIDER-TOKENIZERS-20260804
+controller=/root/mcp_gateway_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:00:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Wire truthful model-aware token counting into the live Token Optimize runtime, using exact local engines or provider-native counters only when real trusted assets or ports exist and retaining a labeled conservative fallback otherwise.
+owned_paths=app/src/features/token-optimizer/chatRuntimeBridge.ts;app/src/features/token-optimizer/chatRuntimeBridge.test.ts;app/src/features/token-optimizer/productionTokenizerEngines.ts;app/src/features/token-optimizer/productionTokenizerEngines.test.ts;app/src/features/token-optimizer/tokenizerAdapters.ts;app/src/features/token-optimizer/tokenizerAdapters.test.ts;app/src/features/token-optimizer/tokenizerRegistry.ts;app/src/features/token-optimizer/tokenizerRegistry.test.ts
+exclusions=all other files;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all provider or credential configuration;all external network calls;all external systems;Computer Control
+verification=add only focused deterministic tests required by changed behavior;do not run tests,typecheck,build,format,or review commands;self-review once and hand off
+status=ASSIGNED

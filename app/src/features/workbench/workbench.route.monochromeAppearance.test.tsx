@@ -17,6 +17,7 @@ const baseWallpaper: WorkbenchWallpaperConfig = {
   paused: false,
   interactive: true,
   intensity: 0.72,
+  brightness: 0.5,
   quality: 'balanced',
 };
 

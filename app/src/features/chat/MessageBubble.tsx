@@ -148,6 +148,7 @@ export function MessageBubble({ message, compact = false, creatorDraftKind }: Me
                   allParts={message.parts}
                   messageId={message.id}
                   chatId={message.chat_id}
+                  compactAttachments
                 />
               ))}
             </div>
@@ -157,6 +158,7 @@ export function MessageBubble({ message, compact = false, creatorDraftKind }: Me
             onBranch={handleBranch}
             timestamp={message.created_at}
             align="end"
+            compact={compact}
           />
         </div>
       </motion.div>
@@ -178,7 +180,9 @@ export function MessageBubble({ message, compact = false, creatorDraftKind }: Me
           compact ? 'max-w-[98%] gap-1.5' : 'max-w-[88%] gap-2',
         )}
       >
-        <Avatar seed={slug} size={compact ? 22 : 28} className="mt-0.5 shrink-0" />
+        <span data-pet-message-avatar={compact ? 'true' : undefined} className="mt-0.5 shrink-0">
+          <Avatar seed={slug} size={compact ? 22 : 28} />
+        </span>
         <div className="group flex min-w-0 flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-1.5">
             <span className="text-ui-strong text-foreground">{agent?.name ?? 'Assistant'}</span>
@@ -223,7 +227,12 @@ export function MessageBubble({ message, compact = false, creatorDraftKind }: Me
               ))}
             </div>
           </div>
-          <ActionStrip onCopy={handleCopy} onBranch={handleBranch} align="start" />
+          <ActionStrip
+            onCopy={handleCopy}
+            onBranch={handleBranch}
+            align="start"
+            compact={compact}
+          />
         </div>
       </div>
     </motion.div>
@@ -235,18 +244,25 @@ function ActionStrip({
   onBranch,
   timestamp,
   align,
+  compact = false,
 }: {
   onCopy: () => void;
   onBranch: () => void;
   timestamp?: number;
   align: 'start' | 'end';
+  /** Pet mini-panel: keep actions visible (no hover) and denser. */
+  compact?: boolean;
 }) {
   return (
     <div
       className={cn(
-        'flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity',
+        'flex items-center gap-0.5 transition-opacity',
+        // Hover-reveal on main; always visible in compact pet chat.
+        compact ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
         align === 'end' ? 'justify-end' : 'justify-start',
       )}
+      data-message-actions="true"
+      data-compact={compact ? 'true' : undefined}
     >
       {timestamp !== undefined && align === 'end' && (
         <span className="text-metadata text-muted-foreground mr-1">
@@ -255,12 +271,12 @@ function ActionStrip({
       )}
       <Hint label="Copy">
         <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy message">
-          <Copy />
+          <Copy className={compact ? 'h-3 w-3' : undefined} />
         </Button>
       </Hint>
       <Hint label="Branch from here">
         <Button size="icon-sm" variant="ghost" onClick={onBranch} aria-label="Branch from here">
-          <GitBranch />
+          <GitBranch className={compact ? 'h-3 w-3' : undefined} />
         </Button>
       </Hint>
     </div>

@@ -81,16 +81,16 @@
     {
       "path": "app/src/features/appearance/sakura/sakura-scene.svg",
       "type": "image/svg+xml",
-      "origin": "original-vibespace-vector",
-      "referenceCopyPolicy": "informed-only-no-copied-geometry",
+      "origin": "owner-authorized-reference-extract",
+      "referenceCopyPolicy": "exact-owner-provided-scene-extract",
       "referenceInputs": ["preview.png", "style-board.png", "STYLE_SPEC.md", "index.html"],
-      "viewBox": "0 0 1920 1080",
+      "viewBox": "0 0 1600 1000",
       "preserveAspectRatio": "xMidYMid slice",
       "depthGroups": 7,
-      "bytes": 5791,
-      "sha256": "F77BE46B6CC3459CDC01738F893C63C476CF2415FDC8BD60BBF8FE145F7185E5",
+      "bytes": 7682,
+      "sha256": "800EC37F0FBF7E52D986C58AB62D40AD456ABE50A948A552241E034F4E865068",
       "runtimeNetworkFetch": false,
-      "notes": "Original broad-shape cel-painted dusk scene. Reference palette, depth recipe, and restraint informed the design; no prototype path geometry, screenshots, text, or runtime content were copied."
+      "notes": "Owner-authorized exact scene extract from the frozen index.html reference. The local SVG contains no scripts, remote fetches, text, or runtime content."
     }
   ]
 }

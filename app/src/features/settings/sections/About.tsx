@@ -9,8 +9,8 @@ import {
   Download,
   CheckCircle2,
   AlertTriangle,
+  Github,
 } from 'lucide-react';
-import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -26,7 +26,10 @@ import {
   setAutoUpdateEnabled as persistAutoUpdateEnabled,
   type UpdatePhase,
   type UpdateResult,
+  UPDATE_RELEASE_CHANNEL,
+  UPDATE_RELEASES_URL,
 } from '@/lib/updates';
+import { OpenSourceCredits } from './OpenSourceCredits';
 
 const VERSION = import.meta.env.VITE_APP_VERSION || CURRENT_VERSION;
 
@@ -42,6 +45,11 @@ const LINKS: { label: string; href: string; icon: typeof BookOpen }[] = [
     icon: Shield,
   },
   {
+    label: 'Open Source Credits',
+    href: 'https://github.com/Cookie774-GameDev/VibeSpace/blob/main/docs/oss/THIRD_PARTY_NOTICES.md',
+    icon: Github,
+  },
+  {
     label: 'License',
     href: 'https://github.com/Cookie774-GameDev/VibeSpace/blob/main/LICENSE',
     icon: ScrollText,
@@ -49,8 +57,6 @@ const LINKS: { label: string; href: string; icon: typeof BookOpen }[] = [
 ];
 
 export function About() {
-  const telemetryOptIn = useAuthStore((s) => s.telemetryOptIn);
-  const setTelemetryOptIn = useAuthStore((s) => s.setTelemetryOptIn);
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [pendingUpdate, setPendingUpdate] = useState<UpdateResult | null>(null);
@@ -58,6 +64,7 @@ export function About() {
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [totalBytes, setTotalBytes] = useState<number | undefined>();
   const [installedVersion, setInstalledVersion] = useState(VERSION);
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null);
 
   useEffect(() => {
     setAutoUpdate(getAutoUpdateEnabled());
@@ -85,6 +92,7 @@ export function About() {
     setPendingUpdate(null);
     try {
       const result = await checkForAppUpdate();
+      setLastCheckedAt(Date.now());
       if (result.available) {
         setPendingUpdate(result);
         setUpdatePhase('available');
@@ -94,6 +102,7 @@ export function About() {
         toast.success('Jarvis is up to date');
       }
     } catch (err) {
+      setLastCheckedAt(Date.now());
       const message = err instanceof Error ? err.message : 'Could not check for updates.';
       setUpdatePhase('error');
       setUpdateError(message);
@@ -144,7 +153,10 @@ export function About() {
         <KV label="Version" value={installedVersion} />
         <KV label="License" value="Apache-2.0" />
         <KV label="Build" value={isTauri ? 'Tauri desktop' : 'Web preview'} />
-        <KV label="Channel" value={import.meta.env.DEV ? 'dev' : 'stable'} />
+        <KV
+          label="Channel"
+          value={import.meta.env.DEV ? `dev → ${UPDATE_RELEASE_CHANNEL}` : UPDATE_RELEASE_CHANNEL}
+        />
       </section>
 
       <section className="max-w-xl rounded-2xl border border-border bg-elevated/70 p-5 shadow-soft">
@@ -200,6 +212,8 @@ export function About() {
         </div>
       </section>
 
+      <OpenSourceCredits />
+
       <Separator />
 
       <section className="flex flex-col gap-2">
@@ -230,19 +244,28 @@ export function About() {
       <Separator />
 
       <section className="flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3 max-w-md">
+        <div className="flex items-start justify-between gap-3 max-w-xl">
           <div className="flex flex-col gap-1">
-            <Label htmlFor="telemetry-toggle">Anonymous usage telemetry</Label>
+            <span className="text-secondary font-medium text-foreground">
+              Privacy and anonymous telemetry
+            </span>
             <p className="text-metadata text-muted-foreground">
-              Helps us prioritize. No prompts, no message contents, ever. You can revoke at any
-              time.
+              Optional collection is off by default. Review every data class, exclusion, retention
+              rule, consent record, and any configured reward on the dedicated page.
             </p>
           </div>
-          <Switch
-            id="telemetry-toggle"
-            checked={telemetryOptIn}
-            onCheckedChange={setTelemetryOptIn}
-          />
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() =>
+              window.dispatchEvent(
+                new CustomEvent('jarvis:settings:tab', { detail: { tab: 'telemetry' } }),
+              )
+            }
+          >
+            Privacy controls
+          </Button>
         </div>
 
         <div className="flex items-start justify-between gap-3 max-w-md">
@@ -308,6 +331,27 @@ export function About() {
             downloadedBytes={downloadedBytes}
             totalBytes={totalBytes}
           />
+          <dl className="mt-3 grid gap-2 border-t border-border/60 pt-3 text-metadata sm:grid-cols-2">
+            <KV
+              label="Last checked"
+              value={lastCheckedAt ? new Date(lastCheckedAt).toLocaleString() : 'Not checked yet'}
+            />
+            <KV
+              label="Latest known"
+              value={
+                pendingUpdate?.version ??
+                (updatePhase === 'none' ? installedVersion : 'Check required')
+              }
+            />
+          </dl>
+          <a
+            href={pendingUpdate?.notesUrl ?? UPDATE_RELEASES_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-3 inline-flex items-center gap-1 text-metadata text-accent-cyan hover:underline"
+          >
+            Release notes <ExternalLink className="h-3 w-3" aria-hidden />
+          </a>
           {updatePhase === 'available' && pendingUpdate ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button type="button" size="sm" onClick={() => void installUpdate()} disabled={busy}>

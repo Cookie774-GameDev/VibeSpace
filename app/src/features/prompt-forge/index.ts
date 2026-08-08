@@ -10,5 +10,6 @@ export * from './modelSelection';
 export * from './preservation';
 export * from './promptForgeExecutor';
 export * from './promptForgeService';
+export * from './promptUpgradeEngine';
 export * from './publicResearch';
 export * from './sourcePack';

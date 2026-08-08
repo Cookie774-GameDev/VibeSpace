@@ -1,5 +1,6 @@
 import * as React from 'react';
-import type { WorkbenchPanelKind } from './types';
+import type { WorkbenchPanel } from './types';
+import { PluginDashboardPanel } from './PluginDashboardPanel';
 
 const KanbanPage = React.lazy(() =>
   import('@/features/kanban').then((m) => ({ default: m.KanbanPage })),
@@ -9,6 +10,14 @@ const AgentManager = React.lazy(() =>
 );
 const ToolsPage = React.lazy(() =>
   import('@/features/tools').then((m) => ({ default: m.ToolsPage })),
+);
+const Plugins = React.lazy(() =>
+  import('@/features/plugins').then((m) => ({ default: m.Plugins })),
+);
+const JarvisActions = React.lazy(() =>
+  import('@/features/settings/sections/JarvisActions').then((m) => ({
+    default: m.JarvisActions,
+  })),
 );
 const HistoryPage = React.lazy(() =>
   import('@/features/history').then((m) => ({ default: m.HistoryPage })),
@@ -29,7 +38,8 @@ function SurfaceFallback({ label }: { label: string }) {
 /**
  * Mount real app pages inside Workbench panels (same stores/APIs as main routes).
  */
-export function EmbeddedSurface({ kind }: { kind: WorkbenchPanelKind }) {
+export function EmbeddedSurface({ panel }: { panel: WorkbenchPanel }) {
+  const { kind } = panel;
   let node: React.ReactNode = null;
   let label = String(kind);
 
@@ -43,11 +53,28 @@ export function EmbeddedSurface({ kind }: { kind: WorkbenchPanelKind }) {
       node = <AgentManager />;
       break;
     case 'actions':
-    case 'plugins':
-    case 'github':
-    case 'supabase':
+      label = 'Jarvis actions';
+      node = <JarvisActions />;
+      break;
+    case 'tools':
       label = 'Tools';
       node = <ToolsPage />;
+      break;
+    case 'plugins':
+      label = 'Plugins';
+      node = <Plugins />;
+      break;
+    case 'github':
+      label = 'GitHub';
+      node = <PluginDashboardPanel pluginId="github" />;
+      break;
+    case 'supabase':
+      label = 'Supabase';
+      node = <PluginDashboardPanel pluginId="supabase" />;
+      break;
+    case 'plugin':
+      label = 'Plugin';
+      node = <PluginDashboardPanel pluginId={panel.settings.pluginId} />;
       break;
     case 'activity':
       label = 'Activity';
@@ -74,12 +101,14 @@ export function EmbeddedSurface({ kind }: { kind: WorkbenchPanelKind }) {
   );
 }
 
-export function isEmbeddedSurfaceKind(kind: WorkbenchPanelKind): boolean {
+export function isEmbeddedSurfaceKind(kind: WorkbenchPanel['kind']): boolean {
   return (
     kind === 'kanban' ||
     kind === 'agent' ||
     kind === 'actions' ||
     kind === 'plugins' ||
+    kind === 'plugin' ||
+    kind === 'tools' ||
     kind === 'github' ||
     kind === 'supabase' ||
     kind === 'activity' ||

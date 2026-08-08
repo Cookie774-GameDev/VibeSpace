@@ -1294,20 +1294,13 @@ function Tile({
         {/* Atomic presentation: only one xterm owner per PTY (main vs pet panel). */}
         {presentedInPet && leaf.sessionId ? (
           <div
-            className="flex h-full flex-col items-center justify-center gap-2 bg-paper-soft p-4 text-center"
+            className="flex h-full flex-col items-center justify-center bg-paper-soft p-4 text-center"
             data-terminal-presented-in-pet="true"
             data-pty-id={leaf.sessionId}
           >
             <p className="text-sm text-muted-foreground">
-              This live terminal is in the Pet panel (same PTY — not restarted).
+              This live terminal is active in the compact panel (same PTY — not restarted).
             </p>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => moveTerminal(leaf.sessionId!, 'main')}
-            >
-              Bring back here
-            </Button>
           </div>
         ) : (
           <TerminalView
@@ -1315,6 +1308,8 @@ function Tile({
             paneId={leaf.id}
             command={leaf.command || defaultCommand}
             startupCommand={leaf.startupCommand}
+            startupCommands={leaf.startupCommands}
+            preserveExisting={leaf.preserveExisting}
             pendingCommand={leaf.pendingCommand}
             pendingCommandId={leaf.pendingCommandId}
             executionId={leaf.executionId}

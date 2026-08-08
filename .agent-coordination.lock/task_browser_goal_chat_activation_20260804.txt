@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-BROWSER-GOAL-CHAT-ACTIVATION-20260804
+controller=/root/mcp_gateway_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:44:28-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Activate durable Browser Goal state in the normal chat surface with inherited Token Optimize mode, compact truthful status, approval/pause/cancel/resume controls, checkpoint recovery, and no duplicate browser-specific modes.
+owned_paths=app/src/features/browser/browserGoalChatRuntime.ts;app/src/features/browser/browserGoalChatRuntime.test.ts;app/src/features/browser/browserGoalStore.ts;app/src/features/browser/browserGoalStore.test.ts;app/src/features/browser/BrowserGoalStatus.tsx;app/src/features/browser/BrowserGoalStatus.test.tsx;app/src/features/browser/index.ts;app/src/features/chat/ChatView.tsx;app/src/features/chat/ChatView.browserGoal.test.tsx
+exclusions=all other files;all unrelated dirty hunks;Composer.tsx;app/src/lib/ai/runtime.ts;provider selection;raw CDP or browser execution;Git operations;external systems;Computer Control
+verification=add only focused deterministic tests required by changed behavior;do not run tests,typecheck,build,format,visual,or review commands;self-review once and hand off
+status=ASSIGNED

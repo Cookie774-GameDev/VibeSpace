@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-BROWSER-GOAL-LIVE-ACTIVATION-20260804
+controller=/root/mcp_gateway_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T01:15:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Connect canonical browser-action turns to durable Browser Goal chat activation and checkpoint/status updates without adding a separate browser mode or bypassing kernel approvals.
+owned_paths=app/src/features/browser/browserGoalLaunchRuntime.ts;app/src/features/browser/browserGoalLaunchRuntime.test.ts;app/src/features/browser/browserGoalChatRuntime.ts;app/src/features/browser/browserGoalChatRuntime.test.ts;app/src/features/browser/browserGoalStore.ts;app/src/features/browser/browserGoalStore.test.ts;app/src/features/browser/index.ts;app/src/lib/ai/runtime.ts;app/src/lib/ai/runtime.browserGoal.test.ts
+exclusions=all other files;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all raw CDP/Playwright exposure;all external systems;Computer Control
+verification=add only focused deterministic tests required by changed behavior;do not run tests,typecheck,build,format,or review commands;self-review once and hand off
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

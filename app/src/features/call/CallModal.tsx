@@ -12,16 +12,30 @@ import { Orb } from '@/features/voice/Orb';
 import { PERSONAS } from '@/features/voice/personas';
 import { useCallStore, type CallStatus } from './store';
 import { getCallService } from './CallService';
+import {
+  assistantPersonaDisplayName,
+  useAssistantPersonaName,
+} from '@/lib/assistantPersona';
 import './sakura-call.css';
 
-const STATUS_LABEL: Record<CallStatus, string> = {
-  idle: 'Ready',
-  connecting: 'Connecting…',
-  ringing: 'Ringing Sage',
-  'in-call': 'On a call',
-  ending: 'Hanging up',
-  error: 'Call failed',
-};
+function statusLabel(status: CallStatus, assistantName: string): string {
+  switch (status) {
+    case 'idle':
+      return 'Ready';
+    case 'connecting':
+      return 'Connecting…';
+    case 'ringing':
+      return `Ringing ${assistantName}`;
+    case 'in-call':
+      return 'On a call';
+    case 'ending':
+      return 'Hanging up';
+    case 'error':
+      return 'Call failed';
+    default:
+      return 'Ready';
+  }
+}
 
 /**
  * In-call modal for Path C voice (in-app WebRTC).
@@ -48,6 +62,8 @@ export function CallModal({ runtimeEffectsEnabled = true }: CallModalProps = {})
   const status = useCallStore((s) => s.status);
   const errorMessage = useCallStore((s) => s.errorMessage);
   const persona = useCallStore((s) => s.persona);
+  const selectedPersonaName = useAssistantPersonaName();
+  const callPersonaName = assistantPersonaDisplayName(persona ?? selectedPersonaName);
   const muted = useCallStore((s) => s.muted);
   const transcript = useCallStore((s) => s.transcript);
   const awaitingConfirm = useCallStore((s) => s.awaitingConfirm);
@@ -166,7 +182,7 @@ export function CallModal({ runtimeEffectsEnabled = true }: CallModalProps = {})
                 (status === 'idle' || status === 'ending') && 'bg-muted-foreground',
               )}
             />
-            <span className="font-medium">{STATUS_LABEL[status]}</span>
+            <span className="font-medium">{statusLabel(status, callPersonaName)}</span>
             {callId && status === 'in-call' && (
               <span className="text-[10px] text-muted-foreground/70 font-mono ml-1">
                 {callId.slice(-6)}

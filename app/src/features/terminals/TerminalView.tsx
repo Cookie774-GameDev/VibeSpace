@@ -51,6 +51,7 @@ import {
   type HoldConfirmPhase,
 } from './holdToConfirm';
 import { useTerminalTranscriptStore } from './transcriptStore';
+import { TerminalWarmIdleScene } from './terminalWarmIdleScene';
 import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
 import {
   buildAgentSpawnEnv,
@@ -77,6 +78,11 @@ import {
 } from './terminalClearRegistry';
 import { TERMINAL_CLEAR_SUPPRESS_MS } from './terminalClear';
 import { createWebglDisposeTracker } from './terminalDispose';
+import { subscribeTerminalOutput, type TerminalOutputSubscription } from './terminalOutputRouter';
+import { createTerminalRenderQueue } from './terminalRenderQueue';
+import { terminalWebglBudget, type TerminalWebglLease } from './terminalWebglBudget';
+import { RESOURCE_PRESSURE_EVENT } from '@/stability/resourcePressure';
+import { stabilityDiagnostics } from '@/stability/stabilityDiagnostics';
 import { shouldSendTerminalResize, type TerminalGridSize } from './terminalGeometry';
 import { applyTerminalFollowScroll, terminalUserHasScrolled } from './terminalViewport';
 import { COMPOSER_STT_STOP_EVENT, COMPOSER_STT_TOGGLE_EVENT } from '@/features/composer-stt';
@@ -134,6 +140,7 @@ import {
   TERMINAL_VIBESPACE_PALETTE_EVENT,
 } from './terminalSlashIntegration';
 import type { TerminalPromptEvidence } from './terminalCommandFoundation';
+import { prepareUpgradedPromptInsert } from './terminalPromptUpgrade';
 import {
   applyTerminalTheme,
   resolveTerminalDocumentTheme,
@@ -479,6 +486,8 @@ export function TerminalView({
   paneId,
   command,
   startupCommand,
+  startupCommands,
+  preserveExisting = false,
   executionId,
   pendingCommand,
   pendingCommandId,
@@ -522,6 +531,21 @@ export function TerminalView({
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(existingSessionId ?? null);
   const [isFocused, setIsFocused] = useState(false);
+  const [warmIdleInteractionAt, setWarmIdleInteractionAt] = useState(() => Date.now());
+  const [warmIdlePointerEnteredAt, setWarmIdlePointerEnteredAt] = useState<number | null>(null);
+  const [warmIdlePointerInside, setWarmIdlePointerInside] = useState(false);
+  const warmTheme = useUIStore((state) => state.theme);
+  const markWarmIdleInteraction = () => setWarmIdleInteractionAt(Date.now());
+  const markWarmIdlePointerEntered = () => {
+    setWarmIdlePointerInside(true);
+    setWarmIdlePointerEnteredAt(Date.now());
+  };
+  const markWarmIdlePointerLeft = () => {
+    setWarmIdlePointerInside(false);
+    setWarmIdlePointerEnteredAt(null);
+    markWarmIdleInteraction();
+  };
+  const warmIdleLastActivityAt = warmIdleInteractionAt;
   const [dictating, setDictating] = useState(false);
   const [terminalPaletteOpen, setTerminalPaletteOpen] = useState(false);
   const [terminalPromptEvidence, setTerminalPromptEvidence] = useState<TerminalPromptEvidence>(() =>
@@ -816,15 +840,15 @@ export function TerminalView({
     let cancelled = false;
     let term: Terminal | null = null;
     let fit: FitAddon | null = null;
-    let unlistenOutput: UnlistenFn | undefined;
+    let outputSubscription: TerminalOutputSubscription | undefined;
     let unlistenExit: UnlistenFn | undefined;
     let scrollListenerDispose: { dispose: () => void } | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let mutationObserver: MutationObserver | null = null;
     let rafToken: number | null = null;
     let outputRafToken: number | null = null;
-    let pendingOutput = '';
-    let pendingTranscript = '';
+    const renderQueue = createTerminalRenderQueue();
+    let terminalWriteInFlight = false;
     const outputBuffer = createTerminalOutputBuffer();
     let handleVisible: (() => void) | null = null;
     let onClear: ((e: Event) => void) | null = null;
@@ -840,6 +864,8 @@ export function TerminalView({
     let startupRestoreMode = false;
     let sshSession = isSshSessionCommand(startupCommand);
     const webglDispose = createWebglDisposeTracker();
+    let webglLease: TerminalWebglLease | null = null;
+    let onResourcePressure: (() => void) | null = null;
     const inputTracker = createPersistedInputTracker(currentInputRef.current);
     const slashIntegration = createTerminalSlashIntegration({ command });
     const publishPromptEvidence = (next: TerminalPromptEvidence) => {
@@ -917,8 +943,7 @@ export function TerminalView({
 
     const resetTerminalSurface = () => {
       outputBuffer.flush();
-      pendingOutput = '';
-      pendingTranscript = '';
+      renderQueue.clear();
       if (outputRafToken != null) {
         cancelAnimationFrame(outputRafToken);
         outputRafToken = null;
@@ -1032,11 +1057,17 @@ export function TerminalView({
 
     const flushTerminalOutput = () => {
       outputRafToken = null;
-      if (!pendingOutput) return;
-      const displayData = pendingOutput;
-      const transcriptData = pendingTranscript;
-      pendingOutput = '';
-      pendingTranscript = '';
+      if (terminalWriteInFlight) return;
+      const pending = renderQueue.drain();
+      if (!pending) return;
+      const { displayData, transcriptData, droppedCharacters } = pending;
+      if (droppedCharacters > 0) {
+        stabilityDiagnostics.record({
+          type: 'terminal-output-trimmed',
+          at: Date.now(),
+          droppedCharacters,
+        });
+      }
       const sid = sessionRef.current;
       if (!sid) return;
 
@@ -1044,6 +1075,7 @@ export function TerminalView({
         const currentTerm = termRef.current;
         const followUserScrolled = userHasScrolledRef.current;
         if (currentTerm) {
+          terminalWriteInFlight = true;
           latestTerminalWrite = new Promise<void>((resolve) => {
             currentTerm.write(displayData, () => {
               if (!cancelled) {
@@ -1059,7 +1091,11 @@ export function TerminalView({
                 }
                 scheduleTerminalSnapshot();
               }
+              terminalWriteInFlight = false;
               resolve();
+              if (!renderQueue.isEmpty() && outputRafToken == null) {
+                outputRafToken = requestAnimationFrame(flushTerminalOutput);
+              }
             });
           });
         }
@@ -1076,8 +1112,7 @@ export function TerminalView({
 
     const queueTerminalOutput = (displayData: string, transcriptData: string) => {
       if (!displayData) return;
-      pendingOutput += displayData;
-      pendingTranscript += transcriptData;
+      renderQueue.enqueue(displayData, transcriptData);
       if (outputRafToken != null) return;
       outputRafToken = requestAnimationFrame(flushTerminalOutput);
     };
@@ -1094,6 +1129,10 @@ export function TerminalView({
     const flushTerminalPersistenceNow = async (): Promise<void> => {
       if (outputRafToken != null) {
         cancelAnimationFrame(outputRafToken);
+        flushTerminalOutput();
+      }
+      while (terminalWriteInFlight || !renderQueue.isEmpty()) {
+        await latestTerminalWrite;
         flushTerminalOutput();
       }
       flushCurrentInput();
@@ -1140,10 +1179,16 @@ export function TerminalView({
       // If WebGL isn't available — or the browser reclaims the context
       // because too many are alive — we dispose the addon and xterm falls
       // back to the DOM renderer transparently.
+      webglLease = terminalWebglBudget.acquire();
       try {
+        if (!webglLease) {
+          throw new Error('terminal WebGL context budget reached');
+        }
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
           webglDispose.disposeAddon();
+          webglLease?.release();
+          webglLease = null;
           requestAnimationFrame(() => {
             if (cancelled) return;
             const currentTerm = termRef.current;
@@ -1160,8 +1205,17 @@ export function TerminalView({
         term.loadAddon(webgl);
       } catch (err) {
         webglDispose.setAddon(null);
+        webglLease?.release();
+        webglLease = null;
         console.warn('[Jarvis] WebGL renderer unavailable, using DOM renderer:', err);
       }
+
+      onResourcePressure = () => {
+        webglDispose.disposeAddon();
+        webglLease?.release();
+        webglLease = null;
+      };
+      window.addEventListener(RESOURCE_PRESSURE_EVENT, onResourcePressure);
 
       // Belt-and-braces: re-assigning fontFamily forces xterm's option
       // proxy to re-run its cell measurement, in case fonts.ready
@@ -1200,6 +1254,7 @@ export function TerminalView({
       }
 
       term.onData((data: string) => {
+        markWarmIdleInteraction();
         const sid = sessionRef.current;
         if (!sid) return;
 
@@ -1267,14 +1322,12 @@ export function TerminalView({
           await ensureTerminalExecutionExitListener();
         }
         setInitializationPhase('kernel_terminal_phase_output_listener');
-        const u1 = await listen<OutputPayload>('terminal://output', (e) => {
-          outputLatch.observe(e.payload);
-        });
+        const u1 = await subscribeTerminalOutput((payload) => outputLatch.observe(payload));
         if (cancelled) {
-          u1();
+          u1.unsubscribe();
           return;
         }
-        unlistenOutput = u1;
+        outputSubscription = u1;
 
         setInitializationPhase('kernel_terminal_phase_native_exit_listener');
         const u2 = await listen<NativeTerminalExitPayload>('terminal://exit', (e) => {
@@ -1357,7 +1410,8 @@ export function TerminalView({
           restoredInput = restoreDecision.restoredInput;
           let spawnCommand = command;
           const isRecoveredSession = restoreDecision.source !== 'new-pane';
-          const nativeStartupCommand = isRecoveredSession ? undefined : startupCommand;
+          const nativeStartupCommand =
+            isRecoveredSession || startupCommands?.length ? undefined : startupCommand;
           if (isRecoveredSession) {
             const restart = terminalRestartDecision(command, startupCommand);
             spawnCommand = restart.spawnCommand;
@@ -1421,6 +1475,7 @@ export function TerminalView({
             projectId: projectId,
             projectName: projectName,
             cancellationToken: canonicalTerminalSpawnToken(executionId),
+            preserveExisting: preserveExisting || undefined,
             // Make the assignment discoverable by any process in the pane,
             // not just AGENTS.md readers (env is inherited by child CLIs).
             env: Object.keys(spawnEnv).length > 0 ? spawnEnv : undefined,
@@ -1442,6 +1497,7 @@ export function TerminalView({
             markTerminalExecution(executionId, 'running', { sessionId: sid });
           }
           outputLatch.bind(sid);
+          outputSubscription?.bind(sid);
           if (exitLatch.bind(sid)) return;
           sessionCwd = result.cwd || cwd || null;
           console.log(`[Jarvis] Spawned new PTY session: ${sid}`);
@@ -1539,6 +1595,7 @@ export function TerminalView({
         if (!cancelled) setActiveSessionId(sid);
         setInitializationPhase('kernel_terminal_phase_session_bound');
         outputLatch.bind(sid);
+        outputSubscription?.bind(sid);
         if (exitLatch.bind(sid)) return;
       }
 
@@ -1599,9 +1656,14 @@ export function TerminalView({
       const executionWasCancelled = executionId
         ? useTerminalExecutionStore.getState().executions[executionId]?.status === 'cancelled'
         : false;
+      const orderedStartupCommands = startupCommands?.length
+        ? startupCommands
+        : startupCommand
+          ? [startupCommand]
+          : [];
       if (
         spawnedFresh &&
-        startupCommand &&
+        orderedStartupCommands.length > 0 &&
         !nativeStartupCommandConsumed &&
         !deferredRestartCommand &&
         !executionWasCancelled
@@ -1615,10 +1677,17 @@ export function TerminalView({
         if (cancelledBeforeStartupWrite) return;
         try {
           setInitializationPhase('kernel_terminal_phase_startup_command_write');
-          await invoke('terminal_write', {
-            sessionId: sid,
-            data: commandToInput(startupCommand),
-          });
+          for (const startupWrite of orderedStartupCommands) {
+            if (cancelled) return;
+            const cancelledDuringStartup = executionId
+              ? useTerminalExecutionStore.getState().executions[executionId]?.status === 'cancelled'
+              : false;
+            if (cancelledDuringStartup) return;
+            await invoke('terminal_write', {
+              sessionId: sid,
+              data: commandToInput(startupWrite),
+            });
+          }
           markTerminalExecution(executionId, 'running', { sessionId: sid });
           setInitializationPhase('kernel_terminal_phase_startup_command_sent');
         } catch {
@@ -1757,13 +1826,18 @@ export function TerminalView({
       if (paneId) clearTerminalPaneSessionId(paneId);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
-      unlistenOutput?.();
+      outputSubscription?.unsubscribe();
       unlistenExit?.();
       scrollListenerDispose?.dispose();
       try {
         webglDispose.disposeTerminal(termRef.current);
       } catch {
         /* best-effort teardown */
+      }
+      webglLease?.release();
+      webglLease = null;
+      if (onResourcePressure) {
+        window.removeEventListener(RESOURCE_PRESSURE_EVENT, onResourcePressure);
       }
       termRef.current = null;
       fitRef.current = null;
@@ -2050,6 +2124,10 @@ export function TerminalView({
       data-terminal-status={
         KERNEL_SMOKE_ENABLED && executionId ? terminalExecutionStatus : undefined
       }
+      onPointerEnter={markWarmIdlePointerEntered}
+      onPointerLeave={markWarmIdlePointerLeft}
+      onPointerDownCapture={markWarmIdleInteraction}
+      onKeyDownCapture={markWarmIdleInteraction}
       onDragOver={(e) => {
         const nextKind =
           e.dataTransfer.types.includes('application/x-jarvis-file') ||
@@ -2095,6 +2173,13 @@ export function TerminalView({
         className,
       )}
     >
+      <TerminalWarmIdleScene
+        identity={activeSessionId ?? paneId ?? command ?? 'terminal'}
+        lastActivityAt={warmIdleLastActivityAt}
+        pointerEnteredAt={warmIdlePointerEnteredAt}
+        pointerInside={warmIdlePointerInside}
+        theme={warmTheme}
+      />
       {dropKind && (
         <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-accent-copper/60 bg-background/90 px-3 py-1 text-metadata text-accent-copper shadow-soft">
           Drop {dropKind === 'context' ? 'Context' : 'file'} here to paste into this terminal
@@ -2120,11 +2205,25 @@ export function TerminalView({
         sessionId={activeSessionId}
         projectId={projectId ?? null}
         evidence={terminalPromptEvidence}
+        cwd={cwdRef.current ?? cwd ?? null}
+        agentSlug={agentSlug ?? null}
+        projectName={projectName ?? null}
+        projectRoot={cwd ?? null}
         onClose={() => {
           setTerminalPaletteOpen(false);
           requestAnimationFrame(() => termRef.current?.focus());
         }}
         onNavigate={(route) => useUIStore.getState().setRoute(route)}
+        onInsertUpgradedPrompt={async (text) => {
+          const sid = sessionRef.current ?? activeSessionId;
+          if (!sid) throw new Error('No active terminal session');
+          // Never called during upgrade itself — only after user confirms Insert.
+          // Single-line: submit with CR. Multi-line: type body without auto-run.
+          await invoke('terminal_write', {
+            sessionId: sid,
+            data: prepareUpgradedPromptInsert(text),
+          });
+        }}
         onInstallCli={installTerminalCli}
         onUninstallCli={uninstallTerminalCli}
         onInstallShellIntegration={installTerminalShellIntegration}

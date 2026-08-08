@@ -1,6 +1,7 @@
 import type { DragEvent, KeyboardEvent, MouseEvent } from 'react';
 import { CalendarClock, Check, Clock, GripVertical } from 'lucide-react';
 import { cn, formatRelative } from '@/lib/utils';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import type { MilestoneItem } from '@/features/inspector/types';
 
 export interface KanbanCardProps {
@@ -85,7 +86,7 @@ export function KanbanCard({
         </span>
         <span className="inline-flex items-center gap-1 text-metadata text-muted-foreground">
           <Clock className="h-3 w-3" />
-          <span title={new Date(item.updatedAt).toLocaleString()}>
+          <span title={formatUserDateTime(item.updatedAt)}>
             {formatRelative(item.updatedAt)}
           </span>
         </span>

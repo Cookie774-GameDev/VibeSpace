@@ -89,6 +89,7 @@ export interface ProviderRequest {
   connection: ProviderConnection;
   prompt: string;
   modelId?: string;
+  reasoningEffort?: string;
   systemPrompt?: string;
   workingDirectory?: string;
   sessionId?: string;

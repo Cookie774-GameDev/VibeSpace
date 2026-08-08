@@ -38,6 +38,7 @@ import type {
 } from '@/lib/jarvis/artifactProducerAdapters';
 import { formatJarvisVerifiedNarration } from '@/lib/jarvis/response/templates';
 import { isCanonicalFileArtifactResult } from './registryFiles';
+import { dispatchCanonicalBrowserGoalAction } from '@/features/browser/browserGoalIntegration';
 
 /** @internal Re-reads a committed action result and its exact producer evidence. */
 export interface CanonicalFileActionResultReadPort {
@@ -448,6 +449,10 @@ export function createJarvisRegisteredBuiltinDispatcher() {
   }): Promise<JarvisRegisteredActionDispatchOutcome | null> => {
     const executor = input.registration.executor;
     if (executor.kind !== 'builtin') return null;
+    const browserResult = await dispatchCanonicalBrowserGoalAction(input);
+    if (browserResult) {
+      return { kind: 'executor_returned', result: browserResult };
+    }
     if (input.registration.id === 'terminal.create') return null;
     if (input.registration.id === 'task.cancel' && Reflect.ownKeys(input.params).length === 0) {
       return {

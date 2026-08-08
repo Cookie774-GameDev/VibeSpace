@@ -1,0 +1,11 @@
+task_id=VS-PR31-MG1-REPOSITORY-INTELLIGENCE-20260803
+controller=/root
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T14:16:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement a VibeSpace-owned deterministic repository ranking and token-budget packing boundary using Tree-sitter fact contracts plus selected Repomix/Aider patterns, without installing or copying third-party runtimes.
+owned_paths=app/src/features/repository-intelligence/**
+exclusions=all other paths;package files;existing Context Map/search/runtime files;agent-owned paths;Git staging/commit/push/branch;external systems;user data
+status=IMPLEMENTING

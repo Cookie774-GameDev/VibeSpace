@@ -1,0 +1,14 @@
+task_id=VS-PR31-MG2-BROWSER-GOAL-LIVE-INTEGRATION-20260804
+controller=/root
+delegate=/root/browser_live_integration
+parent_session_id=active-root-session-20260804
+acquired_at=2026-08-04T00:30:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Connect the existing canonical browser approval, browser session, native capability, and Browser Goal foundations to one live VibeSpace-owned execution seam without Computer Control or ambient browser authority.
+owned_paths=app/src/features/browser/browserGoalIntegration.ts;app/src/features/browser/browserGoalIntegration.test.ts;app/src/features/browser/browserActions.ts;app/src/features/browser/browserActions.test.ts;app/src/features/browser/BrowserPage.tsx;app/src/features/browser/BrowserPage.approval.test.tsx;app/src/features/browser/index.ts;app/src/lib/jarvis/actions/catalog.ts;app/src/lib/jarvis/actions/catalog.test.ts;app/src/lib/actions/runner.ts;app/src/lib/actions/runner.test.ts
+exclusions=all other files;all unrelated dirty work;Computer Control;arbitrary model-supplied JavaScript;ambient Chrome profiles;credentials;external services;Git staging/commit/push/branch changes;coordination authority changes;process termination;production data
+verification=add focused deterministic fixtures but do not run intermediate tests; final coordinator performs the bounded final verification pass
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION
+released_paths=app/src/features/browser/browserGoalIntegration.ts;app/src/features/browser/browserGoalIntegration.test.ts;app/src/features/browser/BrowserPage.tsx;app/src/features/browser/index.ts;app/src/lib/jarvis/actions/catalog.ts;app/src/lib/jarvis/actions/catalog.test.ts;app/src/lib/actions/runner.ts;app/src/lib/actions/runner.test.ts

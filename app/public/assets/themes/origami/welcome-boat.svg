@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="presentation">
+  <defs>
+    <linearGradient id="sea" x1="0" x2="1">
+      <stop offset="0" stop-color="#9ccbd0"/>
+      <stop offset=".52" stop-color="#70b6c5"/>
+      <stop offset="1" stop-color="#d2a7c7"/>
+    </linearGradient>
+    <linearGradient id="sail" x1=".2" y1="0" x2=".8" y2="1">
+      <stop stop-color="#fffaf0"/>
+      <stop offset=".5" stop-color="#f4dccb"/>
+      <stop offset="1" stop-color="#d78a8d"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="140%" height="170%">
+      <feDropShadow dx="0" dy="18" stdDeviation="15" flood-color="#402f43" flood-opacity=".2"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path fill="#cbd8bb" d="M116 264 270 196l28 76-182 26z"/>
+    <path fill="#91b7ad" d="m270 196 86 92-58-16z"/>
+    <path fill="url(#sail)" d="m355 72-70 202 157-50z"/>
+    <path fill="#f39b72" d="m355 72 87 152-18 6z"/>
+    <path fill="#736092" d="m355 72-7 202 17 12z"/>
+    <path fill="#f7e6cc" d="m285 274 80 12 92-42-66 103-176-19z"/>
+    <path fill="#c86e79" d="m215 328 176 19-31 29-116-8z"/>
+    <path fill="#9bb8cb" d="m391 347 66-103 52 67-96 61z"/>
+  </g>
+  <path fill="url(#sea)" opacity=".9" d="M48 360c80-27 145-27 224 0s151 27 229 0 126-28 171-9v69H48z"/>
+  <path fill="none" stroke="#fffaf0" stroke-linecap="round" stroke-width="8" opacity=".7" d="M92 382c63-18 118-17 174 0m166 4c60-20 121-21 185-3"/>
+</svg>

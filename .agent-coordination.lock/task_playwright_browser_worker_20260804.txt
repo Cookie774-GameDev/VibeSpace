@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-PLAYWRIGHT-BROWSER-WORKER-20260804
+controller=/root/browser_live_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T02:05:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement the isolated typed Playwright browser-worker boundary and live Browser Goal adapter using the pinned root Playwright dependency, with exact session leases, origin/action authority, bounded observations, download quarantine, trace receipts, cancellation, and no raw evaluate or ambient-profile access.
+owned_paths=app/src/lib/jarvis/playwrightBrowserWorker.ts;app/src/lib/jarvis/playwrightBrowserWorker.test.ts;app/src/lib/jarvis/browserGoalPlaywrightAdapter.ts;app/src/lib/jarvis/browserGoalPlaywrightAdapter.test.ts;app/src/lib/jarvis/browserGoalRuntime.ts;app/src/lib/jarvis/browserGoalRuntime.test.ts
+exclusions=all other files;all Rust;all existing browser feature files owned by the other active worker;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all external browser sessions and user profiles;all network execution during tests;raw Playwright evaluate;Computer Control
+verification=add only focused deterministic tests required by changed behavior;do not run tests,typecheck,build,format,browser,or review commands;self-review once and hand off
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

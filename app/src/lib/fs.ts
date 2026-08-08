@@ -71,6 +71,17 @@ export interface FsAccessOptions {
   strictProjectBoundary?: boolean;
 }
 
+export type FsHashedTextResult =
+  | { ok: true; content: string; path: string; sha256: `sha256:${string}`; bytes: number }
+  | { ok: false; error: FsReadError; path: string };
+
+export async function sha256Text(content: string): Promise<`sha256:${string}`> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
 /** Map a Rust-side error string onto a stable code we can branch on. */
 function classifyError(raw: unknown): FsReadError {
   if (typeof raw !== 'string') {
@@ -149,6 +160,38 @@ export async function readTextFileSample(
   } catch (err) {
     return { ok: false, error: classifyInvokeError(err), path };
   }
+}
+
+/** Exact bounded read used by native evidence producers; content and hash share one snapshot. */
+export async function readTextFileWithSha256(
+  path: string,
+  maxBytes = 256 * 1024,
+  options: FsAccessOptions = {},
+): Promise<FsHashedTextResult> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes >= 512 * 1024) {
+    return { ok: false, error: { code: 'too_large' }, path };
+  }
+  // Read one byte beyond the accepted limit so a truncated sample can never
+  // masquerade as the complete file whose digest is reported.
+  const result = await readTextFileSample(path, maxBytes + 1, {
+    ...options,
+    strictProjectBoundary: true,
+  });
+  if (!result.ok) return result;
+  if (result.content.includes('\uFFFD')) {
+    return { ok: false, error: { code: 'not_utf8' }, path };
+  }
+  const bytes = new TextEncoder().encode(result.content).byteLength;
+  if (bytes > maxBytes) {
+    return { ok: false, error: { code: 'too_large' }, path };
+  }
+  return {
+    ok: true,
+    content: result.content,
+    path: result.path,
+    sha256: await sha256Text(result.content),
+    bytes,
+  };
 }
 
 export async function readImageFileBase64(

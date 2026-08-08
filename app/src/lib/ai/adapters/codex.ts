@@ -32,6 +32,12 @@ export function buildCodexInvocation(request: CliInvocationRequest): CliInvocati
   const args = ['exec', '--json'];
   if (request.workingDirectory) args.push('--cd', request.workingDirectory);
   if (request.modelId) args.push('--model', requireModelId(request.modelId, 'Codex'));
+  if (request.reasoningEffort) {
+    if (!['low', 'medium', 'high', 'xhigh'].includes(request.reasoningEffort)) {
+      throw new Error('Codex CLI reasoning effort is unsupported');
+    }
+    args.push('-c', `model_reasoning_effort="${request.reasoningEffort}"`);
+  }
   return {
     args,
     stdin: request.prompt,

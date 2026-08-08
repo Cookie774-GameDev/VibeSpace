@@ -21,10 +21,11 @@ export function HistoryPage() {
   return (
     <div
       data-monochrome-route="history"
+      data-warm-state={selectedChatId ? 'selected' : 'empty'}
       className="flex h-full w-full overflow-hidden bg-background text-foreground [html[data-theme=monochrome]_&]:font-sans [html[data-theme=monochrome]_&>div]:border-border-mid"
     >
       <HistoryList selectedChatId={selectedChatId} onSelectChat={setSelectedChatId} />
-      <div className="min-w-0 flex-1">
+      <div data-warm-surface="history-replay" className="min-w-0 flex-1">
         <Replay chatId={selectedChatId} />
       </div>
     </div>

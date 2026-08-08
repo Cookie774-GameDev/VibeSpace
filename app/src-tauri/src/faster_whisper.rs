@@ -28,6 +28,7 @@ static LAST_MANIFEST: Mutex<Option<Manifest>> = Mutex::new(None);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelId {
     Tiny,
+    Base,
     Small,
     LargeV3,
 }
@@ -36,7 +37,9 @@ impl ModelId {
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "tiny" => Some(Self::Tiny),
-            "small" | "small.en" => Some(Self::Small),
+            // Product catalog labels map onto Systran CTranslate2 packs.
+            "base" | "base.en" | "whisper-base-en-q5" => Some(Self::Base),
+            "small" | "small.en" | "whisper-small-en-q8" => Some(Self::Small),
             "large-v3" => Some(Self::LargeV3),
             _ => None,
         }
@@ -45,6 +48,7 @@ impl ModelId {
     fn repo(&self) -> &'static str {
         match self {
             Self::Tiny => "faster-whisper-tiny",
+            Self::Base => "faster-whisper-base.en",
             Self::Small => "faster-whisper-small.en",
             Self::LargeV3 => "faster-whisper-large-v3",
         }
@@ -53,6 +57,7 @@ impl ModelId {
     fn dir_name(&self) -> &'static str {
         match self {
             Self::Tiny => "tiny",
+            Self::Base => "base",
             Self::Small => "small",
             Self::LargeV3 => "large-v3",
         }
@@ -214,6 +219,7 @@ fn default_manifest(id: ModelId) -> Manifest {
     let base = format!("{HF_BASE}/{repo}/resolve/main");
     let (model_bin_size, model_bin_sha) = match id {
         ModelId::Tiny => (75_389_248_u64, ""),
+        ModelId::Base => (145_000_000_u64, ""),
         ModelId::Small => (484_440_064_u64, ""),
         ModelId::LargeV3 => (3_094_963_200_u64, ""),
     };
@@ -481,6 +487,16 @@ pub fn faster_whisper_download(
         if file.required {
             download_file(&app, id.dir_name(), file, &dir)?;
         }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn faster_whisper_remove(model: String) -> Result<(), String> {
+    let id = ModelId::from_str(&model).ok_or_else(|| format!("unknown model: {model}"))?;
+    let dir = model_dir(id);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(|e| format!("Could not remove model files: {e}"))?;
     }
     Ok(())
 }

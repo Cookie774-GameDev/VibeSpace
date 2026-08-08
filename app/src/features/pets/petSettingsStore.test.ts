@@ -9,7 +9,7 @@ describe('Pet settings store desktop controls', () => {
   it('validates the panel mode and persists movement, animation, sound, and reaction controls', () => {
     const state = usePetSettingsStore.getState();
 
-    expect(state.panelMode).toBe('normal');
+    expect(state.panelMode).toBe('always-on-top');
     expect(state.positionLocked).toBe(false);
     expect(state.edgeSnapping).toBe(true);
     expect(state.animationLevel).toBe('calm');

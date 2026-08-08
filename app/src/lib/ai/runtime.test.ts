@@ -457,6 +457,52 @@ describe('startRuntimeListener agent routing', () => {
     stop();
   });
 
+  it('sends Jarvis coding capability and Final Boss verification instructions to the selected provider', async () => {
+    const jarvis = agent('agent_jarvis_final_boss', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_final_boss' as ChatId;
+
+    trackListener(
+      startRuntimeListener({
+        getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+        getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+        getAgentForChat: vi.fn(async () => jarvis),
+        getMessages: vi.fn(async () => []),
+        appendMessage: vi.fn(async (message) => ({
+          ...message,
+          id: 'msg_final_boss' as MessageId,
+          created_at: 2,
+          updated_at: 2,
+        })),
+        updateMessage: vi.fn(async () => undefined),
+      }),
+    );
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId,
+          text: 'Fix the code and verify it.',
+          interactionMode: 'agent',
+          reasoningPreference: { mode: 'token-final-boss', effortOverride: null },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
+    const request = mocks.runAgent.mock.calls[0]![0];
+    expect(request.agent.model).toEqual({
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+    });
+    expect(request.provider_options).toEqual({});
+    expect(request.agent.system_prompt).toContain('Token Final Boss');
+    expect(request.agent.system_prompt).toContain('Reread the original user request');
+    expect(request.agent.system_prompt).toContain('files.read');
+    expect(request.agent.system_prompt).toContain('Do not broadly claim that you cannot code');
+    expect(request.agent.system_prompt).toContain('Scale response depth to the task');
+    expect(request.agent.system_prompt).toContain('calm, precise, capable');
+  });
+
   it('auto-routes a protected Jarvis image turn through an active catalog connection without changing the picker', async () => {
     const jarvis = agent('agent_jarvis_auto_route', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_auto_route' as ChatId;
@@ -504,6 +550,7 @@ describe('startRuntimeListener agent routing', () => {
           text: 'Describe this image.',
           modelSelectionOverride: originalSelection,
           automaticModelRoutingEligible: true,
+          reasoningPreference: { mode: 'token-final-boss', effortOverride: null },
           imageAttachments: [
             {
               id: 'image-auto-route',
@@ -523,6 +570,7 @@ describe('startRuntimeListener agent routing', () => {
           model: { provider: 'google', model: 'gemini-2.5-flash' },
         }),
         connectionId: 'google-gemini-api',
+        provider_options: { thinking_level: 'high' },
       }),
     );
     expect(info).toHaveBeenCalledWith(
@@ -638,6 +686,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('does not auto-route an explicit Hive slash turn', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     const jarvis = agent('agent_jarvis_hive_route', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_hive_route' as ChatId;
     const originalSelection = selectionFromOption('xai', 'grok-2-1212');
@@ -1122,7 +1171,7 @@ describe('startRuntimeListener agent routing', () => {
     stop();
   });
 
-  it('keeps the Jarvis chat overlay terse and context-referential', async () => {
+  it('keeps Jarvis concise for simple chat without truncating complex work', async () => {
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_terse_jarvis' as ChatId;
     const placeholderId = 'msg_terse_jarvis_assistant' as MessageId;
@@ -1157,7 +1206,9 @@ describe('startRuntimeListener agent routing', () => {
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     const prompt = mocks.runAgent.mock.calls[0][0].agent.system_prompt;
-    expect(prompt).toContain('Answer in 1-3 short sentences');
+    expect(prompt).toContain('Scale response depth to the task');
+    expect(prompt).toContain('use 1-3 short sentences for simple questions');
+    expect(prompt).toContain('complex coding, research, or multi-step work');
     expect(prompt).toContain(
       'Name the relevant file, agent, terminal, context map, or page when it matters',
     );
@@ -1256,19 +1307,19 @@ describe('startRuntimeListener agent routing', () => {
     stop();
   });
 
-  it('revises AllAboutMe.md after every 10 user messages without blocking the reply', async () => {
+  it('revises AllAboutMe.md after every 20 user messages without blocking the reply', async () => {
     useAllAboutMeStore.setState({
       markdown: '# AllAboutMe.md\n\nStable profile.',
       source: 'quiz',
       updatedAt: Date.now(),
-      totalUserMessages: 9,
+      totalUserMessages: 19,
       lastUpdatedAtMessageCount: 0,
       learningEnabled: true,
     });
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_all_about_me_learning' as ChatId;
     const placeholderId = 'msg_all_about_me_learning_assistant' as MessageId;
-    const history: Message[] = Array.from({ length: 10 }, (_, index) => ({
+    const history: Message[] = Array.from({ length: 20 }, (_, index) => ({
       id: `msg_all_about_me_learning_user_${index}` as MessageId,
       chat_id: chatId,
       role: 'user',
@@ -1276,7 +1327,7 @@ describe('startRuntimeListener agent routing', () => {
         {
           kind: 'text',
           text:
-            index === 9 ? 'Please keep it short and launch-ready.' : `prior user message ${index}`,
+            index === 19 ? 'Please keep it short and launch-ready.' : `prior user message ${index}`,
         },
       ],
       created_at: index + 1,
@@ -1317,14 +1368,13 @@ describe('startRuntimeListener agent routing', () => {
         detail: {
           chatId,
           text: 'Please keep it short and launch-ready.',
-          forceAllAboutMeUpdate: true,
         },
       }),
     );
 
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
     expect(useAllAboutMeStore.getState().markdown).toContain('Learned Patterns');
-    expect(useAllAboutMeStore.getState().lastUpdatedAtMessageCount).toBe(10);
+    expect(useAllAboutMeStore.getState().lastUpdatedAtMessageCount).toBe(20);
 
     stop();
   });
@@ -1837,7 +1887,85 @@ describe('startRuntimeListener agent routing', () => {
     stop();
   });
 
+  it('recovers an approval proposal when a tiny local model emits malformed action JSON', async () => {
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_malformed_action_fallback' as ChatId;
+    const placeholderId = 'msg_malformed_action_fallback_assistant' as MessageId;
+    const updateMessage = vi.fn(async () => undefined);
+    const userMessage: Message = {
+      id: 'msg_malformed_action_fallback_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [
+        {
+          kind: 'text',
+          text: 'Write a note to "C:\\Users\\viper\\Downloads\\jarvis-note.txt" that says verified.',
+        },
+      ],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.runAgent.mockResolvedValueOnce({
+      text: [
+        'Done.',
+        '```action',
+        "{ id: 'files.write', params: { path: 'C:\\\\Users\\\\viper\\\\Downloads\\\\jarvis-note.txt' } }",
+        '```',
+      ].join('\n'),
+      usage: { input_tokens: 1, output_tokens: 12, cost_usd: 0 },
+      provider: 'ollama',
+      model: 'llama3.2:latest',
+    });
+
+    const stop = trackListener(
+      startRuntimeListener({
+        getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+        getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+        getAgentForChat: vi.fn(async () => jarvis),
+        getMessages: vi.fn(async () => [userMessage]),
+        appendMessage: vi.fn(async (msg) => ({
+          ...msg,
+          id: placeholderId,
+          created_at: 2,
+          updated_at: 2,
+        })),
+        updateMessage,
+      }),
+    );
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId,
+          text: 'Write a note to "C:\\Users\\viper\\Downloads\\jarvis-note.txt" that says verified.',
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(updateMessage).toHaveBeenCalled());
+    const updateCalls = updateMessage.mock.calls as unknown as Array<
+      [MessageId, { parts: Part[] }]
+    >;
+    const finalWrite = updateCalls[updateCalls.length - 1]?.[1];
+    if (!finalWrite) throw new Error('expected a final assistant message write');
+    expect(finalWrite.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'action_proposal',
+          action_id: 'files.create',
+          params: expect.objectContaining({
+            path: 'C:\\Users\\viper\\Downloads\\jarvis-note.txt',
+          }),
+          status: 'pending',
+        }),
+      ]),
+    );
+
+    stop();
+  });
+
   it('fails legacy /Hive quality closed instead of reopening a provider-side stack path', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     useAuthStore.setState({
       apiKeys: {
         openrouter: 'openrouter-test',
@@ -3145,6 +3273,7 @@ describe('startRuntimeListener agent routing', () => {
   }, 15_000);
 
   it('runs Hive only through persisted kernel workers and one protected hive-final turn', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     useAuthStore.setState({
       apiKeys: {
         google: 'google-test',
@@ -3251,6 +3380,7 @@ describe('startRuntimeListener agent routing', () => {
   }, 15_000);
 
   it('does not start canonical Hive workers when cancellation wins during plan binding', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     useAuthStore.setState({
       apiKeys: {
         google: 'google-test',
@@ -3362,6 +3492,7 @@ describe('startRuntimeListener agent routing', () => {
   }, 15_000);
 
   it('bridges message cancellation to the canonical Hive parent and active child owner', async () => {
+    vi.stubEnv('VITE_HIVE_ENABLED', 'true');
     useAuthStore.setState({
       apiKeys: {
         google: 'google-test',

@@ -32,6 +32,7 @@ export interface InputTokenProps {
   sublabel?: string;
   /** Replaces the default type icon (e.g. official plugin logo). */
   icon?: React.ReactNode;
+  onActivate?: () => void;
   onRemove?: () => void;
   className?: string;
 }
@@ -77,7 +78,15 @@ const TOKEN_GLOW: Record<TokenType, string> = {
 const SPRING = 'spring' as const;
 const TOKEN_TRANSITION = { type: SPRING, stiffness: 520, damping: 26, mass: 0.7 };
 
-export function InputToken({ type, label, sublabel, icon, onRemove, className }: InputTokenProps) {
+export function InputToken({
+  type,
+  label,
+  sublabel,
+  icon,
+  onActivate,
+  onRemove,
+  className,
+}: InputTokenProps) {
   const Icon = TOKEN_ICONS[type];
   const isCommand = type === 'command';
   const tokenTransition = useThemeMotionTransition(TOKEN_TRANSITION);
@@ -88,6 +97,7 @@ export function InputToken({ type, label, sublabel, icon, onRemove, className }:
       animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
       exit={{ opacity: 0, scale: 0.85, y: -6, filter: 'blur(1px)' }}
       transition={tokenTransition}
+      data-slash-active-glow={isCommand ? 'true' : undefined}
       className={cn(
         'relative inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full',
         'bg-gradient-to-r border',
@@ -111,21 +121,49 @@ export function InputToken({ type, label, sublabel, icon, onRemove, className }:
           <span className="absolute inset-y-0 -left-1/3 w-1/3 skew-x-[-18deg] bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[plan-border-flow_2.4s_linear_infinite] bg-[length:200%_auto]" />
         </span>
       ) : null}
-      {icon ?? (
-        <Icon
-          className={cn(
-            'relative h-3 w-3 shrink-0',
-            isCommand
-              ? 'text-amber-200 drop-shadow-[0_0_6px_rgba(251,191,36,0.8)]'
-              : type === 'agent'
-                ? 'text-cyan-300'
-                : 'text-violet-400',
+      {onActivate ? (
+        <button
+          type="button"
+          className="relative inline-flex min-w-0 items-center gap-1.5 rounded-full focus:outline-none focus-visible:ring-1 focus-visible:ring-violet-500"
+          onClick={onActivate}
+          aria-label={`Preview ${label}`}
+        >
+          {icon ?? (
+            <Icon
+              className={cn(
+                'relative h-3 w-3 shrink-0',
+                type === 'agent' ? 'text-cyan-300' : 'text-violet-400',
+              )}
+            />
           )}
-        />
-      )}
-      <span className="relative text-foreground/95 truncate max-w-[140px]">{label}</span>
-      {sublabel && (
-        <span className="relative text-muted-foreground/75 truncate max-w-[90px]">{sublabel}</span>
+          <span className="relative max-w-[140px] truncate text-foreground/95">{label}</span>
+          {sublabel ? (
+            <span className="relative max-w-[90px] truncate text-muted-foreground/75">
+              {sublabel}
+            </span>
+          ) : null}
+        </button>
+      ) : (
+        <>
+          {icon ?? (
+            <Icon
+              className={cn(
+                'relative h-3 w-3 shrink-0',
+                isCommand
+                  ? 'text-amber-200 drop-shadow-[0_0_6px_rgba(251,191,36,0.8)]'
+                  : type === 'agent'
+                    ? 'text-cyan-300'
+                    : 'text-violet-400',
+              )}
+            />
+          )}
+          <span className="relative max-w-[140px] truncate text-foreground/95">{label}</span>
+          {sublabel ? (
+            <span className="relative max-w-[90px] truncate text-muted-foreground/75">
+              {sublabel}
+            </span>
+          ) : null}
+        </>
       )}
       {isCommand ? (
         <span className="relative rounded-full bg-amber-400/20 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-200/95">
@@ -135,7 +173,10 @@ export function InputToken({ type, label, sublabel, icon, onRemove, className }:
       {onRemove && (
         <button
           type="button"
-          onClick={onRemove}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
           className={cn(
             'relative ml-0.5 p-0.5 rounded-full',
             'text-muted-foreground/60 hover:text-foreground',

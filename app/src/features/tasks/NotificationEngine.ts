@@ -1,7 +1,9 @@
 import { taskRepo } from '@/lib/db/repositories';
 import { useAuthStore } from '@/stores/auth';
-import { notify, requestNotificationPermission } from '@/lib/tauri';
+import { requestNotificationPermission } from '@/lib/tauri';
 import { toast } from '@/components/ui/toast';
+import { notifyDone } from '@/lib/notifications';
+import { useUIStore } from '@/stores/ui';
 import type { Reminder, Task } from '@/types/task';
 
 /**
@@ -135,8 +137,12 @@ async function deliverReminder(task: Task, reminder: Reminder): Promise<void> {
     }
   }
 
+  // OS banner respects Settings → Notifications master + "Task reminders".
   if (channels.has('banner')) {
-    await notify(title, body, { fallbackToast: false });
+    const ui = useUIStore.getState();
+    if (ui.notificationMaster && ui.doneNotifications.reminders) {
+      await notifyDone('reminders', title, body);
+    }
   }
 }
 

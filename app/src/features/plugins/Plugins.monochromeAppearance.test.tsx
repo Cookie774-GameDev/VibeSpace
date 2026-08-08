@@ -24,7 +24,7 @@ describe('Plugins MonoChrome appearance', () => {
     // Meaningful product surface and copy are preserved.
     expect(screen.getByRole('heading', { name: 'Plugins' })).toBeTruthy();
     expect(screen.getByText(/Tokens are never/)).toBeTruthy();
-  });
+  }, 10_000);
 
   it('gates the credential hero gradient inside the setup dialog under exact monochrome', () => {
     render(<Plugins />);

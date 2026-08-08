@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, AgentId } from '@/types';
 import { useAgentStore } from '@/stores/agents';
@@ -44,7 +44,7 @@ const baseAgent: Agent = {
   tools_allowed: ['files.read'],
   memory_scope: 'project',
   capabilities: ['writing'],
-  skills: ['summarize'],
+  skills: ['analyze'],
   temperature: 0.7,
   effort: 'medium',
   persona: 'jarvis',
@@ -169,9 +169,11 @@ describe('AgentManager save lifecycle', () => {
     render(<AgentManager />);
     const save = screen.getByRole('button', { name: 'Save agent' });
     expect(save).toHaveProperty('disabled', true);
+    expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('idle');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Alpha Renamed' } });
     expect(save).toHaveProperty('disabled', false);
+    expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('unsaved');
     fireEvent.change(screen.getByLabelText('System prompt'), {
       target: { value: 'Updated prompt\n\nKeep formatting.' },
     });
@@ -188,13 +190,86 @@ describe('AgentManager save lifecycle', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save agent' })).toHaveProperty('disabled', true),
     );
+    await waitFor(() =>
+      expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('saved'),
+    );
+  });
+
+  it('limits persona options to jarvis and friday and offers recommended max tokens', async () => {
+    render(<AgentManager />);
+    const persona = screen.getByLabelText('Persona') as HTMLSelectElement;
+    expect(Array.from(persona.options).map((option) => option.value)).toEqual(['jarvis', 'friday']);
+    const maxTokens = screen.getByLabelText('Max output tokens') as HTMLSelectElement;
+    expect(Array.from(maxTokens.options).map((option) => option.value)).toEqual([
+      'recommended',
+      'custom',
+    ]);
+    expect(maxTokens.value).toBe('recommended');
+  });
+
+  it('enables NO BS with the approved cinematic and persists its directive at the prompt end', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+
+    const noBs = screen.getByRole('checkbox', { name: /NO BS/i });
+    expect(noBs.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(noBs);
+
+    expect(noBs.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('dialog', { name: 'NO BS activation' })).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'NO BS activation' })).toBeNull();
+    expect(document.activeElement).toBe(noBs);
+    const prompt = screen.getByLabelText('System prompt') as HTMLTextAreaElement;
+    expect(prompt.value).toContain('## NO BS');
+    expect(prompt.value.trim().endsWith('<!-- vibespace:no-bs:end -->')).toBe(true);
+
+    fireEvent.change(prompt, { target: { value: `${prompt.value}\nNew base instruction.` } });
+    expect(prompt.value).toContain('New base instruction.');
+    expect(prompt.value.trim().endsWith('<!-- vibespace:no-bs:end -->')).toBe(true);
+    expect(prompt.value.indexOf('New base instruction.')).toBeLessThan(
+      prompt.value.indexOf('## NO BS'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
+    await waitFor(() => expect(agentRepo.update).toHaveBeenCalledTimes(1));
+    const patch = vi.mocked(agentRepo.update).mock.calls[0]?.[1];
+    expect(patch?.system_prompt).toBe(prompt.value);
+  });
+
+  it('blocks save on concurrent conflict until the latest agent is reloaded', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local edit' } });
+    expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('unsaved');
+
+    act(() => {
+      useAgentStore.getState().registerAgent({
+        ...baseAgent,
+        name: 'Remote edit',
+        updated_at: 99,
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('conflict'),
+    );
+    expect(screen.getByRole('button', { name: 'Retry save' })).toHaveProperty('disabled', true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload latest' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('idle'),
+    );
+    expect(screen.getByLabelText('Name')).toHaveProperty('value', 'Remote edit');
+    expect(agentRepo.update).not.toHaveBeenCalled();
   });
 
   it('tracks skills, tools, capabilities, model settings, toggles, and advanced fields', async () => {
     const agentRepo = await repoMocks();
     render(<AgentManager />);
 
-    fireEvent.change(screen.getByLabelText('Skills'), { target: { value: 'summarize, planning' } });
+    fireEvent.change(screen.getByLabelText('Skills'), { target: { value: 'build, analyze' } });
     fireEvent.change(screen.getByLabelText('Allowed tools'), {
       target: { value: 'files.read, files.write' },
     });
@@ -203,8 +278,13 @@ describe('AgentManager save lifecycle', () => {
     });
     fireEvent.change(screen.getByLabelText('Memory scope'), { target: { value: 'workspace' } });
     fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'high' } });
-    fireEvent.change(screen.getByLabelText('Persona'), { target: { value: 'athena' } });
-    fireEvent.change(screen.getByLabelText('Max output tokens'), { target: { value: '4096' } });
+    fireEvent.change(screen.getByLabelText('Persona'), { target: { value: 'friday' } });
+    fireEvent.change(screen.getByLabelText('Max output tokens'), {
+      target: { value: 'custom' },
+    });
+    fireEvent.change(screen.getByLabelText('Custom max output tokens'), {
+      target: { value: '4096' },
+    });
     fireEvent.change(screen.getByLabelText('Appearance hue'), { target: { value: '210' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
 
@@ -212,15 +292,31 @@ describe('AgentManager save lifecycle', () => {
     expect(agentRepo.update).toHaveBeenCalledWith(
       baseAgent.id,
       expect.objectContaining({
-        skills: ['planning', 'summarize'],
+        skills: ['analyze', 'build'],
         tools_allowed: ['files.read', 'files.write'],
         capabilities: ['planning', 'writing'],
         memory_scope: 'workspace',
         effort: 'high',
-        persona: 'athena',
+        persona: 'friday',
         max_output_tokens: 4096,
         color_hue: 210,
       }),
+    );
+  });
+
+  it('persists a selected VibeSpace emoji through the agent repository', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+
+    const quickChoices = screen.getByLabelText('Agent emoji quick choices');
+    const choices = within(quickChoices).getAllByRole('button', { name: /^Choose /u });
+    fireEvent.click(choices[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
+
+    await waitFor(() => expect(agentRepo.update).toHaveBeenCalledTimes(1));
+    expect(agentRepo.update).toHaveBeenCalledWith(
+      baseAgent.id,
+      expect.objectContaining({ emoji: 'vibe:aurora-builder' }),
     );
   });
 

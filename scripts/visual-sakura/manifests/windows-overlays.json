@@ -25,7 +25,6 @@
     "account"
   ],
   "settingsTabIds": [
-    "account",
     "plans",
     "providers",
     "connections",
@@ -65,7 +64,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:detached:dictation",
@@ -98,7 +97,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:detached:pet-mini-panel",
@@ -134,7 +133,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:detached:pet-overlay",
@@ -170,7 +169,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:detached:workbench-main",
@@ -178,6 +177,39 @@
       "sharedReadOnlyPaths": [
         "app/src/features/workbench/window.ts",
         "tests/visual/monochrome/shell-overlay-manifest.test.ts"
+      ],
+      "exclusions": [
+        "business behavior",
+        "user or remote content",
+        "non-Sakura themes",
+        "backend, schema, auth, and billing changes"
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "native:cold-start-intro",
+      "kind": "native",
+      "routeId": null,
+      "auditStatus": "native-only",
+      "availability": "native-only",
+      "owner": "SK9",
+      "requirements": ["SAK-010", "SAK-030", "SAK-033", "SAK-040", "SAK-048", "SAK-036"],
+      "sourcePaths": ["app/src-tauri/tauri.conf.json"],
+      "writerPaths": [],
+      "testPaths": ["tests/visual/monochrome/native-window-manifest.test.ts"],
+      "behaviorCommands": [
+        "npm --prefix app test -- --maxWorkers=1 --minWorkers=1",
+        "node --test tests/visual/monochrome/native-window-manifest.test.ts"
+      ],
+      "viewports": ["1672x941", "1024x768", "narrow-desktop"],
+      "zoom": ["100%", "125%", "150%", "200%"],
+      "motion": ["no-preference", "reduce"],
+      "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
+      "logicalLock": "sakura:native:cold-start-intro",
+      "fileLockPaths": [],
+      "sharedReadOnlyPaths": [
+        "app/src-tauri/tauri.conf.json",
+        "tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "exclusions": [
         "business behavior",
@@ -203,7 +235,7 @@
         "node --test tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:native:dictation",
@@ -236,7 +268,7 @@
         "node --test tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:native:main",
@@ -269,7 +301,7 @@
         "node --test tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:native:pet-mini-panel",
@@ -302,7 +334,7 @@
         "node --test tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:native:pet-overlay",
@@ -335,13 +367,46 @@
         "node --test tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:native:preview-surface",
       "fileLockPaths": [],
       "sharedReadOnlyPaths": [
         "app/src-tauri/src/preview.rs",
+        "tests/visual/monochrome/native-window-manifest.test.ts"
+      ],
+      "exclusions": [
+        "business behavior",
+        "user or remote content",
+        "non-Sakura themes",
+        "backend, schema, auth, and billing changes"
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "native:taskbar-usage",
+      "kind": "native",
+      "routeId": null,
+      "auditStatus": "native-only",
+      "availability": "native-only",
+      "owner": "SK9",
+      "requirements": ["SAK-010", "SAK-030", "SAK-033", "SAK-040", "SAK-048", "SAK-036"],
+      "sourcePaths": ["app/src/features/taskbar-usage/taskbarUsageNativeWindow.ts"],
+      "writerPaths": [],
+      "testPaths": ["tests/visual/monochrome/native-window-manifest.test.ts"],
+      "behaviorCommands": [
+        "npm --prefix app test -- --maxWorkers=1 --minWorkers=1",
+        "node --test tests/visual/monochrome/native-window-manifest.test.ts"
+      ],
+      "viewports": ["1672x941", "1024x768", "narrow-desktop"],
+      "zoom": ["100%", "125%", "150%", "200%"],
+      "motion": ["no-preference", "reduce"],
+      "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
+      "logicalLock": "sakura:native:taskbar-usage",
+      "fileLockPaths": [],
+      "sharedReadOnlyPaths": [
+        "app/src/features/taskbar-usage/taskbarUsageNativeWindow.ts",
         "tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "exclusions": [
@@ -368,7 +433,7 @@
         "node --test tests/visual/monochrome/native-window-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:native:workbench-main",
@@ -401,7 +466,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:actions-palette-host",
@@ -431,7 +496,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:activity-strip",
@@ -464,7 +529,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:ambient-home",
@@ -494,7 +559,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:api-key-save-burst",
@@ -524,7 +589,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:app-dispatch",
@@ -557,7 +622,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:app-shell",
@@ -590,7 +655,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:assistant-bar-host",
@@ -620,7 +685,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:call-modal",
@@ -650,7 +715,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:celebration-host",
@@ -680,7 +745,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:command-palette-host",
@@ -710,7 +775,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:file-explorer-host",
@@ -743,7 +808,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:global-dictation-overlay",
@@ -773,7 +838,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:inspector",
@@ -806,7 +871,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:jarvis-context-menu",
@@ -839,7 +904,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:launcher-dialog-host",
@@ -869,7 +934,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:nav-pane",
@@ -902,7 +967,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:news-host",
@@ -939,7 +1004,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:page-router",
@@ -972,7 +1037,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:pet-host",
@@ -1002,7 +1067,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:pet-mini-panel-window",
@@ -1035,7 +1100,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:pet-overlay-window",
@@ -1065,7 +1130,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:product-tutorial-host",
@@ -1095,7 +1160,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-settings", "jarvis-settings", "vibespace-settings"],
       "logicalLock": "sakura:overlay:settings-modal-host",
@@ -1125,7 +1190,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:tab-strip",
@@ -1158,7 +1223,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:toaster",
@@ -1194,7 +1259,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:top-bar",
@@ -1227,7 +1292,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:update-warning-host",
@@ -1257,7 +1322,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:voice-modal-host",
@@ -1287,7 +1352,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:wellness-break",
@@ -1317,7 +1382,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-chat", "jarvis-chat", "vibespace-chat", "origami-chat"],
       "logicalLock": "sakura:overlay:whats-new-host",
@@ -1350,7 +1415,7 @@
         "node --test tests/visual/monochrome/shell-overlay-manifest.test.ts"
       ],
       "viewports": ["1672x941", "1024x768", "narrow-desktop"],
-      "zoom": ["50%", "80%", "100%", "125%", "200%"],
+      "zoom": ["100%", "125%", "150%", "200%"],
       "motion": ["no-preference", "reduce"],
       "baselineCaptureIds": ["default-terminal", "jarvis-terminal", "vibespace-terminal"],
       "logicalLock": "sakura:overlay:workbench-window-dispatch",

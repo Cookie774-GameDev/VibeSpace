@@ -1,0 +1,19 @@
+- description: Context Map retrieval carries exact portable evidence
+  vars:
+    candidate_output: |
+      Path: src/auth.ts
+      Why included: exact_match, task_relevance
+      Repository revision: 985c197
+      Content hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AST hash: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  assert:
+    - type: contains
+      value: 'Path: src/auth.ts'
+    - type: contains
+      value: 'Why included: exact_match, task_relevance'
+    - type: contains
+      value: 'Content hash: sha256:'
+    - type: contains
+      value: 'AST hash: sha256:'
+    - type: not-contains
+      value: 'C:\Users\'

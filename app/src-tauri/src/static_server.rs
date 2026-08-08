@@ -139,7 +139,9 @@ fn handle_client(mut stream: TcpStream, root: PathBuf) {
     let method = parts.next().unwrap_or("GET");
     let path = parts.next().unwrap_or("/");
     if method != "GET" && method != "HEAD" {
-        let _ = stream.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        let _ = stream.write_all(
+            b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
         return;
     }
 
@@ -212,8 +214,13 @@ pub fn preview_start_static_server(root: String) -> CmdResult<StaticServerInfo> 
     // Stop any existing server first.
     let _ = preview_stop_static_server();
 
-    let (listener, port) = bind_ephemeral()
-        .map_err(|e| err("port_unavailable", format!("Could not bind loopback: {e}"), true))?;
+    let (listener, port) = bind_ephemeral().map_err(|e| {
+        err(
+            "port_unavailable",
+            format!("Could not bind loopback: {e}"),
+            true,
+        )
+    })?;
     let _ = listener.set_nonblocking(false);
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();

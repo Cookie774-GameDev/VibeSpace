@@ -1,7 +1,7 @@
 import {
   DOCUMENT_THEME_BY_ID,
   PERSISTED_LEGACY_THEME_MAP,
-  SELECTABLE_THEME_IDS,
+  RELEASE_THEME_IDS,
   SYNC_LEGACY_THEME_MAP,
   THEME_COMMAND_ALIASES,
   THEME_FALLBACK_ID,
@@ -10,7 +10,7 @@ import type { ResolvedDocumentTheme, SelectableTheme } from './themeContract.gen
 
 export * from './themeContract.generated';
 
-const selectableThemeIds: ReadonlySet<string> = new Set(SELECTABLE_THEME_IDS);
+const selectableThemeIds: ReadonlySet<string> = new Set(RELEASE_THEME_IDS);
 
 export function parseSelectableTheme(value: unknown): SelectableTheme | null {
   return typeof value === 'string' && selectableThemeIds.has(value)

@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-BROWSER-OSS-CREDITS-UI-20260804
+controller=/root
+parent_session_id=active-root-session
+acquired_at=2026-08-04T01:28:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Extend the existing About credits surface with the actually adopted MCP SDK and Playwright foundations.
+owned_paths=app/src/features/settings/sections/OpenSourceCredits.tsx;app/src/features/settings/sections/OpenSourceCredits.test.tsx
+exclusions=all other UI;all unrelated dirty hunks;all external systems;all Git operations
+verification=add focused static credit assertions;defer execution to final verification
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

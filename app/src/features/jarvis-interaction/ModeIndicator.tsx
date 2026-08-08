@@ -87,21 +87,27 @@ export function ModeIndicator({
         <button
           type="button"
           className={cn(
-            'group inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-metadata font-medium transition-all',
+            'group inline-flex h-7 items-center gap-1 rounded-full border px-1.5 py-0 text-[11px] font-medium leading-none transition-all',
             'hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
             accent.chip,
             open && cn('ring-1', accent.ring),
-            compact && 'shrink-0 whitespace-nowrap px-2 py-1 text-[11px]',
+            compact && 'h-6 shrink-0 gap-0.5 whitespace-nowrap px-1.5 text-[10px]',
           )}
           title={`${interactionModeDescription(mode)} Click to change · Shift+Tab cycles · /permissions`}
           aria-label={`${interactionModeLabel(mode)}. Open permissions panel.`}
           aria-expanded={open}
           aria-haspopup="listbox"
         >
-          <Icon className={cn('h-3 w-3 shrink-0', accent.icon)} />
-          <span className="max-w-[7.5rem] truncate">{interactionModeLabel(mode)}</span>
+          <Icon className={cn('h-3 w-3 shrink-0', compact && 'h-2.5 w-2.5', accent.icon)} />
+          <span className={cn('max-w-[6.5rem] truncate', compact && 'max-w-[4.5rem]')}>
+            {interactionModeLabel(mode)}
+          </span>
           <ChevronDown
-            className={cn('h-3 w-3 shrink-0 opacity-70 transition-transform', open && 'rotate-180')}
+            className={cn(
+              'h-3 w-3 shrink-0 opacity-70 transition-transform',
+              compact && 'h-2.5 w-2.5',
+              open && 'rotate-180',
+            )}
           />
         </button>
       </PopoverTrigger>
@@ -113,6 +119,8 @@ export function ModeIndicator({
           'w-[min(320px,92vw)] overflow-hidden rounded-[16px] border border-border-mid/80 p-0',
           'bg-elevated/95 text-foreground backdrop-blur-xl',
           'shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_28px_hsl(var(--accent-copper)/0.12)]',
+          // Pet mini-panel is z-[81]; default popover z-50 is hidden under it.
+          compact && 'z-[120]',
         )}
         onOpenAutoFocus={(e) => e.preventDefault()}
       >

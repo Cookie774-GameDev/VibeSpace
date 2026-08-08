@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "vibespace-browser-agent",
+  "version": "1.61.1",
+  "description": "Optional, separately provisioned Browser Agent automation assets.",
+  "defaultInstallerIncluded": false,
+  "separatelyRemovable": true,
+  "separatelyMeasurable": true,
+  "measurementStatus": "pending-build-verification",
+  "installerMeasurementClaimed": false,
+  "components": [
+    {
+      "name": "playwright-core",
+      "version": "1.61.1",
+      "distribution": "optional-feature-pack",
+      "defaultInstallerIncluded": false
+    },
+    {
+      "name": "playwright-browser-binaries",
+      "version": "1.61.1",
+      "distribution": "separately-provisioned-optional-assets",
+      "defaultInstallerIncluded": false,
+      "measuredBytes": null
+    }
+  ],
+  "excluded": [
+    {
+      "name": "@playwright/test",
+      "reason": "development-only test wrapper"
+    },
+    {
+      "name": "promptfoo",
+      "version": "0.121.20",
+      "reason": "development/CI-only evaluation runtime"
+    }
+  ]
+}

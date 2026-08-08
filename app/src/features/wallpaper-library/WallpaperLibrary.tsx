@@ -29,6 +29,7 @@ import { wallpaperPreviewSrc } from './previewUrl';
 import { WallpaperPreviewThumb } from './WallpaperPreviewThumb';
 import { useWorkbenchStore } from '@/features/workbench/store';
 import { isTauri } from '@/lib/utils';
+import type { WallpaperId } from '@/features/workbench/types';
 
 function functionsBaseUrl(): string | null {
   const raw = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -51,10 +52,15 @@ async function getAccessToken(): Promise<string | null> {
 /** Temporary unlock so download/apply can be tested without subscription. */
 const DEV_UNLOCK_ALL_WALLPAPERS = true;
 
-export function WallpaperLibrary() {
+export function WallpaperLibrary({
+  onApplyWallpaper,
+}: {
+  onApplyWallpaper?: (id: WallpaperId, assetUrl?: string) => void;
+} = {}) {
   const plan = useAuthStore((s) => s.plan);
   const isAdmin = useAppAdmin();
-  const setWallpaper = useWorkbenchStore((s) => s.setWallpaper);
+  const setWorkbenchWallpaper = useWorkbenchStore((s) => s.setWallpaper);
+  const setWallpaper = onApplyWallpaper ?? setWorkbenchWallpaper;
   const [catalog, setCatalog] = React.useState<CatalogLoadResult | null>(null);
   const [filter, setFilter] = React.useState<'all' | 'available' | 'featured'>('all');
   const [query, setQuery] = React.useState('');
@@ -173,7 +179,10 @@ export function WallpaperLibrary() {
   const confirmOrbit = async (wallpaper: CatalogWallpaper) => {
     const token = await getAccessToken();
     if (!token) {
-      toast.warning('Sign in required', 'Cloud subscription is required to redeem Orbit wallpapers.');
+      toast.warning(
+        'Sign in required',
+        'Cloud subscription is required to redeem Orbit wallpapers.',
+      );
       return;
     }
     const base = functionsBaseUrl();
@@ -268,7 +277,10 @@ export function WallpaperLibrary() {
           mastersDir: null,
         });
         if (!cached?.path || !cached.size_bytes || cached.size_bytes < 500_000) {
-          toast.warning('Full master missing', 'Could not find a full-quality MP4 for this wallpaper.');
+          toast.warning(
+            'Full master missing',
+            'Could not find a full-quality MP4 for this wallpaper.',
+          );
           return;
         }
         const url = await storeFullMasterPath({
@@ -292,7 +304,10 @@ export function WallpaperLibrary() {
         'Open the VibeSpace desktop app to import full-quality masters.',
       );
     } catch (e) {
-      toast.warning('Download failed', e instanceof Error ? e.message : 'Could not import full master');
+      toast.warning(
+        'Download failed',
+        e instanceof Error ? e.message : 'Could not import full master',
+      );
     } finally {
       setBusyId(null);
     }
@@ -385,7 +400,8 @@ export function WallpaperLibrary() {
               <div className="wallpaper-library-meta">
                 <h4>{w.name}</h4>
                 <p>
-                  {w.category} · {w.performance_tier} · {Math.round(w.size_bytes / (1024 * 1024))} MB
+                  {w.category} · {w.performance_tier} · {Math.round(w.size_bytes / (1024 * 1024))}{' '}
+                  MB
                 </p>
                 <span>
                   {entitled
@@ -426,7 +442,13 @@ export function WallpaperLibrary() {
                       Apply
                     </Button>
                     {downloaded ? (
-                      <Button type="button" size="icon-sm" variant="ghost" aria-label={`Delete ${w.name}`} onClick={() => removeLocal(w)}>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label={`Delete ${w.name}`}
+                        onClick={() => removeLocal(w)}
+                      >
                         <Trash2 />
                       </Button>
                     ) : null}
@@ -439,12 +461,18 @@ export function WallpaperLibrary() {
       </div>
 
       {pending ? (
-        <div className="wallpaper-library-confirm" role="dialog" aria-modal="true" aria-labelledby="orbit-confirm-title">
+        <div
+          className="wallpaper-library-confirm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="orbit-confirm-title"
+        >
           <div>
             <h3 id="orbit-confirm-title">Use an Orbit wallpaper slot?</h3>
             <p>
-              You are selecting “{pending.name}”. This will use 1 of your {ORBIT_SLOT_LIMIT} Orbit wallpaper
-              slots ({slotsUsed} already used). Selections stay assigned while Orbit remains active.
+              You are selecting “{pending.name}”. This will use 1 of your {ORBIT_SLOT_LIMIT} Orbit
+              wallpaper slots ({slotsUsed} already used). Selections stay assigned while Orbit
+              remains active.
             </p>
             <div className="wallpaper-library-confirm-actions">
               <Button type="button" size="sm" variant="ghost" onClick={() => setPending(null)}>

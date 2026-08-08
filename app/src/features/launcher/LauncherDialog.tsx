@@ -173,6 +173,7 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
               '[html[data-theme=monochrome]_&]:backdrop-blur-none [html[data-theme=monochrome]_&]:data-[state=open]:!animate-none [html[data-theme=monochrome]_&]:data-[state=closed]:!animate-none',
           }}
           data-monochrome-surface="launcher-dialog"
+          data-warm-surface="quick-launch-dialog"
           data-vibespace-owned-chrome="launcher"
           className="w-[min(820px,92vw)] max-w-3xl h-[min(640px,85vh)] p-0 flex flex-col overflow-hidden [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:font-sans [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&_*]:shadow-none"
         >
@@ -237,6 +238,7 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
 
           <main
             data-monochrome-surface="launcher-grid"
+            data-warm-surface="quick-launch-grid"
             className="flex-1 overflow-y-auto px-5 py-4 [html[data-theme=monochrome]_&]:bg-background"
           >
             {links.length === 0 ? (
@@ -247,6 +249,19 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
               </div>
             ) : (
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                <div
+                  aria-hidden="true"
+                  className="hidden"
+                  data-warm-surface="quick-launch-art-slot"
+                >
+                  <img
+                    alt=""
+                    data-warm-surface="quick-launch-art"
+                    draggable={false}
+                    role="presentation"
+                    src="/assets/themes/warm/quick-launch/coffee-stationery-darker.png"
+                  />
+                </div>
                 {filtered.map((link) => (
                   <LinkTile
                     key={link.id}
@@ -273,6 +288,7 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
                 ))}
                 <button
                   type="button"
+                  data-warm-action="quick-launch-new"
                   onClick={startNewLink}
                   onDragOver={(e) => {
                     if (draggingId) e.preventDefault();
@@ -377,6 +393,7 @@ function LinkTile({
 
   return (
     <div
+      data-warm-surface="quick-launch-tile"
       draggable
       onDragStart={(e) => {
         // Carry the link id along so cross-component drops could resolve it
@@ -416,6 +433,7 @@ function LinkTile({
         aria-label={`Launch ${link.label}`}
       >
         <div
+          data-warm-surface="quick-launch-icon"
           className="flex h-9 w-9 items-center justify-center rounded-md text-lg"
           style={{ background: `hsl(${hue} 70% 30% / 0.6)`, color: `hsl(${hue} 90% 88%)` }}
         >

@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG1-PROMPTFOO-CI-EVALS-20260804
+controller=/root
+parent_session_id=active-root-session
+acquired_at=2026-08-04T00:44:28-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Add pinned development-only Promptfoo evaluation configuration for Prompt Forge preservation, retrieval quality, injection resistance, tool authority, and model/provider mismatch without shipping Promptfoo.
+owned_paths=app/package.json;app/package-lock.json;app/promptfooconfig.yaml;app/tests/ai-evals/**;.github/workflows/ai-evals.yml;docs/oss/dependency-lock.json;docs/oss/THIRD_PARTY_NOTICES.md
+exclusions=production runtime bundle;provider credentials;live model calls in default CI;all unrelated files;Git operations;Computer Control
+verification=configuration and deterministic local provider fixtures only;do not run until final bounded verification
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

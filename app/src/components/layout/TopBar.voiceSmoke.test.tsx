@@ -8,7 +8,6 @@ const ui = vi.hoisted(() => ({
   voiceListening: false,
   composerSttListening: false,
   composerStt: true,
-  chatFullscreen: false,
   route: 'chat',
   toggleNav: vi.fn(),
   toggleInspector: vi.fn(),
@@ -19,13 +18,21 @@ const ui = vi.hoisted(() => ({
   setAssistantOpen: vi.fn(),
   setWhatsNewOpen: vi.fn(),
   setNewsPanelOpen: vi.fn(),
-  toggleChatFullscreen: vi.fn(),
   setRoute: vi.fn(),
 }));
 const smokeGate = vi.hoisted(() => ({ enabled: false }));
 const whatsNew = vi.hoisted(() => ({ hasUpdate: false, currentVersion: 'test' }));
 
 vi.mock('@/stores/ui', () => ({
+  createDefaultDoneNotifications: () => ({
+    jarvis: false,
+    terminal: false,
+    tasks: false,
+    contextMaps: false,
+    skills: false,
+    connectors: false,
+    reminders: false,
+  }),
   useUIStore: (selector: (state: typeof ui) => unknown) => selector(ui),
 }));
 
@@ -91,7 +98,6 @@ describe('TopBar voice smoke evidence', () => {
     ui.voiceListening = false;
     ui.composerSttListening = false;
     ui.route = 'chat';
-    ui.chatFullscreen = false;
     whatsNew.hasUpdate = false;
   });
 
@@ -100,6 +106,21 @@ describe('TopBar voice smoke evidence', () => {
 
     const opener = screen.getByRole('button', { name: 'Open Jarvis voice panel' });
     expect(opener.getAttribute('data-sik-evidence')).toBeNull();
+  });
+
+  it('does not expose the obsolete Jarvis Assistant header launcher', () => {
+    renderTopBar(false);
+
+    expect(screen.queryByRole('button', { name: 'Open Jarvis Assistant' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /Assistant/i })).toBeNull();
+  });
+
+  it('exposes one top-right Chat Modes entry with the shared pointer target', () => {
+    renderTopBar(false);
+
+    const control = screen.getByRole('button', { name: /chat modes/i });
+    expect(control.className).toContain('min-h-6');
+    expect(control.className).toContain('min-w-6');
   });
 
   it('places the unique voice.open selector on the genuine opener', async () => {

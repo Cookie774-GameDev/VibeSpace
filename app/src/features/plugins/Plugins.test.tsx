@@ -63,6 +63,7 @@ describe('Plugins settings page', () => {
 
   it('loads the catalog and filters by search', () => {
     renderPlugins();
+    expect(screen.getAllByTestId(/^plugin-card-/)).toHaveLength(112);
     expect(screen.getByText('GitHub')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'Linear' } });
     expect(screen.getByText('Linear')).toBeTruthy();

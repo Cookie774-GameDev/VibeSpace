@@ -32,6 +32,7 @@ import {
 } from '@/lib/ai/providers/kernelSmoke';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
+import { bootstrapOllamaConnection } from '@/lib/ai/ollamaBootstrap';
 import { AuthGate } from './AuthGate';
 
 const binding = Object.freeze({
@@ -43,6 +44,7 @@ const binding = Object.freeze({
 
 describe('AuthGate kernel smoke entry', () => {
   beforeEach(() => {
+    vi.mocked(bootstrapOllamaConnection).mockClear();
     clearKernelSmokeBinding();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
     useUIStore.setState(useUIStore.getInitialState(), true);
@@ -70,6 +72,22 @@ describe('AuthGate kernel smoke entry', () => {
 
     expect(screen.getByTestId('onboarding')).toBeTruthy();
     expect(screen.queryByTestId('workspace')).toBeNull();
+  });
+
+  it('aborts its mount-time Ollama bootstrap when the gate unmounts', () => {
+    const view = render(
+      <AuthGate>
+        <div data-testid="workspace" />
+      </AuthGate>,
+    );
+    const signal = vi.mocked(bootstrapOllamaConnection).mock.calls[0]?.[0]?.signal;
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+
+    view.unmount();
+
+    expect(signal?.aborted).toBe(true);
   });
 
   it('keeps an onboarded profile behind model access before native attestation', () => {

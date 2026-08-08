@@ -7,6 +7,7 @@ import {
 } from '@/lib/fs';
 import { basename, extension, isPopularTextFile } from '@/features/files/projectFiles';
 import { classifyJarvisReadError, classifyJarvisSource } from '@/lib/jarvis/sourcePolicy';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import { contextMapPickerOption } from './contextChatIntegration';
 
 export const CONTEXT_MIME = 'application/x-jarvis-context';
@@ -783,8 +784,8 @@ export function formatContextAttachmentForTerminal(attachment: ContextAttachment
     `Kind: ${attachment.kind}`,
     attachment.path ? `Path: ${attachment.path}` : null,
     typeof attachment.sizeBytes === 'number' ? `Size: ${attachment.sizeBytes} bytes` : null,
-    attachment.createdAt ? `Created: ${new Date(attachment.createdAt).toLocaleString()}` : null,
-    attachment.modifiedAt ? `Modified: ${new Date(attachment.modifiedAt).toLocaleString()}` : null,
+    attachment.createdAt ? `Created: ${formatUserDateTime(attachment.createdAt)}` : null,
+    attachment.modifiedAt ? `Modified: ${formatUserDateTime(attachment.modifiedAt)}` : null,
     attachment.tags?.length ? `Tags: ${attachment.tags.join(', ')}` : null,
     '',
     attachment.summary,

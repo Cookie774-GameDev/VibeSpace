@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4096 2304" role="img" aria-label="Low-profile sunset mountain horizon">
+  <defs>
+    <linearGradient id="mauve" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#cfa8c8"/><stop offset="1" stop-color="#9c809f"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#f1aa93"/><stop offset="1" stop-color="#c97967"/></linearGradient>
+    <linearGradient id="sage" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#b5b49c"/><stop offset="1" stop-color="#7f8978"/></linearGradient>
+  </defs>
+  <circle cx="3180" cy="1400" r="250" fill="#efb66f" opacity=".62"/>
+  <path d="m0 1810 650-560 490 500 470-380 510 450 600-300 470 250 907-470v1004H0Z" fill="#ecd0c7" opacity=".68"/>
+  <path d="m0 1960 720-640 500 570 610-500 570 570 540-410 420 310 736-390v834H0Z" fill="url(#mauve)" opacity=".75"/>
+  <path d="m0 2100 1030-430 620 570 670-650 620 540 620-500 536 350v324H0Z" fill="url(#sage)" opacity=".82"/>
+  <path d="m2480 2304 360-270 380-130 365-195 511-195v790z" fill="url(#coral)" opacity=".88"/>
+  <path d="M2760 2304c180-340 420-410 660-430-130 105-238 250-315 430Z" fill="#efc67e"/>
+  <g fill="#75836c" opacity=".78">
+    <path d="m350 2150 70-280 70 280zM530 2200l85-340 85 340zM3360 2160l75-300 75 300zM3590 2210l90-360 90 360z"/>
+  </g>
+  <g fill="#dda15d" opacity=".65"><path d="m550 1510 20 60 60 20-60 20-20 60-20-60-60-20 60-20z"/><path d="m2900 1490 16 48 48 16-48 16-16 48-16-48-48-16 48-16z"/></g>
+</svg>

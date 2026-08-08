@@ -16,6 +16,11 @@ import path from 'node:path';
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    fs: {
+      allow: [path.resolve(__dirname), path.resolve(__dirname, '../node_modules')],
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

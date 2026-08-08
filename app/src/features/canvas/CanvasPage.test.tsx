@@ -30,6 +30,7 @@ import {
 } from './templates';
 import type { CanvasRecoveryEntry } from './autosave';
 import { useUIStore } from '@/stores/ui';
+import { useWorkbenchStore } from '@/features/workbench/store';
 
 const PERSISTENCE_SCOPE: CanvasPersistenceScope = {
   accountId: 'account-a',
@@ -108,6 +109,30 @@ function readBlobBytes(blob: Blob): Promise<Uint8Array> {
 }
 
 describe('CanvasPage', () => {
+  it('changes the Canvas document wallpaper without changing the Workbench wallpaper', () => {
+    const previousWallpaper = useWorkbenchStore.getState().wallpaper;
+    act(() => {
+      useWorkbenchStore.getState().setWallpaper('aurora');
+    });
+    const view = render(<CanvasPage />);
+
+    expect(screen.getByTestId('workbench-wallpaper').getAttribute('data-wallpaper')).toBe('none');
+    expect(useWorkbenchStore.getState().wallpaper.id).toBe('aurora');
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas wallpapers' }));
+    expect(screen.getByRole('dialog', { name: 'Interactive wallpapers' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Warm Gradient/i }));
+    expect(screen.getByTestId('workbench-wallpaper').getAttribute('data-wallpaper')).toBe(
+      'warm-gradient',
+    );
+    expect(useWorkbenchStore.getState().wallpaper.id).toBe('aurora');
+    expect(screen.getByRole('heading', { name: 'Infinite Idea Canvas' })).toBeTruthy();
+    view.unmount();
+    act(() => {
+      useWorkbenchStore.setState({ wallpaper: previousWallpaper });
+    });
+  });
+
   it('renders an accessible, truthful local-first Canvas workspace', () => {
     render(<CanvasPage />);
 
@@ -877,6 +902,14 @@ describe('CanvasPage', () => {
     expect(vi.mocked(repository.save).mock.calls[0]?.[1].background).toEqual({
       kind: 'grid',
       color: '#ffffff',
+      wallpaper: {
+        id: 'none',
+        paused: false,
+        interactive: true,
+        intensity: 0.72,
+        brightness: 0.5,
+        quality: 'balanced',
+      },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));

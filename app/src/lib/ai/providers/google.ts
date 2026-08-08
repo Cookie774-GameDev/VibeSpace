@@ -25,6 +25,7 @@ import {
 } from '../types';
 import { useAuthStore } from '@/stores/auth';
 import { parseSSE } from './sse';
+import { sanitizeReasoningProviderOptions } from '../reasoningControls';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -52,6 +53,11 @@ function geminiParts(content: string | LLMContentPart[]) {
 }
 
 export function buildGoogleRequestBody(req: LLMRequest) {
+  const model = req.agent.model.model || GOOGLE_DEFAULT_MODEL;
+  const thinkingLevel = sanitizeReasoningProviderOptions(
+    { providerId: 'google', modelId: model },
+    req.provider_options,
+  ).thinking_level;
   const contents = req.messages
     .filter((message) => message.role !== 'system')
     .map((message) => ({
@@ -69,6 +75,7 @@ export function buildGoogleRequestBody(req: LLMRequest) {
     generationConfig: {
       temperature: req.temperature ?? req.agent.temperature ?? 0.7,
       maxOutputTokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
+      ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
     },
   };
 }

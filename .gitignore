@@ -80,6 +80,17 @@ coverage/
 .artifacts/monochrome/
 .artifacts/origami-chat/
 .artifacts/origami-nonchat-scope/
+.artifacts/ui-fidelity/
+.artifacts/warm-theme/
+.artifacts/
+
+# Local visual evidence and runner output (preserved on disk, never shipped)
+qa/warm-goal/
+artifacts/warm-final/
+artifacts/live-pr31/
+app/test-results/
+test-results/
+app/vitest.config.ts.timestamp-*.mjs
 
 # Local databases
 *.db

@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-BROWSER-NATIVE-HANDOFF-20260804
+controller=/root/mcp_gateway_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T02:25:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement and integrate the exact browser-to-native handoff contract so only user-approved visible prompt, selected approved attachments, purpose, trust labels, expected artifact, and canonical returned evidence cross the boundary.
+owned_paths=app/src/features/browser/browserNativeHandoff.ts;app/src/features/browser/browserNativeHandoff.test.ts;app/src/features/browser/browserGoalLaunchRuntime.ts;app/src/features/browser/browserGoalLaunchRuntime.test.ts;app/src/features/browser/browserGoalChatRuntime.ts;app/src/features/browser/browserGoalChatRuntime.test.ts
+exclusions=all other files;all browserGoalIntegration/index files owned by the other active worker;all Rust;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all external browsers/network;credentials;raw file contents beyond approved attachment refs;Computer Control
+verification=add only focused deterministic tests;do not run tests,typecheck,build,format,browser,or review commands;self-review once and hand off
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

@@ -19,6 +19,7 @@ const DEFAULT_PROBE_OUTPUT_LIMIT_BYTES = 16_384;
 export interface CliInvocationRequest {
   prompt: string;
   modelId?: string;
+  reasoningEffort?: string;
   workingDirectory?: string;
   sessionId?: string;
 }
@@ -654,6 +655,7 @@ async function* sendProviderRequest(
   const invocation = definition.buildInvocation({
     prompt: request.prompt,
     modelId: request.modelId,
+    reasoningEffort: request.reasoningEffort,
     workingDirectory: request.workingDirectory,
     sessionId: request.sessionId,
   });

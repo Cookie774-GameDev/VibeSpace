@@ -46,7 +46,7 @@ describe('registryAppControl actions', () => {
       'workflow.run',
       {
         stepsJson: JSON.stringify([
-          { action: 'voice.setEngine', params: { engine: 'kokoro' } },
+          { action: 'voice.setEngine', params: { engine: 'jarvis' } },
           { action: 'voice.setPreset', params: { preset: 'aurora' } },
         ]),
       },
@@ -55,7 +55,7 @@ describe('registryAppControl actions', () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(useAuthStore.getState().voiceEngine).toBe('kokoro');
+    expect(useAuthStore.getState().voiceEngine).toBe('jarvis');
     expect(useAuthStore.getState().voicePreset).toBe('aurora');
   });
 

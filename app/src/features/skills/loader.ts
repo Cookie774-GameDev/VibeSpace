@@ -19,6 +19,11 @@ import { parseFrontmatter } from './parseFrontmatter';
 
 export type SkillManifestSource = 'builtin' | 'project' | 'user';
 
+export interface SkillPackageResource {
+  readonly kind: 'scripts' | 'references' | 'assets' | 'tests';
+  readonly path: string;
+}
+
 export interface SkillManifest {
   name: string;
   title: string;
@@ -49,6 +54,12 @@ export interface SkillManifest {
   emoji?: string;
   /** Runtime instruction block injected via /skills. */
   systemPromptAddendum?: string;
+  /** SPDX expression or human-readable upstream license declaration. */
+  license?: string;
+  /** Resource directories are discovered by name and loaded only on demand. */
+  resources?: readonly SkillPackageResource[];
+  /** SHA-256 of an imported manifest; built-ins rely on the signed app bundle. */
+  manifestSha256?: `sha256:${string}`;
 }
 
 export interface SkillDiscoveryFilesystem {
@@ -148,6 +159,7 @@ function manifestFromRaw(
 
   return {
     name: typeof meta.name === 'string' ? meta.name : fallbackName,
+    description: typeof meta.description === 'string' ? meta.description : undefined,
     title:
       typeof meta.title === 'string'
         ? meta.title
@@ -162,6 +174,7 @@ function manifestFromRaw(
     body,
     source,
     filePath,
+    license: typeof meta.license === 'string' ? meta.license : undefined,
   };
 }
 
@@ -254,6 +267,7 @@ function strictExternalManifest(
   if (meta.kind !== undefined && meta.kind !== defaultKind) return 'malformed';
   if (meta.title !== undefined && typeof meta.title !== 'string') return 'malformed';
   if (meta.description !== undefined && typeof meta.description !== 'string') return 'malformed';
+  if (meta.license !== undefined && typeof meta.license !== 'string') return 'malformed';
   if (
     !validStringArray(meta.when) ||
     !validStringArray(meta.tools) ||
@@ -289,6 +303,23 @@ interface DiscoveryCandidate {
   id: string;
   filePath: string;
   size: number;
+  resources: readonly SkillPackageResource[];
+}
+
+const RESOURCE_DIRECTORIES = new Set<SkillPackageResource['kind']>([
+  'scripts',
+  'references',
+  'assets',
+  'tests',
+]);
+
+async function sha256Text(value: string): Promise<`sha256:${string}` | undefined> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return undefined;
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
 }
 
 async function discoverSource(
@@ -377,6 +408,21 @@ async function discoverSource(
         id,
         filePath: joinRoot(packageDirectory, packageFileName),
         size: manifest.size,
+        resources: Object.freeze(
+          packageListing.entries
+            .filter(
+              (candidate) =>
+                candidate.isDir &&
+                RESOURCE_DIRECTORIES.has(candidate.name as SkillPackageResource['kind']),
+            )
+            .map((candidate) => {
+              const kind = candidate.name as SkillPackageResource['kind'];
+              return Object.freeze({
+                kind,
+                path: joinRoot(packageDirectory, kind),
+              });
+            }),
+        ),
       });
       continue;
     }
@@ -400,7 +446,12 @@ async function discoverSource(
       safeReject(opts, source, 'oversized');
       continue;
     }
-    candidates.push({ id, filePath: joinRoot(directory, entry.name), size: entry.size });
+    candidates.push({
+      id,
+      filePath: joinRoot(directory, entry.name),
+      size: entry.size,
+      resources: Object.freeze([]),
+    });
   }
 
   const counts = new Map<string, number>();
@@ -435,7 +486,12 @@ async function discoverSource(
       safeReject(opts, source, parsed);
       continue;
     }
-    manifests.push(parsed);
+    const manifestSha256 = await sha256Text(read.content);
+    manifests.push({
+      ...parsed,
+      resources: candidate.resources,
+      ...(manifestSha256 ? { manifestSha256 } : {}),
+    });
   }
   return manifests;
 }

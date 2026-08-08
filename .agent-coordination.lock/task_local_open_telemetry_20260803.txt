@@ -1,0 +1,11 @@
+task_id=VS-PR31-MG1-LOCAL-OTEL-20260803-A9
+controller=/root/native_intelligence_audit
+parent_session_id=019fa038-5ad0-77a3-a350-d35f4c1e2d85
+acquired_at=2026-08-03T14:58:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement a privacy-safe local-only OpenTelemetry bridge over the pinned API/SDK packages and existing IntelligenceTelemetryEvent contract, with bounded retention and no exporter by default.
+owned_paths=app/src/lib/ai/localIntelligenceOpenTelemetry.ts;app/src/lib/ai/localIntelligenceOpenTelemetry.test.ts
+exclusions=all other files;network exporters;raw prompts/responses/paths/tool arguments/credentials/user data;package files;live runtime/UI;Git mutation;Computer Control;nested delegation
+status=DELEGATED_LOCAL_OTEL

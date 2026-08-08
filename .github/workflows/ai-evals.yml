@@ -1,0 +1,37 @@
+name: AI boundary evaluations
+
+on:
+  pull_request:
+    paths:
+      - 'app/promptfooconfig.yaml'
+      - 'app/tests/ai-evals/**'
+      - 'app/src/features/prompt-forge/**'
+      - 'app/src/features/token-optimizer/**'
+      - 'app/src/features/context/**'
+      - 'app/src/lib/jarvis/**'
+      - '.github/workflows/ai-evals.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-ai-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: app
+    env:
+      PROMPTFOO_DISABLE_TELEMETRY: '1'
+      PROMPTFOO_DISABLE_UPDATE: '1'
+      PROMPTFOO_DISABLE_REMOTE_GENERATION: '1'
+      PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION: '1'
+      PROMPTFOO_CACHE_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run pinned local-only Promptfoo fixtures
+        run: npx --yes promptfoo@0.121.20 eval --config promptfooconfig.yaml --no-cache --output "$RUNNER_TEMP/promptfoo-results.json"

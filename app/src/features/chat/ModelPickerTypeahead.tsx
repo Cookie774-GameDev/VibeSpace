@@ -1,4 +1,11 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  type CSSProperties,
+} from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Cpu, Sparkles, type LucideIcon } from 'lucide-react';
 import type { ProviderId } from '@/types';
@@ -10,6 +17,7 @@ import { scrollPickerItemIntoView } from './pickerScroll';
 import { LEGACY_DROPDOWN_TRANSITION, resolveDropdownMotion } from './dropdownMotion';
 import { SIK_CONTROL } from '@/lib/jarvis/smoke/evidenceIds';
 import { useThemeMotionTransition } from '@/features/appearance/themeMotion';
+import { getLivePanelUiScale } from '@/lib/ui/panelScale';
 
 /** Sentinel id for the pinned Hive entry (keyboard nav + selection state). */
 export const HIVE_OPTION_ID = 'hive:balanced';
@@ -41,6 +49,8 @@ export interface ModelPickerTypeaheadProps {
   onSelectHive?: () => void;
   automaticRoutingEnabled?: boolean;
   onAutomaticRoutingChange?: (enabled: boolean) => void;
+  /** Dense sizing for pet mini-panel / narrow composer. */
+  compact?: boolean;
 }
 
 export interface ModelPickerTypeaheadRef {
@@ -62,6 +72,7 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
       onSelectHive,
       automaticRoutingEnabled,
       onAutomaticRoutingChange,
+      compact = false,
     },
     ref,
   ) {
@@ -69,6 +80,7 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
     const reducedMotion = useReducedMotion();
     const dropdownTransition = useThemeMotionTransition(LEGACY_DROPDOWN_TRANSITION);
     const dropdownMotion = resolveDropdownMotion(reducedMotion, dropdownTransition);
+    const panelScale = compact ? getLivePanelUiScale() : 1;
 
     const flatOptions = useMemo(() => groups.flatMap((group) => group.options), [groups]);
 
@@ -117,31 +129,67 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
     return (
       <motion.div
         {...dropdownMotion}
+        data-pet-scaled-picker={compact ? 'true' : undefined}
         className={cn(
-          'jarvis-slash-dropdown w-[338px] overflow-hidden rounded-[14px] border border-border-mid/80',
+          'jarvis-slash-dropdown overflow-hidden rounded-[14px] border border-border-mid/80',
+          compact ? 'w-[min(280px,88vw)] rounded-[10px]' : 'w-[338px]',
           'bg-elevated/95 text-foreground backdrop-blur-xl',
           'shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_30px_hsl(var(--accent-copper)/0.1)]',
           '[html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none',
           '[html[data-theme=monochrome]_&_*]:bg-none [html[data-theme=monochrome]_&_*]:shadow-none',
         )}
+        style={
+          compact
+            ? ({
+                transform: `scale(${panelScale})`,
+                transformOrigin: 'bottom left',
+              } as CSSProperties)
+            : undefined
+        }
       >
-        <div className="border-b border-border bg-panel/90 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-accent-copper/55 bg-background/70 shadow-[inset_0_0_10px_hsl(var(--accent-copper)/0.28),0_0_13px_hsl(var(--accent-copper)/0.2)]">
-              <Sparkles className="h-4 w-4 text-accent-copper" />
+        <div
+          className={cn(
+            'border-b border-border bg-panel/90',
+            compact ? 'px-2.5 py-1.5' : 'px-4 py-3',
+          )}
+        >
+          <div className={cn('flex items-center', compact ? 'gap-1.5' : 'gap-2')}>
+            <span
+              className={cn(
+                'inline-flex items-center justify-center rounded-full border border-accent-copper/55 bg-background/70 shadow-[inset_0_0_10px_hsl(var(--accent-copper)/0.28),0_0_13px_hsl(var(--accent-copper)/0.2)]',
+                compact ? 'h-6 w-6' : 'h-8 w-8',
+              )}
+            >
+              <Sparkles className={cn(compact ? 'h-3 w-3' : 'h-4 w-4', 'text-accent-copper')} />
             </span>
             <div className="min-w-0">
-              <div className="truncate text-[17px] font-medium leading-5 text-foreground">
+              <div
+                className={cn(
+                  'truncate font-medium text-foreground',
+                  compact ? 'text-[13px] leading-4' : 'text-[17px] leading-5',
+                )}
+              >
                 AI model
               </div>
-              <div className="text-[12px] leading-4 text-muted-foreground">
+              <div
+                className={cn(
+                  'text-muted-foreground',
+                  compact ? 'text-[10px] leading-3' : 'text-[12px] leading-4',
+                )}
+              >
                 Choose provider and model
               </div>
             </div>
           </div>
         </div>
 
-        <div ref={listRef} className="max-h-[280px] overflow-y-auto py-2 scrollbar-hidden">
+        <div
+          ref={listRef}
+          className={cn(
+            'overflow-y-auto scrollbar-hidden',
+            compact ? 'max-h-[min(200px,42vh)] py-1' : 'max-h-[280px] py-2',
+          )}
+        >
           {onSelectHive ? (
             <div className="mb-1">
               <div className="px-4 pb-1 pt-0.5 text-[11px] uppercase tracking-[0.2em] text-accent-copper/70">
@@ -224,7 +272,10 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                         onMouseEnter={() => option.available !== false && onHoverId?.(option.id)}
                         aria-disabled={option.available === false}
                         className={cn(
-                          'mx-2 flex cursor-pointer items-center gap-3 rounded-[12px] border px-3 py-2.5',
+                          'mx-2 flex cursor-pointer items-center border',
+                          compact
+                            ? 'gap-2 rounded-[8px] px-2 py-1.5'
+                            : 'gap-3 rounded-[12px] px-3 py-2.5',
                           'transition-all duration-100',
                           option.available === false && 'cursor-not-allowed opacity-55',
                           isSelected
@@ -234,15 +285,26 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                       >
                         <GroupIcon
                           className={cn(
-                            'h-4 w-4 shrink-0',
+                            'shrink-0',
+                            compact ? 'h-3.5 w-3.5' : 'h-4 w-4',
                             isSelected ? 'text-accent-copper' : 'text-muted-foreground/70',
                           )}
                         />
                         <div className="min-w-0 flex-1">
-                          <span className="block truncate text-[15px] font-medium leading-5 text-foreground">
+                          <span
+                            className={cn(
+                              'block truncate font-medium text-foreground',
+                              compact ? 'text-[12px] leading-4' : 'text-[15px] leading-5',
+                            )}
+                          >
                             {option.label}
                           </span>
-                          <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+                          <span
+                            className={cn(
+                              'block truncate text-muted-foreground',
+                              compact ? 'text-[10px] leading-3' : 'text-[11px] leading-4',
+                            )}
+                          >
                             {option.modeLabel ?? option.modelId}
                             {option.authLabel ? ` · ${option.authLabel}` : ''}
                           </span>

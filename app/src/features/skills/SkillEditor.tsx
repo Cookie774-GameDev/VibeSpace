@@ -15,7 +15,8 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { cn } from '@/lib/utils';
+import { EmojiMark } from '@/features/emoji/EmojiMark';
+import { EmojiPicker } from '@/features/emoji/EmojiPicker';
 import {
   JARVIS_CREATOR_APPLY_SKILL_EVENT,
   normalizeJarvisCreatorSkillDraft,
@@ -148,30 +149,18 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
         style={{ borderLeftWidth: 4, borderLeftColor: `hsl(${hue}, 55%, 48%)` }}
       >
         <div className="flex flex-wrap items-start gap-3">
-          <div className="flex items-center gap-2">
-            <Input
-              value={emoji}
-              onChange={(e) => setEmoji(e.target.value.slice(0, 4))}
-              className="w-14 text-center text-xl px-1"
-              aria-label="Skill emoji"
+          <div className="flex items-start gap-2">
+            <EmojiMark
+              token={emoji}
+              label="Current Skill emoji"
+              className="h-10 w-10 shrink-0 text-2xl"
             />
-            <div className="flex flex-wrap gap-1 max-w-[200px]">
-              {SKILL_EMOJI_PRESETS.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  className={cn(
-                    'h-7 w-7 rounded-md border border-border text-sm hover:border-accent-copper/60',
-                    '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:focus-visible:outline [html[data-theme=monochrome]_&]:focus-visible:outline-1 [html[data-theme=monochrome]_&]:focus-visible:outline-offset-2 [html[data-theme=monochrome]_&]:focus-visible:outline-accent-cyan',
-                    emoji === e &&
-                      'ring-1 ring-accent-copper border-accent-copper/60 [html[data-theme=monochrome]_&]:border-accent-cyan [html[data-theme=monochrome]_&]:ring-0',
-                  )}
-                  onClick={() => setEmoji(e)}
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
+            <EmojiPicker
+              value={emoji}
+              onChange={setEmoji}
+              label="Skill emoji"
+              legacyTokens={SKILL_EMOJI_PRESETS}
+            />
           </div>
           <div className="flex-1 min-w-[200px] space-y-2">
             <Input

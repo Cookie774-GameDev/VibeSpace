@@ -44,13 +44,15 @@ describe('BarChart MonoChrome appearance', () => {
 
   it('preserves chart role, labels, and scores', () => {
     const { container } = render(<BarChart rows={ROWS} />);
-    const svg = container.querySelector('svg[role="img"]');
+    const svg = container.querySelector<SVGSVGElement>('svg[role="img"]');
     expect(svg).not.toBeNull();
     expect(svg!.getAttribute('aria-label')).toBe('Bar chart of top 2 models by arena score');
     expect(container.textContent).toContain('Closed Fixture');
     expect(container.textContent).toContain('Open Fixture');
     expect(container.textContent).toContain('1500');
     expect(container.textContent).toContain('1450');
+    expect(svg!.style.minWidth).toBe('800px');
+    expect(svg!.parentElement?.className).toContain('overflow-x-auto');
   });
 
   it('renders the empty-state message without a chart', () => {

@@ -320,6 +320,20 @@ function markCanonical(
 ): void {
   useTerminalExecutionStore.getState().mark(id, status, patch);
   if (['complete', 'failed', 'cancelled'].includes(status)) clearExecutionTimeout(id);
+  // Real terminal lifecycle event → Settings → Notifications "Terminal done".
+  // Skip pure cancellations (user-initiated abort is not a "command finished" cue).
+  if (status === 'complete' || status === 'failed') {
+    const exitCode = patch?.exitCode;
+    const body =
+      status === 'complete'
+        ? 'Command finished successfully.'
+        : typeof exitCode === 'number'
+          ? `Command exited with code ${exitCode}.`
+          : 'Command failed.';
+    void import('@/lib/notifications').then(({ notifyDone }) => {
+      void notifyDone('terminal', 'Terminal done', body);
+    });
+  }
 }
 
 function nativeRegistration(record: CanonicalExecutionRecord): JarvisAbortRegistration {

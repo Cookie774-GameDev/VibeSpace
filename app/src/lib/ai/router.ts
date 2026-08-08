@@ -70,6 +70,17 @@ import {
   JarvisProviderAttemptFailureError,
   createJarvisProviderAttemptEvidenceAuthority,
 } from './providerAttemptEvidence';
+import { providerActivityTracker } from '@/features/taskbar-usage/activityTracker';
+import {
+  LocalCloudEscalationRequiredError,
+  planLocalCloudEscalation,
+  readLocalAgentPreferences,
+  type LocalInferenceFailure,
+} from './localAgentRuntime';
+import {
+  artifactIdForAgent,
+  prepareFoundryAgentRequest,
+} from '@/features/model-foundry/foundryRuntime';
 
 export class NoModelSelectedError extends Error {
   constructor() {
@@ -226,6 +237,7 @@ type ExternalConnectionArgs = {
   requestId: string;
   prompt: string;
   modelId?: string;
+  reasoningEffort?: string;
   systemPrompt?: string;
   workingDirectory?: string;
   signal?: AbortSignal;
@@ -286,6 +298,7 @@ async function runExternalConnectionAuthorized(
     connection,
     prompt: args.prompt,
     modelId: args.modelId,
+    reasoningEffort: args.reasoningEffort,
     systemPrompt: args.systemPrompt,
     workingDirectory: args.workingDirectory,
     signal: args.signal,
@@ -326,7 +339,12 @@ async function runExternalConnectionAuthorized(
 
 /** Exact, fail-closed external bridge seam. Exported so routing can be tested without Tauri. */
 export async function runExternalConnection(args: ExternalConnectionArgs): Promise<LLMResponse> {
-  return runExternalConnectionAuthorized(args, 'adapter-authentication');
+  const completeActivity = providerActivityTracker.begin(args.connection.id);
+  try {
+    return await runExternalConnectionAuthorized(args, 'adapter-authentication');
+  } finally {
+    completeActivity();
+  }
 }
 
 function resolveExplicitSingleSelection(auth: ReturnType<typeof useAuthStore.getState>): {
@@ -407,6 +425,28 @@ function resolveExactConnectionProviderAndModel(
   return { provider, model: agent.model.model };
 }
 
+function configuredCloudEscalationTarget(
+  auth: ReturnType<typeof useAuthStore.getState>,
+): Readonly<{ providerId: ProviderId; modelId: string }> | null {
+  const candidates = [auth.defaultProvider, ...(Object.keys(auth.apiKeys) as ProviderId[]).sort()];
+  for (const providerId of new Set(candidates)) {
+    if (providerId === 'local' || providerId === 'ollama' || providerId === 'mock') continue;
+    const modelId = auth.selectedModels[providerId]?.trim();
+    const provider = providers[providerId];
+    if (modelId && auth.apiKeys[providerId]?.trim() && provider?.isAvailable()) {
+      return Object.freeze({ providerId, modelId });
+    }
+  }
+  return null;
+}
+
+function classifyLocalFailure(error: unknown): LocalInferenceFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(?:unsupported|not supported|capability unavailable)\b/iu.test(message)
+    ? 'capability_unavailable'
+    : 'inference_failed';
+}
+
 export interface RunAgentRequest {
   agent: Agent;
   messages: LLMMessage[];
@@ -436,12 +476,26 @@ export interface RunAgentRequest {
  * agent invocation. The agent object is treated as immutable input; the router
  * may construct a derived agent for the call but never mutates the original.
  */
-export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
+async function runAgentDispatch(req: RunAgentRequest): Promise<LLMResponse> {
   if (req.signal?.aborted) {
     throw new DOMException('The request was aborted.', 'AbortError');
   }
 
   const protectedDispatch = req.compiledPrompt !== undefined;
+  let foundryBaseModel: string | null = null;
+  if (artifactIdForAgent(req.agent)) {
+    if (protectedDispatch) {
+      throw new Error('Model Foundry artifacts cannot replace a protected provider binding.');
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    const prepared = await prepareFoundryAgentRequest({
+      agent: req.agent,
+      messages: req.messages,
+      invoke,
+    });
+    req = { ...req, agent: prepared.agent };
+    foundryBaseModel = prepared.agent.model.model;
+  }
   if (protectedDispatch) {
     if (!req.connectionId || !req.requestId || !req.protectedAttempt) {
       throw new Error('Protected provider dispatch requires exact connection and attempt binding.');
@@ -503,6 +557,11 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
             requestId: req.requestId ?? globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}`,
             prompt,
             modelId: req.agent.model.model,
+            reasoningEffort:
+              connection.adapterId === 'codex' &&
+              typeof req.provider_options?.reasoning_effort === 'string'
+                ? req.provider_options.reasoning_effort
+                : undefined,
             systemPrompt: protectedDispatch ? undefined : req.agent.system_prompt,
             workingDirectory: req.workingDirectory,
             signal: req.signal,
@@ -534,10 +593,12 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
       return response;
     }
   }
-  const { provider, model } =
+  const resolvedProvider =
     selectedConnection === undefined
       ? resolveProviderAndModel(req.agent)
       : resolveExactConnectionProviderAndModel(selectedConnection, req.agent);
+  const provider = resolvedProvider.provider;
+  const model = foundryBaseModel ?? resolvedProvider.model;
 
   if (protectedDispatch) {
     if (!selectedConnection || selectedConnection.mode === 'external-cli') {
@@ -620,6 +681,33 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
         },
       });
 
+      if ((provider.id === 'ollama' || provider.id === 'local') && !protectedDispatch) {
+        const auth = useAuthStore.getState();
+        const preferences = readLocalAgentPreferences();
+        const target = configuredCloudEscalationTarget(auth);
+        if (target) {
+          const messageChars = req.messages.reduce(
+            (total, message) => total + llmContentToText(message.content).length,
+            0,
+          );
+          const proposal = planLocalCloudEscalation({
+            offlineMode: auth.offlineMode,
+            enabled: preferences.cloudEscalationEnabled,
+            failure: classifyLocalFailure(err),
+            providerId: target.providerId,
+            modelId: target.modelId,
+            data: {
+              messageChars,
+              contextChars: 0,
+              categories: ['prompt'],
+            },
+          });
+          if (proposal.status === 'approval_required') {
+            throw new LocalCloudEscalationRequiredError(proposal);
+          }
+        }
+      }
+
       throw err;
     }
   }
@@ -634,4 +722,14 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
     );
 
   return response;
+}
+
+export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
+  const activityId = req.connectionId ?? req.agent.model.provider;
+  const completeActivity = providerActivityTracker.begin(activityId);
+  try {
+    return await runAgentDispatch(req);
+  } finally {
+    completeActivity();
+  }
 }

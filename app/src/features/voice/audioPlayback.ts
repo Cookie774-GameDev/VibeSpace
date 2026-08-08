@@ -2,7 +2,7 @@
  * Minimal base64 → HTMLAudioElement playback with abort + cleanup.
  * Returns a stop() function. Resolves when playback ends (or is aborted).
  *
- * Used by Kokoro and cloud providers. Guards against duplicate playback and
+ * Used by Jarvis High and cloud providers. Guards against duplicate playback and
  * leaked object URLs / audio elements.
  */
 

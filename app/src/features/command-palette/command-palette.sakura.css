@@ -1,8 +1,10 @@
 html[data-theme='sakura'] [data-vibespace-owned-chrome='command-palette'][data-sakura-overlay] {
+  z-index: 89;
   background: hsl(var(--sakura-night-hsl) / 0.62);
 }
 
 html[data-theme='sakura'] [data-vibespace-owned-chrome='command-palette'][role='dialog'] {
+  z-index: 90;
   border-color: hsl(var(--sakura-pink-hsl) / 0.42);
   border-radius: 1.5rem;
   background: var(--sakura-panel-fallback);

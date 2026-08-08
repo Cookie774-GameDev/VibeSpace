@@ -164,8 +164,12 @@ export function readConnectionMetadata(): ConnectionMetadata {
 }
 
 export function writeConnectionMetadata(metadata: ConnectionMetadata): ConnectionMetadata {
+  const previous = sessionMetadataSnapshot ?? {};
+  const hadSessionSnapshot = sessionMetadataSnapshot !== undefined;
   const canonical = canonicalMetadata(metadata);
   if (!sessionMetadataSnapshot) readConnectionMetadata();
+  // Re-read previous after ensuring snapshot exists for first-write baseline.
+  const baseline = hadSessionSnapshot ? previous : {};
   observeMetadataSnapshot(canonical);
   if (typeof window !== 'undefined') {
     try {
@@ -187,6 +191,14 @@ export function writeConnectionMetadata(metadata: ConnectionMetadata): Connectio
   );
   sessionPickerStates = canonicalPickerStates(pickerStates);
   writeConnectionPickerStates(pickerStates);
+
+  // Real auth-loss event: authenticated → unauthenticated (not first hydrate).
+  if (hadSessionSnapshot) {
+    void import('@/lib/notifications').then(({ detectAndNotifyConnectorAuthLoss }) => {
+      detectAndNotifyConnectorAuthLoss(baseline, canonical);
+    });
+  }
+
   return canonical;
 }
 

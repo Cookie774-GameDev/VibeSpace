@@ -25,12 +25,22 @@ import './styles/vibespace-theme.css';
 import './styles/origami-chat.css';
 import './styles/monochrome-theme.css';
 import './styles/sakura-theme.css';
+import './styles/warm-theme.css';
+import './styles/origami-theme.css';
 import './features/workbench/registerCommandActions';
 import { useUIStore } from './stores/ui';
 import { applyThemeSyncToApplication, startThemeSync } from './features/appearance/themeSync';
 import { resolveDevelopmentSurface } from './developmentSurface';
+import { TaskbarUsageWindow } from './features/taskbar-usage/TaskbarUsageWindow';
+import { startTaskbarUsageController } from './features/taskbar-usage/taskbarUsageController';
+import { startRendererHeartbeat } from './rendererHeartbeat';
+import { ColdStartIntroView } from './features/cold-start-intro';
+import { startResourcePressureMonitor } from './stability/resourcePressure';
 
 const devSurface = import.meta.env.DEV ? resolveDevelopmentSurface(window.location.search) : null;
+const viewParam = new URLSearchParams(window.location.search).get('view');
+const taskbarUsageView = viewParam === 'taskbar-usage';
+const coldStartIntroView = viewParam === 'cold-start-intro';
 
 const DevelopmentEntry =
   import.meta.env.DEV && devSurface !== null
@@ -41,7 +51,7 @@ if (devSurface === 'monochrome') {
   document.documentElement.dataset.theme = 'monochrome';
 } else if (devSurface === 'sakura') {
   document.documentElement.dataset.theme = 'sakura';
-} else {
+} else if (!coldStartIntroView) {
   startThemeSync((theme) => {
     applyThemeSyncToApplication(theme, document, useUIStore);
   });
@@ -54,7 +64,11 @@ if (!rootEl) {
 
 ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>
-    {DevelopmentEntry && devSurface ? (
+    {coldStartIntroView ? (
+      <ColdStartIntroView />
+    ) : taskbarUsageView ? (
+      <TaskbarUsageWindow />
+    ) : DevelopmentEntry && devSurface ? (
       <React.Suspense fallback={null}>
         <DevelopmentEntry surface={devSurface} />
       </React.Suspense>
@@ -63,3 +77,12 @@ ReactDOM.createRoot(rootEl).render(
     )}
   </React.StrictMode>,
 );
+
+const stopRendererHeartbeat = startRendererHeartbeat();
+window.addEventListener('pagehide', stopRendererHeartbeat, { once: true });
+
+if (!taskbarUsageView && !coldStartIntroView) {
+  const stopResourcePressureMonitor = startResourcePressureMonitor();
+  window.addEventListener('pagehide', stopResourcePressureMonitor, { once: true });
+  startTaskbarUsageController();
+}

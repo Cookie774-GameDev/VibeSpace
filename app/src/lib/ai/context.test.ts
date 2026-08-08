@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 
 const fsMocks = vi.hoisted(() => ({
   readTextFileSample: vi.fn(),
@@ -180,12 +181,13 @@ describe('AI explicit file context safeguards', () => {
 
   it('drops content-denied connected and explicit samples without reflecting their path or secret', async () => {
     fsMocks.getStoredProjectRoot.mockReturnValue('C:\\repo');
+    const secretPathSegment = syntheticCredentialFixture('ghp_', '1234567890abcdefghijkl');
     window.localStorage.setItem(
       'jarvis-terminal-pane-tree:project_a',
       JSON.stringify({
         kind: 'leaf',
         agentSlug: 'coder',
-        connectedFiles: ['C:\\repo\\ghp_1234567890abcdefghijkl.txt'],
+        connectedFiles: [`C:\\repo\\${secretPathSegment}.txt`],
       }),
     );
     fsMocks.readTextFileSample.mockImplementation(async (path: string) => ({
@@ -201,7 +203,7 @@ describe('AI explicit file context safeguards', () => {
       expect(block).toContain('secret_content');
       expect(block).not.toContain('synthetic-secret');
       expect(block).not.toContain('C:\\repo');
-      expect(block).not.toContain('ghp_1234567890abcdefghijkl');
+      expect(block).not.toContain(secretPathSegment);
       expect(block).not.toContain('line');
       expect(block).not.toContain('break');
       expect(block).toContain('source:');

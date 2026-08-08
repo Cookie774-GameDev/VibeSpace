@@ -282,6 +282,7 @@ export {
   type GitHubContextServerRequest,
   type GitHubContextServerResult,
 } from './githubContextAuth';
+export { buildGitHubProjectContextTree } from './githubContextTree';
 export {
   CONTEXT_RECOVERY_ACTIONS,
   appendContextRevision,
@@ -534,3 +535,12 @@ export {
   type ContextTreeNode,
   type ProjectContextTree,
 } from './tree';
+export * from './nightlySecondBrain';
+export * from './nightlySecondBrainScheduler';
+export {
+  formatRepositoryRetrievalItem,
+  retrieveLiveRepositoryContext,
+  type LiveRepositoryRetrievalInput,
+} from './repositoryRetrievalRuntime';
+export { NightlySecondBrainPanel } from './NightlySecondBrainPanel';
+export { NightlySecondBrainHost } from './NightlySecondBrainHost';

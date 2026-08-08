@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Phone,
   PhoneCall,
@@ -12,6 +12,9 @@ import {
   Trash2,
   Copy,
   RefreshCw,
+  KeyRound,
+  Server,
+  Coins,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,7 +25,22 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { getSupabaseClient } from '@/lib/supabase/client';
 import { getBridgeClient, type BridgeStatus } from '@/lib/bridge';
-import { getCallService } from '@/features/call/CallService';
+import {
+  callCloudUrl,
+  checkCallCloudReadiness,
+  type CallCloudReadiness,
+} from '@/features/call/config';
+import { CallAnyonePanel } from '@/features/call/thirdParty/CallAnyonePanel';
+import { normalizeAssistantPersonaId, useAssistantPersonaName } from '@/lib/assistantPersona';
+import { DeepgramCredentialCard } from '@/features/settings/components/DeepgramCredentialCard';
+import { migrateDeepgramPlaintextCredential } from '@/lib/deepgram';
+import { useAuthStore } from '@/stores/auth';
+import {
+  getCombinedUsage,
+  unifiedCreditsFromCombined,
+  type CombinedUsage,
+} from '@/features/billing/planLimits';
+import { secureSetApiKey } from '@/lib/security/secureApiKeys';
 
 /**
  * Phone & Voice settings — everything related to the phone-jarvis cloud.
@@ -31,8 +49,8 @@ import { getCallService } from '@/features/call/CallService';
  *  1. Cloud connection — show the configured cloud URL + bridge status.
  *  2. PIN — set / change the 6-digit verbal PIN used to gate inbound PSTN calls.
  *  3. Allowed callers — phone numbers that skip the PIN. Caller-ID match.
- *  4. Provider keys (BYOK) — paste Groq, Anthropic, Deepgram, Cartesia keys.
- *     Stored encrypted in Supabase phone_settings.byok_provider_keys.
+ *  4. Provider readiness — shared secure app credentials, with one-time
+ *     migration from legacy phone settings.
  *  5. Outbound calling — toggle which event categories may dial the user.
  *  6. Unlock phrase — the spoken passphrase that unlocks shell.run for
  *     the current call only.
@@ -64,7 +82,7 @@ interface PhoneSettings {
 }
 
 const DEFAULT_SETTINGS: PhoneSettings = {
-  persona: 'sage',
+  persona: 'jarvis',
   pin_length: 6,
   caller_allowlist: [],
   byok_provider_keys: {},
@@ -79,9 +97,43 @@ const DEFAULT_SETTINGS: PhoneSettings = {
 
 export const PHONE_SETTINGS_DRAFT_KEY = 'jarvis-phone-settings-draft-v1';
 
+export function separateLegacyPhoneDeepgramCredential(settings: PhoneSettings | null | undefined): {
+  settings: PhoneSettings | null | undefined;
+  legacyKey?: string;
+  legacyApiKeys?: Partial<Record<'groq' | 'anthropic', string>>;
+} {
+  const keys = settings?.byok_provider_keys;
+  const legacyKey = keys?.deepgram?.trim() || undefined;
+  const legacyApiKeys = {
+    ...(keys?.groq?.trim() ? { groq: keys.groq.trim() } : {}),
+    ...(keys?.anthropic?.trim() ? { anthropic: keys.anthropic.trim() } : {}),
+  };
+  if (
+    !settings ||
+    !keys ||
+    (!('deepgram' in keys) && !('groq' in keys) && !('anthropic' in keys))
+  ) {
+    return { settings, legacyKey, legacyApiKeys };
+  }
+  const {
+    deepgram: _legacyDeepgram,
+    groq: _legacyGroq,
+    anthropic: _legacyAnthropic,
+    ...safeKeys
+  } = keys;
+  return {
+    settings: { ...settings, byok_provider_keys: safeKeys },
+    legacyKey,
+    legacyApiKeys,
+  };
+}
+
 function sanitizePhoneSettingsDraft(settings: PhoneSettings): PhoneSettings {
   const { byok_provider_keys: _keys, ...safe } = settings;
-  return safe;
+  return {
+    ...safe,
+    persona: normalizeAssistantPersonaId(safe.persona ?? 'jarvis'),
+  };
 }
 
 function readPhoneSettingsDraft(): PhoneSettings {
@@ -133,12 +185,37 @@ export function PhoneVoice() {
     ...readPhoneSettingsDraft(),
   }));
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [, setSaving] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus | 'disabled'>('disabled');
+  const [cloudReadiness, setCloudReadiness] = useState<CallCloudReadiness>(() => {
+    const url = callCloudUrl();
+    return url
+      ? { state: 'checking', url }
+      : { state: 'missing', message: 'This build does not include a phone backend URL.' };
+  });
+  const [usage, setUsage] = useState<CombinedUsage | null>(null);
+  const apiKeys = useAuthStore((state) => state.apiKeys);
+  const hydrateApiKeysFromVault = useAuthStore((state) => state.hydrateApiKeysFromVault);
 
-  const cloudUrl = getCallService().getCloudUrl();
-  const configured = Boolean(cloudUrl);
+  const cloudUrl = callCloudUrl();
+  const configured = cloudReadiness.state === 'ready' || cloudReadiness.state === 'partial';
+  const outboundReady =
+    (cloudReadiness.state === 'ready' || cloudReadiness.state === 'partial') &&
+    cloudReadiness.transports.telnyx &&
+    cloudReadiness.transports.callAnyone &&
+    cloudReadiness.transports.supabase;
+
+  const refreshCloudReadiness = async () => {
+    if (cloudUrl) setCloudReadiness({ state: 'checking', url: cloudUrl });
+    setCloudReadiness(await checkCallCloudReadiness(cloudUrl));
+  };
+
+  useEffect(() => {
+    void refreshCloudReadiness();
+    void hydrateApiKeysFromVault();
+    void getCombinedUsage().then(setUsage);
+  }, []);
 
   // --- Load on mount ---
   useEffect(() => {
@@ -187,7 +264,54 @@ export function PhoneVoice() {
           // PGRST116 = no rows; that's fine, we'll create on first save
           toast.error('Failed to load Phone settings', error.message);
         }
-        const next = mergePhoneSettingsForDisplay(data as PhoneSettings | null);
+        const separated = separateLegacyPhoneDeepgramCredential(data as PhoneSettings | null);
+        const legacyApiEntries = Object.entries(separated.legacyApiKeys ?? {}) as Array<
+          ['groq' | 'anthropic', string]
+        >;
+        let credentialsMigrated = true;
+        if (separated.legacyKey) {
+          const migrated = await migrateDeepgramPlaintextCredential(separated.legacyKey);
+          credentialsMigrated = migrated.configured;
+        }
+        if (credentialsMigrated && legacyApiEntries.length > 0) {
+          try {
+            const currentApiKeys = useAuthStore.getState().apiKeys;
+            const migratedApiKeys: Partial<Record<'groq' | 'anthropic', string>> = {};
+            for (const [provider, key] of legacyApiEntries) {
+              if (currentApiKeys[provider]?.trim()) continue;
+              await secureSetApiKey(provider, key);
+              migratedApiKeys[provider] = key;
+            }
+            useAuthStore.setState((state) => ({
+              apiKeys: { ...state.apiKeys, ...migratedApiKeys },
+            }));
+          } catch {
+            credentialsMigrated = false;
+          }
+        }
+        if (credentialsMigrated && (separated.legacyKey || legacyApiEntries.length > 0)) {
+          const safeKeys = separated.settings?.byok_provider_keys ?? {};
+          const cleanup = await (
+            supa as unknown as {
+              from: (t: string) => {
+                upsert: (
+                  row: Record<string, unknown>,
+                  opts: { onConflict: string },
+                ) => Promise<{ error: { message: string } | null }>;
+              };
+            }
+          )
+            .from('phone_settings')
+            .upsert({ user_id: uid, byok_provider_keys: safeKeys }, { onConflict: 'user_id' });
+          if (cleanup.error) {
+            toast.warning(
+              'Provider migration cleanup pending',
+              'The keys are secure in this app, but their legacy phone settings could not yet be removed.',
+            );
+          }
+        }
+        if (cancelled) return;
+        const next = mergePhoneSettingsForDisplay(separated.settings);
         setSettings(next);
         writePhoneSettingsDraft(next);
       } finally {
@@ -220,7 +344,8 @@ export function PhoneVoice() {
     patch: Partial<PhoneSettings>,
     options: { silentLocal?: boolean; notify?: boolean } = {},
   ) {
-    const next = { ...settings, ...patch };
+    const next =
+      separateLegacyPhoneDeepgramCredential({ ...settings, ...patch }).settings ?? DEFAULT_SETTINGS;
     setSettings(next);
     writePhoneSettingsDraft(next);
 
@@ -274,22 +399,101 @@ export function PhoneVoice() {
 
   return (
     <div className="mc7f-settings-phone-voice flex flex-col gap-6 [html[data-theme=monochrome]_&]:border-l-2 [html[data-theme=monochrome]_&]:border-l-foreground/20 [html[data-theme=monochrome]_&]:pl-4 [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:bg-none [html[data-theme=monochrome]_&_*]:shadow-none [html[data-theme=monochrome]_&_*]:!animate-none [html[data-theme=monochrome]_&_*]:!blur-none [html[data-theme=monochrome]_&_*]:backdrop-blur-none [html[data-theme=monochrome]_&_*]:transition-none [html[data-theme=monochrome]_&_*]:focus-visible:outline [html[data-theme=monochrome]_&_*]:focus-visible:outline-2 [html[data-theme=monochrome]_&_*]:focus-visible:outline-offset-2 [html[data-theme=monochrome]_&_*]:focus-visible:outline-ring motion-reduce:[&_*]:!animate-none motion-reduce:[&_*]:transition-none">
-      <header>
-        <h2 className="text-page-title text-foreground">Phone & Voice</h2>
-        <p className="text-secondary text-muted-foreground mt-1">
-          Real phone calls, SMS messages, and in-app voice. Files never leave your machine.
+      <header className="rounded-xl border border-border bg-card/40 p-5">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-copper">
+          Communications
+        </p>
+        <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
+          Phone & Voice
+        </h2>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          Connect the services that hear, speak, and place calls—then review permissions and
+          shared-credit impact before anything paid starts.
         </p>
       </header>
 
-      {/* 1. Cloud connection */}
-      <CloudCard cloudUrl={cloudUrl} bridgeStatus={bridgeStatus} configured={configured} />
+      <SectionHeading
+        eyebrow="1 · Identity"
+        title="My number"
+        description="Choose the number Jarvis uses only when calling or messaging you, and keep the existing automation controls."
+      />
+      <OutboundCard
+        triggers={settings.outbound_triggers ?? DEFAULT_SETTINGS.outbound_triggers!}
+        onChange={(outbound_triggers) => save({ outbound_triggers })}
+        userPhoneNumber={settings.user_phone_number ?? ''}
+        onPhoneDraftChange={(user_phone_number) =>
+          patchPhoneSettingsDraft(settings, { user_phone_number })
+        }
+        onPhoneChange={(user_phone_number) => save({ user_phone_number }, { silentLocal: true })}
+      />
 
       <Separator />
 
-      {/* Privacy disclosure */}
+      <SectionHeading
+        eyebrow="2 · People"
+        title="Contacts"
+        description="Saved call contacts can include a name, relationship, optional HTTPS profile image, phone number, and private notes. Choose one in the Test call workflow below."
+      />
+
+      <Separator />
+
+      <SectionHeading
+        eyebrow="3 · Carrier"
+        title="Calling provider"
+        description="The hosted phone backend and carrier must pass a real health check before VibeSpace can place a call."
+      />
+      <CloudCard
+        readiness={cloudReadiness}
+        bridgeStatus={bridgeStatus}
+        onRetry={() => void refreshCloudReadiness()}
+      />
+
+      <Separator />
+
+      <SectionHeading
+        eyebrow="4 · Speech and intelligence"
+        title="Voice provider"
+        description="Provider credentials live in the secure app-wide store. Phone & Voice reads their connection state and never asks you to enter the same key twice."
+      />
+      <ProviderReadiness apiKeys={apiKeys} />
       <PrivacyCard />
 
       <Separator />
+
+      <SectionHeading
+        eyebrow="5 · Safe dry run"
+        title="Test call"
+        description="Choose a recipient, define the brief, then review the server-calculated reservation before explicitly approving the call."
+      />
+      {usage ? (
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
+          <Coins className="size-4 text-accent-copper" aria-hidden />
+          <span className="text-foreground">
+            {unifiedCreditsFromCombined(usage)?.remaining.toLocaleString() ?? 0} shared credits
+            available
+          </span>
+          <span className="text-muted-foreground">· 1 credit = $0.001 provider usage</span>
+        </div>
+      ) : null}
+      <CallAnyonePanel
+        availability={{
+          ready: outboundReady,
+          message:
+            cloudReadiness.state === 'partial'
+              ? 'The backend is reachable, but Telnyx, Call Anyone, or account credits are not fully configured.'
+              : cloudReadiness.state === 'ready'
+                ? undefined
+                : 'Outbound calling stays off until the configured backend passes its health check.',
+        }}
+      />
+
+      <Separator />
+
+      <SectionHeading
+        eyebrow="Inbound security"
+        title="Who can reach you"
+        description="PIN and allowlist controls protect incoming calls. They do not weaken app approvals or shell permissions."
+      />
 
       {/* 2. PIN */}
       <PinCard
@@ -304,28 +508,6 @@ export function PhoneVoice() {
       <AllowlistCard
         list={settings.caller_allowlist ?? []}
         onChange={(caller_allowlist) => save({ caller_allowlist })}
-      />
-
-      <Separator />
-
-      {/* 4. BYOK */}
-      <ByokCard
-        keys={settings.byok_provider_keys ?? {}}
-        onChange={(byok_provider_keys) => void save({ byok_provider_keys }, { notify: true })}
-        saving={saving}
-      />
-
-      <Separator />
-
-      {/* 5. Outbound triggers */}
-      <OutboundCard
-        triggers={settings.outbound_triggers ?? DEFAULT_SETTINGS.outbound_triggers!}
-        onChange={(outbound_triggers) => save({ outbound_triggers })}
-        userPhoneNumber={settings.user_phone_number ?? ''}
-        onPhoneDraftChange={(user_phone_number) =>
-          patchPhoneSettingsDraft(settings, { user_phone_number })
-        }
-        onPhoneChange={(user_phone_number) => save({ user_phone_number }, { silentLocal: true })}
       />
 
       <Separator />
@@ -345,27 +527,44 @@ export function PhoneVoice() {
 // ---------------------------------------------------------------------------
 
 function CloudCard({
-  cloudUrl,
+  readiness,
   bridgeStatus,
-  configured,
+  onRetry,
 }: {
-  cloudUrl: string;
+  readiness: CallCloudReadiness;
   bridgeStatus: BridgeStatus | 'disabled';
-  configured: boolean;
+  onRetry: () => void;
 }) {
-  const status: 'good' | 'warn' | 'bad' = (() => {
-    if (!configured) return 'bad';
-    if (bridgeStatus === 'connected') return 'good';
-    if (bridgeStatus === 'connecting' || bridgeStatus === 'reconnecting') return 'warn';
-    return 'bad';
-  })();
+  const status: 'good' | 'warn' | 'bad' =
+    readiness.state === 'ready'
+      ? 'good'
+      : readiness.state === 'checking' || readiness.state === 'partial'
+        ? 'warn'
+        : 'bad';
 
   const StatusIcon = status === 'good' ? Wifi : WifiOff;
+  const title =
+    readiness.state === 'ready'
+      ? 'Phone backend ready'
+      : readiness.state === 'checking'
+        ? 'Checking phone backend'
+        : readiness.state === 'partial'
+          ? 'Phone backend needs provider setup'
+          : readiness.state === 'unreachable'
+            ? 'Phone backend is unreachable'
+            : 'Phone backend needs configuration';
 
   return (
-    <section className="flex flex-col gap-3">
+    <section aria-labelledby="phone-backend-title" className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <Label>Cloud connection</Label>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            System readiness
+          </p>
+          <h3 id="phone-backend-title" className="mt-1 text-lg font-semibold text-foreground">
+            {title}
+          </h3>
+        </div>
         <div
           className={cn(
             'flex items-center gap-1.5 text-xs',
@@ -375,28 +574,45 @@ function CloudCard({
           )}
         >
           <StatusIcon className="h-3.5 w-3.5" />
-          {bridgeStatus === 'disabled' ? 'not configured' : bridgeStatus}
+          {readiness.state}
         </div>
       </div>
 
-      {configured ? (
-        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs font-mono break-all">
-          {cloudUrl}
+      {'url' in readiness ? (
+        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs break-all">
+          <span className="font-mono">{readiness.url}</span>
+          {readiness.state === 'ready' || readiness.state === 'partial' ? (
+            <p className="mt-2 font-sans text-muted-foreground">
+              In-app voice: {readiness.transports.livekit ? 'ready' : 'not configured'} · Outbound
+              phone:{' '}
+              {readiness.transports.callAnyone && readiness.transports.telnyx
+                ? 'ready'
+                : 'not configured'}{' '}
+              · Account/credits: {readiness.transports.supabase ? 'ready' : 'not configured'} ·
+              Desktop bridge: {bridgeStatus}
+            </p>
+          ) : null}
+          {readiness.state === 'unreachable' ? (
+            <p className="mt-2 font-sans text-destructive">{readiness.message}</p>
+          ) : null}
         </div>
       ) : (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500 leading-relaxed">
           <div className="flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
             <div>
-              <p className="font-medium mb-1">Jarvis Call cloud is not configured</p>
-              <p className="text-amber-500/80">
-                Official VibeSpace releases include the call backend. This build is missing that
-                backend URL, so phone calls and SMS stay disabled until a maintainer configures it.
-              </p>
+              <p className="font-medium mb-1">{title}</p>
+              <p className="text-amber-500/80">{readiness.message}</p>
             </div>
           </div>
         </div>
       )}
+      {readiness.state !== 'ready' ? (
+        <Button className="self-start" variant="outline" size="sm" onClick={onRetry}>
+          <RefreshCw className="size-3.5" aria-hidden />
+          Check again
+        </Button>
+      ) : null}
     </section>
   );
 }
@@ -414,12 +630,16 @@ function PrivacyCard() {
       </p>
       <ul className="text-xs space-y-1 list-disc list-inside">
         <li>
-          Your voice goes to the Jarvis Call cloud service for live transcription and replies.
+          During a hosted call, audio goes to the VibeSpace call service. Telnyx carries the call;
+          Deepgram provides supported live transcription and speech.
         </li>
-        <li>The transcript goes to the AI provider you configured (Anthropic / Groq / etc.).</li>
         <li>
-          <strong>Your files NEVER leave this computer.</strong> The AI can read files only by
-          asking the local Jarvis bridge. We use the same MCP registry the rest of Jarvis uses.
+          The conversation uses the explicitly selected AI route. BYOK calls use your provider
+          account; hosted routes use the shared credit pool.
+        </li>
+        <li>
+          <strong>Your files stay on this computer.</strong> A call can access a file only through
+          the local bridge and the app’s normal permission and approval controls.
         </li>
         <li>
           Call metadata is kept 30 days for debugging. You can delete any time from this panel.
@@ -540,7 +760,7 @@ function AllowlistCard({ list, onChange }: { list: string[]; onChange: (next: st
       <Label>Allowed callers (skip PIN)</Label>
       <p className="text-xs text-muted-foreground">
         Numbers in E.164 format (e.g. <code className="font-mono">+15551234567</code>). Calls from
-        these numbers skip the PIN and go straight to Sage.
+        these numbers skip the PIN and go straight to the assistant.
       </p>
 
       <div className="flex gap-2 max-w-md">
@@ -584,126 +804,104 @@ function AllowlistCard({ list, onChange }: { list: string[]; onChange: (next: st
 }
 
 // ---------------------------------------------------------------------------
-// BYOK — bring your own provider keys (Groq is free; the rest are paid)
+// Shared provider readiness
 // ---------------------------------------------------------------------------
 
-function ByokCard({
-  keys,
-  onChange,
-  saving: _saving,
+function SectionHeading({
+  eyebrow,
+  title,
+  description,
 }: {
-  keys: NonNullable<PhoneSettings['byok_provider_keys']>;
-  onChange: (next: NonNullable<PhoneSettings['byok_provider_keys']>) => void;
-  saving: boolean;
+  eyebrow: string;
+  title: string;
+  description: string;
 }) {
-  const [local, setLocal] = useState(keys);
-  const onChangeRef = useRef(onChange);
-
-  useEffect(() => {
-    setLocal(keys);
-  }, [keys]);
-
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
-
-  const dirty = useMemo(() => JSON.stringify(local) !== JSON.stringify(keys), [local, keys]);
-
-  useEffect(() => {
-    if (!dirty) return;
-    const id = window.setTimeout(() => onChangeRef.current(local), 650);
-    return () => window.clearTimeout(id);
-  }, [dirty, local]);
-
   return (
-    <section className="flex flex-col gap-3">
-      <Label>Provider keys (BYOK)</Label>
-      <p className="text-xs text-muted-foreground">
-        Paste your own keys. When set, your keys override the operator defaults for your calls.
-        Recommended starter: a free Groq key — covers STT and LLM at $0. Changes auto-save.
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-copper">
+        {eyebrow}
       </p>
-
-      <div className="grid gap-2 max-w-xl">
-        <KeyInput
-          label="Groq"
-          placeholder="gsk_…"
-          help={
-            <>
-              Free, no card.{' '}
-              <a
-                href="https://console.groq.com/keys"
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-              >
-                console.groq.com/keys
-              </a>
-            </>
-          }
-          value={local.groq ?? ''}
-          onChange={(v) => setLocal({ ...local, groq: v })}
-        />
-        <KeyInput
-          label="Anthropic"
-          placeholder="sk-ant-…"
-          help="Optional. Used for premium LLM on Path A (PSTN)."
-          value={local.anthropic ?? ''}
-          onChange={(v) => setLocal({ ...local, anthropic: v })}
-        />
-        <KeyInput
-          label="Deepgram"
-          placeholder="…"
-          help="Optional. Used for premium STT on Path A."
-          value={local.deepgram ?? ''}
-          onChange={(v) => setLocal({ ...local, deepgram: v })}
-        />
-        <KeyInput
-          label="Cartesia"
-          placeholder="…"
-          help="Optional. Used for high-quality TTS on both paths."
-          value={local.cartesia ?? ''}
-          onChange={(v) => setLocal({ ...local, cartesia: v })}
-        />
-      </div>
-    </section>
+      <h3 className="mt-1 text-lg font-semibold text-foreground">{title}</h3>
+      <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">{description}</p>
+    </div>
   );
 }
 
-function KeyInput({
-  label,
-  placeholder,
-  help,
-  value,
-  onChange,
+function ProviderReadiness({
+  apiKeys,
 }: {
-  label: string;
-  placeholder: string;
-  help: React.ReactNode;
-  value: string;
-  onChange: (v: string) => void;
+  apiKeys: Partial<Record<'groq' | 'anthropic', string>>;
 }) {
-  const [revealed, setRevealed] = useState(false);
+  const openProviders = () => {
+    window.dispatchEvent(new CustomEvent('jarvis:settings:tab', { detail: { tab: 'providers' } }));
+  };
+  const providers = [
+    {
+      id: 'groq' as const,
+      label: 'Groq',
+      description:
+        'Fast language and speech-to-text requests when you choose Groq. Your own usage is billed by Groq, not VibeSpace credits.',
+    },
+    {
+      id: 'anthropic' as const,
+      label: 'Anthropic',
+      description:
+        'Reasoning and conversation requests when you explicitly route a supported voice workflow to Anthropic.',
+    },
+  ];
+
   return (
-    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-      <Label className="pt-2 text-xs">{label}</Label>
-      <div className="flex flex-col gap-1">
-        <div className="flex gap-2">
-          <Input
-            type={revealed ? 'text' : 'password'}
-            placeholder={placeholder}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="font-mono text-xs"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <Button variant="outline" size="sm" type="button" onClick={() => setRevealed((r) => !r)}>
-            {revealed ? 'Hide' : 'Show'}
-          </Button>
-        </div>
-        <p className="text-[11px] text-muted-foreground leading-tight">{help}</p>
+    <section className="grid gap-3 lg:grid-cols-2" aria-label="Phone and voice providers">
+      {providers.map((provider) => {
+        const connected = Boolean(apiKeys[provider.id]?.trim());
+        return (
+          <article key={provider.id} className="rounded-xl border border-border bg-card/40 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <KeyRound className="size-4 text-accent-copper" aria-hidden />
+                <h4 className="font-semibold text-foreground">{provider.label}</h4>
+              </div>
+              <span
+                className={cn(
+                  'text-xs font-medium',
+                  connected ? 'text-emerald-500' : 'text-muted-foreground',
+                )}
+              >
+                {provider.label} {connected ? 'connected' : 'not connected'}
+              </span>
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              {provider.description}
+            </p>
+          </article>
+        );
+      })}
+      <div className="lg:col-span-2">
+        <DeepgramCredentialCard compact />
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          Deepgram powers supported speech recognition (Flux) and speech output (Aura). The same
+          secure key is shared with Providers, Speech to Text, and Voice. Hosted calls use only the
+          operator’s server-side credential; your desktop key is never sent to the call backend.
+        </p>
       </div>
-    </div>
+      <article className="lg:col-span-2 rounded-xl border border-border bg-muted/25 p-4">
+        <div className="flex items-start gap-3">
+          <Server className="mt-0.5 size-4 shrink-0 text-accent-cyan" aria-hidden />
+          <div className="flex-1">
+            <h4 className="font-semibold text-foreground">Hosted phone providers</h4>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+              VibeSpace routes outbound carrier service through Telnyx and hosted voice through
+              server-side Deepgram credentials. Those operator secrets never belong in this app.
+              BYOK and local voice do not consume the shared company-credit pool.
+            </p>
+          </div>
+        </div>
+      </article>
+      <Button className="justify-self-start" variant="outline" onClick={openProviders}>
+        <KeyRound className="size-4" aria-hidden />
+        Manage provider keys
+      </Button>
+    </section>
   );
 }
 
@@ -736,14 +934,19 @@ function OutboundCard({
     return () => window.clearTimeout(id);
   }, [phone, userPhoneNumber]);
 
+  const assistantName = useAssistantPersonaName();
+
   return (
     <section className="flex flex-col gap-3">
-      <Label>Outbound phone — when Sage calls or messages you</Label>
+      <Label>Outbound phone — when {assistantName} calls or messages you</Label>
 
       <div className="grid grid-cols-[120px_1fr] gap-2 items-center max-w-md">
-        <Label className="text-xs">Your number</Label>
+        <Label htmlFor="phone-voice-my-number" className="text-xs">
+          Your number
+        </Label>
         <div className="flex gap-2">
           <Input
+            id="phone-voice-my-number"
             placeholder="+15551234567"
             value={phone}
             onChange={(e) => {
@@ -764,7 +967,7 @@ function OutboundCard({
       <div className="flex flex-col gap-2 max-w-md">
         <TriggerRow
           label="Manual"
-          help='You ask: "Sage, call me at 3pm."'
+          help={`You ask: "${assistantName}, call me at 3pm."`}
           value={!!triggers.manual}
           onChange={(v) => onChange({ ...triggers, manual: v })}
         />
@@ -782,7 +985,7 @@ function OutboundCard({
         />
         <TriggerRow
           label="Todo deadlines"
-          help="Sage calls when a high-priority todo is due soon."
+          help={`${assistantName} calls when a high-priority todo is due soon.`}
           value={!!triggers.todo_due}
           onChange={(v) => onChange({ ...triggers, todo_due: v })}
         />
@@ -839,12 +1042,14 @@ function UnlockCard({
     return () => window.clearTimeout(id);
   }, [dirty, draft]);
 
+  const assistantName = useAssistantPersonaName();
+
   return (
     <section className="flex flex-col gap-3">
       <Label>Shell unlock phrase</Label>
       <p className="text-xs text-muted-foreground">
-        Sage will not run shell commands until you say this phrase mid-call. Resets at hangup. Pick
-        something you would not say accidentally. Default:{' '}
+        {assistantName} will not run shell commands until you say this phrase mid-call. Resets at
+        hangup. Pick something you would not say accidentally. Default:{' '}
         <code className="font-mono">unlock shell</code>.
       </p>
 

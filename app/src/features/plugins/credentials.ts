@@ -1,4 +1,9 @@
 import { isTauri } from '@/lib/utils';
+import {
+  getDeepgramApiKey,
+  removeDeepgramCredential,
+  saveDeepgramCredential,
+} from '@/lib/deepgram';
 import type { ExistingPluginCredentialLocator } from './credentialAuthorization';
 
 export type { ExistingPluginCredentialLocator } from './credentialAuthorization';
@@ -66,28 +71,55 @@ function assertLocator(locator: ExistingPluginCredentialLocator): void {
   }
 }
 
+function isDeepgramLocator(locator: ExistingPluginCredentialLocator): boolean {
+  return locator.pluginId === 'deepgram' && locator.fieldId === 'api_key';
+}
+
 /** @internal Imported only by trusted security composition and focused tests. */
 export function createExistingPluginCredentialAdapter(
   input: {
     readRaw?: RawCredentialReader;
     writeRaw?: RawCredentialWriter;
     deleteRaw?: RawCredentialDeleter;
+    readDeepgram?: () => Promise<string | undefined>;
+    writeDeepgram?: (value: string) => Promise<boolean>;
+    deleteDeepgram?: () => Promise<boolean>;
   } = {},
 ): ExistingPluginCredentialAdapter {
   const read = input.readRaw ?? readRaw;
   const write = input.writeRaw ?? writeRaw;
   const remove = input.deleteRaw ?? deleteRaw;
+  const readDeepgram = input.readDeepgram ?? getDeepgramApiKey;
+  const writeDeepgram =
+    input.writeDeepgram ??
+    (async (value) => (await saveDeepgramCredential(value)).health === 'connected');
+  const deleteDeepgram =
+    input.deleteDeepgram ??
+    (async () => (await removeDeepgramCredential()).health === 'missing');
   return Object.freeze({
     async readExistingCredential(locator: ExistingPluginCredentialLocator) {
       assertLocator(locator);
+      if (isDeepgramLocator(locator)) return await readDeepgram();
       return await read(locator.pluginId, locator.fieldId);
     },
     async writeExistingCredential(locator: ExistingPluginCredentialLocator, value: string) {
       assertLocator(locator);
+      if (isDeepgramLocator(locator)) {
+        if (!(await writeDeepgram(value))) {
+          throw new Error('Deepgram credential validation or secure storage failed.');
+        }
+        return;
+      }
       await write(locator.pluginId, locator.fieldId, value);
     },
     async deleteExistingCredential(locator: ExistingPluginCredentialLocator) {
       assertLocator(locator);
+      if (isDeepgramLocator(locator)) {
+        if (!(await deleteDeepgram())) {
+          throw new Error('Deepgram credential removal failed.');
+        }
+        return;
+      }
       await remove(locator.pluginId, locator.fieldId);
     },
   });

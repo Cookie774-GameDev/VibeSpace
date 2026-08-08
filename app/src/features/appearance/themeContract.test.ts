@@ -12,34 +12,78 @@ import {
 import type { ResolvedDocumentTheme, SelectableTheme } from './themeContract';
 
 describe('canonical theme contract', () => {
-  it('exposes the exact selectable theme order', () => {
+  it('preserves the complete theme catalog for future releases', () => {
     expect(SELECTABLE_THEME_IDS).toEqual([
       'jarvis',
       'vibespace',
       'default',
       'monochrome',
       'sakura',
+      'warm',
+      'origami',
     ]);
     expectTypeOf<Parameters<typeof resolveDocumentTheme>[0]>().toEqualTypeOf<SelectableTheme>();
     expectTypeOf<ReturnType<typeof resolveDocumentTheme>>().toEqualTypeOf<ResolvedDocumentTheme>();
   });
 
-  it('publishes Sakura with its exact product copy as the fifth opt-in theme', () => {
-    expect(THEME_DEFINITIONS.at(-1)).toEqual({
+  it('preserves VibeSpace metadata while deferring it from this release', () => {
+    expect(THEME_DEFINITIONS.at(1)).toEqual({
+      id: 'vibespace',
+      label: 'VibeSpace',
+      description: 'Pastel origami workspace.',
+    });
+    expect(parseSelectableTheme('vibespace')).toBeNull();
+    expect(normalizePersistedTheme('vibespace')).toBe('default');
+  });
+
+  it('preserves Sakura metadata while deferring it from this release', () => {
+    expect(THEME_DEFINITIONS.at(4)).toEqual({
       id: 'sakura',
       label: 'Sakura',
       description: 'Cel-painted dusk workspace.',
     });
-    expect(normalizePersistedTheme('sakura')).toBe('sakura');
+    expect(parseSelectableTheme('sakura')).toBeNull();
+    expect(normalizePersistedTheme('sakura')).toBe('default');
     expect(normalizePersistedTheme('dusk')).toBe('default');
   });
 
-  it('parses only canonical selectable theme identifiers', () => {
-    for (const theme of SELECTABLE_THEME_IDS) {
+  it('publishes Warm as the owner-approved paper workspace theme', () => {
+    expect(THEME_DEFINITIONS.at(-2)).toEqual({
+      id: 'warm',
+      label: 'Warm',
+      description: 'Espresso and ivory paper workspace.',
+    });
+    expect(normalizePersistedTheme('warm')).toBe('warm');
+  });
+
+  it('preserves Origami metadata while deferring it from this release', () => {
+    expect(THEME_DEFINITIONS.at(-1)).toEqual({
+      id: 'origami',
+      label: 'Origami',
+      description: 'Sculpted paper workspace in motion.',
+    });
+    expect(parseSelectableTheme('origami')).toBeNull();
+    expect(normalizePersistedTheme('origami')).toBe('default');
+  });
+
+  it('parses only themes enabled for the current release', () => {
+    for (const theme of ['jarvis', 'default', 'monochrome', 'warm'] as const) {
       expect(parseSelectableTheme(theme)).toBe(theme);
     }
 
-    for (const value of ['light', 'dark', 'system', 'mono', 'MONOCHROME', '', null, {}]) {
+    for (const value of [
+      'sakura',
+      'origami',
+      'vibespace',
+      'light',
+      'dark',
+      'system',
+      'mono',
+      'MONOCHROME',
+      '',
+      null,
+      {},
+    ]) {
       expect(parseSelectableTheme(value)).toBeNull();
     }
   });
@@ -62,23 +106,24 @@ describe('canonical theme contract', () => {
     expect(resolveDocumentTheme('default')).toBe('dark');
     expect(resolveDocumentTheme('monochrome')).toBe('monochrome');
     expect(resolveDocumentTheme('sakura')).toBe('sakura');
+    expect(resolveDocumentTheme('warm')).toBe('warm');
+    expect(resolveDocumentTheme('origami')).toBe('origami');
   });
 
   it('parses command aliases case-insensitively after trimming', () => {
     const aliases = {
       jarvis: 'jarvis',
       'jarvis core': 'jarvis',
+      'jarvis one': 'jarvis',
       core: 'jarvis',
-      vibespace: 'vibespace',
-      vibe: 'vibespace',
       default: 'default',
       dark: 'default',
       monochrome: 'monochrome',
       mono: 'monochrome',
       terminal: 'monochrome',
       light: 'monochrome',
-      sakura: 'sakura',
-      'sakura dusk': 'sakura',
+      warm: 'warm',
+      cozy: 'warm',
     } as const;
 
     expect(THEME_COMMAND_ALIASES).toEqual(aliases);
@@ -92,14 +137,26 @@ describe('canonical theme contract', () => {
     }
   });
 
-  it('accepts canonical sync messages plus the exact legacy light value', () => {
-    for (const theme of SELECTABLE_THEME_IDS) {
+  it('accepts release-enabled sync messages plus the exact legacy light value', () => {
+    for (const theme of ['jarvis', 'default', 'monochrome', 'warm'] as const) {
       expect(parseThemeSyncMessage(theme)).toBe(theme);
     }
 
     expect(parseThemeSyncMessage('light')).toBe('monochrome');
 
-    for (const value of ['dark', 'system', 'mono', 'terminal', 'MONOCHROME', '', null, {}]) {
+    for (const value of [
+      'sakura',
+      'origami',
+      'vibespace',
+      'dark',
+      'system',
+      'mono',
+      'terminal',
+      'MONOCHROME',
+      '',
+      null,
+      {},
+    ]) {
       expect(parseThemeSyncMessage(value)).toBeNull();
     }
   });

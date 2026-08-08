@@ -8,6 +8,7 @@ import {
   type WorkbenchDocument,
   type WorkbenchPanel,
   type WorkbenchPanelKind,
+  type WorkbenchPanelSettings,
   type WorkbenchTemplate,
   type WorkbenchView,
 } from './types';
@@ -42,7 +43,11 @@ interface WorkbenchState extends WorkbenchDocument {
   persistenceError: string | null;
   lastSavedFingerprint: string | null;
   lastKnownRevision: number;
-  addPanel: (kind: WorkbenchPanelKind, at?: { x: number; y: number }) => string | null;
+  addPanel: (
+    kind: WorkbenchPanelKind,
+    at?: { x: number; y: number },
+    settings?: WorkbenchPanelSettings,
+  ) => string | null;
   updatePanel: (
     id: string,
     patch: Partial<WorkbenchPanel>,
@@ -123,6 +128,7 @@ export function createDefaultWorkbenchDocument(): WorkbenchDocument {
       paused: false,
       interactive: true,
       intensity: 0.72,
+      brightness: 0.5,
       quality: 'balanced',
     },
     customTemplates: [],
@@ -167,7 +173,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     };
   },
 
-  addPanel: (kind, at) => {
+  addPanel: (kind, at, initialSettings) => {
     if (get().panels.length >= MAX_WORKBENCH_PANELS) {
       set({ persistenceError: `Panel limit reached (${MAX_WORKBENCH_PANELS}).` });
       return null;
@@ -187,7 +193,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         z: maxZ + 1,
         minimized: false,
         status: 'idle',
-        settings:
+        settings: {
+          ...(
           kind === 'browser'
             ? { url: 'https://developer.mozilla.org' }
             : kind === 'files'
@@ -195,8 +202,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
               : kind === 'jarvis'
                 ? { route: 'chat' }
                 : kind === 'editor'
-                  ? { note: '', previewEnabled: false }
-                  : {},
+                ? { note: '', previewEnabled: false }
+                  : {}),
+          ...initialSettings,
+        },
       };
       return historyUpdate(state, { panels: [...state.panels, panel], selectedIds: [id] });
     });
@@ -342,6 +351,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         ...state.wallpaper,
         ...patch,
         intensity: Math.max(0, Math.min(1, patch.intensity ?? state.wallpaper.intensity)),
+        brightness: Math.max(0, Math.min(1, patch.brightness ?? state.wallpaper.brightness)),
       },
       updatedAt: Date.now(),
     })),

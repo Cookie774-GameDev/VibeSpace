@@ -59,7 +59,15 @@ export type PluginManifest = {
   httpTest?: PluginHttpTest;
 };
 
-export type PluginConnectionState = 'connected' | 'not_connected' | 'needs_setup' | 'error';
+export type PluginConnectionState =
+  | 'connected'
+  | 'not_connected'
+  | 'needs_setup'
+  | 'connecting'
+  | 'awaiting_approval'
+  | 'reauthorize'
+  | 'expired'
+  | 'error';
 
 export type PluginConnection = {
   accountId: string;

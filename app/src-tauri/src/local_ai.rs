@@ -145,7 +145,12 @@ fn ollama_cli_candidates() -> Vec<PathBuf> {
         push(PathBuf::from("/usr/local/bin/ollama"));
         push(PathBuf::from("/opt/homebrew/bin/ollama"));
         if let Some(home) = std::env::var_os("HOME") {
-            push(PathBuf::from(home).join(".ollama").join("bin").join("ollama"));
+            push(
+                PathBuf::from(home)
+                    .join(".ollama")
+                    .join("bin")
+                    .join("ollama"),
+            );
         }
     }
 
@@ -154,7 +159,12 @@ fn ollama_cli_candidates() -> Vec<PathBuf> {
         push(PathBuf::from("/usr/bin/ollama"));
         push(PathBuf::from("/usr/local/bin/ollama"));
         if let Some(home) = std::env::var_os("HOME") {
-            push(PathBuf::from(home).join(".ollama").join("bin").join("ollama"));
+            push(
+                PathBuf::from(home)
+                    .join(".ollama")
+                    .join("bin")
+                    .join("ollama"),
+            );
         }
     }
 
@@ -433,7 +443,10 @@ fn clear_serve_child_if_dead() {
     }
 }
 
-fn ensure_ollama_ready_internal(base_url: Option<String>) -> OllamaEnsureResult {
+fn ensure_ollama_ready_internal(
+    base_url: Option<String>,
+    allow_install: bool,
+) -> OllamaEnsureResult {
     let base = normalize_base_url(base_url);
 
     if !is_allowed_local_endpoint(&base) {
@@ -486,6 +499,18 @@ fn ensure_ollama_ready_internal(base_url: Option<String>) -> OllamaEnsureResult 
     let (executable, version) = match find_ollama_cli() {
         Ok(found) => found,
         Err(initial_detail) => {
+            if !allow_install {
+                return OllamaEnsureResult {
+                    ready: false,
+                    api_reachable: false,
+                    installed: false,
+                    version: None,
+                    phase: "not_installed".to_string(),
+                    detail: Some(format!(
+                        "{initial_detail} Installation requires explicit user consent."
+                    )),
+                };
+            }
             if let Err(install_err) = install_ollama_silent() {
                 return OllamaEnsureResult {
                     ready: false,
@@ -635,7 +660,10 @@ pub fn is_ollama_running() -> OllamaRunningStatus {
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                let pids: Vec<u32> = stdout.lines().filter_map(|l| l.trim().parse().ok()).collect();
+                let pids: Vec<u32> = stdout
+                    .lines()
+                    .filter_map(|l| l.trim().parse().ok())
+                    .collect();
                 // Compute before the struct literal: `pids` is moved into the
                 // `pids` field, so later fields can't borrow it (E0382).
                 let detail = if api_reachable {
@@ -684,13 +712,15 @@ pub fn ollama_installation_status() -> OllamaInstallationStatus {
 /// Never launches the Ollama desktop GUI.
 #[tauri::command]
 pub async fn ollama_start() -> Result<(), String> {
-    let result = match tauri::async_runtime::spawn_blocking(|| ensure_ollama_ready_internal(None)).await
-    {
-        Ok(result) => result,
-        Err(err) => {
-            return Err(format!("Ollama startup task failed: {err}"));
-        }
-    };
+    let result =
+        match tauri::async_runtime::spawn_blocking(|| ensure_ollama_ready_internal(None, false))
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                return Err(format!("Ollama startup task failed: {err}"));
+            }
+        };
     if result.ready {
         Ok(())
     } else {
@@ -704,7 +734,10 @@ pub async fn ollama_start() -> Result<(), String> {
 /// and wait until `/api/version` responds.
 #[tauri::command]
 pub async fn ensure_ollama_ready(base_url: Option<String>) -> OllamaEnsureResult {
-    match tauri::async_runtime::spawn_blocking(move || ensure_ollama_ready_internal(base_url)).await
+    match tauri::async_runtime::spawn_blocking(move || {
+        ensure_ollama_ready_internal(base_url, false)
+    })
+    .await
     {
         Ok(result) => result,
         Err(err) => OllamaEnsureResult {
@@ -714,6 +747,25 @@ pub async fn ensure_ollama_ready(base_url: Option<String>) -> OllamaEnsureResult
             version: None,
             phase: "error".to_string(),
             detail: Some(format!("Ollama setup task failed: {err}")),
+        },
+    }
+}
+
+/// Installs Ollama only after the renderer has presented and recorded an
+/// explicit user consent action, then starts and health-checks the local API.
+#[tauri::command]
+pub async fn install_ollama_with_consent(base_url: Option<String>) -> OllamaEnsureResult {
+    match tauri::async_runtime::spawn_blocking(move || ensure_ollama_ready_internal(base_url, true))
+        .await
+    {
+        Ok(result) => result,
+        Err(err) => OllamaEnsureResult {
+            ready: false,
+            api_reachable: false,
+            installed: false,
+            version: None,
+            phase: "error".to_string(),
+            detail: Some(format!("Ollama installation task failed: {err}")),
         },
     }
 }
@@ -730,7 +782,11 @@ pub fn open_ollama_troubleshooting() -> Result<(), String> {
             candidates.push(root.join("Ollama").join("ollama app.exe"));
         }
         if let Some(program_files) = std::env::var_os("ProgramFiles") {
-            candidates.push(PathBuf::from(program_files).join("Ollama").join("ollama app.exe"));
+            candidates.push(
+                PathBuf::from(program_files)
+                    .join("Ollama")
+                    .join("ollama app.exe"),
+            );
         }
 
         for app_exe in candidates {

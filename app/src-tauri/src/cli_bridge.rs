@@ -14,8 +14,19 @@ const MIN_TIMEOUT_MS: u64 = 100;
 const MAX_TIMEOUT_MS: u64 = 300_000;
 const MIN_OUTPUT_LIMIT_BYTES: usize = 1_024;
 const MAX_OUTPUT_LIMIT_BYTES: usize = 1_048_576;
-const PROVIDER_EXECUTABLE_NAMES: [&str; 6] =
-    ["codex", "claude", "gemini", "copilot", "qwen", "opencode"];
+const PROVIDER_EXECUTABLE_NAMES: [&str; 11] = [
+    "codex",
+    "claude",
+    "gemini",
+    "copilot",
+    "qwen",
+    "opencode",
+    "cursor-agent",
+    "cline",
+    "aider",
+    "goose",
+    "openai",
+];
 const KERNEL_SMOKE_EXECUTABLE_NAME: &str = "vibespace_kernel_smoke_cli";
 static NEXT_EXECUTABLE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1801,7 +1812,19 @@ mod tests {
 
     #[test]
     fn cli_bridge_accepts_safe_executable_names_and_rejects_unsafe_names() {
-        for name in ["codex", "claude", "gemini", "copilot", "qwen", "opencode"] {
+        for name in [
+            "codex",
+            "claude",
+            "gemini",
+            "copilot",
+            "qwen",
+            "opencode",
+            "cursor-agent",
+            "cline",
+            "aider",
+            "goose",
+            "openai",
+        ] {
             assert!(validate_executable_name(name).is_ok(), "rejected {name:?}");
         }
 

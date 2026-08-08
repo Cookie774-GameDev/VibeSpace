@@ -54,6 +54,10 @@ export type TerminalCommand =
       id: string;
       /** Shell command line to run in the new pane. */
       command: string;
+      /** Ordered commands written after the fresh shell is ready. */
+      startupCommands?: string[];
+      /** Refuse to evict any existing project terminal at native capacity. */
+      preserveExisting?: boolean;
       /** Optional friendly label shown on the pane chrome. */
       label?: string;
       /**
@@ -314,7 +318,15 @@ export const useTerminalCommandQueue = create<TerminalCommandQueueState>((set, g
   queue: [],
   enqueue: (cmd) => {
     const id = newId('tcmd');
-    const next: TerminalCommand = { kind: 'shell', id, ...cmd };
+    const next: TerminalCommand = {
+      kind: 'shell',
+      id,
+      ...cmd,
+      ...(cmd.startupCommands === undefined
+        ? {}
+        : { startupCommands: cmd.startupCommands.slice(0, 3) }),
+      ...(cmd.preserveExisting ? { preserveExisting: true } : {}),
+    };
     set((s) => ({ queue: [...s.queue, next] }));
     return id;
   },
@@ -336,6 +348,10 @@ export const useTerminalCommandQueue = create<TerminalCommandQueueState>((set, g
       kind: 'shell',
       id: executionId,
       command: cmd.command,
+      ...(cmd.startupCommands === undefined
+        ? {}
+        : { startupCommands: cmd.startupCommands.slice(0, 3) }),
+      ...(cmd.preserveExisting ? { preserveExisting: true } : {}),
       ...(cmd.label === undefined ? {} : { label: cmd.label }),
       ...(cmd.agentSlug === undefined ? {} : { agentSlug: cmd.agentSlug }),
       ...(cmd.cwd === undefined ? {} : { cwd: cmd.cwd }),

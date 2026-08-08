@@ -13,6 +13,7 @@ import {
   systemPromptForRequest,
 } from '../types';
 import { parseSSE } from './sse';
+import { sanitizeReasoningProviderOptions } from '../reasoningControls';
 
 export interface OpenAICompatibleConfig {
   id: ProviderId;
@@ -59,6 +60,10 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
       if (!apiKey?.trim()) throw new Error(`${cfg.name} API key not set`);
 
       const model = req.agent.model.model || cfg.defaultModel;
+      const reasoning = sanitizeReasoningProviderOptions(
+        { providerId: cfg.id, modelId: model },
+        req.provider_options,
+      );
       const systemPrompt = systemPromptForRequest(req);
       const messages = [
         { role: 'system' as const, content: systemPrompt },
@@ -77,6 +82,7 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
         stream_options: { include_usage: true },
         temperature: req.temperature ?? req.agent.temperature ?? 0.7,
         max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
+        ...reasoning,
       };
 
       const headers: Record<string, string> = {

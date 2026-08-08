@@ -6,12 +6,26 @@ import type { PluginConnection, PluginConnectionsByAccount } from './types';
 
 export const PLUGIN_CONNECTIONS_SYNC_TABLE = 'plugin_connections';
 const EMPTY_PLUGIN_CONNECTIONS: Readonly<Record<string, PluginConnection>> = Object.freeze({});
+const EMPTY_PINNED_PLUGIN_IDS: readonly string[] = Object.freeze([]);
+const MAX_PINNED_PLUGINS = 10;
 
 export interface PluginStore {
   connectionsByAccount: PluginConnectionsByAccount;
+  pinnedPluginIdsByAccount: Record<string, string[]>;
   upsertConnection(connection: PluginConnection): void;
   removeConnection(accountId: string, pluginId: string): void;
   setEnabled(accountId: string, pluginId: string, enabled: boolean): void;
+  pinPlugin(accountId: string, pluginId: string): boolean;
+  unpinPlugin(accountId: string, pluginId: string): void;
+  movePinnedPlugin(accountId: string, pluginId: string, offset: -1 | 1): void;
+}
+
+export function selectPinnedPluginIdsForAccount(
+  state: Pick<PluginStore, 'pinnedPluginIdsByAccount'>,
+  accountId: string,
+): readonly string[] {
+  if (!accountId || accountId.trim() !== accountId) return EMPTY_PINNED_PLUGIN_IDS;
+  return state.pinnedPluginIdsByAccount[accountId] ?? EMPTY_PINNED_PLUGIN_IDS;
 }
 
 function exactId(value: string, label: string): string {
@@ -75,6 +89,23 @@ function persistedConnectionsByAccount(value: unknown): PluginConnectionsByAccou
   return result;
 }
 
+function persistedPinnedPluginIdsByAccount(value: unknown): Record<string, string[]> {
+  if (!isRecord(value) || !isRecord(value.pinnedPluginIdsByAccount)) return {};
+  const result: Record<string, string[]> = {};
+  for (const [accountId, rawIds] of Object.entries(value.pinnedPluginIdsByAccount)) {
+    if (!accountId || accountId.trim() !== accountId || !Array.isArray(rawIds)) continue;
+    const ids = [
+      ...new Set(
+        rawIds.filter(
+          (id): id is string => typeof id === 'string' && id.length > 0 && id.trim() === id,
+        ),
+      ),
+    ].slice(0, MAX_PINNED_PLUGINS);
+    if (ids.length > 0) result[accountId] = ids;
+  }
+  return result;
+}
+
 function mayQueueForAccount(owner: SyncQueueOwnerSnapshot, accountId: string): boolean {
   return owner.state !== 'cloud' || owner.userId === accountId;
 }
@@ -108,6 +139,7 @@ export const usePluginStore = create<PluginStore>()(
   persist(
     (set, get) => ({
       connectionsByAccount: {},
+      pinnedPluginIdsByAccount: {},
       upsertConnection: (connection) => {
         exactId(connection.accountId, 'Account ID');
         exactId(connection.pluginId, 'Plugin ID');
@@ -157,18 +189,67 @@ export const usePluginStore = create<PluginStore>()(
         }));
         queueConnection(updated, 'update', captureSyncQueueOwner());
       },
+      pinPlugin: (accountId, pluginId) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        const current = selectPinnedPluginIdsForAccount(get(), accountId);
+        if (current.includes(pluginId)) return true;
+        if (current.length >= MAX_PINNED_PLUGINS) return false;
+        set((state) => ({
+          pinnedPluginIdsByAccount: {
+            ...state.pinnedPluginIdsByAccount,
+            [accountId]: [...selectPinnedPluginIdsForAccount(state, accountId), pluginId],
+          },
+        }));
+        return true;
+      },
+      unpinPlugin: (accountId, pluginId) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        set((state) => {
+          const next = selectPinnedPluginIdsForAccount(state, accountId).filter(
+            (id) => id !== pluginId,
+          );
+          const pinnedPluginIdsByAccount = { ...state.pinnedPluginIdsByAccount };
+          if (next.length > 0) pinnedPluginIdsByAccount[accountId] = next;
+          else delete pinnedPluginIdsByAccount[accountId];
+          return { pinnedPluginIdsByAccount };
+        });
+      },
+      movePinnedPlugin: (accountId, pluginId, offset) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        set((state) => {
+          const current = [...selectPinnedPluginIdsForAccount(state, accountId)];
+          const from = current.indexOf(pluginId);
+          const to = Math.max(0, Math.min(current.length - 1, from + offset));
+          if (from < 0 || from === to) return state;
+          [current[from], current[to]] = [current[to]!, current[from]!];
+          return {
+            pinnedPluginIdsByAccount: {
+              ...state.pinnedPluginIdsByAccount,
+              [accountId]: current,
+            },
+          };
+        });
+      },
     }),
     {
       name: 'jarvis-plugin-connections-v2',
       storage: createJSONStorage(() => safeLocalStorage),
-      partialize: (state) => ({ connectionsByAccount: state.connectionsByAccount }),
-      version: 2,
+      partialize: (state) => ({
+        connectionsByAccount: state.connectionsByAccount,
+        pinnedPluginIdsByAccount: state.pinnedPluginIdsByAccount,
+      }),
+      version: 3,
       migrate: (persistedState) => ({
         connectionsByAccount: persistedConnectionsByAccount(persistedState),
+        pinnedPluginIdsByAccount: persistedPinnedPluginIdsByAccount(persistedState),
       }),
       merge: (persistedState, currentState) => ({
         ...currentState,
         connectionsByAccount: persistedConnectionsByAccount(persistedState),
+        pinnedPluginIdsByAccount: persistedPinnedPluginIdsByAccount(persistedState),
       }),
     },
   ),

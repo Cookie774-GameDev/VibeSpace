@@ -1392,7 +1392,7 @@ describe('product-owned MonoChrome fixture readiness', () => {
     await waitFor(() => {
       expect(document.querySelector('#settings-tab-admin')).toBeNull();
       expect((document.querySelector('#settings-panel-admin') as HTMLElement).hidden).toBe(true);
-      expect(document.querySelector('#settings-tab-account')?.getAttribute('aria-selected')).toBe(
+      expect(document.querySelector('#settings-tab-plans')?.getAttribute('aria-selected')).toBe(
         'true',
       );
     });

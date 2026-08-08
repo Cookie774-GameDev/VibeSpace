@@ -37,7 +37,7 @@ describe('useAccessibleChatModels', () => {
     isConnectionSessionChecked.mockReset();
     isConnectionSessionChecked.mockReturnValue(false);
     syncDiscoveredOllamaModels([]);
-    useAuthStore.setState({ defaultLocalModel: '', apiKeys: {} });
+    useAuthStore.setState({ defaultLocalModel: '', apiKeys: {}, offlineMode: false, plan: 'free' });
   });
 
   it('includes discovered Ollama models in picker groups', () => {
@@ -60,11 +60,36 @@ describe('useAccessibleChatModels', () => {
     const { result, rerender } = renderHook(() => useAccessibleChatModels());
     expect(result.current.hasAny).toBe(false);
 
-    syncDiscoveredOllamaModels(['llama3.2']);
-    rerender();
+    act(() => {
+      syncDiscoveredOllamaModels(['llama3.2']);
+      rerender();
+    });
 
     expect(result.current.hasAny).toBe(true);
     expect(result.current.flatOptions[0]?.modelId).toBe('llama3.2');
+  });
+
+  it('removes every cloud and external connection from Fully Local Chat', () => {
+    syncDiscoveredOllamaModels(['qwen3.5:4b']);
+    writeConnectionPickerStates({
+      'openai-api': { available: true, auth: 'authenticated' },
+    });
+    useAuthStore.setState({
+      offlineMode: true,
+      defaultLocalModel: 'qwen3.5:4b',
+      apiKeys: { openai: 'test-key' },
+    });
+
+    const { result } = renderHook(() => useAccessibleChatModels());
+
+    expect(result.current.groups).toHaveLength(1);
+    expect(result.current.groups[0]?.options).toEqual([
+      expect.objectContaining({
+        provider: 'ollama',
+        modelId: 'qwen3.5:4b',
+        connectionId: 'ollama-local',
+      }),
+    ]);
   });
 
   it('groups exact connections by provider family with mode and availability labels', () => {

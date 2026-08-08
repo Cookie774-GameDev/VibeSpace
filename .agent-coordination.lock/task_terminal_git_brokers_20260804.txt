@@ -1,0 +1,12 @@
+task_id=VS-PR31-MG2-TERMINAL-GIT-BROKERS-20260804
+controller=/root/browser_live_integration
+parent_session_id=active-root-session
+acquired_at=2026-08-04T01:18:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Implement strict provider-neutral Terminal and Git capability brokers and the coding-run focused-test bridge using injected native execution ports, without touching protected Rust or exposing raw shell authority.
+owned_paths=app/src/lib/jarvis/nativeTerminalGitCapabilityBroker.ts;app/src/lib/jarvis/nativeTerminalGitCapabilityBroker.test.ts;app/src/lib/jarvis/codingRunCommandAdapter.ts;app/src/lib/jarvis/codingRunCommandAdapter.test.ts;app/src/lib/jarvis/nativeCapabilityAdapters.ts;app/src/lib/jarvis/nativeCapabilityAdapters.test.ts
+exclusions=all other files;all Rust;all unrelated dirty hunks;all Git staging/commit/push/branch operations;all direct process execution;all external systems;Computer Control
+verification=add only focused deterministic tests required by changed behavior;do not run tests,typecheck,build,format,or review commands;self-review once and hand off
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

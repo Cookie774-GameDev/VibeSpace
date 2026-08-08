@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
   JARVIS_CREATOR_APPLY_SKILL_EVENT,
@@ -53,7 +53,9 @@ describe('SkillEditor Jarvis creator integration', () => {
       emoji: '✨',
     };
 
-    window.dispatchEvent(new CustomEvent(JARVIS_CREATOR_APPLY_SKILL_EVENT, { detail: draft }));
+    act(() => {
+      window.dispatchEvent(new CustomEvent(JARVIS_CREATOR_APPLY_SKILL_EVENT, { detail: draft }));
+    });
 
     await waitFor(() => expect(screen.getByPlaceholderText('Skill name')).toHaveProperty('value', 'Polish Writer'));
     expect(screen.getByPlaceholderText('Short description for /skills picker')).toHaveProperty('value', 'Makes rough copy crisp.');

@@ -83,13 +83,17 @@ describe('SchedulePage Jarvis Action model picker', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Jarvis Action$/i }));
     expect(screen.queryByLabelText('All day')).toBeNull();
     expect(screen.queryByText('Reminders')).toBeNull();
-    fireEvent.change(screen.getByLabelText('Jarvis action model'), {
-      target: { value: 'google:gemini-2.5-flash' },
-    });
-    fireEvent.change(screen.getByLabelText('Jarvis action title'), {
+    // Redundant natural-language "schedule request" field is gone in Action mode.
+    expect(screen.queryByLabelText(/schedule request/i)).toBeNull();
+    fireEvent.click(screen.getByLabelText(/action model/i));
+    // Prefer non-Lite Flash when multiple Gemini 2.5 Flash options appear.
+    const flashOptions = screen.getAllByRole('option', { name: /Gemini 2\.5 Flash/i });
+    const nonLite = flashOptions.find((el) => !/Lite/i.test(el.textContent ?? ''));
+    fireEvent.click(nonLite ?? flashOptions[0]!);
+    fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review release notes' },
     });
-    fireEvent.change(screen.getByLabelText('System prompt'), {
+    fireEvent.change(screen.getByLabelText(/instruction/i), {
       target: { value: 'Review the release notes before publishing.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Save Jarvis Action/i }));
@@ -139,10 +143,10 @@ describe('SchedulePage Jarvis Action model picker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Jarvis Action$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Daily$/i }));
-    fireEvent.change(screen.getByLabelText('Jarvis action title'), {
+    fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Football news' },
     });
-    fireEvent.change(screen.getByLabelText('System prompt'), {
+    fireEvent.change(screen.getByLabelText(/instruction/i), {
       target: { value: 'Give me the top football headlines.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Save Jarvis Action/i }));

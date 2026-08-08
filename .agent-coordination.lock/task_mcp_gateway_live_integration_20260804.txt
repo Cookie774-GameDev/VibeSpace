@@ -1,0 +1,13 @@
+task_id=VS-PR31-MG2-MCP-GATEWAY-LIVE-INTEGRATION-20260804
+controller=/root
+delegate=/root/mcp_gateway_integration
+parent_session_id=active-root-session-20260804
+acquired_at=2026-08-04T00:45:00-05:00
+worktree=C:\Users\viper\VibeSpace\.worktrees\pr30-fixes-updates-20260802
+branch=agent/pr30-fixes-and-updates
+starting_head=fb72cdd91f011d5408a4e858308cb09768764912
+objective=Compose the existing MCP server manager, trusted remote setup, unified registry, and connection supervisor into one durable user-facing VibeSpace MCP Gateway with bounded lazy reconnect for unchanged approved profiles.
+owned_paths=app/src/lib/mcp/vibeSpaceGateway.ts;app/src/lib/mcp/vibeSpaceGateway.test.ts;app/src/lib/mcp/remoteSetupRuntime.ts;app/src/lib/mcp/remoteSetupRuntime.test.ts;app/src/lib/mcp/index.ts;app/src/features/settings/sections/McpConnections.tsx;app/src/features/settings/sections/McpConnections.test.tsx
+exclusions=all other files;all unrelated dirty work;credentials;new process launch authority;unapproved servers;schema expansion without approval;external service mutations;Computer Control;Git staging/commit/push/branch;coordination authority changes;process termination;nested delegation
+verification=add focused deterministic fixtures but do not run intermediate tests; final coordinator performs bounded final verification
+status=IMPLEMENTED_PENDING_FINAL_VERIFICATION

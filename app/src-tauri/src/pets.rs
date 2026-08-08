@@ -256,8 +256,8 @@ fn set_windows_startup_enabled(_enabled: bool) -> Result<bool, String> {
 #[serde(rename_all = "kebab-case")]
 pub enum PetPanelMode {
     FollowPet,
-    AlwaysOnTop,
     #[default]
+    AlwaysOnTop,
     Normal,
 }
 
@@ -518,8 +518,9 @@ fn get_or_create_pet_panel(app: &AppHandle) -> Result<WebviewWindow, String> {
     .resizable(true)
     .decorations(false)
     .transparent(false)
-    .always_on_top(false)
-    .skip_taskbar(false)
+    // Default topmost so panel stays above games/browsers until mode is applied.
+    .always_on_top(true)
+    .skip_taskbar(true)
     .visible(false)
     .focused(false)
     .build()
@@ -593,6 +594,8 @@ fn show_existing_pet_overlay(app: AppHandle, x: f64, y: f64) -> Result<(), Strin
     // Re-assert the exact pet surface size after visibility is applied.
     win.set_size(overlay_size)
         .map_err(|e| format!("failed to confirm pet-overlay size: {e}"))?;
+    // Second topmost pass — some hosts drop Z-order during the first show.
+    let _ = win.set_always_on_top(true);
     #[cfg(debug_assertions)]
     log_pet_window_metrics("after pet_show_overlay", &win);
     Ok(())
@@ -996,11 +999,11 @@ mod tests {
     }
 
     #[test]
-    fn panel_mode_defaults_to_normal_and_only_explicit_mode_is_topmost() {
-        assert_eq!(PetPanelMode::default(), PetPanelMode::Normal);
-        assert!(!panel_stays_on_top(PetPanelMode::Normal));
+    fn panel_mode_defaults_to_topmost_but_preserves_explicit_modes() {
+        assert_eq!(PetPanelMode::default(), PetPanelMode::AlwaysOnTop);
         assert!(!panel_stays_on_top(PetPanelMode::FollowPet));
         assert!(panel_stays_on_top(PetPanelMode::AlwaysOnTop));
+        assert!(!panel_stays_on_top(PetPanelMode::Normal));
     }
 
     #[test]
