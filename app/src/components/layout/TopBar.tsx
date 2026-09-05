@@ -79,6 +79,7 @@ const ROUTES: ReadonlyArray<Route> = [
   'history',
   'tools',
   'files',
+  'notes',
   'account',
 ];
 
@@ -102,6 +103,7 @@ const ROUTE_LABELS: Record<Route, string> = {
   history: 'History',
   tools: 'Tools',
   files: 'Files',
+  notes: 'Notes',
   account: 'Account',
 };
 

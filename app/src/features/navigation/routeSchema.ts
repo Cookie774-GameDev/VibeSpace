@@ -18,6 +18,7 @@ export const APP_ROUTES = [
   'history',
   'tools',
   'files',
+  'notes',
   'account',
 ] as const;
 

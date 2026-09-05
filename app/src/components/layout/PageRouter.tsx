@@ -196,6 +196,7 @@ const ToolsPage = React.lazy(() =>
     })),
 );
 
+const NotesPage = React.lazy(() => import('@/features/notes/NotesPage').then(m => ({ default: m.NotesPage })));
 const FilesPage = React.lazy(() =>
   import('@/features/files')
     .then((m) => ({ default: m.FilesPage }))
@@ -234,6 +235,7 @@ const routeMap: Record<Route, React.LazyExoticComponent<React.ComponentType>> = 
   history: HistoryPage,
   tools: ToolsPage,
   files: FilesPage,
+  notes: NotesPage,
   account: AccountPage,
 };
 

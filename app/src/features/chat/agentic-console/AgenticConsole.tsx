@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { NotesSessionReferences } from '../../notes/NotesSessionReferences';
+import { parseChatNoteReference } from '../../notes/notesChatReferences';
 import {
   AlertCircle,
   Bot,
@@ -181,6 +183,7 @@ function HeaderProgressSlot({
 
 function SessionHeader({
   chatId,
+  messages,
   summary,
   preferences,
   headerProgress,
@@ -192,6 +195,7 @@ function SessionHeader({
   onExport,
 }: {
   chatId: string;
+  messages: readonly Message[];
   summary: AgenticSessionSummary;
   preferences: ConsolePreferences;
   headerProgress?: React.ReactNode;
@@ -325,6 +329,7 @@ function SessionHeader({
                 <dd>{formatDuration(summary.durationMs)}</dd>
               </div>
             </dl>
+            <NotesSessionReferences messages={messages} />
             <label>
               <span>Console theme</span>
               <select
@@ -670,7 +675,9 @@ function BlockView({
   return (
     <div className="agentic-legacy" data-agentic-fallback="structured-message">
       <MessageBubble
-        message={block.message}
+        message={block.message.role === 'user'
+          ? { ...block.message, parts: block.message.parts.filter((part) => !parseChatNoteReference(part)) }
+          : block.message}
         compact={compact}
         creatorDraftKind={creatorDraftKind}
         showActivityLedger={false}
@@ -1276,6 +1283,7 @@ export function AgenticConsole({
     >
       <SessionHeader
         chatId={chatId}
+        messages={messages}
         summary={summary}
         preferences={preferences}
         headerProgress={headerProgress}

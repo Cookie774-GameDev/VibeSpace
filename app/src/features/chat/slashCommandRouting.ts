@@ -35,6 +35,7 @@ const ROUTES = {
   multitask: { owner: 'opencode-agent', execution: 'agent-request' },
   subagents: { owner: 'opencode-agent', execution: 'agent-request' },
   terminals: { owner: 'vibespace-context', execution: 'reference' },
+  notes: { owner: 'vibespace-context', execution: 'attachment' },
   context: { owner: 'vibespace-context', execution: 'attachment' },
   plug: { owner: 'vibespace-tool', execution: 'attachment' },
   skills: { owner: 'vibespace-context', execution: 'attachment' },

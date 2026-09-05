@@ -15,6 +15,7 @@ const expected = {
   multitask: ['opencode-agent', 'agent-request'],
   subagents: ['opencode-agent', 'agent-request'],
   terminals: ['vibespace-context', 'reference'],
+  notes: ['vibespace-context', 'attachment'],
   context: ['vibespace-context', 'attachment'],
   plug: ['vibespace-tool', 'attachment'],
   skills: ['vibespace-context', 'attachment'],

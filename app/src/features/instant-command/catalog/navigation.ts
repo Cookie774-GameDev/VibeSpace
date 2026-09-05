@@ -41,13 +41,14 @@ const ROUTE_ALIASES = {
   history: ['open history', 'open history page'],
   tools: ['open tools', 'open tools page'],
   files: ['open files', 'open files page'],
+  notes: ['open notes', 'open notes page', 'go to notes'],
   account: ['open account', 'open account page'],
 } as const satisfies Readonly<Record<Route, readonly string[]>>;
 
 export const PAGE_TARGET_ALIASES: Readonly<Record<Route, readonly string[]>> = Object.freeze(
   Object.fromEntries(
     APP_ROUTES.map((route) => {
-      const supportsTargetlessSlash = route !== 'agent-detail' && route !== 'project-detail';
+      const supportsTargetlessSlash = route !== 'agent-detail' && route !== 'project-detail' && route !== 'notes';
       return [
         route,
         Object.freeze([...ROUTE_ALIASES[route], ...(supportsTargetlessSlash ? [`/${route}`] : [])]),

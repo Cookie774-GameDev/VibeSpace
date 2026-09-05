@@ -20,6 +20,7 @@ export const SAKURA_ROUTE_INTENSITY = Object.freeze({
   history: 'quiet',
   tools: 'quiet',
   files: 'quiet',
+  notes: 'quiet',
   account: 'quiet',
 } as const satisfies Readonly<Record<string, SakuraRouteIntensity>>);
 

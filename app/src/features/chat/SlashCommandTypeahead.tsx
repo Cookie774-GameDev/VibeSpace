@@ -69,6 +69,7 @@ export function normalizeSlashCmd(raw: string): string {
 }
 
 export const CHAT_ATTACH_SLASH_CMDS = new Set([
+  'notes',
   'context',
   'plug',
   'skills',
@@ -184,6 +185,12 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     aliases: ['terminal'],
     description: 'Reference the terminal surface in chat',
     icon: Terminal,
+    category: 'chat',
+  },
+  {
+    cmd: 'notes',
+    description: 'Select several project notes to attach',
+    icon: FileText,
     category: 'chat',
   },
   {

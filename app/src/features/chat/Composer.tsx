@@ -1,4 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { NotesPicker, type NotesPickerHandle } from '../notes/NotesPicker';
+import {
+  useNoteScope,
+  useNotesWorkspace,
+  currentNoteScope,
+  getNotesWorkspace,
+  openNoteReference,
+} from '../notes/notesRuntime';
+import {
+  findNotesCommand,
+  removeNotesCommand,
+  mergeNoteReferences,
+  buildNoteContextAttachments,
+  verifyNotesContextCapacity,
+  type NotesCommandSpan,
+} from '../notes/notesReferences';
+import {
+  noteReference,
+  noteReferenceKey,
+  sameNoteScope,
+  type NoteReference,
+  type NoteSummary,
+} from '../notes/notesContracts';
+import {
+  checkpointNotesComposer,
+  notesComposerKey,
+  readNotesComposerDraft,
+} from '../notes/notesComposerDraft';
 import {
   Send,
   Play,
@@ -1259,7 +1287,65 @@ export function Composer({
   compact = false,
   disableRouteSlashCommands = false,
 }: ComposerProps) {
-  const [text, setText] = useState('');
+  const noteScope = useNoteScope();
+  const [text, setText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
+  const [notesCtx, setNotesCtx] = useState<NotesCommandSpan | null>(null);
+  const [attachedNotes, setAttachedNotes] = useState<NoteReference[]>(
+    () => readNotesComposerDraft(noteScope, String(chatId)).references,
+  );
+  const notesPickerRef = useRef<NotesPickerHandle>(null);
+  const dismissedNotesRef = useRef<string | null>(null);
+  const notesSendingRef = useRef(false);
+  const { workspace: notesWorkspace, snapshot: notesSnapshot } = useNotesWorkspace(
+    noteScope,
+    notesCtx !== null,
+  );
+  const notesDraftKey = notesComposerKey(noteScope, String(chatId));
+  const [notesDraftStateKey, setNotesDraftStateKey] = useState(notesDraftKey);
+  const notesScopeRef = useRef(notesDraftKey);
+  useEffect(() => {
+    if (notesScopeRef.current === notesDraftKey) return;
+    notesScopeRef.current = notesDraftKey;
+    const saved = readNotesComposerDraft(noteScope, String(chatId));
+    setAttachedNotes(saved.references);
+    setNotesCtx(null);
+    dismissedNotesRef.current = null;
+    setNotesDraftStateKey(notesDraftKey);
+    if (saved.references.length || attachedNotes.length) setText(saved.text);
+  }, [notesDraftKey]);
+  useEffect(() => {
+    if (notesDraftStateKey === notesDraftKey)
+      checkpointNotesComposer(noteScope, String(chatId), text, attachedNotes);
+  }, [notesDraftStateKey, notesDraftKey, text, attachedNotes]);
+  const attachedNotesRef = useRef(attachedNotes);
+  attachedNotesRef.current = attachedNotes;
+  const cancelNotes = () => {
+    dismissedNotesRef.current = text;
+    setNotesCtx(null);
+    setSlashCtx(null);
+  };
+  const confirmNotes = (notes: NoteSummary[]) => {
+    if (!notesCtx || !noteScope) return;
+    try {
+      const next = removeNotesCommand(text, notesCtx);
+      setAttachedNotes((current) =>
+        mergeNoteReferences(current, notes.map(noteReference), noteScope),
+      );
+      setText(next);
+      setNotesCtx(null);
+      setSlashCtx(null);
+      dismissedNotesRef.current = next;
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(notesCtx.start, notesCtx.start);
+      });
+    } catch (error) {
+      toast.error(
+        'Cannot attach notes',
+        error instanceof Error ? error.message : 'Reopen /notes and retry.',
+      );
+    }
+  };
   const textRef = useRef(text);
   textRef.current = text;
   const handoffDraftEditRevisionRef = useRef(0);
@@ -1495,6 +1581,13 @@ export function Composer({
   );
 
   const enqueueCurrentMessage = (draft: string, flushMode: QueueFlushMode = 'after-run') => {
+    if (attachedNotes.length) {
+      toast.warning(
+        'Notes are ready',
+        'Wait for this response to finish before sending note references.',
+      );
+      return false;
+    }
     const queued = createComposerQueuedMessage({
       draft,
       flushMode,
@@ -2192,7 +2285,21 @@ export function Composer({
   const recomputeSlash = () => {
     const ta = textareaRef.current;
     if (!ta) return;
-    setSlashCtx(getSlashContext(ta.value, ta.selectionStart));
+    const notes = findNotesCommand(ta.value, ta.selectionStart);
+    if (notes && dismissedNotesRef.current !== ta.value) {
+      setNotesCtx((current) =>
+        current?.start === notes.start &&
+        current?.end === notes.end &&
+        current?.query === notes.query
+          ? current
+          : notes,
+      );
+      setSlashCtx(null);
+      setMentionCtx(null);
+      return;
+    }
+    setNotesCtx(null);
+    setSlashCtx(notes ? null : getSlashContext(ta.value, ta.selectionStart));
   };
 
   const activateTokenBoss = (mode: ReasoningMode, remainingText = '') => {
@@ -2224,6 +2331,13 @@ export function Composer({
     const after = text.slice(ta.selectionStart);
 
     const canonicalCmd = normalizeSlashCmd(cmd.cmd);
+    if (canonicalCmd === 'notes') {
+      setText(before + '/notes' + after);
+      dismissedNotesRef.current = null;
+      setNotesCtx({ start: before.length, end: before.length + 6, query: '' });
+      setSlashCtx(null);
+      return;
+    }
 
     // Immediate local commands are actions, not decorative confirmed chips.
     // Selecting one with Enter runs locally and never reaches provider dispatch.
@@ -3458,6 +3572,14 @@ export function Composer({
       submittedVisibleHandoffKey?: string | null;
     } = {},
   ): Promise<boolean> => {
+    if (notesCtx || notesSendingRef.current) return false;
+    if (attachedNotes.length && jarvisRunning) {
+      toast.warning(
+        'Notes are ready',
+        'Wait for this response to finish before sending note references.',
+      );
+      return false;
+    }
     const draftText = overrideText ?? text;
     const directlySubmittedDraftEditRevision = handoffDraftEditRevisionRef.current;
     const directlySubmittedVisibleHandoffKey =
@@ -3481,6 +3603,7 @@ export function Composer({
         attachedTerminals.length === 0 &&
         attachedPlugins.length === 0 &&
         attachedContexts.length === 0 &&
+        attachedNotes.length === 0 &&
         !pendingHandoff &&
         !options.handoffPayload &&
         !hasConfirmedCommands &&
@@ -3526,6 +3649,7 @@ export function Composer({
       attachedTerminals.length === 0 &&
       attachedPlugins.length === 0 &&
       attachedContexts.length === 0 &&
+      attachedNotes.length === 0 &&
       !pendingHandoff &&
       !options.handoffPayload
     ) {
@@ -3771,6 +3895,28 @@ export function Composer({
     let nextAttachedTerminals = attachedTerminals;
     let nextAttachedPlugins = attachedPlugins;
     let nextAttachedContexts = attachedContexts;
+    if (attachedNotes.length) {
+      notesSendingRef.current = true;
+      try {
+        const scope = currentNoteScope();
+        if (!scope || attachedNotes.some((ref) => !sameNoteScope(ref, scope)))
+          throw new Error('Return to the referenced account/project or remove these note chips.');
+        const records = await getNotesWorkspace(scope).resolve(attachedNotes.map((ref) => ref.id));
+        const attachments = await buildNoteContextAttachments(records, scope);
+        nextAttachedContexts = [...nextAttachedContexts, ...attachments];
+        await verifyNotesContextCapacity(attachments, nextAttachedContexts, scope, sendText);
+        if (!currentNoteScope() || !sameNoteScope(currentNoteScope()!, scope))
+          throw new Error('The account or project changed. Your message has not been sent.');
+      } catch (error) {
+        toast.error(
+          'Cannot send notes',
+          error instanceof Error ? error.message : 'Open Notes, retry saving, then send again.',
+        );
+        return false;
+      } finally {
+        notesSendingRef.current = false;
+      }
+    }
     if (canvasAttachmentModes.length > 0) {
       const currentAuth = useAuthStore.getState();
       const accountId = resolveAccountIdentity(currentAuth)?.accountId ?? '';
@@ -3927,6 +4073,26 @@ export function Composer({
       const tokenOptimizationMode = browserTokenOptimizationPreferences.resolveMode(String(chatId));
       // UI keeps full videos; vision path only receives image/* (+ sampled frames).
       const visionAttachments = await visionAttachmentsForSend(attachedImages);
+      if (attachedNotes.length) {
+        const scope = currentNoteScope();
+        if (
+          !scope ||
+          attachedNotes.some((ref) => !sameNoteScope(ref, scope)) ||
+          attachedNotes.map(noteReferenceKey).join('\n') !==
+            attachedNotesRef.current.map(noteReferenceKey).join('\n') ||
+          (!overrideText && textRef.current !== draftText)
+        ) {
+          throw new Error(
+            'The note references, project, or draft changed while preparing this message. Review it and send again.',
+          );
+        }
+        await verifyNotesContextCapacity(
+          nextAttachedContexts.filter((context) => context.mapId.startsWith('notes:')),
+          nextAttachedContexts,
+          scope,
+          sendText,
+        );
+      }
       const persistUserMessage = () =>
         messageRepo.create({
           chat_id: chatId as ChatId,
@@ -4048,6 +4214,7 @@ export function Composer({
       setAttachedTerminals([]);
       setAttachedPlugins([]);
       setAttachedContexts([]);
+      setAttachedNotes([]);
       const currentVisibleHandoffKey = pendingHandoffRef.current
         ? composerChatHandoffDeliveryKey(
             buildComposerChatHandoffPayload({
@@ -4222,6 +4389,11 @@ export function Composer({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if (notesCtx) {
+      notesPickerRef.current?.keyDown(e);
+      return;
+    }
     playComposerKeySound(e.nativeEvent);
     // Mod+Enter always sends, regardless of any popover state
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -4874,14 +5046,13 @@ export function Composer({
     attachedTerminals.length > 0 ||
     attachedPlugins.length > 0 ||
     attachedContexts.length > 0 ||
+    attachedNotes.length > 0 ||
     confirmedCommands.length > 0 ||
     confirmedAgentMentions.length > 0 ||
     confirmedCatalogReferences.length > 0 ||
     pendingHandoff !== null;
   const canSend =
-    hasDraft &&
-    !sending &&
-    (!backendRuntimeBlocked || canAttemptSlashWhileBackendBlocked);
+    hasDraft && !sending && (!backendRuntimeBlocked || canAttemptSlashWhileBackendBlocked);
   const kernelSmokeHiveBound = KERNEL_SMOKE_ENABLED && isKernelSmokeBindingActive();
   const kernelSmokeHivePrepared =
     kernelSmokeHiveBound &&
@@ -5663,9 +5834,15 @@ export function Composer({
           />
         ) : null}
         <Popover
-          open={mentionCtx !== null || slashCtx !== null || optionPickerCtx !== null}
+          open={
+            notesCtx !== null ||
+            mentionCtx !== null ||
+            slashCtx !== null ||
+            optionPickerCtx !== null
+          }
           onOpenChange={(open) => {
             if (!open) {
+              if (notesCtx) cancelNotes();
               if (anyThemePickerActive) {
                 themePickerRef.current?.cancel();
                 return;
@@ -5773,6 +5950,38 @@ export function Composer({
                   });
                 }}
               />
+              {attachedNotes.length > 0 && (
+                <div className="vs-notes-chips" aria-label="Attached notes">
+                  {attachedNotes.map((note) => (
+                    <span key={noteReferenceKey(note)} className="vs-notes-chip">
+                      <button
+                        type="button"
+                        aria-label={`Open attached note: ${note.title}`}
+                        onClick={() => {
+                          try {
+                            openNoteReference(note);
+                          } catch (error) {
+                            toast.error('Cannot open note', String(error));
+                          }
+                        }}
+                      >
+                        {note.title}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove note reference: ${note.title}`}
+                        onClick={() =>
+                          setAttachedNotes((current) =>
+                            current.filter((n) => noteReferenceKey(n) !== noteReferenceKey(note)),
+                          )
+                        }
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
                 value={text}
@@ -6239,7 +6448,20 @@ export function Composer({
               }
             }}
           >
-            {themePickerActive && optionPickerCtx !== null ? (
+            {notesCtx ? (
+              <NotesPicker
+                ref={notesPickerRef}
+                notes={notesSnapshot.notes}
+                initialQuery={notesCtx.query}
+                onConfirm={confirmNotes}
+                onCancel={cancelNotes}
+                loading={notesSnapshot.loading}
+                error={notesSnapshot.error}
+                onRetry={() => {
+                  void notesWorkspace?.refresh().catch(() => undefined);
+                }}
+              />
+            ) : themePickerActive && optionPickerCtx !== null ? (
               <ThemeSlashPicker
                 ref={themePickerRef}
                 commandLabel={optionPickerCtx.cmd.cmd as 'appearance'}

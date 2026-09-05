@@ -24,6 +24,7 @@ describe('Sakura route intensity', () => {
       history: 'quiet',
       tools: 'quiet',
       files: 'quiet',
+      notes: 'quiet',
       account: 'quiet',
     };
 

@@ -405,6 +405,14 @@ export function NavPane() {
             route={route}
             setRoute={setRoute}
           />
+          <RouteItem
+            navOpen={navOpen}
+            label="Notes"
+            icon={<FileText className="h-3.5 w-3.5 text-muted-foreground" />}
+            target="notes"
+            route={route}
+            setRoute={setRoute}
+          />
         </NavSection>
 
         <NavSection
