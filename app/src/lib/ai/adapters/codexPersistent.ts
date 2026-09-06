@@ -55,6 +55,12 @@ export async function resolveCodexExecutable(
   dependencies: CodexExecutableResolverDependencies = defaultResolverDependencies,
 ): Promise<Readonly<{ executableId: string }> | DetectedExecutable | undefined> {
   try {
+    // Native launch revalidates the registered executable and seals OpenCodex.
+    // Repeating full managed discovery here adds cold-start work to every turn.
+    const ready = dependencies.manager.getSnapshot();
+    if (ready.kind === 'ready') {
+      return Object.freeze({ executableId: ready.executableId });
+    }
     await dependencies.manager.refresh();
     const managed = dependencies.manager.getSnapshot();
     if (managed.kind === 'ready') {

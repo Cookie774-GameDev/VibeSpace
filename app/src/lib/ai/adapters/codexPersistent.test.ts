@@ -133,7 +133,7 @@ describe('persistent Codex app-server adapter', () => {
     expect(stop).toHaveBeenCalledWith('cancelled-generation');
   });
 
-  it('refreshes and prefers the verified managed executable identity on every start', async () => {
+  it('reuses the ready managed identity and observes a later explicit refresh', async () => {
     let executableId = 'cli-executable-managed-1';
     const refresh = vi.fn(async () => {
       executableId = executableId.endsWith('-1')
@@ -155,12 +155,13 @@ describe('persistent Codex app-server adapter', () => {
     };
 
     await expect(resolveCodexExecutable({ manager, findSystem })).resolves.toEqual({
+      executableId: 'cli-executable-managed-1',
+    });
+    await manager.refresh();
+    await expect(resolveCodexExecutable({ manager, findSystem })).resolves.toEqual({
       executableId: 'cli-executable-managed-2',
     });
-    await expect(resolveCodexExecutable({ manager, findSystem })).resolves.toEqual({
-      executableId: 'cli-executable-managed-3',
-    });
-    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(findSystem).not.toHaveBeenCalled();
   });
 

@@ -28,6 +28,30 @@ function adapter(overrides: Partial<CodexRuntimeNativeAdapter> = {}): CodexRunti
 }
 
 describe('Codex runtime manager', () => {
+  it('shares detection across simultaneous startup requests', async () => {
+    const pending = deferred<Awaited<ReturnType<CodexRuntimeNativeAdapter['detect']>>>();
+    const native = adapter({ detect: vi.fn(() => pending.promise) });
+    const manager = createCodexRuntimeManager(native);
+    const first = manager.refresh();
+    const second = manager.refresh();
+    pending.resolve({ status: 'missing' });
+    await Promise.all([first, second]);
+    expect(native.detect).toHaveBeenCalledOnce();
+  });
+
+  it('keeps verified readiness visible while rechecking and still invalidates missing tools', async () => {
+    const pending = deferred<Awaited<ReturnType<CodexRuntimeNativeAdapter['detect']>>>();
+    const native = adapter();
+    const manager = createCodexRuntimeManager(native);
+    await manager.install();
+    vi.mocked(native.detect).mockReturnValue(pending.promise);
+    const refresh = manager.refresh();
+    expect(manager.getSnapshot().kind).toBe('ready');
+    pending.resolve({ status: 'missing' });
+    await refresh;
+    expect(manager.getSnapshot().kind).toBe('missing');
+  });
+
   it('detects missing tools on activation without silently installing', async () => {
     const native = adapter();
     const manager = createCodexRuntimeManager(native);

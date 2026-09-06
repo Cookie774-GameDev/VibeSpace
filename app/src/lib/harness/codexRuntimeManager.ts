@@ -103,6 +103,7 @@ export function createCodexRuntimeManager(
   let operation = 0;
   let unlisten: (() => void) | undefined;
   let installFlight: Promise<void> | undefined;
+  let refreshFlight: { operation: number; promise: Promise<void> } | undefined;
 
   const publish = (next: CodexRuntimeState) => {
     snapshot = next;
@@ -112,19 +113,30 @@ export function createCodexRuntimeManager(
     publish({ kind: 'failed', recoverable: true, message: bounded(error, fallback) });
   const apply = (detection: CodexRuntimeDetection) => publish(mapDetection(detection));
 
-  const refresh = async () => {
+  const refresh = (): Promise<void> => {
+    if (installFlight) return installFlight;
+    if (refreshFlight?.operation === operation) return refreshFlight.promise;
     const ticket = ++operation;
-    if (!native.available()) {
-      if (ticket === operation) publish({ kind: 'missing' });
-      return;
-    }
-    publish({ kind: 'checking' });
-    try {
-      const detection = await native.detect();
-      if (ticket === operation) apply(detection);
-    } catch (error) {
-      if (ticket === operation) fail(error, 'Managed Codex detection failed.');
-    }
+    const promise = (async () => {
+      if (!native.available()) {
+        if (ticket === operation) publish({ kind: 'missing' });
+        return;
+      }
+      if (snapshot.kind !== 'ready') publish({ kind: 'checking' });
+      try {
+        const detection = await native.detect();
+        if (ticket === operation) apply(detection);
+      } catch (error) {
+        if (ticket === operation) fail(error, 'Managed Codex detection failed.');
+      }
+    })();
+    const flight = { operation: ticket, promise };
+    refreshFlight = flight;
+    const clear = () => {
+      if (refreshFlight === flight) refreshFlight = undefined;
+    };
+    void promise.then(clear, clear);
+    return promise;
   };
 
   return {

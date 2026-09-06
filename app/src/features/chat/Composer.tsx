@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useChatBackendAffinity } from './useChatBackendAffinity';
 import { NotesPicker, type NotesPickerHandle } from '../notes/NotesPicker';
 import {
   useNoteScope,
@@ -382,9 +383,7 @@ import type {
 import { CODEX_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
 import {
   ChatBackendLockedError,
-  resolveChatBackendAffinity,
   type ChatBackend,
-  type ChatBackendAffinityV1,
 } from '@/lib/ai/backend/chatBackend';
 import {
   dexieChatBackendPersistence,
@@ -1633,9 +1632,7 @@ export function Composer({
   const [modelSelectionReadyChatId, setModelSelectionReadyChatId] = useState('');
   const [retainedExactChatSelection, setRetainedExactChatSelection] =
     useState<ExactChatSelection | null>(null);
-  const [chatBackendAffinity, setChatBackendAffinity] = useState<ChatBackendAffinityV1 | null>(
-    null,
-  );
+  const chatBackendAffinity = useChatBackendAffinity(String(chatId));
   const backendRuntimeBlocked =
     chatBackendAffinity?.backend === 'codex' ? codexRuntimeState.kind !== 'ready' : harnessBlocked;
   const chatModelSelection = useMemo(
@@ -1828,16 +1825,10 @@ export function Composer({
   useEffect(() => {
     let cancelled = false;
     setRetainedExactChatSelection(null);
-    setChatBackendAffinity(null);
     setModelSelectionReadyChatId('');
-    void Promise.all([chatRepo.getById(chatId as ChatId), messageRepo.listByChat(chatId as ChatId)])
-      .then(([chat, messages]) => {
+    void chatRepo.getById(chatId as ChatId)
+      .then((chat) => {
         if (cancelled || !chat) return;
-        const affinity = resolveChatBackendAffinity(chat.backend_affinity, {
-          hasCommittedUserMessage: messages.some((message) => message.role === 'user'),
-          chatCreatedAt: chat.created_at,
-        });
-        setChatBackendAffinity(affinity);
         if (!chat.connection) return;
         const current = useAuthStore.getState().chatModelSelection;
         const modelId =
@@ -1885,6 +1876,16 @@ export function Composer({
     setChatModelSelection,
   ]);
 
+  useEffect(() => {
+    if (
+      chatBackendAffinity?.locked &&
+      optionPickerCtx &&
+      normalizeSlashCmd(optionPickerCtx.cmd.cmd) === 'cli'
+    ) {
+      setOptionPickerCtx(null);
+    }
+  }, [chatBackendAffinity?.locked, optionPickerCtx]);
+
   // Generate options for option picker based on current command
   const optionPickerOptions = useMemo<SlashCommandOption[]>(() => {
     if (!optionPickerCtx) return [];
@@ -1896,33 +1897,19 @@ export function Composer({
     }
 
     if (normalizeSlashCmd(cmd) === 'cli') {
-      const locked = chatBackendAffinity?.locked === true;
+      if (!chatBackendAffinity || chatBackendAffinity.locked) return [];
       return [
         {
           id: 'opencode',
           label: 'OpenCode',
           description: 'Use the authenticated OpenCode backend for this chat',
-          metadata:
-            chatBackendAffinity?.backend === 'opencode'
-              ? locked
-                ? 'active · locked'
-                : 'active'
-              : locked
-                ? 'locked out'
-                : undefined,
+          metadata: chatBackendAffinity.backend === 'opencode' ? 'active' : undefined,
         },
         {
           id: 'codex',
           label: 'Codex',
           description: 'Use Codex CLI through the same selected provider and model',
-          metadata:
-            chatBackendAffinity?.backend === 'codex'
-              ? locked
-                ? 'active · locked'
-                : 'active'
-              : locked
-                ? 'locked out'
-                : undefined,
+          metadata: chatBackendAffinity.backend === 'codex' ? 'active' : undefined,
         },
       ];
     }
@@ -2494,7 +2481,6 @@ export function Composer({
         backend,
         Date.now(),
       );
-      setChatBackendAffinity(next);
       toast.info(
         `${backend === 'codex' ? 'Codex' : 'OpenCode'} selected`,
         next.locked
@@ -6199,7 +6185,7 @@ export function Composer({
                     'flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
                   )}
                 >
-                  {chatBackendAffinity && (
+                  {chatBackendAffinity && !chatBackendAffinity.locked && (
                     <Button
                       type="button"
                       size="sm"

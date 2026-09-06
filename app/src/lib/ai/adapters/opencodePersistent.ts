@@ -1616,10 +1616,13 @@ async function liveModels(
     async () => {
       const entry = await sessions.clientForScope(scope);
       const client = entry.client as PersistentOpenCodeClient;
-      const providerState = await client.http.providerState();
+      const [providerState, providers] = await Promise.all([
+        client.http.providerState(),
+        client.listProviders(),
+      ]);
       const connectedProviderIds = parseConnectedOpenCodeProviderIds(providerState);
       return filterOpenCodeModelsToConnectedProviders(
-        parseOpenCodeLiveModels(await client.listProviders()),
+        parseOpenCodeLiveModels(providers),
         connectedProviderIds,
       );
     },
