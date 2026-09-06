@@ -40,6 +40,19 @@ const LOCAL_APP_DATA = 'C:\\Users\\tester\\AppData\\Local';
 const PROFILE = `${LOCAL_APP_DATA}\\ai.jarvis.desktop\\EBWebView`;
 const tempDirectories = [];
 
+test('qualifies an explicit nested lane profile and rejects a different profile', () => {
+  const state = officialState({ cdpPort: 9224 });
+  const expectedProfile = `${PROFILE}\\EBWebView`;
+  for (const row of state.processes.slice(1)) {
+    row.CommandLine = row.CommandLine.replace(PROFILE, expectedProfile);
+  }
+  const options = { localAppData: LOCAL_APP_DATA, cdpPort: 9224, jarvisPid: 100, expectedProfile };
+  assert.equal(captureOfficialIdentity(state, options).profile, expectedProfile);
+  assert.throws(() => captureOfficialIdentity(state, { ...options, expectedProfile: PROFILE }));
+  assert.throws(() => captureOfficialIdentity(state, { ...options, jarvisPid: 101 }));
+  assert.throws(() => captureOfficialIdentity(state, { ...options, cdpPort: 9223 }));
+});
+
 afterEach(async () => {
   await Promise.all(
     tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),

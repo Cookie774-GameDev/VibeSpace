@@ -136,7 +136,7 @@ export function WorkbenchPage() {
     return () => {
       current = false;
     };
-  }, []);
+  }, [nativeAppPickerOpen]);
 
   React.useEffect(() => {
     artifactRequestGeneration.current += 1;

@@ -874,7 +874,7 @@ export function resolveOfficialNativeTarget(rawProcesses, options = {}) {
   const localAppData = String(options.localAppData ?? '');
   if (!localAppData) fail('local_app_data_unavailable', 'identity');
   const officialProfile = normalizeWindowsPath(
-    path.win32.join(localAppData, ...OFFICIAL_PROFILE_PARTS),
+    options.expectedProfile ?? path.win32.join(localAppData, ...OFFICIAL_PROFILE_PARTS),
   );
   const processes = (rawProcesses ?? [])
     .map(normalizeProcess)
@@ -1186,6 +1186,7 @@ export async function attachOfficialNative(options = {}) {
   );
   const identityBefore = captureOfficialIdentity(beforeState, {
     localAppData,
+    expectedProfile: options.expectedProfile,
     cdpPort: options.cdpPort,
     jarvisPid: options.jarvisPid,
   });
@@ -1215,6 +1216,7 @@ export async function attachOfficialNative(options = {}) {
     );
     const identityAfter = captureOfficialIdentity(afterState, {
       localAppData,
+      expectedProfile: options.expectedProfile,
       cdpPort: identityBefore.cdpPort,
       jarvisPid: identityBefore.jarvisPid,
     });

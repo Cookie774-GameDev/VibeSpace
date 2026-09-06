@@ -40,12 +40,16 @@ export function HoldExitButton({ onConfirmExit }: HoldExitButtonProps) {
     [clearHold],
   );
 
+  const startHold = () => {
+    if (armed || startRef.current != null) return;
+    startRef.current = performance.now();
+    rafRef.current = window.requestAnimationFrame(tick);
+  };
+
   const onPointerDown = (event: React.PointerEvent) => {
     if (event.button !== 0) return;
     event.preventDefault();
-    if (armed) return;
-    startRef.current = performance.now();
-    rafRef.current = window.requestAnimationFrame(tick);
+    startHold();
   };
 
   const onPointerUp = () => {
@@ -77,6 +81,17 @@ export function HoldExitButton({ onConfirmExit }: HoldExitButtonProps) {
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerUp}
         onPointerCancel={onPointerUp}
+        onKeyDown={(event) => {
+          if (event.key !== ' ' && event.key !== 'Enter') return;
+          event.preventDefault();
+          if (!event.repeat) startHold();
+        }}
+        onKeyUp={(event) => {
+          if (event.key !== ' ' && event.key !== 'Enter') return;
+          event.preventDefault();
+          onPointerUp();
+        }}
+        onBlur={onPointerUp}
         onContextMenu={(event) => event.preventDefault()}
       >
         <span

@@ -5,6 +5,8 @@ import {
   hideNativeAppSurface,
   nativeAppSelectionForPanel,
   openNativeAppSurface,
+  nativeAppSurfaceAction,
+  type NativeAppSurfaceStatus,
   type NativeAppBounds,
   type NativeAppSurfaceOpenInput,
 } from './nativeApps';
@@ -71,6 +73,8 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
   const hidePromiseRef = React.useRef<Promise<void> | null>(null);
   const lastSettledKeyRef = React.useRef<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [host, setHost] = React.useState<NativeAppSurfaceStatus | null>(null);
+  const [acting, setActing] = React.useState(false);
   const [retryGeneration, setRetryGeneration] = React.useState(0);
   onUpdateRef.current = onUpdate;
   statusRef.current = panel.status;
@@ -132,11 +136,12 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
             if (result.panelId !== panel.id || result.operationId !== operationId) {
               throw new Error('workbench_native_app_operation_stale');
             }
-            if (!result.embedded || result.error) {
+            if ((!result.embedded && !result.fallback) || result.error) {
               throw new Error(result.error || 'workbench_native_app_window_unavailable');
             }
             lastSettledKeyRef.current = current.key;
             visibleRef.current = true;
+            setHost(result);
             setError(null);
             setPanelStatus('ready');
           } catch (cause) {
@@ -212,6 +217,50 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
     void syncSurface();
   });
 
+  React.useEffect(() => {
+    if (!host?.fallback || route !== 'workbench' || panel.minimized) return;
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || !visibleRef.current) return;
+      pending = true;
+      try {
+        const value = await nativeAppSurfaceAction(panel.id, operationId, 'status');
+        if (!disposed && value && value.panelId === panel.id && value.operationId === operationId)
+          setHost(value);
+      } catch (cause) {
+        if (!disposed) {
+          setError(failureMessage(cause));
+          setPanelStatus('error');
+        }
+      } finally {
+        pending = false;
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 1500);
+    window.addEventListener('focus', refresh);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [host?.fallback, route, panel.id, panel.minimized, operationId, setPanelStatus]);
+
+  const actOnHost = async () => {
+    if (acting) return;
+    setActing(true);
+    setError(null);
+    try {
+      await nativeAppSurfaceAction(panel.id, operationId, host?.running ? 'focus' : 'launch');
+      const value = await nativeAppSurfaceAction(panel.id, operationId, 'status');
+      if (value && value.panelId === panel.id && value.operationId === operationId) setHost(value);
+    } catch (cause) {
+      setError(failureMessage(cause));
+    } finally {
+      setActing(false);
+    }
+  };
+
   React.useEffect(
     () => () => {
       desiredRef.current = false;
@@ -236,12 +285,38 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
         ref={surfaceRef}
         className="workbench-native-app-surface"
         data-testid="workbench-native-app-surface"
+        role="region"
         aria-label={name + ' desktop app'}
       />
-      {error ? (
+      {host?.fallback ? (
+        <div className="workbench-native-app-overlay" role="status">
+          <strong>
+            {name} · {host.running ? 'Running' : 'Closed'}
+          </strong>
+          <span>This app opens in a separate window. Embedding is unavailable.</span>
+          <span>The app remains under your control when this panel closes.</span>
+          {selection.appId === 'chatgpt' ? (
+            <span>
+              External app sessions do not receive VibeSpace Context Map tools automatically.
+            </span>
+          ) : null}
+          {error ? <span role="alert">{error}</span> : null}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={acting}
+            aria-label={(host.running ? 'Focus ' : 'Launch ') + name}
+            onClick={() => void actOnHost()}
+          >
+            {acting ? 'Opening…' : (host.running ? 'Focus ' : 'Launch ') + name}
+          </Button>
+        </div>
+      ) : error ? (
         <div className="workbench-native-app-overlay" role="alert">
           <strong>{name} could not open</strong>
           <span>{error}</span>
+          <span>Start the app or choose its executable from Apps, then retry.</span>
           <Button
             type="button"
             size="sm"

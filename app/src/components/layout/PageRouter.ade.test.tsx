@@ -6,6 +6,6 @@ describe('PageRouter ChatGPT ADE compatibility route', () => {
     const source = readFileSync('src/components/layout/PageRouter.tsx', 'utf8');
     expect(source).not.toContain('ChatGptAdePage');
     expect(source).toContain('ChatGptAdeRedirect');
-    expect(source).toMatch(/ade:s*ChatGptAdeRedirect/u);
+    expect(source).toMatch(/ade:\s*ChatGptAdeRedirect/u);
   });
 });

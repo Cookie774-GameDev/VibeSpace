@@ -30,6 +30,7 @@ function WorkbenchPanelComponent({
   onClose,
 }: WorkbenchPanelProps) {
   const [closing, setClosing] = React.useState(false);
+  const [closeError, setCloseError] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState({
     x: panel.x,
     y: panel.y,
@@ -85,10 +86,14 @@ function WorkbenchPanelComponent({
       return;
     }
     setClosing(true);
+    setCloseError(null);
     try {
       await detachNativeAppSurface(panel.id);
-    } finally {
       onClose();
+    } catch (cause) {
+      setCloseError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setClosing(false);
     }
   };
 
@@ -177,6 +182,7 @@ function WorkbenchPanelComponent({
           <X />
         </button>
       </header>
+      {closeError ? <p role="alert">{closeError}</p> : null}
       <div
         className="workbench-panel-body"
         aria-hidden={panel.minimized}
@@ -195,7 +201,22 @@ function WorkbenchPanelComponent({
         type="button"
         className="workbench-panel-resize"
         aria-label={`Resize ${panel.title}`}
+        title="Resize with arrow keys; hold Shift for one-pixel steps"
         onPointerDown={beginResize}
+        onKeyDown={(event) => {
+          if (event.altKey || event.ctrlKey || event.metaKey) return;
+          const step = event.shiftKey ? 1 : 10;
+          const dx = event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0;
+          const dy = event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0;
+          if (!dx && !dy) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onBringToFront();
+          onUpdate({
+            width: Math.max(240, draft.width + dx),
+            height: Math.max(160, draft.height + dy),
+          });
+        }}
       />
     </section>
   );

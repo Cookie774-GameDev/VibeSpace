@@ -53,6 +53,17 @@ afterEach(() => {
 });
 
 describe('WorkbenchPanel accessibility', () => {
+  it('resizes from the keyboard with coarse and fine steps and ignores unrelated keys', () => {
+    const { onUpdate } = renderPanel();
+    const resize = screen.getByRole('button', { name: 'Resize Console' });
+    fireEvent.keyDown(resize, { key: 'ArrowRight' });
+    expect(onUpdate).toHaveBeenLastCalledWith({ width: 310, height: 200 });
+    fireEvent.keyDown(resize, { key: 'ArrowDown', shiftKey: true });
+    expect(onUpdate).toHaveBeenLastCalledWith({ width: 300, height: 201 });
+    fireEvent.keyDown(resize, { key: 'Enter' });
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+  });
+
   it('exposes the visual panel status through valid status semantics and text', () => {
     renderPanel();
 

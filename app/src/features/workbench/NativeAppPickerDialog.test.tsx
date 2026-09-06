@@ -13,6 +13,22 @@ const apps: NativeAppDescriptor[] = [
 ];
 
 describe('NativeAppPickerDialog', () => {
+  it('keeps unavailable apps discoverable with recovery guidance', () => {
+    render(
+      <NativeAppPickerDialog
+        open
+        apps={apps}
+        onOpenChange={vi.fn()}
+        onChoose={vi.fn()}
+        onPickExecutable={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Unavailable app')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Open Unavailable app' }).hasAttribute('disabled'),
+    ).toBe(true);
+    expect(screen.getByText(/start the app|choose its executable/i)).toBeTruthy();
+  });
   it('searches detected apps, reports running state, and opens the selected app', () => {
     const onChoose = vi.fn();
     render(

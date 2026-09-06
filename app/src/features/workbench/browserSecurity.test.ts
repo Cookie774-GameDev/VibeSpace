@@ -9,6 +9,22 @@ import {
 } from './browserSecurity';
 
 describe('Workbench browser isolation', () => {
+  it('keeps local preview documents opaque even if they redirect to the host origin', () => {
+    const policy = browserFramePolicy('http://127.0.0.1:18724/');
+    expect(policy.sandbox.split(' ')).not.toContain('allow-same-origin');
+    expect(policy.sandbox.split(' ')).toContain('allow-scripts');
+  });
+  it('rejects the host app origin while allowing a distinct local preview origin', () => {
+    expect(() =>
+      browserFramePolicy('http://localhost:5174/?route=chat', 'http://localhost:5174'),
+    ).toThrow(/app origin/i);
+    expect(() => browserFramePolicy('http://tauri.localhost/', 'http://tauri.localhost')).toThrow(
+      /app origin/i,
+    );
+    expect(browserFramePolicy('http://127.0.0.1:18724/', 'http://localhost:5174').delivery).toBe(
+      'embedded',
+    );
+  });
   it('allows ordinary web and localhost URLs but rejects privileged schemes', () => {
     expect(normalizeBrowserUrl('example.com')).toBe('https://example.com/');
     expect(normalizeBrowserUrl('localhost:5173')).toBe('http://localhost:5173/');
@@ -47,7 +63,7 @@ describe('Workbench browser isolation', () => {
   it('uses loopback sandbox for localhost so local apps are not blank', () => {
     const policy = browserFramePolicy('http://localhost:5173');
     expect(policy.sandbox).toBe(LOOPBACK_BROWSER_SANDBOX);
-    expect(policy.sandbox).toContain('allow-same-origin');
+    expect(policy.sandbox).not.toContain('allow-same-origin');
     expect(policy.frameBlocked).toBe(false);
     expect(policy.delivery).toBe('embedded');
   });

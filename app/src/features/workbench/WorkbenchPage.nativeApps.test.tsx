@@ -55,6 +55,13 @@ const edge: NativeAppDescriptor = {
 };
 
 describe('Workbench native app integration', () => {
+  it('refreshes the catalog when Apps is opened after an application becomes available', async () => {
+    native.list.mockResolvedValueOnce([]).mockResolvedValue([chatgpt, edge]);
+    render(<WorkbenchPage />);
+    await waitFor(() => expect(native.list).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'Open app' }));
+    expect(await screen.findByRole('button', { name: 'Open Microsoft Edge' })).toBeTruthy();
+  });
   beforeEach(() => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => null);
     window.localStorage.clear();

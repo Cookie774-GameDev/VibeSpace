@@ -310,13 +310,14 @@ export function createOpenCodeChatGptAdeDispatcher(dependencies: {
           reasoningEffort: input.executionIdentity.effort,
           systemPrompt: input.contextPromptBlock,
           workingDirectory: input.scope.worktreeId,
-          explicitReadRoot: true,
-          explicitReadSynthesis: true,
           runtimeSettings: dependencies.runtimeSettings,
           interactionMode: 'ask',
           accessLevel: 'read-only',
           approveAllForRun: false,
-          tools: READ_TOOLS,
+          tools: {
+            ...READ_TOOLS,
+            vibespace_context: dependencies.runtimeSettings.rlmEnabled,
+          },
           signal: input.signal,
         };
         for await (const event of dependencies.adapter.send(request)) {

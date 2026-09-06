@@ -51,6 +51,34 @@ function nativeStatus(args?: Record<string, unknown>) {
 }
 
 describe('Workbench NativeAppPanel', () => {
+  it('shows a truthful external fallback and focuses only on explicit action', async () => {
+    native.invoke.mockImplementation(async (command, args) => {
+      if (
+        command === 'workbench_native_app_surface_open' ||
+        command === 'workbench_native_app_surface_status'
+      )
+        return { ...nativeStatus(args), embedded: false, fallback: true, owned: false };
+    });
+    render(
+      <div className="workbench-canvas">
+        <NativeAppPanel panel={appPanel()} onUpdate={vi.fn()} />
+      </div>,
+    );
+    const focus = await screen.findByRole('button', { name: 'Focus ChatGPT' });
+    expect(screen.getByText(/separate window/i)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(native.invoke.mock.calls.some(([c]) => c === 'workbench_native_app_surface_focus')).toBe(
+      false,
+    );
+    focus.click();
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith(
+        'workbench_native_app_surface_focus',
+        expect.objectContaining({ panelId: 'native-1' }),
+      ),
+    );
+  });
+
   beforeEach(() => {
     useUIStore.setState({ route: 'workbench' });
     native.invoke.mockReset();
@@ -129,7 +157,9 @@ describe('Workbench NativeAppPanel', () => {
     );
     await waitFor(() =>
       expect(
-        native.invoke.mock.calls.filter(([command]) => command === 'workbench_native_app_surface_open'),
+        native.invoke.mock.calls.filter(
+          ([command]) => command === 'workbench_native_app_surface_open',
+        ),
       ).toHaveLength(1),
     );
 
@@ -142,7 +172,9 @@ describe('Workbench NativeAppPanel', () => {
     await act(async () => Promise.resolve());
 
     expect(
-      native.invoke.mock.calls.filter(([command]) => command === 'workbench_native_app_surface_open'),
+      native.invoke.mock.calls.filter(
+        ([command]) => command === 'workbench_native_app_surface_open',
+      ),
     ).toHaveLength(1);
   });
 
@@ -179,14 +211,18 @@ describe('Workbench NativeAppPanel', () => {
     );
     await waitFor(() =>
       expect(
-        native.invoke.mock.calls.filter(([command]) => command === 'workbench_native_app_surface_open'),
+        native.invoke.mock.calls.filter(
+          ([command]) => command === 'workbench_native_app_surface_open',
+        ),
       ).toHaveLength(2),
     );
 
     act(() => useUIStore.setState({ route: 'context' }));
     await waitFor(() =>
       expect(
-        native.invoke.mock.calls.filter(([command]) => command === 'workbench_native_app_surface_hide'),
+        native.invoke.mock.calls.filter(
+          ([command]) => command === 'workbench_native_app_surface_hide',
+        ),
       ).toHaveLength(2),
     );
   });
@@ -205,7 +241,9 @@ describe('Workbench NativeAppPanel', () => {
     screen.getByRole('button', { name: 'Retry ChatGPT' }).click();
     await waitFor(() =>
       expect(
-        native.invoke.mock.calls.filter(([command]) => command === 'workbench_native_app_surface_open'),
+        native.invoke.mock.calls.filter(
+          ([command]) => command === 'workbench_native_app_surface_open',
+        ),
       ).toHaveLength(2),
     );
   });

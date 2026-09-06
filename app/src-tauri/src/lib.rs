@@ -82,6 +82,7 @@ mod terminal_peer_fabric;
 mod terminal_snapshot;
 mod wallpaper_master;
 mod workbench_browser_surface;
+mod native_app_surface;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -660,6 +661,13 @@ fn run_ordinary(
             browser_chat_surface::browser_chat_surface_hide,
             browser_chat_surface::browser_chat_surface_hide_all,
             workbench_browser_surface::workbench_browser_surface_open,
+            native_app_surface::workbench_native_app_list,
+            native_app_surface::workbench_native_app_surface_open,
+            native_app_surface::workbench_native_app_surface_status,
+            native_app_surface::workbench_native_app_surface_focus,
+            native_app_surface::workbench_native_app_surface_launch,
+            native_app_surface::workbench_native_app_surface_hide,
+            native_app_surface::workbench_native_app_surface_detach,
             workbench_browser_surface::workbench_browser_surface_status,
             workbench_browser_surface::workbench_browser_surface_history,
             workbench_browser_surface::workbench_browser_surface_reload,
@@ -984,6 +992,13 @@ browser_chat_surface::browser_chat_surface_open
 browser_chat_surface::browser_chat_surface_hide
 browser_chat_surface::browser_chat_surface_hide_all
 workbench_browser_surface::workbench_browser_surface_open
+native_app_surface::workbench_native_app_list
+native_app_surface::workbench_native_app_surface_open
+native_app_surface::workbench_native_app_surface_status
+native_app_surface::workbench_native_app_surface_focus
+native_app_surface::workbench_native_app_surface_launch
+native_app_surface::workbench_native_app_surface_hide
+native_app_surface::workbench_native_app_surface_detach
 workbench_browser_surface::workbench_browser_surface_status
 workbench_browser_surface::workbench_browser_surface_history
 workbench_browser_surface::workbench_browser_surface_reload

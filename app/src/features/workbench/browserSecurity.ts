@@ -8,9 +8,8 @@ export const EMBEDDED_BROWSER_SANDBOX = 'allow-forms allow-modals allow-popups a
 export const TRUSTED_MEDIA_EMBED_SANDBOX =
   'allow-forms allow-modals allow-popups allow-scripts allow-same-origin';
 
-/** Loopback pages often need same-origin for local apps; still no Tauri bridge. */
-export const LOOPBACK_BROWSER_SANDBOX =
-  'allow-forms allow-modals allow-popups allow-scripts allow-same-origin';
+/** Local content stays opaque even after redirects to the trusted app origin. */
+export const LOOPBACK_BROWSER_SANDBOX = 'allow-forms allow-modals allow-popups allow-scripts';
 
 const FORBIDDEN_SCHEME = /^(?:javascript|data|file|tauri|asset|chrome|about|vbscript):/i;
 
@@ -112,7 +111,10 @@ export function toEmbeddableUrl(input: string): { src: string; usedEmbed: boolea
   return { src: normalized, usedEmbed: false };
 }
 
-export function browserFramePolicy(input: string): {
+export function browserFramePolicy(
+  input: string,
+  appOrigin = typeof window === 'undefined' ? undefined : window.location.origin,
+): {
   src: string;
   sandbox: string;
   referrerPolicy: 'no-referrer' | 'strict-origin-when-cross-origin';
@@ -123,6 +125,9 @@ export function browserFramePolicy(input: string): {
   delivery: 'embedded' | 'native-child';
 } {
   const externalUrl = normalizeBrowserUrl(input);
+  if (appOrigin && new URL(externalUrl).origin === appOrigin) {
+    throw new Error('The VibeSpace app origin cannot open inside a browser panel.');
+  }
   const { src, usedEmbed } = toEmbeddableUrl(input);
   const frameHost = new URL(src).hostname;
   const loopback = isLoopbackHost(frameHost);

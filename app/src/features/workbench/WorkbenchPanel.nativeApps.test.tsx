@@ -29,6 +29,29 @@ const panel: WorkbenchPanelModel = {
 };
 
 describe('WorkbenchPanel native app close lifecycle', () => {
+  it('keeps the panel recoverable when native cleanup fails', async () => {
+    native.detach.mockReset().mockRejectedValue(new Error('cleanup unavailable'));
+    const onClose = vi.fn();
+    render(
+      <WorkbenchPanel
+        panel={panel}
+        selected
+        zoom={1}
+        onSelect={vi.fn()}
+        onBringToFront={vi.fn()}
+        onUpdate={vi.fn()}
+        onRuntimeUpdate={vi.fn()}
+        onDuplicate={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Close ChatGPT' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('cleanup unavailable');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Close ChatGPT' }).hasAttribute('disabled')).toBe(
+      false,
+    );
+  });
   it('detaches the owned window before removing the panel', async () => {
     const order: string[] = [];
     native.detach.mockReset().mockImplementation(async () => {

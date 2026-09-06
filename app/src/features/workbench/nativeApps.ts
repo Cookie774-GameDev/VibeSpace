@@ -35,6 +35,8 @@ export interface NativeAppSurfaceStatus {
   embedded: boolean;
   running: boolean;
   error?: string | null;
+  fallback?: boolean;
+  owned?: boolean;
 }
 
 export interface NativeAppSurfaceOpenInput {
@@ -159,4 +161,13 @@ export async function hideNativeAppSurface(panelId: string, operationId: string)
 export async function detachNativeAppSurface(panelId: string): Promise<void> {
   if (!isTauri) return;
   await invoke('workbench_native_app_surface_detach', { panelId });
+}
+
+export async function nativeAppSurfaceAction(
+  panelId: string,
+  operationId: string,
+  action: 'status' | 'focus' | 'launch',
+): Promise<NativeAppSurfaceStatus | void> {
+  if (!isTauri) throw new Error('workbench_native_app_requires_desktop');
+  return invoke(`workbench_native_app_surface_${action}`, { panelId, operationId });
 }

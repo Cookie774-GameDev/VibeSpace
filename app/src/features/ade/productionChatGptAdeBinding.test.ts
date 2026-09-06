@@ -216,85 +216,92 @@ describe('production ChatGPT ADE binding', () => {
     ).toMatchObject({ kind: 'unavailable', code: 'route_unavailable' });
   });
 
-  it('dispatches once through persistent OpenCode, enables only read tools, and requires observed Tool Gateway identity', async () => {
-    const events: ProviderEvent[] = [
-      { type: 'session', sessionId: 'session-a' },
-      { type: 'model', modelId: 'openai/gpt-5.6-sol' },
-      { type: 'text', delta: 'done' },
-      { type: 'done' },
-    ];
-    const send = vi.fn(async function* () {
-      yield* events;
-    });
-    const cancel = vi.fn(async () => undefined);
-    const adapter: ProviderAdapter = { id: 'opencode-cli', send, cancel };
-    const observed = {
-      executionIdentity: {
-        transportConnectionId: 'opencode-cli',
-        transportAdapterId: 'opencode-persistent',
-        upstreamProviderId: 'openai',
-        upstreamModelId: 'gpt-5.6-sol',
-        providerQualifiedModelId: 'openai/gpt-5.6-sol',
-        authBillingRoute: 'managed-opencode-auth',
-        effort: 'high',
-        fastVariant: 'high-fast',
-        catalogRevision: `sha256:${'b'.repeat(64)}`,
-        observedProviderIdentity: 'openai/gpt-5.6-sol',
-      },
-      performance: 'quality' as const,
-      scopeRevision: 'session-a:1',
-    };
-    const dispatcher = createOpenCodeChatGptAdeDispatcher({
-      adapter,
-      connection,
-      readObservedAuthority: () => observed,
-      runtimeSettings: { effort: 'high', fastMode: 'on', performance: 'quality', rlmEnabled: true },
-    });
-    const signal = new AbortController().signal;
-    const onOutput = vi.fn();
-    const result = await dispatcher.dispatch({
-      runId: 'run-a',
-      selectedHarness: 'chatgpt',
-      instruction: 'Inspect this project.',
-      contextPromptBlock: 'verified context',
-      executionIdentity: {
-        ...observed.executionIdentity,
-        catalogRevision: `sha256:${'a'.repeat(64)}`,
-      },
-      scope: {
-        accountId: 'account-a',
-        workspaceId: 'workspace-a',
-        projectId: 'project-a',
-        worktreeId: 'C:\\repo',
-        revision: 'ade-scope-3-7',
-      },
-      terminalLink: null,
-      signal,
-      onOutput,
-    });
+  it.each([true, false])(
+    'dispatches scoped context tools with RLM enabled=%s and requires observed Tool Gateway identity',
+    async (rlmEnabled) => {
+      const events: ProviderEvent[] = [
+        { type: 'session', sessionId: 'session-a' },
+        { type: 'model', modelId: 'openai/gpt-5.6-sol' },
+        { type: 'text', delta: 'done' },
+        { type: 'done' },
+      ];
+      const send = vi.fn(async function* () {
+        yield* events;
+      });
+      const cancel = vi.fn(async () => undefined);
+      const adapter: ProviderAdapter = { id: 'opencode-cli', send, cancel };
+      const observed = {
+        executionIdentity: {
+          transportConnectionId: 'opencode-cli',
+          transportAdapterId: 'opencode-persistent',
+          upstreamProviderId: 'openai',
+          upstreamModelId: 'gpt-5.6-sol',
+          providerQualifiedModelId: 'openai/gpt-5.6-sol',
+          authBillingRoute: 'managed-opencode-auth',
+          effort: 'high',
+          fastVariant: 'high-fast',
+          catalogRevision: `sha256:${'b'.repeat(64)}`,
+          observedProviderIdentity: 'openai/gpt-5.6-sol',
+        },
+        performance: 'quality' as const,
+        scopeRevision: 'session-a:1',
+      };
+      const dispatcher = createOpenCodeChatGptAdeDispatcher({
+        adapter,
+        connection,
+        readObservedAuthority: () => observed,
+        runtimeSettings: { effort: 'high', fastMode: 'on', performance: 'quality', rlmEnabled },
+      });
+      const signal = new AbortController().signal;
+      const onOutput = vi.fn();
+      const result = await dispatcher.dispatch({
+        runId: 'run-a',
+        selectedHarness: 'chatgpt',
+        instruction: 'Inspect this project.',
+        contextPromptBlock: 'verified context',
+        executionIdentity: {
+          ...observed.executionIdentity,
+          catalogRevision: `sha256:${'a'.repeat(64)}`,
+        },
+        scope: {
+          accountId: 'account-a',
+          workspaceId: 'workspace-a',
+          projectId: 'project-a',
+          worktreeId: 'C:\\repo',
+          revision: 'ade-scope-3-7',
+        },
+        terminalLink: null,
+        signal,
+        onOutput,
+      });
 
-    expect(result.output).toBe('done');
-    expect(result.observedExecutionIdentity.providerQualifiedModelId).toBe('openai/gpt-5.6-sol');
-    expect(onOutput).toHaveBeenCalledWith('done');
-    expect(send).toHaveBeenCalledOnce();
-    const request = (send.mock.calls as unknown as [[ProviderRequest]])[0]![0];
-    expect(request.tools).toMatchObject({
-      'context.list': true,
-      'context.read': true,
-      'plugins.list': true,
-      'mcp.list': true,
-      'terminal.list': true,
-      'terminal.read': true,
-      vibespace_context: false,
-    });
-    expect(Object.values(request.tools ?? {}).some((enabled) => enabled === true)).toBe(true);
-    expect(request.accessLevel).toBe('read-only');
-    expect(request.runtimeSettings).toMatchObject({ effort: 'high', fastMode: 'on' });
-    expect(JSON.stringify(request)).not.toMatch(/ollama|11434|api.?key|credential/iu);
+      expect(result.output).toBe('done');
+      expect(result.observedExecutionIdentity.providerQualifiedModelId).toBe('openai/gpt-5.6-sol');
+      expect(onOutput).toHaveBeenCalledWith('done');
+      expect(send).toHaveBeenCalledOnce();
+      const request = (send.mock.calls as unknown as [[ProviderRequest]])[0]![0];
+      expect(request.tools).toMatchObject({
+        'context.list': true,
+        'context.read': true,
+        'plugins.list': true,
+        'mcp.list': true,
+        'terminal.list': true,
+        'terminal.read': true,
+        vibespace_context: rlmEnabled,
+      });
+      expect(Object.values(request.tools ?? {}).some((enabled) => enabled === true)).toBe(true);
+      expect(request.accessLevel).toBe('read-only');
+      expect(request.explicitReadRoot).not.toBe(true);
+      expect(request.explicitReadSynthesis).not.toBe(true);
+      expect(request.projectId).toBe('project-a');
+      expect(request.workingDirectory).toBe('C:\\repo');
+      expect(request.runtimeSettings).toMatchObject({ effort: 'high', fastMode: 'on' });
+      expect(JSON.stringify(request)).not.toMatch(/ollama|11434|api.?key|credential/iu);
 
-    dispatcher.cancel('run-a');
-    expect(cancel).toHaveBeenCalledWith('run-a');
-  });
+      dispatcher.cancel('run-a');
+      expect(cancel).toHaveBeenCalledWith('run-a');
+    },
+  );
 
   it('rejects missing or fabricated observed authority', async () => {
     const adapter: ProviderAdapter = {
