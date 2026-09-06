@@ -68,11 +68,13 @@ function activity(id: string): ChatActivityEvent {
 describe('Jarvis task run read-only view store', () => {
   beforeEach(() => useJarvisTaskRunStore.getState().clearForTests());
 
-  it('exposes only account replacement and test-clearing actions', () => {
+  it('exposes only account-scoped presentation and test-clearing actions', () => {
     expect(Object.keys(useJarvisTaskRunStore.getState()).sort()).toEqual([
       'accountScope',
       'activityByChat',
       'clearForTests',
+      'manualRecoveryByRun',
+      'recordManualRecovery',
       'replaceCanonicalForAccount',
       'replaceLegacyForAccount',
       'runs',
@@ -170,5 +172,22 @@ describe('Jarvis task run read-only view store', () => {
     expect(state.activityByChat).toEqual({
       'chat-beta': [expect.objectContaining({ id: 'second-event' })],
     });
+  });
+});
+
+
+describe('manual recovery presentation ownership', () => {
+  beforeEach(() => useJarvisTaskRunStore.getState().clearForTests());
+
+  it('retains an interrupted outcome across canonical refresh without changing lifecycle truth', () => {
+    const state = useJarvisTaskRunStore.getState();
+    state.setAccountScope('scope-a');
+    state.recordManualRecovery('scope-a', 'account-a', 'run-a');
+    state.replaceCanonicalForAccount('scope-a', [canonicalProjection('run-a')], {});
+    expect(useJarvisTaskRunStore.getState().manualRecoveryByRun['run-a']).toEqual({ accountId: 'account-a', runId: 'run-a' });
+    expect(useJarvisTaskRunStore.getState().runs['run-a'].status).toBe('running');
+    state.setAccountScope('scope-b');
+    state.recordManualRecovery('scope-a', 'account-a', 'run-a');
+    expect(useJarvisTaskRunStore.getState().manualRecoveryByRun).toEqual({});
   });
 });

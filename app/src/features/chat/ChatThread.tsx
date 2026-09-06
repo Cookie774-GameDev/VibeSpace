@@ -259,6 +259,21 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   );
   const currentCanonicalState = useCurrentCanonicalRunState(commandCenterBinding, String(chatId));
   const currentCanonicalRun = currentCanonicalState.run;
+  const recoveredAccountId = useJarvisTaskRunStore((state) =>
+    currentCanonicalRun ? state.manualRecoveryByRun[currentCanonicalRun.id]?.accountId : undefined,
+  );
+  const requiresManualRecovery = Boolean(
+    currentCanonicalRun && recoveredAccountId === commandCenterBinding?.hostPort.accountId &&
+    !/completed|failed|cancelled/.test(currentCanonicalRun.status),
+  );
+  const hasEarlierRecovery = useJarvisTaskRunStore((state) =>
+    Object.values(state.manualRecoveryByRun).some((entry) =>
+      entry.accountId === commandCenterBinding?.hostPort.accountId &&
+      state.runs[entry.runId]?.chatId === chatKey &&
+      !/completed|failed|cancelled/.test(state.runs[entry.runId]?.status ?? ''),
+    ),
+  );
+
   const chatModelSelection = useAuthStore((state) => state.chatModelSelection);
   const hasCanonicalRun = hasProjectedCanonicalRun || Boolean(currentCanonicalRun);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -308,15 +323,15 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
     if (!currentCanonicalRun) return undefined;
     const status = String(currentCanonicalRun.status);
     return {
-      status,
-      currentOperation: status.replaceAll('_', ' '),
+      status: requiresManualRecovery ? 'blocked' : status,
+      currentOperation: requiresManualRecovery ? 'Interrupted · outcome unknown' : status.replaceAll('_', ' '),
       model: selectedModelPreview(chatModelSelection, currentCanonicalRun.model?.modelId),
       startedAt: currentCanonicalRun.createdAt,
       endedAt: /done|complete|success|failed|error|cancelled/i.test(status)
         ? currentCanonicalRun.updatedAt
         : undefined,
     };
-  }, [chatModelSelection, currentCanonicalRun]);
+  }, [chatModelSelection, currentCanonicalRun, requiresManualRecovery]);
   const agenticActions = useMemo(() => {
     const run = currentCanonicalRun;
     const binding = commandCenterBinding;
@@ -328,13 +343,13 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
       retryLabel?: string;
       continue?: () => void;
     } = {};
-    if (/running|queued|pending|streaming|active/i.test(status)) {
+    if (!requiresManualRecovery && /running|queued|pending|streaming|active/i.test(status)) {
       actions.cancel = async () => {
         await commandCenterHandlers.cancelRun?.(binding.hostPort.accountId, run.id);
       };
     }
-    if (/failed|error|cancelled/i.test(status)) {
-      if (run.source === 'schedule') {
+    if (requiresManualRecovery || /failed|error|cancelled/i.test(status)) {
+      if (run.source === 'schedule' && !requiresManualRecovery) {
         actions.retry = async () => {
           await commandCenterHandlers.retryLogicalRun?.(binding.hostPort.accountId, run.id);
         };
@@ -378,7 +393,7 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
       };
     }
     return Object.keys(actions).length ? actions : undefined;
-  }, [chatId, commandCenterBinding, commandCenterHandlers, currentCanonicalRun, messages]);
+  }, [chatId, commandCenterBinding, commandCenterHandlers, currentCanonicalRun, messages, requiresManualRecovery]);
 
   useEffect(() => {
     let disposed = false;
@@ -575,6 +590,11 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
               : 'mx-auto flex w-full max-w-[860px] flex-col gap-4 px-4 py-6'
         }
       >
+        {requiresManualRecovery || hasEarlierRecovery ? (
+          <div role="status" className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
+            Interrupted request · outcome unknown. Review the existing result before retrying.
+          </div>
+        ) : null}
         {consoleView === 'agentic' ? (
           <AgenticConsoleErrorBoundary
             fallback={

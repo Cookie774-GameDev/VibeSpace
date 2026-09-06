@@ -348,6 +348,7 @@ async function resumeCanonicalJarvisRecovery(input: {
   ) {
     return 0;
   }
+  const recoveryScope = useJarvisTaskRunStore.getState().accountScope;
   const scanner = createJarvisRecoveryScanner({ runs: jarvisRunRepo, events: jarvisEventRepo });
   return resumeRecoverableJarvisRuns({
     accountId: input.accountId,
@@ -357,6 +358,11 @@ async function resumeCanonicalJarvisRecovery(input: {
     isCurrent: input.isCurrent,
     onPresentation: (presentation: JarvisRecoveryPresentation) => {
       if (typeof window !== 'undefined' && input.isCurrent()) {
+        if (presentation.kind === 'manual_retry_required') {
+          useJarvisTaskRunStore.getState().recordManualRecovery(
+            recoveryScope, input.accountId, presentation.runId,
+          );
+        }
         window.dispatchEvent(
           new CustomEvent('jarvis:recovery-presentation', { detail: presentation }),
         );

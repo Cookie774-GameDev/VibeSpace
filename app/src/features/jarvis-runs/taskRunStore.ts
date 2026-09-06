@@ -169,6 +169,8 @@ function cloneActivityByChat(
 
 interface JarvisTaskRunViewStore {
   accountScope: string;
+  manualRecoveryByRun: Record<string, { accountId: string; runId: string }>;
+  recordManualRecovery: (scope: string, accountId: string, runId: string) => void;
   runs: Record<string, JarvisTaskRunProjection>;
   activityByChat: Record<string, readonly ChatActivityEvent[]>;
   setAccountScope: (scope: string) => void;
@@ -190,13 +192,20 @@ function mergedRows(): Record<string, JarvisTaskRunProjection> {
 
 export const useJarvisTaskRunStore = create<JarvisTaskRunViewStore>()((set, get) => ({
   accountScope: '',
+  manualRecoveryByRun: {},
   runs: {},
   activityByChat: {},
   setAccountScope: (scope) => {
     if (scope === get().accountScope) return;
     legacyRows = {};
     canonicalRows = {};
-    set({ accountScope: scope, runs: {}, activityByChat: {} });
+    set({ accountScope: scope, runs: {}, activityByChat: {}, manualRecoveryByRun: {} });
+  },
+  recordManualRecovery: (scope, accountId, runId) => {
+    if (!scope || scope !== get().accountScope || !accountId.trim() || !runId.trim()) return;
+    // Presentation only: canonical lifecycle writes remain with the bound kernel.
+    const retained = Object.entries(get().manualRecoveryByRun).filter(([id]) => id !== runId).slice(-499);
+    set({ manualRecoveryByRun: { ...Object.fromEntries(retained), [runId]: { accountId, runId } } });
   },
   replaceLegacyForAccount: (scope, runs) => {
     if (!scope || scope !== get().accountScope) return;
@@ -221,6 +230,6 @@ export const useJarvisTaskRunStore = create<JarvisTaskRunViewStore>()((set, get)
   clearForTests: () => {
     legacyRows = {};
     canonicalRows = {};
-    set({ accountScope: '', runs: {}, activityByChat: {} });
+    set({ accountScope: '', runs: {}, activityByChat: {}, manualRecoveryByRun: {} });
   },
 }));

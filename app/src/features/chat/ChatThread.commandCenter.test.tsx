@@ -147,6 +147,25 @@ function setReducedMotion(matches: boolean) {
 }
 
 describe('ChatThread Command Center routing', () => {
+
+  it('shows a recovered running request as outcome unknown and offers reviewed text retry', async () => {
+    const auth = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'account-1', cloudSession: null });
+    const run = canonicalRun({ status: 'running' });
+    const currentBinding = binding([run]);
+    useJarvisTaskRunStore.getState().recordManualRecovery('scope-1', 'account-1', run.id);
+    hookState.messages = [{ id: 'user-1', chat_id: 'chat-1', role: 'user', parts: [{ kind: 'text', text: 'Inspect the existing result' }], created_at: 90, updated_at: 90 } as Message];
+    try {
+      render(<JarvisCommandCenterProvider value={currentBinding}><ChatThread chatId="chat-1" /></JarvisCommandCenterProvider>);
+      expect(await screen.findByText('Interrupted request · outcome unknown. Review the existing result before retrying.')).toBeTruthy();
+      expect((await screen.findByRole('status', { name: 'Session status' })).textContent).toContain('Blocked');
+      expect(await screen.findByRole('button', { name: 'Retry in composer' })).toBeTruthy();
+      expect(run.status).toBe('running');
+      expect(currentBinding.hostPort.requestCancellation).not.toHaveBeenCalled();
+      expect(currentBinding.hostPort.retryLogicalRun).not.toHaveBeenCalled();
+    } finally { useAuthStore.setState({ localUserId: auth.localUserId, cloudSession: auth.cloudSession }); }
+  });
+
   it('reopens an ordinary failed request for review without invoking scheduled retry or sending', async () => {
     const auth = useAuthStore.getState();
     useAuthStore.setState({ localUserId: 'account-1', cloudSession: null });

@@ -31,6 +31,14 @@ function message(
 }
 
 describe('projectAgenticTranscript', () => {
+
+  it('does not infer an older completion while the latest saved request awaits recovery status', () => {
+    const messages = [message('old', 'assistant', 1, [{ kind: 'text', text: 'Earlier result' }]), message('pending', 'user', 2, [{ kind: 'text', text: 'A new request' }])];
+    expect(summarizeAgenticSession(messages, [])).toMatchObject({ status: 'recovering', currentOperation: 'Checking saved request status' });
+    expect(summarizeAgenticSession(messages, [], { status: 'failed' }).status).toBe('error');
+    expect(summarizeAgenticSession([...messages, message('new', 'assistant', 3, [{ kind: 'text', text: 'New result' }])], []).status).toBe('done');
+  });
+
   it('uses the provider total when cached tokens are separately reported', () => {
     expect(summarizeAgenticSession([message('total', 'assistant', 1, [], {input_tokens: 626, output_tokens: 228, total_tokens: 41814, cache_read_tokens: 40960})], []).tokenCount).toBe(41814);
   });

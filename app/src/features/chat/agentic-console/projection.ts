@@ -692,12 +692,18 @@ export function summarizeAgenticSession(
   }
 
   let hasAssistantAnswer = false;
+  let latestUserAt = -Infinity;
+  let latestAnswerAt = -Infinity;
   let hasTokenUsage = false;
   let hasUnavailableTokenUsage = false;
   let tokenCount = 0;
   let hasEstimatedTokens = false;
   let model = '—';
   for (const message of messages) {
+    if (message.role === 'user') latestUserAt = Math.max(latestUserAt, message.created_at);
+    if (message.role === 'assistant' && textParts(message).length > 0) {
+      latestAnswerAt = Math.max(latestAnswerAt, message.created_at);
+    }
     for (const part of message.parts) {
       if (part.kind === 'tool_call' && typeof part.args.path === 'string') {
         uniqueFiles.add(part.args.path);
@@ -767,7 +773,9 @@ export function summarizeAgenticSession(
                       : undefined;
   const inferredStatus: AgenticSessionSummary['status'] = running
     ? 'running'
-    : hasError
+    : hasAssistantAnswer && latestUserAt > latestAnswerAt
+      ? 'recovering'
+      : hasError
       ? 'error'
       : hasBlocked
         ? 'blocked'
@@ -793,7 +801,7 @@ export function summarizeAgenticSession(
             : status === 'done'
               ? 'Complete'
               : status === 'recovering'
-                ? 'Recovering'
+                ? 'Checking saved request status'
                 : status === 'planning'
                   ? 'Planning'
                   : status === 'queued'
