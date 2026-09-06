@@ -43,6 +43,7 @@ interface NativeOpenRequest {
   url: string;
   bounds: SurfaceBounds;
   generation: number;
+  preserveNavigation: boolean;
 }
 
 function readBounds(element: HTMLElement | null): SurfaceBounds | null {
@@ -102,7 +103,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
   const [history, setHistory] = React.useState<string[]>([currentUrl]);
   const [historyIndex, setHistoryIndex] = React.useState(0);
   const surfaceRef = React.useRef<HTMLDivElement>(null);
-  const operationId = React.useRef(createOperationId()).current;
+  const [operationId] = React.useState(createOperationId);
   const onUpdateRef = React.useRef(onUpdate);
   const settingsRef = React.useRef(panel.settings);
   const panelStatusRef = React.useRef(panel.status);
@@ -211,20 +212,38 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
   }, [operationId, panel.id]);
 
   const openNative = React.useCallback(
-    async (url: string, bounds: SurfaceBounds) => {
+    async (url: string, bounds: SurfaceBounds, preserveNavigation: boolean) => {
       if (!isTauri) throw new Error('The in-window browser is available in the VibeSpace app.');
       await nativeHidePromiseRef.current?.catch(() => undefined);
       if (!nativeSurfaceDesiredRef.current) return;
       const state = nativeOpenRef.current;
-      const requested = { url, bounds, generation: nativeRequestGenerationRef.current };
-      if (!state.promise && sameNativeOpenRequest(state.lastSettled, requested)) return;
-      setLoadState('loading');
+      const requested = {
+        url,
+        bounds,
+        generation: nativeRequestGenerationRef.current,
+        preserveNavigation,
+      };
+      if (
+        preserveNavigation &&
+        !state.promise &&
+        sameNativeOpenRequest(state.lastSettled, requested)
+      )
+        return;
+      if (!preserveNavigation || !state.mayExist) setLoadState('loading');
       if (state.promise) {
-        if (sameNativeOpenRequest(state.pending ?? state.active, requested)) return state.promise;
+        const queued = state.pending ?? state.active;
+        if (
+          sameNativeOpenRequest(queued, requested) &&
+          (preserveNavigation || queued?.preserveNavigation === false)
+        )
+          return state.promise;
         state.pending = {
           url,
           bounds,
           generation: ++nativeRequestGenerationRef.current,
+          preserveNavigation:
+            preserveNavigation &&
+            !(state.pending?.url === url && !state.pending.preserveNavigation),
         };
         nativeStatusGenerationRef.current += 1;
         return state.promise;
@@ -233,6 +252,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
         url,
         bounds,
         generation: ++nativeRequestGenerationRef.current,
+        preserveNavigation: preserveNavigation && state.mayExist,
       };
       const run = async () => {
         let request: NativeOpenRequest | null = next;
@@ -246,11 +266,13 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
             operationId,
             url: request.url,
             bounds: request.bounds,
+            preserveNavigation: request.preserveNavigation,
           });
           if (state.pending || nativeRequestGenerationRef.current !== request.generation) {
             request = state.pending;
             continue;
           }
+          state.lastSettled = { ...request, url: normalizeBrowserUrl(opened.url) };
           applyNativeState(opened);
           if (opened.loading && !opened.error) {
             const generation = request.generation;
@@ -281,7 +303,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
   );
 
   const syncNativeSurface = React.useCallback(
-    async (url = nativeDesiredUrlRef.current) => {
+    async (url = nativeDesiredUrlRef.current, preserveNavigation = true) => {
       if (!nativeSurfaceAllowed) {
         await retireNativeSurface();
         return;
@@ -292,7 +314,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
         return;
       }
       nativeSurfaceDesiredRef.current = true;
-      await openNative(url, bounds);
+      await openNative(url, bounds, preserveNavigation);
     },
     [nativeSurfaceAllowed, openNative, retireNativeSurface],
   );
@@ -338,9 +360,10 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
 
   React.useEffect(() => {
     if (policy?.delivery !== 'native-child') return;
+    if (nativeOpenRef.current.mayExist && nativeUrlRef.current === policy.externalUrl) return;
     nativeUrlRef.current = policy.externalUrl;
     nativeDesiredUrlRef.current = policy.externalUrl;
-    void syncNativeSurface(policy.externalUrl).catch((cause) => {
+    void syncNativeSurface(policy.externalUrl, false).catch((cause) => {
       if (!nativeSurfaceDesiredRef.current) return;
       const message = nativeFailureMessage(cause, 'The page could not open.');
       setError(message);
@@ -384,7 +407,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
         setError(nativeFailureMessage(cause, 'The page could not open externally.'));
       });
     } else
-      void syncNativeSurface(nextPolicy.externalUrl).catch((cause) => {
+      void syncNativeSurface(nextPolicy.externalUrl, false).catch((cause) => {
         const message = nativeFailureMessage(cause, 'The page could not open.');
         setError(message);
         setLoadState('error');

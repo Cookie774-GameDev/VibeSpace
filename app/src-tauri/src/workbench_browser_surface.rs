@@ -222,6 +222,7 @@ pub async fn workbench_browser_surface_open(
     operation_id: String,
     url: String,
     bounds: WorkbenchBrowserBounds,
+    preserve_navigation: Option<bool>,
 ) -> Result<WorkbenchBrowserStatus, String> {
     ensure_caller(caller.label())?;
     let _mutation = SURFACE_MUTATION.lock().await;
@@ -231,6 +232,16 @@ pub async fn workbench_browser_surface_open(
     let target = validate_url(&url)?;
     let surface_label = label(&panel_id);
     let existing = app.get_webview(&surface_label);
+    // Layout reconciliation must never replay a stale address over a link,
+    // form submission, redirect, or history navigation inside the live page.
+    if preserve_navigation.unwrap_or(false) {
+        if let Some(webview) = existing.as_ref() {
+            current_operation(&panel_id, &operation_id)?;
+            apply_bounds(webview, &bounds)?;
+            webview.show().map_err(|_| "workbench_browser_window_unavailable".to_owned())?;
+            return current_status(&panel_id, &operation_id);
+        }
+    }
     let unchanged_url = match existing.as_ref() {
         Some(webview) => {
             webview

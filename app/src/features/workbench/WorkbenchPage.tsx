@@ -92,8 +92,8 @@ export function WorkbenchPage() {
   const fitView = useWorkbenchStore((state) => state.fitView);
   const undo = useWorkbenchStore((state) => state.undo);
   const redo = useWorkbenchStore((state) => state.redo);
-  const history = useWorkbenchStore((state) => state.history);
-  const future = useWorkbenchStore((state) => state.future);
+  const canUndo = useWorkbenchStore((state) => state.history.length > 0);
+  const canRedo = useWorkbenchStore((state) => state.future.length > 0);
   const warning = useWorkbenchStore((state) => state.persistenceWarning);
   const persistenceError = useWorkbenchStore((state) => state.persistenceError);
   const name = useWorkbenchStore((state) => state.name);
@@ -397,7 +397,7 @@ export function WorkbenchPage() {
             size="icon-sm"
             variant="ghost"
             aria-label="Undo"
-            disabled={!history.length}
+            disabled={!canUndo}
             onClick={undo}
           >
             <Undo2 />
@@ -407,7 +407,7 @@ export function WorkbenchPage() {
             size="icon-sm"
             variant="ghost"
             aria-label="Redo"
-            disabled={!future.length}
+            disabled={!canRedo}
             onClick={redo}
           >
             <Redo2 />

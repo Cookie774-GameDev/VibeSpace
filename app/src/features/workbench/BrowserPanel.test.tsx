@@ -203,6 +203,102 @@ describe('Workbench BrowserPanel delivery', () => {
     );
   });
 
+  it('preserves website navigation when layout changes and does not flash loading', async () => {
+    let liveUrl = 'https://example.com/';
+    let left = 20;
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(() => ({
+      x: left,
+      y: 80,
+      top: 80,
+      left,
+      right: left + 640,
+      bottom: 480,
+      width: 640,
+      height: 400,
+      toJSON: () => ({}),
+    }));
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command === 'workbench_browser_surface_open') {
+        if (!args?.preserveNavigation) liveUrl = String(args?.url);
+        return {
+          panelId: args?.panelId,
+          operationId: args?.operationId,
+          url: liveUrl,
+          loading: false,
+          error: null,
+        };
+      }
+      return undefined;
+    });
+    const initial = panel(liveUrl);
+    const view = render(<BrowserPanel panel={initial} onUpdate={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+    await act(async () => Promise.resolve());
+    liveUrl = 'https://example.com/search?q=hello';
+    left = 40;
+    view.rerender(<BrowserPanel panel={{ ...initial, x: 20 }} onUpdate={vi.fn()} />);
+    await act(async () => Promise.resolve());
+    expect(liveUrl).toBe('https://example.com/search?q=hello');
+    expect(screen.queryByText('Loading…')).toBeNull();
+    const before = native.invoke.mock.calls.length;
+    fireEvent.change(screen.getByLabelText('Browser address'), { target: { value: 'draft' } });
+    await act(async () => Promise.resolve());
+    expect(native.invoke.mock.calls.length).toBe(before);
+    liveUrl = 'https://example.com/another-link';
+    fireEvent.change(screen.getByLabelText('Browser address'), {
+      target: { value: 'https://example.com/search?q=hello' },
+    });
+    fireEvent.submit(screen.getByLabelText('Browser address').closest('form')!);
+    await act(async () => Promise.resolve());
+    expect(liveUrl).toBe('https://example.com/search?q=hello');
+  });
+
+  it('keeps an explicit Go queued behind an in-flight layout refresh', async () => {
+    let finishLayout: (() => void) | undefined;
+    let deferLayout = false;
+    let liveUrl = 'https://example.com/';
+    native.invoke.mockImplementation(async (command, args) => {
+      if (command !== 'workbench_browser_surface_open') return undefined;
+      if (args?.preserveNavigation && deferLayout) {
+        deferLayout = false;
+        await new Promise<void>((resolve) => {
+          finishLayout = resolve;
+        });
+      }
+      if (!args?.preserveNavigation) liveUrl = String(args?.url);
+      return {
+        panelId: args?.panelId,
+        operationId: args?.operationId,
+        url: liveUrl,
+        loading: false,
+      };
+    });
+    const initial = panel(liveUrl);
+    const view = render(<BrowserPanel panel={initial} onUpdate={vi.fn()} />);
+    await act(async () => Promise.resolve());
+    liveUrl = 'https://example.com/a-link';
+    deferLayout = true;
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+      x: 40,
+      y: 80,
+      top: 80,
+      left: 40,
+      right: 680,
+      bottom: 480,
+      width: 640,
+      height: 400,
+      toJSON: () => ({}),
+    });
+    view.rerender(<BrowserPanel panel={{ ...initial, x: 20 }} onUpdate={vi.fn()} />);
+    await waitFor(() => expect(finishLayout).toBeTypeOf('function'));
+    fireEvent.submit(screen.getByLabelText('Browser address').closest('form')!);
+    await act(async () => {
+      await Promise.resolve();
+      finishLayout?.();
+    });
+    expect(liveUrl).toBe('https://example.com/');
+  });
+
   it('coalesces concurrent mount and bounds opens for the same native child', async () => {
     let finishOpen: (() => void) | undefined;
     native.invoke.mockImplementation(async (command, args) => {

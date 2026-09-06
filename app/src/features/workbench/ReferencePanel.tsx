@@ -8,6 +8,10 @@ import { FilesPanel } from './FilesPanel';
 import { JarvisPanel } from './JarvisPanel';
 import { NativeAppPanel } from './NativeAppPanel';
 import { NotesPanel } from './NotesPanel';
+
+const NotesPage = React.lazy(() =>
+  import('@/features/notes/NotesPage').then((module) => ({ default: module.NotesPage })),
+);
 import type {
   WorkbenchArtifactReferenceResolver,
   WorkbenchArtifactReferenceSnapshot,
@@ -242,7 +246,22 @@ export function ReferencePanel({ panel, onUpdate }: ReferencePanelProps) {
   }
 
   if (panel.kind === 'notes') {
-    return <NotesPanel panel={panel} onUpdate={onUpdate} />;
+    // Existing scratchpads retain their content and Desktop save workflow.
+    if (typeof panel.settings.note === 'string' || panel.settings.filePath) {
+      return <NotesPanel panel={panel} onUpdate={onUpdate} />;
+    }
+    return (
+      <div
+        className="workbench-embedded-surface"
+        data-workbench-surface="notes"
+        onWheel={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <React.Suspense fallback={<div className="workbench-panel-empty">Loading Notes…</div>}>
+          <NotesPage />
+        </React.Suspense>
+      </div>
+    );
   }
 
   if (panel.kind === 'editor') {
