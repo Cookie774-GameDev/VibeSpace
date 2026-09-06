@@ -246,3 +246,30 @@ describe('normalizeOpenCodeEvent', () => {
     ]);
   });
 });
+
+it('maps native custom-tool permission names to exact gateway grants', () => {
+  const events = normalizeOpenCodeEvent(
+    {
+      type: 'permission.asked',
+      properties: {
+        sessionID: 's',
+        id: 'p',
+        permission: 'terminal_spawn',
+        patterns: ['terminal.spawn'],
+      },
+    },
+    's',
+  );
+  expect(events).toEqual([
+    {
+      type: 'approval.requested',
+      approval: {
+        id: 'p',
+        sessionId: 's',
+        capability: 'terminal.spawn',
+        title: 'Allow terminal.spawn',
+        pattern: ['terminal.spawn'],
+      },
+    },
+  ]);
+});

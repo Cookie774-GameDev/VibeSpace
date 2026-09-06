@@ -545,7 +545,7 @@ type KernelQuestionProjectionPort = Readonly<{
   accountId: string;
   runId: string;
   requestId: string;
-  project(part: Extract<Part, { kind: 'question_block' }>): Promise<void>;
+  project(part: Extract<Part, { kind: 'question_block' | 'permission_request' }>): Promise<void>;
 }>;
 
 const activeKernelQuestionProjectionPorts = new Map<string, KernelQuestionProjectionPort>();
@@ -1649,7 +1649,7 @@ export async function installJarvisKernelRuntimeHost(
               if (resolvedDisposed || preparedDisposed) {
                 throw new Error('kernel_provider_configuration_disposed');
               }
-              let previewState = createStreamingPreviewState();
+              const previewTextParts = new Map<string, string>();
               const lastUserText = llmContentToText(
                 [...providerInput.messages].reverse().find((message) => message.role === 'user')
                   ?.content ?? '',
@@ -1778,6 +1778,21 @@ export async function installJarvisKernelRuntimeHost(
                     }
                     contextCitationSessionId = binding.sessionId;
                   },
+                  onApprovalRequested: async (approval) => {
+                    signal.throwIfAborted();
+                    const port = activeKernelQuestionProjectionPorts.get(providerInput.runId);
+                    if (!port || port.accountId !== providerInput.accountId ||
+                        port.requestId !== providerInput.requestId ||
+                        approval.sessionId !== contextCitationSessionId) {
+                      throw new Error('kernel_provider_approval_scope_unavailable');
+                    }
+                    await port.project({ kind: 'permission_request', request: openCodePermissionRequest(approval, {
+                      chatId: providerChatId, accountId: providerInput.accountId,
+                      workspaceId: providerInput.workspaceId, projectId: providerInput.projectId,
+                      workingDirectory: providerInput.workingDirectory,
+                    }) });
+                    signal.throwIfAborted();
+                  },
                   onQuestionRequested: async (projection) => {
                     signal.throwIfAborted();
                     const port = activeKernelQuestionProjectionPorts.get(providerInput.runId);
@@ -1866,8 +1881,11 @@ export async function installJarvisKernelRuntimeHost(
                   },
                   onChunk: (chunk) => {
                     if (!chunk.delta) return;
-                    const decision = pushStreamingPreviewChunk(previewState, chunk.delta);
-                    previewState = decision.state;
+                    const partId = chunk.streamPartId ?? 'default';
+                    previewTextParts.set(partId, chunk.mode === 'replace' ? chunk.delta :
+                      `${previewTextParts.get(partId) ?? ''}${chunk.delta}`);
+                    const decision = pushStreamingPreviewChunk(createStreamingPreviewState(),
+                      [...previewTextParts.values()].join(''));
                     const scope = activeTurnScopes.get(providerInput.runId);
                     if (!decision.allowed || !scope) return;
                     setLiveAgentActivityRunPhase(providerInput.runId, {
@@ -2911,11 +2929,7 @@ const JARVIS_CHAT_ACTION_OVERLAY = [
   'Name the relevant file, agent, terminal, context map, or page when it matters.',
   '',
   'Rules:',
-  '- If the user asks you to change the app, navigate, open terminals, run commands, create schedules, or spawn subagents, say the result briefly and emit a fenced `action` block when an action exists.',
-  '- Never claim you spawned subagents unless you emitted an approval-gated action block. Do not role-play fake multi-agent work in plain text.',
-  '- To spawn one chat-native worker: emit `agent.run` with `{"task":"..."}` (user must Approve). The parent chat stays focused; workers run in background threads.',
-  '- To spawn several: emit `agent.run_many` with `{"tasksJson":"[{\\"task\\":\\"...\\"},{\\"task\\":\\"...\\"}]"}`. Prefer fire-and-watch plus `agent.status` / `agent.wait` / `chat.send` for long multi-agent conversations instead of only one blocking batch when the user wants continuous orchestration.',
-  '- To talk to a worker after spawn: use `agent.status` to learn child chat ids, then `chat.send` with that chatId and your message. You may relay peer instructions so subagents converse while you stay the supervisor on the parent chat.',
+  '- If the user asks you to change the app, navigate, open terminals, run commands, or create schedules, say the result briefly and emit a fenced `action` block when an action exists.',
   '- For long multi-agent tasks or “keep them talking until I say stop”: stay awake as supervisor — keep checking status, waiting, and sending follow-ups until the user says stop. Do not end early with “done” while children are still running.',
   '- Users open a worker thread with `/agent` (selector). Do not instruct them to leave the parent chat unless they ask.',
   '- You can inspect and change code through the listed `files.read`, `files.create`, `files.edit`, and terminal actions. Do not broadly claim that you cannot code, read files, edit files, run tests, or use terminals when those actions are present.',
@@ -2969,8 +2983,8 @@ function getInteractionModeOverlay(mode: JarvisInteractionMode, needsVisiblePlan
   return [
     '## Jarvis interaction mode: Agent',
     'You may help do the work, but risky writes, deletes, commands, project-structure changes, or agent launches must be gated by permission cards or existing approval actions.',
-    'When the user wants subagents: emit real `agent.run` / `agent.run_many` actions (Approve required). Stay on the parent chat as supervisor; do not pretend agents exist without cards.',
-    'For long orchestrated work, keep coordinating with `agent.status`, `agent.wait`, and `chat.send` until the user stops you. Prefer staying awake over declaring premature completion.',
+    'For subagents, use the selected backend native delegation tools: OpenCode task, or the available Codex native agent tools. Keep their native child session identities. Do not substitute VibeSpace agent.run / agent.run_many actions. If native delegation is unavailable, report that limitation.',
+    'Coordinate children through the selected provider native status, wait, and follow-up tools. Report only observed child activity and completion.',
   ].join('\n');
 }
 
@@ -6444,10 +6458,11 @@ export function startRuntimeListener(
               requestId: turn.attempt.requestId,
               async project(part) {
                 controller.signal.throwIfAborted();
-                if (projectedQuestionBlockIds.has(part.block.id)) {
+                const projectionId = part.kind === 'question_block' ? `question:${part.block.id}` : `approval:${part.request.id}`;
+                if (projectedQuestionBlockIds.has(projectionId)) {
                   throw new Error('kernel_provider_question_duplicate');
                 }
-                projectedQuestionBlockIds.add(part.block.id);
+                projectedQuestionBlockIds.add(projectionId);
                 await bindings.appendMessage({
                   chat_id: chatId as ChatId,
                   role: 'assistant',

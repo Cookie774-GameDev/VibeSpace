@@ -122,4 +122,10 @@ export function createActivityRecorder(capacity = 2000) {
   };
 }
 
-export const appActivityLog = createActivityRecorder();
+// The native log viewer and Vite HMR can import different module URLs. All
+// instrumentation in one renderer must write to the same bounded recorder.
+const recorderKey = Symbol.for('vibespace.appActivityLog.v1');
+const renderer = globalThis as typeof globalThis & {
+  [recorderKey]?: ReturnType<typeof createActivityRecorder>;
+};
+export const appActivityLog = (renderer[recorderKey] ??= createActivityRecorder());

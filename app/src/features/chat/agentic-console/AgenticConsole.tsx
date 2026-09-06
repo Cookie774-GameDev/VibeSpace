@@ -1,3 +1,4 @@
+import { StreamingChatPreview } from '../StreamingChatPreview';
 import * as React from 'react';
 import { ThemedSelect } from '@/components/ui/themed-select';
 import { NotesSessionReferences } from '../../notes/NotesSessionReferences';
@@ -1504,6 +1505,7 @@ export function AgenticConsole({
               </React.Fragment>
             );
           })}
+          {sessionIsActive ? <StreamingChatPreview chatId={chatId} /> : null}
           {turnActivityMessage && !inlineLedgerLegacyId && !finalAnswerId ? (
             <AssistantActivityLedger
               message={turnActivityMessage}

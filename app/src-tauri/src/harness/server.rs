@@ -671,7 +671,8 @@ fn scoped_provider_config(
             "schedule_create",
             "app_navigate",
         ] {
-            permission.insert(name.to_string(), json!(mutation));
+            // Semantic gateway mutations need an observable native approval receipt.
+            permission.insert(name.to_string(), json!(if mutation == "deny" { "deny" } else { "ask" }));
         }
         json!({
             "description": description,
@@ -759,6 +760,14 @@ async function call(name, args, context) {
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.pathname !== "/v1/tool") {
     throw new Error("VibeSpace Tool Gateway endpoint is invalid.")
   }
+  const mutations = new Set(["terminal.open", "terminal.focus", "terminal.spawn", "terminal.write",
+    "terminal.schedule", "command.run", "profile.allAboutMe.update", "memory.learning.update",
+    "context.attach", "skills.load", "plugins.run", "mcp.run", "tasks.create", "tasks.update",
+    "schedule.create", "app.navigate"])
+  if (mutations.has(name)) {
+    await context.ask({ permission: name.replaceAll(".", "_"), patterns: [name], always: [],
+      metadata: { title: `Allow ${name}`, args } })
+  }
   const response = await fetch(url, {
     method: "POST",
     redirect: "error",
@@ -781,6 +790,8 @@ async function call(name, args, context) {
   if (!response.ok) throw new Error(`VibeSpace Tool Gateway failed (${response.status}).`)
   const body = await response.text()
   if (body.length > 131072) throw new Error("VibeSpace tool result exceeded the safe size limit.")
+  const result = JSON.parse(body)
+  if (result.ok !== true) throw new Error(`VibeSpace tool did not complete (${result.code || "tool_failed"}).`)
   return body
 }
 

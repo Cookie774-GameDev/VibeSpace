@@ -7173,6 +7173,12 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     );
     if (!installedHostQuestion) throw new Error('expected installed-host question projection');
     mocks.runAgent.mockImplementation(async (providerInput) => {
+      expect(providerInput.onApprovalRequested).toEqual(expect.any(Function));
+      await providerInput.onHarnessSessionBound?.({ sessionId: 'ses_installed_kernel_host' });
+      await providerInput.onApprovalRequested?.({ id: 'approval_installed_kernel_host', sessionId: 'ses_installed_kernel_host', capability: 'terminal.spawn', title: 'Open terminal' });
+      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        parts: [expect.objectContaining({kind: 'permission_request', request: expect.objectContaining({id: 'approval_installed_kernel_host', status: 'pending'})})],
+      }));
       expect(providerInput.onQuestionRequested).toEqual(expect.any(Function));
       await providerInput.onQuestionRequested?.(installedHostQuestion);
       expect(providerInput.onToolActivity).toEqual(expect.any(Function));
@@ -7231,6 +7237,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           .getState()
           .eventsByChat[harness.chatId]?.filter((event) => event.kind === 'tool'),
       ).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'done', subtitle: 'game.js' }), expect.objectContaining({ status: 'done', subtitle: 'src/alpha.txt' })]));
+      providerInput.onChunk?.({delta:'I am checking the file.',streamPartId:'preview-1'});
+      providerInput.onChunk?.({delta:'I checked the file.',streamPartId:'preview-1',mode:'replace'});
+      expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)?.text).toBe('I checked the file.');
       providerInput.onChunk?.({
         delta: 'The installed kernel host returned a partial response, Sir.',
         done: false,
@@ -7401,7 +7410,8 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(mocks.buildRoutedMcpTaskContext).toHaveBeenCalledWith(
         'Run the installed kernel host.',
       );
-      expect(harness.bindings.appendMessage).toHaveBeenCalledExactlyOnceWith({
+      expect(harness.bindings.appendMessage).toHaveBeenCalledTimes(2);
+      expect(harness.bindings.appendMessage).toHaveBeenCalledWith({
         chat_id: harness.chatId,
         role: 'assistant',
         parts: [installedHostQuestion.part],

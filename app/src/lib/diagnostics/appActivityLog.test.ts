@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createActivityRecorder } from './appActivityLog';
 
 describe('app-wide activity recorder', () => {
@@ -39,4 +39,14 @@ describe('app-wide activity recorder', () => {
     expect(log.snapshot(0).events[0].phase).toBe('failed');
     expect(log.snapshot(2).events).toHaveLength(1);
   });
+});
+
+it('keeps native viewer imports and reloaded instrumentation on one recorder', async () => {
+  const first = await import('./appActivityLog');
+  first.appActivityLog.record('fixture', 'received', { tool: 'vibespace_context' });
+  const sequence = first.appActivityLog.snapshot().sequence;
+  vi.resetModules();
+  const reloaded = await import('./appActivityLog');
+  expect(reloaded.appActivityLog).toBe(first.appActivityLog);
+  expect(reloaded.appActivityLog.snapshot().sequence).toBe(sequence);
 });

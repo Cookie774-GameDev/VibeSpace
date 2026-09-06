@@ -1,3 +1,4 @@
+import { TOOL_GATEWAY_CATALOG } from './toolGatewayProtocol';
 import { classifyOpenCodeAuthFailure, redactHarnessText } from './errors';
 import type { HarnessEvent } from './types';
 
@@ -153,9 +154,12 @@ export function normalizeOpenCodeEvent(
 
   if (eventType === 'permission.updated' || eventType === 'permission.asked') {
     const id = asBoundedString(properties.id, 512) ?? asBoundedString(properties.requestID, 512);
-    const capability =
+    const nativeCapability =
       asBoundedString(properties.type, 256) ?? asBoundedString(properties.permission, 256);
-    if (!id || !capability) return [];
+    if (!id || !nativeCapability) return [];
+    const capability =
+      TOOL_GATEWAY_CATALOG.find((name) => name.replaceAll('.', '_') === nativeCapability) ??
+      nativeCapability;
     const metadata = asRecord(properties.metadata);
     const title =
       asBoundedString(properties.title, 512) ??
