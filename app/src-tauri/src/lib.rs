@@ -77,6 +77,7 @@ mod sik_smoke;
 mod siyuan;
 mod static_server;
 mod terminal;
+mod terminal_clipboard;
 pub mod terminal_cli;
 mod terminal_peer_fabric;
 mod terminal_snapshot;
@@ -733,6 +734,7 @@ fn run_ordinary(
             harness::tool_gateway::tool_gateway_respond,
             command_center_tool::command_center_tool,
             terminal_peer_fabric::terminal_peer_fabric,
+            terminal_clipboard::terminal_read_clipboard,
             context_search::context_search_replace_documents,
             context_search::context_search_delete_documents,
             context_search::context_search_query,
@@ -1063,6 +1065,7 @@ harness::codex_server::codex_app_server_stop
 harness::tool_gateway::tool_gateway_respond
 command_center_tool::command_center_tool
 terminal_peer_fabric::terminal_peer_fabric
+terminal_clipboard::terminal_read_clipboard
 context_search::context_search_replace_documents
 context_search::context_search_delete_documents
 context_search::context_search_query

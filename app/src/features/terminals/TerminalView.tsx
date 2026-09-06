@@ -37,6 +37,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal, type ITheme } from 'xterm';
 import { isTauri } from '@/lib/utils';
+import { classifyResourceShell } from '@/lib/resourceInteraction';
+import { formatTerminalClipboard, installTerminalPaste } from './terminalClipboard';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebLinksAddon } from 'xterm-addon-web-links';
 import { WebglAddon } from 'xterm-addon-webgl';
@@ -1022,6 +1024,7 @@ export function TerminalView({
     let onClear: ((e: Event) => void) | null = null;
     let onPersistNow: (() => void) | null = null;
     let unregisterPaneClear: (() => void) | null = null;
+    let disposeClipboard: (() => void) | null = null;
     let unregisterSnapshotFlush: (() => void) | null = null;
     let snapshotSaveTimer: number | null = null;
     let snapshotSaveInFlight: Promise<void> | null = null;
@@ -1364,6 +1367,19 @@ export function TerminalView({
 
       setInitializationPhase('kernel_terminal_phase_xterm_open');
       term.open(containerEl);
+      disposeClipboard = installTerminalPaste(
+        containerEl,
+        term,
+        async () => {
+          const targetSession = sessionRef.current;
+          const value = isTauri && /Win/i.test(navigator.platform)
+            ? await invoke<{ text: string; paths: string[] }>('terminal_read_clipboard')
+            : { text: await navigator.clipboard.readText(), paths: [] };
+          if (sessionRef.current !== targetSession) return '';
+          return formatTerminalClipboard(value, classifyResourceShell(command ?? 'powershell'));
+        },
+        () => toast.error('Paste failed', 'Could not read the clipboard. Copy the item again and retry.'),
+      );
 
       // GPU renderer. xterm's default DOM renderer re-lays-out HTML rows on
       // every write, which is the dominant frame cost with a 10-pane grid of
@@ -2105,6 +2121,7 @@ export function TerminalView({
       if (onPersistNow) window.removeEventListener('jarvis:terminal:persist-now', onPersistNow);
       unregisterSnapshotFlush?.();
       unregisterPaneClear?.();
+      disposeClipboard?.();
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       scrollListenerDispose?.dispose();

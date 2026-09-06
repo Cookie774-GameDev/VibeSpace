@@ -9,6 +9,8 @@ const repo = vi.hoisted(() => ({
   create: vi.fn(),
 }));
 const openCodeQuestion = vi.hoisted(() => ({ respond: vi.fn() }));
+const playUiSound = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/sfx', () => ({ playUiSound }));
 
 vi.mock('@/lib/db/repositories', () => ({
   messageRepo: repo,
@@ -97,6 +99,7 @@ const harnessPart: Extract<Part, { kind: 'question_block' }> = {
 
 describe('QuestionBlockCard', () => {
   beforeEach(() => {
+    playUiSound.mockClear();
     repo.getById.mockReset();
     repo.update.mockReset();
     repo.create.mockReset();
@@ -120,6 +123,25 @@ describe('QuestionBlockCard', () => {
       blockId: 'qb_opencode_exact',
       questionCount: 1,
     });
+  });
+
+  it('plays the existing UI sound on selection and locks completed answers', () => {
+    const { rerender } = render(<QuestionBlockCard part={blockPart} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Chat UI' }));
+    expect(playUiSound).toHaveBeenCalledWith('ui_click_soft');
+    expect(screen.getByRole('button', { name: 'Chat UI' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    rerender(
+      <QuestionBlockCard
+        part={{ ...blockPart, block: { ...blockPart.block, status: 'answered' } }}
+      />,
+    );
+    expect((screen.getByRole('button', { name: 'Chat UI' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Runtime' }));
+    expect(playUiSound).toHaveBeenCalledTimes(1);
   });
 
   it('shows one question at a time with a real progress label', () => {

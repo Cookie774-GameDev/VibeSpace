@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { ArrowLeft, ArrowRight, Check, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { playUiSound } from '@/lib/sfx';
+import './QuestionBlockCard.css';
 import { messageRepo } from '@/lib/db/repositories';
 import {
   buildOpenCodeQuestionRejectRequest,
@@ -345,6 +347,8 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
   };
 
   const toggleChoice = (question: JarvisQuestion, optionId: string) => {
+    if (busy || !isPending) return;
+    playUiSound('ui_click_soft');
     setError(null);
     setSelectedByQuestion((current) => {
       const selected = current[question.id] ?? [];
@@ -426,32 +430,37 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
   const renderQuestion = (question: JarvisQuestion, index: number) => {
     const selected = selectedByQuestion[question.id] ?? [];
     return (
-      <div key={question.id} className="rounded-lg border border-border/80 bg-background/60 p-3">
-        <div className="mb-2 text-secondary font-medium text-foreground">
+      <div key={question.id} className="question-card__question">
+        <div className="question-card__prompt text-foreground">
           {isWizard ? question.prompt : `${index + 1}. ${question.prompt}`}
           {question.required && <span className="ml-1 text-accent-copper">*</span>}
         </div>
         {question.options?.length ? (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {question.options.map((option) => {
+          <div className="question-card__options">
+            {question.options.map((option, optionIndex) => {
               const active = selected.includes(option.id);
               return (
                 <button
                   key={option.id}
                   type="button"
                   className={cn(
-                    'rounded-md border px-2.5 py-1.5 text-secondary transition',
+                    'question-card__option',
                     active
                       ? 'border-accent-cyan/70 bg-accent-cyan/15 text-foreground'
                       : 'border-border bg-elevated text-muted-foreground hover:text-foreground',
                   )}
                   aria-pressed={active}
+                  disabled={busy || !isPending}
                   onClick={() => toggleChoice(question, option.id)}
                 >
-                  <span className="inline-flex items-center gap-1">
-                    {active && <Check className="h-3 w-3" />}
-                    {option.label}
+                  <span className="question-card__marker" aria-hidden="true">
+                    {active ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      String(optionIndex + 1).padStart(2, '0')
+                    )}
                   </span>
+                  <span>{option.label}</span>
                 </button>
               );
             })}
@@ -461,12 +470,13 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
           <button
             type="button"
             className={cn(
-              'mb-2 rounded-md border px-2.5 py-1.5 text-secondary transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan/60',
+              'question-card__custom mb-2 rounded-md border px-2.5 py-1.5 text-secondary transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan/60',
               customOpenByQuestion[question.id]
                 ? 'border-accent-cyan/70 bg-accent-cyan/15 text-foreground'
                 : 'border-border bg-elevated text-muted-foreground hover:text-foreground',
             )}
             aria-pressed={Boolean(customOpenByQuestion[question.id])}
+            disabled={busy || !isPending}
             aria-controls={`question-custom-${question.id}`}
             onClick={() =>
               setCustomOpenByQuestion((current) => ({
@@ -486,6 +496,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
             className="min-h-16 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-secondary text-foreground outline-none focus:border-accent-cyan focus-visible:ring-2 focus-visible:ring-accent-cyan/40"
             placeholder={question.placeholder ?? 'Write your own answer'}
             value={textByQuestion[question.id] ?? ''}
+            disabled={busy || !isPending}
             onKeyDown={handleTextKeyDown}
             onChange={(event) => {
               setError(null);
@@ -498,14 +509,14 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
   };
 
   return (
-    <section className="rounded-xl border border-accent-cyan/30 bg-accent-cyan/5 p-3 shadow-[0_0_20px_-16px_hsl(var(--accent-cyan))]">
+    <section className="question-card" aria-busy={busy}>
       <div className="mb-3 flex items-start justify-between gap-2">
         <div className="flex items-start gap-2">
-          <div className="rounded-full border border-accent-cyan/40 bg-accent-cyan/10 p-1">
-            <HelpCircle className="h-3.5 w-3.5 text-accent-cyan" />
+          <div className="question-card__icon">
+            <HelpCircle className="h-5 w-5" />
           </div>
           <div>
-            <div className="text-ui-strong text-foreground">
+            <div className="question-card__title text-foreground">
               {block.title ?? 'Jarvis needs a quick answer'}
             </div>
             {block.description && (
@@ -514,7 +525,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
           </div>
         </div>
         {isPending && (
-          <span className="shrink-0 rounded-full border border-accent-cyan/30 bg-accent-cyan/10 px-2 py-0.5 text-metadata text-muted-foreground">
+          <span className="question-card__count shrink-0 text-metadata text-muted-foreground">
             Question {activeIndex + 1} of {total}
           </span>
         )}
@@ -559,7 +570,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="question-card__footer flex flex-wrap items-center gap-2">
         {isWizard && activeIndex > 0 && (
           <Button
             type="button"
