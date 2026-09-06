@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { AppWindow, FileUp, Search } from 'lucide-react';
+import { AppWindow, FileUp, Pin, PinOff, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -14,6 +14,8 @@ interface NativeAppPickerDialogProps {
   open: boolean;
   apps: readonly NativeAppDescriptor[];
   error?: string | null;
+  loading?: boolean;
+  onTogglePin?: (app: NativeAppDescriptor) => void;
   onOpenChange: (open: boolean) => void;
   onChoose: (app: NativeAppDescriptor) => void;
   onPickExecutable: () => Promise<NativeAppDescriptor | null>;
@@ -23,6 +25,8 @@ export function NativeAppPickerDialog({
   open,
   apps,
   error: catalogError,
+  loading = false,
+  onTogglePin,
   onOpenChange,
   onChoose,
   onPickExecutable,
@@ -83,8 +87,8 @@ export function NativeAppPickerDialog({
         <DialogHeader>
           <DialogTitle>Open an app</DialogTitle>
           <DialogDescription>
-            Choose a detected desktop app or select an executable. Unsupported embedding uses a
-            separate app window.
+            Open an installed app inside Workbench, or pin it to the left taskbar. Unsupported
+            embedding uses a separate app window.
           </DialogDescription>
         </DialogHeader>
         <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
@@ -98,14 +102,23 @@ export function NativeAppPickerDialog({
             placeholder="Search installed and running apps"
           />
         </label>
-        <div className="max-h-72 space-y-2 overflow-y-auto" role="list">
+        {loading ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            Loading installed apps…
+          </p>
+        ) : null}
+        <div className="max-h-72 space-y-2 overflow-y-auto" role="list" aria-busy={loading}>
           {availableApps.map((app) => (
-            <div key={app.id + ':' + (app.path ?? '')} role="listitem">
+            <div
+              key={app.id + ':' + (app.path ?? '')}
+              role="listitem"
+              className="flex items-center gap-2"
+            >
               <button
                 type="button"
                 aria-label={'Open ' + app.name}
                 disabled={!app.launchable}
-                className="flex w-full items-center gap-3 rounded-md border border-border px-3 py-3 text-left hover:bg-muted/60"
+                className="flex min-w-0 flex-1 items-center gap-3 rounded-md border border-border px-3 py-3 text-left hover:bg-muted/60"
                 onClick={() => choose(app)}
               >
                 <AppWindow className="h-5 w-5 shrink-0" aria-hidden="true" />
@@ -123,9 +136,25 @@ export function NativeAppPickerDialog({
                   <span>Unavailable</span>
                 ) : null}
               </button>
+              {onTogglePin ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label={
+                    app.pinned ? `Unpin ${app.name} from taskbar` : `Pin ${app.name} to taskbar`
+                  }
+                  title={app.pinned ? 'Unpin from taskbar' : 'Pin to taskbar'}
+                  aria-pressed={app.pinned}
+                  disabled={!app.launchable && !app.pinned}
+                  onClick={() => onTogglePin(app)}
+                >
+                  {app.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                </Button>
+              ) : null}
             </div>
           ))}
-          {availableApps.length === 0 ? (
+          {availableApps.length === 0 && !loading ? (
             <p className="py-5 text-center text-sm text-muted-foreground" role="status">
               No matching detected apps.
             </p>

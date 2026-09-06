@@ -42,12 +42,9 @@ import { WorkbenchCanvas } from './WorkbenchCanvas';
 import { WorkbenchContextMenu } from './WorkbenchContextMenu';
 import { ArtifactReferenceResolverProvider } from './ReferencePanel';
 import { useWorkbenchStore } from './store';
-import {
-  listNativeApps,
-  pickNativeAppExecutable,
-  type NativeAppDescriptor,
-} from './nativeApps';
+import { listNativeApps, pickNativeAppExecutable, type NativeAppDescriptor } from './nativeApps';
 import { openNativeAppPanel } from './nativeAppPanels';
+import { mergeNativeAppPins, readNativeAppPins, updateNativeAppPin } from './nativeAppPins';
 import { setWorkbenchNativeWindowTitle } from './window';
 import type { WorkbenchPanelKind } from './types';
 import type { PluginManifest } from '@/features/plugins';
@@ -111,7 +108,49 @@ export function WorkbenchPage() {
   const [artifactPickerOpen, setArtifactPickerOpen] = React.useState(false);
   const [artifactChoices, setArtifactChoices] = React.useState<readonly ArtifactChoice[]>([]);
   const [nativeApps, setNativeApps] = React.useState<readonly NativeAppDescriptor[]>([]);
+  const pinStorageKey = `vibespace.workbench.app-pins.v1:${accountId}`;
+  const [pinState, setPinState] = React.useState<{ key: string; apps: NativeAppDescriptor[] }>(
+    () => {
+      try {
+        return { key: pinStorageKey, apps: readNativeAppPins(localStorage.getItem(pinStorageKey)) };
+      } catch {
+        return { key: pinStorageKey, apps: [] };
+      }
+    },
+  );
+  React.useEffect(() => {
+    const reload = () => {
+      try {
+        setPinState({
+          key: pinStorageKey,
+          apps: readNativeAppPins(localStorage.getItem(pinStorageKey)),
+        });
+      } catch {
+        setPinState({ key: pinStorageKey, apps: [] });
+      }
+    };
+    reload();
+    const sync = (event: StorageEvent) => {
+      if (event.key === pinStorageKey || event.key === null) reload();
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, [pinStorageKey]);
+  const appsWithPins = React.useMemo(
+    () => mergeNativeAppPins(nativeApps, pinState.key === pinStorageKey ? pinState.apps : []),
+    [nativeApps, pinState, pinStorageKey],
+  );
+  const toggleNativeAppPin = (app: NativeAppDescriptor) => {
+    try {
+      const next = updateNativeAppPin(readNativeAppPins(localStorage.getItem(pinStorageKey)), app);
+      localStorage.setItem(pinStorageKey, JSON.stringify(next));
+      setPinState({ key: pinStorageKey, apps: next });
+    } catch {
+      toast.error('Could not save app pins', 'Storage is unavailable. Try again.');
+    }
+  };
   const [nativeAppPickerOpen, setNativeAppPickerOpen] = React.useState(false);
+  const [nativeAppsLoading, setNativeAppsLoading] = React.useState(true);
   const [nativeAppCatalogError, setNativeAppCatalogError] = React.useState<string | null>(null);
   const [artifactPickerState, setArtifactPickerState] = React.useState<
     'idle' | 'loading' | 'ready' | 'error'
@@ -120,6 +159,7 @@ export function WorkbenchPage() {
 
   React.useEffect(() => {
     let current = true;
+    setNativeAppsLoading(true);
     void listNativeApps()
       .then((apps) => {
         if (!current) return;
@@ -132,6 +172,9 @@ export function WorkbenchPage() {
         setNativeAppCatalogError(
           cause instanceof Error ? cause.message : 'Native app catalog unavailable.',
         );
+      })
+      .finally(() => {
+        if (current) setNativeAppsLoading(false);
       });
     return () => {
       current = false;
@@ -417,7 +460,7 @@ export function WorkbenchPage() {
         <PanelPalette
           onAdd={add}
           pinnedPlugins={pinnedPlugins}
-          detectedApps={nativeApps}
+          detectedApps={appsWithPins}
           onOpenNativeApp={openNativeApp}
           onOpenNativeAppPicker={() => setNativeAppPickerOpen(true)}
           open={paletteOpen}
@@ -443,7 +486,9 @@ export function WorkbenchPage() {
       )}
       <NativeAppPickerDialog
         open={nativeAppPickerOpen}
-        apps={nativeApps}
+        apps={appsWithPins}
+        loading={nativeAppsLoading}
+        onTogglePin={toggleNativeAppPin}
         error={nativeAppCatalogError}
         onOpenChange={setNativeAppPickerOpen}
         onChoose={openNativeApp}

@@ -37,6 +37,7 @@ export interface NativeAppSurfaceStatus {
   error?: string | null;
   fallback?: boolean;
   owned?: boolean;
+  embeddingError?: string | null;
 }
 
 export interface NativeAppSurfaceOpenInput {
@@ -47,6 +48,25 @@ export interface NativeAppSurfaceOpenInput {
   path?: string;
   bounds: NativeAppBounds;
   zIndex?: number;
+  scaleFactor?: number;
+  launch?: boolean;
+}
+
+const launchRequests = new Map<string, { generation: number; pending: boolean }>();
+export function requestNativeAppLaunch(panelId: string): void {
+  launchRequests.set(panelId, {
+    generation: (launchRequests.get(panelId)?.generation ?? 0) + 1,
+    pending: true,
+  });
+}
+export function nativeAppLaunchGeneration(panelId: string): number {
+  return launchRequests.get(panelId)?.generation ?? 0;
+}
+export function consumeNativeAppLaunch(panelId: string): boolean {
+  const request = launchRequests.get(panelId);
+  if (!request?.pending) return false;
+  request.pending = false;
+  return true;
 }
 
 export const CHATGPT_NATIVE_APP: NativeAppDescriptor = {
@@ -159,6 +179,7 @@ export async function hideNativeAppSurface(panelId: string, operationId: string)
 }
 
 export async function detachNativeAppSurface(panelId: string): Promise<void> {
+  launchRequests.delete(panelId);
   if (!isTauri) return;
   await invoke('workbench_native_app_surface_detach', { panelId });
 }

@@ -55,6 +55,21 @@ const edge: NativeAppDescriptor = {
 };
 
 describe('Workbench native app integration', () => {
+  it('keeps a chosen taskbar pin after remount and supports unpinning', async () => {
+    const first = render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open app' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin Microsoft Edge to taskbar' }));
+    first.unmount();
+    render(<WorkbenchPage />);
+    expect(await screen.findByRole('button', { name: 'Open Microsoft Edge' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open app' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Unpin Microsoft Edge from taskbar' }),
+    );
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Open Microsoft Edge' })).toBeNull();
+  });
   it('refreshes the catalog when Apps is opened after an application becomes available', async () => {
     native.list.mockResolvedValueOnce([]).mockResolvedValue([chatgpt, edge]);
     render(<WorkbenchPage />);

@@ -2,6 +2,7 @@ import { useWorkbenchStore } from './store';
 import {
   nativeAppPanelSettings,
   sanitizeNativeAppDescriptor,
+  requestNativeAppLaunch,
   type NativeAppDescriptor,
 } from './nativeApps';
 
@@ -17,6 +18,7 @@ export function openNativeAppPanel(input: NativeAppDescriptor): string | null {
   });
   const settings = nativeAppPanelSettings(app);
   if (existing) {
+    requestNativeAppLaunch(existing.id);
     store.updatePanel(existing.id, {
       kind: 'native-app',
       title: app.name,
@@ -26,12 +28,15 @@ export function openNativeAppPanel(input: NativeAppDescriptor): string | null {
     });
     store.bringToFront(existing.id);
     store.selectPanel(existing.id);
+    store.fitView();
     return existing.id;
   }
   const id = store.addPanel('native-app', undefined, settings);
   if (!id) return null;
+  requestNativeAppLaunch(id);
   useWorkbenchStore.getState().updatePanel(id, { title: app.name, status: 'idle' });
   useWorkbenchStore.getState().bringToFront(id);
   useWorkbenchStore.getState().selectPanel(id);
+  useWorkbenchStore.getState().fitView();
   return id;
 }

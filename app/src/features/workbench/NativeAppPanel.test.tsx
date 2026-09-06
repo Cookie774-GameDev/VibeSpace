@@ -51,6 +51,60 @@ function nativeStatus(args?: Record<string, unknown>) {
 }
 
 describe('Workbench NativeAppPanel', () => {
+  it('releases an app window when its panel is removed instead of merely changing routes', async () => {
+    const view = render(
+      <div className="workbench-canvas">
+        <NativeAppPanel panel={appPanel()} onUpdate={vi.fn()} />
+      </div>,
+    );
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith(
+        'workbench_native_app_surface_open',
+        expect.anything(),
+      ),
+    );
+    view.unmount();
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith('workbench_native_app_surface_detach', {
+        panelId: 'native-1',
+      }),
+    );
+  });
+  it('hides native content while a dialog covers the workbench, then restores it', async () => {
+    render(
+      <div className="workbench-canvas">
+        <NativeAppPanel panel={appPanel()} onUpdate={vi.fn()} />
+      </div>,
+    );
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith(
+        'workbench_native_app_surface_open',
+        expect.anything(),
+      ),
+    );
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('data-state', 'open');
+    try {
+      act(() => document.body.appendChild(dialog));
+      await waitFor(() =>
+        expect(native.invoke).toHaveBeenCalledWith(
+          'workbench_native_app_surface_hide',
+          expect.anything(),
+        ),
+      );
+      act(() => dialog.remove());
+      await waitFor(() =>
+        expect(
+          native.invoke.mock.calls.filter(
+            ([command]) => command === 'workbench_native_app_surface_open',
+          ),
+        ).toHaveLength(2),
+      );
+    } finally {
+      dialog.remove();
+    }
+  });
   it('shows a truthful external fallback and focuses only on explicit action', async () => {
     native.invoke.mockImplementation(async (command, args) => {
       if (

@@ -1,11 +1,16 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/ui';
+import { useWorkbenchStore } from './store';
 import {
   hideNativeAppSurface,
   nativeAppSelectionForPanel,
   openNativeAppSurface,
   nativeAppSurfaceAction,
+  consumeNativeAppLaunch,
+  nativeAppLaunchGeneration,
+  requestNativeAppLaunch,
+  detachNativeAppSurface,
   type NativeAppSurfaceStatus,
   type NativeAppBounds,
   type NativeAppSurfaceOpenInput,
@@ -45,6 +50,23 @@ function readNativeBounds(element: HTMLElement | null): NativeAppBounds | null {
       rect.bottom > canvasRect.bottom + tolerance
     ) {
       return null;
+    }
+    // Native HWNDs sit above the WebView. Hide a covered surface so it cannot
+    // paint over a foreground panel's HTML controls or intercept their input.
+    const ownPanel = element.closest<HTMLElement>('.workbench-panel');
+    if (ownPanel) {
+      const z = Number(ownPanel.style.zIndex) || 0;
+      for (const other of canvas.querySelectorAll<HTMLElement>('.workbench-panel')) {
+        if (other === ownPanel || (Number(other.style.zIndex) || 0) <= z) continue;
+        const cover = other.getBoundingClientRect();
+        if (
+          cover.left < rect.right &&
+          cover.right > rect.left &&
+          cover.top < rect.bottom &&
+          cover.bottom > rect.top
+        )
+          return null;
+      }
     }
   }
   return {
@@ -129,7 +151,10 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
           setError(null);
           setPanelStatus('busy');
           try {
-            const result = await openNativeAppSurface(current);
+            const result = await openNativeAppSurface({
+              ...current,
+              launch: consumeNativeAppLaunch(panel.id),
+            });
             if (!desiredRef.current || pendingRef.current || generation !== generationRef.current) {
               continue;
             }
@@ -166,7 +191,14 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
   );
 
   const syncSurface = React.useCallback(async () => {
-    if (route !== 'workbench' || panel.minimized || !selection) {
+    if (
+      route !== 'workbench' ||
+      panel.minimized ||
+      !selection ||
+      document.querySelector(
+        '[role="dialog"][data-state="open"], [role="alertdialog"], [role="menu"][data-state="open"]',
+      )
+    ) {
       await hideSurface();
       return;
     }
@@ -183,8 +215,13 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
       ...(selection.path ? { path: selection.path } : {}),
       bounds,
       zIndex: panel.z,
+      scaleFactor: window.devicePixelRatio || 1,
     };
-    const key = JSON.stringify({ ...input, retryGeneration });
+    const key = JSON.stringify({
+      ...input,
+      retryGeneration,
+      launchGeneration: nativeAppLaunchGeneration(panel.id),
+    });
     await openSurface({ ...input, key });
   }, [
     hideSurface,
@@ -202,12 +239,20 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
   React.useEffect(() => {
     const refresh = () => void syncSurface();
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(refresh);
+    const overlays = new MutationObserver(refresh);
+    overlays.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-state'],
+    });
     if (surfaceRef.current) observer?.observe(surfaceRef.current);
     window.addEventListener('resize', refresh);
     window.addEventListener('scroll', refresh, true);
     refresh();
     return () => {
       observer?.disconnect();
+      overlays.disconnect();
       window.removeEventListener('resize', refresh);
       window.removeEventListener('scroll', refresh, true);
     };
@@ -218,7 +263,7 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
   });
 
   React.useEffect(() => {
-    if (!host?.fallback || route !== 'workbench' || panel.minimized) return;
+    if (!host || route !== 'workbench' || panel.minimized) return;
     let disposed = false;
     let pending = false;
     const refresh = async () => {
@@ -226,8 +271,9 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
       pending = true;
       try {
         const value = await nativeAppSurfaceAction(panel.id, operationId, 'status');
-        if (!disposed && value && value.panelId === panel.id && value.operationId === operationId)
+        if (!disposed && value && value.panelId === panel.id && value.operationId === operationId) {
           setHost(value);
+        }
       } catch (cause) {
         if (!disposed) {
           setError(failureMessage(cause));
@@ -244,13 +290,18 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
       window.clearInterval(timer);
       window.removeEventListener('focus', refresh);
     };
-  }, [host?.fallback, route, panel.id, panel.minimized, operationId, setPanelStatus]);
+  }, [!!host, route, panel.id, panel.minimized, operationId, setPanelStatus]);
 
   const actOnHost = async () => {
     if (acting) return;
     setActing(true);
     setError(null);
     try {
+      if (!host?.running) {
+        requestNativeAppLaunch(panel.id);
+        setRetryGeneration((value) => value + 1);
+        return;
+      }
       await nativeAppSurfaceAction(panel.id, operationId, host?.running ? 'focus' : 'launch');
       const value = await nativeAppSurfaceAction(panel.id, operationId, 'status');
       if (value && value.panelId === panel.id && value.operationId === operationId) setHost(value);
@@ -265,9 +316,17 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
     () => () => {
       desiredRef.current = false;
       pendingRef.current = null;
-      void hideSurface().catch(() => undefined);
+      void hideSurface()
+        .then(async () => {
+          // Route changes keep the panel. Removal by templates/context menus must
+          // release the native window just like the panel's Close button does.
+          if (!useWorkbenchStore.getState().panels.some((entry) => entry.id === panel.id)) {
+            await detachNativeAppSurface(panel.id);
+          }
+        })
+        .catch(() => undefined);
     },
-    [hideSurface],
+    [hideSurface, panel.id],
   );
 
   if (!selection) {
@@ -294,7 +353,18 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
             {name} · {host.running ? 'Running' : 'Closed'}
           </strong>
           <span>This app opens in a separate window. Embedding is unavailable.</span>
+          {host.embeddingError ? <span>{host.embeddingError}</span> : null}
           <span>The app remains under your control when this panel closes.</span>
+          {host.running ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setRetryGeneration((value) => value + 1)}
+            >
+              Show in Workbench
+            </Button>
+          ) : null}
           {selection.appId === 'chatgpt' ? (
             <span>
               External app sessions do not receive VibeSpace Context Map tools automatically.
@@ -322,7 +392,10 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
             size="sm"
             variant="outline"
             aria-label={'Retry ' + name}
-            onClick={() => setRetryGeneration((value) => value + 1)}
+            onClick={() => {
+              requestNativeAppLaunch(panel.id);
+              setRetryGeneration((value) => value + 1);
+            }}
           >
             Retry
           </Button>

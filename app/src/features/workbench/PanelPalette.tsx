@@ -90,11 +90,12 @@ export function PanelPalette({
       </div>
       <div className="workbench-palette-items">
         {detectedApps
-          .filter((app) => app.pinned && app.launchable)
+          .filter((app) => app.pinned)
           .map((app) => (
             <button
-              key={`native:${app.id}`}
+              key={`native:${app.id}:${app.path ?? ''}`}
               type="button"
+              disabled={!app.launchable}
               aria-label={`Open ${app.name}`}
               title={app.running ? `${app.name} · running` : app.name}
               onClick={() => onOpenNativeApp?.(app)}
@@ -103,7 +104,12 @@ export function PanelPalette({
               <span>{app.name}</span>
             </button>
           ))}
-        <button type="button" aria-label="Open app" title="Open app" onClick={onOpenNativeAppPicker}>
+        <button
+          type="button"
+          aria-label="Open app"
+          title="Open app"
+          onClick={onOpenNativeAppPicker}
+        >
           <AppWindow aria-hidden="true" />
           <span>Apps</span>
         </button>

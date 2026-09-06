@@ -13,6 +13,26 @@ const apps: NativeAppDescriptor[] = [
 ];
 
 describe('NativeAppPickerDialog', () => {
+  it('pins an app without launching it or closing the picker', () => {
+    const onTogglePin = vi.fn();
+    const onChoose = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <NativeAppPickerDialog
+        open
+        apps={apps}
+        onTogglePin={onTogglePin}
+        onChoose={onChoose}
+        onOpenChange={onOpenChange}
+        onPickExecutable={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Pin Microsoft Edge to taskbar' }));
+    expect(onTogglePin).toHaveBeenCalledWith(apps[1]);
+    expect(onChoose).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Unpin ChatGPT from taskbar' })).toBeTruthy();
+  });
   it('keeps unavailable apps discoverable with recovery guidance', () => {
     render(
       <NativeAppPickerDialog

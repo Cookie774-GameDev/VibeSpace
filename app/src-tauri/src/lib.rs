@@ -890,6 +890,7 @@ fn run_ordinary(
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                native_app_surface::release_all();
                 siyuan::shutdown_runtime(app_handle);
                 harness::server::shutdown_owned_server(app_handle);
                 harness::codex_server::shutdown_owned_server(app_handle);
@@ -899,6 +900,7 @@ fn run_ordinary(
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 let state = app_handle.state::<terminal_snapshot::PersistenceFlushState>();
                 if state.is_completed() {
+                    native_app_surface::release_all();
                     return;
                 }
                 api.prevent_exit();
