@@ -1505,8 +1505,7 @@ export function AgenticConsole({
               </React.Fragment>
             );
           })}
-          {sessionIsActive ? <StreamingChatPreview chatId={chatId} /> : null}
-          {turnActivityMessage && !inlineLedgerLegacyId && !finalAnswerId ? (
+          <StreamingChatPreview chatId={chatId} fallback={turnActivityMessage && !inlineLedgerLegacyId && !finalAnswerId ? (
             <AssistantActivityLedger
               message={turnActivityMessage}
               correlatedEvents={turnActivity}
@@ -1514,7 +1513,7 @@ export function AgenticConsole({
               compact={compact}
               active={sessionIsActive}
             />
-          ) : null}
+          ) : null} />
         </div>
       ) : null}
     </section>

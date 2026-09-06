@@ -112,7 +112,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
       await readPendingAuthority();
       if (request.harness) {
         const response = status === 'approved_plan' ? 'always' : 'once';
-        const revoke = grantToolGatewayMutation(
+        const revoke = request.harness.approvalId.startsWith('codex-approval-') ? undefined : grantToolGatewayMutation(
           request.harness.sessionId,
           request.harness.capability,
           response,

@@ -401,7 +401,7 @@ import {
   setPermissionAccess,
 } from '@/features/jarvis-interaction/permissionAccessStore';
 import type { JarvisInteractionMode } from '@/features/jarvis-interaction/types';
-import { launchJarvisChatAgent } from '@/features/jarvis-interaction/agentRunner';
+import { requestNativeDelegation } from '@/features/jarvis-interaction/nativeDelegation';
 import { shouldCancelForLiveModeRestriction } from './modeTransitionSafety';
 import {
   buildReasoningSlashPickerState,
@@ -2481,6 +2481,19 @@ export function Composer({
         backend,
         Date.now(),
       );
+      if (backend === 'codex' && (chatModelSelection.mode !== 'single' ||
+          chatModelSelection.connectionId !== 'openai-codex')) {
+        const option = accessibleChatModels.flatOptions.find(option => option.connectionId === 'openai-codex');
+        const selection = selectionFromOption('openai', option?.modelId ?? 'gpt-5.4-mini',
+          getProviderConnectionDescriptor('openai-codex'));
+        if (selection.mode === 'single') {
+          await chatRepo.update(chatId as ChatId, {
+            connection: { ...getProviderConnectionDescriptor('openai-codex'), modelId: selection.modelId },
+          });
+          setRetainedExactChatSelection(selection);
+          setChatModelSelection(selection);
+        }
+      }
       toast.info(
         `${backend === 'codex' ? 'Codex' : 'OpenCode'} selected`,
         next.locked
@@ -3113,25 +3126,13 @@ export function Composer({
       applyInteractionMode('agent');
       if (!rest) {
         await addSystem(
-          `Use /${cmd} <task> to launch chat-native Jarvis ${cmd === 'subagents' ? 'subagents' : 'agent'}. Open a spawned thread with /agent.`,
+          `Use /${cmd} <task> to ask this session to launch provider-native subagents.`,
         );
         return true;
       }
-      const jarvisAgent =
-        findProtectedJarvisAgent(Object.values(agents)) ?? Object.values(agents)[0];
-      await launchJarvisChatAgent({
-        parentChatId: chatId,
-        task: rest,
-        modelLabel: formatChatModelSelectionLabel(chatModelSelection, modelCtx),
-        modelSelection: chatModelSelection,
-        jarvisAgentId: jarvisAgent?.id,
-        commandName: cmd,
-        repos: { chatRepo, messageRepo },
-      });
-      toast.info(
-        cmd === 'subagents' ? 'Subagents spawned' : 'Agent spawned',
-        'Stay on this chat. Open a worker thread with /agent.',
-      );
+      await requestNativeDelegation({ parentChatId: chatId, task: rest,
+        modelSelection: chatModelSelection, commandName: cmd, repos: { chatRepo, messageRepo } });
+      toast.info('Native delegation requested', 'The parent session will launch and coordinate its subagents at the next turn boundary.');
       setText('');
       return true;
     }

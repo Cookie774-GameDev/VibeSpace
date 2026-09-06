@@ -1,9 +1,14 @@
+export type StreamingPreviewSegment =
+  | { kind: 'text'; id: string; text: string }
+  | { kind: 'tool'; id: string; name: string; status: 'started' | 'completed' | 'failed'; fileLabel?: string };
+
 export interface JarvisStreamingPreview {
   accountId: string;
   runId: string;
   requestId: string;
   chatId: string;
   text: string;
+  segments?: readonly StreamingPreviewSegment[];
   updatedAt: number;
 }
 
@@ -55,7 +60,8 @@ export function setPreview(preview: JarvisStreamingPreview): void {
   if (
     existing?.requestId === detached.requestId &&
     existing.chatId === detached.chatId &&
-    existing.text === detached.text
+    existing.text === detached.text &&
+    JSON.stringify(existing.segments) === JSON.stringify(detached.segments)
   )
     return;
   previews.set(key(detached.accountId, detached.runId), detached);

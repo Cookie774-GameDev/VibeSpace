@@ -1650,6 +1650,20 @@ export async function installJarvisKernelRuntimeHost(
                 throw new Error('kernel_provider_configuration_disposed');
               }
               const previewTextParts = new Map<string, string>();
+              const previewSegments: import('@/features/chat/streamingPreviewStore').StreamingPreviewSegment[] = [];
+              const publishPreview = () => {
+                const scope = activeTurnScopes.get(providerInput.runId);
+                if (suppressProviderPreview || !scope || scope.requestId !== providerInput.requestId) return;
+                const decision = pushStreamingPreviewChunk(createStreamingPreviewState(),
+                  [...previewTextParts.values()].join(''));
+                if (!decision.allowed) return;
+                const segments = previewSegments.map(segment => {
+                  if (segment.kind !== 'text') return { ...segment };
+                  const safe = pushStreamingPreviewChunk(createStreamingPreviewState(), segment.text);
+                  return { ...segment, text: safe.allowed ? safe.visibleText : '' };
+                });
+                setPreview({ ...scope, text: decision.visibleText, segments, updatedAt: now() });
+              };
               const lastUserText = llmContentToText(
                 [...providerInput.messages].reverse().find((message) => message.role === 'user')
                   ?.content ?? '',
@@ -1662,8 +1676,10 @@ export async function installJarvisKernelRuntimeHost(
               const startedAt = now();
               let contextCitationSessionId: string | undefined;
               const liveToolActivityIds = new Map<string, string>();
+              const lastLiveToolStates = new Map<string, string>();
               const thinkingActivityId = createChatActivityId('thinking');
               let thinkingRecorded = false;
+              let liveReasoning = '';
               const finishThinking = (status: 'done' | 'error' | 'cancelled') => {
                 if (thinkingRecorded) useChatActivityStore.getState().update(providerChatId, thinkingActivityId, { status, endedAt: now() });
               };
@@ -1698,6 +1714,9 @@ export async function installJarvisKernelRuntimeHost(
                 ) {
                   return;
                 }
+                const stateKey = JSON.stringify(activity);
+                if (lastLiveToolStates.get(callId) === stateKey) return;
+                lastLiveToolStates.set(callId, stateKey);
                 let projected: ReturnType<typeof projectOpenCodeLiveToolActivity>;
                 try {
                   projected = projectOpenCodeLiveToolActivity({
@@ -1708,6 +1727,11 @@ export async function installJarvisKernelRuntimeHost(
                 } catch {
                   return;
                 }
+                const segment = previewSegments.find(part => part.kind === 'tool' && part.id === callId);
+                if (segment?.kind === 'tool') segment.status = activity.status;
+                else previewSegments.push({ kind: 'tool', id: callId, name,
+                  status: activity.status, fileLabel: activity.fileLabel });
+                publishPreview();
                 let activityId = liveToolActivityIds.get(callId);
                 if (!activityId) {
                   activityId = createChatActivityId('tool');
@@ -1741,6 +1765,7 @@ export async function installJarvisKernelRuntimeHost(
                   messages: [...providerInput.messages],
                   chatId: providerChatId,
                   backend: providerBackend,
+                  interactionMode: providerInput.interactionMode,
                   connectionId: providerInput.model.connectionId,
                   accountId: providerInput.accountId,
                   workspaceId: providerInput.workspaceId,
@@ -1811,6 +1836,18 @@ export async function installJarvisKernelRuntimeHost(
                     signal.throwIfAborted();
                     updateLiveToolActivity(activity);
                   },
+                  onReasoning: (delta, mode) => {
+                    const scope = activeTurnScopes.get(providerInput.runId);
+                    if (signal.aborted || suppressProviderPreview || !scope || scope.requestId !== providerInput.requestId) return;
+                    liveReasoning = mode === 'replace' ? delta : liveReasoning + delta;
+                    if (thinkingRecorded) useChatActivityStore.getState().update(scope.chatId, thinkingActivityId, { detail: liveReasoning });
+                    else {
+                      useChatActivityStore.getState().record({ id: thinkingActivityId, chatId: scope.chatId,
+                        messageId: `msg_${providerInput.requestId}`, kind: 'agent', category: 'thinking',
+                        title: 'Thinking', detail: liveReasoning, status: 'running', ts: startedAt, startedAt });
+                      thinkingRecorded = true;
+                    }
+                  },
                   onPublicTimelineSnapshot: async (snapshot) => {
                     signal.throwIfAborted();
                     const thinking = snapshot.timeline.filter((part) => part.kind === 'reasoning');
@@ -1859,6 +1896,7 @@ export async function installJarvisKernelRuntimeHost(
                     if (thinking.length > 0 && thinkingScope?.accountId === providerInput.accountId &&
                         thinkingScope.requestId === providerInput.requestId && !suppressProviderPreview) {
                       const detail = thinking.map((part) => part.text).join('\n\n');
+                      liveReasoning = detail;
                       if (thinkingRecorded) {
                         useChatActivityStore.getState().update(thinkingScope.chatId, thinkingActivityId, { detail });
                       } else {
@@ -1884,21 +1922,14 @@ export async function installJarvisKernelRuntimeHost(
                     const partId = chunk.streamPartId ?? 'default';
                     previewTextParts.set(partId, chunk.mode === 'replace' ? chunk.delta :
                       `${previewTextParts.get(partId) ?? ''}${chunk.delta}`);
-                    const decision = pushStreamingPreviewChunk(createStreamingPreviewState(),
-                      [...previewTextParts.values()].join(''));
-                    const scope = activeTurnScopes.get(providerInput.runId);
-                    if (!decision.allowed || !scope) return;
+                    const segment = previewSegments.find(part => part.kind === 'text' && part.id === partId);
+                    if (segment?.kind === 'text') segment.text = previewTextParts.get(partId) ?? '';
+                    else previewSegments.push({ kind: 'text', id: partId, text: previewTextParts.get(partId) ?? '' });
                     setLiveAgentActivityRunPhase(providerInput.runId, {
-                      category: 'response',
-                      title: 'Jarvis is preparing the final response',
+                      category: 'response', title: 'Jarvis is responding',
                       subtitle: `${providerInput.agent.model.provider}/${providerInput.agent.model.model}`,
                     });
-                    if (suppressProviderPreview) return;
-                    setPreview({
-                      ...scope,
-                      text: decision.visibleText,
-                      updatedAt: now(),
-                    });
+                    publishPreview();
                   },
                 },
                 parseExplicitResponseContract(lastUserText),
@@ -2549,6 +2580,7 @@ export interface RuntimeBindings {
 
 /** The shape of the `jarvis:send` event detail. */
 export interface SendDetail {
+  queueIfBusy?: boolean;
   /** Chat the message belongs to. */
   chatId: string;
   /** Stable caller-visible message key used to cancel this exact in-flight turn. */
@@ -2961,6 +2993,7 @@ function getInteractionModeOverlay(mode: JarvisInteractionMode, needsVisiblePlan
   if (mode === 'ask') {
     return [
       '## Jarvis interaction mode: Ask',
+      'Ask clarifying questions with the native question tool when the answer depends on missing information. Otherwise answer directly.',
       'Answer the user directly. Do not emit action blocks, permission cards, plan cards, file writes, command proposals, or multi-agent launches.',
       'If the user asks for work that requires changes, explain what would be needed but do not perform or propose the action.',
     ].join('\n');
@@ -2976,6 +3009,7 @@ function getInteractionModeOverlay(mode: JarvisInteractionMode, needsVisiblePlan
     return [
       '## Jarvis interaction mode: Plan',
       'This is read-only planning mode. You may inspect available context and explain a plan.',
+      'Use the native question tool to clarify important missing requirements before finalizing a plan. Wait for the answers and continue in this session.',
       'Do not emit executable action blocks, file writes, delete operations, command proposals, or direct project mutations.',
       'End the response with a fenced jarvis_plan JSON block containing title, summary, steps, and risks.',
     ].join('\n');
@@ -3197,7 +3231,7 @@ function openCodePermissionRequest(
   return {
     id: approval.id,
     title: approval.title,
-    description: `OpenCode requests the ${approval.capability} VibeSpace capability.`,
+    description: `${approval.id.startsWith('codex-approval-') ? 'Codex' : 'OpenCode'} requests approval for ${approval.capability}.`,
     risk,
     action,
     ...(targets?.length ? { targets: targets.slice(0, 32) } : {}),
@@ -4615,6 +4649,7 @@ export function startRuntimeListener(
   const activeControllers = new Set<AbortController>();
   const acceptedApprovalContinuations = new Set<string>();
   const controllersByChatId = new Map<string, Set<AbortController>>();
+  const queuedNativeDelegations = new Map<string, SendDetail[]>();
   const activeSendDetails = new Map<AbortController, SendDetail>();
   const suspendedSendDetails = new Map<string, SendDetail>();
   const pendingSteersByChatId = new Map<string, SteerDetail & { send: SendDetail }>();
@@ -4700,6 +4735,7 @@ export function startRuntimeListener(
   };
 
   const abortAllTrackedRuns = (): number => {
+    queuedNativeDelegations.clear();
     const count = activeControllers.size;
     for (const requestCancellation of new Set(canonicalCancellationOwners.values())) {
       cancellationTaskTracker.request(requestCancellation);
@@ -4765,6 +4801,13 @@ export function startRuntimeListener(
     const detail = (e as CustomEvent<SendDetail>).detail;
     if (!detail || !detail.chatId || typeof detail.text !== 'string') return;
     const { chatId, text } = detail;
+    if (detail.queueIfBusy && (controllersByChatId.get(String(chatId))?.size ?? 0) > 0) {
+      const queued = queuedNativeDelegations.get(String(chatId)) ?? [];
+      if (queued.length >= 100) throw new Error('Native delegation queue is full.');
+      queued.push(detail);
+      queuedNativeDelegations.set(String(chatId), queued);
+      return;
+    }
 
     if (detail.speakReply === true && activeControllers.size > 0) {
       const count = abortAllTrackedRuns();
@@ -4809,7 +4852,11 @@ export function startRuntimeListener(
       activeControllers.delete(controller);
       detachControllerFromChat(controller);
       if (releasedChatId && (controllersByChatId.get(releasedChatId)?.size ?? 0) === 0) {
-        void dispatchAcceptedSteer(releasedChatId);
+        const queued = queuedNativeDelegations.get(releasedChatId);
+        const next = queued?.shift();
+        if (!queued?.length) queuedNativeDelegations.delete(releasedChatId);
+        if (next) queueMicrotask(() => window.dispatchEvent(new CustomEvent(sendEventName, { detail: next })));
+        else void dispatchAcceptedSteer(releasedChatId);
       }
     };
     dispatchKernelSmokeRuntimeStage('accepted');
@@ -7686,6 +7733,8 @@ export function startRuntimeListener(
       const targetMessageId = detail.messageId;
       const c = inFlight.get(targetMessageId);
       if (c) {
+        const owner = activeSendDetails.get(c);
+        if (owner) queuedNativeDelegations.delete(String(owner.chatId));
         preserveStoppedTurn(c);
         abortTrackedRun(targetMessageId, c);
         for (const [messageId, owner] of inFlight) {
@@ -7706,6 +7755,7 @@ export function startRuntimeListener(
     }
     if (detail?.chatId) {
       const chatId = String(detail.chatId);
+      queuedNativeDelegations.delete(chatId);
       const controllers = [...(controllersByChatId.get(chatId) ?? [])];
       for (const controller of controllers) {
         preserveStoppedTurn(controller);
@@ -7817,6 +7867,7 @@ export function startRuntimeListener(
     stopPromptForgeContextBridge();
     for (const pending of pendingSteersByChatId.values()) safelyRejectSteer(pending);
     pendingSteersByChatId.clear();
+    queuedNativeDelegations.clear();
     abortAllTrackedRuns();
   }) as RuntimeListenerStop;
   stop.whenIdle = async () => {

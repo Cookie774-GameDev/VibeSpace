@@ -81,7 +81,8 @@ fn validate_start_request(
     if !valid_identifier(&request.owner_id, 256) {
         return Err("Codex owner identity is invalid.".to_string());
     }
-    if !request.model_id.starts_with("opencode-go/") || !valid_identifier(&request.model_id, 256) {
+    if !(request.model_id.starts_with("opencode-go/") || request.model_id.starts_with("gpt-"))
+        || !valid_identifier(&request.model_id, 256) {
         return Err("Codex model identity is invalid.".to_string());
     }
     Ok(())
@@ -554,18 +555,25 @@ fn launch_server(
     model_id: String,
     caller_label: String,
     owner_id: String,
-    codex_home: &Path,
-    proxy_process: OwnedProcessGuard,
-    proxy_runtime: SealedReviewedOpenCodexRuntime,
+    proxy: Option<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime)>,
 ) -> Result<RunningCodexServer, String> {
-    let proxy = LaunchProxyLifecycle::new(proxy_process, proxy_runtime);
+    let (proxy, codex_home) = match proxy {
+        Some((process, home, runtime)) => (Some(LaunchProxyLifecycle::new(process, runtime)), Some(home)),
+        None => (None, None),
+    };
     let mut command = Command::new(&launch.executable);
     command
         .args(&launch.arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    command.env("CODEX_HOME", codex_home).env("NO_COLOR", "1");
+    command.env("NO_COLOR", "1");
+    if let Some(home) = codex_home {
+        command.env("CODEX_HOME", home);
+    }
+    // Direct OpenAI models use the existing Codex login and home. No credentials
+    // are copied and no OpenCode proxy is started for a Codex subscription.
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -631,7 +639,9 @@ fn launch_server(
 
     let (sender, receiver) = mpsc::sync_channel(READER_CHANNEL_CAPACITY);
     let reader_task = spawn_stdout_reader(reader, handshake.decoder, sender);
-    let (proxy_process, proxy_runtime) = proxy.into_parts();
+    let (proxy_process, proxy_runtime) = proxy
+        .map(|proxy| { let (process, runtime) = proxy.into_parts(); (Some(process), Some(runtime)) })
+        .unwrap_or((None, None));
     Ok(RunningCodexServer {
         executable_id,
         model_id,
@@ -645,8 +655,8 @@ fn launch_server(
         stderr_task: Some(stderr_task),
         active_stream: None,
         process,
-        proxy_process: Some(proxy_process),
-        proxy_runtime: Some(proxy_runtime),
+        proxy_process,
+        proxy_runtime,
         stopped: false,
     })
 }
@@ -858,16 +868,18 @@ fn start_internal(
     let launch = resolve_launch_request(&request.executable_id, |executable_id| {
         cli_state.resolve_trusted_executable(executable_id)
     })?;
-    let (proxy_process, codex_home, proxy_runtime) = start_owned_opencodex(app, &request.model_id)?;
+    let proxy = if request.model_id.starts_with("opencode-go/") {
+        Some(start_owned_opencodex(app, &request.model_id)?)
+    } else {
+        None
+    };
     let running = launch_server(
         launch,
         request.executable_id,
         request.model_id,
         caller_label.to_string(),
         request.owner_id,
-        &codex_home,
-        proxy_process,
-        proxy_runtime,
+        proxy,
     )?;
     let generation = running.generation.clone();
     inner.running = Some(running);
@@ -1166,6 +1178,12 @@ mod tests {
         assert_eq!(request.executable_id, "cli-executable-0000000000000001");
         assert_eq!(request.owner_id, "chat_session-01");
         assert!(validate_start_request("main", &request).is_ok());
+        let direct = CodexAppServerStartRequest {
+            executable_id: request.executable_id.clone(), owner_id: request.owner_id.clone(),
+            model_id: "gpt-5.4-mini".to_string(),
+        };
+        assert!(validate_start_request("main", &direct).is_ok());
+
 
         assert!(serde_json::from_value::<CodexAppServerStartRequest>(json!({
             "executableId": "cli-executable-0000000000000001",

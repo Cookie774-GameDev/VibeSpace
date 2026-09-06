@@ -7,7 +7,7 @@ export interface OpenCodeLiveToolActivityInput {
   fileLabel?: string;
 }
 
-type ActivitySemantic = 'read' | 'search' | 'command' | 'edit' | 'check' | 'tool';
+type ActivitySemantic = 'read' | 'search' | 'command' | 'edit' | 'check' | 'task' | 'tool';
 
 export interface OpenCodeLiveToolActivityProjection {
   event: Readonly<{
@@ -32,6 +32,7 @@ const CHECK_TOOL = /(?:^|[._:/-])(test|verify|check|lint|build)(?:$|[._:/-])/iu;
 const SAFE_PUBLIC_LABEL = /^[^\u0000-\u001f\u007f]{1,256}$/u;
 
 function semantic(name: string): ActivitySemantic {
+  if (name === 'task') return 'task';
   if (COMMAND_TOOL.test(name)) return 'command';
   if (READ_TOOL.test(name)) return 'read';
   if (SEARCH_TOOL.test(name)) return 'search';
@@ -57,6 +58,7 @@ function safeLeaf(value: string | undefined): string | undefined {
 }
 
 function categoryFor(kind: ActivitySemantic): ChatActivityCategory {
+  if (kind === 'task') return 'coordination';
   if (kind === 'read') return 'file';
   if (kind === 'edit') return 'writing';
   return 'context';
@@ -92,6 +94,11 @@ const TITLES: Readonly<
     started: ['Verifying', 'Jarvis is verifying'],
     completed: ['Verified', 'Jarvis verified'],
     failed: ['Verification failed', 'Jarvis verification failed'],
+  },
+  task: {
+    started: ['Coordinating agents', 'Jarvis is coordinating agents'],
+    completed: ['Coordinated agents', 'Jarvis coordinated agents'],
+    failed: ['Agent task failed', 'Jarvis agent task failed'],
   },
   tool: {
     started: ['Running tool', 'Jarvis is running a tool'],

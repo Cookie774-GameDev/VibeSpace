@@ -706,3 +706,14 @@ describe('Codex app-server structured event normalization', () => {
     });
   });
 });
+
+it('projects native Codex child identity and running state without copying its prompt', () => {
+  const value = normalizeCodexAppServerMessage({ method: 'item/completed', params: {
+    threadId: 'thr_123', turnId: 'turn_1', item: { id: 'spawn-1', type: 'collabAgentToolCall',
+      tool: 'spawnAgent', status: 'completed', senderThreadId: 'thr_123', receiverThreadIds: ['child_1'],
+      agentsStates: { child_1: { status: 'running' } }, prompt: 'Private task instructions', model: 'gpt-5.4-mini' },
+  } });
+  expect(value.events).toEqual([expect.objectContaining({ type: 'tool', name: 'task', status: 'completed',
+    nativeTask: { name: 'Codex agent', sessionId: 'child_1', status: 'running', currentStep: 'spawnAgent', modelLabel: 'gpt-5.4-mini' } })]);
+  expect(JSON.stringify(value)).not.toContain('Private task instructions');
+});

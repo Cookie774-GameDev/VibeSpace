@@ -378,6 +378,7 @@ export interface RunAgentRequest {
     }>,
   ) => void | Promise<void>;
   /** Whole authoritative OpenCode public snapshot; replaces prior snapshot for this request. */
+  onReasoning?: (delta: string, mode?: 'replace') => void;
   onPublicTimelineSnapshot?: (
     snapshot: Readonly<import('./openCodePublicTimeline').OpenCodePublicTimelineSnapshot>,
   ) => void | Promise<void>;
@@ -395,6 +396,7 @@ export interface RunAgentRequest {
 function codexQualifiedModel(req: Readonly<RunAgentRequest>): string {
   const model = req.agent.model.model.trim();
   if (!model) throw new NoModelSelectedError();
+  if (req.agent.model.provider === 'openai') return model.replace(/^openai\//u, '');
   return model.includes('/') ? model : req.agent.model.provider + '/' + model;
 }
 
@@ -408,7 +410,7 @@ function codexGatewayConnection(req: Readonly<RunAgentRequest>): ProviderConnect
     ...descriptor,
     adapterId: codexPersistentAdapter.id,
     providerId: req.agent.model.provider,
-    authSource: 'opencode-provider-session',
+    authSource: 'codex-cli-session',
     promptTransport: 'native-system',
   });
 }
@@ -420,6 +422,19 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
   const connection = codexGatewayConnection(req);
   const modelId = codexQualifiedModel(req);
   let text = '';
+  const chronology: import('./openCodePublicTimeline').OpenCodePublicTimelinePart[] = [];
+  const chronologyTextIds = new Map<string, number>();
+  const chronologyToolIds = new Map<string, number>();
+  const chronologyResultIds = new Map<string, number>();
+  const snapshot = () => {
+    let finalIndex = -1;
+    for (let index = chronology.length - 1; index >= 0; index -= 1) {
+      if (chronology[index]?.kind === 'text') { finalIndex = index; break; }
+    }
+    const final = chronology[finalIndex];
+    return { timeline: chronology.filter((_, index) => index !== finalIndex),
+      finalText: final?.kind === 'text' ? final.text : text };
+  };
   const textParts: string[] = [];
   const textPartIndexes = new Map<string, number>();
   let first = true;
@@ -459,6 +474,15 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
       const event = next.value;
       if (req.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
       if (event.type === 'text') {
+        const key = event.streamPartId ?? 'default';
+        const previous = chronologyTextIds.get(key);
+        if (previous === undefined) {
+          chronologyTextIds.set(key, chronology.length); chronology.push({ kind: 'text', text: event.delta });
+        } else {
+          const part = chronology[previous];
+          chronology[previous] = { kind: 'text', text: event.mode === 'replace' ? event.delta :
+            (part?.kind === 'text' ? part.text : '') + event.delta };
+        }
         if (event.streamPartId) {
           const index = textPartIndexes.get(event.streamPartId);
           if (index === undefined) {
@@ -479,6 +503,11 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
           ...(event.streamPartId ? { streamPartId: event.streamPartId } : {}),
         });
         first = false;
+      } else if (event.type === 'reasoning') {
+        const previous = chronology.at(-1);
+        if (previous?.kind === 'reasoning') chronology[chronology.length - 1] = { kind: 'reasoning', text: previous.text + event.delta };
+        else chronology.push({ kind: 'reasoning', text: event.delta });
+        req.onReasoning?.(event.delta, event.mode);
       } else if (event.type === 'usage') {
         usage = mergeUsageSnapshots(usage, event.usage);
       } else if (event.type === 'session') {
@@ -500,6 +529,22 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
         }
         await req.onQuestionRequested(projection);
       } else if (event.type === 'tool') {
+        if (event.callId) {
+          const call = { kind: 'tool_call' as const, tool: event.name, call_id: event.callId,
+            args: { ...(event.fileLabel ? { path: event.fileLabel } : {}),
+              ...(event.nativeTask ? { nativeTask: event.nativeTask } : {}) } };
+          const index = chronologyToolIds.get(event.callId);
+          if (index === undefined) { chronologyToolIds.set(event.callId, chronology.length); chronology.push(call); }
+          else chronology[index] = call;
+          if (event.status !== 'started') {
+            const result = { kind: 'tool_result' as const, call_id: event.callId,
+              ...(event.status === 'failed' ? { error: 'Tool failed' as const } : { result: { status: 'completed' as const } }) };
+            const resultIndex = chronologyResultIds.get(event.callId);
+            if (resultIndex === undefined) { chronologyResultIds.set(event.callId, chronology.length); chronology.push(result); }
+            else chronology[resultIndex] = result;
+          }
+        }
+
         anyToolObserved = true;
         if (event.status === 'completed' && READ_ONLY_FILESYSTEM_TOOL_NAMES.has(event.name)) {
           completedReadOnlyFilesystem = true;
@@ -525,8 +570,11 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
   if (!terminalObserved) throw new Error('provider_completion_terminal_missing');
   if (!sessionId) throw new Error('provider_completion_session_missing');
   req.onChunk?.({ delta: '', done: true });
+  const publicSnapshot = snapshot();
+  await req.onPublicTimelineSnapshot?.(publicSnapshot);
   const response: LLMResponse = {
-    text,
+    text: publicSnapshot.finalText,
+    public_timeline: publicSnapshot.timeline,
     usage: {
       ...tokenProvenance(usage),
       ...reportedUsageDetails(usage),
@@ -816,6 +864,8 @@ async function executePersistentOpenCode(
             ...(event.streamPartId ? { streamPartId: event.streamPartId } : {}),
           });
           first = false;
+        } else if (event.type === 'reasoning') {
+          req.onReasoning?.(event.delta, event.mode);
         } else if (event.type === 'public_timeline') {
           publicTimelineSnapshot = event.snapshot;
           await req.onPublicTimelineSnapshot?.(event.snapshot);
@@ -1343,6 +1393,10 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
               return req.onQuestionRequested?.(question);
             }
           : undefined,
+        onReasoning: req.onReasoning ? (delta, mode) => {
+          appActivityLog.record('model.reasoning', 'observed', { ...identity, delta, mode });
+          req.onReasoning?.(delta, mode);
+        } : undefined,
         onApprovalRequested: req.onApprovalRequested,
         onProviderCompletionEvidence: req.onProviderCompletionEvidence
           ? (evidence) => {

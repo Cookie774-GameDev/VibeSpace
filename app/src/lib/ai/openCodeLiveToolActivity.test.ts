@@ -3,6 +3,7 @@ import { projectOpenCodeLiveToolActivity } from './openCodeLiveToolActivity';
 
 describe('progressive OpenCode live tool activity', () => {
   it.each([
+    ['task', 'coordination', 'Coordinating agents', 'Coordinated agents'],
     ['read', 'file', 'Reading file', 'Read file'],
     ['grep', 'context', 'Searching', 'Searched'],
     ['bash', 'context', 'Running command', 'Ran command'],

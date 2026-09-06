@@ -7173,6 +7173,11 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     );
     if (!installedHostQuestion) throw new Error('expected installed-host question projection');
     mocks.runAgent.mockImplementation(async (providerInput) => {
+      expect(providerInput.interactionMode).toBe('agent');
+      expect(providerInput.onReasoning).toEqual(expect.any(Function));
+      providerInput.onReasoning?.('Live provider summary. '.repeat(300), 'replace');
+      expect(useChatActivityStore.getState().eventsByChat[harness.chatId]?.find(event => event.category === 'thinking')?.detail)
+        .toBe('Live provider summary. '.repeat(300));
       expect(providerInput.onApprovalRequested).toEqual(expect.any(Function));
       await providerInput.onHarnessSessionBound?.({ sessionId: 'ses_installed_kernel_host' });
       await providerInput.onApprovalRequested?.({ id: 'approval_installed_kernel_host', sessionId: 'ses_installed_kernel_host', capability: 'terminal.spawn', title: 'Open terminal' });

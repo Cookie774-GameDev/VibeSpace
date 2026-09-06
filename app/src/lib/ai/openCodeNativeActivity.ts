@@ -5,6 +5,7 @@ export interface NativeTaskActivity {
   sessionId?: string;
   currentStep?: string;
   modelLabel?: string;
+  status?: 'running' | 'done' | 'error' | 'cancelled' | 'unknown';
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -50,7 +51,9 @@ export function readNativeTaskActivity(value: unknown): NativeTaskActivity | und
   const sessionId = typeof item?.sessionId === 'string' && /^[\w-]{1,512}$/.test(item.sessionId) ? item.sessionId : undefined;
   const currentStep = label(item?.currentStep);
   const modelLabel = label(item?.modelLabel);
-  return { name, ...(sessionId ? { sessionId } : {}), ...(currentStep ? { currentStep } : {}), ...(modelLabel ? { modelLabel } : {}) };
+  const status = ['running', 'done', 'error', 'cancelled', 'unknown'].includes(String(item?.status))
+    ? item?.status as NativeTaskActivity['status'] : undefined;
+  return { name, ...(status ? { status } : {}), ...(sessionId ? { sessionId } : {}), ...(currentStep ? { currentStep } : {}), ...(modelLabel ? { modelLabel } : {}) };
 }
 
 export type NativeShellFailure = `Command exited with code ${number}`;

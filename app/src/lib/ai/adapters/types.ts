@@ -94,7 +94,7 @@ export type ProviderEvent =
       type: 'public_timeline';
       snapshot: import('../openCodePublicTimeline').OpenCodePublicTimelineSnapshot;
     }
-  | { type: 'reasoning'; delta: string }
+  | { type: 'reasoning'; delta: string; mode?: 'replace' }
   | { type: 'session'; sessionId: string }
   | {
       type: 'tool';

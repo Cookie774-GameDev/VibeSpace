@@ -1,3 +1,4 @@
+import { createCodexControlBridge } from './codexControlBridge';
 import {
   nativeCodexFrames,
   startNativeCodexAppServer,
@@ -197,6 +198,7 @@ async function* sendCodexRequest(
   if (request.connection.id !== 'openai-codex') {
     throw new Error('Codex backend requires the exact Codex connection.');
   }
+  const mode = executionMode(request);
   const executable = await dependencies.findExecutable();
   if (!executable) throw new Error('Codex CLI is not installed.');
   const ownerId = request.chatId ?? request.requestId;
@@ -222,10 +224,10 @@ async function* sendCodexRequest(
     return: (value) => iterator.return?.(value) ?? Promise.resolve({ done: true, value }),
   };
   const exactIdentity = identity(request);
-  const mode = executionMode(request);
   let threadId: string | undefined;
   let turnId: string | undefined;
   let terminal = false;
+  const controls = createCodexControlBridge(message => dependencies.write(generation, message), mode);
   const abort = () => {
     if (threadId && turnId) {
       void dependencies
@@ -312,6 +314,17 @@ async function* sendCodexRequest(
         },
       });
       for (const control of projection.controls) {
+        if (control.type === 'approval') {
+          const approval = controls.approval(control, frame.id as string | number,
+            recordOf(recordOf(frame.params)?.permissions ?? recordOf(frame.params)?.additionalPermissions));
+          if (!request.onApprovalRequested) throw new Error('Codex approval handler is unavailable.');
+          await request.onApprovalRequested(approval);
+        } else if (control.type === 'question') {
+          const id = controls.question(control, frame.id as string | number);
+          for (const event of projection.events) if (event.type === 'question') event.request = { ...event.request, id };
+        } else if (control.type === 'secure_question') {
+          throw new Error('Codex requested secure input. Complete it in the Codex CLI.');
+        }
         if (control.type === 'turn_binding') {
           if (control.threadId !== threadId || (turnId && turnId !== control.turnId)) {
             throw new Error('Codex turn binding changed unexpectedly.');
@@ -327,6 +340,7 @@ async function* sendCodexRequest(
     }
     throw new Error('Codex turn exceeded its safe event bound.');
   } finally {
+    controls.dispose();
     request.signal?.removeEventListener('abort', abort);
     await iterator.return?.();
     await dependencies.stop(generation).catch(() => false);
@@ -338,7 +352,24 @@ export function createCodexPersistentAdapter(
 ): ProviderAdapter {
   return Object.freeze({
     id: 'codex-app-server',
-    send: (request: ProviderRequest) => sendCodexRequest(request, dependencies),
+    send: async function* (request: ProviderRequest) {
+      const key = request.accountId && request.chatId && request.workingDirectory
+        ? 'vibespace.codex-thread.v1:' + JSON.stringify([request.accountId, request.workspaceId,
+            request.projectId, request.chatId, request.workingDirectory]) : undefined;
+      let sessionId = request.sessionId;
+      if (!sessionId && key) {
+        try {
+          const stored = localStorage.getItem(key);
+          if (stored && /^[A-Za-z0-9._:-]{1,256}$/u.test(stored)) sessionId = stored;
+        } catch { /* Native startup still works when local persistence is unavailable. */ }
+      }
+      for await (const event of sendCodexRequest({ ...request, sessionId }, dependencies)) {
+        if (key && event.type === 'session') {
+          try { localStorage.setItem(key, event.sessionId); } catch { /* Current turn remains usable. */ }
+        }
+        yield event;
+      }
+    },
     cancel: async () => undefined,
   });
 }

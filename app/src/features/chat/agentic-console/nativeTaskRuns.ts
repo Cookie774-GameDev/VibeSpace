@@ -2,7 +2,7 @@ import type { Message } from '@/types';
 import { readNativeTaskActivity, type NativeTaskActivity } from '@/lib/ai/openCodeNativeActivity';
 import type { ChatActivityEvent, ChatActivityStatus } from '../activity/types';
 
-export interface NativeTaskRun extends NativeTaskActivity {
+export interface NativeTaskRun extends Omit<NativeTaskActivity, 'status'> {
   id: string;
   status: ChatActivityStatus | 'unknown';
 }
@@ -19,7 +19,7 @@ export function collectNativeTaskRuns(
     const task = readNativeTaskActivity(value);
     if (!task) return;
     const id = task.sessionId ? `native-session:${task.sessionId}` : source;
-    runs.set(id, { ...task, id, status });
+    runs.set(id, { ...task, id, status: task.status ?? status });
   };
   for (const event of activity) {
     if ((event.startedAt ?? event.ts) < since) continue;

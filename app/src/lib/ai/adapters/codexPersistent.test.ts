@@ -329,3 +329,33 @@ describe('persistent Codex app-server adapter', () => {
     await expect(consume()).rejects.toThrow(/model capability mismatch/u);
   });
 });
+
+it('delivers native approval requests to the UI handler and resumes the saved native thread', async () => {
+  const { replyCodexApproval } = await import('./codexControlBridge');
+  const write = vi.fn(async (_generation: string, _message: Record<string, unknown>) => {});
+  const requested = vi.fn(async (approval: import('@/lib/harness/types').VibeSpaceApproval) => {
+    await replyCodexApproval({ sessionId: approval.sessionId, approvalId: approval.id, response: 'reject' });
+  });
+  let runs = 0;
+  const adapter = createCodexPersistentAdapter({ findExecutable: async () => ({ executableId: 'trusted' }),
+    start: async () => ({ generation: `native-${++runs}` }), write, stop: async () => true,
+    frames: () => ({ ready: Promise.resolve(), stream: (async function* () {
+      for await (const frame of frames()) {
+        const next = JSON.parse(JSON.stringify(frame)) as Record<string, unknown>;
+        if (runs === 2 && next.id === 'request_1_thread') next.id = 'request_1_resume';
+        yield next;
+        if (next.method === 'turn/started') yield { id: 7, method: 'item/commandExecution/requestApproval',
+          params: { threadId: 'thread_native_1', turnId: 'turn_native_1', itemId: 'command_native_1', command: 'fixture-command' } };
+      }
+    })() }),
+  });
+  const request = { requestId: 'request_1', chatId: 'persistent-control-fixture', accountId: 'control-fixture',
+    connection, prompt: 'Read marker', modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+    workingDirectory: 'C:\\workspace', interactionMode: 'ask' as const, onApprovalRequested: requested };
+  try {
+    for (let turn = 0; turn < 2; turn++) for await (const _event of adapter.send!(request)) { /* collect full turn */ }
+    expect(requested).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledWith('native-1', { id: 7, result: { decision: 'decline' } });
+    expect(write.mock.calls.some((call: unknown[]) => (call[1] as { method?: string })?.method === 'thread/resume')).toBe(true);
+  } finally { localStorage.clear(); }
+});

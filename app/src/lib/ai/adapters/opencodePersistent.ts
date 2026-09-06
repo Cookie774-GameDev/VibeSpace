@@ -1,3 +1,5 @@
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { bindCodexQuestionRoute, replyCodexQuestion, replyCodexApproval } from './codexControlBridge';
 import { isTauri } from '@/lib/utils';
 import { questionEventsWithActivity } from '../openCodeQuestionActivity';
 import type {
@@ -703,6 +705,7 @@ async function executePersistentOpenCodeApproval(
 export async function respondToPersistentOpenCodeApproval(
   input: Readonly<HarnessApprovalResponse & { route?: OpenCodeApprovalHarnessRoute }>,
 ): Promise<void> {
+  if (input.approvalId.startsWith('codex-approval-')) return replyCodexApproval(input);
   const sessionId = cleanIdentifier(input.sessionId, 512);
   const approvalId = cleanIdentifier(input.approvalId, 512);
   if (!sessionId || !approvalId) {
@@ -741,6 +744,7 @@ function sameQuestionTool(
 }
 
 export function bindPersistentOpenCodeQuestionRoute(route: OpenCodeQuestionReplyRoute): void {
+  if (bindCodexQuestionRoute(route)) return;
   const active = activeQuestionSessions.get(route.sessionId);
   const pending = active?.pending.get(route.requestId);
   if (
@@ -766,6 +770,7 @@ export async function respondToPersistentOpenCodeQuestion(input: {
   expectedBlockId: string;
   signal?: AbortSignal;
 }): Promise<OpenCodeQuestionDispatchReceipt> {
+  if (input.request.authority.requestId.startsWith('que_codex_')) return replyCodexQuestion(input);
   const active = activeQuestionSessions.get(input.expectedSessionId);
   if (!active) throw new Error('OpenCode question is no longer active.');
   const receipt = await executeOpenCodeQuestionRequest(
@@ -1844,6 +1849,7 @@ export function toolsForPolicy(input: {
     const subagentLike = name.startsWith('agent.') || name.startsWith('task.');
     bounded[name] =
       enabled === true &&
+      name !== 'agent.run' && name !== 'agent.run_many' &&
       (!mutating || canWrite) &&
       (!terminalLike || canTerminal) &&
       (!subagentLike || canSubagents);
@@ -1916,11 +1922,12 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   let failureStage: PersistentTurnFailureStage = 'session_binding';
 
   try {
-    const session = await sessions.sessionForChat(scope, chatId);
+    const timing = { requestId: request.requestId, chatId, model: modelId };
+    const session = await appActivityLog.trace('model.prepare.session', timing, () => sessions.sessionForChat(scope, chatId));
     const client = session.client as PersistentOpenCodeClient;
     const [baselineResult, catalogResult] = await Promise.allSettled([
-      client.http.messages(session.sessionId),
-      liveModels(scope),
+      appActivityLog.trace('model.prepare.history', timing, () => client.http.messages(session.sessionId)),
+      appActivityLog.trace('model.prepare.catalog', timing, () => liveModels(scope)),
     ]);
     if (baselineResult.status === 'rejected') {
       failureStage = 'session_binding';
@@ -2087,9 +2094,6 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     let finishReason = 'stop';
     const startedAt = Date.now();
     failureStage = 'event_stream';
-    const schedulePoll = (): Promise<{ kind: 'poll' }> =>
-      new Promise((resolve) => setTimeout(() => resolve({ kind: 'poll' }), TURN_IDLE_POLL_MS));
-    let pendingPoll = schedulePoll();
     const toolStateKey = (tool: Extract<ProviderEvent, { type: 'tool' }>): string =>
       `${tool.callId ?? tool.name}:${tool.status}`;
     const requestLocalTool = (
@@ -2207,31 +2211,64 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       await request.onApprovalRequested(approval);
       return true;
     };
-    const recoverPendingApprovals = async (): Promise<void> => {
+    const recoverPendingApprovals = async (register = true): Promise<VibeSpaceApproval[]> => {
       const propertiesList = await client.http.pendingPermissions().catch(() => []);
+      const recovered: VibeSpaceApproval[] = [];
+      if (done || abortEvents.signal.aborted) return recovered;
       for (const properties of propertiesList) {
         for (const event of normalizeOpenCodeEvent(
-          { type: 'permission.asked', properties },
-          dispatch.sessionId,
+          { type: 'permission.asked', properties }, dispatch.sessionId,
         )) {
-          if (event.type === 'approval.requested') await registerApproval(event.approval);
+          if (event.type === 'approval.requested' && (!register || await registerApproval(event.approval))) recovered.push(event.approval);
         }
       }
+      return recovered;
     };
-    const recoverPendingQuestions = async (): Promise<
+    const recoverPendingQuestions = async (register = true): Promise<
       Extract<ProviderEvent, { type: 'question' }>[]
     > => {
       const propertiesList = await client.http.pendingQuestions().catch(() => []);
+      if (done || abortEvents.signal.aborted) return [];
       const recovered: Extract<ProviderEvent, { type: 'question' }>[] = [];
       for (const properties of propertiesList) {
         const question = normalizeQuestionEvent(
           { type: 'question.asked', properties },
           dispatch.sessionId,
         );
-        if (question && (await registerQuestion(question))) recovered.push(question);
+        if (question && (!register || await registerQuestion(question))) recovered.push(question);
       }
       return recovered;
     };
+
+    // Recovery is concurrent with SSE: a slow HTTP read must never hold up
+    // text, questions, approvals or tool lifecycle events already on the stream.
+    let streamRevision = 0;
+    const schedulePoll = (delay = TURN_IDLE_POLL_MS) => (async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      if (done || abortEvents.signal.aborted) throw new DOMException("Recovery stopped", "AbortError");
+      const revision = streamRevision;
+      const [statusLookup, recoveredQuestions, recoveredApprovals, messages] = await Promise.all([
+          client.http
+            .status(dispatch.sessionId)
+            .then((value) => ({ succeeded: true as const, value }))
+            .catch((error: unknown) => {
+              const reason = error instanceof Error ? error.message : error;
+              // Native generation loss is terminal for this accepted turn. A
+              // replacement runtime must never silently inherit its live state.
+              if (reason === 'OpenCode managed server is unavailable.' ||
+                  reason === 'OpenCode managed server generation is unavailable.') {
+                throw new Error('OpenCode runtime disconnected. Retry to reconnect.');
+              }
+              return { succeeded: false as const, value: undefined };
+            }),
+          recoverPendingQuestions(false),
+          recoverPendingApprovals(false),
+          client.http.messages(dispatch.sessionId).catch(() => []),
+        ]);
+      return { kind: 'poll' as const, statusLookup, recoveredQuestions, recoveredApprovals, messages, revision };
+    })().catch((error: unknown) => ({ kind: 'poll' as const, error }));
+    let pendingPoll = schedulePoll();
+    let lastPublicTimeline = '';
 
     while (!done) {
       if (!turnGate.isCurrent(turn))
@@ -2249,29 +2286,17 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       ]);
       if (next.kind === 'poll') {
         pendingPoll = schedulePoll();
-        const [statusLookup, recoveredQuestions] = await Promise.all([
-          client.http
-            .status(dispatch.sessionId)
-            .then((value) => ({ succeeded: true as const, value }))
-            .catch((error: unknown) => {
-              const reason = error instanceof Error ? error.message : error;
-              // Native generation loss is terminal for this accepted turn. A
-              // replacement runtime must never silently inherit its live state.
-              if (reason === 'OpenCode managed server is unavailable.' ||
-                  reason === 'OpenCode managed server generation is unavailable.') {
-                throw new Error('OpenCode runtime disconnected. Retry to reconnect.');
-              }
-              return { succeeded: false as const, value: undefined };
-            }),
-          recoverPendingQuestions(),
-          recoverPendingApprovals(),
-        ]);
+        if ('error' in next) throw next.error;
+        const { statusLookup, recoveredQuestions, recoveredApprovals, messages } = next;
+        for (const approval of recoveredApprovals) await registerApproval(approval);
         for (const question of recoveredQuestions) {
+          if (!await registerQuestion(question)) continue;
           yield* questionEventsWithActivity(question, toolCallIdFor, emittedToolStates,
             () => request.onActionDispatch?.({ observedAt: Date.now() }));
         }
+        // An HTTP snapshot started before newer SSE parts cannot replace them.
+        if (next.revision !== streamRevision) continue;
         const status = statusType(statusLookup.value);
-        const messages = await client.http.messages(dispatch.sessionId).catch(() => []);
         const currentTurnMessages = currentTurnOpenCodeMessages(messages, baselineMessageIds);
         for (const recovered of reconcilePersistedEvents(currentTurnMessages)) {
           if (recovered.type === 'text') {
@@ -2286,7 +2311,10 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages, { workingDirectory: scope.workingDirectory, toolCallIdFor });
         if (request.signal?.aborted)
           throw new DOMException('The OpenCode turn was aborted.', 'AbortError');
-        if (publicTimeline.finalText || publicTimeline.timeline.length > 0) {
+        const timelineIdentity = JSON.stringify(publicTimeline);
+        if ((publicTimeline.finalText || publicTimeline.timeline.length > 0) &&
+            timelineIdentity !== lastPublicTimeline) {
+          lastPublicTimeline = timelineIdentity;
           yield { type: 'public_timeline', snapshot: publicTimeline };
         }
         const canonical = publicTextFromTurnMessages(currentTurnMessages);
@@ -2359,6 +2387,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       pendingEvent = nextEventOrEof();
       const eventScope = eventSessionId(event);
       if (eventScope && eventScope !== dispatch.sessionId) continue;
+      if (event.type.startsWith('message.')) streamRevision += 1;
 
       if (event.type === 'message.updated') {
         const info = recordOf(event.properties?.info ?? event.properties?.message);
@@ -2397,6 +2426,11 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           : extractOpenCodeTextPartUpdate(event);
       if (update) {
         const emission = accumulator.ingest(update);
+        if (emission.channel === 'reasoning' && emission.kind !== 'noop') {
+          yield { type: 'reasoning', delta: emission.kind === 'replace'
+            ? accumulator.fullText('reasoning') : emission.text,
+            ...(emission.kind === 'replace' ? { mode: 'replace' as const } : {}) };
+        }
         if (emission.kind === 'delta' && emission.channel === 'text' && emission.text) {
           latestTextStreamPartId = streamPartIdFor(emission.partKey);
           emittedText = accumulator.fullText('text');
@@ -2434,10 +2468,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         }
         yield tool;
         if (tool.type === 'tool' && tool.name === 'question' && tool.status === 'started') {
-          for (const recoveredQuestion of await recoverPendingQuestions()) {
-            yield* questionEventsWithActivity(recoveredQuestion, toolCallIdFor, emittedToolStates,
-              () => request.onActionDispatch?.({ observedAt: Date.now() }));
-          }
+          pendingPoll = schedulePoll(0);
         }
       }
       const question = normalizeQuestionEvent(event, dispatch.sessionId);

@@ -902,6 +902,50 @@ describe('persistent OpenCode approval recovery', () => {
 });
 
 describe('persistent OpenCode live authority', () => {
+  it('does not replace newer SSE text with an older in-flight recovery snapshot', async () => {
+    const message = (text: string) => [{ info: { id: 'live-message', role: 'assistant', providerID: 'openai', modelID: 'gpt-question-test' },
+      parts: [{ id: 'live-part', type: 'text', sessionID: 'ses_question_exact', messageID: 'live-message', text }] }];
+    configureManagedQuestionTransport([{ type: 'message.part.updated', properties: { part: message('Fresh response.')[0].parts[0] } }],
+      { eventStartDelayMs: 650, persistedMessagePolls: [[], message('Old response.'), message('Fresh response.')] });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let reads = 0; let release!: () => void;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      const response = await original(generation, path, init, timeout);
+      if (path.includes('/message?') && ++reads === 2) await new Promise<void>(resolve => { release = resolve; });
+      return response;
+    });
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('stale-recovery'))[Symbol.asyncIterator]();
+    try {
+      await iterator.next();
+      await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'text', delta: 'Fresh response.' } });
+      release();
+      const recovered = await iterator.next();
+      expect(recovered.value).toMatchObject({ type: 'public_timeline', snapshot: { finalText: 'Fresh response.' } });
+    } finally { release?.(); await iterator.return?.(); }
+  });
+
+  it('delivers SSE reasoning while a recovery HTTP request is stalled', async () => {
+    const reasoning = 'Provider-exposed summary. '.repeat(350);
+    configureManagedQuestionTransport([{ type: 'message.part.updated', properties: {
+      part: { id: 'thinking-live', sessionID: 'ses_question_exact', messageID: 'message-live', type: 'reasoning', text: reasoning },
+    } }], { eventStartDelayMs: 650 });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let release!: (response: Response) => void;
+    nativeOpenCodeMocks.request.mockImplementation((generation, path, init, timeout) =>
+      path.startsWith('/session/status') ? new Promise<Response>(resolve => { release = resolve; }) : original(generation, path, init, timeout));
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('unblocked-reasoning'))[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session' } });
+    const next = iterator.next();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([next, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('SSE blocked behind recovery')), 2500); })]);
+      expect(release).toBeTypeOf('function');
+      expect(result).toMatchObject({ value: { type: 'reasoning', delta: reasoning } });
+    } finally {
+      clearTimeout(timer); release?.(jsonResponse({ ses_question_exact: { type: 'busy' } })); await iterator.return?.();
+    }
+  });
+
   it('preserves exact provider capability fields and combined effort/Fast variant semantics', () => {
     const [model] = parseOpenCodeLiveModels({
       providers: [

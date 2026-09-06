@@ -328,6 +328,27 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
     ];
   }
 
+  if (type === 'collabAgentToolCall' && callId) {
+    const operation = safeIdentifier(item.tool) ?? 'task';
+    const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : [];
+    const states = recordOf(item.agentsStates);
+    const ids = receivers.length ? receivers : [undefined];
+    return ids.slice(0, 64).map((rawId, index): ProviderEvent => {
+      const sessionId = safeIdentifier(rawId);
+      const child = sessionId ? recordOf(states?.[sessionId]) : undefined;
+      const status = child?.status === 'completed' ? 'done' :
+        child?.status === 'errored' ? 'error' :
+        child?.status === 'interrupted' || child?.status === 'shutdown' ? 'cancelled' :
+        child?.status === 'running' || child?.status === 'pendingInit' ? 'running' : 'unknown';
+      return { type: 'tool', name: 'task',
+        status: toolStatus(item.status ?? (method === 'item/completed' ? 'completed' : 'started')),
+        callId: `${callId}:${index}`, nativeTask: { name: 'Codex agent',
+          ...(sessionId ? { sessionId } : {}), currentStep: operation, status,
+          ...(safeIdentifier(item.model) ? { modelLabel: safeIdentifier(item.model) } : {}),
+        } };
+    });
+  }
+
   if (type === 'mcpToolCall' || type === 'dynamicToolCall') {
     const server = safeIdentifier(item.server ?? item.namespace);
     const tool = safeIdentifier(item.tool);
@@ -385,11 +406,11 @@ function normalizeQuestion(message: Record<string, unknown>, params: Record<stri
   const questions = rawQuestions.slice(0, 3).flatMap((question) => {
     const record = recordOf(question);
     const id = safeIdentifier(record?.id);
-    const header = safePublicText(record?.header, 120);
+    const header = safePublicText(record?.header, 64);
     const prompt = safePublicText(record?.question, 1_024);
     if (!id || !header || !prompt) return [];
     const options = Array.isArray(record?.options)
-      ? record.options.slice(0, 20).flatMap((option) => {
+      ? record.options.slice(0, 8).flatMap((option) => {
           const optionRecord = recordOf(option);
           const label = safePublicText(optionRecord?.label, 120);
           const description = safePublicText(optionRecord?.description, 512);
@@ -403,7 +424,7 @@ function normalizeQuestion(message: Record<string, unknown>, params: Record<stri
         prompt,
         options,
         multiple: false,
-        allowCustomAnswer: record?.isOther === true,
+        allowCustomAnswer: record?.isOther === true || options.length === 0,
       },
     ];
   });

@@ -50,3 +50,18 @@ it('never renders another account or chat preview', () => {
   const { container } = render(<StreamingChatPreview chatId="chat-a" />);
   expect(container.textContent).toBe('');
 });
+
+it('interleaves live checkpoints with their native tool receipts', () => {
+  const { container } = render(<StreamingChatPreview chatId="chat-a" fallback={<div>Aggregate fallback</div>} />);
+  act(() => setPreview({ accountId: 'preview-user', chatId: 'chat-a', runId: 'ordered', requestId: 'request',
+    updatedAt: 1, text: 'First checkpoint. Second checkpoint.', segments: [
+      { kind: 'text', id: 'one', text: 'First checkpoint.' },
+      { kind: 'tool', id: 'read', name: 'read', status: 'completed', fileLabel: 'game.ts' },
+      { kind: 'text', id: 'two', text: 'Second checkpoint.' },
+    ] }));
+  const preview = container.querySelector('[data-streaming-chat-preview]')!;
+  expect(preview.children[0].textContent).toContain('First checkpoint.');
+  expect(preview.children[1].textContent).toMatch(/action|read/i);
+  expect(preview.children[2].textContent).toContain('Second checkpoint.');
+  expect(screen.queryByText('Aggregate fallback')).toBeNull();
+});
