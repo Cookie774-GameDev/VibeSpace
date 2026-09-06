@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { projectOpenCodePublicTimeline } from './openCodePublicTimeline';
 
 describe('projectOpenCodePublicTimeline', () => {
+  it('keeps live tool identities when persisted history arrives in a different order', () => {
+    const messages = [{ info: { role: 'assistant' }, parts: [
+      { type: 'tool', tool: 'read', callID: 'earlier-read', state: { status: 'completed' } },
+      { type: 'tool', tool: 'question', callID: 'live-question', state: { status: 'running' } },
+    ] }];
+    const snapshot = projectOpenCodePublicTimeline(messages, {
+      toolCallIdFor: (id) => id === 'live-question' ? 'opencode-tool-1' : 'opencode-tool-2',
+    });
+    expect(snapshot.timeline.filter(part => part.kind === 'tool_call').map(part => part.call_id))
+      .toEqual(['opencode-tool-2', 'opencode-tool-1']);
+    expect(() => projectOpenCodePublicTimeline(messages, { toolCallIdFor: () => 'private-provider-id' }))
+      .toThrow('opencode_public_tool_identity_invalid');
+  });
   it('relativizes diff metadata headers without rewriting actual changed content', () => {
     const diff = 'Index: C:/fixture/alpha.txt\n--- C:/fixture/alpha.txt\n+++ C:/fixture/alpha.txt\n@@ -1 +1 @@\n--- C:/fixture/content\n+++ C:/fixture/content';
     const snapshot = projectOpenCodePublicTimeline([{info: {role: 'assistant'}, parts: [{type: 'tool', tool: 'edit', callID: 'edit', state: {status: 'completed', input: {path: 'C:/fixture/alpha.txt'}, metadata: {diff}}}]}], {workingDirectory: 'C:/fixture'});

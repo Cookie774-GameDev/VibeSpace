@@ -429,14 +429,17 @@ describe('chat repository connections and queue ownership', () => {
       mode: 'chat',
       active_agent_ids: [],
       connection: codexConnection,
+      backend_affinity: { version: 1, backend: 'codex', locked: false, selectedAt: 1 },
     });
 
     expect(created.connection).toEqual(codexConnection);
+    expect(created.backend_affinity?.backend).toBe('codex');
     expect((await chatRepo.getById(created.id))?.connection).toEqual(codexConnection);
 
     const updated = await chatRepo.update(created.id, { connection: localConnection });
     expect(updated.connection).toEqual(localConnection);
     expect((await chatRepo.getById(created.id))?.connection).toEqual(localConnection);
+    expect((await chatRepo.getById(created.id))?.backend_affinity?.backend).toBe('codex');
   });
 
   it('omits the local connection from cloud sync payload serialization', async () => {

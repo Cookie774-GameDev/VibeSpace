@@ -294,6 +294,9 @@ async function startWaitingQuestion(requestId: string, signal?: AbortSignal) {
     done: false,
     value: { type: 'session', sessionId: 'ses_question_exact' },
   });
+  await expect(iterator.next()).resolves.toMatchObject({
+    value: { type: 'tool', name: 'question', status: 'started', callId: 'opencode-tool-1' },
+  });
   const question = await iterator.next();
   expect(question.done).toBe(false);
   expect(question.value).toMatchObject({
@@ -602,6 +605,9 @@ describe('persistent OpenCode question transport authority', () => {
       ]),
     ).resolves.toMatchObject({
       done: false,
+      value: { type: 'tool', name: 'question', status: 'started' },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
       value: { type: 'question', request: { id: 'que_question_exact' } },
     });
 

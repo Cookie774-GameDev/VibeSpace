@@ -1,4 +1,5 @@
 import { isTauri } from '@/lib/utils';
+import { questionEventsWithActivity } from '../openCodeQuestionActivity';
 import type {
   AuthProbeResult,
   DetectionResult,
@@ -2265,7 +2266,10 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           recoverPendingQuestions(),
           recoverPendingApprovals(),
         ]);
-        for (const question of recoveredQuestions) yield question;
+        for (const question of recoveredQuestions) {
+          yield* questionEventsWithActivity(question, toolCallIdFor, emittedToolStates,
+            () => request.onActionDispatch?.({ observedAt: Date.now() }));
+        }
         const status = statusType(statusLookup.value);
         const messages = await client.http.messages(dispatch.sessionId).catch(() => []);
         const currentTurnMessages = currentTurnOpenCodeMessages(messages, baselineMessageIds);
@@ -2279,7 +2283,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           }
           yield recovered;
         }
-        const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages, { workingDirectory: scope.workingDirectory });
+        const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages, { workingDirectory: scope.workingDirectory, toolCallIdFor });
         if (request.signal?.aborted)
           throw new DOMException('The OpenCode turn was aborted.', 'AbortError');
         if (publicTimeline.finalText || publicTimeline.timeline.length > 0) {
@@ -2431,12 +2435,16 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         yield tool;
         if (tool.type === 'tool' && tool.name === 'question' && tool.status === 'started') {
           for (const recoveredQuestion of await recoverPendingQuestions()) {
-            yield recoveredQuestion;
+            yield* questionEventsWithActivity(recoveredQuestion, toolCallIdFor, emittedToolStates,
+              () => request.onActionDispatch?.({ observedAt: Date.now() }));
           }
         }
       }
       const question = normalizeQuestionEvent(event, dispatch.sessionId);
-      if (question && (await registerQuestion(question))) yield question;
+      if (question && (await registerQuestion(question))) {
+        yield* questionEventsWithActivity(question, toolCallIdFor, emittedToolStates,
+          () => request.onActionDispatch?.({ observedAt: Date.now() }));
+      }
       const usage = normalizePersistentOpenCodeUsage(event);
       if (usage) yield { type: 'usage', usage };
       if (event.type === 'session.error') {
@@ -2473,7 +2481,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       }
       yield recovered;
     }
-    const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages, { workingDirectory: scope.workingDirectory });
+    const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages, { workingDirectory: scope.workingDirectory, toolCallIdFor });
     if (publicTimeline.finalText || publicTimeline.timeline.length > 0) {
       const counts = publicTimeline.timeline.reduce(
         (current, part) => ({

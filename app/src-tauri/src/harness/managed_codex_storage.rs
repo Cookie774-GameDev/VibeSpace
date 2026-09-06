@@ -7,9 +7,26 @@ static STORAGE_OVERRIDE: OnceLock<Option<PathBuf>> = OnceLock::new();
 /// This opt-in is scoped to the VibeSpace process. An invalid override is an error,
 /// never permission to fall back to another installation or credential store.
 pub fn storage_root(default: &Path) -> Result<PathBuf, String> {
-    let selected = STORAGE_OVERRIDE
-        .get_or_init(|| std::env::var_os("VIBESPACE_MANAGED_CODEX_ROOT").map(PathBuf::from));
+    let selected = STORAGE_OVERRIDE.get_or_init(|| configured_storage_root());
     resolve_storage_root(default, selected.as_deref()).map_err(str::to_string)
+}
+
+fn configured_storage_root() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os("VIBESPACE_MANAGED_CODEX_ROOT") {
+        return Some(PathBuf::from(value));
+    }
+    // Launchers may retain their old environment after the user's storage
+    // preference changes. Read this one VibeSpace setting, not Codex's home.
+    #[cfg(windows)]
+    {
+        use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+        if let Ok(environment) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment") {
+            if let Ok(value) = environment.get_value::<String, _>("VIBESPACE_MANAGED_CODEX_ROOT") {
+                return Some(PathBuf::from(value));
+            }
+        }
+    }
+    None
 }
 
 pub fn resolve_storage_root(

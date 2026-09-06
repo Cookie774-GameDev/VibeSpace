@@ -103,8 +103,11 @@ export function pushStreamingPreviewChunk(
   if (PROMPT_LEAK_SIGNAL.test(parsed.prose)) {
     return { allowed: false, state: blockedState, reason: 'prompt_leak_signal' };
   }
-  if (parsed.insideFence) {
-    return { allowed: false, state: nextState, reason: 'inside_structured_fence' };
+  // Publish already-complete safe prose before the fence while structured bytes
+  // remain hidden. Otherwise a same-chunk question marks prose visible without
+  // ever delivering it, delaying its message until final response persistence.
+  if (parsed.insideFence && (!nextVisible || nextVisible === state.visible)) {
+    return { allowed: false, state: blockedState, reason: 'inside_structured_fence' };
   }
   if (!nextVisible || nextVisible === state.visible) {
     return { allowed: false, state: nextState, reason: 'incomplete_sentence' };

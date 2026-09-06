@@ -52,7 +52,10 @@ export function normalizeResourceReference(value: ResourceReference): ResourceRe
 }
 
 export function classifyResourceShell(command?: string | null): ResourceShellFamily {
-  const executable = (command ?? '').trim().toLowerCase().split(/[\\/]/).pop()?.split(/\s+/)[0] ?? '';
+  const raw = (command ?? '').trim().toLowerCase();
+  const executablePath = raw.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  const executable = (executablePath?.[1] ?? executablePath?.[2] ?? executablePath?.[3] ?? '')
+    .split(/[\\/]/).pop() ?? '';
   if (/^(?:powershell|powershell\.exe|pwsh|pwsh\.exe)$/.test(executable)) return 'powershell';
   if (/^(?:cmd|cmd\.exe)$/.test(executable)) return 'cmd';
   if (/^(?:bash|zsh|sh|dash|fish|ksh|wsl|wsl\.exe)$/.test(executable)) return 'posix';

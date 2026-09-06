@@ -327,6 +327,8 @@ export async function branchChatFromMessage(args: {
     title: formatBranchChatTitle(source.title),
     mode: source.mode,
     active_agent_ids: [...source.active_agent_ids],
+    connection: source.connection,
+    backend_affinity: source.backend_affinity,
   });
 
   const idMap = new Map<MessageId, MessageId>();

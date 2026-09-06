@@ -143,7 +143,7 @@ function freezePart(part: OpenCodePublicTimelinePart): OpenCodePublicTimelinePar
  */
 export function projectOpenCodePublicTimeline(
   messages: readonly OpenCodePublicMessageRecord[],
-  options: Readonly<{ workingDirectory?: string }> = {},
+  options: Readonly<{ workingDirectory?: string; toolCallIdFor?: (nativeId: string) => string }> = {},
 ): Readonly<OpenCodePublicTimelineSnapshot> {
   if (messages.length > MAX_MESSAGES) throw new Error('opencode_public_timeline_message_limit');
 
@@ -156,7 +156,8 @@ export function projectOpenCodePublicTimeline(
   const requestLocalCallId = (nativeId: string): string => {
     const existing = callIds.get(nativeId);
     if (existing) return existing;
-    const local = `opencode-tool-${callIds.size + 1}`;
+    const local = options.toolCallIdFor?.(nativeId) ?? `opencode-tool-${callIds.size + 1}`;
+    if (!/^opencode-tool-[1-9]\d{0,3}$/.test(local)) throw new Error('opencode_public_tool_identity_invalid');
     callIds.set(nativeId, local);
     return local;
   };

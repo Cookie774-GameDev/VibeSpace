@@ -3,11 +3,18 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 # A single clipboard snapshot preserves format precedence and avoids mixed reads.
+function Read-TerminalClipboard {
 $snapshot = [System.Windows.Forms.Clipboard]::GetDataObject()
 $result = @{ text = ''; paths = @() }
 if ($null -ne $snapshot) {
     if ($snapshot.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
-        $result.paths = @($snapshot.GetData([System.Windows.Forms.DataFormats]::FileDrop))
+        $result.paths = @($snapshot.GetData([System.Windows.Forms.DataFormats]::FileDrop) | ForEach-Object {
+            $fullPath = [System.IO.Path]::GetFullPath($_)
+            if (-not ([System.IO.File]::Exists($fullPath) -or [System.IO.Directory]::Exists($fullPath))) {
+                throw 'The copied file no longer exists.'
+            }
+            $fullPath
+        })
     } elseif ($snapshot.GetDataPresent([System.Windows.Forms.DataFormats]::Bitmap)) {
         $bitmap = $snapshot.GetData([System.Windows.Forms.DataFormats]::Bitmap)
         try {
@@ -22,3 +29,13 @@ if ($null -ne $snapshot) {
     }
 }
 ConvertTo-Json -InputObject $result -Compress -Depth 3
+}
+if ($env:VIBESPACE_CLIPBOARD_SERVER -eq '1') {
+    while ($null -ne ($request = [Console]::ReadLine())) {
+        try {
+            if ($request -ne 'read') { throw 'Invalid clipboard request.' }
+            Read-TerminalClipboard
+        } catch { [Console]::WriteLine('{"error":"Clipboard unavailable"}') }
+        [Console]::Out.Flush()
+    }
+} else { Read-TerminalClipboard }

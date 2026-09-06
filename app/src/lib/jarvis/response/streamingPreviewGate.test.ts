@@ -10,6 +10,14 @@ function push(state: Readonly<StreamingPreviewState>, delta: string) {
 }
 
 describe('streaming preview gate', () => {
+  it('shows safe prose immediately when a question fence arrives in the same chunk', () => {
+    const first = push(createStreamingPreviewState(), 'Which file should I edit?\n```jarvis_question\n{"questions":[');
+    expect(first).toMatchObject({ allowed: true, visibleText: 'Which file should I edit?' });
+    expect(first.state.insideFence).toBe(true);
+    const second = push(first.state, ']}\n```');
+    expect(second.state.visible).toBe('Which file should I edit?');
+    expect(second.state.visible).not.toContain('questions');
+  });
   it('starts empty and deeply frozen', () => {
     const state = createStreamingPreviewState();
     expect(state).toEqual({ buffered: '', visible: '', insideFence: false });

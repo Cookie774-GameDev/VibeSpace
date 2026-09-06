@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_RESOURCE_PAYLOAD_CHARS,
+  classifyResourceShell,
   insertResourceText,
   normalizeResourceReference,
   quoteResourcePath,
@@ -16,6 +17,13 @@ const fileReference: ResourceReference = {
 };
 
 describe('resource interaction security and routing', () => {
+  it('quotes pasted paths for the actual shell even when its executable path is quoted', () => {
+    for (const command of ['"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoLogo', "& 'C:\\Program Files\\PowerShell\\7\\pwsh.exe'", 'powershell.exe -NoProfile']) {
+      expect(classifyResourceShell(command)).toBe('powershell');
+      expect(quoteResourcePath("D:\\My Files\\O'Brien.png", classifyResourceShell(command))).toBe("'D:\\My Files\\O''Brien.png'");
+    }
+    expect(classifyResourceShell('"C:\\Windows\\System32\\cmd.exe" /k')).toBe('cmd');
+  });
   afterEach(() => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
