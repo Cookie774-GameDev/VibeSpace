@@ -1,12 +1,14 @@
 //! A reversible lease on an external HWND; never owns or terminates its process.
 use super::NativeBounds;
+use windows::core::BOOL;
 use windows::Win32::{
-    Foundation::HWND,
+    Foundation::{GetLastError, SetLastError, HWND, LPARAM, WIN32_ERROR},
     UI::WindowsAndMessaging::{
-        GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowThreadProcessId, IsWindow,
-        SetParent, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE,
-        GWL_STYLE, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_RESTORE,
-        SW_SHOWNA, WINDOWPLACEMENT, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_THICKFRAME,
+        EnumChildWindows, GetClassNameW, GetParent, GetWindowLongPtrW, GetWindowPlacement,
+        GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent, SetWindowLongPtrW,
+        SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOWNA,
+        WINDOWPLACEMENT, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_THICKFRAME,
     },
 };
 
@@ -17,6 +19,41 @@ pub struct EmbeddedWindow {
     style: isize,
     ex_style: isize,
     placement: WINDOWPLACEMENT,
+    original_parent: isize,
+    frame_visible: bool,
+}
+
+fn class_name(window: HWND) -> String {
+    let mut name = [0u16; 256];
+    let length = unsafe { GetClassNameW(window, &mut name) } as usize;
+    String::from_utf16_lossy(&name[..length])
+}
+
+// Some ApplicationFrameHost shell frames reject SetParent (error 87). Lease their
+// actual CoreWindow content instead, retaining the frame for exact restoration.
+fn packaged_content(frame: HWND) -> Option<HWND> {
+    if class_name(frame) != "ApplicationFrameWindow" {
+        return None;
+    }
+    unsafe extern "system" fn visit(child: HWND, data: LPARAM) -> BOOL {
+        let result = unsafe { &mut *(data.0 as *mut Option<HWND>) };
+        if class_name(child) == "Windows.UI.Core.CoreWindow"
+            && unsafe { IsWindowVisible(child) }.as_bool()
+        {
+            *result = Some(child);
+            return false.into();
+        }
+        true.into()
+    }
+    let mut result = None;
+    let _ = unsafe {
+        EnumChildWindows(
+            Some(frame),
+            Some(visit),
+            LPARAM((&mut result as *mut Option<HWND>) as isize),
+        )
+    };
+    result.filter(|child| unsafe { GetParent(*child) }.is_ok_and(|parent| parent == frame))
 }
 
 fn handle(value: isize) -> HWND {
@@ -29,13 +66,23 @@ fn child_style(style: isize) -> isize {
 
 impl EmbeddedWindow {
     pub fn attach(hwnd: isize, parent: isize) -> Result<Self, String> {
-        let window = handle(hwnd);
+        let frame = handle(hwnd);
         if hwnd == parent
-            || !unsafe { IsWindow(Some(window)) }.as_bool()
-            || unsafe { GetParent(window) }.is_ok()
+            || !unsafe { IsWindow(Some(frame)) }.as_bool()
+            || unsafe { GetParent(frame) }.is_ok()
         {
             return Err("This app window cannot be hosted in Workbench.".into());
         }
+        let window = packaged_content(frame).unwrap_or(frame);
+        Self::attach_content(frame, window, parent)
+    }
+
+    fn attach_content(frame: HWND, window: HWND, parent: isize) -> Result<Self, String> {
+        if !unsafe { IsWindow(Some(handle(parent))) }.as_bool() {
+            return Err("Workbench host window is unavailable.".into());
+        }
+        let hwnd = window.0 as isize;
+        let original_parent = unsafe { GetParent(window) }.map_or(0, |parent| parent.0 as isize);
         let mut pid = 0;
         unsafe {
             GetWindowThreadProcessId(window, Some(&mut pid));
@@ -55,7 +102,10 @@ impl EmbeddedWindow {
             placement,
             style: unsafe { GetWindowLongPtrW(window, GWL_STYLE) },
             ex_style: unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) },
+            original_parent,
+            frame_visible: original_parent != 0 && unsafe { IsWindowVisible(frame) }.as_bool(),
         };
+        let parent_error;
         unsafe {
             let _ = ShowWindow(window, SW_RESTORE);
             SetWindowLongPtrW(window, GWL_STYLE, child_style(lease.style));
@@ -66,7 +116,9 @@ impl EmbeddedWindow {
             );
             // A successful SetParent can return NULL for a previous desktop parent.
             // Verify the resulting relationship instead of treating NULL as failure.
+            SetLastError(WIN32_ERROR(0));
             let _ = SetParent(window, Some(handle(parent)));
+            parent_error = GetLastError();
         }
         if !lease.is_attached() {
             unsafe {
@@ -87,10 +139,15 @@ impl EmbeddedWindow {
                         | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
                 );
             }
-            return Err(
-                "Windows prevented this app from embedding (permissions or window compatibility)."
-                    .into(),
-            );
+            return Err(format!(
+                "Windows could not embed this app (SetParent error {}).",
+                parent_error.0
+            ));
+        }
+        if lease.original_parent != 0 {
+            unsafe {
+                let _ = ShowWindow(handle(lease.original_parent), SW_HIDE);
+            }
         }
         Ok(lease)
     }
@@ -159,7 +216,10 @@ impl Drop for EmbeddedWindow {
         }
         unsafe {
             // Detach before restoring the desktop frame, position, and show state.
-            let _ = SetParent(handle(self.hwnd), None);
+            let _ = SetParent(
+                handle(self.hwnd),
+                (self.original_parent != 0).then(|| handle(self.original_parent)),
+            );
             SetWindowLongPtrW(handle(self.hwnd), GWL_STYLE, self.style);
             SetWindowLongPtrW(handle(self.hwnd), GWL_EXSTYLE, self.ex_style);
             let _ = SetWindowPlacement(handle(self.hwnd), &self.placement);
@@ -176,6 +236,9 @@ impl Drop for EmbeddedWindow {
                     | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
                     | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
             );
+            if self.frame_visible {
+                let _ = ShowWindow(handle(self.original_parent), SW_SHOWNA);
+            }
         }
     }
 }
@@ -185,6 +248,15 @@ mod tests {
     use super::*;
     #[test]
     fn hosts_resizes_hides_and_restores_a_disposable_external_window() {
+        check_external_window(false);
+    }
+
+    #[test]
+    fn restores_content_to_its_original_frame_after_hosting() {
+        check_external_window(true);
+    }
+
+    fn check_external_window(content: bool) {
         use std::{
             io::{BufRead, BufReader},
             os::windows::process::CommandExt,
@@ -225,7 +297,10 @@ mod tests {
                 $form.Text = 'VibeSpace native host unit test'
                 $form.ShowInTaskbar = $false
                 $form.Opacity = 0
-                $form.Add_Shown({ [Console]::WriteLine($form.Handle.ToInt64()); [Console]::Out.Flush() })
+                $panel = New-Object System.Windows.Forms.Panel
+                $panel.SetBounds(12, 18, 240, 160)
+                $form.Controls.Add($panel)
+                $form.Add_Shown({ [Console]::WriteLine(('{0},{1}' -f $form.Handle.ToInt64(), $panel.Handle.ToInt64())); [Console]::Out.Flush() })
                 [System.Windows.Forms.Application]::Run($form)
             "#]).creation_flags(0x0800_0000).stdout(Stdio::piped()).stderr(Stdio::null())
             .spawn().unwrap());
@@ -236,12 +311,15 @@ mod tests {
             let _ = BufReader::new(output).read_line(&mut line);
             let _ = tx.send(line);
         });
-        let hwnd: isize = rx
+        let handles: Vec<isize> = rx
             .recv_timeout(Duration::from_secs(20))
             .unwrap()
             .trim()
-            .parse()
-            .unwrap();
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
+        let frame = handles[0];
+        let hwnd = if content { handles[1] } else { frame };
         let parent = Parent(
             unsafe {
                 CreateWindowExW(
@@ -265,7 +343,14 @@ mod tests {
         let mut original_rect = RECT::default();
         unsafe { GetWindowRect(handle(hwnd), &mut original_rect) }.unwrap();
         {
-            let host = EmbeddedWindow::attach(hwnd, parent.0 .0 as isize).unwrap();
+            let host = if content {
+                EmbeddedWindow::attach_content(handle(frame), handle(hwnd), parent.0 .0 as isize)
+            } else {
+                EmbeddedWindow::attach(hwnd, parent.0 .0 as isize)
+            }.unwrap();
+            if content {
+                assert!(!unsafe { IsWindowVisible(handle(frame)) }.as_bool());
+            }
             assert!(host.is_attached());
             host.resize(
                 &NativeBounds {
@@ -283,7 +368,12 @@ mod tests {
             host.hide();
             assert!(!unsafe { IsWindowVisible(handle(hwnd)) }.as_bool());
         }
-        assert!(unsafe { GetParent(handle(hwnd)) }.is_err());
+        if content {
+            assert_eq!(unsafe { GetParent(handle(hwnd)) }.unwrap(), handle(frame));
+            assert!(unsafe { IsWindowVisible(handle(frame)) }.as_bool());
+        } else {
+            assert!(unsafe { GetParent(handle(hwnd)) }.is_err());
+        }
         assert_eq!(
             unsafe { GetWindowLongPtrW(handle(hwnd), GWL_STYLE) },
             original_style
