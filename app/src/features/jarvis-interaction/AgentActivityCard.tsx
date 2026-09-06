@@ -1,5 +1,5 @@
-﻿import * as React from 'react';
-import { Bot, ChevronDown, ExternalLink, GitFork, X } from 'lucide-react';
+import * as React from 'react';
+import { ChevronDown, ExternalLink, GitFork, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Part } from '@/types/chat';
@@ -7,6 +7,8 @@ import type { ChatId } from '@/types/common';
 import { useJarvisInteractionStore } from './sessionStore';
 import type { JarvisAgentStatus, JarvisChatAgent } from './types';
 import { openNativeChildChat } from './openNativeChildChat';
+import { AgentActivityIndicator } from './AgentActivityIndicator';
+import './AgentActivityCard.css';
 
 type AgentPart = Extract<Part, { kind: 'agent_card' }>;
 const EMPTY_AGENTS: NonNullable<
@@ -55,26 +57,24 @@ export function AgentActivityCard({ part }: AgentActivityCardProps) {
   return (
     <article
       data-testid="chat-agent-card"
-      className="group rounded-xl border border-orange-500/25 bg-orange-950/20 px-3 py-2 text-orange-50 shadow-[inset_0_1px_0_rgba(251,146,60,0.12)]"
+      className="agent-task-card group rounded-xl border border-border bg-muted/40 px-3 py-2 text-foreground "
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-orange-400/25 bg-orange-500/10 text-orange-300">
-          <Bot className="h-3.5 w-3.5" />
-        </div>
+        <AgentActivityIndicator agent={agent} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 rounded-full border border-orange-400/20 bg-black/20 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-orange-300/85">
+            <span className="shrink-0 rounded-full border border-border bg-muted/30 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-foreground">
               {agent.name.toLowerCase().includes('planner') ? 'Planner' : 'Subagent'}
             </span>
-            <span className="truncate text-ui-strong text-orange-100">{agent.name}</span>
-            <span className="shrink-0 text-metadata text-orange-100/45">
+            <span className="truncate text-ui-strong text-foreground">{agent.name}</span>
+            <span className="shrink-0 text-metadata text-muted-foreground">
               {STATUS_LABELS[agent.status]}
             </span>
           </div>
-          <p className="mt-1 truncate text-secondary text-orange-50/85" title={agent.task}>
+          <p className="mt-1 truncate text-secondary text-foreground" title={agent.task}>
             {cleanTask(agent.task, agent.name)}
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-orange-100/55">
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
             <span className="truncate">{agent.currentStep ?? STATUS_LABELS[agent.status]}</span>
             <span aria-hidden>|</span>
             <span className="truncate">{agent.modelLabel}</span>
@@ -91,10 +91,11 @@ export function AgentActivityCard({ part }: AgentActivityCardProps) {
           size="sm"
           variant="ghost"
           onClick={openChildChat}
+          data-chat-pane-action="true"
           aria-label={`Open chat for ${agent.name}`}
-          className="h-7 shrink-0 border border-orange-400/15 bg-black/20 px-2 text-[11px] text-orange-200/80 hover:bg-orange-500/10 hover:text-orange-100"
+          className="h-7 shrink-0 border border-border bg-muted/30 px-2 text-[11px] text-foreground hover:bg-muted/40 hover:text-foreground"
         >
-          Open chat
+          <ExternalLink className="h-3.5 w-3.5" /> Open task
         </Button>
       </div>
     </article>
@@ -161,9 +162,7 @@ export function ChatAgentActivityPanel({
   return (
     <section
       className={cn(
-        'relative w-full overflow-visible rounded-[18px] border border-orange-400/40 bg-[#120d09]/95 text-orange-50',
-        'shadow-[0_0_0_1px_rgba(251,146,60,0.16),0_0_24px_rgba(251,146,60,0.32),inset_0_0_20px_rgba(251,146,60,0.08)]',
-        'backdrop-blur-xl',
+        'agent-task-panel relative w-full overflow-visible rounded-[18px] border border-border bg-background text-foreground',
         className,
       )}
       aria-label="Multitask activity"
@@ -173,19 +172,16 @@ export function ChatAgentActivityPanel({
       <div className="overflow-hidden rounded-[17px]">
         <div
           className={cn(
-            'flex items-center border-b border-orange-500/20 bg-gradient-to-r from-orange-500/10 via-black/25 to-orange-500/5',
+            'flex items-center border-b border-border bg-muted/20',
             compact ? 'gap-1.5 px-2 py-1.5' : 'gap-2.5 px-3 py-2',
           )}
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <GitFork
-              className={cn(
-                'shrink-0 text-orange-300 drop-shadow-[0_0_8px_rgba(251,146,60,0.85)]',
-                compact ? 'h-3.5 w-3.5' : 'h-4 w-4',
-              )}
+              className={cn('shrink-0 text-foreground ', compact ? 'h-3.5 w-3.5' : 'h-4 w-4')}
             />
-            <span className="shrink-0 text-ui-strong font-semibold text-orange-300">{title}</span>
-            <span className="truncate text-metadata text-orange-100/70">{HEADER_STATUS}</span>
+            <span className="shrink-0 text-ui-strong font-semibold text-foreground">{title}</span>
+            <span className="truncate text-metadata text-muted-foreground">{HEADER_STATUS}</span>
           </div>
           <Button
             type="button"
@@ -195,7 +191,7 @@ export function ChatAgentActivityPanel({
             aria-label={expanded ? 'Collapse multitask activity' : 'Expand multitask activity'}
             aria-expanded={expanded}
             className={cn(
-              'border border-orange-400/15 bg-black/25 text-orange-100 hover:bg-orange-500/10 hover:text-orange-200',
+              'border border-border bg-muted/30 text-foreground hover:bg-muted/40 hover:text-foreground',
               compact && 'h-6 gap-1 px-1.5 text-[10px]',
             )}
           >
@@ -218,7 +214,7 @@ export function ChatAgentActivityPanel({
             }}
             aria-label="Dismiss multitask activity"
             className={cn(
-              'rounded-full border border-orange-400/20 bg-orange-500/10 text-orange-300 hover:bg-orange-500/20',
+              'rounded-full border border-border bg-muted/40 text-foreground hover:bg-muted/40',
               compact ? 'h-6 w-6' : 'h-7 w-7',
             )}
           >
@@ -236,11 +232,11 @@ export function ChatAgentActivityPanel({
             aria-label={compact ? 'Live agent work' : undefined}
           >
             {showGroupHeaders && agentRows.length > 0 && (
-              <div className="border-b border-orange-500/10 bg-black/20 px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-orange-300/70">
+              <div className="border-b border-border bg-muted/30 px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-foreground">
                 Agents ({agentRows.length})
               </div>
             )}
-            <div className="divide-y divide-orange-500/10">
+            <div className="divide-y divide-border">
               {agentRows.map((agent, index) => (
                 <AgentActivityRow
                   key={String(agent.agentId)}
@@ -251,11 +247,11 @@ export function ChatAgentActivityPanel({
               ))}
             </div>
             {showGroupHeaders && subagentRows.length > 0 && (
-              <div className="border-y border-orange-500/10 bg-black/20 px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-orange-300/70">
+              <div className="border-y border-border bg-muted/30 px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-foreground">
                 Subagents ({subagentRows.length})
               </div>
             )}
-            <div className="divide-y divide-orange-500/10">
+            <div className="divide-y divide-border">
               {subagentRows.map((agent, index) => (
                 <AgentActivityRow
                   key={String(agent.agentId)}
@@ -273,8 +269,8 @@ export function ChatAgentActivityPanel({
         className="pointer-events-none absolute left-1/2 top-full h-8 w-24 -translate-x-1/2"
         aria-hidden
       >
-        <div className="mx-auto h-5 w-px bg-gradient-to-b from-orange-300 via-orange-500 to-transparent shadow-[0_0_18px_rgba(251,146,60,0.95)]" />
-        <div className="mx-auto -mt-1 h-4 w-4 rotate-45 rounded-[4px] border-b border-r border-orange-400/60 bg-[#120d09] shadow-[0_0_20px_rgba(251,146,60,0.95)]" />
+        <div className="mx-auto h-5 w-px" />
+        <div className="mx-auto -mt-1 h-4 w-4 rotate-45 rounded-[4px] border-b border-r border-border bg-background " />
       </div>
     </section>
   );
@@ -298,10 +294,7 @@ function AgentActivityRow({
 
   return (
     <article
-      className={cn(
-        'bg-gradient-to-r from-orange-950/25 via-black/20 to-transparent',
-        compact ? 'px-2 py-1.5' : 'px-3 py-2',
-      )}
+      className={cn('bg-muted/20', compact ? 'px-2 py-1.5' : 'px-3 py-2')}
       data-testid="chat-agent-activity-row"
       data-compact={compact ? 'true' : 'false'}
     >
@@ -315,31 +308,32 @@ function AgentActivityRow({
       >
         <div
           className={cn(
-            'flex items-center justify-center rounded-lg border border-orange-500/20 bg-orange-500/10 font-semibold text-orange-300 shadow-[inset_0_0_14px_rgba(251,146,60,0.12)]',
+            'flex items-center justify-center rounded-lg border border-border bg-muted/40 font-semibold text-foreground ',
             compact ? 'h-6 w-6 text-[11px]' : 'h-8 w-8 text-sm',
           )}
         >
-          {index}
+          <span className="sr-only">{index}</span>
+          <AgentActivityIndicator agent={agent} />
         </div>
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 rounded-full border border-orange-400/20 bg-black/20 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-orange-300/85">
+            <span className="shrink-0 rounded-full border border-border bg-muted/30 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-foreground">
               {labelForAgent(agent)}
             </span>
             <span
-              className="truncate text-ui-strong text-orange-50"
+              className="truncate text-ui-strong text-foreground"
               title={cleanTask(agent.task, agent.name)}
             >
               {agent.name}
             </span>
-            <span className="shrink-0 text-metadata text-orange-100/45">
+            <span className="shrink-0 text-metadata text-muted-foreground">
               {STATUS_LABELS[agent.status]}
             </span>
           </div>
-          <p className="mt-1 line-clamp-2 text-secondary text-orange-50/85">
+          <p className="mt-1 line-clamp-2 text-secondary text-foreground">
             {cleanTask(agent.task, agent.name)}
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-orange-100/55">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             <span className="truncate">{agent.currentStep ?? STATUS_LABELS[agent.status]}</span>
             <span aria-hidden>|</span>
             <span className="truncate">{agent.modelLabel}</span>
@@ -351,14 +345,15 @@ function AgentActivityRow({
           size="sm"
           variant="ghost"
           onClick={openChildChat}
+          data-chat-pane-action="true"
           aria-label={`Open chat for ${agent.name}`}
           className={cn(
-            'shrink-0 gap-1 border border-orange-400/15 bg-black/20 text-orange-200/80 hover:bg-orange-500/10 hover:text-orange-100',
+            'shrink-0 gap-1 border border-border bg-muted/30 text-foreground hover:bg-muted/40 hover:text-foreground',
             compact ? 'h-6 w-6 px-0' : 'px-2 text-[11px]',
           )}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          <span className={compact ? 'sr-only' : undefined}>Open chat</span>
+          <span className={compact ? 'sr-only' : undefined}>Open task</span>
         </Button>
       </div>
     </article>
@@ -379,9 +374,9 @@ function FileEvidenceDisclosure({
   const hasDiff = Boolean(diff && (diff.addedLines !== 0 || diff.removedLines !== 0));
   if (filesRead.length === 0 && filesEditing.length === 0 && !hasDiff) return null;
   return (
-    <details className="mt-1.5 rounded-lg border border-orange-500/15 bg-black/20 px-2 py-1 text-[10px] text-orange-100/65">
-      <summary className="cursor-pointer select-none text-orange-200/80">Files and changes</summary>
-      <div className="mt-1.5 space-y-1 border-t border-orange-500/10 pt-1.5">
+    <details className="mt-1.5 rounded-lg border border-border bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">
+      <summary className="cursor-pointer select-none text-foreground">Files and changes</summary>
+      <div className="mt-1.5 space-y-1 border-t border-border pt-1.5">
         {filesRead.length > 0 ? <FileEvidenceList label="Read" files={filesRead} /> : null}
         {filesEditing.length > 0 ? <FileEvidenceList label="Changed" files={filesEditing} /> : null}
         {hasDiff && diff ? <DiffCounts diff={diff} small={small} /> : null}
@@ -393,7 +388,7 @@ function FileEvidenceDisclosure({
 function FileEvidenceList({ label, files }: { label: string; files: string[] }) {
   return (
     <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-1.5">
-      <span className="text-orange-300/80">{label}</span>
+      <span className="text-foreground">{label}</span>
       <ul className="min-w-0 space-y-0.5">
         {files.map((file) => (
           <li key={`${label}:${file}`} className="truncate font-mono" title={file}>

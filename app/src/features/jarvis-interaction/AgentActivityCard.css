@@ -1,0 +1,109 @@
+.agent-task-card,
+.agent-task-panel {
+  --task-accent: hsl(var(--accent-copper));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+  box-shadow: 0 8px 26px -20px hsl(var(--foreground) / 0.24);
+}
+
+.agent-task-card {
+  border-radius: 14px;
+  border-inline-start: 3px solid var(--task-accent);
+  padding: 14px;
+}
+
+.agent-task-panel {
+  border-radius: 18px;
+  border-top: 2px solid var(--task-accent);
+}
+
+.agent-task-card button,
+.agent-task-panel button {
+  transition:
+    background-color 150ms,
+    border-color 150ms;
+}
+
+.agent-task-card button[data-chat-pane-action],
+.agent-task-panel button[data-chat-pane-action] {
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent-copper) / 0.09);
+  gap: 6px;
+}
+
+.agent-task-card button[data-chat-pane-action]:hover,
+.agent-task-panel button[data-chat-pane-action]:hover {
+  border-color: var(--task-accent);
+  background: hsl(var(--accent-copper) / 0.16);
+}
+
+.agent-task-icon {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--task-accent, hsl(var(--accent-copper)));
+  background: hsl(var(--accent-copper) / 0.08);
+}
+
+.agent-task-icon .agent-motion-slot[data-agent-motion-size='compact'] {
+  --agent-motion-scale: 0.36;
+  width: 30px;
+  flex-basis: 30px;
+}
+
+.agent-task-panel [data-compact='true'] .agent-task-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.agent-task-panel [data-compact='true'] .agent-motion-slot[data-agent-motion-size='compact'] {
+  --agent-motion-scale: 0.28;
+  width: 24px;
+  flex-basis: 24px;
+}
+
+.agent-task-card [data-chat-pane-action] {
+  min-height: 30px;
+}
+
+.agent-task-panel [data-testid='chat-agent-connector'] > div {
+  background: hsl(var(--background));
+  border-color: hsl(var(--border));
+}
+
+.agent-task-panel [data-testid='chat-agent-connector'] > div:first-child {
+  background: var(--task-accent);
+}
+
+html[data-theme='monochrome'] .agent-task-card,
+html[data-theme='monochrome'] .agent-task-panel {
+  --task-accent: hsl(var(--foreground));
+}
+
+@media (max-width: 540px) {
+  .agent-task-card > div {
+    flex-wrap: wrap;
+  }
+  .agent-task-card > div > .min-w-0 {
+    flex-basis: calc(100% - 48px);
+  }
+  .agent-task-card > div > button {
+    margin-inline-start: 42px;
+  }
+  .agent-task-card .flex.min-w-0.items-center,
+  .agent-task-panel .flex.min-w-0.items-center {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-task-card button,
+  .agent-task-panel button {
+    transition: none;
+  }
+}

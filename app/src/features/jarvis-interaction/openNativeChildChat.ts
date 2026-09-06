@@ -4,7 +4,8 @@ import type { ChatId } from '@/types/common';
 
 /** Focus a multitask/subagent child thread without destroying the parent tab. */
 export function openNativeChildChat(childChatId: string | ChatId): void {
-  const id = String(childChatId);
+  const id = String(childChatId).trim();
+  if (!id) return;
   browserChatStore.getState().setEngine('native', id);
-  useUIStore.setState({ activeChatId: id, route: 'chat' });
+  useUIStore.setState({ activeChatId: id, route: 'chat', chatMode: 'chat' });
 }

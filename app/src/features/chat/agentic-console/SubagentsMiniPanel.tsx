@@ -121,6 +121,7 @@ function SubagentRow({ agent }: { agent: JarvisChatAgent }) {
         className="shrink-0"
         aria-label={`Open chat for ${agent.name}`}
         title="Open native VibeSpace chat"
+        data-chat-pane-action="true"
         onClick={() => openNativeChildChat(String(agent.childChatId))}
       >
         <ExternalLink className="h-3.5 w-3.5" />
