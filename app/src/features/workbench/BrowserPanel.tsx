@@ -174,7 +174,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
 
   const policy = React.useMemo(() => {
     try {
-      return browserFramePolicy(currentUrl);
+      return browserFramePolicy(currentUrl, undefined, isTauri);
     } catch {
       return null;
     }
@@ -253,10 +253,11 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
           }
           applyNativeState(opened);
           if (opened.loading && !opened.error) {
-            void reconcileNativeState(request.generation).catch((cause) => {
+            const generation = request.generation;
+            void reconcileNativeState(generation).catch((cause) => {
               if (
                 nativeStatusGenerationRef.current === 0 ||
-                nativeRequestGenerationRef.current !== request?.generation
+                nativeRequestGenerationRef.current !== generation
               )
                 return;
               setError(nativeFailureMessage(cause, 'Browser state is unavailable.'));
@@ -357,11 +358,12 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
   );
 
   React.useEffect(() => {
-    if (policy) setLoadState('loading');
+    if (policy?.delivery === 'embedded') setLoadState('loading');
+    else if (policy?.delivery === 'external') setLoadState('idle');
   }, [frameKey, policy]);
 
   const commitUrl = (normalized: string, pushHistory: boolean) => {
-    const nextPolicy = browserFramePolicy(normalized);
+    const nextPolicy = browserFramePolicy(normalized, undefined, isTauri);
     nativeDesiredUrlRef.current = normalized;
     draftDirtyRef.current = false;
     setError(null);
@@ -375,9 +377,13 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
       });
       setHistoryIndex((index) => Math.min(index + 1, 39));
     }
-    setLoadState('loading');
+    setLoadState(nextPolicy.delivery === 'external' ? 'idle' : 'loading');
     if (nextPolicy.delivery === 'embedded') setFrameKey((value) => value + 1);
-    else
+    else if (nextPolicy.delivery === 'external') {
+      void openExternal(nextPolicy.externalUrl).catch((cause) => {
+        setError(nativeFailureMessage(cause, 'The page could not open externally.'));
+      });
+    } else
       void syncNativeSurface(nextPolicy.externalUrl).catch((cause) => {
         const message = nativeFailureMessage(cause, 'The page could not open.');
         setError(message);
@@ -421,10 +427,12 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
         panelId: panel.id,
         operationId,
         delta,
-      }).catch((cause) => {
-        setError(nativeFailureMessage(cause, 'History is unavailable.'));
-        setLoadState('error');
-      });
+      })
+        .then(() => reconcileNativeState(nativeRequestGenerationRef.current))
+        .catch((cause) => {
+          setError(nativeFailureMessage(cause, 'History is unavailable.'));
+          setLoadState('error');
+        });
       return;
     }
     const next = historyIndex + delta;
@@ -434,6 +442,10 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
   };
 
   const nativeControl = (command: 'reload' | 'stop') => {
+    if (policy?.delivery === 'external') {
+      if (command === 'reload') openDraftExternally();
+      return;
+    }
     if (policy?.delivery !== 'native-child') {
       if (command === 'reload') {
         setLoadState('loading');
@@ -445,10 +457,12 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
     void invoke(`workbench_browser_surface_${command}`, {
       panelId: panel.id,
       operationId,
-    }).catch((cause) => {
-      setError(nativeFailureMessage(cause, `Browser ${command} failed.`));
-      setLoadState('error');
-    });
+    })
+      .then(() => reconcileNativeState(nativeRequestGenerationRef.current))
+      .catch((cause) => {
+        setError(nativeFailureMessage(cause, `Browser ${command} failed.`));
+        setLoadState('error');
+      });
   };
 
   const showFrame = policy?.delivery === 'embedded' && loadState !== 'idle';
@@ -538,6 +552,18 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
           aria-label="In-window web page"
         />
       ) : null}
+      {policy?.delivery === 'external' ? (
+        <div className="workbench-panel-empty">
+          <strong>Open this website in a browser tab</strong>
+          <span>
+            Full websites need a browser tab in web mode. Use the VibeSpace desktop app to browse
+            inside Workbench.
+          </span>
+          <Button type="button" onClick={openDraftExternally}>
+            Open website
+          </Button>
+        </div>
+      ) : null}
       {showFrame && policy ? (
         <iframe
           key={`${policy.src}-${frameKey}`}
@@ -550,7 +576,11 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
         />
       ) : null}
       <p className="workbench-browser-engine">
-        Remote pages stay inside a capability-free VibeSpace child WebView.
+        {isTauri
+          ? 'Remote pages stay inside a capability-free VibeSpace child WebView.'
+          : policy?.usedEmbed
+            ? 'YouTube video player. Open in external browser for the full website.'
+            : 'Web mode: local previews stay in Workbench; full websites open in a browser tab.'}
       </p>
     </div>
   );

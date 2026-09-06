@@ -89,6 +89,32 @@ describe('Workbench BrowserPanel delivery', () => {
     expect(address.className).toContain('[html[data-theme=warm]_&]:caret-foreground');
   });
 
+  it.each(['Back', 'Forward', 'Reload browser', 'Stop loading'])(
+    'reconciles native status after %s',
+    async (control) => {
+      render(<BrowserPanel panel={panel('https://example.com/')} onUpdate={vi.fn()} />);
+      await waitFor(() =>
+        expect(native.invoke).toHaveBeenCalledWith(
+          'workbench_browser_surface_status',
+          expect.anything(),
+        ),
+      );
+      await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+      const before = native.invoke.mock.calls.filter(
+        ([command]) => command === 'workbench_browser_surface_status',
+      ).length;
+      fireEvent.click(screen.getByRole('button', { name: control }));
+      await waitFor(() =>
+        expect(
+          native.invoke.mock.calls.filter(
+            ([command]) => command === 'workbench_browser_surface_status',
+          ).length,
+        ).toBeGreaterThan(before),
+      );
+      await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+    },
+  );
+
   it('keeps localhost interactive inside Workbench', () => {
     render(<BrowserPanel panel={panel('http://localhost:5173/')} onUpdate={vi.fn()} />);
     expect(screen.getByTitle('Browser web page').getAttribute('src')).toBe(

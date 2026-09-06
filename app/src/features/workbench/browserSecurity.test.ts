@@ -9,6 +9,22 @@ import {
 } from './browserSecurity';
 
 describe('Workbench browser isolation', () => {
+  it('uses browser tabs for full remote sites when the native engine is unavailable', () => {
+    expect(browserFramePolicy('YouTube.com', 'http://localhost:5173', false).delivery).toBe(
+      'external',
+    );
+    expect(browserFramePolicy('https://example.com', 'http://localhost:5173', false).delivery).toBe(
+      'external',
+    );
+  });
+
+  it('uses the official player in web mode without losing its referrer', () => {
+    const policy = browserFramePolicy('https://youtu.be/abc123', 'http://localhost:5173', false);
+    expect(policy.delivery).toBe('embedded');
+    expect(policy.src).toBe('https://www.youtube-nocookie.com/embed/abc123');
+    expect(policy.referrerPolicy).toBe('strict-origin-when-cross-origin');
+    expect(policy.usedEmbed).toBe(true);
+  });
   it('keeps local preview documents opaque even if they redirect to the host origin', () => {
     const policy = browserFramePolicy('http://127.0.0.1:18724/');
     expect(policy.sandbox.split(' ')).not.toContain('allow-same-origin');
