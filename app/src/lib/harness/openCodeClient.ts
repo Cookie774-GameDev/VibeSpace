@@ -1,4 +1,5 @@
 import { redactHarnessText } from './errors';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { QWEN_COMPATIBLE_BASE_URLS } from '@/lib/ai/nativeConnectionProbe';
 import type { OpenCodeServerConnection } from './runtimeManager';
 import { nativeOpenCodeEvents, nativeOpenCodeRequest } from './openCodeNativeTransport';
@@ -598,12 +599,22 @@ export function createOpenCodeHttpClient(
       return value;
     },
     async promptAsync(sessionId, input, signal, directory) {
-      await request(
-        sessionPath(sessionId, '/prompt_async'),
-        { method: 'POST', body: JSON.stringify(input), signal },
-        'void',
-        MAX_JSON_BYTES,
-        directory,
+      await appActivityLog.trace(
+        'cli.prompt-http',
+        {
+          sessionId,
+          directory,
+          input,
+          completionMeans: 'Local OpenCode HTTP acknowledgement; not upstream model receipt',
+        },
+        () =>
+          request(
+            sessionPath(sessionId, '/prompt_async'),
+            { method: 'POST', body: JSON.stringify(input), signal },
+            'void',
+            MAX_JSON_BYTES,
+            directory,
+          ),
       );
     },
     abortSession: (sessionId, directory) =>
@@ -624,6 +635,7 @@ export function createOpenCodeHttpClient(
           requestUrl('/event', directory),
           signal,
         )) {
+          appActivityLog.record('cli.event', 'received', { directory, event });
           yield { data: JSON.stringify(event) };
         }
         return;
@@ -658,7 +670,16 @@ export function createOpenCodeHttpClient(
       ) {
         throw new Error('OpenCode returned an invalid event stream.');
       }
-      yield* parseOpenCodeSse(response.body, signal);
+      for await (const event of parseOpenCodeSse(response.body, signal)) {
+        let payload: unknown;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          payload = '[invalid provider event]';
+        }
+        appActivityLog.record('cli.event', 'received', { directory, event: payload });
+        yield event;
+      }
     },
     disposeInstance: () => booleanRequest('/instance/dispose', { method: 'POST' }),
   };

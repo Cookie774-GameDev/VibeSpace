@@ -1,4 +1,5 @@
 import { classifyOpenCodeAuthFailure, HarnessError, redactHarnessText } from './errors';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { verifiedQwenCompatibleBaseUrl } from '@/lib/ai/nativeConnectionProbe';
 import { normalizeOpenCodeEvent } from './eventNormalizer';
 import { createOpenCodeHttpClient, type OpenCodeHttpClient } from './openCodeClient';
@@ -324,6 +325,42 @@ export class OpenCodeHarness implements VibeSpaceHarness {
   }
 
   async *send(input: HarnessSendRequest): AsyncIterable<HarnessEvent> {
+    const started = performance.now();
+    const id = appActivityLog.record('harness', 'started', input);
+    let terminal = false;
+    try {
+      for await (const event of this.sendObserved(input)) {
+        appActivityLog.record(
+          'harness.event',
+          event.type,
+          { sessionId: input.sessionId, event },
+          id,
+          performance.now() - started,
+        );
+        if (event.type === 'done' || event.type === 'error') terminal = true;
+        yield event;
+      }
+    } catch (error) {
+      appActivityLog.record(
+        'harness',
+        'failed',
+        { sessionId: input.sessionId, error },
+        id,
+        performance.now() - started,
+      );
+      throw error;
+    } finally {
+      appActivityLog.record(
+        'harness',
+        'stream_closed',
+        { sessionId: input.sessionId, terminalEventObserved: terminal },
+        id,
+        performance.now() - started,
+      );
+    }
+  }
+
+  private async *sendObserved(input: HarnessSendRequest): AsyncIterable<HarnessEvent> {
     await this.ensureReady();
     const controller = new AbortController();
     const abort = () => controller.abort();

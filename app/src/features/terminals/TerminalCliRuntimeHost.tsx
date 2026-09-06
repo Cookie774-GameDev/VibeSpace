@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -69,7 +70,9 @@ export function TerminalCliRuntimeHost({ runtime: suppliedRuntime }: TerminalCli
     const queues = new Map<string, Promise<void>>();
 
     const dispatch = async (request: TerminalCliFrontendRequest): Promise<void> => {
-      const response = await runtime.execute(request);
+      const response = await appActivityLog.trace('terminal-command', request, () =>
+        runtime.execute(request),
+      );
       if (!disposed) await respond(response);
     };
 
@@ -84,6 +87,7 @@ export function TerminalCliRuntimeHost({ runtime: suppliedRuntime }: TerminalCli
         return;
       }
 
+      appActivityLog.record('terminal-command', 'received', request);
       const key = queueKey(request);
       const previous = queues.get(key) ?? Promise.resolve();
       const next = previous

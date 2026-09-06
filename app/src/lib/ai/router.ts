@@ -11,6 +11,7 @@
  * executors in this router.
  */
 import type { Agent, ProviderId } from '@/types';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import type { CompiledJarvisPrompt } from '@/lib/jarvis/contracts';
 import type { VibeSpaceApproval } from '@/lib/harness/types';
 import {
@@ -201,19 +202,43 @@ function usageNumber(value: { value?: number } | undefined): number {
   return typeof value?.value === 'number' && Number.isFinite(value.value) ? value.value : 0;
 }
 
-function tokenProvenance(usage: UsageSnapshot | undefined): { provenance?: 'estimated' | 'unavailable' } {
+function tokenProvenance(usage: UsageSnapshot | undefined): {
+  provenance?: 'estimated' | 'unavailable';
+} {
   const tokens = [usage?.inputTokens, usage?.outputTokens];
-  if (tokens.some(token => token?.provenance === 'unavailable' ||
-      !Number.isSafeInteger(token?.value) || (token?.value ?? -1) < 0)) {
+  if (
+    tokens.some(
+      (token) =>
+        token?.provenance === 'unavailable' ||
+        !Number.isSafeInteger(token?.value) ||
+        (token?.value ?? -1) < 0,
+    )
+  ) {
     return { provenance: 'unavailable' };
   }
-  return tokens.some(token => token?.provenance === 'estimated') ? { provenance: 'estimated' } : {};
+  return tokens.some((token) => token?.provenance === 'estimated')
+    ? { provenance: 'estimated' }
+    : {};
 }
 
-function reportedUsageDetails(usage: UsageSnapshot | undefined): Pick<import('./types').TokenUsage, 'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens'> {
-  const details: Pick<import('./types').TokenUsage, 'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens'> = {};
-  for (const [key, metric] of [['total_tokens', usage?.totalTokens], ['cache_read_tokens', usage?.cacheReadTokens], ['cache_write_tokens', usage?.cacheWriteTokens]] as const) {
-    if (metric?.provenance === 'provider-reported' && Number.isSafeInteger(metric.value) && metric.value! >= 0) details[key] = metric.value;
+function reportedUsageDetails(
+  usage: UsageSnapshot | undefined,
+): Pick<import('./types').TokenUsage, 'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens'> {
+  const details: Pick<
+    import('./types').TokenUsage,
+    'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens'
+  > = {};
+  for (const [key, metric] of [
+    ['total_tokens', usage?.totalTokens],
+    ['cache_read_tokens', usage?.cacheReadTokens],
+    ['cache_write_tokens', usage?.cacheWriteTokens],
+  ] as const) {
+    if (
+      metric?.provenance === 'provider-reported' &&
+      Number.isSafeInteger(metric.value) &&
+      metric.value! >= 0
+    )
+      details[key] = metric.value;
   }
   return details;
 }
@@ -504,8 +529,8 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
     text,
     usage: {
       ...tokenProvenance(usage),
-        ...reportedUsageDetails(usage),
-        input_tokens: usageNumber(usage?.inputTokens),
+      ...reportedUsageDetails(usage),
+      input_tokens: usageNumber(usage?.inputTokens),
       output_tokens: usageNumber(usage?.outputTokens),
       cost_usd: usageNumber(usage?.costUsd),
     },
@@ -1099,8 +1124,8 @@ async function runKernelSmokeCliConnection(
     text,
     usage: {
       ...tokenProvenance(usage),
-        ...reportedUsageDetails(usage),
-        input_tokens: usageNumber(usage?.inputTokens),
+      ...reportedUsageDetails(usage),
+      input_tokens: usageNumber(usage?.inputTokens),
       output_tokens: usageNumber(usage?.outputTokens),
       cost_usd: usageNumber(usage?.costUsd),
     },
@@ -1293,7 +1318,52 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
   const activityId = req.connectionId ?? req.agent.model.provider;
   const completeActivity = providerActivityTracker.begin(activityId);
   try {
-    return await runAgentDispatch(req);
+    const identity = {
+      requestId: req.requestId,
+      chatId: req.chatId,
+      purpose: req.purpose,
+      provider: req.agent.model.provider,
+      model: req.agent.model.model,
+      connectionId: req.connectionId,
+    };
+    return await appActivityLog.trace('model', { ...identity, messages: req.messages }, () =>
+      runAgentDispatch({
+        ...req,
+        onChunk: (chunk) => {
+          appActivityLog.record('model.stream', 'observed', { ...identity, chunk });
+          req.onChunk?.(chunk);
+        },
+        onToolActivity: (activity) => {
+          appActivityLog.record('model.tool', activity.status, { ...identity, activity });
+          return req.onToolActivity?.(activity);
+        },
+        onQuestionRequested: req.onQuestionRequested
+          ? (question) => {
+              appActivityLog.record('model.question', 'waiting', { ...identity, question });
+              return req.onQuestionRequested?.(question);
+            }
+          : undefined,
+        onApprovalRequested: req.onApprovalRequested,
+        onProviderCompletionEvidence: req.onProviderCompletionEvidence
+          ? (evidence) => {
+              appActivityLog.record('model.receipt', 'observed', { ...identity, evidence });
+              return req.onProviderCompletionEvidence?.(evidence);
+            }
+          : undefined,
+        onHarnessSessionBound: req.onHarnessSessionBound
+          ? (binding) => {
+              appActivityLog.record('model.session', 'bound', { ...identity, binding });
+              return req.onHarnessSessionBound?.(binding);
+            }
+          : undefined,
+        onPublicTimelineSnapshot: req.onPublicTimelineSnapshot
+          ? (snapshot) => {
+              appActivityLog.record('model.timeline', 'observed', { ...identity, snapshot });
+              return req.onPublicTimelineSnapshot?.(snapshot);
+            }
+          : undefined,
+      }),
+    );
   } finally {
     completeActivity();
   }

@@ -5,6 +5,36 @@ import { chooseNativeTarget } from './capture.mjs';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 
+test('app-wide collector runs independently of an open viewer', async t => {
+  let reads = 0;
+  const { server, url } = await startLiveLog({ port: 0, readActivity: async () => ({ instanceId: 'renderer', sequence: ++reads, events: [{ sequence: reads, kind: 'tool', data: 'result' }] }) });
+  t.after(() => server.close());
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(reads, 1);
+  const response = await fetch(url + 'activity');
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).events[0].data, 'result');
+});
+
+test('app-wide viewer renders tool detail as text and defaults away from chat selection', async () => {
+  const source = await readFile(new URL('./viewer.html', import.meta.url), 'utf8');
+  const dom = new JSDOM(source, { url: 'http://127.0.0.1/private/', runScripts: 'dangerously', beforeParse(window) {
+    window.AbortSignal = AbortSignal;
+    window.setTimeout = () => 1;
+    window.fetch = async path => { assert.equal(path, 'activity'); return { ok: true, json: async () => ({ instanceId: 'one', events: [{ sequence: 1, observedAt: 1, kind: 'tool', phase: 'completed', durationMs: 1.25, data: { tool: '<script>bad()</script>', result: 'source text' } }], coverage: ['Measured locally'], capturedAt: 1 }) }; };
+  } });
+  try {
+    await new Promise(setImmediate);
+    const detail = dom.window.document.querySelector('#events details');
+    detail.open = true;
+    detail.dispatchEvent(new dom.window.Event('toggle'));
+    assert.match(dom.window.document.querySelector('#events').textContent, /source text/);
+    assert.match(dom.window.document.querySelector('#events').textContent, /1.250 ms/);
+    assert.equal(dom.window.document.querySelector('#events script'), null);
+    assert.equal(dom.window.document.querySelector('#history').open, false);
+  } finally { dom.window.close(); }
+});
+
 test('selects only one main native development target, excluding auxiliary windows', () => {
   const target = { type: 'page', title: 'VibeSpace', url: 'http://localhost:5173/?route=chat' };
   assert.equal(chooseNativeTarget([target, { ...target, url: 'http://localhost:5173/?view=pet-overlay' }]), target);
@@ -46,7 +76,7 @@ test('reports disconnection without leaking backend errors and prevents concurre
 });
 
 test('standalone HTML refreshes actual payloads and clears the report on disconnect', async () => {
-  const source = await readFile(new URL('./viewer.html', import.meta.url), 'utf8');
+  const source = (await readFile(new URL('./viewer.html', import.meta.url), 'utf8')).replace('<details id="history">', '<details id="history" open>').replace('refreshLive();\n', '// live view tested separately\n');
   let refresh;
   let fail = false;
   const payload = { chats: [{ id: 'chat-1', title: '<script>untrusted title</script>' }], chatId: 'chat-1', html: '<p>real captured record</p>', messages: 1, runs: 2, updatedAt: 1000 };

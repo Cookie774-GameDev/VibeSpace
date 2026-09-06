@@ -1,4 +1,5 @@
 import type { ProviderEvent, UsageSnapshot, UsageValue } from './types';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 
 export type CodexApprovalKind = 'command' | 'file_change' | 'permissions';
 export type CodexSimpleApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel';
@@ -544,6 +545,21 @@ export function normalizeCodexAppServerMessage(
   }
   if (SCOPED_METHODS.has(method) && !isWithinActiveScope(method, params, options)) {
     return projection();
+  }
+  // Record only protocol methods this projection recognizes. Private reasoning is excluded.
+  if (SCOPED_METHODS.has(method) && method !== 'item/reasoning/textDelta') {
+    const item = recordOf(params.item);
+    appActivityLog.record('codex.event', 'received', {
+      method,
+      params:
+        item?.type === 'reasoning'
+          ? {
+              threadId: params.threadId,
+              turnId: params.turnId,
+              item: { id: item.id, type: item.type, summary: item.summary },
+            }
+          : params,
+    });
   }
   if (method === 'turn/started') {
     const threadId = safeIdentifier(params.threadId);

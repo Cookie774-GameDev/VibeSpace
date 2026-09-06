@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -63,7 +64,9 @@ export function ToolGatewayHost({ runtime: suppliedRuntime }: ToolGatewayHostPro
     const uninstallRlmContext = installToolGatewayRlmContextPort(productionRlmContextTool);
 
     const dispatch = async (request: ToolGatewayRequest): Promise<void> => {
-      const response = await runtime.execute(request);
+      const response = await appActivityLog.trace('semantic-tool', request, () =>
+        runtime.execute(request),
+      );
       if (!disposed) await respond(response);
     };
 
@@ -77,6 +80,7 @@ export function ToolGatewayHost({ runtime: suppliedRuntime }: ToolGatewayHostPro
         if (requestId) void respond(invalidResponse(requestId)).catch(() => undefined);
         return;
       }
+      appActivityLog.record('semantic-tool', 'received', request);
       if (request.tool === 'vibespace_context') {
         void dispatch(request).catch(() => undefined);
         return;
