@@ -58,6 +58,11 @@ import { PerceptibleAgentMotionIndicator, resolveAgentMotion } from './AgentMoti
 import { SubagentsHeaderButton } from './SubagentsMiniPanel';
 import { collectNativeTaskRuns, type NativeTaskRun } from './nativeTaskRuns';
 import { buildChatSessionExport, downloadChatSessionExport } from './sessionExport';
+import { loadChatDebugLog } from './chatDebugLogData';
+import { downloadChatDebugLog } from './chatDebugLogHtml';
+import { chatRepo, messageRepo } from '@/lib/db';
+import { getActiveAccountIdentity } from '@/lib/accountIdentity';
+import { useJarvisCommandCenterBinding } from '@/features/jarvis-command-center/JarvisCommandCenter';
 import './agentic-console.css';
 
 export interface AgenticConsoleProps {
@@ -197,6 +202,8 @@ function SessionHeader({
   onCollapseAll,
   onCopySummary,
   onExport,
+  onHtmlExport,
+  htmlExportBusy,
 }: {
   chatId: string;
   messages: readonly Message[];
@@ -210,6 +217,8 @@ function SessionHeader({
   onCollapseAll: () => void;
   onCopySummary: () => void;
   onExport: () => void;
+  onHtmlExport: () => void;
+  htmlExportBusy: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const [hasHeaderProgress, setHasHeaderProgress] = React.useState(false);
@@ -428,6 +437,16 @@ function SessionHeader({
                 onClick={onExport}
               >
                 Export session
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label="Export HTML log"
+                disabled={htmlExportBusy}
+                onClick={onHtmlExport}
+              >
+                {htmlExportBusy ? 'Building HTML log…' : 'Export HTML log'}
               </Button>
             </div>
           </div>
@@ -1256,6 +1275,44 @@ export function AgenticConsole({
     );
   };
 
+  const binding = useJarvisCommandCenterBinding();
+  const [htmlExportBusy, setHtmlExportBusy] = React.useState(false);
+  const htmlExportFlight = React.useRef(false);
+  const exportChatRef = React.useRef(chatId);
+  exportChatRef.current = chatId;
+  React.useEffect(() => {
+    exportChatRef.current = chatId;
+    return () => { exportChatRef.current = ''; };
+  }, [chatId]);
+  const exportHtmlLog = async () => {
+    if (htmlExportFlight.current) return;
+    const accountId = getActiveAccountIdentity()?.accountId;
+    if (!accountId) {
+      toast.error('HTML log unavailable', 'Wait for account loading to finish.');
+      return;
+    }
+    htmlExportFlight.current = true;
+    setHtmlExportBusy(true);
+    try {
+      const log = await loadChatDebugLog({
+        accountId,
+        chatId,
+        listMessages: () => messageRepo.listByChat(chatId as Message['chat_id']),
+        getChat: () => chatRepo.getById(chatId as Message['chat_id']),
+        activity,
+        dataPort: binding?.hostPort.accountId === accountId ? binding.dataPort : undefined,
+        isCurrent: () => exportChatRef.current === chatId && getActiveAccountIdentity()?.accountId === accountId,
+        rendererUptimeMs: performance.now(),
+      });
+      downloadChatDebugLog(log);
+    } catch {
+      toast.error('HTML log not exported', 'The chat/account changed or its saved records could not be read. Try again.');
+    } finally {
+      htmlExportFlight.current = false;
+      if (exportChatRef.current) setHtmlExportBusy(false);
+    }
+  };
+
   if (preferences.view === 'classic') {
     return (
       <div className="agentic-view-notice" role="status">
@@ -1327,6 +1384,8 @@ export function AgenticConsole({
         onCollapseAll={() => setDetailsOpen(false)}
         onCopySummary={() => copyText(summaryText)}
         onExport={exportSession}
+        onHtmlExport={() => { void exportHtmlLog(); }}
+        htmlExportBusy={htmlExportBusy}
       />
       {blocks.length > 0 ? (
         <div className="agentic-transcript" role="region" aria-label="Agentic transcript">

@@ -926,6 +926,7 @@ describe('AgenticConsole', () => {
     expect(screen.getByRole('button', { name: 'Collapse all transcript details' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy session summary' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Export session' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Export HTML log' })).toBeTruthy();
   });
 
   it('mounts exactly one mini command center with metrics and session actions on normal agentic chat', () => {
@@ -963,6 +964,7 @@ describe('AgenticConsole', () => {
     expect(screen.getByRole('button', { name: 'Collapse all transcript details' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy session summary' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Export session' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Export HTML log' })).toBeTruthy();
   });
 
   it('places the authoritative progress control between Jarvis status and model metrics', () => {
