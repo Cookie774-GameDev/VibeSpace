@@ -7,6 +7,7 @@ const css = readFileSync(resolve(__dirname, '../../styles/warm-theme.css'), 'utf
 const bootstrap = readFileSync(resolve(__dirname, '../../bootstrapApp.tsx'), 'utf8');
 const chatDecor = readFileSync(resolve(__dirname, '../chat/OrigamiChatDecor.tsx'), 'utf8');
 const chatView = readFileSync(resolve(__dirname, '../chat/ChatView.tsx'), 'utf8');
+const chatWorkspace = readFileSync(resolve(__dirname, '../chat/ChatWorkspace.tsx'), 'utf8');
 const warmChatWelcome = readFileSync(resolve(__dirname, '../chat/WarmChatWelcome.tsx'), 'utf8');
 const filesPage = readFileSync(resolve(__dirname, '../files/FilesPage.tsx'), 'utf8');
 const historyPage = readFileSync(resolve(__dirname, '../history/HistoryPage.tsx'), 'utf8');
@@ -377,7 +378,9 @@ describe('Warm theme presentation contract', () => {
   });
 
   it('matches the approved Warm empty-chat welcome without the superseded session panel', () => {
-    expect(chatView).toContain('Boolean(activeChatId)');
+    expect(chatView).toContain('activeChatId && effectiveLayout');
+    expect(chatView).toContain('<ChatWorkspace');
+    expect(chatWorkspace).toContain('<WarmChatWelcome chatId={chatId} />');
     expect(chatView).toContain('<WarmChatWelcome chatId={String(activeChatId)} />');
     expect(chatView).not.toContain('useChatMessages');
     expect(warmChatWelcome).toContain('Start a conversation');
