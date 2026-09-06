@@ -249,7 +249,7 @@ export const SlashCommandOptionPicker = forwardRef<
           >
             <div
               className={cn(
-                'uppercase tracking-[0.2em] text-accent-copper/70',
+                'uppercase tracking-[0.2em] text-muted-foreground',
                 compact ? 'px-2.5 pb-0.5 pt-0.5 text-[9px]' : 'px-4 pb-1 pt-0.5 text-[11px]',
               )}
             >
@@ -340,7 +340,7 @@ export const SlashCommandOptionPicker = forwardRef<
                   </div>
                   {option.metadata && (
                     <span
-                      className="shrink-0 text-accent-copper/80"
+                      className="shrink-0 text-foreground"
                       style={{ fontSize: `${Math.max(9, bodyPx - 2)}px` }}
                     >
                       {option.metadata}
@@ -363,15 +363,15 @@ export const SlashCommandOptionPicker = forwardRef<
         )}
       >
         <span className="flex items-center gap-1">
-          <kbd className="jarvis-kbd">up/down</kbd>
+          <kbd className="jarvis-kbd !text-foreground">up/down</kbd>
           <span>nav</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="jarvis-kbd">enter</kbd>
+          <kbd className="jarvis-kbd !text-foreground">enter</kbd>
           <span>select</span>
         </span>
         <span className="ml-auto flex items-center gap-1">
-          <kbd className="jarvis-kbd">esc</kbd>
+          <kbd className="jarvis-kbd !text-foreground">esc</kbd>
         </span>
       </div>
     </motion.div>
