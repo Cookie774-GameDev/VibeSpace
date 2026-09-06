@@ -873,7 +873,8 @@ describe('AgenticConsole', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Chat console settings' }));
-    fireEvent.change(screen.getByLabelText('Console theme'), { target: { value: 'oled-void' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Console theme' }));
+    fireEvent.click(screen.getByRole('option', { name: 'OLED Void' }));
 
     expect(
       screen

@@ -359,11 +359,11 @@ const INITIAL_DOCUMENT = createCanvasDocument({
   projectId: 'local-project',
   ownerId: 'local-user',
   title: 'Untitled canvas',
+  layoutMode: 'edgeless',
   now: 1,
 });
 
-const CAMERA_VIEWPORT = Object.freeze({ width: 1200, height: 800 });
-const CAMERA_CENTER = Object.freeze({ x: 600, y: 400 });
+const DEFAULT_CAMERA_VIEWPORT = Object.freeze({ width: 1200, height: 800 });
 let documentSequence = 0;
 
 export interface CanvasPagePersistenceBinding {
@@ -709,6 +709,25 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   const directGeometryGesture = React.useRef<CanvasDirectGeometryGesture | null>(null);
   const blockElements = React.useRef(new Map<string, HTMLElement>());
   const workspaceRef = React.useRef<HTMLElement>(null);
+  const [CAMERA_VIEWPORT, setViewport] = React.useState<{ width: number; height: number }>(
+    DEFAULT_CAMERA_VIEWPORT,
+  );
+  const CAMERA_CENTER = { x: CAMERA_VIEWPORT.width / 2, y: CAMERA_VIEWPORT.height / 2 };
+  React.useLayoutEffect(() => {
+    const element = workspaceRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      const rect = entry?.contentRect;
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      setViewport((previous) =>
+        previous.width === rect.width && previous.height === rect.height
+          ? previous
+          : { width: rect.width, height: rect.height },
+      );
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [canvasRouteActive]);
   const pendingSearchFocusBlockId = React.useRef<string | null>(null);
   const geometryOverlayRef = React.useRef<HTMLDivElement>(null);
   const suppressObjectClick = React.useRef(false);
@@ -876,6 +895,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
             projectId: scope.projectId,
             ownerId: scope.ownerId,
             title: 'Untitled canvas',
+            layoutMode: 'edgeless',
             now,
           });
         const next = request.navigation ? withCamera(base, request.navigation.camera) : base;
@@ -1279,7 +1299,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           : undefined;
       pastePayload(clipboard.current, 'Paste canvas objects', destination);
     }
-  }, [pastePayload]);
+  }, [pastePayload, CAMERA_VIEWPORT]);
 
   const duplicateSelected = React.useCallback(() => {
     if (selected.ids.length === 0) return;
@@ -2432,6 +2452,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           });
         },
       );
+      if (documentRef.current.layoutMode === 'edgeless') fitContent();
       setPackageMessage(
         `Imported ${contents.length} Markdown ${contents.length === 1 ? 'block' : 'blocks'} from ${file.name || 'document.md'}`,
       );
@@ -2609,7 +2630,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   };
 
   const fitContent = () => {
-    const placements = [...resolveEdgelessLayout(document).values()].filter(
+    const placements = [...resolveEdgelessLayout(documentRef.current).values()].filter(
       (placement) => !placement.hidden,
     );
     if (placements.length === 0) {
@@ -2982,13 +3003,11 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     setSelected(createCanvasSelection([blockId]));
     setCamera(target);
   };
-  const placementById = resolveEdgelessLayout(document);
+  const placementById = React.useMemo(() => resolveEdgelessLayout(document), [document]);
   const selectedPlacement = selectedBlock ? placementById.get(selectedBlock.id) : undefined;
   const selectedObjectsLocked = selectionHasLockedPlacement(document, selected.ids);
   const minimap = React.useMemo(() => {
-    const placements = [...resolveEdgelessLayout(document).values()].filter(
-      (placement) => !placement.hidden,
-    );
+    const placements = [...placementById.values()].filter((placement) => !placement.hidden);
     const viewportBounds = {
       x: camera.x - CAMERA_VIEWPORT.width / camera.zoom / 2,
       y: camera.y - CAMERA_VIEWPORT.height / camera.zoom / 2,
@@ -3015,23 +3034,28 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       })),
       viewport: rectangle(viewportBounds),
     };
-  }, [camera, document]);
+  }, [camera, placementById, CAMERA_VIEWPORT]);
   const goBack = () => {
     restoreCameraLocation(cameraNavigator.current.back());
   };
   const goForward = () => {
     restoreCameraLocation(cameraNavigator.current.forward());
   };
-  const visibleEdgelessBlockIds = React.useMemo(() => {
+  const spatialIndex = React.useMemo(() => {
     const index = createCanvasSpatialIndex();
-    for (const placement of resolveEdgelessLayout(document).values()) {
+    for (const placement of placementById.values()) {
       if (placement.hidden) continue;
       index.upsert(placement);
     }
-    return new Set(
-      index.queryViewport(camera, CAMERA_VIEWPORT).map((placement) => placement.blockId),
-    );
-  }, [camera, document]);
+    return index;
+  }, [placementById]);
+  const visibleEdgelessBlockIds = React.useMemo(
+    () =>
+      new Set(
+        spatialIndex.queryViewport(camera, CAMERA_VIEWPORT).map((placement) => placement.blockId),
+      ),
+    [camera, CAMERA_VIEWPORT, spatialIndex],
+  );
   const visibleEdgelessBlocks = blocks.filter((block) => visibleEdgelessBlockIds.has(block.id));
   const renderBlockEditor = (block: CanvasBlock) => {
     const content = block.content;
@@ -3260,10 +3284,17 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
                   : 'text-muted-foreground hover:text-foreground',
               ].join(' ')}
             >
-              {layout}
+              {layout === 'edgeless' ? 'Infinite canvas' : 'Page'}
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          onClick={() => useUIStore.getState().setRoute('notes')}
+          className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-muted"
+        >
+          Open Notes
+        </button>
         <details className="relative">
           <summary className="inline-flex h-9 cursor-pointer list-none items-center rounded-md border border-border px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
             Templates
@@ -4140,6 +4171,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           className="relative isolate min-h-0 flex-1 overflow-auto bg-muted/20 [html[data-theme=monochrome]_&]:border-y [html[data-theme=monochrome]_&]:border-border"
           style={{
             ...canvasBackgroundStyle(document.background),
+            overflow: document.layoutMode === 'edgeless' ? 'hidden' : 'auto',
             cursor: document.layoutMode === 'edgeless' && tool === 'hand' ? 'grab' : undefined,
             touchAction: document.layoutMode === 'edgeless' ? 'none' : undefined,
           }}

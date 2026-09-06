@@ -45,9 +45,7 @@
   flex-shrink: 0;
   width: 32px;
   height: 32px;
-  border-radius: 9px;
   color: var(--task-accent, hsl(var(--accent-copper)));
-  background: hsl(var(--accent-copper) / 0.08);
 }
 
 .agent-task-icon .agent-motion-slot[data-agent-motion-size='compact'] {

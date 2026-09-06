@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { ThemedSelect } from '@/components/ui/themed-select';
 import { NotesSessionReferences } from '../../notes/NotesSessionReferences';
 import { parseChatNoteReference } from '../../notes/notesChatReferences';
 import { ThinkingDisclosure } from '../ThinkingDisclosure';
@@ -351,19 +352,14 @@ function SessionHeader({
             <NotesSessionReferences messages={messages} />
             <label>
               <span>Console theme</span>
-              <select
-                aria-label="Console theme"
+              <ThemedSelect
+                label="Console theme"
                 value={preferences.profile}
-                onChange={(event) =>
-                  onPreferences({ profile: event.currentTarget.value as ConsoleProfile })
+                onChange={(value) =>
+                  onPreferences({ profile: value as ConsoleProfile })
                 }
-              >
-                {CONSOLE_PROFILES.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.label}
-                  </option>
-                ))}
-              </select>
+                options={CONSOLE_PROFILES.map(profile => ({ value: profile.id, label: profile.label }))}
+              />
             </label>
             <div className="agentic-settings__row">
               <Button

@@ -139,8 +139,8 @@ mod platform {
                 PROCESS_QUERY_LIMITED_INFORMATION,
             },
             UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
-                ShowWindow, SW_RESTORE,
+                EnumChildWindows, EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+                SetForegroundWindow, ShowWindow, SW_RESTORE,
             },
         },
     };
@@ -200,6 +200,31 @@ mod platform {
     }
 
     pub fn app_id(hwnd: isize) -> Option<String> {
+        if let Some(id) = process_app_id(hwnd) {
+            return Some(id);
+        }
+        // Packaged apps can put their real process below ApplicationFrameHost.
+        // Resolve the descendant's exact AUMID, but embed the top-level frame.
+        unsafe extern "system" fn visit(child: HWND, data: LPARAM) -> BOOL {
+            let result = unsafe { &mut *(data.0 as *mut Option<String>) };
+            if let Some(id) = process_app_id(child.0 as isize) {
+                *result = Some(id);
+                return false.into();
+            }
+            true.into()
+        }
+        let mut result: Option<String> = None;
+        let _ = unsafe {
+            EnumChildWindows(
+                Some(HWND(hwnd as *mut _)),
+                Some(visit),
+                LPARAM((&mut result as *mut Option<String>) as isize),
+            )
+        };
+        result
+    }
+
+    fn process_app_id(hwnd: isize) -> Option<String> {
         #[link(name = "kernel32")]
         unsafe extern "system" {
             fn GetApplicationUserModelId(
@@ -325,8 +350,13 @@ fn find_window(path: &Path, shell_id: Option<&str>) -> Option<isize> {
     platform::windows()
         .into_iter()
         .find_map(|(hwnd, candidate)| {
-            ((!path.as_os_str().is_empty() && same_path(path, &candidate))
-                || shell_id.is_some_and(|id| platform::app_id(hwnd).as_deref() == Some(id)))
+            (if let Some(id) = shell_id.filter(|id| id.contains('!')) {
+                // Shared host paths must never select a different packaged app.
+                platform::app_id(hwnd).as_deref() == Some(id)
+            } else {
+                (!path.as_os_str().is_empty() && same_path(path, &candidate))
+                    || shell_id.is_some_and(|id| platform::app_id(hwnd).as_deref() == Some(id))
+            })
             .then_some(hwnd)
         })
 }
@@ -612,6 +642,9 @@ pub async fn workbench_native_app_surface_open(
                 Ok(host) => record.embedded = Some(host),
                 Err(error) => record.embedding_error = Some(error),
             }
+        }
+        if hwnd.is_none() && launch == Some(true) {
+            record.embedding_error = Some("The app started, but Windows has not exposed a compatible window for Workbench. Retry after it finishes opening.".into());
         }
         let result = status(&panel_id, &record);
         records.insert(panel_id, record);

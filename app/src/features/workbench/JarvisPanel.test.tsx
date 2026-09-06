@@ -14,7 +14,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => mocks.chats }));
 vi.mock('@/features/chat', () => ({
-  ChatThread: ({ chatId }: { chatId: string }) => <div data-testid="chat-thread">{chatId}</div>,
+  ChatThread: ({ chatId, compact }: { chatId: string; compact?: boolean }) => (
+    <div data-testid="chat-thread" data-compact={String(compact)}>
+      {chatId}
+    </div>
+  ),
   Composer: ({ chatId }: { chatId: string }) => <div data-testid="composer">{chatId}</div>,
   EmptyChat: () => <div>Empty chat</div>,
   ensureActiveChat: mocks.ensureActiveChat,
@@ -64,6 +68,35 @@ function chat(id: string, workspaceId: WorkspaceId, projectId?: ProjectId): Chat
 }
 
 describe('Workbench Jarvis canonical chat scope', () => {
+  it('shrinks and restores chat density from the panel content width', () => {
+    let resize: ResizeObserverCallback = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    mocks.chats = [chat('child', WORKSPACE, PROJECT_B)];
+    useUIStore.setState({ activeChatId: 'child' });
+    render(<JarvisPanel panel={panel} onUpdate={vi.fn()} />);
+    React.act(() =>
+      resize([{ contentRect: { width: 350 } } as ResizeObserverEntry], {} as ResizeObserver),
+    );
+    expect(screen.getByTestId('chat-thread').dataset.compact).toBe('true');
+    expect((screen.getByTestId('chat-thread').parentElement as HTMLElement).style.zoom).toBe(
+      '0.72',
+    );
+    React.act(() =>
+      resize([{ contentRect: { width: 900 } } as ResizeObserverEntry], {} as ResizeObserver),
+    );
+    expect(screen.getByTestId('chat-thread').dataset.compact).toBe('false');
+    expect((screen.getByTestId('chat-thread').parentElement as HTMLElement).style.zoom).toBe('1');
+    vi.unstubAllGlobals();
+  });
   beforeEach(() => {
     mocks.chats = [];
     mocks.ensureActiveChat.mockReset();

@@ -60,7 +60,6 @@ export function AgentActivityCard({ part }: AgentActivityCardProps) {
       className="agent-task-card group rounded-xl border border-border bg-muted/40 px-3 py-2 text-foreground "
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <AgentActivityIndicator agent={agent} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <span className="shrink-0 rounded-full border border-border bg-muted/30 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-foreground">
@@ -308,7 +307,7 @@ function AgentActivityRow({
       >
         <div
           className={cn(
-            'flex items-center justify-center rounded-lg border border-border bg-muted/40 font-semibold text-foreground ',
+            'flex items-center justify-center text-foreground',
             compact ? 'h-6 w-6 text-[11px]' : 'h-8 w-8 text-sm',
           )}
         >

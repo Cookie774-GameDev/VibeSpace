@@ -198,8 +198,6 @@ export function AgentMotionIndicator({
   );
 }
 
-const EXIT_TRACE_MS = 1400;
-
 export function PerceptibleAgentMotionIndicator({
   motion,
   compact = false,
@@ -207,35 +205,6 @@ export function PerceptibleAgentMotionIndicator({
   motion: AgentMotionKind | null;
   compact?: boolean;
 }) {
-  const previousMotionRef = React.useRef<AgentMotionKind | null>(motion);
-  const [exitingMotion, setExitingMotion] = React.useState<AgentMotionKind | null>(null);
-
-  React.useEffect(() => {
-    const previousMotion = previousMotionRef.current;
-    previousMotionRef.current = motion;
-    if (!previousMotion || previousMotion === motion) return;
-
-    setExitingMotion(previousMotion);
-    const timeout = window.setTimeout(() => {
-      setExitingMotion((current) => (current === previousMotion ? null : current));
-    }, EXIT_TRACE_MS);
-    return () => window.clearTimeout(timeout);
-  }, [motion]);
-
-  if (!motion && !exitingMotion) return null;
-
-  return (
-    <span
-      className="agent-motion-transition"
-      data-agent-motion-transition-size={compact ? 'compact' : 'standard'}
-      aria-hidden="true"
-    >
-      {motion ? (
-        <AgentMotionIndicator motion={motion} compact={compact} presence="current" />
-      ) : null}
-      {exitingMotion ? (
-        <AgentMotionIndicator motion={exitingMotion} compact={compact} presence="exiting" />
-      ) : null}
-    </span>
-  );
+  if (!motion) return null;
+  return <AgentMotionIndicator key={motion} motion={motion} compact={compact} />;
 }

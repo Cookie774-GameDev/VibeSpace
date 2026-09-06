@@ -172,7 +172,7 @@ describe('AgentMotionIndicator', () => {
     },
   );
 
-  it('shows a new truthful phase immediately while the prior phase completes a bounded exit', () => {
+  it('shows only the current phase and stops immediately when activity ends', () => {
     vi.useFakeTimers();
     const view = render(<PerceptibleAgentMotionIndicator motion="twin-loop" />);
 
@@ -183,10 +183,7 @@ describe('AgentMotionIndicator', () => {
         node.getAttribute('data-agent-motion'),
         node.getAttribute('data-agent-motion-presence'),
       ]),
-    ).toEqual([
-      ['cursor-forge', 'current'],
-      ['twin-loop', 'exiting'],
-    ]);
+    ).toEqual([['cursor-forge', 'current']]);
 
     act(() => {
       vi.advanceTimersByTime(1500);
@@ -203,7 +200,7 @@ describe('AgentMotionIndicator', () => {
       view.container
         .querySelector('[data-agent-motion="cursor-forge"]')
         ?.getAttribute('data-agent-motion-presence'),
-    ).toBe('exiting');
+    ).toBeUndefined();
 
     act(() => {
       vi.advanceTimersByTime(1500);

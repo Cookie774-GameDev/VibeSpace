@@ -40,7 +40,10 @@
   --agent-motion-primary: var(--console-accent, hsl(var(--accent-copper)));
   --agent-motion-secondary: hsl(var(--accent-cyan));
   position: relative;
-  display: inline-grid;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   width: var(--agent-motion-canvas-width);
   height: var(--agent-motion-canvas-height);
   flex: 0 0 var(--agent-motion-canvas-width);
@@ -76,6 +79,7 @@ html[data-theme='warm'] .agent-motion-slot {
 }
 
 .agent-motion {
+  flex-shrink: 0;
   --agent-motion-speed: 1;
   --agent-motion-ease: cubic-bezier(0.65, 0, 0.35, 1);
   position: relative;

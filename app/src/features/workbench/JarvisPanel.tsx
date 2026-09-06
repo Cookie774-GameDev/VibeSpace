@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Plus } from 'lucide-react';
+import { ThemedSelect } from '@/components/ui/themed-select';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ChatThread, Composer, EmptyChat, ensureActiveChat } from '@/features/chat';
 import { TokenBossCinematic } from '@/features/chat/token-boss/TokenBossCinematic';
@@ -21,6 +22,19 @@ interface JarvisPanelProps {
  * Real VibeSpace chat surface inside Workbench with chat picker + new-chat control.
  */
 export function JarvisPanel({ panel, onUpdate }: JarvisPanelProps) {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const [width, setWidth] = React.useState(panel.width);
+  React.useLayoutEffect(() => {
+    const element = panelRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry && entry.contentRect.width > 0) setWidth(entry.contentRect.width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const compact = width < 640;
+  const chatScale = Math.max(0.72, Math.min(1, width / 560));
   const storageHealth = useStorageDoctorSnapshot();
   const chatCreationBlocked = storageHealth.kind !== 'healthy';
   const activeChatId = useUIStore((state) => state.activeChatId);
@@ -148,6 +162,7 @@ export function JarvisPanel({ panel, onUpdate }: JarvisPanelProps) {
   return (
     <div
       className="workbench-jarvis"
+      ref={panelRef}
       data-testid="workbench-jarvis-panel"
       data-panel-id={panel.id}
       onWheel={(event) => event.stopPropagation()}
@@ -155,22 +170,18 @@ export function JarvisPanel({ panel, onUpdate }: JarvisPanelProps) {
     >
       <div className="workbench-jarvis-toolbar">
         <label htmlFor={`workbench-chat-select-${panel.id}`}>Chat</label>
-        <select
+        <ThemedSelect
           id={`workbench-chat-select-${panel.id}`}
-          aria-label="Select chat"
+          label="Select chat"
           value={activeChatIsAccessible ? (activeChatId ?? '') : ''}
-          onChange={(event) => {
-            const next = event.target.value;
+          onChange={(next) => {
             if (next) setActiveChat(next);
           }}
-        >
-          {!activeChatIsAccessible ? <option value="">Select a chat…</option> : null}
-          {chats.map((chat) => (
-            <option key={chat.id} value={chat.id}>
-              {chat.title?.trim() || 'Untitled chat'}
-            </option>
-          ))}
-        </select>
+          options={chats.map((chat) => ({
+            value: String(chat.id),
+            label: chat.title?.trim() || 'Untitled chat',
+          }))}
+        />
         <button
           type="button"
           className="workbench-jarvis-new-chat"
@@ -184,10 +195,14 @@ export function JarvisPanel({ panel, onUpdate }: JarvisPanelProps) {
         </button>
       </div>
       {activeChatId && activeChatIsAccessible ? (
-        <div className="workbench-jarvis-body relative min-h-0" data-token-boss-host="true">
-          <ChatThread chatId={activeChatId} compact />
-          <Composer chatId={activeChatId} compact disableRouteSlashCommands />
-          <TokenBossCinematic chatId={String(activeChatId)} compact />
+        <div
+          className="workbench-jarvis-body relative min-h-0"
+          data-token-boss-host="true"
+          style={{ zoom: chatScale }}
+        >
+          <ChatThread chatId={activeChatId} compact={compact} />
+          <Composer chatId={activeChatId} compact={compact} disableRouteSlashCommands />
+          <TokenBossCinematic chatId={String(activeChatId)} compact={compact} />
         </div>
       ) : ensuring || creating ? (
         <div className="workbench-panel-empty">
