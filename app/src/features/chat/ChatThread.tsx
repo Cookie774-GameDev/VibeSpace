@@ -30,6 +30,7 @@ import { SIK_EVIDENCE } from '@/lib/jarvis/smoke/evidenceIds';
 import { AgenticConsole, AgenticConsoleErrorBoundary } from './agentic-console';
 import { CONSOLE_PREFERENCE_EVENT, loadConsolePreferences } from './agentic-console/preferences';
 import { useAuthStore } from '@/stores/auth';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import type { ChatModelSelection } from '@/lib/ai/modelSelection';
 import {
   INITIAL_CHAT_MESSAGE_WINDOW,
@@ -324,6 +325,7 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
     const actions: {
       cancel?: () => Promise<void>;
       retry?: () => Promise<void>;
+      retryLabel?: string;
       continue?: () => void;
     } = {};
     if (/running|queued|pending|streaming|active/i.test(status)) {
@@ -332,9 +334,39 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
       };
     }
     if (/failed|error|cancelled/i.test(status)) {
-      actions.retry = async () => {
-        await commandCenterHandlers.retryLogicalRun?.(binding.hostPort.accountId, run.id);
-      };
+      if (run.source === 'schedule') {
+        actions.retry = async () => {
+          await commandCenterHandlers.retryLogicalRun?.(binding.hostPort.accountId, run.id);
+        };
+      } else if (run.source === 'typed_chat') {
+        const latestUser = messages.filter((message) => message.role === 'user').at(-1);
+        // A text-only draft can be reviewed through the normal Composer send path.
+        // Never replay a newer request or silently discard attachments/context parts.
+        if (
+          latestUser &&
+          String(latestUser.chat_id) === String(chatId) &&
+          latestUser.created_at <= run.createdAt &&
+          latestUser.parts.length > 0 &&
+          latestUser.parts.every((part) => part.kind === 'text')
+        ) {
+          const text = latestUser.parts
+            .map((part) => (part.kind === 'text' ? part.text : ''))
+            .join('\n');
+          if (text.trim()) {
+            actions.retryLabel = 'Retry in composer';
+            actions.retry = async () => {
+              if (resolveAccountIdentity(useAuthStore.getState())?.accountId !== binding.hostPort.accountId) {
+                throw new Error('The account changed. Reopen the current chat before retrying.');
+              }
+              window.dispatchEvent(
+                new CustomEvent('jarvis:composer:insert-text', {
+                  detail: { chatId: String(chatId), text },
+                }),
+              );
+            };
+          }
+        }
+      }
     }
     if (/awaiting_approval|blocked/i.test(status)) {
       actions.continue = () => {
@@ -346,7 +378,7 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
       };
     }
     return Object.keys(actions).length ? actions : undefined;
-  }, [commandCenterBinding, commandCenterHandlers, currentCanonicalRun]);
+  }, [chatId, commandCenterBinding, commandCenterHandlers, currentCanonicalRun, messages]);
 
   useEffect(() => {
     let disposed = false;

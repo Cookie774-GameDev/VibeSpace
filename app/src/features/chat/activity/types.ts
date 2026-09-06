@@ -38,6 +38,10 @@ export interface ChatActivityEvent {
   outputTokens?: number;
   detail?: string;
   diff?: string;
+  /** Exact producer correlation, supplied only when the runtime owns both identities. */
+  messageId?: string;
+  providerCallId?: string;
+  nativeTask?: import('@/lib/ai/openCodeNativeActivity').NativeTaskActivity;
 }
 
 export type ChatActivityPatch = Partial<Omit<ChatActivityEvent, 'id' | 'chatId'>>;

@@ -1,5 +1,6 @@
 import { Bot, FileText, Image as ImageIcon, Layers, Zap } from 'lucide-react';
 import { ToolCallCard } from './ToolCallCard';
+import { ThinkingDisclosure } from './ThinkingDisclosure';
 import { ActionApprovalCard } from './ActionApprovalCard';
 import { StackTimeline } from './StackTimeline';
 import { parseActionBlocks } from '@/lib/actions';
@@ -314,12 +315,7 @@ export function MessagePart({
     }
 
     case 'reasoning': {
-      if (!part.text) return null;
-      return (
-        <div className="text-secondary text-muted-foreground italic whitespace-pre-wrap break-words [overflow-wrap:anywhere] border-l-2 border-border pl-2">
-          {part.text}
-        </div>
-      );
+      return <ThinkingDisclosure text={part.text} />;
     }
 
     case 'usage_card': {

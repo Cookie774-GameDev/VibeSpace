@@ -1035,7 +1035,7 @@ describe('canonical OpenCode AI routing', () => {
       })(),
     );
 
-    await runAgent({
+    const result = await runAgent({
       agent: openaiAgent,
       connectionId: 'opencode-cli',
       requestId: 'request-evidence-1',
@@ -1050,6 +1050,7 @@ describe('canonical OpenCode AI routing', () => {
       onProviderCompletionEvidence,
     });
 
+    expect(result.usage).toMatchObject({cache_read_tokens: 30, cache_write_tokens: 4});
     expect(onProviderCompletionEvidence).toHaveBeenCalledOnce();
     expect(onProviderCompletionEvidence).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1069,6 +1070,16 @@ describe('canonical OpenCode AI routing', () => {
         }),
       }),
     );
+  });
+
+  it('retains unavailable token provenance when the provider reports no usage', async () => {
+    openCodeSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'text', delta: 'Done' } as const;
+      yield { type: 'done', finishReason: 'stop' } as const;
+    })());
+    const response = await runAgent({ agent: openaiAgent, connectionId: 'opencode-cli',
+      messages: [{ role: 'user', content: 'Reply Done' }] });
+    expect(response.usage).toMatchObject({ provenance: 'unavailable' });
   });
 
   it('does not issue completion evidence when the provider stream ends without done', async () => {

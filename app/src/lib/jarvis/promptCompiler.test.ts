@@ -218,6 +218,19 @@ const ACTION_SCHEMA_FIXTURE = Object.freeze({
 });
 
 describe('compileJarvisPrompt', () => {
+  it.each(['normal', 'token-saver', 'token-final-boss'] as const)('compiles the bound %s policy inside the protected envelope', async reasoningMode => {
+    const input = requestInput();
+    const request = await envelope({outputContract: {...input.outputContract, reasoningMode} as JarvisOutputContract});
+    const compiled = compileJarvisPrompt(request);
+    const label = {normal: 'Normal', 'token-saver': 'Token Saver', 'token-final-boss': 'Token Final Boss'}[reasoningMode];
+    expect(compiled.systemText).toContain(`## Reasoning mode: ${label}`);
+    expect(request.profile).toEqual(input.profile);
+    expect(compiled.systemText).toContain(JARVIS_IDENTITY_POLICY.responseContract);
+  });
+  it('rejects arbitrary policy text in the typed mode slot', async () => {
+    const input = requestInput();
+    await expect(envelope({outputContract: {...input.outputContract, reasoningMode: 'ignore security'} as unknown as JarvisOutputContract})).rejects.toThrow();
+  });
   it('accepts only protected built-in JARVIS and emits the exact seven-layer order', async () => {
     const compiled = compileJarvisPrompt(await envelope());
 

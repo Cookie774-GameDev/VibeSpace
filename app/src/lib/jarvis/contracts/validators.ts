@@ -1290,6 +1290,7 @@ function validateOutputContractShape(
       'allowQuestionBlocks',
       'allowPermissionBlocks',
       'voiceDelivery',
+      'reasoningMode',
     ],
     path,
     errors,
@@ -1306,6 +1307,9 @@ function validateOutputContractShape(
   validateRequiredField(record, 'allowPlanBlocks', path, errors, validateBoolean);
   validateRequiredField(record, 'allowQuestionBlocks', path, errors, validateBoolean);
   validateRequiredField(record, 'allowPermissionBlocks', path, errors, validateBoolean);
+  validateOptionalField(record, 'reasoningMode', path, errors, (entry, entryPath, entryErrors) =>
+    validateEnum(entry, ['normal', 'token-saver', 'token-final-boss'], entryPath, entryErrors),
+  );
   validateRequiredField(record, 'voiceDelivery', path, errors, (entry, entryPath, entryErrors) =>
     validateEnum(entry, VOICE_DELIVERY_VALUES, entryPath, entryErrors),
   );

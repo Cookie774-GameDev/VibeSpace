@@ -31,6 +31,88 @@ function message(
 }
 
 describe('projectAgenticTranscript', () => {
+  it('uses the provider total when cached tokens are separately reported', () => {
+    expect(summarizeAgenticSession([message('total', 'assistant', 1, [], {input_tokens: 626, output_tokens: 228, total_tokens: 41814, cache_read_tokens: 40960})], []).tokenCount).toBe(41814);
+  });
+  it('keeps one stable Thinking block when live evidence becomes a saved multi-part answer', () => {
+    const live: ChatActivityEvent[] = [{ id: 'thinking', chatId: 'chat-1', kind: 'agent', category: 'thinking', messageId: 'answer', title: 'Thinking', detail: 'First', status: 'running', ts: 1 }];
+    const before = projectAgenticTranscript([], live);
+    const saved = message('answer', 'assistant', 2, [{kind: 'reasoning', text: 'First'}, {kind: 'text', text: 'Checkpoint'}, {kind: 'reasoning', text: 'Second'}, {kind: 'text', text: 'Done'}]);
+    const after = projectAgenticTranscript([saved], live);
+    expect(before[0]).toMatchObject({kind: 'reasoning', text: 'First'});
+    expect(after.filter(block => block.kind === 'reasoning')).toEqual([expect.objectContaining({id: before[0]!.id, text: 'First\n\nSecond'})]);
+    expect(projectAgenticTranscriptWindow([saved], live, 2)).toMatchObject({total: 3, remaining: 1});
+  });
+  it('does not display a stale terminal timestamp as zero elapsed time for an active run', () => {
+    expect(summarizeAgenticSession([], [], { status: 'running', startedAt: 20, endedAt: 10 }).durationMs).toBe('—');
+  });
+  it('keeps restored confirmed diffs and empty thinking in the virtual transcript count', () => {
+    const messages = [message('edit', 'assistant', 1, [
+      {kind: 'reasoning', text: ''},
+      {kind: 'tool_call', tool: 'edit', call_id: 'one', args: {path: 'a.txt'}},
+      {kind: 'tool_result', call_id: 'one', result: {status: 'completed', diff: '-old\n+new'}},
+    ])];
+    expect(projectAgenticTranscriptWindow(messages, [], 2)).toMatchObject({total: 3, remaining: 1});
+  });
+  it('counts persisted file changes once alongside their matching live evidence', () => {
+    const messages = [message('edit', 'assistant', 1, [
+      { kind: 'tool_call', tool: 'edit', call_id: 'one', args: { path: 'src/alpha.txt' } },
+      { kind: 'tool_result', call_id: 'one', result: { status: 'completed', diff: '-old\n+new' } },
+      { kind: 'tool_call', tool: 'read', call_id: 'two', args: { path: 'src/beta.txt' } },
+    ])];
+    const live: ChatActivityEvent[] = [{ id: 'one', chatId: 'chat-1', kind: 'file', messageId: 'edit', providerCallId: 'one',
+      status: 'done', title: 'Edited', filePath: 'src/alpha.txt', diff: '-old\n+new',
+      addedLines: 1, removedLines: 1, ts: 1 }];
+    for (const events of [[], live]) {
+      expect(summarizeAgenticSession(messages, events)).toMatchObject({fileCount: 2, addedLines: 1, removedLines: 1});
+      expect(projectAgenticTranscriptWindow(messages, events).visible.filter(block => block.kind === 'diff')).toHaveLength(1);
+    }
+  });
+  it('does not collapse distinct edits merely because their diff text is identical', () => {
+    const messages = ['first', 'second'].map((id, index) => message(id, 'assistant', index + 1, [
+      {kind: 'tool_call', tool: 'edit', call_id: 'one', args: {path: 'alpha.txt'}},
+      {kind: 'tool_result', call_id: 'one', result: {status: 'completed', diff: '-old\n+new'}},
+    ]));
+    expect(summarizeAgenticSession(messages, [])).toMatchObject({addedLines: 2, removedLines: 2});
+  });
+  it('counts saved authoritative changes even when a source reference keeps the message interactive', () => {
+    const saved = message('with-source', 'assistant', 1, [
+      { kind: 'jarvis_source_ref', source: { id: 'source', kind: 'project_file', label: 'Context', trust: 'app_verified', sensitivity: 'restricted' } },
+      { kind: 'tool_call', tool: 'edit', call_id: 'edit', args: { path: 'alpha.txt' } },
+      { kind: 'tool_result', call_id: 'edit', result: { status: 'completed', diff: '-old\n+new' } },
+    ]);
+    expect(summarizeAgenticSession([saved], [])).toMatchObject({ fileCount: 1, addedLines: 1, removedLines: 1 });
+    expect(projectAgenticTranscript([saved], [])[0]?.kind).toBe('legacy');
+  });
+  it('keeps unavailable usage distinct from estimates and observed zero', () => {
+    expect(summarizeAgenticSession([message('u', 'assistant', 1, [], {
+      input_tokens: 0, output_tokens: 0, provenance: 'unavailable',
+    })], []).tokenCount).toBe('—');
+    expect(summarizeAgenticSession([message('e', 'assistant', 1, [], {
+      input_tokens: 10, output_tokens: 5, provenance: 'estimated',
+    })], [])).toMatchObject({tokenCount: 15, tokenProvenance: 'estimated'});
+  });
+  it('projects persisted confirmed tool diffs with exact additions and removals after reload', () => {
+    const blocks = projectAgenticTranscript([message('edit', 'assistant', 1, [
+      { kind: 'tool_call', tool: 'edit', call_id: 'edit-one', args: { path: 'alpha.txt' } },
+      { kind: 'tool_result', call_id: 'edit-one', result: { status: 'completed', diff: '-old\n+new' } },
+    ])], []);
+    expect(blocks.find(block => block.kind === 'diff')).toMatchObject({
+      status: 'done', filePath: 'alpha.txt', diff: '-old\n+new', addedLines: 1, removedLines: 1,
+    });
+  });
+  it('does not turn model-only or partial usage metadata into a zero total', () => {
+    for (const usage of [{ model: 'provider/model' }, { model: 'provider/model', input_tokens: 12 }]) {
+      expect(summarizeAgenticSession([message('usage', 'assistant', 1, [], usage)], []).tokenCount).toBe('—');
+    }
+    expect(summarizeAgenticSession([message('zero', 'assistant', 1, [], { input_tokens: 0, output_tokens: 0 })], []).tokenCount).toBe(0);
+  });
+  it('retains an explicit thinking signal when the provider supplies no displayable text', () => {
+    const blocks = projectAgenticTranscript([message('signal', 'assistant', 1, [
+      { kind: 'reasoning', text: '' },
+    ])], []);
+    expect(blocks).toEqual([expect.objectContaining({ kind: 'reasoning', text: '' })]);
+  });
   it('projects prompt, reasoning, paired tool call/result, and final response in stable order', () => {
     const messages = [
       message('m1', 'user', 10, [{ kind: 'text', text: 'Inspect the repository' }]),

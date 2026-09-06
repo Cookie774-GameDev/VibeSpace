@@ -434,6 +434,15 @@ describe('projectAssistantActivityLedger', () => {
     expect(ledger.durationMs).toBe(100);
   });
 
+  it('preserves unavailable and estimated response provenance', () => {
+    const unavailable = projectAssistantActivityLedger(assistant([], { input_tokens: 0, output_tokens: 0, provenance: 'unavailable' }));
+    expect(unavailable.usage.input).toMatchObject({ value: null, provenance: 'unavailable' });
+    expect(unavailable.usage.output).toMatchObject({ value: null, provenance: 'unavailable' });
+    const estimated = projectAssistantActivityLedger(assistant([], { input_tokens: 12, output_tokens: 7, provenance: 'estimated' }));
+    expect(estimated.usage.input).toMatchObject({ value: 12, provenance: 'estimated' });
+    expect(estimated.usage.output).toMatchObject({ value: 7, provenance: 'estimated' });
+  });
+
   it('keeps provider usage exact, optimizer-only input estimated, and missing output unavailable', () => {
     const exact = projectAssistantActivityLedger(
       assistant([], {

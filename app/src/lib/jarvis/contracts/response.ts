@@ -19,6 +19,8 @@ export type JarvisResponseMode =
   | 'sensitive';
 
 export interface JarvisOutputContract {
+  /** Closed application policy, never arbitrary caller-supplied prompt text. */
+  reasoningMode?: import('@/lib/ai/reasoningControls').ReasoningMode;
   preserveStructuredBlocks: true;
   allowActionBlocks: boolean;
   allowPlanBlocks: boolean;

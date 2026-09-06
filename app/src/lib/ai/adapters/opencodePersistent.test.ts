@@ -1981,6 +1981,39 @@ describe('persistent OpenCode live authority', () => {
     expect(observed).not.toContainEqual(expect.objectContaining({ type: 'done' }));
   });
 
+  it.each([
+    'OpenCode managed server is unavailable.',
+    'OpenCode managed server generation is unavailable.',
+  ])('ends an accepted turn when its native runtime is lost: %s', async (failure) => {
+    configureManagedQuestionTransport([], { persistedMessages: [] });
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let dispatched = false;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (dispatched && path.startsWith('/session/status')) throw failure;
+      const response = await transport(generation, path, init, timeout);
+      if (path.includes('/prompt_async')) dispatched = true;
+      return response;
+    });
+    const abort = new AbortController();
+    const observed: ProviderEvent[] = [];
+    const consume = (async () => {
+      try {
+        for await (const event of openCodePersistentAdapter.send!(questionProviderRequest(`lost-native-runtime-${failure.includes('generation') ? 'generation' : 'missing'}`, abort.signal))) {
+          observed.push(event);
+        }
+        return 'completed';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    })();
+    const result = await Promise.race([consume, new Promise(resolve => setTimeout(() => resolve('still pending'), 900))]);
+    abort.abort();
+    await consume;
+    expect(dispatched).toBe(true);
+    expect(result).toBe('OpenCode runtime disconnected. Retry to reconnect.');
+    expect(observed).not.toContainEqual(expect.objectContaining({ type: 'done' }));
+  });
+
   it('reconciles ordered persisted text and tool parts before completing on an immediate idle event', async () => {
     configureManagedQuestionTransport(
       [{ type: 'session.idle', properties: { sessionID: 'ses_question_exact' } }],
@@ -1991,6 +2024,7 @@ describe('persistent OpenCode live authority', () => {
             {
               info: {
                 id: 'message-immediate-idle-recovery',
+                tokens: { input: 626, output: 228, total: 41814, cache: {read: 40960} },
                 role: 'assistant',
                 providerID: 'openai',
                 modelID: 'gpt-question-test',
@@ -2064,6 +2098,7 @@ describe('persistent OpenCode live authority', () => {
       },
       { type: 'text', delta: 'The game is ready.', streamPartId: 'opencode-text-2' },
     ]);
+    expect(events.filter(event => event.type === 'usage').at(-1)).toMatchObject({type: 'usage', usage: {inputTokens: {value: 626}, outputTokens: {value: 228}, totalTokens: {value: 41814}, cacheReadTokens: {value: 40960}}});
     expect(events.at(-1)).toMatchObject({ type: 'done' });
     expect(JSON.stringify(events)).not.toMatch(
       /must-not-survive|call-private|message-immediate|part-idle|C:\\\\private/iu,
@@ -2179,7 +2214,7 @@ describe('persistent OpenCode live authority', () => {
       },
       {
         info: assistantInfo('msg-current-2'),
-        parts: [{ id: 'part-reasoning', type: 'reasoning', text: 'Private chain.' }],
+        parts: [{ id: 'part-reasoning', type: 'reasoning', text: 'Checking the fixture.' }],
       },
       {
         info: assistantInfo('msg-current-3'),
@@ -2281,7 +2316,7 @@ describe('persistent OpenCode live authority', () => {
     ]);
     expect(events.some((event) => event.type === 'reasoning')).toBe(false);
     expect(JSON.stringify(events)).not.toMatch(
-      /Historical answer|Private chain|private command|C:\\\\private/iu,
+      /Historical answer|private command|C:\\\\private/iu,
     );
     expect(events.at(-1)).toMatchObject({ type: 'done' });
   });

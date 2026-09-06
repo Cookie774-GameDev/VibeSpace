@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { NotesSessionReferences } from '../../notes/NotesSessionReferences';
 import { parseChatNoteReference } from '../../notes/notesChatReferences';
+import { ThinkingDisclosure } from '../ThinkingDisclosure';
+import { ResponseDetails } from '../ResponseDetails';
 import {
   AlertCircle,
   Bot,
@@ -11,7 +13,6 @@ import {
   Clock3,
   Copy,
   FileCode2,
-  Gauge,
   GitCompareArrows,
   MoreHorizontal,
   Play,
@@ -55,6 +56,7 @@ import {
 } from './preferences';
 import { PerceptibleAgentMotionIndicator, resolveAgentMotion } from './AgentMotionIndicator';
 import { SubagentsHeaderButton } from './SubagentsMiniPanel';
+import { collectNativeTaskRuns, type NativeTaskRun } from './nativeTaskRuns';
 import { buildChatSessionExport, downloadChatSessionExport } from './sessionExport';
 import './agentic-console.css';
 
@@ -69,6 +71,7 @@ export interface AgenticConsoleProps {
   actions?: {
     cancel?: () => void | Promise<void>;
     retry?: () => void | Promise<void>;
+    retryLabel?: string;
     continue?: () => void | Promise<void>;
   };
 }
@@ -185,6 +188,7 @@ function SessionHeader({
   chatId,
   messages,
   summary,
+  nativeRuns,
   preferences,
   headerProgress,
   onPreferences,
@@ -197,6 +201,7 @@ function SessionHeader({
   chatId: string;
   messages: readonly Message[];
   summary: AgenticSessionSummary;
+  nativeRuns: readonly NativeTaskRun[];
   preferences: ConsolePreferences;
   headerProgress?: React.ReactNode;
   onPreferences: (patch: Partial<ConsolePreferences>) => void;
@@ -223,13 +228,14 @@ function SessionHeader({
     <header
       className="agentic-session"
       aria-label="Agentic session summary"
+      role="group"
       data-testid="jarvis-session-panel"
       data-has-progress={hasHeaderProgress ? 'true' : undefined}
     >
       <div className="agentic-session__identity">
         <span className={cn('agentic-status-dot', `is-${summary.status}`)} aria-hidden="true" />
         <div className="agentic-session__title">
-          <strong aria-label="Session status">{statusLabel(summary.status)}</strong>
+          <strong role="status" aria-label="Session status">{statusLabel(summary.status)}</strong>
           <span title={summary.currentOperation}>{summary.currentOperation}</span>
         </div>
       </div>
@@ -250,7 +256,10 @@ function SessionHeader({
           </span>
           <span className="is-add">+{summary.addedLines}</span>
           <span className="is-remove">-{summary.removedLines}</span>
-          <span>{formatMetric(summary.tokenCount, ' tokens')}</span>
+          <span title={summary.tokenCount === '—' ? 'Token usage unavailable' : summary.tokenProvenance === 'estimated' ? 'Estimated token usage' : 'Reported token usage'}>
+            {summary.tokenProvenance === 'estimated' && summary.tokenCount !== '—' ? 'Estimated ' : ''}
+            {formatMetric(summary.tokenCount, ' tokens')}
+          </span>
           <span title="Elapsed time">
             <Clock3 aria-hidden="true" />
             {formatDuration(summary.durationMs)}
@@ -259,7 +268,7 @@ function SessionHeader({
             {summary.model}
           </span>
         </button>
-        <SubagentsHeaderButton chatId={chatId} />
+        <SubagentsHeaderButton chatId={chatId} nativeRuns={nativeRuns} />
       </div>
       <div className="agentic-session__actions">
         {actions?.continue ? (
@@ -278,7 +287,8 @@ function SessionHeader({
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Retry run"
+            aria-label={actions.retryLabel ?? 'Retry run'}
+            title={actions.retryLabel ?? 'Retry run'}
             onClick={() => invoke(actions.retry)}
           >
             <RotateCcw />
@@ -554,7 +564,13 @@ function DiffView({
   block: Extract<TranscriptBlock, { kind: 'diff' }>;
   compact?: boolean;
 }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const detailId = React.useId();
   const lines = React.useMemo(() => formatUnifiedDiffLines(block.diff), [block.diff]);
+  const label = block.status === 'done' ? 'Edited files'
+    : block.status === 'error' ? 'Edit failed'
+      : block.status === 'cancelled' ? 'Edit cancelled'
+        : block.status === 'pending' ? 'Proposed file changes' : 'Editing files';
   const motion = resolveAgentMotion({
     status: block.status,
     activityCategory: block.activityCategory,
@@ -563,6 +579,15 @@ function DiffView({
     filePath: block.filePath,
   });
   return (
+    <section className="min-w-0">
+      <button type="button" className="assistant-activity-ledger__disclosure"
+        aria-expanded={expanded} aria-controls={detailId}
+        onClick={() => setExpanded((value) => !value)}>
+        <ChevronRight aria-hidden="true" className={cn('h-3.5 w-3.5 shrink-0', expanded && 'rotate-90')} />
+        <span className="min-w-0 break-words [overflow-wrap:anywhere]">{label} · {block.filePath ?? block.title}</span>
+      </button>
+      <div id={detailId} hidden={!expanded}>
+      {expanded ? (
     <article className="agentic-diff" aria-label={`Diff ${block.filePath ?? block.title}`}>
       <div className="agentic-block-head">
         <span>
@@ -600,6 +625,9 @@ function DiffView({
         ))}
       </pre>
     </article>
+      ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -620,6 +648,8 @@ function BlockView({
 }) {
   if (block.kind === 'prompt') return <PromptBand block={block} />;
   if (block.kind === 'answer') {
+    const finalAnswerIndex = block.message.parts.reduce((last, part, index) => part.kind === 'text' && part.text.trim() ? index : last, -1);
+    const finalInMessage = block.id === `message:${block.message.id}:answer:${finalAnswerIndex}`;
     if (nativeCheckpoint) {
       if (hideNativeCheckpoint) return null;
       const final = block.id === finalAnswerId;
@@ -631,7 +661,10 @@ function BlockView({
           data-message-id={block.message.id}
         >
           <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
-          <div className="agentic-native-checkpoint__text">{block.text}</div>
+          <div className="agentic-native-checkpoint__text">
+            {block.text}
+            {finalInMessage ? <ResponseDetails usage={block.message.usage} /> : null}
+          </div>
         </div>
       );
     }
@@ -646,28 +679,23 @@ function BlockView({
           {block.message.usage?.model ? <span>{block.message.usage.model}</span> : null}
         </div>
         <div className="agentic-answer__text">{block.text}</div>
+        {finalInMessage ? <ResponseDetails usage={block.message.usage} /> : null}
       </article>
     );
   }
   if (block.kind === 'reasoning') {
-    if (nativeCheckpoint) return null;
-    return (
-      <details className="agentic-reasoning">
-        <summary>
-          <Gauge aria-hidden="true" />
-          Reasoning
-        </summary>
-        <p>{block.text}</p>
-      </details>
-    );
+    return <ThinkingDisclosure text={block.text} />;
   }
   if (block.kind === 'activity') {
+    if (block.activityCategory === 'thinking' && block.title === 'Thinking' && block.status === 'running') {
+      return <ThinkingDisclosure text={block.detail ?? ''} />;
+    }
     // Chat-level lifecycle events do not have durable assistant-message
     // correlation. Render them once in the current turn activity ledger instead of
     // manufacturing a wall of standalone assistant/status messages.
     return null;
   }
-  if (block.kind === 'diff') return null;
+  if (block.kind === 'diff') return <DiffView block={block} compact={compact} />;
   // Persisted command/tool payloads are represented by the privacy-safe
   // AssistantActivityLedger at their message boundary. Never expose their
   // arguments, command text, stdout, stderr, environment, or raw results here.
@@ -936,7 +964,7 @@ function nativeTranscriptMessage(message: Message, modelHint?: string): Message 
     ...message,
     ...(projectedModel ? { usage: { ...(message.usage ?? {}), model: projectedModel } } : {}),
     parts: message.parts.filter(
-      (part) => part.kind !== 'reasoning' && part.kind !== 'jarvis_source_ref',
+      (part) => part.kind !== 'jarvis_source_ref',
     ),
   };
 }
@@ -999,7 +1027,6 @@ export function AgenticConsole({
     [transcriptMessages, activity, mountedCount, creatorDraftKind],
   );
   const blocks = transcriptWindow.visible;
-  const finalAnswerId = [...blocks].reverse().find((block) => block.kind === 'answer')?.id;
   const latestUserTurnStartedAt = React.useMemo(
     () =>
       messages.reduce(
@@ -1009,6 +1036,8 @@ export function AgenticConsole({
       ),
     [messages],
   );
+  const finalAnswerId = [...blocks].reverse().find((block) =>
+    block.kind === 'answer' && block.message.created_at >= latestUserTurnStartedAt)?.id;
   const turnActivity = React.useMemo(
     () => activity.filter((event) => (event.startedAt ?? event.ts) >= latestUserTurnStartedAt),
     [activity, latestUserTurnStartedAt],
@@ -1035,6 +1064,10 @@ export function AgenticConsole({
     summary.status === 'planning' ||
     summary.status === 'running' ||
     summary.status === 'recovering';
+  const nativeRuns = React.useMemo(
+    () => collectNativeTaskRuns(messages, turnActivity, latestUserTurnStartedAt, !sessionIsActive),
+    [messages, turnActivity, latestUserTurnStartedAt, sessionIsActive],
+  );
   const liveTurnActivity = React.useMemo(
     () =>
       [...turnActivity]
@@ -1285,6 +1318,7 @@ export function AgenticConsole({
         chatId={chatId}
         messages={messages}
         summary={summary}
+        nativeRuns={nativeRuns}
         preferences={preferences}
         headerProgress={headerProgress}
         onPreferences={updatePreferences}
@@ -1295,7 +1329,7 @@ export function AgenticConsole({
         onExport={exportSession}
       />
       {blocks.length > 0 ? (
-        <div className="agentic-transcript" aria-label="Agentic transcript">
+        <div className="agentic-transcript" role="region" aria-label="Agentic transcript">
           {transcriptWindow.remaining > 0 ? (
             <button
               type="button"

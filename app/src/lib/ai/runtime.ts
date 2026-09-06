@@ -377,6 +377,23 @@ export function resolveRuntimeReasoningPolicy(
   return resolveReasoningPolicy({ selection, preference, liveVariants });
 }
 
+/** Resolve automatic OpenCode modes against the same live catalog used by its picker and dispatcher. */
+export async function resolveCapturedRuntimeReasoningPolicy(
+  selection: Readonly<{ providerId: string; modelId: string; connectionId?: string }>,
+  preference: Readonly<ReasoningPreference>,
+  listModels: () => Promise<readonly import('./adapters/types').ProviderDiscoveredModel[]> = async () => {
+    const { openCodePersistentAdapter } = await import('./adapters/opencodePersistent');
+    return await openCodePersistentAdapter.listModels?.() ?? [];
+  },
+): Promise<ReturnType<typeof resolveReasoningPolicy>> {
+  if (selection.connectionId !== 'opencode-cli' || preference.mode === 'normal') {
+    return resolveRuntimeReasoningPolicy(selection, preference);
+  }
+  const model = (await listModels()).find(item => item.id === selection.modelId);
+  if (!model) throw new Error('The selected OpenCode model is unavailable in the live catalog.');
+  return resolveReasoningPolicy({ selection, preference, liveVariants: model.variants ?? [], liveVariantsAuthoritative: true });
+}
+
 /** @internal Re-reads canonical provider results without exposing the result store. */
 export interface CanonicalProviderArtifactEvidenceReadPort {
   readCanonicalProviderEvidence(
@@ -658,7 +675,10 @@ function stablePhaseId(value: string): string {
 }
 
 function addResponseUsage(...responses: readonly LLMResponse[]): LLMResponse['usage'] {
+  const provenance = responses.some(response => response.usage.provenance === 'unavailable')
+    ? 'unavailable' : responses.some(response => response.usage.provenance === 'estimated') ? 'estimated' : undefined;
   return Object.freeze({
+    ...(provenance ? { provenance } : {}),
     input_tokens: responses.reduce((total, response) => total + response.usage.input_tokens, 0),
     output_tokens: responses.reduce((total, response) => total + response.usage.output_tokens, 0),
     cost_usd: responses.reduce((total, response) => total + response.usage.cost_usd, 0),
@@ -1642,12 +1662,18 @@ export async function installJarvisKernelRuntimeHost(
               const startedAt = now();
               let contextCitationSessionId: string | undefined;
               const liveToolActivityIds = new Map<string, string>();
+              const thinkingActivityId = createChatActivityId('thinking');
+              let thinkingRecorded = false;
+              const finishThinking = (status: 'done' | 'error' | 'cancelled') => {
+                if (thinkingRecorded) useChatActivityStore.getState().update(providerChatId, thinkingActivityId, { status, endedAt: now() });
+              };
               const updateLiveToolActivity = (
                 activity: Readonly<{
                   name: string;
                   status: 'started' | 'completed' | 'failed';
                   callId?: string;
                   fileLabel?: string;
+                  nativeTask?: import('./openCodeNativeActivity').NativeTaskActivity;
                 }>,
               ): void => {
                 if (signal.aborted) return;
@@ -1689,8 +1715,11 @@ export async function installJarvisKernelRuntimeHost(
                   useChatActivityStore.getState().record({
                     id: activityId,
                     chatId: scope.chatId,
+                    messageId: `msg_${providerInput.requestId}`,
+                    providerCallId: callId,
                     kind: 'tool',
                     ...projected.event,
+                    ...(activity.nativeTask ? { nativeTask: activity.nativeTask } : {}),
                     ts: now(),
                     startedAt: now(),
                     ...(projected.event.status === 'running' ? {} : { endedAt: now() }),
@@ -1698,6 +1727,7 @@ export async function installJarvisKernelRuntimeHost(
                 } else {
                   useChatActivityStore.getState().update(scope.chatId, activityId, {
                     ...projected.event,
+                    ...(activity.nativeTask ? { nativeTask: activity.nativeTask } : {}),
                     ...(projected.event.status === 'running' ? {} : { endedAt: now() }),
                     ts: now(),
                   });
@@ -1768,6 +1798,7 @@ export async function installJarvisKernelRuntimeHost(
                   },
                   onPublicTimelineSnapshot: async (snapshot) => {
                     signal.throwIfAborted();
+                    const thinking = snapshot.timeline.filter((part) => part.kind === 'reasoning');
                     const resultByCallId = new Map<
                       string,
                       Extract<(typeof snapshot.timeline)[number], { kind: 'tool_result' }>
@@ -1790,11 +1821,42 @@ export async function installJarvisKernelRuntimeHost(
                           ? { fileLabel: part.args.path }
                           : {}),
                       });
+                      const scope = activeTurnScopes.get(providerInput.runId);
+                      const activityId = liveToolActivityIds.get(part.call_id);
+                      const diff = resultPart?.result?.diff;
+                      const nativeTask = part.args.nativeTask;
+                      if (scope?.accountId === providerInput.accountId && scope.requestId === providerInput.requestId && activityId && part.tool === 'task' && nativeTask && typeof nativeTask === 'object') {
+                        useChatActivityStore.getState().update(scope.chatId, activityId, {
+                          nativeTask: nativeTask as import('./openCodeNativeActivity').NativeTaskActivity,
+                        });
+                      }
+                      if (scope?.accountId === providerInput.accountId && scope.requestId === providerInput.requestId &&
+                          activityId && resultPart?.result?.status === 'completed' && !resultPart.error &&
+                          typeof diff === 'string' && /^(edit|write|apply_patch)$/.test(part.tool)) {
+                        useChatActivityStore.getState().update(scope.chatId, activityId, {
+                          diff,
+                          addedLines: diff.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length,
+                          removedLines: diff.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).length,
+                        });
+                      }
+                    }
+                    const thinkingScope = activeTurnScopes.get(providerInput.runId);
+                    if (thinking.length > 0 && thinkingScope?.accountId === providerInput.accountId &&
+                        thinkingScope.requestId === providerInput.requestId && !suppressProviderPreview) {
+                      const detail = thinking.map((part) => part.text).join('\n\n');
+                      if (thinkingRecorded) {
+                        useChatActivityStore.getState().update(thinkingScope.chatId, thinkingActivityId, { detail });
+                      } else {
+                        useChatActivityStore.getState().record({ id: thinkingActivityId, chatId: thinkingScope.chatId,
+                          messageId: `msg_${providerInput.requestId}`, kind: 'agent', category: 'thinking',
+                          title: 'Thinking', detail, status: 'running', ts: startedAt, startedAt });
+                        thinkingRecorded = true;
+                      }
                     }
                     const checkpoint = [...snapshot.timeline]
                       .reverse()
                       .find((part) => part.kind === 'text');
-                    if (checkpoint?.kind === 'text' && checkpoint.text.trim()) {
+                    if (thinking.length === 0 && checkpoint?.kind === 'text' && checkpoint.text.trim()) {
                       setLiveAgentActivityRunPhase(providerInput.runId, {
                         category: 'thinking',
                         title: 'Jarvis is auditing the request',
@@ -1890,7 +1952,11 @@ export async function installJarvisKernelRuntimeHost(
                     modelSnapshotRef,
                   }),
                 );
+                finishThinking('done');
                 return raw;
+              }).catch((error: unknown) => {
+                finishThinking(signal.aborted ? 'cancelled' : 'error');
+                throw error;
               });
               return Object.freeze({
                 receipt: Object.freeze({
@@ -4012,6 +4078,7 @@ async function createRuntimeKernelTurn(input: {
   interactionMode: JarvisInteractionMode;
   speakReply: boolean;
   surface?: 'hive_final';
+  execution?: JarvisKernelTurnInput['execution'];
   contextBlocks: readonly Readonly<JarvisRuntimeContextBlock>[];
   model: import('@/lib/jarvis/contracts').JarvisModelSnapshot;
   providerOptions?: Readonly<Record<string, unknown>>;
@@ -4098,6 +4165,7 @@ async function createRuntimeKernelTurn(input: {
     userMessageId: input.userMessageId,
     agent: input.agent,
     surface,
+    ...(input.execution ? { execution: { ...input.execution } } : {}),
     interactionMode: input.interactionMode,
     userText: input.providerUserText ?? input.text,
     messageHistory: [...input.messages],
@@ -5677,7 +5745,7 @@ export function startRuntimeListener(
     try {
       reasoningPolicy =
         stackStepsEarly.length === 0 && chatModelSelection.mode === 'single'
-          ? resolveRuntimeReasoningPolicy(
+          ? await resolveCapturedRuntimeReasoningPolicy(
               {
                 providerId: chatModelSelection.providerId,
                 modelId: chatModelSelection.modelId,
@@ -5688,6 +5756,14 @@ export function startRuntimeListener(
               effectiveReasoningPreference,
             )
           : null;
+      if (
+        chatModelSelection.mode === 'single' &&
+        chatModelSelection.connectionId === 'opencode-cli' &&
+        reasoningPolicy?.resolvedEffort
+      ) {
+        // Native OpenCode consumes runtime settings, not provider-specific API options.
+        runtimeSettings.effort = reasoningPolicy.resolvedEffort;
+      }
     } catch (error) {
       failEarlySetup('model', error);
       return;
@@ -5941,7 +6017,7 @@ export function startRuntimeListener(
       return true;
     };
     const currentOpenCodeResponseParts = (): Part[] =>
-      hasNativeOpenCodeTextIdentity
+      hasNativeOpenCodeTextIdentity || liveOpenCodeChronology.length > 0
         ? currentOpenCodeChronologyParts()
         : [{ kind: 'text', text: acc }, ...currentOpenCodeToolParts()];
     const currentOpenCodeQuestionParts = (): Part[] => [...liveOpenCodeQuestions];
@@ -6346,6 +6422,7 @@ export function startRuntimeListener(
               model,
               providerOptions: reasoningPolicy?.providerOptions,
               runtimeSettings,
+              execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
             });
             if (continuationOutcome) {
               approvalContinuationOutcomesByRun.set(turn.run.id, continuationOutcome);
@@ -7057,11 +7134,11 @@ export function startRuntimeListener(
           if (existing && existing.call.tool !== toolActivity.name) {
             throw new Error('OpenCode tool identity changed during one call.');
           }
-          const call: Extract<Part, { kind: 'tool_call' }> = existing?.call ?? {
+          const call: Extract<Part, { kind: 'tool_call' }> = {
             kind: 'tool_call',
             tool: toolActivity.name,
             call_id: callId,
-            args: toolActivity.fileLabel ? { path: toolActivity.fileLabel } : {},
+            args: { ...existing?.call.args, ...(toolActivity.fileLabel ? { path: toolActivity.fileLabel } : {}), ...(toolActivity.nativeTask ? { nativeTask: toolActivity.nativeTask } : {}) },
           };
           const result: Extract<Part, { kind: 'tool_result' }> | undefined =
             toolActivity.status === 'completed'
@@ -7080,11 +7157,12 @@ export function startRuntimeListener(
               liveOpenCodeChronology.push(result);
             }
             liveOpenCodeToolIndexes.set(callId, nextIndexes);
-          } else if (result) {
-            if (indexes.result === undefined) {
+          } else {
+            liveOpenCodeChronology[indexes.call] = call;
+            if (result && indexes.result === undefined) {
               indexes.result = liveOpenCodeChronology.length;
               liveOpenCodeChronology.push(result);
-            } else {
+            } else if (result && indexes.result !== undefined) {
               liveOpenCodeChronology[indexes.result] = result;
             }
           }
@@ -7230,7 +7308,7 @@ export function startRuntimeListener(
             retrievedResponseContext,
           )
         : null;
-      const reconciledTokenUsage = tokenOptimizationReceipt
+      const reconciledTokenUsage = tokenOptimizationReceipt && !response.usage.provenance
         ? reconcileTokenUsage(
             {
               providerId: tokenOptimizationReceipt.providerId,
@@ -7333,6 +7411,8 @@ export function startRuntimeListener(
       await bindings.updateMessage(placeholder.id, {
         parts: finalParts,
         usage: {
+          execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
+          ...(response.usage.provenance ? { provenance: response.usage.provenance } : {}),
           input_tokens: response.usage.input_tokens,
           output_tokens: response.usage.output_tokens,
           cost_usd: response.usage.cost_usd,
@@ -7477,7 +7557,9 @@ export function startRuntimeListener(
       useChatActivityStore.getState().update(chatId, agentActivityId, {
         status: 'done',
         title: `@${agent.slug} finished`,
-        subtitle: `${response.provider}/${response.model} · ${response.usage.input_tokens}+${response.usage.output_tokens} tokens`,
+        subtitle: response.usage.provenance === 'unavailable'
+          ? `${response.provider}/${response.model} · Token usage unavailable`
+          : `${response.provider}/${response.model} · ${response.usage.provenance === 'estimated' ? 'Estimated ' : ''}${response.usage.input_tokens}+${response.usage.output_tokens} tokens`,
         ts: Date.now(),
       });
       dispatchCurrentRunState('done');

@@ -363,9 +363,14 @@ describe('Composer chat handoff integration', () => {
     vi.spyOn(chatRepo, 'getById').mockImplementation(async (id) =>
       String(id) === 'chat-source' ? sourceChat : targetChat,
     );
-    vi.spyOn(messageRepo, 'listByChat')
-      .mockResolvedValueOnce([message('First rendered snapshot')])
-      .mockResolvedValueOnce([message('Replacement rendered snapshot', 100)]);
+    let sourceRead = 0;
+    vi.spyOn(messageRepo, 'listByChat').mockImplementation(async (id) => {
+      if (String(id) !== 'chat-source') return [];
+      sourceRead += 1;
+      return sourceRead === 1
+        ? [message('First rendered snapshot')]
+        : [message('Replacement rendered snapshot', 100)];
+    });
     const send = vi.fn();
     const warning = vi.spyOn(toast, 'warning');
     window.addEventListener('jarvis:send', send);
@@ -584,9 +589,14 @@ describe('Composer chat handoff integration', () => {
     vi.spyOn(chatRepo, 'getById').mockImplementation(async (id) =>
       String(id) === 'chat-source' ? sourceChat : targetChat,
     );
-    vi.spyOn(messageRepo, 'listByChat')
-      .mockResolvedValueOnce([message('Original submitted card')])
-      .mockResolvedValueOnce([message('Newer replacement card', 100)]);
+    let sourceRead = 0;
+    vi.spyOn(messageRepo, 'listByChat').mockImplementation(async (id) => {
+      if (String(id) !== 'chat-source') return [];
+      sourceRead += 1;
+      return sourceRead === 1
+        ? [message('Original submitted card')]
+        : [message('Newer replacement card', 100)];
+    });
     let persistedId = 0;
     const create = vi.spyOn(messageRepo, 'create').mockImplementation(async (input) => {
       persistedId += 1;

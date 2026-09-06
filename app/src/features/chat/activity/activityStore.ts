@@ -4,6 +4,11 @@ import type { ChatActivityEvent, ChatActivityPatch } from './types';
 
 const MAX_EVENTS_PER_CHAT = 80;
 const MAX_DETAIL_CHARS = 4000;
+const MAX_THINKING_CHARS = 1_000_000;
+
+function detailLimit(event: ChatActivityPatch): number {
+  return event.category === 'thinking' && event.messageId ? MAX_THINKING_CHARS : MAX_DETAIL_CHARS;
+}
 const MAX_DIFF_CHARS = 12000;
 
 interface ChatActivityState {
@@ -25,16 +30,16 @@ function truncatePayload(value: string | undefined, maxChars: number, label: str
 function boundedEvent(event: ChatActivityEvent): ChatActivityEvent {
   return {
     ...event,
-    detail: truncatePayload(event.detail, MAX_DETAIL_CHARS, 'detail'),
+    detail: truncatePayload(event.detail, detailLimit(event), 'detail'),
     diff: truncatePayload(event.diff, MAX_DIFF_CHARS, 'diff'),
   };
 }
 
-function boundedPatch(patch: ChatActivityPatch): ChatActivityPatch {
+function boundedPatch(patch: ChatActivityPatch, event: ChatActivityEvent): ChatActivityPatch {
   return {
     ...patch,
-    detail: truncatePayload(patch.detail, MAX_DETAIL_CHARS, 'detail'),
-    diff: truncatePayload(patch.diff, MAX_DIFF_CHARS, 'diff'),
+    ...('detail' in patch ? { detail: truncatePayload(patch.detail, detailLimit({ ...event, ...patch }), 'detail') } : {}),
+    ...('diff' in patch ? { diff: truncatePayload(patch.diff, MAX_DIFF_CHARS, 'diff') } : {}),
   };
 }
 
@@ -65,7 +70,7 @@ export const useChatActivityStore = create<ChatActivityState>((set) => ({
       const chatKey = key(chatId);
       const existing = state.eventsByChat[chatKey] ?? [];
       if (!existing.some((event) => event.id === id)) return state;
-      const nextPatch = boundedPatch(patch);
+      const nextPatch = boundedPatch(patch, existing.find(event => event.id === id)!);
       return {
         eventsByChat: {
           ...state.eventsByChat,

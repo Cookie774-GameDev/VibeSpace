@@ -144,6 +144,9 @@ export type Message = {
   updated_at: number;
   /** Token usage if known */
   usage?: {
+    execution?: { mode: 'normal' | 'token-saver' | 'token-final-boss'; effort?: string };
+    provenance?: 'estimated' | 'unavailable';
+    total_tokens?: number;
     input_tokens?: number;
     output_tokens?: number;
     cache_read_tokens?: number;

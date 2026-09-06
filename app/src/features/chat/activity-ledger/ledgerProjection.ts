@@ -383,9 +383,11 @@ function eventReceipt(event: ChatActivityEvent): AssistantActivityReceipt {
 }
 
 function usage(message: Message): AssistantActivityLedgerProjection['usage'] {
-  const exactInput = positive(message.usage?.input_tokens);
-  const exactOutput = positive(message.usage?.output_tokens);
-  let estimatedInput: number | undefined;
+  const exact = !message.usage?.provenance;
+  const exactInput = exact ? positive(message.usage?.input_tokens) : undefined;
+  const exactOutput = exact ? positive(message.usage?.output_tokens) : undefined;
+  const estimatedOutput = message.usage?.provenance === 'estimated' ? positive(message.usage.output_tokens) : undefined;
+  let estimatedInput = message.usage?.provenance === 'estimated' ? positive(message.usage.input_tokens) : undefined;
   let reportedInput: number | undefined;
   let reportedOutput: number | undefined;
   for (const part of message.parts) {
@@ -395,7 +397,7 @@ function usage(message: Message): AssistantActivityLedgerProjection['usage'] {
     reportedOutput = positive(part.usage?.actualOutputTokens) ?? reportedOutput;
   }
   const inputValue = exactInput ?? reportedInput ?? estimatedInput;
-  const outputValue = exactOutput ?? reportedOutput;
+  const outputValue = exactOutput ?? reportedOutput ?? estimatedOutput;
   return {
     input:
       inputValue === undefined
@@ -410,7 +412,9 @@ function usage(message: Message): AssistantActivityLedgerProjection['usage'] {
         ? { value: null, provenance: 'unavailable', source: 'unavailable' }
         : exactOutput !== undefined
           ? { value: outputValue, provenance: 'exact', source: 'response-metadata' }
-          : { value: outputValue, provenance: 'exact', source: 'provider-reported' },
+          : reportedOutput !== undefined
+            ? { value: outputValue, provenance: 'exact', source: 'provider-reported' }
+            : { value: outputValue, provenance: 'estimated', source: 'local-estimate' },
   };
 }
 

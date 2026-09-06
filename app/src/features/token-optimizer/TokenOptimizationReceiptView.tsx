@@ -56,7 +56,7 @@ export function TokenOptimizationReceiptView({
         <div>
           <p className="token-opt-eyebrow">Optimization receipt</p>
           <h2 id="token-opt-receipt-title">
-            {formatCount(receipt.estimatedTokensSaved)} tokens saved
+            Estimated {formatCount(receipt.estimatedTokensSaved)} tokens saved
           </h2>
         </div>
         <span className="token-opt-model-lock">

@@ -1,3 +1,4 @@
+import { reasoningModeInstructions } from '@/lib/ai/reasoningControls';
 import type {
   CompiledJarvisPrompt,
   CompiledPromptLayer,
@@ -735,6 +736,7 @@ export function compileJarvisPrompt(
       `Interaction mode: ${envelope.interactionMode}`,
       interactionPolicy,
       `Response mode hint: ${envelope.responseModeHint ?? 'none'}`,
+      ...(envelope.outputContract.reasoningMode ? [reasoningModeInstructions(envelope.outputContract.reasoningMode)] : []),
     ].join('\n'),
     contextParts.length === 0
       ? 'No admitted untrusted context was supplied.'

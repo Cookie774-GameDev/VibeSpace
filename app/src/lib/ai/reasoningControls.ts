@@ -63,6 +63,10 @@ const EXECUTION_INSTRUCTIONS: Readonly<Record<ReasoningMode, string>> = {
   ].join('\n'),
 };
 
+export function reasoningModeInstructions(mode: ReasoningMode): string {
+  return EXECUTION_INSTRUCTIONS[mode];
+}
+
 export function normalizeReasoningPreference(value: unknown): ReasoningPreference {
   if (!value || typeof value !== 'object') return { mode: 'normal', effortOverride: null };
   const record = value as Record<string, unknown>;
@@ -169,15 +173,18 @@ function staticReasoningCapabilities(selection: ReasoningSelection): ReasoningCa
 export function getReasoningCapabilities(
   selection: ReasoningSelection,
   liveVariants?: readonly string[],
+  liveVariantsAuthoritative = false,
 ): ReasoningCapabilities {
   const base = staticReasoningCapabilities(selection);
-  if (!liveVariants || liveVariants.length === 0) return base;
+  if (liveVariants === undefined || (liveVariants.length === 0 && !liveVariantsAuthoritative)) return base;
   const supported = EFFORTS.filter(
     (effort) => liveVariants.includes(effort) || liveVariants.includes(base.wireEffort(effort)),
   );
   return {
     ...base,
     supportedEfforts: supported,
+    // Live variants prove effort availability, not a provider-specific API key.
+    // Native OpenCode routes carry the resolved effort through runtimeSettings.
     providerOptionKey: supported.length > 0 ? base.providerOptionKey : null,
   };
 }
@@ -201,13 +208,15 @@ export function resolveReasoningPolicy({
   selection,
   preference: rawPreference,
   liveVariants,
+  liveVariantsAuthoritative = false,
 }: {
   selection: ReasoningSelection;
   preference: ReasoningPreference;
   liveVariants?: readonly string[];
+  liveVariantsAuthoritative?: boolean;
 }): ResolvedReasoningPolicy {
   const preference = normalizeReasoningPreference(rawPreference);
-  const capabilities = getReasoningCapabilities(selection, liveVariants);
+  const capabilities = getReasoningCapabilities(selection, liveVariants, liveVariantsAuthoritative);
   if (
     preference.effortOverride &&
     !capabilities.supportedEfforts.includes(preference.effortOverride)

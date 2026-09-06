@@ -2,6 +2,40 @@ import { describe, expect, it } from 'vitest';
 import { projectOpenCodePublicTimeline } from './openCodePublicTimeline';
 
 describe('projectOpenCodePublicTimeline', () => {
+  it('relativizes diff metadata headers without rewriting actual changed content', () => {
+    const diff = 'Index: C:/fixture/alpha.txt\n--- C:/fixture/alpha.txt\n+++ C:/fixture/alpha.txt\n@@ -1 +1 @@\n--- C:/fixture/content\n+++ C:/fixture/content';
+    const snapshot = projectOpenCodePublicTimeline([{info: {role: 'assistant'}, parts: [{type: 'tool', tool: 'edit', callID: 'edit', state: {status: 'completed', input: {path: 'C:/fixture/alpha.txt'}, metadata: {diff}}}]}], {workingDirectory: 'C:/fixture'});
+    expect(snapshot.timeline.find(part => part.kind === 'tool_result')).toMatchObject({result: {diff: 'Index: alpha.txt\n--- alpha.txt\n+++ alpha.txt\n@@ -1 +1 @@\n--- C:/fixture/content\n+++ C:/fixture/content'}});
+  });
+  it('preserves independent native task identities and public progress without copying prompts', () => {
+    const snapshot = projectOpenCodePublicTimeline([{ info: { role: 'assistant' }, parts: [
+      { type: 'tool', tool: 'task', callID: 'call-a', state: { status: 'running', input: { description: 'Read alpha', prompt: 'PRIVATE TASK PROMPT' }, metadata: { sessionId: 'session-a', summary: [{ tool: 'read', state: { title: 'Reading alpha.txt', status: 'running' } }] } } },
+      { type: 'tool', tool: 'task', callID: 'call-b', state: { status: 'completed', input: { description: 'Read beta' }, metadata: { sessionId: 'session-b' } } },
+    ] }]);
+    const tasks = snapshot.timeline.filter(part => part.kind === 'tool_call').map(part => part.args.nativeTask);
+    expect(tasks).toEqual([
+      expect.objectContaining({ sessionId: 'session-a', name: 'Read alpha', currentStep: 'Reading alpha.txt' }),
+      expect.objectContaining({ sessionId: 'session-b', name: 'Read beta' }),
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain('PRIVATE TASK PROMPT');
+  });
+
+  it('shows a nonzero shell exit as failure even when the transport completed', () => {
+    const snapshot = projectOpenCodePublicTimeline([{ info: { role: 'assistant' }, parts: [
+      { type: 'tool', tool: 'bash', callID: 'exit-seven', state: { status: 'completed', metadata: { exit: 7 } } },
+    ] }]);
+    expect(snapshot.timeline).toContainEqual({ kind: 'tool_result', call_id: 'opencode-tool-1', error: 'Command exited with code 7' });
+  });
+
+  it('keeps distinct project-relative file identities without exposing paths outside the root', () => {
+    const snapshot = projectOpenCodePublicTimeline([{info: {role: 'assistant'}, parts: [
+      ...['C:/fixture/src/alpha.txt', 'C:/fixture/test/alpha.txt', 'C:/outside/private.txt'].map((path, index) => ({
+        type: 'tool', tool: 'read', callID: `read-${index}`, state: {status: 'completed', input: {path}},
+      })),
+    ]}], {workingDirectory: 'C:/fixture'});
+    expect(snapshot.timeline.filter(part => part.kind === 'tool_call').map(part => part.args.path))
+      .toEqual(['src/alpha.txt', 'test/alpha.txt', 'private.txt']);
+  });
   it('distinguishes an empty Context boundary from a generic tool failure', () => {
     const snapshot = projectOpenCodePublicTimeline([
       {
@@ -117,12 +151,12 @@ describe('projectOpenCodePublicTimeline', () => {
     );
   });
 
-  it('ignores reasoning and non-assistant records while retaining failed public tool state', () => {
+  it('retains provider-exposed reasoning and failed public tool state', () => {
     const snapshot = projectOpenCodePublicTimeline([
       {
         info: { role: 'assistant' },
         parts: [
-          { type: 'reasoning', text: 'private chain of thought' },
+          { type: 'reasoning', text: 'Checking the fixture.' },
           { type: 'step-start', text: 'private phase' },
           { type: 'text', text: 'I am checking the game.' },
           {
@@ -139,13 +173,14 @@ describe('projectOpenCodePublicTimeline', () => {
     expect(snapshot).toEqual({
       finalText: 'The test failed safely.',
       timeline: [
+        { kind: 'reasoning', text: 'Checking the fixture.' },
         { kind: 'text', text: 'I am checking the game.' },
         { kind: 'tool_call', tool: 'bash', call_id: 'opencode-tool-1', args: {} },
         { kind: 'tool_result', call_id: 'opencode-tool-1', error: 'Tool failed' },
       ],
     });
     expect(JSON.stringify(snapshot)).not.toMatch(
-      /reasoning|private phase|secret command|private-bash/iu,
+      /private phase|secret command|private-bash/iu,
     );
   });
 
@@ -264,14 +299,28 @@ describe('projectOpenCodePublicTimeline', () => {
     expect(JSON.stringify(snapshot)).not.toMatch(/private-call|must-not-survive|C:\\\\private/iu);
   });
 
-  it('fails closed when no public assistant text exists', () => {
+  it('retains a confirmed provider diff but never treats a running proposal as applied', () => {
+    const make = (status: string) => projectOpenCodePublicTimeline([{ info: { role: 'assistant' }, parts: [
+      { type: 'tool', tool: 'edit', callID: 'edit-one', state: { status, input: { filePath: 'src/alpha.txt' }, metadata: { diff: '-old\n+new' } } },
+    ] }]);
+    expect(make('running').timeline).toEqual([{ kind: 'tool_call', tool: 'edit', call_id: 'opencode-tool-1', args: { path: 'src/alpha.txt' } }]);
+    expect(make('completed').timeline[1]).toEqual({ kind: 'tool_result', call_id: 'opencode-tool-1', result: { status: 'completed', diff: '-old\n+new' } });
+  });
+
+  it('streams supported thinking and running tools before any final answer exists', () => {
     expect(
       projectOpenCodePublicTimeline([
         {
           info: { role: 'assistant' },
-          parts: [{ type: 'reasoning', text: 'private' }],
+          parts: [
+            { type: 'reasoning', text: 'Checking the fixture.' },
+            { type: 'tool', tool: 'read', callID: 'live-read', state: { status: 'running', input: { path: 'alpha.txt' } } },
+          ],
         },
       ]),
-    ).toEqual({ finalText: '', timeline: [] });
+    ).toEqual({ finalText: '', timeline: [
+      { kind: 'reasoning', text: 'Checking the fixture.' },
+      { kind: 'tool_call', tool: 'read', call_id: 'opencode-tool-1', args: { path: 'alpha.txt' } },
+    ] });
   });
 });

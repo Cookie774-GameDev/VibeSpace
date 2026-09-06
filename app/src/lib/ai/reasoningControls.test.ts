@@ -12,6 +12,13 @@ function selection(providerId: string, modelId: string, connectionId?: string): 
 }
 
 describe('reasoning controls', () => {
+  it('uses authoritative OpenCode Go variants for automatic modes without static provider guesses', () => {
+    const selected = selection('opencode', 'opencode-go/deepseek-v4-flash-vision-exp', 'opencode-cli');
+    for (const [mode, effort] of [['token-saver', 'low'], ['token-final-boss', 'max']] as const) {
+      expect(resolveReasoningPolicy({selection: selected, preference: {mode, effortOverride: null}, liveVariants: ['low', 'high', 'max']})).toMatchObject({resolvedEffort: effort, providerOptions: {}});
+    }
+    expect(getReasoningCapabilities(selection('openai', 'gpt-5.6-sol', 'opencode-cli'), [], true).supportedEfforts).toEqual([]);
+  });
   it.each([
     [
       selection('openai', 'gpt-5.6-sol', 'openai-codex'),

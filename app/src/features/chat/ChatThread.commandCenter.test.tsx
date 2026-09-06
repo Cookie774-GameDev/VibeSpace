@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   JarvisCommandCenterProvider,
@@ -14,6 +14,7 @@ import type { JarvisEvent, JarvisRun } from '@/features/jarvis-command-center/ty
 import { useJarvisTaskRunStore } from '@/features/jarvis-runs/taskRunStore';
 import type { Message } from '@/types';
 import { ChatThread } from './ChatThread';
+import { useAuthStore } from '@/stores/auth';
 
 const hookState = vi.hoisted(() => ({ messages: [] as Message[] }));
 
@@ -146,6 +147,40 @@ function setReducedMotion(matches: boolean) {
 }
 
 describe('ChatThread Command Center routing', () => {
+  it('reopens an ordinary failed request for review without invoking scheduled retry or sending', async () => {
+    const auth = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'account-1', cloudSession: null });
+    const insert = vi.fn();
+    const send = vi.fn();
+    window.addEventListener('jarvis:composer:insert-text', insert);
+    window.addEventListener('jarvis:send', send);
+    const currentBinding = binding([canonicalRun({ status: 'failed' })]);
+    hookState.messages = [{ id: 'user-1', chat_id: 'chat-1', role: 'user', parts: [{ kind: 'text', text: 'Read alpha.txt' }], created_at: 90, updated_at: 90 } as Message];
+    try {
+      render(<JarvisCommandCenterProvider value={currentBinding}><ChatThread chatId="chat-1" /></JarvisCommandCenterProvider>);
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry in composer' }));
+      expect(insert).toHaveBeenCalledTimes(1);
+      expect((insert.mock.calls[0][0] as CustomEvent).detail).toEqual({ chatId: 'chat-1', text: 'Read alpha.txt' });
+      expect(currentBinding.hostPort.retryLogicalRun).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      useAuthStore.setState({ localUserId: 'account-2' });
+      fireEvent.click(screen.getByRole('button', { name: 'Retry in composer' }));
+      expect(insert).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('jarvis:composer:insert-text', insert);
+      window.removeEventListener('jarvis:send', send);
+      useAuthStore.setState({ localUserId: auth.localUserId, cloudSession: auth.cloudSession });
+    }
+  });
+
+  it.each(['newer request', 'non-text context'])('does not offer a partial or stale Chat retry: %s', async (scenario) => {
+    hookState.messages = [{ id: 'user-1', chat_id: 'chat-1', role: 'user', parts: scenario === 'non-text context' ? [{ kind: 'text', text: 'Read the attached file' }, { kind: 'file', name: 'attachment' }] : [{ kind: 'text', text: 'New request' }], created_at: scenario === 'newer request' ? 110 : 90, updated_at: 110 } as unknown as Message];
+    const currentBinding = binding([canonicalRun({ status: 'failed' })]);
+    render(<JarvisCommandCenterProvider value={currentBinding}><ChatThread chatId="chat-1" /></JarvisCommandCenterProvider>);
+    await screen.findByRole('status', { name: 'Session status' });
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+  });
+
   beforeEach(() => {
     setReducedMotion(false);
     hookState.messages = [];

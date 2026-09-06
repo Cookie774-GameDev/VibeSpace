@@ -1,7 +1,9 @@
 import { applySecretPolicy } from '../security/secretDetector';
+import { nativeShellFailure, projectNativeTaskActivity, type NativeShellFailure, type NativeTaskActivity } from './openCodeNativeActivity';
 
 export type OpenCodePublicTimelinePart =
   | Readonly<{ kind: 'text'; text: string }>
+  | Readonly<{ kind: 'reasoning'; text: string }>
   | Readonly<{
       kind: 'tool_call';
       tool: string;
@@ -11,8 +13,8 @@ export type OpenCodePublicTimelinePart =
   | Readonly<{
       kind: 'tool_result';
       call_id: string;
-      result?: Readonly<{ status: 'completed' }>;
-      error?: 'Tool failed' | 'Context unavailable';
+      result?: Readonly<{ status: 'completed'; diff?: string }>;
+      error?: 'Tool failed' | 'Context unavailable' | NativeShellFailure;
     }>;
 
 export interface OpenCodePublicMessageRecord {
@@ -29,13 +31,16 @@ export interface OpenCodePublicTimelineSnapshot {
 
 type PublicTimelineEntry =
   | { kind: 'text'; text: string }
+  | { kind: 'reasoning'; text: string }
   | {
       kind: 'tool';
       tool: string;
       callId: string;
       fileLabel?: string;
+      diff?: string;
+      nativeTask?: NativeTaskActivity;
       status: 'started' | 'completed' | 'failed';
-      error?: 'Tool failed' | 'Context unavailable';
+      error?: 'Tool failed' | 'Context unavailable' | NativeShellFailure;
     };
 
 const MAX_MESSAGES = 4_096;
@@ -61,14 +66,35 @@ function publicText(value: unknown): string | undefined {
   return value;
 }
 
-function safeFileLabel(state: Readonly<Record<string, unknown>> | undefined): string | undefined {
+function safeFileLabel(state: Readonly<Record<string, unknown>> | undefined, workingDirectory?: string): string | undefined {
   const input = recordOf(state?.input);
   const path = input?.path ?? input?.filePath ?? input?.file_path ?? input?.filepath;
   if (typeof path !== 'string' || !path.trim() || path.length > 4_096) return undefined;
-  const leaf = path.split(/[\\/]/u).filter(Boolean).at(-1);
+  const normalized = path.replace(/\\/g, '/');
+  const root = workingDirectory?.replace(/\\/g, '/').replace(/\/+$/, '');
+  const windows = /^[a-z]:\//i.test(normalized);
+  const withinRoot = root && (windows ? normalized.toLowerCase() : normalized)
+    .startsWith((windows ? root.toLowerCase() : root) + '/');
+  const relative = withinRoot ? normalized.slice(root.length + 1) : normalized;
+  const safeRelative = !/^(?:[a-z]:|\/)/i.test(relative) &&
+    !relative.split('/').includes('..');
+  const leaf = safeRelative ? relative.replace(/^\.\//, '') : normalized.split('/').filter(Boolean).at(-1);
   if (!leaf) return undefined;
   const redacted = applySecretPolicy(leaf, 'redact').text;
-  return boundedIdentifier(redacted, 256);
+  return boundedIdentifier(redacted, 4096);
+}
+
+function relativeDiffHeaders(diff: string, workingDirectory?: string): string {
+  let inHunk = false;
+  return diff.split('\n').map(line => {
+    if (line.startsWith('diff --git ') || line.startsWith('Index: ')) inHunk = false;
+    if (line.startsWith('@@')) inHunk = true;
+    if (inHunk) return line;
+    const match = /^(Index: |--- |\+\+\+ )([^\t\r]+)(.*)$/.exec(line);
+    if (!match || match[2] === '/dev/null') return line;
+    const label = safeFileLabel({ input: { path: match[2] } }, workingDirectory);
+    return label ? `${match[1]}${label}${match[3]}` : line;
+  }).join('\n');
 }
 
 function toolStatus(value: unknown): 'started' | 'completed' | 'failed' {
@@ -112,10 +138,12 @@ function freezePart(part: OpenCodePublicTimelinePart): OpenCodePublicTimelinePar
  * Deterministically projects persisted OpenCode messages into the only public
  * Chat UI state we retain: checkpoint text, safe tool lifecycle, and one final
  * answer. It never exposes provider message/part/call identity, tool input,
- * tool output, absolute paths, reasoning, or workflow metadata.
+ * tool output, absolute paths, hidden reasoning, or workflow metadata. Reasoning
+ * explicitly exposed in the provider message stream is retained separately.
  */
 export function projectOpenCodePublicTimeline(
   messages: readonly OpenCodePublicMessageRecord[],
+  options: Readonly<{ workingDirectory?: string }> = {},
 ): Readonly<OpenCodePublicTimelineSnapshot> {
   if (messages.length > MAX_MESSAGES) throw new Error('opencode_public_timeline_message_limit');
 
@@ -140,6 +168,13 @@ export function projectOpenCodePublicTimeline(
       observedParts += 1;
       if (observedParts > MAX_PARTS) throw new Error('opencode_public_timeline_part_limit');
       const type = boundedIdentifier(part.type, 64)?.toLocaleLowerCase('en-US');
+      if (type === 'reasoning') {
+        const text = publicText(part.text) ?? '';
+        textChars += text.length;
+        if (textChars > MAX_TEXT_CHARS) throw new Error('opencode_public_timeline_text_limit');
+        entries.push({ kind: 'reasoning', text });
+        continue;
+      }
       if (type === 'text' || type === 'agent_message') {
         const text = publicText(part.text);
         if (!text) continue;
@@ -156,15 +191,22 @@ export function projectOpenCodePublicTimeline(
         boundedIdentifier(part.callID ?? part.callId ?? part.id, 512) ??
         `anonymous:${messageIndex}:${partIndex}`;
       const state = recordOf(part.state);
-      const fileLabel = safeFileLabel(state);
+      const fileLabel = safeFileLabel(state, options.workingDirectory);
       const transportStatus = toolStatus(state?.status ?? part.status);
-      const contextFailure = vibeSpaceContextFailure(state?.output, tool);
+      const contextFailure = vibeSpaceContextFailure(state?.output, tool) ?? nativeShellFailure(tool, state);
+      const nativeTask = projectNativeTaskActivity(tool, state);
       const status = transportStatus === 'completed' && contextFailure ? 'failed' : transportStatus;
+      const rawDiff = recordOf(state?.metadata)?.diff;
+      const diff = status === 'completed' && /^(edit|write|apply_patch)$/.test(tool) &&
+        typeof rawDiff === 'string' && rawDiff.length <= MAX_TEXT_CHARS
+        ? applySecretPolicy(relativeDiffHeaders(rawDiff, options.workingDirectory), 'redact').text : undefined;
       const existing = toolsByNativeCallId.get(nativeCallId);
       if (existing) {
         if (fileLabel) existing.fileLabel = fileLabel;
         if (contextFailure) existing.error = contextFailure;
         if (status !== 'started') existing.status = status;
+        if (diff) existing.diff = diff;
+        if (nativeTask) existing.nativeTask = nativeTask;
       } else {
         const entry: Extract<PublicTimelineEntry, { kind: 'tool' }> = {
           kind: 'tool',
@@ -172,6 +214,8 @@ export function projectOpenCodePublicTimeline(
           callId: requestLocalCallId(nativeCallId),
           ...(fileLabel ? { fileLabel } : {}),
           status,
+          ...(diff ? { diff } : {}),
+          ...(nativeTask ? { nativeTask } : {}),
           ...(contextFailure ? { error: contextFailure } : {}),
         };
         toolsByNativeCallId.set(nativeCallId, entry);
@@ -182,16 +226,17 @@ export function projectOpenCodePublicTimeline(
 
   const parts = entries.flatMap<OpenCodePublicTimelinePart>((entry) => {
     if (entry.kind === 'text') return [{ kind: 'text', text: entry.text }];
+    if (entry.kind === 'reasoning') return [{ kind: 'reasoning', text: entry.text }];
     const call: OpenCodePublicTimelinePart = {
       kind: 'tool_call',
       tool: entry.tool,
       call_id: entry.callId,
-      args: entry.fileLabel ? { path: entry.fileLabel } : {},
+      args: { ...(entry.fileLabel ? { path: entry.fileLabel } : {}), ...(entry.nativeTask ? { nativeTask: entry.nativeTask } : {}) },
     };
     if (entry.status === 'completed') {
       return [
         call,
-        { kind: 'tool_result', call_id: entry.callId, result: { status: 'completed' } },
+        { kind: 'tool_result', call_id: entry.callId, result: { status: 'completed', ...(entry.diff ? { diff: entry.diff } : {}) } },
       ];
     }
     if (entry.status === 'failed') {
@@ -210,7 +255,7 @@ export function projectOpenCodePublicTimeline(
       break;
     }
   }
-  if (finalTextIndex < 0) return Object.freeze({ finalText: '', timeline: Object.freeze([]) });
+  if (finalTextIndex < 0) return Object.freeze({ finalText: '', timeline: Object.freeze(parts.map(freezePart)) });
 
   const finalPart = parts[finalTextIndex];
   if (finalPart?.kind !== 'text') throw new Error('opencode_public_timeline_final_text_invalid');

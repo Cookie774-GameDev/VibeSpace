@@ -113,6 +113,7 @@ export type AgenticSessionSummary = {
   addedLines: number;
   removedLines: number;
   tokenCount: number | '—';
+  tokenProvenance?: 'estimated';
   startedAt: number | '—';
   endedAt: number | '—';
   durationMs: number | '—';
@@ -321,18 +322,31 @@ function projectMessage(message: Message, preserveAssistantMessages: boolean): T
       });
       return;
     }
-    if (part.kind === 'reasoning' && part.text.trim()) {
+    if (part.kind === 'reasoning') {
+      if (index !== message.parts.findIndex(item => item.kind === 'reasoning')) return;
       blocks.push({
         ...base,
-        id: `${sourceId}:reasoning:${index}`,
+        id: `${sourceId}:reasoning`,
         kind: 'reasoning',
-        text: sanitizeConsoleText(part.text),
+        text: sanitizeConsoleText(message.parts.flatMap(item => item.kind === 'reasoning' ? [item.text] : []).join('\n\n')),
       });
       return;
     }
     if (part.kind === 'tool_call') {
       const result = results.get(part.call_id);
       if (result) pairedResults.add(part.call_id);
+      const change = result?.result && typeof result.result === 'object'
+        ? result.result as Record<string, unknown> : undefined;
+      if (/^(edit|write|apply_patch)$/.test(part.tool) && change?.status === 'completed' &&
+          !result?.error && typeof change.diff === 'string' && change.diff.trim()) {
+        const diff = boundedDiff(change.diff);
+        const lines = formatUnifiedDiffLines(diff);
+        const filePath = typeof part.args.path === 'string' ? part.args.path : undefined;
+        blocks.push({ ...base, id: `${sourceId}:diff:${part.call_id}`, kind: 'diff', status: 'done',
+          title: 'Edited files', filePath, diff,
+          addedLines: lines.filter(line => line.kind === 'add').length,
+          removedLines: lines.filter(line => line.kind === 'remove').length });
+      }
       const command = commandFromArgs(part.args);
       if (COMMAND_TOOLS.test(part.tool) && command.command) {
         const evidence = commandResultEvidence(result?.result);
@@ -384,6 +398,9 @@ function projectMessage(message: Message, preserveAssistantMessages: boolean): T
 
 function projectActivity(event: ChatActivityEvent): TranscriptBlock {
   const sourceId = `activity:${event.id}`;
+  if (event.category === 'thinking' && event.messageId) {
+    return { id: `message:${event.messageId}:reasoning`, sourceId: `message:${event.messageId}`, ts: event.ts, kind: 'reasoning', text: sanitizeConsoleText(event.detail ?? '') };
+  }
   if (event.diff?.trim()) {
     return {
       id: `${sourceId}:diff`,
@@ -463,15 +480,10 @@ export function projectAgenticTranscript(
   activity: readonly ChatActivityEvent[],
   options: { preserveAssistantMessages?: boolean } = {},
 ): TranscriptBlock[] {
-  const seenActivity = new Set<string>();
   const messageBlocks = messages.flatMap((message) =>
     projectMessage(message, options.preserveAssistantMessages === true),
   );
-  const activityBlocks = activity.flatMap((event) => {
-    if (seenActivity.has(event.id)) return [];
-    seenActivity.add(event.id);
-    return [projectActivity(event)];
-  });
+  const activityBlocks = dedupeActivity(activity, messages).map(projectActivity);
   if (isOrderedTranscript(messageBlocks) && isOrderedTranscript(activityBlocks)) {
     return mergeOrderedTranscripts(messageBlocks, activityBlocks);
   }
@@ -488,6 +500,11 @@ function projectedMessageShape(
   message: Message,
   preserveAssistantMessages: boolean,
 ): ProjectedMessageShape {
+  if (message.parts.some(part => part.kind === 'tool_result' && part.result &&
+      typeof part.result === 'object' && 'diff' in part.result)) {
+    const blocks = projectMessage(message, preserveAssistantMessages);
+    return { count: blocks.length, firstTs: blocks[0]!.ts, lastTs: blocks.at(-1)!.ts };
+  }
   if (
     hasInteractiveParts(message) ||
     message.role === 'system' ||
@@ -502,6 +519,7 @@ function projectedMessageShape(
   );
   const pairedResults = new Set<string>();
   let count = 0;
+  let hasReasoning = false;
   let firstIndex = 0;
   let lastIndex = 0;
   const record = (index: number) => {
@@ -511,7 +529,10 @@ function projectedMessageShape(
   };
   message.parts.forEach((part, index) => {
     if (part.kind === 'text' || part.kind === 'reasoning') {
-      if (part.text.trim()) record(index);
+      if (part.kind === 'reasoning') {
+        if (!hasReasoning) record(index);
+        hasReasoning = true;
+      } else if (part.text.trim()) record(index);
       return;
     }
     if (part.kind === 'tool_call') {
@@ -529,16 +550,36 @@ function projectedMessageShape(
   };
 }
 
-function dedupeActivity(activity: readonly ChatActivityEvent[]): ChatActivityEvent[] {
+function activityDiffKey(event: ChatActivityEvent): string {
+  return event.messageId && event.providerCallId
+    ? `message:${event.messageId}:diff:${event.providerCallId}` : `activity:${event.id}:diff`;
+}
+
+function dedupeActivity(activity: readonly ChatActivityEvent[], messages: readonly Message[] = []): ChatActivityEvent[] {
   const seen = new Set<string>();
+  const persisted = new Set<string>();
+  for (const message of messages) {
+    if (message.parts.some(part => part.kind === 'reasoning')) persisted.add(`message:${message.id}:reasoning`);
+    const edits = new Set(message.parts.flatMap(part => part.kind === 'tool_call' &&
+      /^(edit|write|apply_patch)$/.test(part.tool) ? [part.call_id] : []));
+    for (const part of message.parts) {
+      if (part.kind === 'tool_result' && edits.has(part.call_id) && !part.error &&
+          part.result && typeof part.result === 'object' && 'status' in part.result &&
+          part.result.status === 'completed' && 'diff' in part.result && typeof part.result.diff === 'string') {
+        persisted.add(`message:${message.id}:diff:${part.call_id}`);
+      }
+    }
+  }
   return activity.filter((event) => {
     if (seen.has(event.id)) return false;
     seen.add(event.id);
-    return true;
+    return !(event.diff && persisted.has(activityDiffKey(event))) &&
+      !(event.category === 'thinking' && event.messageId && persisted.has(`message:${event.messageId}:reasoning`));
   });
 }
 
 function activityProjectionId(event: ChatActivityEvent): string {
+  if (event.category === 'thinking' && event.messageId) return `message:${event.messageId}:reasoning`;
   return `activity:${event.id}:${event.diff?.trim() ? 'diff' : 'activity'}`;
 }
 
@@ -565,7 +606,7 @@ export function projectAgenticTranscriptWindow(
   const messageShapes = messages.map((message) =>
     projectedMessageShape(message, preserveAssistantMessages),
   );
-  const uniqueActivity = dedupeActivity(activity);
+  const uniqueActivity = dedupeActivity(activity, messages);
   const messageTotal = messageShapes.reduce((total, shape) => total + shape.count, 0);
   const total = messageTotal + uniqueActivity.length;
   const messagesOrdered = messageShapes.every(
@@ -615,8 +656,9 @@ export function summarizeAgenticSession(
   let hasCompletedActivity = false;
   let addedLines = 0;
   let removedLines = 0;
+  const countedDiffs = new Set<string>();
 
-  for (const event of activity) {
+  for (const event of dedupeActivity(activity)) {
     if (event.filePath) uniqueFiles.add(event.filePath);
     const eventStartedAt = event.startedAt ?? event.ts;
     if (
@@ -633,8 +675,14 @@ export function summarizeAgenticSession(
     hasError ||= event.status === 'error';
     hasBlocked ||= /blocked|approval|permission/i.test(`${event.status} ${event.title}`);
     hasCompletedActivity ||= event.status === 'done';
-    addedLines += event.addedLines ?? 0;
-    removedLines += event.removedLines ?? 0;
+    if (event.status === 'done') {
+      const diffKey = event.diff ? activityDiffKey(event) : undefined;
+      if (!diffKey || !countedDiffs.has(diffKey)) {
+        addedLines += event.addedLines ?? 0;
+        removedLines += event.removedLines ?? 0;
+        if (diffKey) countedDiffs.add(diffKey);
+      }
+    }
 
     const completedAt = event.endedAt ?? event.ts;
     if (latestActivity === undefined || completedAt > (latestActivityAt as number)) {
@@ -645,9 +693,30 @@ export function summarizeAgenticSession(
 
   let hasAssistantAnswer = false;
   let hasTokenUsage = false;
+  let hasUnavailableTokenUsage = false;
   let tokenCount = 0;
+  let hasEstimatedTokens = false;
   let model = '—';
   for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.kind === 'tool_call' && typeof part.args.path === 'string') {
+        uniqueFiles.add(part.args.path);
+      }
+    }
+    if (message.parts.some(part => part.kind === 'tool_result')) {
+      // Summary accounting is independent of interactive cards that retain the
+      // complete message in the transcript (for example a saved source reference).
+      const toolEvidence = { ...message, parts: message.parts.filter(part =>
+        part.kind === 'tool_call' || part.kind === 'tool_result') };
+      for (const block of projectMessage(toolEvidence, false)) {
+        if (block.kind !== 'diff' || block.status !== 'done') continue;
+        const key = block.id;
+        if (countedDiffs.has(key)) continue;
+        countedDiffs.add(key);
+        addedLines += block.addedLines ?? 0;
+        removedLines += block.removedLines ?? 0;
+      }
+    }
     if (
       Number.isFinite(message.created_at) &&
       (earliestStartedAt === undefined || message.created_at < earliestStartedAt)
@@ -658,10 +727,18 @@ export function summarizeAgenticSession(
       hasAssistantAnswer = true;
     }
     const usage = message.usage;
-    if (usage) {
-      hasTokenUsage = true;
-      tokenCount += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
-      if (usage.model) model = usage.model;
+    if (usage?.model) model = usage.model;
+    if (message.role === 'assistant') {
+      const input = usage?.input_tokens;
+      const output = usage?.output_tokens;
+      if (usage?.provenance !== 'unavailable' && typeof input === 'number' && Number.isSafeInteger(input) && input >= 0 &&
+          typeof output === 'number' && Number.isSafeInteger(output) && output >= 0) {
+        hasTokenUsage = true;
+        tokenCount += Number.isSafeInteger(usage?.total_tokens) && usage!.total_tokens! >= 0 ? usage!.total_tokens! : input + output;
+        hasEstimatedTokens ||= usage?.provenance === 'estimated';
+      } else {
+        hasUnavailableTokenUsage = true;
+      }
     }
   }
   const startedAt =
@@ -727,11 +804,13 @@ export function summarizeAgenticSession(
     fileCount: uniqueFiles.size,
     addedLines,
     removedLines,
-    tokenCount: hasTokenUsage ? tokenCount : '—',
+    tokenCount: hasTokenUsage && !hasUnavailableTokenUsage ? tokenCount : '—',
+    ...(hasEstimatedTokens ? { tokenProvenance: 'estimated' as const } : {}),
     startedAt,
     endedAt,
     durationMs:
-      typeof startedAt === 'number' && typeof endedAt === 'number'
+      !['running', 'queued', 'planning', 'recovering'].includes(status) &&
+      typeof startedAt === 'number' && typeof endedAt === 'number' && endedAt >= startedAt
         ? Math.max(0, endedAt - startedAt)
         : '—',
     model: sanitizeConsoleText(evidence.model ?? model, 1024),

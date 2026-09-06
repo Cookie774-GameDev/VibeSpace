@@ -33,6 +33,54 @@ function message(
 }
 
 describe('AgenticConsole', () => {
+  it('keeps follow-up live activity after its own prompt rather than the previous answer', () => {
+    const rendered = renderConsole({chatId: 'chat-console', messages: [
+      message('old-user', 'user', 1, [{kind: 'text', text: 'Old request'}]),
+      message('old-answer', 'assistant', 2, [{kind: 'text', text: 'Old answer'}]),
+      message('new-user', 'user', 10, [{kind: 'text', text: 'Current request'}]),
+    ], activity: [{id: 'new-read', chatId: 'chat-console', kind: 'tool', category: 'file', filePath: 'alpha.txt', subtitle: 'alpha.txt', status: 'running', title: 'Reading file', ts: 11}], sessionEvidence: {status: 'running'}});
+    const prompt = screen.getByText('Current request');
+    const ledger = rendered.container.querySelector('[data-assistant-activity-ledger="true"]');
+    expect(ledger).not.toBeNull();
+    expect(Boolean(prompt.compareDocumentPosition(ledger!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it('discloses authoritative file additions and removals without claiming failed edits succeeded', () => {
+    const rendered = renderConsole({
+      chatId: 'chat-console',
+      messages: [message('diff-answer', 'assistant', 3, [{ kind: 'text', text: 'The edit failed.' }])],
+      activity: [{ id: 'failed-diff', chatId: 'chat-console', kind: 'diff', status: 'error',
+        title: 'Edit failed', filePath: 'src/alpha.txt', diff: '-alpha=old\n+alpha=new',
+        addedLines: 1, removedLines: 1, ts: 2 }],
+      sessionEvidence: { status: 'completed' },
+    });
+    const disclosure = screen.getByRole('button', { name: /Edit failed.*src\/alpha.txt/i });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('alpha=new')).toBeNull();
+    fireEvent.click(disclosure);
+    expect(rendered.container.querySelector('.agentic-diff-line--add')?.textContent).toContain('alpha=new');
+    expect(rendered.container.querySelector('.agentic-diff-line--remove')?.textContent).toContain('alpha=old');
+    expect(screen.queryByText('Edited files')).toBeNull();
+  });
+  it('preserves provider-exposed thinking in the native tool chronology, collapsed by default', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [message('exposed-thinking', 'assistant', 2, [
+        { kind: 'reasoning', text: 'I will check both fixture files.' },
+        { kind: 'tool_call', call_id: 'read-fixture', tool: 'read', args: { path: 'fixture.txt' } },
+        { kind: 'tool_result', call_id: 'read-fixture', result: { status: 'completed' } },
+        { kind: 'text', text: 'Both files were checked.' },
+      ], { model: 'opencode-go/deepseek-v4-flash-vision-exp' })],
+      activity: [],
+      sessionEvidence: { status: 'completed' },
+    });
+    const toggle = screen.getByRole('button', { name: 'Thinking' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('I will check both fixture files.')).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByText('I will check both fixture files.')).toBeTruthy();
+    expect(screen.getByText('Both files were checked.')).toBeTruthy();
+  });
   it('keeps the warm prompt band while response phases read as one continuous transcript', () => {
     const stylesheet = readFileSync(
       resolve(process.cwd(), 'src/features/chat/agentic-console/agentic-console.css'),
@@ -114,7 +162,9 @@ describe('AgenticConsole', () => {
         .getByRole('region', { name: 'Agentic chat console' })
         .getAttribute('data-console-theme'),
     ).toBe('vibespace-amber');
-    expect(screen.getByLabelText('Session status').textContent).toContain('Complete');
+    expect(screen.getByRole('status', { name: 'Session status' }).textContent).toContain('Complete');
+    expect(screen.getByRole('group', { name: 'Agentic session summary' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Agentic transcript' })).toBeTruthy();
     expect(screen.getByText('1 file')).toBeTruthy();
     expect(screen.getAllByText('+4')).toHaveLength(1);
     expect(screen.getAllByText('-1')).toHaveLength(1);
@@ -767,7 +817,7 @@ describe('AgenticConsole', () => {
       sessionEvidence: { status: 'done', currentOperation: 'Complete' },
     });
 
-    expect(screen.getByText('Reasoning')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Thinking' })).toBeTruthy();
     expect(rendered.container.querySelector('[data-agent-motion]')).toBeNull();
   });
 
@@ -803,7 +853,7 @@ describe('AgenticConsole', () => {
     });
 
     expect(
-      screen.getByText('Reasoning').closest('details')?.querySelector('[data-agent-motion]'),
+      screen.getByRole('button', { name: 'Thinking' }).closest('section')?.querySelector('[data-agent-motion]'),
     ).toBeNull();
     expect(screen.getByRole('button', { name: /show activity details/i })).toBeTruthy();
     expect(document.body.textContent).not.toContain('npm test');

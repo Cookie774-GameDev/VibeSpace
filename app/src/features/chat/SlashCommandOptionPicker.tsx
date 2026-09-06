@@ -135,6 +135,8 @@ export const SlashCommandOptionPicker = forwardRef<
           option.description?.toLowerCase().includes(query.toLowerCase()),
       )
     : options;
+  // The active setting is distinct from the row highlighted for navigation.
+  const activeOptionId = options.find((option) => option.metadata === 'active')?.id;
 
   useImperativeHandle(ref, () => ({
     moveUp: () => {
@@ -242,8 +244,8 @@ export const SlashCommandOptionPicker = forwardRef<
           </div>
         ) : (
           <div
-            role={effortPicker ? 'group' : undefined}
-            aria-label={effortPicker ? 'Live effort options' : undefined}
+            role="group"
+            aria-label={effortPicker ? 'Live effort options' : `${commandLabel} options`}
           >
             <div
               className={cn(
@@ -267,15 +269,18 @@ export const SlashCommandOptionPicker = forwardRef<
               const isSelected = selectedId === option.id;
 
               return (
-                <div
+                <button
                   key={option.id}
+                  type="button"
                   data-value={option.id}
                   data-effort-level={effortPicker ? effortId : undefined}
-                  aria-pressed={effortPicker ? isSelected : undefined}
+                  aria-pressed={activeOptionId ? activeOptionId === option.id : isSelected}
+                  style={{ width: compact ? 'calc(100% - 0.5rem)' : 'calc(100% - 1rem)' }}
                   onClick={() => onSelect(option)}
                   onMouseEnter={() => onHoverId?.(option.id)}
+                  onFocus={() => onHoverId?.(option.id)}
                   className={cn(
-                    'relative flex cursor-pointer items-center overflow-hidden border transition-all duration-100',
+                    'relative flex cursor-pointer items-center overflow-hidden border text-left transition-all duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring',
                     effortPicker && 'vibespace-effort-row capitalize',
                     effortPicker && effortId === 'ultra' && 'vibespace-effort-ultra',
                     compact
@@ -326,7 +331,7 @@ export const SlashCommandOptionPicker = forwardRef<
                     </span>
                     {option.description && (
                       <span
-                        className="block truncate leading-4 text-muted-foreground"
+                        className="block whitespace-normal break-words leading-4 text-muted-foreground"
                         style={{ fontSize: `${bodyPx - 1}px` }}
                       >
                         {option.description}
@@ -341,8 +346,8 @@ export const SlashCommandOptionPicker = forwardRef<
                       {option.metadata}
                     </span>
                   )}
-                  {isSelected && <span className="shrink-0 text-accent-copper">&gt;</span>}
-                </div>
+                  {isSelected && <span aria-hidden="true" className="shrink-0 text-accent-copper">&gt;</span>}
+                </button>
               );
             })}
           </div>

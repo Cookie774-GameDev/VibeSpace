@@ -201,6 +201,23 @@ function usageNumber(value: { value?: number } | undefined): number {
   return typeof value?.value === 'number' && Number.isFinite(value.value) ? value.value : 0;
 }
 
+function tokenProvenance(usage: UsageSnapshot | undefined): { provenance?: 'estimated' | 'unavailable' } {
+  const tokens = [usage?.inputTokens, usage?.outputTokens];
+  if (tokens.some(token => token?.provenance === 'unavailable' ||
+      !Number.isSafeInteger(token?.value) || (token?.value ?? -1) < 0)) {
+    return { provenance: 'unavailable' };
+  }
+  return tokens.some(token => token?.provenance === 'estimated') ? { provenance: 'estimated' } : {};
+}
+
+function reportedUsageDetails(usage: UsageSnapshot | undefined): Pick<import('./types').TokenUsage, 'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens'> {
+  const details: Pick<import('./types').TokenUsage, 'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens'> = {};
+  for (const [key, metric] of [['total_tokens', usage?.totalTokens], ['cache_read_tokens', usage?.cacheReadTokens], ['cache_write_tokens', usage?.cacheWriteTokens]] as const) {
+    if (metric?.provenance === 'provider-reported' && Number.isSafeInteger(metric.value) && metric.value! >= 0) details[key] = metric.value;
+  }
+  return details;
+}
+
 function mergeUsageSnapshots(
   current: UsageSnapshot | undefined,
   next: UsageSnapshot,
@@ -332,6 +349,7 @@ export interface RunAgentRequest {
       status: 'started' | 'completed' | 'failed';
       callId?: string;
       fileLabel?: string;
+      nativeTask?: import('./openCodeNativeActivity').NativeTaskActivity;
     }>,
   ) => void | Promise<void>;
   /** Whole authoritative OpenCode public snapshot; replaces prior snapshot for this request. */
@@ -466,6 +484,7 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
           status: event.status,
           ...(event.callId ? { callId: event.callId } : {}),
           ...(event.fileLabel ? { fileLabel: event.fileLabel } : {}),
+          ...(event.nativeTask ? { nativeTask: event.nativeTask } : {}),
         });
       } else if (event.type === 'error') {
         terminalObserved = true;
@@ -484,7 +503,9 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
   const response: LLMResponse = {
     text,
     usage: {
-      input_tokens: usageNumber(usage?.inputTokens),
+      ...tokenProvenance(usage),
+        ...reportedUsageDetails(usage),
+        input_tokens: usageNumber(usage?.inputTokens),
       output_tokens: usageNumber(usage?.outputTokens),
       cost_usd: usageNumber(usage?.costUsd),
     },
@@ -824,6 +845,7 @@ async function executePersistentOpenCode(
             status: event.status,
             ...(event.callId ? { callId: event.callId } : {}),
             ...(event.fileLabel ? { fileLabel: event.fileLabel } : {}),
+            ...(event.nativeTask ? { nativeTask: event.nativeTask } : {}),
           });
         } else if (event.type === 'error') {
           providerReportedFailure = true;
@@ -866,6 +888,8 @@ async function executePersistentOpenCode(
     return {
       text: finalText,
       usage: {
+        ...tokenProvenance(usage),
+        ...reportedUsageDetails(usage),
         input_tokens: usageNumber(usage?.inputTokens),
         output_tokens: usageNumber(usage?.outputTokens),
         cost_usd: usageNumber(usage?.costUsd),
@@ -1074,7 +1098,9 @@ async function runKernelSmokeCliConnection(
   return {
     text,
     usage: {
-      input_tokens: usageNumber(usage?.inputTokens),
+      ...tokenProvenance(usage),
+        ...reportedUsageDetails(usage),
+        input_tokens: usageNumber(usage?.inputTokens),
       output_tokens: usageNumber(usage?.outputTokens),
       cost_usd: usageNumber(usage?.costUsd),
     },

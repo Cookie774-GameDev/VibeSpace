@@ -58,6 +58,8 @@ import type {
 import type { ChatRuntimeSettings } from '@/features/chat/runtime/chatRuntimeCommandController';
 
 export interface JarvisKernelTurnInput {
+  /** Receipt of bound controls; only its closed mode enum selects the compiled application policy. */
+  execution?: NonNullable<Message['usage']>['execution'];
   run: Readonly<JarvisRun>;
   attempt: JarvisRequestAttempt;
   accountId: string;
@@ -553,7 +555,7 @@ async function runJarvisKernelExecution(
     model: input.model,
     capabilities: input.capabilities,
     context: input.context,
-    outputContract: input.outputContract,
+    outputContract: { ...input.outputContract, ...(input.execution?.mode ? { reasoningMode: input.execution.mode } : {}) },
     userText: input.userText,
     messageHistory: input.messageHistory,
     createdAt: deps.now(),
@@ -940,13 +942,12 @@ async function runJarvisKernelExecution(
       role: 'assistant',
       agent_id: input.agent.id,
       parts: [...messageParts],
-      ...(raw.usage === undefined
+      ...(raw.usage === undefined && input.execution === undefined
         ? {}
         : {
             usage: {
-              input_tokens: raw.usage.input_tokens,
-              output_tokens: raw.usage.output_tokens,
-              cost_usd: raw.usage.cost_usd,
+              ...(raw.usage ?? {}),
+              ...(input.execution ? { execution: { ...input.execution } } : {}),
               provider: input.agent.model.provider,
               model: raw.provider.modelId,
             },

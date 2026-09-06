@@ -164,9 +164,14 @@ export interface LLMStreamChunk {
  * when the provider doesn't return a usage block.
  */
 export interface TokenUsage {
+  total_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
+  /** Numeric compatibility values must not be shown as observed usage when unavailable. */
+  provenance?: 'estimated' | 'unavailable';
 }
 
 /**

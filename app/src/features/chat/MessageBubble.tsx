@@ -5,6 +5,7 @@ import { useThemeMotionLayout, useThemeMotionTransition } from '@/features/appea
 import { useAgentStore } from '@/stores/agents';
 import { cn, formatRelative, hueFromString } from '@/lib/utils';
 import { MessagePart } from './MessagePart';
+import { ResponseDetails } from './ResponseDetails';
 import { AssistantActivityLedger } from './activity-ledger/AssistantActivityLedger';
 import { resolvePluginActionEvidence } from './PluginUsageCard';
 import type { Message } from '@/types';
@@ -250,6 +251,7 @@ export function MessageBubble({
               {message.role === 'assistant' && showActivityLedger ? (
                 <AssistantActivityLedger message={message} compact={compact} />
               ) : null}
+              <ResponseDetails usage={message.usage} />
             </div>
           </div>
           <ActionStrip

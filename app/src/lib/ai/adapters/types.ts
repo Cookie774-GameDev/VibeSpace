@@ -103,6 +103,7 @@ export type ProviderEvent =
       callId?: string;
       /** Privacy-safe leaf filename only; never a directory or raw provider argument. */
       fileLabel?: string;
+      nativeTask?: import('../openCodeNativeActivity').NativeTaskActivity;
       result?: unknown;
       /** Sanitized request-local scope classification; never carries a path or reusable authority. */
       scope?: 'explicit_root_inventory';

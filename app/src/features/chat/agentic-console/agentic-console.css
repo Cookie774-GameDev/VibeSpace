@@ -149,9 +149,9 @@ html[data-theme='warm'] [data-agentic-console] {
   --console-ink: var(--warm-text-strong);
   --console-muted: var(--warm-text-muted);
   --console-line: var(--warm-border);
-  --console-accent: var(--warm-terracotta-deep);
-  --console-add: var(--warm-sage-deep);
-  --console-remove: var(--warm-terracotta-deep);
+  --console-accent: color-mix(in srgb, var(--warm-terracotta-deep) 70%, var(--warm-text-strong));
+  --console-add: color-mix(in srgb, var(--warm-sage-deep) 70%, var(--warm-text-strong));
+  --console-remove: var(--console-accent);
 }
 
 html[data-theme='origami'] [data-agentic-console] {

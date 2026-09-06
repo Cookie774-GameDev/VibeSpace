@@ -354,6 +354,7 @@ export async function createJarvisRequestEnvelope(
       allowQuestionBlocks: input.outputContract.allowQuestionBlocks,
       allowPermissionBlocks: input.outputContract.allowPermissionBlocks,
       voiceDelivery: input.outputContract.voiceDelivery,
+      ...(input.outputContract.reasoningMode === undefined ? {} : { reasoningMode: input.outputContract.reasoningMode }),
     },
     createdAt: input.createdAt,
   };

@@ -11,6 +11,22 @@ describe('chat activity store helpers', () => {
     useChatActivityStore.setState({ eventsByChat: {} });
   });
 
+  it('preserves payloads across lifecycle patches and allows explicit clearing', () => {
+    const store = useChatActivityStore.getState();
+    store.record({ id: 'patch', chatId: 'patch', kind: 'tool', status: 'running', title: 'Edit', detail: 'evidence', diff: '-old\n+new', ts: 1 });
+    store.update('patch', 'patch', { status: 'done' });
+    expect(useChatActivityStore.getState().eventsByChat.patch?.[0]).toMatchObject({ detail: 'evidence', diff: '-old\n+new', status: 'done' });
+    store.update('patch', 'patch', { detail: undefined });
+    expect(useChatActivityStore.getState().eventsByChat.patch?.[0]?.detail).toBeUndefined();
+  });
+
+  it('retains provider-exposed Thinking beyond generic activity preview length', () => {
+    const store = useChatActivityStore.getState();
+    store.record({ id: 'thinking', chatId: 'thinking', kind: 'agent', category: 'thinking', messageId: 'answer', status: 'running', title: 'Thinking', detail: 'r'.repeat(8000), ts: 1 });
+    store.update('thinking', 'thinking', { detail: 'r'.repeat(9000) });
+    expect(useChatActivityStore.getState().eventsByChat.thinking?.[0]?.detail).toHaveLength(9000);
+  });
+
   it('counts changed lines in unified diffs without counting headers', () => {
     const diff = [
       '--- a/src/App.tsx',

@@ -48,7 +48,9 @@ function safeToolName(value: string): string {
 
 function safeLeaf(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  const leaf = value.split(/[\\/]/u).filter(Boolean).at(-1)?.trim();
+  const normalized = value.replace(/\\/g, '/').trim();
+  const relative = !/^(?:[a-z]:|\/)/i.test(normalized) && !normalized.split('/').includes('..');
+  const leaf = relative ? normalized.replace(/^\.\//, '') : normalized.split('/').filter(Boolean).at(-1)?.trim();
   if (!leaf || !SAFE_PUBLIC_LABEL.test(leaf)) return undefined;
   const redacted = applySecretPolicy(leaf, 'redact').text?.trim();
   return redacted && SAFE_PUBLIC_LABEL.test(redacted) ? redacted : undefined;

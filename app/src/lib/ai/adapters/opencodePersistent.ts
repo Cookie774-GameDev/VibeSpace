@@ -35,6 +35,7 @@ import {
   type OpenCodeRequestControls,
 } from '@/lib/harness/OpenCodeRequestControls';
 import { normalizeOpenCodeEvent } from '@/lib/harness/eventNormalizer';
+import { nativeShellFailure, projectNativeTaskActivity } from '../openCodeNativeActivity';
 import {
   bindToolGatewayObservedExecutionAuthority,
   bindToolGatewaySessionAuthority,
@@ -1188,7 +1189,7 @@ export function normalizeToolEvent(
         ? 'failed'
         : 'started';
   const status =
-    transportStatus === 'completed' && isFailedVibeSpaceContextOutput(name, state?.output)
+    transportStatus === 'completed' && (isFailedVibeSpaceContextOutput(name, state?.output) || nativeShellFailure(name, state))
       ? 'failed'
       : transportStatus;
   const callId = cleanIdentifier(part.callID ?? part.callId ?? part.id);
@@ -1201,6 +1202,7 @@ export function normalizeToolEvent(
   const fileLabel = cleanIdentifier(redactedLeaf, 256);
   const scope = classifyExplicitRootInventoryScope({ name, status, input: state?.input }, request);
   const checklist = sanitizeOpenCodeChecklistSnapshot(name, callId, state?.input);
+  const nativeTask = projectNativeTaskActivity(name, state);
   return {
     type: 'tool',
     name,
@@ -1209,6 +1211,7 @@ export function normalizeToolEvent(
     ...(fileLabel ? { fileLabel } : {}),
     ...(scope ? { scope } : {}),
     ...(checklist ? { checklist } : {}),
+    ...(nativeTask ? { nativeTask } : {}),
   };
 }
 
@@ -1223,6 +1226,7 @@ export function normalizePersistentOpenCodeUsage(
     typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
   const input = number(tokens?.input ?? tokens?.inputTokens ?? tokens?.input_tokens);
   const output = number(tokens?.output ?? tokens?.outputTokens ?? tokens?.output_tokens);
+  const total = number(tokens?.total ?? tokens?.totalTokens ?? tokens?.total_tokens);
   const cache = recordOf(tokens?.cache);
   const cacheRead = number(cache?.read ?? tokens?.cacheRead ?? tokens?.cache_read);
   const cacheWrite = number(cache?.write ?? tokens?.cacheWrite ?? tokens?.cache_write);
@@ -1232,6 +1236,7 @@ export function normalizePersistentOpenCodeUsage(
   const cost = number(info?.cost ?? tokens?.cost);
   return {
     capturedAt: Date.now(),
+    ...(total === undefined ? {} : { totalTokens: { value: total, provenance: 'provider-reported' as const } }),
     ...(input === undefined
       ? {}
       : { inputTokens: { value: input, provenance: 'provider-reported' as const } }),
@@ -2244,7 +2249,16 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           client.http
             .status(dispatch.sessionId)
             .then((value) => ({ succeeded: true as const, value }))
-            .catch(() => ({ succeeded: false as const, value: undefined })),
+            .catch((error: unknown) => {
+              const reason = error instanceof Error ? error.message : error;
+              // Native generation loss is terminal for this accepted turn. A
+              // replacement runtime must never silently inherit its live state.
+              if (reason === 'OpenCode managed server is unavailable.' ||
+                  reason === 'OpenCode managed server generation is unavailable.') {
+                throw new Error('OpenCode runtime disconnected. Retry to reconnect.');
+              }
+              return { succeeded: false as const, value: undefined };
+            }),
           recoverPendingQuestions(),
           recoverPendingApprovals(),
         ]);
@@ -2262,7 +2276,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           }
           yield recovered;
         }
-        const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages);
+        const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages, { workingDirectory: scope.workingDirectory });
+        if (request.signal?.aborted)
+          throw new DOMException('The OpenCode turn was aborted.', 'AbortError');
         if (publicTimeline.finalText || publicTimeline.timeline.length > 0) {
           yield { type: 'public_timeline', snapshot: publicTimeline };
         }
@@ -2454,7 +2470,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       }
       yield recovered;
     }
-    const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages);
+    const publicTimeline = projectOpenCodePublicTimeline(currentTurnMessages, { workingDirectory: scope.workingDirectory });
     if (publicTimeline.finalText || publicTimeline.timeline.length > 0) {
       const counts = publicTimeline.timeline.reduce(
         (current, part) => ({
@@ -2503,6 +2519,18 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const delta = canonicalOpenCodeTextSuffix(emittedText, canonical);
       if (delta) yield { type: 'text', delta, streamPartId: latestTextStreamPartId };
     }
+    const finalAssistant = [...currentTurnMessages].reverse().find(message => message.info?.role === 'assistant');
+    const finalInfo = finalAssistant?.info;
+    const completedUsage = finalInfo && (recordOf(finalInfo.time)?.completed || finalInfo.finish)
+      ? normalizePersistentOpenCodeUsage({ type: 'message.updated', properties: { info: finalInfo } }) : undefined;
+    const unavailableMetric = { provenance: 'unavailable' as const };
+    yield { type: 'usage', usage: {
+      capturedAt: Date.now(),
+      inputTokens: unavailableMetric, outputTokens: unavailableMetric, totalTokens: unavailableMetric,
+      cacheReadTokens: unavailableMetric, cacheWriteTokens: unavailableMetric,
+      reasoningTokens: unavailableMetric, costUsd: unavailableMetric,
+      ...completedUsage,
+    } };
     const reconciledChecklists = openCodeChecklistSnapshotsFromMessages(currentTurnMessages);
     for (const checklist of reconciledChecklists) {
       yield {

@@ -54,6 +54,7 @@ import { getPreview } from '@/features/chat/streamingPreviewStore';
 
 const mocks = vi.hoisted(() => ({
   runAgent: vi.fn(),
+  listOpenCodeModels: vi.fn(),
   lockChatBackendForDispatch: vi.fn(),
   chatGetById: vi.fn(),
   chatUpdate: vi.fn(),
@@ -103,19 +104,25 @@ vi.mock('@/lib/mcp/taskContext', () => ({
   buildRoutedMcpTaskContext: mocks.buildRoutedMcpTaskContext,
 }));
 
-vi.mock('./adapters/opencodePersistent', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./adapters/opencodePersistent')>();
-  return {
-    ...actual,
-    bindPersistentOpenCodeQuestionRoute: mocks.bindPersistentOpenCodeQuestionRoute,
-  };
-});
-
 vi.mock('@/features/voice/voiceRouter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/voice/voiceRouter')>();
   return {
     ...actual,
     canVoiceModuleSpeak: () => mocks.voiceCanSpeak,
+  };
+});
+
+vi.mock('./adapters/opencodePersistent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./adapters/opencodePersistent')>();
+  return {
+    ...actual,
+    bindPersistentOpenCodeQuestionRoute: mocks.bindPersistentOpenCodeQuestionRoute,
+    openCodePersistentAdapter: {
+      ...actual.openCodePersistentAdapter,
+      listModels: () => mocks.listOpenCodeModels.getMockImplementation()
+        ? mocks.listOpenCodeModels()
+        : actual.openCodePersistentAdapter.listModels?.(),
+    },
   };
 });
 
@@ -231,6 +238,7 @@ import {
   prependOpenCodePublicTimeline,
   reconcileApprovalContinuationResponse,
   resolveRuntimeReasoningPolicy,
+  resolveCapturedRuntimeReasoningPolicy,
   missingExplicitRootAuditCategories,
   explicitRootAuditQualityIssues,
   runExplicitRootEvidenceSynthesis,
@@ -1155,6 +1163,16 @@ describe('startRuntimeListener agent routing', () => {
     });
   });
 
+  it('resolves automatic native modes from the exact connected model catalog', async () => {
+    const selected = {providerId: 'opencode', connectionId: 'opencode-cli', modelId: 'opencode-go/deepseek-v4-flash-vision-exp'};
+    const list = vi.fn(async () => [{id: selected.modelId, label: 'DeepSeek', variants: ['low', 'high', 'max']}]);
+    for (const [mode, effort] of [['token-saver', 'low'], ['token-final-boss', 'max']] as const) {
+      await expect(resolveCapturedRuntimeReasoningPolicy(selected, {mode, effortOverride: null}, list)).resolves.toMatchObject({selection: selected, mode, resolvedEffort: effort, providerOptions: {}});
+    }
+    await expect(resolveCapturedRuntimeReasoningPolicy(selected, {mode: 'token-saver', effortOverride: null}, async () => [])).rejects.toThrow('unavailable');
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
   it('preserves an explicit-root request verbatim when the Context tool is disabled', () => {
     const message = {
       role: 'user' as const,
@@ -1864,6 +1882,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   beforeEach(() => {
+    mocks.listOpenCodeModels.mockReset();
     vi.clearAllMocks();
     resetDiscoveredConnectionModelsForTests();
     setDiscoveredConnectionModels(GROQ_API_CONNECTION.id, [
@@ -4186,7 +4205,12 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     stop();
   });
 
-  it('dispatches the exact OpenCode Go DeepSeek route through only the federated Context tool', async () => {
+  it.each([
+    { mode: 'normal', requestedEffort: 'medium', expectedEffort: 'medium' },
+    { mode: 'token-saver', requestedEffort: null, expectedEffort: 'low' },
+    { mode: 'token-final-boss', requestedEffort: null, expectedEffort: 'max' },
+  ] as const)('dispatches the exact OpenCode Go DeepSeek route through only the federated Context tool: $mode', async ({ mode, requestedEffort, expectedEffort }) => {
+    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek', variants: ['low', 'medium', 'high', 'max'] }]);
     const openCodeConnection = PROVIDER_CONNECTIONS.find(
       (connection) => connection.id === 'opencode-cli',
     )!;
@@ -4199,7 +4223,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           {
             id: 'deepseek-v4-flash-vision-exp',
             name: 'DeepSeek V4 FLASH Vision Exp',
-            variants: ['medium'],
+            variants: ['low', 'medium', 'high', 'max'],
           },
         ],
       },
@@ -4268,9 +4292,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         detail: {
           chatId,
           text: userText,
-          reasoningPreference: { mode: 'normal', effortOverride: 'medium' },
+          reasoningPreference: { mode, effortOverride: requestedEffort },
           runtimeSettings: {
-            effort: 'medium',
+            effort: requestedEffort ?? 'auto',
             performance: 'quality',
             fastMode: 'off',
             rlmEnabled: true,
@@ -4296,7 +4320,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     // Do not invent a provider-specific wire field for the OpenCode Go namespace.
     expect(providerInput.provider_options).toEqual({});
     expect(providerInput.runtimeSettings).toEqual({
-      effort: 'medium',
+      effort: expectedEffort,
       performance: 'quality',
       fastMode: 'off',
       rlmEnabled: true,
@@ -4311,8 +4335,8 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           provider: 'opencode',
           model: 'opencode-go/deepseek-v4-flash-vision-exp',
           connectionId: 'opencode-cli',
-          reasoningMode: 'normal',
-          reasoningEffort: 'medium',
+          reasoningMode: mode,
+          reasoningEffort: expectedEffort,
           providerVariant: undefined,
           runtimePerformance: 'quality',
         }),
@@ -7167,6 +7191,25 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           ),
       ).toBe(true);
       await providerInput.onPublicTimelineSnapshot?.({
+        finalText: '',
+        timeline: [{ kind: 'reasoning', text: 'Checking both fixture files.' },
+          {kind: 'tool_call', tool: 'edit', call_id: 'edit-fixture', args: {path: 'src/alpha.txt'}},
+          {kind: 'tool_result', call_id: 'edit-fixture', result: {status: 'completed', diff: '-old\n+new'}},
+          {kind: 'tool_call', tool: 'task', call_id: 'task-a', args: {nativeTask: {name: 'Read alpha', sessionId: 'child-a'}}},
+          {kind: 'tool_call', tool: 'task', call_id: 'task-b', args: {nativeTask: {name: 'Read beta', sessionId: 'child-b'}}},
+          {kind: 'tool_result', call_id: 'task-b', error: 'Tool failed'},
+        ],
+      });
+      expect(useChatActivityStore.getState().eventsByChat[harness.chatId]).toEqual(
+        expect.arrayContaining([expect.objectContaining({
+          category: 'thinking', title: 'Thinking', detail: 'Checking both fixture files.', status: 'running',
+        }), expect.objectContaining({
+          filePath: 'src/alpha.txt', diff: '-old\n+new', addedLines: 1, removedLines: 1, status: 'done',
+        })]),
+      );
+      expect(useChatActivityStore.getState().eventsByChat[harness.chatId]?.filter(event => event.nativeTask)
+        .map(event => [event.nativeTask?.sessionId, event.status])).toEqual([['child-a', 'running'], ['child-b', 'error']]);
+      await providerInput.onPublicTimelineSnapshot?.({
         finalText: 'The installed kernel host returned a partial response, Sir.',
         timeline: [
           { kind: 'text', text: 'I inspected the project first.' },
@@ -7187,7 +7230,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         useChatActivityStore
           .getState()
           .eventsByChat[harness.chatId]?.filter((event) => event.kind === 'tool'),
-      ).toEqual([expect.objectContaining({ status: 'done', subtitle: 'game.js' })]);
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'done', subtitle: 'game.js' }), expect.objectContaining({ status: 'done', subtitle: 'src/alpha.txt' })]));
       providerInput.onChunk?.({
         delta: 'The installed kernel host returned a partial response, Sir.',
         done: false,
@@ -7269,6 +7312,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         .where('chat_id')
         .equals(harness.chatId)
         .first();
+      expect(persistedAssistant?.usage?.execution).toMatchObject({ mode: 'normal' });
       expect(persistedAssistant?.parts.slice(0, 4)).toEqual([
         { kind: 'text', text: 'I inspected the project first.' },
         {
@@ -7293,6 +7337,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         openCodeToolsForInteractionMode('agent', providerInput.messages),
       );
       expect(providerInput.compiledPrompt.systemText).toContain('strict JARVIS identity');
+      expect(providerInput.compiledPrompt.systemText).toContain('## Reasoning mode: Normal');
       expect(providerInput.compiledPrompt.systemText).not.toContain('LEGACY SYSTEM PROMPT');
       expect(providerInput.agent.system_prompt).toContain('LEGACY SYSTEM PROMPT');
       const contextInput = mocks.buildJarvisContextPackForAi.mock.calls.at(-1)?.[0] as
