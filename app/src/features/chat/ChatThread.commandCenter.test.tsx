@@ -166,6 +166,17 @@ describe('ChatThread Command Center routing', () => {
     } finally { useAuthStore.setState({ localUserId: auth.localUserId, cloudSession: auth.cloudSession }); }
   });
 
+  it('keeps the completed receipt model when the next composer selection changes', async () => {
+    const previous = useAuthStore.getState().chatModelSelection;
+    useAuthStore.setState({ chatModelSelection: { mode: 'single', providerId: 'openai', modelId: 'next-model' } });
+    try {
+      const currentBinding = binding([canonicalRun({ status: 'completed' })]);
+      render(<JarvisCommandCenterProvider value={currentBinding}><ChatThread chatId="chat-1" /></JarvisCommandCenterProvider>);
+      await screen.findByTitle('model-1');
+      expect(screen.queryByTitle('next-model')).toBeNull();
+    } finally { act(() => useAuthStore.setState({ chatModelSelection: previous })); }
+  });
+
   it('reopens an ordinary failed request for review without invoking scheduled retry or sending', async () => {
     const auth = useAuthStore.getState();
     useAuthStore.setState({ localUserId: 'account-1', cloudSession: null });

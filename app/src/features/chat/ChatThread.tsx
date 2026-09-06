@@ -274,7 +274,6 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
     ),
   );
 
-  const chatModelSelection = useAuthStore((state) => state.chatModelSelection);
   const hasCanonicalRun = hasProjectedCanonicalRun || Boolean(currentCanonicalRun);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyRef = useRef(true);
@@ -325,13 +324,13 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
     return {
       status: requiresManualRecovery ? 'blocked' : status,
       currentOperation: requiresManualRecovery ? 'Interrupted · outcome unknown' : status.replaceAll('_', ' '),
-      model: selectedModelPreview(chatModelSelection, currentCanonicalRun.model?.modelId),
+      model: currentCanonicalRun.model?.modelId,
       startedAt: currentCanonicalRun.createdAt,
       endedAt: /done|complete|success|failed|error|cancelled/i.test(status)
         ? currentCanonicalRun.updatedAt
         : undefined,
     };
-  }, [chatModelSelection, currentCanonicalRun, requiresManualRecovery]);
+  }, [currentCanonicalRun, requiresManualRecovery]);
   const agenticActions = useMemo(() => {
     const run = currentCanonicalRun;
     const binding = commandCenterBinding;
