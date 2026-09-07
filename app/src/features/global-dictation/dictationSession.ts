@@ -271,6 +271,9 @@ export async function createSelectedSttSession(
     onFinal: (text) => {
       if (isCurrent()) events.onFinal?.(text);
     },
+    onTurnEnd: () => {
+      if (isCurrent()) events.onTurnEnd?.();
+    },
     onLevel: (level) => {
       if (isCurrent()) events.onLevel?.(level);
     },

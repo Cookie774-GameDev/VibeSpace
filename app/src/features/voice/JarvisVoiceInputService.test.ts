@@ -24,6 +24,7 @@ describe('JarvisVoiceInputService', () => {
       onOpen?: () => void;
       onPartial?: (text: string) => void;
       onFinal?: (text: string) => void;
+      onTurnEnd?: () => void;
       onClose?: () => void;
     } = {};
     const session = {
@@ -43,9 +44,11 @@ describe('JarvisVoiceInputService', () => {
     const starts = vi.fn();
     const partials = vi.fn();
     const finals = vi.fn();
+    const turnEnds = vi.fn();
     service.on('voice:start', starts);
     service.on('voice:partial', partials);
     service.on('voice:final', finals);
+    service.on('voice:turn-end', turnEnds);
 
     expect(service.startListening()).toBe(true);
     expect(service.startListening()).toBe(true);
@@ -57,6 +60,8 @@ describe('JarvisVoiceInputService', () => {
 
     events.onPartial?.('hello');
     events.onFinal?.('hello Jarvis');
+    events.onTurnEnd?.();
+    expect(turnEnds).toHaveBeenCalledOnce();
     expect(starts).toHaveBeenCalledOnce();
     expect(partials).toHaveBeenCalledWith({ text: 'hello' });
     expect(finals).toHaveBeenCalledWith({ text: 'hello Jarvis' });
@@ -64,6 +69,9 @@ describe('JarvisVoiceInputService', () => {
     service.stopListening();
     await vi.waitFor(() => expect(session.stop).toHaveBeenCalledOnce());
     expect(service.wantsListening()).toBe(false);
+    service.cancelListening();
+    events.onTurnEnd?.();
+    expect(turnEnds).toHaveBeenCalledOnce();
   });
 
   it('cancels a pending selected session without finalizing or emitting transcript', async () => {

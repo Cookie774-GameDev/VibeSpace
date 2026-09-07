@@ -205,6 +205,26 @@ describe('createGlobalDictationSession engine resolution', () => {
     first.cancel();
   });
 
+  it('forwards confirmed turn completion only from the current selected session', async () => {
+    mocks.composer.provider = 'deepgram';
+    mocks.deepgramKey.value = 'disposable-test-key';
+    const onTurnEnd = vi.fn();
+    const first = await createSelectedSttSession({ onTurnEnd });
+    const firstEvents = (mocks.deepgramSession.mock.calls.at(-1) as unknown as [
+      { onTurnEnd?: () => void },
+    ])[0];
+    firstEvents.onTurnEnd?.();
+    expect(onTurnEnd).toHaveBeenCalledOnce();
+    const replacement = await createSelectedSttSession({}, { supersedeActive: true, requester: 'jarvis-voice' });
+    try {
+      firstEvents.onTurnEnd?.();
+      expect(onTurnEnd).toHaveBeenCalledOnce();
+    } finally {
+      first.cancel();
+      replacement.cancel();
+    }
+  });
+
   it('cancels a late pending capture after an explicit voice handoff supersedes it', async () => {
     mocks.composer.provider = 'faster-whisper';
     mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);

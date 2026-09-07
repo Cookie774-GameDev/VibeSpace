@@ -53,6 +53,22 @@ describe('deepgramListenUrl', () => {
 vi.mock('@/lib/security/voiceKeys', () => ({ getDeepgramVoiceKey: async () => 'disposable-test-key' }));
 
 describe('Deepgram capture and finalization ownership', () => {
+  it('reports confirmed Flux turn end after its final transcript, never for eager guesses', async () => {
+    const order: string[] = [];
+    const session = await createDeepgramDictationSession({
+      onFinal: (text) => order.push(text),
+      onTurnEnd: () => order.push('turn-end'),
+    }, 'flux-en');
+    const socket = sockets[0]!;
+    socket.open();
+    try {
+      socket.onmessage?.({ data: JSON.stringify({ type: 'TurnInfo', event: 'EagerEndOfTurn', transcript: 'hello' }) } as MessageEvent);
+      expect(order).toEqual([]);
+      socket.onmessage?.({ data: JSON.stringify({ type: 'TurnInfo', event: 'EndOfTurn', transcript: 'hello' }) } as MessageEvent);
+      expect(order).toEqual(['hello', 'turn-end']);
+    } finally { session.cancel(); }
+  });
+
   let sockets: SocketFixture[];
   let stopTrack: ReturnType<typeof vi.fn>;
   let closeContext: ReturnType<typeof vi.fn>;

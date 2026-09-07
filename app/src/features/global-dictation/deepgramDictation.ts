@@ -12,6 +12,8 @@ export interface DictationEvents {
   onOpen?: () => void;
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
+  /** Confirmed provider turn completion, delivered after the final transcript. */
+  onTurnEnd?: () => void;
   onLevel?: (level: number) => void;
   onError?: (message: string) => void;
   onClose?: () => void;
@@ -192,6 +194,10 @@ export async function createDeepgramDictationSession(
       if (parsed.kind === 'final') {
         lastFinal = (lastFinal + ' ' + parsed.transcript).trim();
         events.onFinal?.(parsed.transcript);
+        const turn = payload as { type?: unknown; event?: unknown };
+        if (!closed && turn.type === 'TurnInfo' && turn.event === 'EndOfTurn') {
+          events.onTurnEnd?.();
+        }
       } else if (parsed.kind === 'partial') events.onPartial?.(parsed.transcript);
     };
     socket.onerror = () => fail('Deepgram dictation connection failed.');

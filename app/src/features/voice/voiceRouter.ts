@@ -59,8 +59,9 @@ export function syncVoiceModuleOpenState(isOpen: boolean): void {
     if (!voiceModuleMarkedOpen) {
       voiceModuleMarkedOpen = true;
       activeVoiceSessionId += 1;
-      TtsService.setProvider('jarvis_local');
-      void ensureJarvisReadyForSpeech();
+      // Warm only the selected engine. Actual speech owns failure reporting;
+      // an optional warmup must not reject into the window's error handler.
+      void warmVoiceEngine(useAuthStore.getState().voiceEngine ?? 'jarvis').catch(() => undefined);
     }
     return;
   }
@@ -441,9 +442,7 @@ export async function speakWithSettings(
   if (!options.allowBackground && !canVoiceModuleSpeak()) return;
 
   const state = useAuthStore.getState();
-  const engine = canVoiceModuleSpeak()
-    ? 'jarvis'
-    : (options.voiceEngine ?? state.voiceEngine ?? 'jarvis');
+  const engine = options.voiceEngine ?? state.voiceEngine ?? 'jarvis';
   const voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
 

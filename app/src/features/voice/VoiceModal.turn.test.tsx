@@ -972,6 +972,47 @@ describe('VoiceModal hands-free turn-taking', () => {
     window.removeEventListener('jarvis:send', send as EventListener);
   });
 
+  it('submits a confirmed provider turn immediately in click-to-talk mode', async () => {
+    useAuthStore.setState({ voiceAutoListenOnOpen: false, voiceSilenceDelayMs: 60_000 });
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    try {
+      render(<VoiceModal />);
+      fireEvent.click(screen.getByRole('button', { name: /click to talk/i }));
+      act(() => {
+        emitVoice('voice:final', { text: 'What is two plus two?' });
+        emitVoice('voice:turn-end');
+        emitVoice('voice:turn-end');
+      });
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      expect(messageRepo.create).toHaveBeenCalledOnce();
+      expect((send.mock.calls[0][0] as CustomEvent).detail.text).toBe('What is two plus two?');
+    } finally {
+      window.removeEventListener('jarvis:send', send as EventListener);
+    }
+  });
+
+  it('does not bypass hands-free commit phrase on provider turn end', async () => {
+    render(<VoiceModal />);
+    act(() => {
+      emitVoice('voice:final', { text: 'Keep this as a draft' });
+      emitVoice('voice:turn-end');
+    });
+    expect(messageRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves the configured hands-free pause on provider turn end', async () => {
+    vi.useFakeTimers();
+    useAuthStore.setState({ voiceEndTrigger: 'silence', voiceSilenceDelayMs: 60_000 });
+    render(<VoiceModal />);
+    act(() => {
+      emitVoice('voice:final', { text: 'Wait for my configured pause' });
+      emitVoice('voice:turn-end');
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(messageRepo.create).not.toHaveBeenCalled();
+  });
+
   it('disables the listening timeout while send-it mode is active', async () => {
     render(<VoiceModal />);
 

@@ -836,6 +836,12 @@ function VoiceModalPanel() {
           auth.voiceSilenceDelayMs,
         );
       }),
+      VoiceService.on('voice:turn-end', () => {
+        if (!listeningArmedRef.current || turnBusyRef.current) return;
+        // Click-to-talk can trust a confirmed provider endpoint. Hands-free
+        // retains the user's explicit phrase gate or configured pause duration.
+        if (!useAuthStore.getState().voiceAutoListenOnOpen) flushUtterance();
+      }),
       VoiceService.on('voice:error', ({ kind, message }) => {
         setCapturePending(false);
         if (!listeningArmedRef.current && useVoiceStore.getState().state === 'paused') return;

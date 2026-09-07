@@ -66,6 +66,7 @@ export type VoiceEventMap = {
   'voice:end': void;
   'voice:partial': { text: string };
   'voice:final': { text: string };
+  'voice:turn-end': void;
   'voice:timeout': { reason: string };
   'voice:error': { kind: VoiceErrorKind; message: string };
 };

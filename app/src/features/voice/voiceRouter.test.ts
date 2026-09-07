@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
+import { preloadSpeechVoices } from './speechSynthesis';
+import { TtsService } from './TtsService';
 
 const h = vi.hoisted(() => {
   let speakResolve: (() => void) | null = null;
@@ -105,6 +107,19 @@ import {
 } from './voiceRouter';
 
 describe('voiceRouter preview cancellation', () => {
+  it('warms the selected system voice without bootstrapping an unrelated local model', async () => {
+    syncVoiceModuleOpenState(false);
+    vi.clearAllMocks();
+    useAuthStore.setState({ voiceEngine: 'system' });
+    syncVoiceModuleOpenState(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(preloadSpeechVoices).toHaveBeenCalledWith('system');
+    expect(h.ensureJarvisReady).not.toHaveBeenCalled();
+    expect(TtsService.setProvider).not.toHaveBeenCalledWith('jarvis_local');
+    syncVoiceModuleOpenState(false);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     voiceModalOpen = true;
@@ -234,7 +249,7 @@ describe('voice module gate', () => {
     expect(h.speakText).toHaveBeenCalledTimes(1);
   });
 
-  it('routes Jarvis output through Jarvis High even when Settings still lists another engine', async () => {
+  it('honors the selected system engine while the voice panel is open', async () => {
     voiceModalOpen = true;
     syncVoiceModuleOpenState(true);
     useAuthStore.setState({
@@ -242,10 +257,23 @@ describe('voice module gate', () => {
       voicePreset: 'jarvis-prime',
       speakReplies: false,
     });
+    vi.clearAllMocks();
     h.speakText.mockResolvedValue(undefined);
     await speakWithSettings('Hello from Jarvis.');
-    expect(h.ensureJarvisReady).toHaveBeenCalled();
-    expect(h.speakText).toHaveBeenCalledTimes(1);
+    expect(h.ensureJarvisReady).not.toHaveBeenCalled();
+    expect(h.speakText).toHaveBeenCalledWith('Hello from Jarvis.', {
+      voicePreset: 'jarvis-prime', engine: 'system',
+    });
+  });
+
+  it('honors the selected Deepgram engine while the voice panel is open', async () => {
+    useAuthStore.setState({ voiceEngine: 'deepgram' });
+    vi.clearAllMocks();
+    await speakWithSettings('Use my selected voice.');
+    expect(TtsService.setProvider).toHaveBeenCalledWith('deepgram_tts');
+    expect(TtsService.speak).toHaveBeenCalledWith('Use my selected voice.');
+    expect(h.ensureJarvisReady).not.toHaveBeenCalled();
+    expect(h.speakText).not.toHaveBeenCalled();
   });
 });
 
@@ -256,7 +284,7 @@ describe('voice module lifecycle', () => {
     voiceModalOpen = true;
     syncVoiceModuleOpenState(true);
     registerActiveStreamingVoiceSession(null);
-    useAuthStore.setState({ speakReplies: false });
+    useAuthStore.setState({ speakReplies: false, voiceEngine: 'system' });
   });
 
   afterEach(async () => {
