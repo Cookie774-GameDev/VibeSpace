@@ -1,0 +1,38 @@
+{
+  "scope": "isolated extracted helper plus modeled handler ordering; not native/provider reproduction",
+  "helperSourceStartLine": 6176,
+  "currentPattern": {
+    "pending": 1,
+    "updates": 0,
+    "completed": false
+  },
+  "predecessorSnapshotModel": {
+    "pending": 0,
+    "updates": 1,
+    "completed": true
+  },
+  "scenariosNotAppBenchmarks": {
+    "syncQueue": {
+      "pendingRows": 20000,
+      "matchingRows": 1,
+      "candidateVisitReductionPercent": 99.995
+    },
+    "codexFrames": {
+      "maxFrameMiB": 4,
+      "channelSlots": 256,
+      "encodedPayloadCeilingMiB": 1024,
+      "proposedBudgetMiB": 16,
+      "ceilingReductionPercent": 98.4375
+    },
+    "terminal": {
+      "oldBatchKiB": 4,
+      "fullProposedBatchKiB": 64,
+      "fullBatchEventReductionPercent": 93.75
+    },
+    "history": {
+      "totalMessages": 20000,
+      "displayedMessages": 400,
+      "initialRowReductionPercent": 98
+    }
+  }
+}
