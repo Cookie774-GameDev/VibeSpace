@@ -184,3 +184,20 @@ describe('trainingRuntime', () => {
     });
   });
 });
+
+describe('concurrent worker readiness', () => {
+  it('shares an in-flight inspection between the page and wizard, then refreshes', async () => {
+    let complete!: (value: unknown) => void;
+    const invoke = vi.fn<TrainingRuntimeInvoke>().mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const first = getLocalTrainingWorkerStatus({ native: true, invoke });
+    const second = getLocalTrainingWorkerStatus({ native: true, invoke });
+    await Promise.resolve();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    complete({ installed: true, attested: true, protocol: 1, methods: ['full'], modalities: ['text'], precisions: ['fp32'] });
+    expect((await first).methods).toEqual(['full']);
+    expect((await second).methods).toEqual(['full']);
+    invoke.mockResolvedValue({ installed: false, methods: [] });
+    expect((await getLocalTrainingWorkerStatus({ native: true, invoke })).installed).toBe(false);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+});

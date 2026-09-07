@@ -273,9 +273,9 @@ fn weight_training_requirements(method: &str, parameters_b: f64) -> WeightTraini
             storage_gb: (parameters_b * 12.0).max(12.0).ceil(),
         },
         _ => WeightTrainingRequirements {
-            vram_gb: (parameters_b * 16.0).max(12.0).ceil(),
-            ram_gb: (parameters_b * 32.0).max(32.0).ceil(),
-            storage_gb: (parameters_b * 40.0).max(30.0).ceil(),
+            vram_gb: (parameters_b * 16.0).max(4.0).ceil(),
+            ram_gb: (parameters_b * 32.0).max(8.0).ceil(),
+            storage_gb: (parameters_b * 40.0).max(4.0).ceil(),
         },
     }
 }
@@ -2689,6 +2689,26 @@ mod tests {
             .contains("managed storage"));
         hardware.free_storage_gb = 12.0;
         validate_weight_hardware("qlora", &hardware, qlora).unwrap();
+    }
+
+    #[test]
+    fn smallest_full_model_fits_cpu_without_weakening_larger_model_limits() {
+        let small = weight_training_requirements("full", 0.135);
+        assert_eq!(small.ram_gb, 8.0);
+        let mut hardware = FoundryHardwareProfile {
+            cpu: "test".into(), gpu: None, ram_gb: 16.0, vram_gb: 0.0,
+            free_storage_gb: 6.0, os: "test".into(), accelerators: vec![],
+            storage_root: "D:\\Foundry".into(), recommended_storage_root: None,
+        };
+        validate_weight_hardware("full", &hardware, small).unwrap();
+        hardware.ram_gb = 7.0;
+        assert!(validate_weight_hardware("full", &hardware, small).is_err());
+        hardware.ram_gb = 16.0;
+        hardware.free_storage_gb = 5.0;
+        assert!(validate_weight_hardware("full", &hardware, small).is_err());
+        let large = weight_training_requirements("full", 7.0);
+        assert_eq!(large.ram_gb, 224.0);
+        assert_eq!(large.storage_gb, 280.0);
     }
 
     #[test]

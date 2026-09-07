@@ -38,6 +38,7 @@ static ACTIVE_INFERENCE: LazyLock<Mutex<BTreeMap<String, Arc<Mutex<Child>>>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 static ACTIVE_MODEL_DOWNLOAD: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 static MODEL_STORAGE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static TRAINING_RUNTIME_SETUP: Mutex<()> = Mutex::new(());
 static MODEL_DOWNLOAD_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn foundry_storage_busy() -> Result<bool, String> {
@@ -1448,10 +1449,15 @@ fn install_training_model(
 }
 
 #[tauri::command]
-pub fn model_foundry_training_worker_status(
+pub async fn model_foundry_training_worker_status(
     app: tauri::AppHandle,
 ) -> Result<TrainingWorkerStatus, String> {
-    Ok(inspect_worker(&training_root(&app)?))
+    tauri::async_runtime::spawn_blocking(move || {
+        let _setup_guard = claim_training_runtime_setup()?;
+        Ok(inspect_worker(&training_root(&app)?))
+    })
+    .await
+    .map_err(|error| format!("Model Foundry status worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1539,10 +1545,17 @@ pub fn model_foundry_remove_training_model(
     Ok(training_model_status(&root, model))
 }
 
+fn claim_training_runtime_setup() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    TRAINING_RUNTIME_SETUP.try_lock().map_err(|_| {
+        "Training runtime setup is already running. Wait for it to finish before starting setup again.".to_string()
+    })
+}
+
 fn install_training_runtime(
     app: &tauri::AppHandle,
     include_qlora: bool,
 ) -> Result<TrainingWorkerStatus, String> {
+    let _setup_guard = claim_training_runtime_setup()?;
     let root = training_root(app)?;
     fs::create_dir_all(&root)
         .map_err(|error| format!("Could not create the private training directory: {error}"))?;
@@ -2084,6 +2097,14 @@ pub(crate) fn cancel_training_worker(job_id: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn training_setup_rejects_overlap_and_releases_after_completion() {
+        let first = claim_training_runtime_setup().unwrap();
+        assert!(claim_training_runtime_setup().unwrap_err().contains("already running"));
+        drop(first);
+        assert!(claim_training_runtime_setup().is_ok());
+    }
 
     #[test]
     fn pinned_runtime_profiles_are_hash_locked_and_do_not_force_cpu_torch() {

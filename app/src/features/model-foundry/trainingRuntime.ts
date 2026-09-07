@@ -131,15 +131,22 @@ async function nativeInvoke(options: TrainingRuntimeOptions): Promise<TrainingRu
   return invoke as TrainingRuntimeInvoke;
 }
 
+const pendingInspections = new WeakMap<TrainingRuntimeInvoke, Promise<LocalTrainingWorkerStatus>>();
+
 export async function getLocalTrainingWorkerStatus(
   options: TrainingRuntimeOptions = {},
 ): Promise<LocalTrainingWorkerStatus> {
   const native = options.native ?? isTauri;
   if (!native) return { ...WEB_STATUS };
   const invoke = await nativeInvoke(options);
-  return normalizeStatus(
-    (await invoke('model_foundry_training_worker_status')) as NativeTrainingWorkerStatus,
-  );
+  let pending = pendingInspections.get(invoke);
+  if (!pending) {
+    pending = invoke('model_foundry_training_worker_status')
+      .then((status) => normalizeStatus(status as NativeTrainingWorkerStatus))
+      .finally(() => pendingInspections.delete(invoke));
+    pendingInspections.set(invoke, pending);
+  }
+  return pending;
 }
 
 export async function installLocalTrainingWorker(

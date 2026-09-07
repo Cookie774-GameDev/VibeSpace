@@ -78,6 +78,8 @@ describe('BuildYourOwnAIHub', () => {
   it('explains document and labeled media training without claiming media generation', () => {
     render(<BuildYourOwnAIHub open onOpenChange={vi.fn()} />);
 
+    expect(screen.getByRole('textbox', { name: 'Purpose' })).toBeTruthy();
+
     expect(screen.getByText(/PDF and DOCX text are extracted locally/i)).toBeTruthy();
     expect(
       screen.getByText(/Scanned\/image-only PDFs need a verified OCR processor/i),

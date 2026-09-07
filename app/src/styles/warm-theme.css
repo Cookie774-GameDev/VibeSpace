@@ -1523,35 +1523,35 @@ html[data-theme='warm']
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-canvas'] aside > section:nth-child(1) {
-  min-height: 242px;
+  min-height: 0;
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-canvas'] aside > section:nth-child(2) {
-  min-height: 128px;
+  min-height: 0;
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-canvas'] aside > section:nth-child(3) {
-  min-height: 150px;
+  min-height: 0;
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-canvas'] aside > section:nth-child(4) {
-  min-height: 92px;
+  min-height: 0;
 }
 
 html[data-theme='warm'] [data-warm-region='model-foundry-primary'] {
-  padding-top: 28px;
+  padding-top: 4px;
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-overview'] {
-  row-gap: 40px;
+  row-gap: 20px;
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-overview'] > :nth-child(2) {
-  margin-top: 44px !important;
+  margin-top: 20px !important;
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-overview'] > :nth-child(3) {
-  margin-top: 25px !important;
+  margin-top: 20px !important;
 }
 
 html[data-theme='warm'] [data-warm-surface='model-foundry-overview'] h1 {

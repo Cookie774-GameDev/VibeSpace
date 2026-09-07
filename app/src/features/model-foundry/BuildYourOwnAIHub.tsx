@@ -933,8 +933,9 @@ export function BuildYourOwnAIHub({
                   Default behavior is optional and remains separate from training.
                 </p>
               </div>
-              <Label>Purpose</Label>
+              <Label htmlFor="foundry-purpose">Purpose</Label>
               <Textarea
+                id="foundry-purpose"
                 value={purpose}
                 onChange={(event) => setPurpose(event.target.value)}
                 placeholder="A coding specialist for this repository…"

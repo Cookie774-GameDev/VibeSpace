@@ -18,7 +18,7 @@ const DialogOverlay = React.forwardRef<
     ref={ref}
     className={cn(
       'fixed inset-0 z-50 bg-black/70 backdrop-blur-sm',
-      'data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out',
+      'data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out motion-reduce:animate-none',
       className,
     )}
     {...props}
@@ -41,16 +41,16 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border border-border bg-elevated p-6 shadow-2xl rounded-lg',
-        'data-[state=open]:animate-scale-in data-[state=closed]:animate-fade-out',
+        'fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain -translate-x-1/2 -translate-y-1/2 gap-4 border border-border bg-elevated p-5 sm:p-6 shadow-2xl rounded-xl',
+        'data-[state=open]:animate-scale-in data-[state=closed]:animate-fade-out motion-reduce:animate-none',
         className,
       )}
       {...props}
     >
       {children}
       {!hideClose && (
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus:ring-1 focus:ring-ring">
-          <X className="h-4 w-4" />
+        <DialogPrimitive.Close className="absolute right-3 top-3 z-30 grid h-8 w-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <X className="h-4 w-4" aria-hidden="true" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
       )}
@@ -65,7 +65,7 @@ const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
 DialogHeader.displayName = 'DialogHeader';
 
 const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-row justify-end gap-2', className)} {...props} />
+  <div className={cn('flex flex-row flex-wrap justify-end gap-2', className)} {...props} />
 );
 DialogFooter.displayName = 'DialogFooter';
 

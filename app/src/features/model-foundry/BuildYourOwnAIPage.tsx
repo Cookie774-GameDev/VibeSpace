@@ -105,7 +105,7 @@ function Blueprint() {
           No cloud upload
         </span>
       </div>
-      <div className="relative grid gap-3 md:grid-cols-4">
+      <div className="relative grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))]">
         {stages.map((stage, index) => {
           const Icon = stage.icon;
           return (
@@ -122,13 +122,7 @@ function Blueprint() {
                 <h3 className="font-medium text-foreground">{stage.label}</h3>
                 <p className="mt-1 text-secondary text-muted-foreground">{stage.detail}</p>
               </div>
-              {index < stages.length - 1 ? (
-                <ChevronRight
-                  aria-hidden
-                  className="absolute top-1/2 z-[2] hidden h-4 w-4 -translate-y-1/2 text-accent-copper md:block"
-                  style={{ left: `${(index + 1) * 25 - 0.7}%` }}
-                />
-              ) : null}
+
             </React.Fragment>
           );
         })}
@@ -168,7 +162,7 @@ function Overview({
         </Button>
       </div>
 
-      <Blueprint />
+
 
       <section aria-labelledby="foundry-paths-heading">
         <div className="mb-3 flex items-center justify-between">
@@ -183,7 +177,7 @@ function Overview({
             Compare methods
           </button>
         </div>
-        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,210px),1fr))]">
           {[
             {
               title: 'Add knowledge',
@@ -221,7 +215,7 @@ function Overview({
               aria-label={`${method.technical}: ${method.title}`}
               onClick={() => onChooseMethod(method.method)}
             >
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="rounded-full bg-muted px-2 py-1 font-mono text-metadata text-muted-foreground">
                   {method.technical}
                 </span>
@@ -246,6 +240,8 @@ function Overview({
           ))}
         </div>
       </section>
+
+      <Blueprint />
 
       {completed.length ? (
         <section className="rounded-xl border border-border bg-card p-4">
@@ -515,7 +511,7 @@ export function BuildYourOwnAIPage() {
       data-warm-surface="model-foundry-canvas"
     >
       <div
-        className="mx-auto grid min-h-full max-w-[1680px] gap-4 p-3 lg:grid-cols-[235px_minmax(0,1fr)] xl:grid-cols-[235px_minmax(0,1fr)_280px] xl:gap-8 xl:p-[22px]"
+        className="mx-auto grid min-h-full max-w-[1680px] gap-4 p-3 lg:grid-cols-[180px_minmax(0,1fr)] xl:grid-cols-[180px_minmax(0,1fr)_220px] xl:gap-6 xl:p-[22px]"
         data-warm-surface="model-foundry-content"
       >
         <div
