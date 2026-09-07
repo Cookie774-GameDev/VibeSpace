@@ -75,9 +75,10 @@ describe('JarvisEdgeAura', () => {
   });
 
   it('accepts native Rust Option nulls without hiding a live screen-edge Aura', () => {
-    const decoded = normalizeAmbientSnapshot({ ...listening, active: true, transientUntil: null });
+    const decoded = normalizeAmbientSnapshot({ ...listening, active: true, sessionId: null, transientUntil: null });
     expect(decoded).toMatchObject({ revision: 4, state: 'listening', energy: 0.72, active: true });
     expect(decoded.transientUntil).toBeUndefined();
+    expect(decoded.sessionId).toBeUndefined();
     expect(Object.isFrozen(decoded)).toBe(true);
     expect(normalizeAmbientSnapshot({ ...listening, active: false, transientUntil: null })).toMatchObject({ active: false, revision: 4 });
   });

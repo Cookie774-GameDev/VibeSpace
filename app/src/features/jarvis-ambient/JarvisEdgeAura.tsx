@@ -18,6 +18,7 @@ export function normalizeAmbientSnapshot(value: unknown): JarvisAmbientSnapshot 
   // before strict validation; never coerce required fields or visibility intent.
   const candidate = { ...value } as Record<string, unknown>;
   if (candidate.transientUntil === null) delete candidate.transientUntil;
+  if (candidate.sessionId === null) delete candidate.sessionId;
   return isJarvisAmbientSnapshot(candidate) ? Object.freeze(candidate) : IDLE_SNAPSHOT;
 }
 
