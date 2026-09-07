@@ -76,6 +76,7 @@ describe('parseJarvisPlanBlocks', () => {
       plan: {
         title: 'Review plan',
         summary: '1. Inspect files\n2. Add tests',
+        steps: [],
         status: 'pending',
       },
     });

@@ -42,6 +42,13 @@ const PLAN_ONLY_RE = /\b(?:plan|roadmap|proposal|architecture)\b[\s\S]{0,80}\b(?
 const BRAINSTORM_RE = /\b(?:brainstorm|ideas?|names?|concepts?|options?)\b/i;
 const INFORMATIONAL_RE = /^(?:what|why|who|when|where|how|explain|summarize|translate|compare|list)\b/i;
 
+export function isExplicitPlanRequest(text: string): boolean {
+  // A plan filename or a request to execute the plan still authorizes mutation.
+  if (/\b(?:plan|roadmap|proposal)\.[a-z0-9]+\b/iu.test(text) ||
+      /\b(?:and|then)\s+(?:then\s+)?(?:implement|build|execute|create|edit|write|run)\b/iu.test(text)) return false;
+  return /^\s*(?:please\s+)?(?:plan\b|(?:give|create|draft|prepare|provide|make|write|redo|revise)\b[\s\S]{0,80}\b(?:plan|roadmap|proposal)\b)/iu.test(text);
+}
+
 function result(kind: JarvisIntentKind, patch: Partial<JarvisIntent> = {}): JarvisIntent {
   const mutating = ['file-create', 'file-edit', 'project-build', 'command-run', 'implementation', 'destructive'].includes(kind);
   return {
@@ -85,7 +92,7 @@ export function classifyJarvisIntent(input: JarvisIntentInput): JarvisIntent {
       destination,
     });
   }
-  if (PLAN_ONLY_RE.test(text)) {
+  if (isExplicitPlanRequest(text) || PLAN_ONLY_RE.test(text)) {
     return result('plan-only', { confidence: 0.94, reasons: ['explicit plan-only request'], destination });
   }
   if (FILE_EDIT_RE.test(text)) {

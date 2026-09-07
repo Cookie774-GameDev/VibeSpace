@@ -136,6 +136,28 @@ async function settleComposerEffects() {
 }
 
 describe('ChatView handoff workspace integration', () => {
+  it('does not revert a newly selected persisted chat while the live list catches up', async () => {
+    testState.liveChats = [chats[0]];
+    const view = render(<ChatView />);
+    await screen.findByTestId('thread-chat-1');
+    act(() => useUIStore.getState().setActiveChat('chat-2'));
+    await settleComposerEffects();
+    expect(useUIStore.getState().activeChatId).toBe('chat-2');
+    testState.liveChats = chats;
+    view.rerender(<ChatView />);
+    await screen.findByTestId('thread-chat-2');
+    expect(screen.queryByTestId('thread-chat-1')).toBeNull();
+  });
+
+  it('switches the mounted pane when the selected chat changes without retaining the old layout', async () => {
+    render(<ChatView />);
+    await screen.findByTestId('thread-chat-1');
+    act(() => useUIStore.getState().setActiveChat('chat-2'));
+    await waitFor(() => expect(screen.queryByTestId('thread-chat-1')).toBeNull());
+    expect(screen.getByTestId('thread-chat-2')).toBeTruthy();
+    expect(useUIStore.getState().activeChatId).toBe('chat-2');
+  });
+
   beforeEach(() => {
     localStorage.clear();
     testState.liveChats = chats;

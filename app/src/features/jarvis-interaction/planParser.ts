@@ -64,17 +64,15 @@ function asPlan(value: unknown, index: number): JarvisPlanReview | null {
 
 function forcedPlan(text: string): Part {
   const cleaned = cleanPlanText(text) || 'Review the request and confirm the next safe steps.';
-  const lines = cleaned
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
   return {
     kind: 'plan_review',
     plan: {
       id: `plan_${Date.now()}`,
       title: 'Review plan',
       summary: cleaned,
-      steps: lines.length > 1 ? lines : [cleaned],
+      // Prose already contains its steps. Do not repeat the whole plan below
+      // the summary; structured provider plans still render their step list.
+      steps: [],
       executable: isExecutablePlanText(cleaned),
       status: 'pending',
     },

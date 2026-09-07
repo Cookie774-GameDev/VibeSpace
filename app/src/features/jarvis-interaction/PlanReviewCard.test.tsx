@@ -55,6 +55,17 @@ describe('PlanReviewCard', () => {
     repo.create.mockResolvedValue({});
   });
 
+  it('adds a requirement while preserving the original plan in a read-only revision', async () => {
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Plan' }));
+    fireEvent.change(screen.getByPlaceholderText('What should Jarvis add to the plan?'), {target:{value:'Add keyboard navigation.'}});
+    fireEvent.click(screen.getByRole('button', { name: 'Send Revision' }));
+    await waitFor(() => expect(window.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type:'jarvis:send', detail:expect.objectContaining({interactionMode:'plan', text:expect.stringContaining('Preserve the existing requirements and add: Add keyboard navigation.'),
+        structuredContext:expect.objectContaining({kind:'plan_redo',payload:expect.objectContaining({plan:planPart.plan})})}),
+    })));
+  });
+
   it('implements an approved plan by switching to Agent Mode and dispatching execution context', async () => {
     useJarvisInteractionStore.getState().setChatMode('chat_1' as never, 'plan');
     render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);

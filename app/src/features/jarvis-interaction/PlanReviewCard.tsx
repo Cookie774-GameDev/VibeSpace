@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ClipboardList, RotateCcw, XCircle } from 'lucide-react';
+import { ClipboardList, Plus, RotateCcw, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { messageRepo } from '@/lib/db/repositories';
 import type { MessageId, Part } from '@/types';
@@ -43,6 +43,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
   const canExecute = plan.executable !== false;
   const [redoOpen, setRedoOpen] = useState(false);
   const [revision, setRevision] = useState('');
+  const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
@@ -111,7 +112,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
     setBusy(true);
     await writeStatus('redone');
     useJarvisInteractionStore.getState().setChatMode(chatId, 'plan');
-    const text = `Redo this plan with this instruction: ${revision.trim()}`;
+    const text = `Redo this plan with this instruction: ${adding ? 'Preserve the existing requirements and add: ' : ''}${revision.trim()}`;
     await messageRepo.create({
       chat_id: chatId as never,
       role: 'user',
@@ -149,7 +150,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
         </div>
         <div>
           <div className="text-ui-strong text-foreground">{plan.title}</div>
-          <p className="text-secondary text-muted-foreground">{plan.summary}</p>
+          <p className="whitespace-pre-wrap text-secondary text-muted-foreground">{plan.summary}</p>
         </div>
       </div>
       <ol className="ml-5 list-decimal space-y-1 text-secondary text-foreground">
@@ -179,7 +180,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
         <div className="mt-3 flex flex-col gap-2">
           <textarea
             className="min-h-16 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-secondary text-foreground outline-none focus:border-accent-copper"
-            placeholder="What should Jarvis change in the next plan?"
+            placeholder={adding ? 'What should Jarvis add to the plan?' : 'What should Jarvis change in the next plan?'}
             value={revision}
             onChange={(event) => setRevision(event.target.value)}
           />
@@ -216,10 +217,20 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
           size="sm"
           variant="secondary"
           disabled={busy || plan.status !== 'pending'}
-          onClick={() => setRedoOpen((open) => !open)}
+          onClick={() => { setAdding(false); setRedoOpen(true); }}
         >
           <RotateCcw className="h-3 w-3" />
           Redo Plan
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={busy || plan.status !== 'pending'}
+          onClick={() => { setAdding(true); setRedoOpen(true); }}
+        >
+          <Plus className="h-3 w-3" />
+          Add to Plan
         </Button>
         <Button
           type="button"

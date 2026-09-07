@@ -49,6 +49,20 @@ describe('classifyJarvisIntent', () => {
       kind: 'destructive', needsQuestions: true, needsImplementationApproval: true,
     });
   });
+
+  it.each([
+    'Create a plan and then implement the app.',
+    'Write a plan.md file for this project.',
+  ])('does not turn a requested mutation into plan-only: %s', text => {
+    expect(classifyJarvisIntent({ text }).needsImplementationApproval).toBe(true);
+  });
+
+  it.each([
+    'Plan a tiny offline recipe organizer as a browser app using local storage. Give three implementation steps and one validation step. All requirements are supplied; do not ask questions. Do not edit files or run commands. Present the plan for approval.',
+    'Redo this plan with this instruction: add keyboard navigation, without editing files.',
+  ])('keeps explicit planning read-only despite implementation terminology: %s', text => {
+    expect(classifyJarvisIntent({ text })).toMatchObject({kind: 'plan-only', needsVisiblePlan: true, needsImplementationApproval: false});
+  });
 });
 
 describe('shouldAutoRetrieveProjectKnowledge', () => {

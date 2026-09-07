@@ -13,6 +13,7 @@ import {
   shouldReplaceModelActionsWithFileReadFallback,
 } from '@/lib/actions/fallbackActions';
 import { parseJarvisPlanBlocks } from '@/features/jarvis-interaction/planParser';
+import { isExplicitPlanRequest } from '@/lib/ai/intent';
 import { parseJarvisQuestionBlocks } from '@/features/jarvis-interaction/questionParser';
 import { parseJarvisPermissionBlocks } from '@/features/jarvis-interaction/permissionParser';
 import { deepFreezeJarvisCopy } from '@/lib/jarvis/requestEnvelope';
@@ -311,7 +312,8 @@ function validatedParts(
   if (request.outputContract.allowPlanBlocks) {
     parts = convertTextParts(parts, (text) => {
       const parsed = parseJarvisPlanBlocks(text, {
-        force: request.interactionMode === 'plan' && hasPlanReviewIntent(text),
+        force: request.interactionMode === 'plan' &&
+          (isExplicitPlanRequest(request.userText) || hasPlanReviewIntent(text)),
       });
       const normalized = parsed.parts.map((part): Part => {
         if (part.kind !== 'plan_review') return part;

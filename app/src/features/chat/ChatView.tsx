@@ -202,27 +202,49 @@ export function ChatView() {
       return;
     const accessibleIds = accessibleChats.map((chat) => String(chat.id));
     const activeIsAccessible = accessibleIds.includes(String(activeChatId));
-    const fallbackChatId = activeIsAccessible ? String(activeChatId) : accessibleIds[0];
-    const pruned = pruneChatWorkspaceLayout(workspaceLayout, accessibleIds, fallbackChatId);
-    const next =
-      pruned ??
-      (fallbackChatId
-        ? ({
-            version: 1,
-            chatIds: [fallbackChatId],
-            focusedChatId: fallbackChatId,
-          } satisfies ChatWorkspaceLayoutV1)
-        : null);
-    if (!next) {
-      if (scope) clearChatWorkspaceLayout(scope);
-      operationEpochRef.current += 1;
-      layoutRef.current = null;
-      setLayoutState(null);
-      setActiveChat(null);
+    const reconcile = () => {
+      const fallbackChatId = activeIsAccessible ? String(activeChatId) : accessibleIds[0];
+      const pruned = pruneChatWorkspaceLayout(workspaceLayout, accessibleIds, fallbackChatId);
+      const next =
+        pruned ??
+        (fallbackChatId
+          ? ({
+              version: 1,
+              chatIds: [fallbackChatId],
+              focusedChatId: fallbackChatId,
+            } satisfies ChatWorkspaceLayoutV1)
+          : null);
+      if (!next) {
+        if (scope) clearChatWorkspaceLayout(scope);
+        operationEpochRef.current += 1;
+        layoutRef.current = null;
+        setLayoutState(null);
+        setActiveChat(null);
+        return;
+      }
+      if (!sameLayout(workspaceLayout, next)) commitLayout(next);
+      if (!activeIsAccessible) setActiveChat(next.focusedChatId);
+    };
+    if (activeIsAccessible) {
+      reconcile();
       return;
     }
-    if (!sameLayout(workspaceLayout, next)) commitLayout(next);
-    if (!activeIsAccessible) setActiveChat(next.focusedChatId);
+    // A newly created chat can reach the selection store before the live list.
+    // Verify its canonical row before treating that stale list as a deletion.
+    let cancelled = false;
+    void chatRepo.getById(activeChatId as ChatId).then(
+      (chat) => {
+        if (cancelled) return;
+        if (
+          chat && !chat.archived &&
+          String(chat.workspace_id) === String(workspaceId) &&
+          (chat.project_id ?? null) === (projectId ?? null)
+        ) return;
+        reconcile();
+      },
+      () => { if (!cancelled) reconcile(); },
+    );
+    return () => { cancelled = true; };
   }, [
     accessibleChats,
     activeChatId,
@@ -231,6 +253,8 @@ export function ChatView() {
     setActiveChat,
     visualChatFixture,
     workspaceLayout,
+    workspaceId,
+    projectId,
   ]);
 
   useEffect(() => {

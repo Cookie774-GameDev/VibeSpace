@@ -1046,7 +1046,8 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
     expect(result.displayText).toContain('Structured output could not be validated');
   });
 
-  it('projects Plan approval-intent prose into review actions without changing Ask or Agent boundaries', async () => {
+  it.each(['Approved to proceed?', 'Awaiting your go-ahead before I write anything.', 'The plan is ready for your approval.'])(
+    'projects requested plans into review actions with provider wording: %s', async (closing) => {
     const userText = 'Plan how to create mode-plan-0d10c62b.md without writing it yet.';
     const providerText = [
       'Plan:',
@@ -1054,7 +1055,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
       '2. Create the Markdown file with the requested content.',
       '3. Read it back to verify the exact bytes.',
       '',
-      'Approved to proceed?',
+      closing,
     ].join('\n');
 
     const plan = await processJarvisResponse(
@@ -1085,7 +1086,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
         kind: 'plan_review',
         plan: expect.objectContaining({
           id: 'jarvis_plan_jreq_response_1_0',
-          summary: expect.stringContaining('Approved to proceed?'),
+          summary: expect.stringContaining(closing),
           status: 'pending',
         }),
       }),
@@ -1093,7 +1094,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
     expect(ask.parts).toEqual([
       expect.objectContaining({
         kind: 'text',
-        text: expect.stringContaining('Approved to proceed?'),
+        text: expect.stringContaining(closing),
       }),
     ]);
     expect(ask.parts.every((part) => part.kind === 'text')).toBe(true);
