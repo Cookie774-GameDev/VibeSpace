@@ -546,9 +546,48 @@
 }
 
 [data-pet-mini-panel='true'] .agentic-session {
+  grid-template-columns: minmax(70px, auto) minmax(0, 1fr) auto;
   min-height: calc(40px * var(--pet-ui-scale, 1)) !important;
   gap: calc(8px * var(--pet-ui-scale, 1)) !important;
   padding: calc(6px * var(--pet-ui-scale, 1)) calc(10px * var(--pet-ui-scale, 1)) !important;
+}
+
+/* The companion already scales its content. Do not inherit the full app's
+   viewport breakpoint, which leaves the metrics stranded on a second row. */
+[data-pet-mini-panel='true'] .agentic-session[data-has-progress='true'] {
+  grid-template-columns: minmax(70px, auto) minmax(0, 1fr) auto;
+}
+
+[data-pet-mini-panel='true'] .agentic-session__identity {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+[data-pet-mini-panel='true'] .agentic-session .agentic-session__metrics-row {
+  grid-column: 2;
+  grid-row: 1;
+  gap: 5px;
+}
+
+[data-pet-mini-panel='true'] .agentic-session__metrics {
+  padding-left: 0;
+  gap: 6px;
+  font-size: var(--pet-msg-metadata);
+}
+
+[data-pet-mini-panel='true'] .agentic-session__actions {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+[data-pet-mini-panel='true'] .agentic-session[data-has-progress='true'] .agentic-session__progress {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+[data-pet-mini-panel='true'] .agentic-session__subagents-btn {
+  font-size: var(--pet-msg-metadata);
+  padding: 5px 7px;
 }
 
 [data-pet-mini-panel='true'] .agentic-prompt-band,
