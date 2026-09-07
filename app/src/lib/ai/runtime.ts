@@ -65,6 +65,7 @@ import {
 } from '@/lib/jarvis/response/explicitResponseContract';
 import type { LLMContentPart, LLMMessage, LLMResponse, LLMStreamChunk } from './types';
 import { llmContentToText } from './types';
+import { publishChatRunState } from '@/features/chat/runtime/chatRunState';
 import {
   MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER,
   parseDirectContextEvidenceContinuation,
@@ -3226,16 +3227,12 @@ function dispatchRunState(
   errorCode?: string,
   cancellationKey?: string | null,
 ): void {
-  window.dispatchEvent(
-    new CustomEvent('jarvis:run-state', {
-      detail: {
-        chatId: String(chatId),
-        ...(cancellationKey ? { cancellationKey: String(cancellationKey) } : {}),
-        status,
-        ...(status === 'error' && errorCode ? { errorCode } : {}),
-      },
-    }),
-  );
+  publishChatRunState({
+    chatId: String(chatId),
+    ...(cancellationKey ? { cancellationKey: String(cancellationKey) } : {}),
+    status,
+    ...(status === 'error' && errorCode ? { errorCode } : {}),
+  });
 }
 
 function dispatchKernelSmokeRuntimeStage(stage: KernelSmokeRuntimeStage): void {

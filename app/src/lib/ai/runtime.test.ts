@@ -6284,7 +6284,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           await stop.whenIdle();
           const request = mocks.runAgent.mock.calls[0]![0];
           expect(request.backend).toBe(backend);
-          const users = request.messages.filter(message => message.role === 'user');
+          const users = request.messages.filter((message: { role: string; content: unknown }) => message.role === 'user');
           expect(users.at(-1)?.content).toBe(text);
           expect(users).toHaveLength(text === 'Run the kernel gate.' ? 1 : 2);
         }
@@ -6348,7 +6348,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         const requests = mocks.runAgent.mock.calls.map(([request]) => request);
         expect(requests.map((request) => request.chatId)).toEqual([harness.chatId, harness.chatId]);
         expect(requests[0]!.requestId).not.toBe(requests[1]!.requestId);
-        expect(requests[1]!.messages.filter(message => message.role === 'user').at(-1)?.content)
+        expect(requests[1]!.messages.filter((message: { role: string; content: unknown }) => message.role === 'user').at(-1)?.content)
           .toBe('Continue with the approved next step.');
         for (const request of requests) {
           expect(request.backend).toBe(backend);

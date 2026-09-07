@@ -6,6 +6,13 @@ import { useUIStore } from '@/stores/ui';
 import { Composer } from './Composer';
 import { chatRepo, messageRepo } from '@/lib/db';
 import { OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
+import { publishChatRunState } from './runtime/chatRunState';
+const backendState = vi.hoisted(() => ({ locked: false }));
+vi.mock('./useChatBackendAffinity', () => ({
+  useChatBackendAffinity: () => backendState.locked
+    ? { version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 }
+    : undefined,
+}));
 vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
 vi.mock('./HarnessReadinessGate', async (original) => ({
   ...(await original<typeof import('./HarnessReadinessGate')>()),
@@ -14,6 +21,7 @@ vi.mock('./HarnessReadinessGate', async (original) => ({
 const originalAuth = useAuthStore.getState();
 describe('Composer follow-up after user cancellation', () => {
   beforeEach(() => {
+    backendState.locked = false;
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.stubGlobal(
       'ResizeObserver',
@@ -31,6 +39,7 @@ describe('Composer follow-up after user cancellation', () => {
   });
   afterEach(() => {
     cleanup();
+    publishChatRunState({ chatId: 'chat-followup', status: 'done' });
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     useAuthStore.setState({
@@ -39,7 +48,29 @@ describe('Composer follow-up after user cancellation', () => {
       chatModelSelection: originalAuth.chatModelSelection,
     });
   });
+  it('restores Stop and Resume after leaving and remounting a running chat', async () => {
+    const mount = () => render(
+      <TooltipProvider><Composer chatId={'chat-followup' as never} /></TooltipProvider>,
+    );
+    let view = mount();
+    act(() => publishChatRunState({ chatId: 'chat-followup', status: 'running', cancellationKey: 'current-turn' }));
+    expect(await screen.findByRole('button', { name: 'Stop current request' })).toBeTruthy();
+    view.unmount();
+    view = mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop current request' }));
+    act(() => publishChatRunState({ chatId: 'chat-followup', status: 'cancelled', cancellationKey: 'current-turn' }));
+    expect(await screen.findByRole('button', { name: 'Resume current request' })).toBeTruthy();
+    view.unmount();
+    view = mount();
+    expect(await screen.findByRole('button', { name: 'Resume current request' })).toBeTruthy();
+    view.unmount();
+    act(() => publishChatRunState({ chatId: 'chat-followup', status: 'done' }));
+    mount();
+    expect(screen.queryByRole('button', { name: 'Resume current request' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop current request' })).toBeNull();
+  });
   it('restores the upstream model separately from the Codex backend after reload', async () => {
+    backendState.locked = true;
     vi.spyOn(chatRepo, 'getById').mockResolvedValue({
       id: 'chat-followup',
       created_at: 1,
@@ -64,9 +95,10 @@ describe('Composer follow-up after user cancellation', () => {
         modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
       }),
     );
-    expect(screen.getByRole('button', { name: 'Choose coding runtime' }).textContent).toContain(
-      'Codex',
-    );
+    const input = screen.getByRole('textbox', { name: 'Message' });
+    fireEvent.change(input, { target: { value: '/cli', selectionStart: 4 } });
+    fireEvent.click(await screen.findByRole('option', { name: /\/cli/ }));
+    expect((await screen.findByRole('button', { name: /Current CLI.*locked for this chat/i })).textContent).toContain('Codex');
   });
   it('offers Send for a new draft after Stop, and retains Resume when the draft is cleared', async () => {
     render(

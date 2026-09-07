@@ -430,6 +430,7 @@ import {
   recordEscapePress,
   type EscapeCancelState,
 } from './composerEscapeCancel';
+import { getChatRunState } from './runtime/chatRunState';
 import { agentSelectorOptions } from './listLiveChatAgents';
 import { openNativeChildChat } from '@/features/jarvis-interaction/openNativeChildChat';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
@@ -1356,8 +1357,12 @@ export function Composer({
   const harnessRuntimeState = useHarnessRuntimeState();
   const harnessBlocked = harnessRuntimeState.kind !== 'ready';
   const codexRuntimeState = useCodexRuntimeState();
-  const [jarvisRunning, setJarvisRunning] = useState(false);
-  const [stoppedRequest, setStoppedRequest] = useState(false);
+  const [jarvisRunning, setJarvisRunning] = useState(
+    () => getChatRunState(String(chatId))?.status === 'running',
+  );
+  const [stoppedRequest, setStoppedRequest] = useState(
+    () => getChatRunState(String(chatId))?.status === 'cancelled',
+  );
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
   const escapeCancelRef = useRef<EscapeCancelState>(createEscapeCancelState());
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -1498,6 +1503,11 @@ export function Composer({
 
   useEffect(() => {
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const retained = getChatRunState(String(chatId));
+    setJarvisRunning(retained?.status === 'running');
+    setStoppedRequest(retained?.status === 'cancelled');
+    activeCancellationKeyRef.current =
+      retained?.status === 'running' ? retained.cancellationKey ?? null : null;
     const onRunState = (event: Event) => {
       const detail = (event as CustomEvent<{ chatId?: string; status?: string }>).detail;
       if (String(detail?.chatId) !== String(chatId)) return;

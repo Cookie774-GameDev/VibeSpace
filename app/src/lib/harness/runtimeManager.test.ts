@@ -263,7 +263,7 @@ describe('harness runtime manager', () => {
     second();
   });
 
-  it('discards a pending detection after the last subscriber is truly gone', async () => {
+  it('keeps pending detection across navigation without notifying removed subscribers', async () => {
     const detection = deferred<NativeRuntimeDetection>();
     const native = adapter({ detect: vi.fn(() => detection.promise) });
     const manager = createHarnessRuntimeManager(native);
@@ -277,12 +277,12 @@ describe('harness runtime manager', () => {
     detection.resolve(readyDetection);
     await settle();
 
-    expect(native.ensureServer).not.toHaveBeenCalled();
-    expect(manager.getConnection()).toBeUndefined();
+    expect(native.ensureServer).toHaveBeenCalledTimes(1);
+    expect(manager.getConnection()).toEqual(readyConnection);
     expect(notifications).not.toHaveBeenCalled();
   });
 
-  it('discards a pending ensure result after the last subscriber is gone', async () => {
+  it('keeps a pending ensure result after the last subscriber is gone', async () => {
     const server = deferred<OpenCodeServerConnection>();
     const native = adapter({ ensureServer: vi.fn(() => server.promise) });
     const manager = createHarnessRuntimeManager(native);
@@ -297,9 +297,27 @@ describe('harness runtime manager', () => {
     server.resolve(readyConnection);
     await settle();
 
-    expect(manager.getConnection()).toBeUndefined();
-    expect(manager.getSnapshot()).toEqual({ kind: 'starting' });
+    expect(manager.getConnection()).toEqual(readyConnection);
+    expect(manager.getSnapshot().kind).toBe('ready');
     expect(notifications).not.toHaveBeenCalled();
+  });
+
+  it('shares pending detection when another view subscribes after teardown', async () => {
+    const detection = deferred<NativeRuntimeDetection>();
+    const native = adapter({ detect: vi.fn(() => detection.promise) });
+    const manager = createHarnessRuntimeManager(native);
+    const first = manager.subscribe(() => {});
+    await settle();
+    first();
+    await settle();
+    const second = manager.subscribe(() => {});
+    await settle();
+    expect(native.detect).toHaveBeenCalledTimes(1);
+    detection.resolve(readyDetection);
+    await settle();
+    expect(manager.getConnection()).toEqual(readyConnection);
+    expect(native.ensureServer).toHaveBeenCalledTimes(1);
+    second();
   });
 
   it('reuses a validated ready connection when the runtime subscriber remounts', async () => {

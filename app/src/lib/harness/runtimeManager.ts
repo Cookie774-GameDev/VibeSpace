@@ -177,7 +177,6 @@ export function createHarnessRuntimeManager(
   let eventGeneration = 0;
   let refreshFlight:
     | Readonly<{
-        activation: number | undefined;
         operation: number;
         promise: Promise<void>;
       }>
@@ -286,20 +285,17 @@ export function createHarnessRuntimeManager(
     publish(mapEvent(event));
   };
 
-  const refresh = (lifecycleGeneration?: number): Promise<void> => {
-    const operationActivation =
-      lifecycleGeneration ?? (subscribers.size > 0 ? activation : undefined);
+  const refresh = (_lifecycleGeneration?: number): Promise<void> => {
+    // Readiness belongs to the app, not whichever chat view currently subscribes.
+    // Downloads/repairs still invalidate this flight through operationGeneration.
     if (
       refreshFlight &&
-      refreshFlight.activation === operationActivation &&
       refreshFlight.operation === operationGeneration
     ) {
       return refreshFlight.promise;
     }
     const operation = ++operationGeneration;
-    const current = () =>
-      operation === operationGeneration &&
-      (operationActivation === undefined || lifecycleIsCurrent(operationActivation));
+    const current = () => operation === operationGeneration;
     const promise = (async () => {
       if (!native.available()) {
         if (!current()) return;
@@ -354,7 +350,7 @@ export function createHarnessRuntimeManager(
         });
       }
     })();
-    const flight = Object.freeze({ activation: operationActivation, operation, promise });
+    const flight = Object.freeze({ operation, promise });
     refreshFlight = flight;
     const clearFlight = () => {
       if (refreshFlight === flight) refreshFlight = undefined;
@@ -463,9 +459,11 @@ export function createHarnessRuntimeManager(
             if (ticket !== teardownTicket || subscribers.size > 0) return;
             lifecycleActive = false;
             activation += 1;
-            operationGeneration += 1;
             eventGeneration += 1;
-            refreshFlight = undefined;
+            if (downloadFlight) {
+              operationGeneration += 1;
+              refreshFlight = undefined;
+            }
             downloadFlight = undefined;
             unlisten?.();
             unlisten = undefined;
