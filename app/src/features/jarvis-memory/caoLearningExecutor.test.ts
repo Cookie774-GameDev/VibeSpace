@@ -26,6 +26,28 @@ const result = {
   sessionId: 'session',
 };
 describe('CAO real learner execution', () => {
+  it('reports a bounded failure stage without forwarding provider errors or consuming evidence', async () => {
+    const onFailure = vi.fn();
+    const save = vi.fn();
+    const markEvaluated = vi.fn();
+    const run = createCaoLearningExecutor({
+      snapshot: async () => ({
+        enabled: true,
+        markdown: '# Jarvis Learning\nEvidence',
+        sourceIds: ['chat'],
+      }),
+      execute: async () => {
+        throw new Error('private provider response');
+      },
+      save,
+      markEvaluated,
+      onFailure,
+    });
+    expect(await run(input, new AbortController().signal)).toEqual({ status: 'failed' });
+    expect(onFailure).toHaveBeenCalledWith('execute');
+    expect(save).not.toHaveBeenCalled();
+    expect(markEvaluated).not.toHaveBeenCalled();
+  });
   it('runs the pinned learner over sourced learning, then persists its receipt before evaluation advances', async () => {
     const order: string[] = [];
     const execute = vi.fn(
@@ -58,6 +80,7 @@ describe('CAO real learner execution', () => {
   });
   it('does not consume learning on a substituted model, missing session, failed persistence, or cancellation', async () => {
     for (const scenario of ['model', 'session', 'save', 'abort']) {
+      const onFailure = vi.fn();
       const markEvaluated = vi.fn();
       const controller = new AbortController();
       const run = createCaoLearningExecutor({
@@ -79,11 +102,17 @@ describe('CAO real learner execution', () => {
           if (scenario === 'save') throw new Error('disk');
         },
         markEvaluated,
+        onFailure,
       });
       expect((await run(input, controller.signal)).status).toBe(
         scenario === 'abort' ? 'cancelled' : 'failed',
       );
       expect(markEvaluated).not.toHaveBeenCalled();
+      if (scenario === 'abort') expect(onFailure).not.toHaveBeenCalled();
+      else
+        expect(onFailure).toHaveBeenCalledWith(
+          scenario === 'model' ? 'identity' : scenario === 'session' ? 'receipt' : 'save',
+        );
     }
   });
 });

@@ -31,7 +31,8 @@ export async function reviewCaoChatLearning(
   if (profile.accountId !== accountId || !profile.enabled) return;
   const key = caoLearningReviewKey(accountId, chat.project_id);
   const previous = (await db.settings.get(key))?.value as
-    { learningEpoch?: string; input?: { throughSeqInclusive?: number } } | undefined;
+    | { learningEpoch?: string; input?: { throughSeqInclusive?: number } }
+    | undefined;
   const throughSeqInclusive = profile.meaningfulMessageCount;
   const previousCount = previous?.input?.throughSeqInclusive;
   const fromSeqExclusive =
@@ -78,6 +79,9 @@ function assertAccount(input: CaoLearningExecutionInput) {
 }
 
 const executeLearningPass = createCaoLearningExecutor({
+  onFailure(stage) {
+    console.warn('[cao-learning] review failed', stage);
+  },
   async snapshot(input) {
     assertAccount(input);
     const [workspace, project] = await Promise.all([

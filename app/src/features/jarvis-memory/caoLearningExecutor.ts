@@ -2,6 +2,13 @@ import { CAO_LEARNER_IDENTITY, assertCaoLearnerExecutionIdentity } from '@/featu
 import type { CaoLearningExecutionInput, CaoLearningExecutionResult } from './caoScheduledLearning';
 
 type Identity = Record<keyof typeof CAO_LEARNER_IDENTITY, string>;
+export type CaoLearningFailureStage =
+  | 'snapshot'
+  | 'execute'
+  | 'identity'
+  | 'receipt'
+  | 'save'
+  | 'mark-evaluated';
 export interface CaoLearningReview {
   schemaVersion: 1;
   receiptId: string;
@@ -24,12 +31,14 @@ export interface CaoLearningExecutorDependencies {
   }): Promise<{ text: string; identity: Identity; requestId: string; sessionId: string }>;
   save(review: CaoLearningReview): Promise<void>;
   markEvaluated(input: CaoLearningExecutionInput): Promise<void>;
+  onFailure?(stage: CaoLearningFailureStage): void;
 }
 export function createCaoLearningExecutor(dependencies: CaoLearningExecutorDependencies) {
   return async (
     input: CaoLearningExecutionInput,
     signal: AbortSignal,
   ): Promise<CaoLearningExecutionResult> => {
+    let stage: CaoLearningFailureStage = 'snapshot';
     try {
       signal.throwIfAborted();
       const snapshot = await dependencies.snapshot(input);
@@ -40,6 +49,7 @@ export function createCaoLearningExecutor(dependencies: CaoLearningExecutorDepen
         snapshot.markdown.length > 128_000
       )
         throw new Error('cao_learning_evidence_invalid');
+      stage = 'execute';
       const result = await dependencies.execute({
         input,
         identity: CAO_LEARNER_IDENTITY,
@@ -47,10 +57,12 @@ export function createCaoLearningExecutor(dependencies: CaoLearningExecutorDepen
         signal,
       });
       signal.throwIfAborted();
+      stage = 'identity';
       assertCaoLearnerExecutionIdentity({
         requested: CAO_LEARNER_IDENTITY,
         observed: result.identity,
       });
+      stage = 'receipt';
       if (
         result.requestId !== input.requestId ||
         !result.sessionId ||
@@ -59,6 +71,7 @@ export function createCaoLearningExecutor(dependencies: CaoLearningExecutorDepen
       )
         throw new Error('cao_learning_receipt_invalid');
       const receiptId = `cao_receipt_${input.passId}`.slice(0, 128);
+      stage = 'save';
       await dependencies.save({
         schemaVersion: 1,
         receiptId,
@@ -70,9 +83,18 @@ export function createCaoLearningExecutor(dependencies: CaoLearningExecutorDepen
         sessionId: result.sessionId,
       });
       signal.throwIfAborted();
+      stage = 'mark-evaluated';
       await dependencies.markEvaluated(input);
       return { status: 'completed', receiptId };
     } catch {
+      if (!signal.aborted) {
+        // Report only the bounded stage; provider errors may contain private data.
+        try {
+          dependencies.onFailure?.(stage);
+        } catch {
+          // Diagnostics must not change the failed execution outcome.
+        }
+      }
       return { status: signal.aborted ? 'cancelled' : 'failed' };
     }
   };
