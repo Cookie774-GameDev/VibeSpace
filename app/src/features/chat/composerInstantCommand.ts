@@ -1,5 +1,6 @@
 import { InstantCommandEntryBoundary } from '@/features/instant-command';
 import type { InstantCommandReceipt } from '@/features/instant-command/receipt';
+import { NAVIGATION_COMMAND_INPUTS } from '@/features/instant-command/catalog/navigation';
 
 export const COMPOSER_INSTANT_SLASH_COMMANDS = Object.freeze([
   'connect',
@@ -30,6 +31,13 @@ export type ComposerInstantCommandResult =
     }>;
 
 const COMMANDS = new Set<string>(COMPOSER_INSTANT_SLASH_COMMANDS);
+// Whole-message aliases only: explanations and negated instructions remain chat.
+// Slash aliases retain their existing Composer meanings (notably /notes).
+const LOCAL_NAVIGATION_ALIASES = new Set(
+  NAVIGATION_COMMAND_INPUTS.flatMap((command) => command.aliases)
+    .filter((alias) => !alias.startsWith('/'))
+    .map((alias) => alias.toLowerCase()),
+);
 const sharedBoundary = new InstantCommandEntryBoundary();
 const SAFE_FAILURE = 'Instant Command was rejected safely.';
 
@@ -40,7 +48,9 @@ function slashCommand(source: string): ComposerInstantSlashCommand | undefined {
 }
 
 export function isComposerInstantCommandSource(source: string): boolean {
-  return slashCommand(source) !== undefined;
+  return (
+    slashCommand(source) !== undefined || LOCAL_NAVIGATION_ALIASES.has(source.trim().toLowerCase())
+  );
 }
 
 function receiptMessage(receipt: InstantCommandReceipt): string {

@@ -4,6 +4,7 @@ import { InstantCommandEntryBoundary } from '@/features/instant-command';
 import { createInstantCommandReceipt } from '@/features/instant-command/receipt';
 import {
   COMPOSER_INSTANT_SLASH_COMMANDS,
+  isComposerInstantCommandSource,
   submitComposerInstantCommand,
 } from './composerInstantCommand';
 
@@ -27,6 +28,46 @@ function acceptingBoundary(execute = vi.fn()) {
 }
 
 describe('Composer Instant Command bridge', () => {
+  it.each([
+    'chat',
+    'canvas',
+    'workbench',
+    'kanban',
+    'schedule',
+    'agents',
+    'skills',
+    'benchmarks',
+    'history',
+    'tools',
+    'files',
+    'notes',
+  ])('handles open %s before any model dependency', async (route) => {
+    const { boundary, execute } = acceptingBoundary();
+    const source = `open ${route}`;
+    expect(isComposerInstantCommandSource(source)).toBe(true);
+    const start = performance.now();
+    const result = await submitComposerInstantCommand(
+      { source, interactionId: `local-${route}`, ...scope },
+      boundary,
+    );
+    expect(result).toMatchObject({ handled: true, ok: true, commandId: 'page.open' });
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ slots: { route } }),
+      expect.anything(),
+    );
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
+  it.each([
+    'do not open notes',
+    'explain how to open notes',
+    'open notes and delete everything',
+    '/notes',
+    'open Codex',
+  ])('leaves non-navigation or non-exact input untouched: %s', (source) => {
+    expect(isComposerInstantCommandSource(source)).toBe(false);
+  });
+
   it('executes five collision-free slash commands through their canonical local authorities', async () => {
     expect(COMPOSER_INSTANT_SLASH_COMMANDS).toEqual([
       'connect',

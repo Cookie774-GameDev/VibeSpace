@@ -2791,7 +2791,6 @@ export function Composer({
   };
 
   const handleSlashCommand = async (trimmed: string): Promise<boolean | string> => {
-    if (!trimmed.startsWith('/')) return false;
     if (isComposerInstantCommandSource(trimmed)) {
       if (instantCommandInFlightRef.current) return true;
       instantCommandInFlightRef.current = true;
@@ -2815,6 +2814,7 @@ export function Composer({
       }
       return true;
     }
+    if (!trimmed.startsWith('/')) return false;
     const [cmdRaw, ...restParts] = trimmed.slice(1).split(/\s+/);
     const classification = classifySlashCommand(cmdRaw ?? '');
     const cmd = classification?.command ?? normalizeSlashCmd(cmdRaw ?? '');
@@ -3596,7 +3596,7 @@ export function Composer({
     );
 
     // Leading full-message slash (multitask, ask, plan, etc.)
-    const slashResult = afterInline.startsWith('/') ? await handleSlashCommand(afterInline) : false;
+    const slashResult = await handleSlashCommand(afterInline);
     if (slashResult === true) return true;
     // When a route slash command has a remainder (e.g. "/terminals close 5 terminals"),
     // handleSlashCommand returns the remainder text so we send it as the message.
@@ -5003,7 +5003,8 @@ export function Composer({
   }, [promptForge.disabledReason, promptForge.start]);
 
   const canAttemptSlashWhileBackendBlocked =
-    backendRuntimeBlocked && text.trimStart().startsWith('/');
+    backendRuntimeBlocked &&
+    (text.trimStart().startsWith('/') || isComposerInstantCommandSource(text));
   const hasDraft =
     text.trim().length > 0 ||
     attachedFiles.length > 0 ||
