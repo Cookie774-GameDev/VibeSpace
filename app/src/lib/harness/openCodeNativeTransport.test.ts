@@ -2,6 +2,27 @@ import { describe, expect, it, vi } from 'vitest';
 import { nativeOpenCodeEvents, nativeOpenCodeRequest } from './openCodeNativeTransport';
 
 describe('native OpenCode transport', () => {
+  it('settles a pending native request promptly on caller cancellation', async () => {
+    const controller = new AbortController();
+    const invoke = vi.fn(() => new Promise<never>(() => {}));
+    const pending = nativeOpenCodeRequest('opencode-server-generation', '/global/health',
+      { signal: controller.signal }, 5000, async () => ({ invoke, channel: vi.fn() as never }));
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    controller.abort();
+    await assertion;
+  }, 1000);
+
+  it('bounds a native IPC request even if its native timeout never returns', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = nativeOpenCodeRequest('opencode-server-generation', '/global/health', {},
+        50, async () => ({ invoke: vi.fn(() => new Promise<never>(() => {})), channel: vi.fn() as never }));
+      const assertion = expect(pending).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(51);
+      await assertion;
+    } finally { vi.useRealTimers(); }
+  }, 1000);
   it('sends only generation-bound request metadata through the native command', async () => {
     const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '{"healthy":true}' }));
     const response = await nativeOpenCodeRequest(

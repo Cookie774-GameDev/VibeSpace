@@ -2971,13 +2971,23 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       ).not.toThrow();
       expect(updateMessage).toHaveBeenCalledTimes(pendingWriteCount);
 
+      // A question can resolve while an older streaming snapshot is still
+      // being persisted. Its resolution must wait only for predecessors.
+      let finishOlderWrite!: () => void;
+      updateMessage.mockImplementationOnce(() => new Promise<undefined>(resolve => {
+        finishOlderWrite = () => resolve(undefined);
+      }));
+      input.onChunk?.({ delta: 'Checking ', first: true });
+      await vi.waitFor(() => expect(finishOlderWrite).toBeTypeOf('function'));
+      const writesBeforeResolution = updateMessage.mock.calls.length;
       window.dispatchEvent(
         new CustomEvent('vibespace:opencode-question-resolved', {
           detail: { chatId, messageId: placeholderId, part: answeredPart },
         }),
       );
+      finishOlderWrite();
       await vi.waitFor(() =>
-        expect(updateMessage.mock.calls.length).toBeGreaterThan(pendingWriteCount),
+        expect(updateMessage.mock.calls.length).toBeGreaterThan(writesBeforeResolution),
       );
       const answeredWriteCount = updateMessage.mock.calls.length;
       window.dispatchEvent(

@@ -188,13 +188,30 @@ export async function nativeOpenCodeRequest(
   const bridge = await bridgeFactory();
   const method = (init.method ?? 'GET').toUpperCase();
   const mapped = nativeRoute(path, method);
-  const result = await bridge.invoke('opencode_server_request', {
+  if (init.signal?.aborted) throw init.signal.reason;
+  const nativeRequest = bridge.invoke('opencode_server_request', {
     request: {
       generation,
       ...mapped,
       body: typeof init.body === 'string' ? init.body : undefined,
       timeoutMs,
     },
+  });
+  // Native HTTP timeouts cannot bound a stalled IPC response. Stop waiting in
+  // the renderer too; turn cancellation separately aborts the native session.
+  // Never replay a timed-out mutation: its native outcome may be unknown.
+  const result = await new Promise<unknown>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      init.signal?.removeEventListener('abort', abort);
+    };
+    const fail = (error: unknown) => { cleanup(); reject(error); };
+    const abort = () => fail(init.signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+    if (timeoutMs > 0) timer = setTimeout(() => fail(new Error('OpenCode native request timed out.')), timeoutMs);
+    init.signal?.addEventListener('abort', abort, { once: true });
+    if (init.signal?.aborted) abort();
+    void nativeRequest.then(value => { cleanup(); resolve(value); }, fail);
   });
   const response = result as NativeTransportResponse;
   const body = [204, 205, 304].includes(response.status) ? null : response.body;

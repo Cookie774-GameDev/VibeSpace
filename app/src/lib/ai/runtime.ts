@@ -6777,7 +6777,9 @@ export function startRuntimeListener(
         liveOpenCodeQuestions[index] = part;
         cancelPendingFlush();
         const write = trackListenerOwnedTask(
-          settleStreamingWrites().then(() =>
+          // Snapshot predecessors before registering this write. Waiting for
+          // the live set here would eventually include this write itself.
+          Promise.allSettled([...pendingStreamingWrites]).then(() =>
             bindings.updateMessage(placeholder.id, {
               parts: currentOpenCodeStreamingParts(),
             }),

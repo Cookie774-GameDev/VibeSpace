@@ -1,3 +1,6 @@
+import finalBossSkill from '../../../.jarvis/skills/token-final-boss/SKILL.md?raw';
+import { ponytailInstructions } from './ponytailInstructions';
+
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'ultra' | 'max';
 export type ReasoningMode = 'token-saver' | 'normal' | 'token-final-boss';
 
@@ -42,6 +45,7 @@ const EXECUTION_INSTRUCTIONS: Readonly<Record<ReasoningMode, string>> = {
     'Keep the selected model. Use the smallest relevant context set, remove duplicate context, and answer concisely.',
     'Use low native reasoning when supported, but never skip mandatory security, approval, correctness, or user acceptance checks.',
     'Do not compress instructions, attachments, patches, schemas, permission decisions, or evidence needed to avoid a false claim.',
+    ponytailInstructions,
   ].join('\n'),
   normal: [
     '## Reasoning mode: Normal',
@@ -50,16 +54,7 @@ const EXECUTION_INSTRUCTIONS: Readonly<Record<ReasoningMode, string>> = {
   ].join('\n'),
   'token-final-boss': [
     '## Reasoning mode: Token Final Boss',
-    'Keep the exact selected model and use its highest verified native reasoning level.',
-    'For difficult work, privately run this bounded loop before completing:',
-    '1. Reread the original user request and identify its concrete acceptance criteria, constraints, and protected boundaries.',
-    '2. Inspect the most relevant current evidence, then form a concise implementation or answer plan.',
-    '3. Execute through only the available tools and approval-gated actions; inspect every material result instead of assuming success.',
-    '4. Verify the changed behavior or factual answer with focused evidence, then critique it against the original request and likely failure paths.',
-    '5. Correct material gaps and Re-run the affected verification once; reread the original user request before the final answer.',
-    'Stop when the acceptance criteria are proven, evidence is sufficient, required checks pass, or further work would repeat unchanged evidence.',
-    'Do not expose private chain-of-thought. Report only the concise result, useful rationale, actions awaiting approval, and verifiable evidence.',
-    'Never weaken security, approvals, account isolation, or truthful completion standards to finish faster.',
+    finalBossSkill.trim(),
   ].join('\n'),
 };
 
@@ -218,18 +213,18 @@ export function resolveReasoningPolicy({
   const preference = normalizeReasoningPreference(rawPreference);
   const capabilities = getReasoningCapabilities(selection, liveVariants, liveVariantsAuthoritative);
   if (
-    preference.effortOverride &&
+    preference.mode !== 'token-final-boss' && preference.effortOverride &&
     !capabilities.supportedEfforts.includes(preference.effortOverride)
   ) {
     throw new Error(`OpenCode model variant "${preference.effortOverride}" is unsupported.`);
   }
   const requestedEffort =
-    preference.effortOverride ??
+    preference.mode === 'token-final-boss'
+      ? (capabilities.supportedEfforts.at(-1) ?? null)
+      : preference.effortOverride ??
     (preference.mode === 'token-saver'
       ? (capabilities.supportedEfforts[0] ?? null)
-      : preference.mode === 'token-final-boss'
-        ? (capabilities.supportedEfforts.at(-1) ?? null)
-        : null);
+      : null);
   const resolvedEffort = requestedEffort;
   const providerOptions =
     resolvedEffort && capabilities.providerOptionKey

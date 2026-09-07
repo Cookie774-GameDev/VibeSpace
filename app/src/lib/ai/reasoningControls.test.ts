@@ -12,6 +12,22 @@ function selection(providerId: string, modelId: string, connectionId?: string): 
 }
 
 describe('reasoning controls', () => {
+  it('Final Boss overrides a stale lower effort with the highest live supported level', () => {
+    const selected = selection('openai', 'gpt-5.6-sol', 'openai-codex');
+    const policy = resolveReasoningPolicy({
+      selection: selected,
+      preference: { mode: 'token-final-boss', effortOverride: 'low' },
+      liveVariants: ['low', 'medium', 'high', 'xhigh'],
+    });
+    expect(policy.resolvedEffort).toBe('ultra');
+    expect(policy.providerOptions).toEqual({ reasoning_effort: 'xhigh' });
+    expect(policy.selection).toEqual(selected);
+    expect(policy.executionInstructions).toContain('SKILL.md');
+    expect(policy.executionInstructions).toContain('above 95/100');
+    expect(policy.executionInstructions).toMatch(/original prompt\s+and all references/);
+    expect(policy.executionInstructions).toContain('highest supported effort');
+    expect(policy.executionInstructions).toContain('stalls');
+  });
   it('uses authoritative OpenCode Go variants for automatic modes without static provider guesses', () => {
     const selected = selection('opencode', 'opencode-go/deepseek-v4-flash-vision-exp', 'opencode-cli');
     for (const [mode, effort] of [['token-saver', 'low'], ['token-final-boss', 'max']] as const) {

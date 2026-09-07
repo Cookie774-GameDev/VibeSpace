@@ -58,3 +58,7 @@ The vendored Rust/native source above is intentionally not added to
 provenance, modification, license status, and release blocker are recorded in
 `copied-code-inventory.md`, `sbom-pr31.cdx.json`, and
 `ESPEAK_RS_SYS_VENDOR_DECISION.md`.
+
+## Ponytail (Token Saver)
+
+DietrichGebert/ponytail, pinned commit 356918eba965ee1eac64bd3a7f0dd02108350de5, MIT, Copyright (c) 2026 DietrichGebert. The upstream skill and adapted full-mode filtering are bundled for Token Saver. Full license and modification record: app/.jarvis/skills/ponytail/LICENSE.txt and UPSTREAM.md. No lifecycle executables or global hooks are installed.

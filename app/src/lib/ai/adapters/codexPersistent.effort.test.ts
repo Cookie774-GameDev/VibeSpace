@@ -3,14 +3,14 @@ import { createCodexPersistentAdapter } from './codexPersistent';
 import { CODEX_CLI_CONNECTION } from './catalog';
 
 describe('Codex token-saving effort', () => {
-  it('preserves explicit minimal effort in both thread and turn requests', async () => {
+  it.each([['minimal', 'minimal'], ['ultra', 'xhigh']] as const)('transports %s as the supported %s effort in thread and turn requests', async (selectedEffort, wireEffort) => {
     const writes: Record<string, any>[] = [];
     async function* frames() {
       yield {
         id: 'request_model_1',
         result: {
           data: [
-            { model: 'gpt-5.6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'minimal' }] },
+            { model: 'gpt-5.6-luna', supportedReasoningEfforts: [{ reasoningEffort: wireEffort }] },
           ],
           nextCursor: null,
         },
@@ -25,7 +25,7 @@ describe('Codex token-saving effort', () => {
           approvalPolicy: 'on-request',
           approvalsReviewer: 'user',
           sandbox: { type: 'readOnly', networkAccess: false },
-          reasoningEffort: 'minimal',
+          reasoningEffort: wireEffort,
         },
       };
       yield { method: 'turn/started', params: { threadId: 'thread', turn: { id: 'turn' } } };
@@ -49,7 +49,7 @@ describe('Codex token-saving effort', () => {
       chatId: 'chat',
       connection: CODEX_CLI_CONNECTION,
       modelId: 'gpt-5.6-luna',
-      reasoningEffort: 'minimal',
+      reasoningEffort: selectedEffort,
       prompt: 'Brief answer.',
       interactionMode: 'agent',
     })) {
@@ -57,7 +57,7 @@ describe('Codex token-saving effort', () => {
     }
     expect(
       writes.find((frame) => frame.method === 'thread/start')?.params.config.model_reasoning_effort,
-    ).toBe('minimal');
-    expect(writes.find((frame) => frame.method === 'turn/start')?.params.effort).toBe('minimal');
+    ).toBe(wireEffort);
+    expect(writes.find((frame) => frame.method === 'turn/start')?.params.effort).toBe(wireEffort);
   });
 });
