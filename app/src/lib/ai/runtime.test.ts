@@ -8341,6 +8341,39 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   }, 15_000);
 
+  it('exposes Stop during preparation and cancels unresolved context without dispatching', async () => {
+    const errorToast = vi.spyOn(toast, 'error');
+    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Always answer with APPLE.'));
+    const contextGate = deferred<Awaited<ReturnType<typeof mocks.resolveJarvisContext>>>();
+    mocks.resolveJarvisContext.mockReturnValueOnce(contextGate.promise);
+    const states: string[] = [];
+    const onState = (event: Event) => states.push((event as CustomEvent).detail.status);
+    window.addEventListener('jarvis:run-state', onState);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', {
+        detail: { chatId: harness.chatId, text: 'Prepare a reply.', cancellationKey: 'msg_kernel_user' },
+      }));
+      await vi.waitFor(() => expect(mocks.resolveJarvisContext).toHaveBeenCalled());
+      expect(states.at(-1)).toBe('running');
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
+        detail: { chatId: harness.chatId },
+      }));
+      await vi.waitFor(() => expect(states.at(-1)).toBe('cancelled'));
+      await stop.whenIdle();
+      expect(mocks.runAgent).not.toHaveBeenCalled();
+      expect(errorToast).not.toHaveBeenCalled();
+      contextGate.reject(new Error('Late native context failure'));
+      await Promise.resolve();
+      expect(states.at(-1)).toBe('cancelled');
+    } finally {
+      contextGate.resolve({ relevantFiles: [], enabledCapabilities: [], sourceReasons: [] });
+      window.removeEventListener('jarvis:run-state', onState);
+      errorToast.mockRestore();
+      stop();
+    }
+  });
+
   it('rechecks cancellation ownership after awaited history before provider dispatch', async () => {
     const selectedAgent = agent('agent_apple', 'apple', 'Always answer with APPLE.');
     const harness = kernelRuntimeBindings(selectedAgent);

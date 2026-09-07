@@ -4832,6 +4832,8 @@ export function startRuntimeListener(
         else void dispatchAcceptedSteer(releasedChatId);
       }
     };
+    // Preparation is already cancellable work; expose Stop before any native/context wait.
+    dispatchCurrentRunState('running');
     dispatchKernelSmokeRuntimeStage('accepted');
     const failEarlySetup = (stage: 'agent' | 'context' | 'model', error: unknown): void => {
       devConsole.log({
@@ -4848,7 +4850,7 @@ export function startRuntimeListener(
       dispatchCurrentRunState('error', `kernel_runtime_setup_${stage}`);
       releaseOperationTracking();
     };
-    const stopEarlyIfAborted = (stage: 'routing_history'): boolean => {
+    const stopEarlyIfAborted = (stage: 'routing_history' | 'context'): boolean => {
       if (!controller.signal.aborted) return false;
       devConsole.log({
         channel: 'ai',
@@ -4860,6 +4862,19 @@ export function startRuntimeListener(
       dispatchCurrentRunState('cancelled');
       releaseOperationTracking();
       return true;
+    };
+    const awaitPreparation = <T,>(pending: Promise<T>): Promise<T> => {
+      const signal = controller.signal;
+      return new Promise<T>((resolve, reject) => {
+        const abort = () => reject(new DOMException('AI preparation cancelled', 'AbortError'));
+        signal.addEventListener('abort', abort, { once: true });
+        // Keep handlers on pending even after cancellation: late native failures must be observed.
+        pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+        if (signal.aborted) {
+          signal.removeEventListener('abort', abort);
+          abort();
+        }
+      });
     };
 
     const authState = useAuthStore.getState();
@@ -5137,14 +5152,23 @@ export function startRuntimeListener(
           subtitle: 'Routing this fact lookup through the bound Context authority',
         });
       } else {
-        resolvedRequestContext = await resolveJarvisContext({
-          projectId,
-          chatId,
-          currentText: text,
-          enabledCapabilities,
-        });
+        resolvedRequestContext = await awaitPreparation(
+          resolveJarvisContext({
+            projectId,
+            chatId,
+            currentText: text,
+            enabledCapabilities,
+          }),
+        );
       }
     } catch (error) {
+      if (stopEarlyIfAborted('context')) {
+        activity.update(chatId, agentActivityId, {
+          status: 'cancelled',
+          title: `@${agent.slug} stopped`,
+        });
+        return;
+      }
       activity.update(chatId, agentActivityId, {
         status: 'error',
         title: `@${agent.slug} could not gather context`,
