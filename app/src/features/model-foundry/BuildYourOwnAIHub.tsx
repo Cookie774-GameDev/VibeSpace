@@ -71,6 +71,7 @@ interface Props {
   onOpenChange(open: boolean): void;
   onActivateArtifact?(job: FoundryJob): void;
   trainingWorker?: LocalTrainingWorkerStatus | null;
+  initialMethod?: TrainingMethod;
   verifiedTrainingModels?: readonly VerifiedTrainingModel[];
 }
 
@@ -119,8 +120,15 @@ export function BuildYourOwnAIHub({
   onActivateArtifact,
   trainingWorker,
   verifiedTrainingModels,
+  initialMethod,
 }: Props) {
   const [step, setStep] = React.useState(0);
+  React.useEffect(() => {
+    if (!open || !initialMethod) return;
+    setMethod(initialMethod);
+    if (initialMethod !== 'knowledge') setTrainingConfig(defaultFoundryTrainingConfiguration(initialMethod));
+    setStep(0);
+  }, [open, initialMethod]);
   const [method, setMethod] = React.useState<TrainingMethod>('knowledge');
   const [trainingConfig, setTrainingConfig] = React.useState<FoundryTrainingConfiguration>(() =>
     defaultFoundryTrainingConfiguration('lora'),
@@ -822,7 +830,7 @@ export function BuildYourOwnAIHub({
         <div className="sticky top-0 z-20 border-b border-border/70 bg-background/95 px-5 py-5 backdrop-blur-xl sm:px-7">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex items-center gap-3">
-              <span className="rounded-2xl border border-accent-cyan/30 bg-gradient-to-br from-accent-cyan/20 to-emerald-500/10 p-2.5 text-accent-cyan shadow-sm">
+              <span className="rounded-2xl border border-accent-copper/30 bg-gradient-to-br from-accent-cyan/20 to-emerald-500/10 p-2.5 text-accent-copper shadow-sm">
                 <FlaskConical className="h-5 w-5" />
               </span>
               <div>
@@ -862,7 +870,7 @@ export function BuildYourOwnAIHub({
                   className={cn(
                     'flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-metadata transition-colors',
                     index === step
-                      ? 'border-accent-cyan/60 bg-accent-cyan/10 font-semibold text-foreground'
+                      ? 'border-accent-copper/60 bg-accent-copper/10 font-semibold text-foreground'
                       : index < step
                         ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300 hover:bg-emerald-500/10'
                         : 'cursor-not-allowed border-border/70 text-muted-foreground/70',
@@ -880,7 +888,7 @@ export function BuildYourOwnAIHub({
           {step === 0 && (
             <>
               <details
-                className="rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 p-4"
+                className="rounded-lg border border-accent-copper/30 bg-accent-copper/5 p-4"
                 open
               >
                 <summary className="cursor-pointer font-semibold">How this works</summary>
@@ -962,19 +970,17 @@ export function BuildYourOwnAIHub({
                       key={id}
                       type="button"
                       disabled={trainingSetupBusy}
+                      aria-pressed={method === id}
                       onClick={() => {
                         setMethod(id);
                         if (id !== 'knowledge') {
                           setComputePresetId('balanced');
                           setTrainingConfig(defaultFoundryTrainingConfiguration(id));
-                          if (!availability.available) {
-                            void setupWeightTraining(id === 'qlora');
-                          }
                         }
                       }}
                       className={cn(
                         'rounded-lg border p-4 text-left disabled:cursor-not-allowed disabled:opacity-60',
-                        method === id ? 'border-accent-cyan bg-accent-cyan/10' : 'border-border',
+                        method === id ? 'border-accent-copper bg-accent-copper/10' : 'border-border',
                       )}
                     >
                       <strong>{title}</strong>
@@ -1039,12 +1045,13 @@ export function BuildYourOwnAIHub({
                   </Button>
                 )}
               </section>
-              {!effectiveTrainingWorker?.attested && (
+              {(!effectiveTrainingWorker?.attested || (method !== 'knowledge' && !effectiveTrainingWorker.methods.includes(method))) && (
                 <section className="rounded-lg border border-border p-4">
                   <h4 className="font-semibold">Unlock verified weight training</h4>
                   <p className="mt-1 text-secondary text-muted-foreground">
                     Install the private, hash-checked worker and test this computer for LoRA, QLoRA,
-                    and Full support. Unsupported methods stay disabled with their reason.
+                    and Full support. This downloads dependencies; your source files stay local.
+                    Unsupported methods remain blocked from starting, with a reason.
                   </p>
                   <Button
                     type="button"
@@ -1109,7 +1116,7 @@ export function BuildYourOwnAIHub({
                       className={cn(
                         'rounded-lg border p-4 text-left disabled:opacity-55',
                         modelId === model.id
-                          ? 'border-accent-cyan bg-accent-cyan/10'
+                          ? 'border-accent-copper bg-accent-copper/10'
                           : 'border-border',
                       )}
                     >
@@ -1129,7 +1136,7 @@ export function BuildYourOwnAIHub({
                         {(model.modalities ?? ['text']).map((modality) => (
                           <span
                             key={modality}
-                            className="rounded bg-accent-cyan/10 px-2 py-0.5 text-metadata text-accent-cyan"
+                            className="rounded bg-accent-copper/10 px-2 py-0.5 text-metadata text-accent-copper"
                           >
                             {modality}
                           </span>
@@ -1187,7 +1194,7 @@ export function BuildYourOwnAIHub({
                 })}
               </div>
               {!selectedModelInstalled && (
-                <div className="rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 p-4">
+                <div className="rounded-lg border border-accent-copper/30 bg-accent-copper/5 p-4">
                   <p className="text-secondary text-muted-foreground">
                     {method === 'knowledge'
                       ? ollamaReady
@@ -1358,7 +1365,7 @@ export function BuildYourOwnAIHub({
                             className={cn(
                               'rounded-lg border p-3 text-left transition-colors',
                               trainingConfig.computeDevice === device
-                                ? 'border-accent-cyan bg-accent-cyan/10'
+                                ? 'border-accent-copper bg-accent-copper/10'
                                 : 'border-border hover:bg-muted',
                             )}
                           >
@@ -1380,7 +1387,7 @@ export function BuildYourOwnAIHub({
                           className={cn(
                             'rounded-lg border p-3 text-left transition-colors',
                             computePresetId === preset.id
-                              ? 'border-accent-cyan bg-accent-cyan/10'
+                              ? 'border-accent-copper bg-accent-copper/10'
                               : 'border-border hover:bg-muted',
                           )}
                         >
@@ -1624,11 +1631,11 @@ export function BuildYourOwnAIHub({
                 className={cn(
                   'relative overflow-hidden rounded-2xl border-2 border-dashed p-7 text-center transition-colors sm:p-10',
                   sourceDropActive
-                    ? 'border-accent-cyan bg-accent-cyan/10 shadow-[0_0_40px_-20px_hsl(var(--accent-cyan)/0.65)]'
-                    : 'border-border bg-muted/20 hover:border-accent-cyan/50 hover:bg-accent-cyan/5',
+                    ? 'border-accent-copper bg-accent-copper/10 shadow-[0_0_40px_-20px_hsl(var(--accent-cyan)/0.65)]'
+                    : 'border-border bg-muted/20 hover:border-accent-copper/50 hover:bg-accent-copper/5',
                 )}
               >
-                <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan">
+                <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-accent-copper/30 bg-accent-copper/10 text-accent-copper">
                   <Upload className="h-5 w-5" />
                 </span>
                 <h3 className="mt-4 text-section-title">
@@ -1689,9 +1696,9 @@ export function BuildYourOwnAIHub({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <FileText className="h-4 w-4 shrink-0 text-accent-cyan" />
+                        <FileText className="h-4 w-4 shrink-0 text-accent-copper" />
                         <strong className="truncate">{source.name}</strong>
-                        <span className="rounded-full border border-accent-cyan/20 bg-accent-cyan/5 px-2 py-0.5 text-metadata uppercase text-accent-cyan">
+                        <span className="rounded-full border border-accent-copper/20 bg-accent-copper/5 px-2 py-0.5 text-metadata uppercase text-accent-copper">
                           {source.use.replace('_', ' ')}
                         </span>
                       </div>
@@ -1830,7 +1837,7 @@ export function BuildYourOwnAIHub({
           {step === 5 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-accent-cyan" />
+                <Sparkles className="h-5 w-5 text-accent-copper" />
                 <h3 className="text-section-title">Persistent model jobs</h3>
               </div>
               {jobs.length === 0 ? (
@@ -1842,14 +1849,14 @@ export function BuildYourOwnAIHub({
                     className={cn(
                       'rounded-xl border bg-background/60 p-4 shadow-sm',
                       revealJobId === job.id
-                        ? 'animate-scale-in border-accent-cyan bg-accent-cyan/5'
+                        ? 'animate-scale-in border-accent-copper bg-accent-copper/5'
                         : job.status === 'failed'
                           ? 'border-destructive/40 bg-destructive/5'
                           : 'border-border',
                     )}
                   >
                     {revealJobId === job.id && (
-                      <p className="mb-2 text-metadata font-semibold uppercase tracking-wider text-accent-cyan">
+                      <p className="mb-2 text-metadata font-semibold uppercase tracking-wider text-accent-copper">
                         Your verified local model is ready
                       </p>
                     )}
@@ -1862,7 +1869,7 @@ export function BuildYourOwnAIHub({
                             ? 'border-destructive/40 bg-destructive/10 text-destructive'
                             : job.status === 'completed'
                               ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                              : 'border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan',
+                              : 'border-accent-copper/30 bg-accent-copper/10 text-accent-copper',
                         )}
                       >
                         {job.status}
@@ -1872,7 +1879,7 @@ export function BuildYourOwnAIHub({
                       <div
                         className={cn(
                           'h-full transition-[width] motion-reduce:transition-none',
-                          job.status === 'failed' ? 'bg-destructive' : 'bg-accent-cyan',
+                          job.status === 'failed' ? 'bg-destructive' : 'bg-accent-copper',
                         )}
                         style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }}
                       />

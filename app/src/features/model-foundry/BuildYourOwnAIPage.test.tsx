@@ -10,12 +10,14 @@ vi.mock('./BuildYourOwnAIHub', () => ({
   BuildYourOwnAIHub: ({
     open,
     onOpenChange,
+    initialMethod,
   }: {
     open: boolean;
+    initialMethod?: string;
     onOpenChange(open: boolean): void;
   }) =>
     open ? (
-      <div role="dialog" aria-label="Create local model">
+      <div role="dialog" aria-label="Create local model" data-method={initialMethod}>
         <button type="button" onClick={() => onOpenChange(false)}>
           Close builder
         </button>
@@ -102,20 +104,16 @@ describe('BuildYourOwnAIPage', () => {
     expect(screen.getByText(/images, video, audio, documents, code, and datasets/i)).toBeTruthy();
   });
 
-  it('opens the real workflow section from each method card', async () => {
+  it('opens each of the four methods directly without claiming unverified readiness', async () => {
     render(<BuildYourOwnAIPage />);
-
-    expect(
-      await screen.findByText(/verified local training worker has not been installed/i),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'RAG: Add knowledge' }));
-    expect(screen.getByRole('heading', { name: 'Start with a purpose' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LoRA: Teach a specialty' }));
-    expect(
-      screen.getByRole('heading', { name: 'Use only what this computer can run' }),
-    ).toBeTruthy();
+    await screen.findByText(/verified local training worker has not been installed/i);
+    for (const [label, method] of [['RAG: Add knowledge', 'knowledge'], ['LoRA: Teach a specialty', 'lora'], ['QLoRA: Train efficiently', 'qlora'], ['Full weight: Train all weights', 'full']]) {
+      fireEvent.click(screen.getByRole('button', { name: label }));
+      expect(screen.getByRole('dialog').getAttribute('data-method')).toBe(method);
+      fireEvent.click(screen.getByRole('button', { name: 'Close builder' }));
+    }
+    expect(screen.queryByText('Hardware checked')).toBeNull();
+    expect(screen.getAllByText('Setup required')).toHaveLength(3);
   });
 
   it('shows the truthful local training runtime state', async () => {

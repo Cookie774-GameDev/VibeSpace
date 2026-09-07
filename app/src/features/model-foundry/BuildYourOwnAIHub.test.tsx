@@ -191,6 +191,12 @@ describe('BuildYourOwnAIHub', () => {
     expect(screen.getByText(/Source verification incomplete/i)).toBeTruthy();
   });
 
+  it('honors the method chosen on the overview without installing anything', async () => {
+    render(<BuildYourOwnAIHub open initialMethod="full" onOpenChange={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: /^Advanced full fine-tuning/i, pressed: true })).toBeTruthy();
+    expect(installTrainingWorker).not.toHaveBeenCalled();
+  });
+
   it('offers one truthful setup path for all verified weight-training methods', async () => {
     installTrainingWorker.mockResolvedValue({
       installed: true,
@@ -244,7 +250,7 @@ describe('BuildYourOwnAIHub', () => {
     expect(getTrainingWorkerStatus).toHaveBeenCalledTimes(1);
   });
 
-  it('automatically installs the verified worker when a weight-training method is selected', async () => {
+  it('does not install dependencies merely by selecting a training method', async () => {
     installTrainingWorker.mockResolvedValue({
       installed: true,
       attested: true,
@@ -262,13 +268,14 @@ describe('BuildYourOwnAIHub', () => {
     const lora = screen.getByRole('button', { name: /^LoRA fine-tuning/i });
     expect((lora as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(lora);
-
+    expect(installTrainingWorker).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Set up LoRA, QLoRA, and Full/i }));
     await waitFor(() =>
-      expect(installTrainingWorker).toHaveBeenCalledWith({ includeQlora: false }),
+      expect(installTrainingWorker).toHaveBeenCalledWith({ includeQlora: true }),
     );
   });
 
-  it('requests the CUDA QLoRA worker automatically only for QLoRA', async () => {
+  it('requires explicit setup before downloading QLoRA dependencies', async () => {
     installTrainingWorker.mockResolvedValue({
       installed: true,
       attested: true,
@@ -284,7 +291,8 @@ describe('BuildYourOwnAIHub', () => {
     render(<BuildYourOwnAIHub open onOpenChange={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^QLoRA fine-tuning/i }));
-
+    expect(installTrainingWorker).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Set up LoRA, QLoRA, and Full/i }));
     await waitFor(() => expect(installTrainingWorker).toHaveBeenCalledWith({ includeQlora: true }));
   });
 

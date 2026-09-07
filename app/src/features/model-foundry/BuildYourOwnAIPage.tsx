@@ -29,6 +29,7 @@ import {
   loadJobs,
   type FoundryJob,
   type HardwareProfile,
+  type TrainingMethod,
 } from './modelHub';
 import {
   getLocalTrainingWorkerStatus,
@@ -92,7 +93,7 @@ function Blueprint() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,hsl(var(--accent-cyan)/0.12),transparent_55%)]" />
       <div className="relative mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-metadata font-semibold uppercase tracking-[0.18em] text-accent-cyan">
+          <p className="text-metadata font-semibold uppercase tracking-[0.18em] text-accent-copper">
             Local model blueprint
           </p>
           <h2 className="mt-1 font-display text-section-title text-foreground">
@@ -100,7 +101,7 @@ function Blueprint() {
           </h2>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-3 py-1 text-metadata text-muted-foreground">
-          <LockKeyhole className="h-3.5 w-3.5 text-accent-cyan" />
+          <LockKeyhole className="h-3.5 w-3.5 text-accent-copper" />
           No cloud upload
         </span>
       </div>
@@ -111,7 +112,7 @@ function Blueprint() {
             <React.Fragment key={stage.label}>
               <div className="relative z-[1] rounded-xl border border-border/80 bg-background/85 p-4 backdrop-blur-sm">
                 <div className="mb-5 flex items-center justify-between">
-                  <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent-cyan/10 text-accent-cyan">
+                  <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent-copper/10 text-accent-copper">
                     <Icon className="h-[18px] w-[18px]" />
                   </span>
                   <span className="font-mono text-metadata text-muted-foreground">
@@ -124,7 +125,7 @@ function Blueprint() {
               {index < stages.length - 1 ? (
                 <ChevronRight
                   aria-hidden
-                  className="absolute top-1/2 z-[2] hidden h-4 w-4 -translate-y-1/2 text-accent-cyan md:block"
+                  className="absolute top-1/2 z-[2] hidden h-4 w-4 -translate-y-1/2 text-accent-copper md:block"
                   style={{ left: `${(index + 1) * 25 - 0.7}%` }}
                 />
               ) : null}
@@ -140,15 +141,19 @@ function Overview({
   jobs,
   onCreate,
   onOpenSection,
+  onChooseMethod,
+  trainingWorker,
 }: {
   jobs: readonly FoundryJob[];
   onCreate(): void;
   onOpenSection(section: SectionId): void;
+  onChooseMethod(method: TrainingMethod): void;
+  trainingWorker: LocalTrainingWorkerStatus | null;
 }) {
   const completed = verifiedJobs(jobs);
   return (
     <div className="space-y-5" data-warm-surface="model-foundry-overview">
-      <div className="max-w-2xl">
+      <div className="relative overflow-hidden rounded-2xl border border-accent-copper/25 bg-card/90 p-6 shadow-soft sm:p-8">
         <p className="text-metadata font-semibold uppercase tracking-[0.18em] text-accent-copper">
           Your private model workshop
         </p>
@@ -172,7 +177,7 @@ function Overview({
           </h2>
           <button
             type="button"
-            className="text-secondary font-medium text-accent-cyan hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-cyan"
+            className="text-secondary font-medium text-accent-copper hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper"
             onClick={() => onOpenSection('train')}
           >
             Compare methods
@@ -184,37 +189,37 @@ function Overview({
               title: 'Add knowledge',
               technical: 'RAG',
               description: 'Fastest path. Search private sources without changing model weights.',
-              ready: true,
+              method: 'knowledge' as const,
               section: 'create' as const,
             },
             {
               title: 'Teach a specialty',
               technical: 'LoRA',
               description: 'Train a small adapter when a verified worker and compatible GPU fit.',
-              ready: false,
+              method: 'lora' as const,
               section: 'train' as const,
             },
             {
               title: 'Train efficiently',
               technical: 'QLoRA',
               description: 'Use quantized training to lower memory needs on supported hardware.',
-              ready: false,
+              method: 'qlora' as const,
               section: 'train' as const,
             },
             {
               title: 'Train all weights',
               technical: 'Full weight',
               description: 'Available only for small models that safely fit the detected machine.',
-              ready: false,
+              method: 'full' as const,
               section: 'train' as const,
             },
           ].map((method) => (
             <button
               key={method.technical}
               type="button"
-              className="rounded-xl border border-border bg-card p-4 text-left transition-[border-color,transform] hover:-translate-y-0.5 hover:border-accent-cyan/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+              className="rounded-xl border border-border bg-card p-4 text-left transition-[border-color,transform] hover:-translate-y-0.5 hover:border-accent-copper/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper"
               aria-label={`${method.technical}: ${method.title}`}
-              onClick={() => onOpenSection(method.section)}
+              onClick={() => onChooseMethod(method.method)}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="rounded-full bg-muted px-2 py-1 font-mono text-metadata text-muted-foreground">
@@ -223,19 +228,20 @@ function Overview({
                 <span
                   className={cn(
                     'inline-flex items-center gap-1 text-metadata',
-                    method.ready ? 'text-success' : 'text-muted-foreground',
+                    method.method === 'knowledge' || trainingWorker?.attested && trainingWorker.methods.includes(method.method) ? 'text-accent-copper' : 'text-muted-foreground',
                   )}
                 >
-                  {method.ready ? (
+                  {method.method === 'knowledge' ? (
                     <CheckCircle2 className="h-3.5 w-3.5" />
                   ) : (
                     <Gauge className="h-3.5 w-3.5" />
                   )}
-                  {method.ready ? 'Ready' : 'Hardware checked'}
+                  {method.method === 'knowledge' ? 'No weight training' : trainingWorker?.attested && trainingWorker.methods.includes(method.method) ? 'Worker ready' : 'Setup required'}
                 </span>
               </div>
               <h3 className="mt-5 font-medium text-foreground">{method.title}</h3>
               <p className="mt-1 text-secondary text-muted-foreground">{method.description}</p>
+              <span className="mt-5 inline-flex items-center gap-1 text-secondary font-medium text-accent-copper">Configure {method.technical}<ChevronRight className="h-3.5 w-3.5" /></span>
             </button>
           ))}
         </div>
@@ -275,7 +281,7 @@ function SectionContent({
   if (section === 'create') {
     return (
       <div className="mx-auto max-w-3xl py-8 text-center">
-        <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-accent-cyan/10 text-accent-cyan">
+        <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-accent-copper/10 text-accent-copper">
           <WandSparkles className="h-6 w-6" />
         </span>
         <h1 className="mt-5 font-display text-hero">Start with a purpose</h1>
@@ -311,7 +317,7 @@ function SectionContent({
             const Icon = item.icon;
             return (
               <article key={item.title} className="rounded-xl border border-border bg-card p-5">
-                <Icon className="h-5 w-5 text-accent-cyan" />
+                <Icon className="h-5 w-5 text-accent-copper" />
                 <h2 className="mt-5 font-medium">{item.title}</h2>
                 <p className="mt-1 text-secondary text-muted-foreground">{item.copy}</p>
               </article>
@@ -347,17 +353,32 @@ function SectionContent({
   if (section === 'evaluate') {
     return (
       <div className="mx-auto max-w-3xl py-8">
-        <FlaskConical className="h-7 w-7 text-accent-cyan" />
+        <FlaskConical className="h-7 w-7 text-accent-copper" />
         <h1 className="mt-5 font-display text-hero">Evaluate before activation</h1>
         <p className="mt-2 text-body text-muted-foreground">
-          Compare held-out examples, inspect failures, and verify artifact integrity before a model
-          becomes available to Agents or Chat.
+          Review job outcomes and artifact integrity here. A verified file is not a guarantee of
+          answer quality: inspect held-out evaluation results before using a model for real work.
         </p>
         <div className="mt-6 rounded-xl border border-border bg-card p-5">
           <p className="text-secondary text-muted-foreground">
-            Evaluation reports appear here after a training job reaches the verification stage.
+            {jobs.length ? `${jobs.length} local jobs · ${verifiedJobs(jobs).length} verified artifacts` : 'No job results yet. Create a model to begin.'}
           </p>
         </div>
+        <div className="mt-4 space-y-3">
+          {jobs.map((job) => (
+            <article key={job.id} className="rounded-xl border border-border bg-card p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="font-medium">{job.name}</h2>
+                <span className="text-metadata text-muted-foreground">{statusLabel(job)}</span>
+              </div>
+              <p className="mt-2 text-secondary text-muted-foreground">
+                {job.artifactVerified && job.artifactPath && job.status === 'completed' ? 'Artifact integrity verified' : 'Artifact not yet verified'}
+              </p>
+              {job.error && <p className="mt-2 text-secondary text-destructive">{job.error}</p>}
+            </article>
+          ))}
+        </div>
+        <Button className="mt-5" variant="accent" onClick={onCreate}>Open jobs and artifacts</Button>
       </div>
     );
   }
@@ -410,6 +431,7 @@ function SectionContent({
 export function BuildYourOwnAIPage() {
   const [section, setSection] = React.useState<SectionId>('overview');
   const [builderOpen, setBuilderOpen] = React.useState(false);
+  const [initialMethod, setInitialMethod] = React.useState<TrainingMethod>();
   const [hardware, setHardware] = React.useState<HardwareProfile>(INITIAL_HARDWARE);
   const [trainingWorker, setTrainingWorker] = React.useState<LocalTrainingWorkerStatus | null>(
     null,
@@ -425,16 +447,26 @@ export function BuildYourOwnAIPage() {
     void detectHardware().then((profile) => {
       if (!cancelled) setHardware(profile);
     });
-    void import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke<FoundryJob[]>('model_foundry_list_jobs'))
-      .then((nativeJobs) => {
+    let refreshing = false;
+    const refreshJobs = async () => {
+      if (cancelled || refreshing) return;
+      refreshing = true;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const nativeJobs = await invoke<FoundryJob[]>('model_foundry_list_jobs');
         if (!cancelled && Array.isArray(nativeJobs)) setJobs(nativeJobs);
-      })
-      .catch(() => {
-        // Web preview keeps the durable local snapshot without inventing native job state.
-      });
+      } catch {
+        // Keep the last known snapshot; never fabricate a completed job.
+      } finally { refreshing = false; }
+    };
+    void refreshJobs();
+    const timer = window.setInterval(() => { void refreshJobs(); }, 5000);
+    window.addEventListener('focus', refreshJobs);
+
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshJobs);
     };
   }, [builderOpen]);
 
@@ -503,7 +535,7 @@ export function BuildYourOwnAIPage() {
           className="rounded-xl border border-border bg-panel p-2 lg:sticky lg:top-3 lg:h-fit"
         >
           <div className="mb-3 hidden items-center gap-2 px-2 py-2 lg:flex">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent-cyan/10 text-accent-cyan">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent-copper/10 text-accent-copper">
               <BrainCircuit className="h-4 w-4" />
             </span>
             <div className="min-w-0">
@@ -523,9 +555,9 @@ export function BuildYourOwnAIPage() {
                   onClick={() => setSection(item.id)}
                   className={cn(
                     'flex min-h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-left text-secondary transition-colors',
-                    'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-cyan',
+                    'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper',
                     selected
-                      ? 'bg-accent-cyan/10 font-medium text-accent-cyan'
+                      ? 'bg-accent-copper/10 font-medium text-accent-copper'
                       : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                   )}
                 >
@@ -547,6 +579,8 @@ export function BuildYourOwnAIPage() {
               jobs={jobs}
               onCreate={() => setBuilderOpen(true)}
               onOpenSection={setSection}
+              trainingWorker={trainingWorker}
+              onChooseMethod={(method) => { setInitialMethod(method); setBuilderOpen(true); }}
             />
           ) : (
             <SectionContent section={section} jobs={jobs} onCreate={() => setBuilderOpen(true)} />
@@ -556,7 +590,7 @@ export function BuildYourOwnAIPage() {
         <aside className="space-y-3 lg:col-start-2 xl:col-start-auto xl:sticky xl:top-5 xl:h-fit">
           <section className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-center gap-2">
-              <Cpu className="h-4 w-4 text-accent-cyan" />
+              <Cpu className="h-4 w-4 text-accent-copper" />
               <h2 className="font-medium">This computer</h2>
             </div>
             <dl className="mt-4 space-y-3 text-secondary">
@@ -598,8 +632,8 @@ export function BuildYourOwnAIPage() {
             </dl>
           </section>
 
-          <section className="rounded-xl border border-accent-cyan/30 bg-accent-cyan/5 p-4">
-            <div className="flex items-center gap-2 text-accent-cyan">
+          <section className="rounded-xl border border-accent-copper/30 bg-accent-copper/5 p-4">
+            <div className="flex items-center gap-2 text-accent-copper">
               <LockKeyhole className="h-4 w-4" />
               <h2 className="font-medium">Local by design</h2>
             </div>
@@ -610,7 +644,7 @@ export function BuildYourOwnAIPage() {
 
           <section className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-accent-cyan" />
+              <ShieldCheck className="h-4 w-4 text-accent-copper" />
               <h2 className="font-medium">Training runtime</h2>
             </div>
             <p className="mt-2 text-secondary text-muted-foreground">
@@ -659,8 +693,8 @@ export function BuildYourOwnAIPage() {
                   <button
                     key={job.id}
                     type="button"
-                    onClick={() => setSection('models')}
-                    className="w-full rounded-lg bg-muted/60 p-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-cyan"
+                    onClick={() => { setInitialMethod(undefined); setBuilderOpen(true); }}
+                    className="w-full rounded-lg bg-muted/60 p-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper"
                   >
                     <span className="block truncate text-secondary font-medium">{job.name}</span>
                     <span className="mt-0.5 block text-metadata capitalize text-muted-foreground">
@@ -680,6 +714,7 @@ export function BuildYourOwnAIPage() {
         open={builderOpen}
         onOpenChange={setBuilderOpen}
         trainingWorker={trainingWorker}
+        initialMethod={initialMethod}
       />
     </main>
   );

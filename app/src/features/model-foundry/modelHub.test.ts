@@ -33,6 +33,15 @@ const workstation = {
 };
 
 describe('model foundry domain', () => {
+  it('blocks unknown capacity and requires actual RAM for knowledge indexing', () => {
+    for (const hardware of [
+      { ...workstation, ramGb: 0, vramGb: 0 },
+      { ...workstation, freeStorageGb: Number.NaN },
+      { ...workstation, ramGb: Number.POSITIVE_INFINITY },
+    ]) {
+      expect(planLocalTrainingMethod({ method: 'knowledge', parametersB: 1, hardware, worker: null }).available).toBe(false);
+    }
+  });
   it('measures plain local training text without inventing a fixed source count', () => {
     const measurement = measureTrainingText('a'.repeat(12_001));
     expect(measurement).toMatchObject({

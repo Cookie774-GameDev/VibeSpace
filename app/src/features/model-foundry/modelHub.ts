@@ -383,6 +383,11 @@ export function planLocalTrainingMethod(input: {
     workload: requirements.workload,
   };
 
+  if ([input.hardware.ramGb, input.hardware.vramGb, input.hardware.freeStorageGb]
+    .some((value) => !Number.isFinite(value) || value < 0)) {
+    return { ...base, available: false, reason: 'Hardware capacity could not be verified. Refresh hardware detection before training.' };
+  }
+
   if (input.method !== 'knowledge') {
     if (!input.worker?.installed) {
       return {
@@ -424,7 +429,9 @@ export function planLocalTrainingMethod(input: {
   }
 
   const memoryFits =
-    input.computeDevice === 'gpu'
+    input.method === 'knowledge'
+      ? reportedMemoryMeets(input.hardware.ramGb, requiredRamGb)
+      : input.computeDevice === 'gpu'
       ? reportedMemoryMeets(input.hardware.vramGb, requiredVramGb)
       : input.computeDevice === 'cpu'
         ? reportedMemoryMeets(input.hardware.ramGb, requiredRamGb)
