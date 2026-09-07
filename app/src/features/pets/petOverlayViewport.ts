@@ -1,6 +1,6 @@
-const DEFAULT_SHELL_SIZE = 144;
-const DEFAULT_DISPLAY_SIZE = 128;
-const SHELL_PADDING = DEFAULT_SHELL_SIZE - DEFAULT_DISPLAY_SIZE;
+const DEFAULT_SHELL_SIZE = 192;
+export const PET_OVERLAY_DISPLAY_SIZE = 176;
+const SHELL_PADDING = DEFAULT_SHELL_SIZE - PET_OVERLAY_DISPLAY_SIZE;
 
 function finiteViewportDimension(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return DEFAULT_SHELL_SIZE;
@@ -18,6 +18,6 @@ export function resolvePetOverlayViewport(
   );
   return {
     shellSize,
-    displaySize: Math.max(1, Math.min(DEFAULT_DISPLAY_SIZE, shellSize - SHELL_PADDING)),
+    displaySize: Math.max(1, Math.min(PET_OVERLAY_DISPLAY_SIZE, shellSize - SHELL_PADDING)),
   };
 }

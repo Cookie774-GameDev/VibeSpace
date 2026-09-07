@@ -475,6 +475,18 @@ describe('PixiAtlasPlayer', () => {
     expect(Number.isInteger(sprite.y)).toBe(true);
     expect(sprite.x).toBe(64);
     expect(sprite.y).toBe(128);
+    p.pause();
+    const before = p.getDiagnostics();
+    p.setDisplaySize(100);
+    expect(host.querySelector('canvas')?.style.width).toBe('100px');
+    expect(sprite.x).toBe(50);
+    expect(sprite.y).toBe(100);
+    expect(sprite.scale.set).toHaveBeenLastCalledWith(100 / 128);
+    expect(p.getDiagnostics().currentFrameIndex).toBe(before.currentFrameIndex);
+    p.setDisplaySize(128);
+    expect(sprite.x).toBe(64);
+    expect(sprite.y).toBe(128);
+    expect(host.querySelectorAll('canvas')).toHaveLength(1);
     p.dispose();
   });
 });

@@ -33,14 +33,21 @@ export function PetOverlayWindow({ runtimeEffectsEnabled = true }: PetOverlayWin
   const panelMode = usePetSettingsStore((s) => s.panelMode) ?? 'normal';
   const setOverlayVisible = usePetSettingsStore((s) => s.setOverlayVisible);
   const theme = useUIStore((s) => s.theme);
-  const viewport = React.useMemo(
-    () =>
-      resolvePetOverlayViewport(
-        typeof window === 'undefined' ? 144 : window.innerWidth,
-        typeof window === 'undefined' ? 144 : window.innerHeight,
-      ),
-    [],
+  const [viewport, setViewport] = React.useState(() =>
+    resolvePetOverlayViewport(
+      typeof window === 'undefined' ? 144 : window.innerWidth,
+      typeof window === 'undefined' ? 144 : window.innerHeight,
+    ),
   );
+  React.useEffect(() => {
+    const resize = () => {
+      const next = resolvePetOverlayViewport(window.innerWidth, window.innerHeight);
+      setViewport((current) => (current.shellSize === next.shellSize ? current : next));
+    };
+    resize();
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
   const shouldRenderPet = !runtimeEffectsEnabled || (enabled && overlayVisible);
 
   React.useEffect(() => {

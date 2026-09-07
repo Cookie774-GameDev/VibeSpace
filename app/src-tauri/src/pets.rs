@@ -17,7 +17,7 @@ use tauri::{
 pub const PET_OVERLAY_LABEL: &str = "pet-overlay";
 pub const PET_MINI_PANEL_LABEL: &str = "pet-mini-panel";
 
-const OVERLAY_SIZE: u32 = 144;
+const OVERLAY_SIZE: u32 = 192;
 const PANEL_DEFAULT_W: f64 = 430.0;
 const PANEL_DEFAULT_H: f64 = 560.0;
 const PANEL_MIN_W: f64 = 360.0;
@@ -937,19 +937,32 @@ fn native_pin_hwnd_topmost_noactivate(win: &WebviewWindow) {
     }
 }
 
+// Keep the overlay caption empty; identify it with a process-owned HWND property
+// instead of displaying an internal window title above the character.
+#[cfg(target_os = "windows")]
+fn set_pet_native_caption(hwnd: windows::Win32::Foundation::HWND, overlay: bool, title: &str) -> bool {
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::{Foundation::HANDLE, UI::WindowsAndMessaging::{SetPropW, SetWindowTextW}};
+    if overlay && unsafe { SetPropW(hwnd, w!("VibeSpace.PetOverlay"), Some(HANDLE(hwnd.0))) }.is_err() {
+        return false;
+    }
+    let caption: Vec<u16> = (if overlay { "" } else { title }).encode_utf16().chain(Some(0)).collect();
+    unsafe { SetWindowTextW(hwnd, PCWSTR(caption.as_ptr())) }.is_ok()
+}
+
 #[cfg(target_os = "windows")]
 fn native_show_pet_window(win: &WebviewWindow, title: &str, focus: bool) -> bool {
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, SetForegroundWindow, SetWindowTextW, ShowWindow, SW_SHOW,
+        IsWindowVisible, SetForegroundWindow, ShowWindow, SW_SHOW,
         SW_SHOWNOACTIVATE,
     };
     let Ok(raw) = win.hwnd() else { return false };
     let hwnd = HWND(raw.0 as *mut _);
-    let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
     unsafe {
-        let _ = SetWindowTextW(hwnd, PCWSTR(title.as_ptr()));
+        if !set_pet_native_caption(hwnd, win.label() == PET_OVERLAY_LABEL, title) {
+            return false;
+        }
         let _ = ShowWindow(hwnd, if focus { SW_SHOW } else { SW_SHOWNOACTIVATE });
         if focus {
             let _ = SetForegroundWindow(hwnd);
@@ -1030,15 +1043,13 @@ fn native_configure_pet_window(
     height: i32,
     focus: bool,
 ) -> Option<isize> {
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, SetForegroundWindow, SetWindowPos, SetWindowTextW, HWND_TOPMOST,
+        IsWindowVisible, SetForegroundWindow, SetWindowPos, HWND_TOPMOST,
         SWP_NOACTIVATE, SWP_SHOWWINDOW,
     };
     let Ok(raw) = win.hwnd() else { return None };
     let hwnd = HWND(raw.0 as *mut _);
-    let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
     let flags = if focus {
         SWP_SHOWWINDOW
     } else {
@@ -1046,7 +1057,9 @@ fn native_configure_pet_window(
     };
     unsafe {
         native_restore_pet_window_chrome(hwnd);
-        let _ = SetWindowTextW(hwnd, PCWSTR(title.as_ptr()));
+        if !set_pet_native_caption(hwnd, win.label() == PET_OVERLAY_LABEL, title) {
+            return None;
+        }
         let positioned = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, flags);
         if focus {
             let _ = SetForegroundWindow(hwnd);
@@ -1066,14 +1079,14 @@ fn native_show_pet_window(win: &WebviewWindow, _title: &str, _focus: bool) -> bo
 
 #[cfg(target_os = "windows")]
 fn native_pet_hwnds(label: &str) -> Vec<windows::Win32::Foundation::HWND> {
-    use windows::core::PCWSTR;
+    use windows::core::{w, PCWSTR};
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetWindowThreadProcessId};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetPropW, GetWindowThreadProcessId};
 
     let Some(expected_title) = pet_native_title_for_label(label) else {
         return Vec::new();
     };
-    let title = expected_title
+    let title = (if label == PET_OVERLAY_LABEL { "" } else { expected_title })
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
@@ -1089,7 +1102,9 @@ fn native_pet_hwnds(label: &str) -> Vec<windows::Win32::Foundation::HWND> {
         unsafe {
             GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         }
-        if process_id == std::process::id() {
+        let tagged = label != PET_OVERLAY_LABEL
+            || unsafe { GetPropW(hwnd, w!("VibeSpace.PetOverlay")) }.0 == hwnd.0;
+        if process_id == std::process::id() && tagged {
             windows.push(hwnd);
         }
         after = Some(hwnd);
@@ -1142,7 +1157,7 @@ fn hide_pet_window_by_state(app: &AppHandle, label: &str) -> Result<(), &'static
     };
     let raw = slot.load(Ordering::SeqCst);
     if raw == 0 {
-        return Ok(());
+        return hide_pet_windows_by_label(label);
     }
     let hwnd = HWND(raw as *mut _);
     let mut process_id = 0;
@@ -1151,7 +1166,7 @@ fn hide_pet_window_by_state(app: &AppHandle, label: &str) -> Result<(), &'static
     }
     if !unsafe { IsWindow(Some(hwnd)).as_bool() } || process_id != std::process::id() {
         slot.store(0, Ordering::SeqCst);
-        return Ok(());
+        return hide_pet_windows_by_label(label);
     }
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
@@ -1546,7 +1561,7 @@ fn build_pet_overlay<M: Manager<tauri::Wry>>(
         PET_OVERLAY_LABEL,
         pet_webview_url(app, "pet-overlay")?,
     )
-    .title("VibeSpace Pet")
+    .title("")
     .inner_size(OVERLAY_SIZE as f64, OVERLAY_SIZE as f64)
     .min_inner_size(OVERLAY_SIZE as f64, OVERLAY_SIZE as f64)
     .max_inner_size(OVERLAY_SIZE as f64, OVERLAY_SIZE as f64)
@@ -2055,7 +2070,7 @@ pub async fn pet_set_overlay_position(app: AppHandle, x: f64, y: f64) -> Result<
     // Keep at least ~24px of the pet window on-screen (cannot disappear off edge).
     let (cx, cy) = constrain_overlay_position(&app, x, y, None);
     let _ = win.set_position(PhysicalPosition::new(cx as i32, cy as i32));
-    pin_pet_window_topmost(&win, true);
+    pin_pet_window_topmost(&win, false);
     if let Ok(mut geo) = app.state::<PetWindowState>().geometry.lock() {
         geo.overlay_x = Some(cx);
         geo.overlay_y = Some(cy);
@@ -3047,6 +3062,23 @@ mod tests {
         assert!(!should_pin_pet_window(true, true));
         assert!(!should_pin_pet_window(false, false));
         assert!(!should_pin_pet_window(false, true));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn overlay_caption_is_empty_and_lookup_requires_our_window_property() {
+        use windows::{core::w, Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetWindowTextW, WS_POPUP}};
+        let tagged = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!("old pet title"), WS_POPUP, 0, 0, 144, 144, None, None, None, None) }.unwrap();
+        let unrelated = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!(""), WS_POPUP, 0, 0, 144, 144, None, None, None, None) }.unwrap();
+        assert!(set_pet_native_caption(tagged, true, "VibeSpace Pet"));
+        let mut caption = [0u16; 64];
+        assert_eq!(unsafe { GetWindowTextW(tagged, &mut caption) }, 0);
+        let matches = native_pet_hwnds(PET_OVERLAY_LABEL);
+        let tagged_found = matches.contains(&tagged);
+        let unrelated_found = matches.contains(&unrelated);
+        unsafe { let _ = DestroyWindow(tagged); let _ = DestroyWindow(unrelated); }
+        assert!(tagged_found);
+        assert!(!unrelated_found);
     }
 
     #[test]

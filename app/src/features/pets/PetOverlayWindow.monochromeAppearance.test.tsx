@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/stores/ui', () => ({
@@ -96,6 +96,30 @@ describe('PetOverlayWindow MonoChrome appearance', () => {
     expect(surface.style.backgroundColor).toBe('transparent');
     expect(surface.style.backgroundImage).toBe('none');
     expect(surface.querySelectorAll('[data-pet-pixi-canvas="true"]')).toHaveLength(1);
+  });
+
+  it('refits the pet shell after the native viewport changes size', () => {
+    const originalWidth = window.innerWidth;
+    const originalHeight = window.innerHeight;
+    const view = render(<PetOverlayWindow runtimeEffectsEnabled={false} />);
+    try {
+      act(() => {
+        Object.defineProperty(window, 'innerWidth', { value: 116, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 116, configurable: true });
+        window.dispatchEvent(new Event('resize'));
+      });
+      expect(screen.getByTestId('pet-overlay-root').style.width).toBe('116px');
+      act(() => {
+        Object.defineProperty(window, 'innerWidth', { value: 144, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 144, configurable: true });
+        window.dispatchEvent(new Event('resize'));
+      });
+      expect(screen.getByTestId('pet-overlay-root').style.width).toBe('144px');
+    } finally {
+      view.unmount();
+      Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: originalHeight, configurable: true });
+    }
   });
 
   it('themes the deterministic fixture without native or storage side effects', async () => {

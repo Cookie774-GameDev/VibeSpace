@@ -10,6 +10,11 @@ describe('resolvePetOverlayViewport', () => {
     expect(resolvePetOverlayViewport(144, 144)).toEqual({ shellSize: 144, displaySize: 128 });
   });
 
+  it('uses a larger pet while preserving clear padding in the enlarged native window', () => {
+    expect(resolvePetOverlayViewport(192, 192)).toEqual({ shellSize: 192, displaySize: 176 });
+    expect(resolvePetOverlayViewport(154, 154)).toEqual({ shellSize: 154, displaySize: 138 });
+  });
+
   it('never overflows very small detached viewports', () => {
     const resolved = resolvePetOverlayViewport(80, 72);
     expect(resolved.shellSize).toBe(72);

@@ -469,12 +469,21 @@ export class PixiAtlasPlayer {
     petPerfSetCanvasCount(liveApplicationCount);
   }
 
+  setDisplaySize(size: number): void {
+    if (!Number.isFinite(size) || size <= 0 || size === this.displaySize) return;
+    this.displaySize = size;
+    this.resizeToDisplay();
+  }
+
   private resizeToDisplay(): void {
     if (!this.app) return;
     this.app.renderer.resize(this.displaySize, this.displaySize);
+    this.app.canvas.style.width = `${this.displaySize}px`;
+    this.app.canvas.style.height = `${this.displaySize}px`;
     if (this.sprite) {
       this.sprite.x = Math.round(this.displaySize / 2);
       this.sprite.y = Math.round(this.displaySize);
+      this.applyCurrentFrame();
     }
   }
 

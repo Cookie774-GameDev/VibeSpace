@@ -5,6 +5,8 @@
  */
 import * as React from 'react';
 import { PixiAtlasPlayer } from './pixiAtlasPlayer';
+import { createPetPositionQueue } from './petPositionQueue';
+import { PET_OVERLAY_DISPLAY_SIZE } from './petOverlayViewport';
 import {
   canEnterSleep,
   canScheduleIdleFun,
@@ -112,7 +114,13 @@ export function PetOverlay({
   edgeSnapping: edgeSnappingProp,
 }: PetOverlayProps) {
   const displaySize = Number.isFinite(displaySizeProp)
-    ? Math.max(1, Math.min(DEFAULT_DISPLAY_SIZE, Math.round(displaySizeProp)))
+    ? Math.max(
+        1,
+        Math.min(
+          tauriWindowMode ? PET_OVERLAY_DISPLAY_SIZE : DEFAULT_DISPLAY_SIZE,
+          Math.round(displaySizeProp),
+        ),
+      )
     : DEFAULT_DISPLAY_SIZE;
   const hostRef = React.useRef<HTMLDivElement>(null);
   const contextMenuRef = React.useRef<HTMLDivElement>(null);
@@ -148,9 +156,19 @@ export function PetOverlay({
     vel: DragVelocityState;
     windowOriginX: number;
     windowOriginY: number;
+    windowScale: number;
     gesture: PetPointerGesture;
     canMove: boolean;
   } | null>(null);
+  const positionQueue = React.useMemo(() => createPetPositionQueue(setPetOverlayPosition), []);
+  const dragGeneration = React.useRef(0);
+  React.useEffect(
+    () => () => {
+      positionQueue.clear();
+      dragGeneration.current += 1;
+    },
+    [positionQueue],
+  );
   /** Prevents double open from setState(panelOpen) + explicit openPanelNow. */
   const openingPanelRef = React.useRef(false);
   const animCache = React.useRef(new Map<string, { jsonUrl: string; imageUrl: string }>());
@@ -282,6 +300,8 @@ export function PetOverlay({
           });
           if (!isCurrentRequest()) return;
           initOnce.current = true;
+        } else {
+          player.setDisplaySize(displaySize);
         }
 
         const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
@@ -771,10 +791,14 @@ export function PetOverlay({
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     const t = performance.now();
+    dragGeneration.current += 1;
+    const pointerX = tauriWindowMode ? e.screenX : e.clientX;
+    const pointerY = tauriWindowMode ? e.screenY : e.clientY;
+    const windowScale = window.devicePixelRatio || 1;
     const gesture = beginPetPointerGesture({
       pointerId: e.pointerId,
-      clientX: e.clientX,
-      clientY: e.clientY,
+      clientX: pointerX,
+      clientY: pointerY,
       screenX: e.screenX,
       screenY: e.screenY,
       logicalLeft: pos.left,
@@ -783,13 +807,14 @@ export function PetOverlay({
     });
     dragRef.current = {
       active: true,
-      startX: e.clientX,
-      startY: e.clientY,
+      startX: pointerX,
+      startY: pointerY,
       originLeft: pos.left,
       originTop: pos.top,
-      vel: createDragVelocityState(e.clientX, t),
-      windowOriginX: e.screenX - e.clientX + pos.left,
-      windowOriginY: e.screenY - e.clientY + pos.top,
+      vel: createDragVelocityState(pointerX, t),
+      windowOriginX: (e.screenX - e.clientX) * windowScale,
+      windowOriginY: (e.screenY - e.clientY) * windowScale,
+      windowScale,
       gesture,
       canMove: !positionLocked,
     };
@@ -829,7 +854,15 @@ export function PetOverlay({
     const samples =
       coalesced && coalesced.length > 0
         ? coalesced
-        : [{ clientX: e.clientX, clientY: e.clientY, timeStamp: e.timeStamp }];
+        : [
+            {
+              clientX: e.clientX,
+              clientY: e.clientY,
+              screenX: e.screenX,
+              screenY: e.screenY,
+              timeStamp: e.timeStamp,
+            },
+          ];
     let walkAnim: 'walkLeft' | 'walkRight' | 'idlePrimary' = 'idlePrimary';
     let vx = d.vel.vx;
     for (const sample of samples) {
@@ -837,25 +870,25 @@ export function PetOverlay({
         typeof sample.timeStamp === 'number' && sample.timeStamp > 0
           ? sample.timeStamp
           : performance.now();
-      const r = sampleDragVelocity(d.vel, sample.clientX, t);
+      const r = sampleDragVelocity(d.vel, tauriWindowMode ? sample.screenX : sample.clientX, t);
       d.vel = r.state;
       walkAnim = r.walkAnim;
       vx = r.state.vx;
     }
     const last = samples[samples.length - 1]!;
-    samplePetPointerGesture(d.gesture, last.clientX, last.clientY);
+    const pointerX = tauriWindowMode ? last.screenX : last.clientX;
+    const pointerY = tauriWindowMode ? last.screenY : last.clientY;
+    samplePetPointerGesture(d.gesture, pointerX, pointerY);
     if (!d.canMove) return;
-    const dx = last.clientX - d.startX;
-    const dy = last.clientY - d.startY;
+    const dx = pointerX - d.startX;
+    const dy = pointerY - d.startY;
     if (tauriWindowMode) {
-      const rawX = d.windowOriginX + dx;
-      const rawY = d.windowOriginY + dy;
-      const sw =
-        typeof window !== 'undefined' ? window.screen.availWidth || window.innerWidth : 1920;
-      const sh =
-        typeof window !== 'undefined' ? window.screen.availHeight || window.innerHeight : 1080;
-      const clamped = clampPetPosition(rawX, rawY, displaySize, sw, sh, 0);
-      void setPetOverlayPosition(clamped.x, clamped.y);
+      // Screen coordinates remain stable while this native window moves. The
+      // backend owns physical monitor bounds, including negative-origin displays.
+      positionQueue.push(
+        d.windowOriginX + dx * d.windowScale,
+        d.windowOriginY + dy * d.windowScale,
+      );
     } else {
       const sw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const sh = typeof window !== 'undefined' ? window.innerHeight : 1080;
@@ -870,14 +903,26 @@ export function PetOverlay({
   const onPointerUp = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
-    samplePetPointerGesture(d.gesture, e.clientX, e.clientY);
-    const openPanel = shouldOpenPanelFromGesture(d.gesture);
+    samplePetPointerGesture(
+      d.gesture,
+      tauriWindowMode ? e.screenX : e.clientX,
+      tauriWindowMode ? e.screenY : e.clientY,
+    );
+    const openPanel = e.type !== 'pointercancel' && shouldOpenPanelFromGesture(d.gesture);
     dragRef.current = null;
     lastWalkAnimRef.current = null;
     if (d.canMove) {
       setState(reducePetEvent(stateRef.current, { type: 'drag_end' }));
       if (tauriWindowMode && edgeSnapping) {
-        void snapPetOverlayToEdge();
+        const generation = dragGeneration.current;
+        void positionQueue
+          .flush()
+          .then(() => {
+            if (generation === dragGeneration.current && !dragRef.current) {
+              return snapPetOverlayToEdge();
+            }
+          })
+          .catch(() => undefined);
       } else if (!tauriWindowMode && edgeSnapping) {
         const sw = typeof window !== 'undefined' ? window.innerWidth : 1920;
         const sh = typeof window !== 'undefined' ? window.innerHeight : 1080;

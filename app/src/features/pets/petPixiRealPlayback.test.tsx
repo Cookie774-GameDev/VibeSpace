@@ -71,6 +71,8 @@ vi.mock('./pixiAtlasPlayer', () => {
       return false;
     }
 
+    setDisplaySize() {}
+
     setPlaybackFps() {}
 
     pause() {}
@@ -158,6 +160,19 @@ describe('PetOverlay StrictMode player lifecycle', () => {
     vi.mocked(snapPetOverlayToEdge).mockClear();
     resetPetRuntimeEventDedupeForTests();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('allows the enlarged native pet without enlarging the in-app default', () => {
+    const view = render(<PetOverlay tauriWindowMode displaySize={176} />);
+    expect((view.container.querySelector('[data-pet-overlay]') as HTMLElement).style.width).toBe(
+      '176px',
+    );
+    view.rerender(<PetOverlay />);
+    expect((view.container.querySelector('[data-pet-overlay]') as HTMLElement).style.width).toBe(
+      '128px',
+    );
+    view.unmount();
   });
 
   it('uses the bundled static portrait when animation is off and publishes image readiness', async () => {
@@ -305,9 +320,56 @@ describe('PetOverlay StrictMode player lifecycle', () => {
       screenX: 225,
       screenY: 200,
     });
-    expect(snapPetOverlayToEdge).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(snapPetOverlayToEdge).toHaveBeenCalledTimes(1));
     view.unmount();
   });
+
+  it.each([1, 1.25, 2])(
+    'tracks desktop coordinates at scale %s while window-relative coordinates stay fixed',
+    async (scale) => {
+      vi.stubGlobal('devicePixelRatio', scale);
+      const view = render(<PetOverlay tauriWindowMode edgeSnapping={false} />);
+      const overlay = view.container.querySelector('[data-pet-overlay="true"]') as HTMLElement;
+      overlay.setPointerCapture = vi.fn();
+      fireEvent.pointerDown(overlay, {
+        button: 0,
+        pointerId: 12,
+        clientX: 20,
+        clientY: 25,
+        screenX: 200,
+        screenY: 225,
+      });
+      fireEvent.pointerMove(overlay, {
+        pointerId: 12,
+        clientX: 20,
+        clientY: 25,
+        screenX: 250,
+        screenY: 275,
+      });
+      await waitFor(() =>
+        expect(setPetOverlayPosition).toHaveBeenLastCalledWith(230 * scale, 250 * scale),
+      );
+      fireEvent.pointerMove(overlay, {
+        pointerId: 12,
+        clientX: 20,
+        clientY: 25,
+        screenX: 300,
+        screenY: 300,
+      });
+      await waitFor(() =>
+        expect(setPetOverlayPosition).toHaveBeenLastCalledWith(280 * scale, 275 * scale),
+      );
+      fireEvent.pointerUp(overlay, {
+        pointerId: 12,
+        clientX: 20,
+        clientY: 25,
+        screenX: 300,
+        screenY: 300,
+      });
+      expect(snapPetOverlayToEdge).not.toHaveBeenCalled();
+      view.unmount();
+    },
+  );
 
   it('keeps clicks active while position lock prevents desktop movement', async () => {
     const view = render(<PetOverlay tauriWindowMode positionLocked />);
