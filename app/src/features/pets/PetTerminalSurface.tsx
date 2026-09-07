@@ -293,9 +293,7 @@ export function PetTerminalSurface({ className }: { className?: string }) {
                     <span className="text-foreground">{t.title || t.terminalId.slice(0, 8)}</span>
                     <span className="ml-1 text-muted-foreground">· {t.status}</span>
                   </div>
-                  {/* Same main-app PaneToolbar (T / Clear hold / X hold / palette).
-                      Only mount on the focused tile so controls stay unique + responsive. */}
-                  {isActive ? (
+                  {/* Keep each pane's controls mounted, including while focus changes. */}
                     <PaneToolbar
                       sessionId={sessionId}
                       paneId={paneId}
@@ -312,7 +310,6 @@ export function PetTerminalSurface({ className }: { className?: string }) {
                         void closeTerminal(t.terminalId, sessionId);
                       }}
                     />
-                  ) : null}
                 </div>
                 <div className="min-h-0 flex-1" data-pet-terminal-input="true">
                   <TerminalView

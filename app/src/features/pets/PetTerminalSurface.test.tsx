@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { act, within, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PetTerminalSurface } from './PetTerminalSurface';
 import { usePetPresentationStore } from './petPresentationStore';
@@ -126,17 +127,17 @@ describe('PetTerminalSurface main-app chrome (tabs and grid, max 4)', () => {
     render(<PetTerminalSurface />);
 
     expect(
-      screen.getByRole('button', { name: 'Open VibeSpace terminal palette' }),
+      screen.getAllByRole('button', { name: 'Open VibeSpace terminal palette' })[0],
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Cycle font size/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Hold 1\.5s to clear screen/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Hold 1\.5s to close pane/i })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /Cycle font size/i })[0]).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /Hold 1\.5s to clear screen/i })[0]).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /Hold 1\.5s to close pane/i })[0]).toBeTruthy();
   });
 
   it('requires hold-then-confirm before clear (identical to main app)', () => {
     render(<PetTerminalSurface />);
 
-    const clearBtn = screen.getByRole('button', { name: /Hold 1\.5s to clear screen/i });
+    const clearBtn = screen.getAllByRole('button', { name: /Hold 1\.5s to clear screen/i })[0];
     fireEvent.pointerDown(clearBtn);
     // Not yet in confirm — clear must not fire on a short click.
     expect(clearTerminalSession).not.toHaveBeenCalled();
@@ -156,4 +157,26 @@ describe('PetTerminalSurface main-app chrome (tabs and grid, max 4)', () => {
     expect((screen.getByRole('button', { name: 'New terminal' }) as HTMLButtonElement).disabled).toBe(true);
     expect(localStorage.getItem('vibespace-pet-terminal-view-mode')).toBe('grid');
   });
+  it('keeps every pane actionable through StrictMode and focus changes', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<StrictMode><PetTerminalSurface /></StrictMode>);
+      fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
+      expect(screen.getAllByRole('button', { name: /Cycle font size/i })).toHaveLength(2);
+      const tile = document.querySelector('[data-pet-terminal-tile="second"]') as HTMLElement;
+      const pane = within(tile);
+      fireEvent.pointerDown(pane.getByRole('button', { name: /Hold 1\.5s to clear screen/i }));
+      act(() => vi.advanceTimersByTime(1500));
+      fireEvent.click(pane.getByRole('button', { name: 'Confirm clear' }));
+      expect(clearTerminalSession).toHaveBeenCalledWith('pty-second', 'pet-pane-second');
+      fireEvent.click(pane.getByRole('button', { name: /Cycle font size/i }));
+      expect(pane.getByRole('button', { name: /currently 11px/i })).toBeTruthy();
+      fireEvent.pointerDown(pane.getByRole('button', { name: /Hold 1\.5s to close pane/i }));
+      act(() => vi.advanceTimersByTime(1500));
+      await act(async () => { fireEvent.click(pane.getByRole('button', { name: 'Confirm close' })); });
+      expect(usePetPresentationStore.getState().terminals.second).toBeUndefined();
+      expect(usePetPresentationStore.getState().terminals.first).toBeTruthy();
+    } finally { vi.useRealTimers(); }
+  });
+
 });

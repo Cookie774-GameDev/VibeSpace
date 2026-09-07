@@ -911,10 +911,15 @@
 }
 .pet-terminal-stage-grid [data-pet-terminal-chrome='true'] {
   display: grid;
-  grid-template-rows: 13px 17px;
-  height: 36px;
-  min-height: 36px;
-  padding-block: 3px;
+  grid-template-rows: auto auto;
+  height: auto;
+  min-height: 48px;
+  padding-block: 5px;
+  justify-content: stretch;
+}
+.pet-terminal-stage-grid [data-pet-terminal-chrome='true'] > :last-child {
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .pet-panel-native-resize { position: absolute; z-index: 20; touch-action: none; }

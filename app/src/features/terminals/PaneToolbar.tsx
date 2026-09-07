@@ -92,7 +92,8 @@ function useHoldToConfirm(canBegin?: () => boolean): {
   React.useEffect(() => {
     return () => {
       ctrlRef.current?.dispose();
-      ctrlRef.current = null;
+      // dispose resets timers and phase; retain the reusable controller through
+      // StrictMode's effect cleanup/setup cycle so pointer handlers stay live.
     };
   }, []);
 
