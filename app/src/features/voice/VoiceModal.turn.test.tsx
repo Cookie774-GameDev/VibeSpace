@@ -35,14 +35,12 @@ const toastMocks = vi.hoisted(() => ({
 const chatRoutingMocks = vi.hoisted(() => ({
   ensureJarvisChatForVoice: vi.fn(async (): Promise<string | null> => 'chat_voice'),
   focusVoiceChat: vi.fn(),
-  resolveVoiceChatTarget: vi.fn(
-    async (text: string): Promise<MockVoiceChatTarget | null> => ({
-      chatId: 'chat_voice',
-      messageText: text,
-      agentId: undefined,
-      mentionedAgentIds: [],
-    }),
-  ),
+  resolveVoiceChatTarget: vi.fn(async (text: string): Promise<MockVoiceChatTarget | null> => ({
+    chatId: 'chat_voice',
+    messageText: text,
+    agentId: undefined,
+    mentionedAgentIds: [],
+  })),
 }));
 
 vi.mock('./JarvisVoiceInputService', () => ({
@@ -136,23 +134,22 @@ function emitVoice(event: string, payload?: unknown) {
 function commandCenterBinding(accountId = 'account-a', runs: readonly JarvisRun[] = []) {
   const dataPort: JarvisCommandCenterDataPort = {
     getRunsForChat: vi.fn(async () => runs),
-    getEventsForRun: vi.fn(
-      async ({ runId }): Promise<readonly JarvisEvent[]> =>
-        runs.some((run) => run.id === runId && run.status === 'awaiting_approval')
-          ? [
-              {
-                runId,
-                seq: 1,
-                idempotencyKey: 'approval-1',
-                type: 'approval',
-                status: 'pending',
-                title: 'Approval pending',
-                sourceRefs: [],
-                artifactIds: [],
-                createdAt: 105,
-              },
-            ]
-          : [],
+    getEventsForRun: vi.fn(async ({ runId }): Promise<readonly JarvisEvent[]> =>
+      runs.some((run) => run.id === runId && run.status === 'awaiting_approval')
+        ? [
+            {
+              runId,
+              seq: 1,
+              idempotencyKey: 'approval-1',
+              type: 'approval',
+              status: 'pending',
+              title: 'Approval pending',
+              sourceRefs: [],
+              artifactIds: [],
+              createdAt: 105,
+            },
+          ]
+        : [],
     ),
     getArtifactsForRun: vi.fn(async () => []),
     getLiveEvidenceSnapshot: vi.fn(async () => undefined),
@@ -212,14 +209,14 @@ describe('VoiceModal hands-free turn-taking', () => {
     chatHookMocks.useChatMessages.mockReset().mockReturnValue([]);
     chatRoutingMocks.ensureJarvisChatForVoice.mockReset().mockResolvedValue('chat_voice');
     chatRoutingMocks.focusVoiceChat.mockReset();
-    chatRoutingMocks.resolveVoiceChatTarget.mockReset().mockImplementation(
-      async (text: string): Promise<MockVoiceChatTarget | null> => ({
+    chatRoutingMocks.resolveVoiceChatTarget
+      .mockReset()
+      .mockImplementation(async (text: string): Promise<MockVoiceChatTarget | null> => ({
         chatId: 'chat_voice',
         messageText: text,
         agentId: undefined,
         mentionedAgentIds: [],
-      }),
-    );
+      }));
     voiceListeners.handlers.clear();
     useUIStore.setState({
       voiceModalOpen: true,
@@ -544,6 +541,7 @@ describe('VoiceModal hands-free turn-taking', () => {
 
   it('provides practical pointer targets and tooltips for compact icon controls', async () => {
     render(<VoiceModal />);
+    act(() => emitVoice('voice:start')); // The icon must reflect actual capture, not request acceptance.
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
 
     const close = screen.getByRole('button', { name: 'Close Jarvis voice session' });

@@ -2,6 +2,8 @@ export type SttFieldSnapshot = {
   before: string;
   after: string;
   caretStart: number;
+  /** Original selection is required to make cancellation lossless. */
+  selected?: string;
 };
 
 export function separatorForBefore(before: string): string {
@@ -17,6 +19,7 @@ export function captureSttFieldSnapshot(
     before: el.value.slice(0, start),
     after: el.value.slice(end),
     caretStart: start,
+    selected: el.value.slice(start, end),
   };
 }
 
@@ -29,21 +32,27 @@ export function captureSttTextSnapshot(
     before: value.slice(0, selectionStart),
     after: value.slice(selectionEnd),
     caretStart: selectionStart,
+    selected: value.slice(selectionStart, selectionEnd),
   };
 }
 
 export function buildSttPreviewValue(snapshot: SttFieldSnapshot, partial: string): string {
   const preview = partial.trim();
-  if (!preview) return snapshot.before + snapshot.after;
+  if (!preview) return restoreSttFieldValue(snapshot);
   const sep = separatorForBefore(snapshot.before);
-  return snapshot.before + sep + preview + snapshot.after;
+  const tail = /^[\p{L}\p{N}]/u.test(snapshot.after) ? ' ' : '';
+  return snapshot.before + sep + preview + tail + snapshot.after;
 }
 
-export function buildSttCommittedValue(snapshot: SttFieldSnapshot, finalText: string): string | null {
+export function buildSttCommittedValue(
+  snapshot: SttFieldSnapshot,
+  finalText: string,
+): string | null {
   const trimmed = finalText.trim();
   if (!trimmed) return null;
   const sep = separatorForBefore(snapshot.before);
-  return snapshot.before + sep + trimmed + snapshot.after;
+  const tail = /^[\p{L}\p{N}]/u.test(snapshot.after) ? ' ' : '';
+  return snapshot.before + sep + trimmed + tail + snapshot.after;
 }
 
 export function previewSttInField(
@@ -79,7 +88,11 @@ export function revertSttPreview(
   el: HTMLInputElement | HTMLTextAreaElement,
   snapshot: SttFieldSnapshot,
 ): void {
-  el.value = snapshot.before + snapshot.after;
-  el.setSelectionRange(snapshot.caretStart, snapshot.caretStart);
+  el.value = restoreSttFieldValue(snapshot);
+  el.setSelectionRange(snapshot.caretStart, snapshot.caretStart + (snapshot.selected?.length ?? 0));
   el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+export function restoreSttFieldValue(snapshot: SttFieldSnapshot): string {
+  return snapshot.before + (snapshot.selected ?? '') + snapshot.after;
 }

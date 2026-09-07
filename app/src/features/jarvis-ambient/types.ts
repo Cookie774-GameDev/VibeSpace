@@ -20,12 +20,21 @@ export type JarvisAmbientSnapshot = Readonly<{
   observedAt: number;
   energy: number;
   transientUntil?: number;
+  /** Explicit visibility intent; absent only for older snapshot producers. */
+  active?: boolean;
+  /** Opaque Voice-session identity, never transcript or account data. */
+  sessionId?: string;
 }>;
 
 export function isJarvisAmbientSnapshot(value: unknown): value is JarvisAmbientSnapshot {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const candidate = value as Partial<JarvisAmbientSnapshot>;
   return (
+    (candidate.active === undefined || typeof candidate.active === 'boolean') &&
+    (candidate.sessionId === undefined ||
+      (typeof candidate.sessionId === 'string' &&
+        candidate.sessionId.length > 0 &&
+        candidate.sessionId.length <= 160)) &&
     Number.isSafeInteger(candidate.revision) &&
     (candidate.revision ?? -1) >= 0 &&
     JARVIS_AMBIENT_STATES.includes(candidate.state as JarvisAmbientState) &&

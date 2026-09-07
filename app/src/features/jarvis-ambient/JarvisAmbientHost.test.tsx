@@ -1,15 +1,21 @@
-import { act, render, waitFor } from '@testing-library/react';
+import { act, render, waitFor, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useVoiceStore } from '@/features/voice/store';
 import { setJarvisPlaybackEnergy } from '@/features/voice/jarvisPlaybackEnergy';
 import { useUIStore } from '@/stores/ui';
 import { setJarvisInputEnergy } from './voiceEnergy';
-import { JarvisAmbientHost } from './JarvisAmbientHost';
+import { JarvisAmbientHost, JarvisAmbientOverlayView } from './JarvisAmbientHost';
 
-const invoke = vi.fn(async () => undefined);
+const invoke = vi.fn(async (_command: string, _args?: unknown): Promise<unknown> => undefined);
 
+const listen = vi.fn(
+  async (_event: string, _listener: (event: { payload: unknown }) => void): Promise<() => void> =>
+    () =>
+      undefined,
+);
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('@tauri-apps/api/event', () => ({ listen }));
 
 describe('JarvisAmbientHost', () => {
   beforeEach(() => {
@@ -29,6 +35,7 @@ describe('JarvisAmbientHost', () => {
   });
 
   it('publishes real user and Jarvis speech energy to the native aura', async () => {
+    useUIStore.setState({ voiceModalOpen: true });
     const view = render(<JarvisAmbientHost />);
     await waitFor(() => expect(invoke).toHaveBeenCalled());
 
@@ -71,10 +78,90 @@ describe('JarvisAmbientHost', () => {
       expect(invoke).toHaveBeenCalledWith(
         'set_jarvis_ambient_snapshot',
         expect.objectContaining({
-          snapshot: expect.objectContaining({ state: 'listening', source: 'voice' }),
+          snapshot: expect.objectContaining({ state: 'idle', source: 'voice', active: true }),
         }),
       ),
     );
+  });
+
+  it('coalesces queued states so delayed IPC cannot replay obsolete speech after close', async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          finish = () => resolve(undefined);
+        }),
+    );
+    const view = render(<JarvisAmbientHost />);
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(invoke).toHaveBeenCalledOnce();
+      await act(async () => {
+        useUIStore.getState().setVoiceModalOpen(true);
+        useVoiceStore.getState().setState('listening');
+        await vi.advanceTimersByTimeAsync(40);
+        useVoiceStore.getState().setState('speaking');
+        await vi.advanceTimersByTimeAsync(40);
+        useUIStore.getState().setVoiceModalOpen(false);
+        useVoiceStore.getState().setState('idle');
+        await vi.advanceTimersByTimeAsync(40);
+        finish();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const states = invoke.mock.calls.map(
+        (call) => (call[1] as { snapshot: { state: string } }).snapshot.state,
+      );
+      expect(states).toEqual(['idle', 'idle']);
+      expect(invoke).toHaveBeenLastCalledWith(
+        'set_jarvis_ambient_snapshot',
+        expect.objectContaining({ snapshot: expect.objectContaining({ active: false }) }),
+      );
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('never publishes a queued active snapshot after the host unmounts', async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          finish = () => resolve(undefined);
+        }),
+    );
+    useUIStore.getState().setVoiceModalOpen(true);
+    useVoiceStore.getState().setState('listening');
+    const view = render(<JarvisAmbientHost />);
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        useVoiceStore.getState().setState('speaking');
+        await vi.advanceTimersByTimeAsync(40);
+      });
+      view.unmount();
+      await act(async () => {
+        finish();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        invoke.mock.calls
+          .filter(([command]) => command === 'set_jarvis_ambient_snapshot')
+          .slice(1)
+          .some(
+            (call) => (call[1] as { snapshot: { state: string } }).snapshot.state === 'speaking',
+          ),
+      ).toBe(false);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('does not invoke native commands in an ordinary browser test surface', async () => {
@@ -82,5 +169,78 @@ describe('JarvisAmbientHost', () => {
     render(<JarvisAmbientHost />);
     await new Promise((resolve) => window.setTimeout(resolve, 50));
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('native Aura renderer lifecycle', () => {
+  beforeEach(() => {
+    invoke.mockReset().mockResolvedValue(undefined);
+    listen.mockReset().mockResolvedValue(() => undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('keeps a newer event when delayed renderer-ready returns an older snapshot', async () => {
+    let finish!: (value: unknown) => void;
+    let deliver!: (event: { payload: unknown }) => void;
+    listen.mockImplementationOnce(async (_name, handler) => {
+      deliver = handler;
+      return () => undefined;
+    });
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const view = render(<JarvisAmbientOverlayView />);
+    try {
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('jarvis_ambient_renderer_ready'));
+      await act(async () => {
+        deliver({
+          payload: {
+            revision: 30,
+            state: 'speaking',
+            source: 'voice',
+            energy: 0.7,
+            observedAt: 30,
+            active: true,
+          },
+        });
+        finish({
+          revision: 20,
+          state: 'listening',
+          source: 'voice',
+          energy: 0.2,
+          observedAt: 20,
+          active: true,
+        });
+      });
+      expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-jarvis-ambient-state')).toBe(
+        'speaking',
+      );
+      expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-energy')).toBe('0.70');
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('releases a listener registered after unmount and never announces renderer readiness', async () => {
+    let finish!: (off: () => void) => void;
+    const off = vi.fn();
+    listen.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const view = render(<JarvisAmbientOverlayView />);
+    await waitFor(() => expect(listen).toHaveBeenCalledOnce());
+    view.unmount();
+    await act(async () => {
+      finish(off);
+    });
+    expect(off).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalledWith('jarvis_ambient_renderer_ready');
   });
 });

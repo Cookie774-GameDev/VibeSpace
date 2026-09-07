@@ -23,7 +23,7 @@ function run(
 }
 
 describe('projectJarvisAmbientSnapshot', () => {
-  it('projects the Jarvis open latch as an immediate listening aura before voice state advances', () => {
+  it('shows an open idle Aura without inventing listening before capture opens', () => {
     expect(
       projectJarvisAmbientSnapshot({
         revision: 7,
@@ -33,7 +33,22 @@ describe('projectJarvisAmbientSnapshot', () => {
         runs: [],
         energy: 0,
       }),
-    ).toMatchObject({ state: 'listening', source: 'voice', energy: 0 });
+    ).toMatchObject({ state: 'idle', source: 'voice', energy: 0, active: true });
+  });
+
+  it('cannot reopen a closed Aura from late voice or task events', () => {
+    for (const voiceState of ['listening', 'speaking', 'thinking', 'error'] as const) {
+      expect(
+        projectJarvisAmbientSnapshot({
+          revision: 8,
+          observedAt: 1_000,
+          voiceOpen: false,
+          voiceState,
+          runs: [run('running')],
+          energy: 0.9,
+        }),
+      ).toMatchObject({ active: false, energy: 0 });
+    }
   });
 
   it('applies needs, error, speaking, listening, working, done, idle priority', () => {

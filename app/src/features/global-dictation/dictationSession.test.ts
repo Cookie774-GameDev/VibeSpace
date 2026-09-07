@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   voiceHandlers: new Map<string, (payload: never) => void>(),
   voiceService: {
     isSupported: vi.fn(() => false),
+    isListening: vi.fn(() => false),
+    wantsListening: vi.fn(() => false),
     startListening: vi.fn(() => true),
     stopListening: vi.fn(),
     setInactivityTimeoutMs: vi.fn(),
@@ -20,10 +22,16 @@ const mocks = vi.hoisted(() => ({
   composer: {
     provider: 'system' as 'system' | 'faster-whisper' | 'deepgram',
     model: 'small',
-    startBatchAudioRecorder: vi.fn(async () => ({
-      captureWav: () => new Blob(['x'], { type: 'audio/wav' }),
-      stop: vi.fn(),
-    })),
+    startBatchAudioRecorder: vi.fn(
+      async (
+        _onVolume: (level: number) => void,
+        _onInactivity: () => void,
+        _options?: { retainAudio?: boolean },
+      ) => ({
+        captureWav: (): Blob | null => new Blob(['x'], { type: 'audio/wav' }),
+        stop: vi.fn(),
+      }),
+    ),
     transcribeFasterWhisper: vi.fn(async () => 'local text'),
     transcribeGroq: vi.fn(async () => 'groq text'),
   },
@@ -33,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   deepgramKey: { value: '' as string },
   deepgramSession: vi.fn(async () => ({
     stop: vi.fn(),
+    cancel: vi.fn(),
     getFinalText: () => 'deepgram text',
   })),
 }));
@@ -223,6 +232,126 @@ describe('createGlobalDictationSession engine resolution', () => {
     await expect(first).rejects.toThrow(/superseded by a newer microphone destination/i);
     expect(firstRecorder.stop).toHaveBeenCalledOnce();
     replacement.cancel();
+  });
+
+  it('cancels an in-flight batch transcription immediately and discards its late result', async () => {
+    mocks.composer.provider = 'faster-whisper';
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    let finish!: (text: string) => void;
+    mocks.composer.transcribeFasterWhisper.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const onFinal = vi.fn();
+    const onClose = vi.fn();
+    const session = await createSelectedSttSession({ onFinal, onClose });
+    const stopping = session.stop();
+    session.cancel();
+    expect.soft(onClose).toHaveBeenCalledOnce();
+    finish('discard this cancelled turn');
+    await stopping;
+    expect(session.getFinalText()).toBe('');
+    expect(onFinal).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('never presents transcript length as microphone energy', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const onLevel = vi.fn();
+    const session = await createSelectedSttSession({ onLevel });
+    try {
+      mocks.voiceHandlers.get('voice:partial')?.({
+        text: 'A harmless fixed dictation phrase.',
+      } as never);
+      expect(onLevel.mock.calls.every(([level]) => level === 0)).toBe(true);
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it('reports capture readiness and real samples, then releases the meter on cancel', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    let sample!: (level: number) => void;
+    const stopMeter = vi.fn();
+    mocks.composer.startBatchAudioRecorder.mockImplementationOnce(
+      async (onLevel: (level: number) => void) => {
+        sample = onLevel;
+        return { captureWav: () => null, stop: stopMeter };
+      },
+    );
+    const onOpen = vi.fn();
+    const onLevel = vi.fn();
+    const session = await createSelectedSttSession({ onOpen, onLevel });
+    try {
+      expect.soft(onOpen).not.toHaveBeenCalled();
+      expect.soft(typeof sample).toBe('function');
+      mocks.voiceHandlers.get('voice:start')?.(undefined as never);
+      expect(onOpen).toHaveBeenCalledOnce();
+      sample?.(0.625);
+      expect.soft(onLevel).toHaveBeenLastCalledWith(0.625);
+      mocks.voiceHandlers.get('voice:partial')?.({ text: 'A harmless fixed phrase' } as never);
+      expect.soft(onLevel).toHaveBeenLastCalledWith(0.625);
+    } finally {
+      session.cancel();
+    }
+    expect(stopMeter).toHaveBeenCalledOnce();
+    expect(onLevel).toHaveBeenLastCalledWith(0);
+    const count = onLevel.mock.calls.length;
+    sample?.(0.8);
+    expect(onLevel).toHaveBeenCalledTimes(count);
+  });
+
+  it('releases its meter immediately when the speech engine reports a terminal microphone failure', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const stopMeter = vi.fn();
+    mocks.composer.startBatchAudioRecorder.mockResolvedValueOnce({
+      captureWav: () => null,
+      stop: stopMeter,
+    });
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const session = await createSelectedSttSession({ onClose, onError });
+    try {
+      mocks.voiceHandlers.get('voice:error')?.({
+        kind: 'audio_capture',
+        message: 'The microphone became unavailable.',
+      } as never);
+      expect(onError).toHaveBeenCalledOnce();
+      expect(stopMeter).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it('releases the meter on a terminal engine end without waiting for the HUD to close', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const stopMeter = vi.fn();
+    mocks.composer.startBatchAudioRecorder.mockResolvedValueOnce({
+      captureWav: () => null,
+      stop: stopMeter,
+    });
+    const onClose = vi.fn();
+    const session = await createSelectedSttSession({ onClose });
+    try {
+      mocks.voiceHandlers.get('voice:end')?.(undefined as never);
+      expect(stopMeter).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it('cancels Deepgram without requesting a final transcription', async () => {
+    mocks.composer.provider = 'deepgram';
+    mocks.deepgramKey.value = 'disposable-test-key';
+    const session = await createSelectedSttSession();
+    const engine = await mocks.deepgramSession.mock.results.at(-1)!.value;
+    session.cancel();
+    expect(engine.cancel).toHaveBeenCalledOnce();
+    expect(engine.stop).not.toHaveBeenCalled();
   });
 
   it('does not silently downgrade a selected Deepgram model when its key is missing', async () => {

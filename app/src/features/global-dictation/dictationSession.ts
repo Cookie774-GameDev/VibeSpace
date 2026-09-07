@@ -86,6 +86,14 @@ function createBatchSession(
   let finalText = '';
   let recorder: FasterWhisperRecorder | null = null;
   let done = false;
+  let cancelled = false;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    events.onLevel?.(0);
+    events.onClose?.();
+  };
 
   return startBatchAudioRecorder(
     (level) => events.onLevel?.(level),
@@ -104,37 +112,52 @@ function createBatchSession(
         recorder?.stop();
         recorder = null;
         if (!wav || wav.size === 0) {
-          events.onClose?.();
+          close();
           return;
         }
         try {
-          finalText = (await transcribe(wav)).trim();
-          if (finalText) events.onFinal?.(finalText);
+          const text = (await transcribe(wav)).trim();
+          if (!cancelled) {
+            finalText = text;
+            if (finalText) events.onFinal?.(finalText);
+          }
         } catch {
-          events.onError?.(formatGlobalDictationTranscriptionFailure(engine));
+          if (!cancelled) events.onError?.(formatGlobalDictationTranscriptionFailure(engine));
+        } finally {
+          close();
         }
-        events.onClose?.();
       },
       cancel: () => {
-        if (done) return;
+        if (cancelled) return;
+        cancelled = true;
         done = true;
+        finalText = '';
         recorder?.stop();
         recorder = null;
-        events.onClose?.();
+        close();
       },
       getFinalText: () => finalText,
     };
   });
 }
 
-function createWebSpeechSession(events: DictationEvents): GlobalDictationSession {
+async function createWebSpeechSession(
+  events: DictationEvents,
+  assertCurrent: () => void,
+): Promise<GlobalDictationSession> {
   let finalText = '';
   let done = false;
+  let opened = false;
+  let meter: FasterWhisperRecorder | null = null;
   const offs = [
+    VoiceService.on('voice:start', () => {
+      if (done || opened) return;
+      opened = true;
+      events.onOpen?.();
+    }),
     VoiceService.on('voice:partial', (payload) => {
       const text = (payload as { text?: string })?.text ?? '';
       if (text) events.onPartial?.(text);
-      events.onLevel?.(Math.min(1, text.length / 48));
     }),
     VoiceService.on('voice:final', (payload) => {
       const text = ((payload as { text?: string })?.text ?? '').trim();
@@ -142,8 +165,12 @@ function createWebSpeechSession(events: DictationEvents): GlobalDictationSession
       finalText = `${finalText} ${text}`.trim();
       events.onFinal?.(finalText);
     }),
-    VoiceService.on('voice:error', ({ message }) => {
+    VoiceService.on('voice:error', ({ kind, message }) => {
       events.onError?.(formatGlobalDictationSessionFailure(message));
+      if (kind !== 'no_speech' && kind !== 'aborted') teardown();
+    }),
+    VoiceService.on('voice:end', () => {
+      if (!VoiceService.isListening() && !VoiceService.wantsListening()) teardown();
     }),
   ];
 
@@ -151,17 +178,31 @@ function createWebSpeechSession(events: DictationEvents): GlobalDictationSession
     if (done) return;
     done = true;
     offs.forEach((off) => off());
+    meter?.stop();
+    meter = null;
     VoiceService.stopListening();
     events.onClose?.();
   };
 
-  VoiceService.setInactivityTimeoutMs(null);
-  const started = VoiceService.startListening();
-  if (!started) {
-    offs.forEach((off) => off());
-    throw new Error('Built-in speech recognition could not start in this window.');
+  try {
+    // SpeechRecognition exposes no samples. Meter the same system-default
+    // microphone without retaining PCM, and own that stream until teardown.
+    meter = await startBatchAudioRecorder(
+      (level) => {
+        if (!done) events.onLevel?.(level);
+      },
+      () => undefined,
+      { retainAudio: false },
+    );
+    assertCurrent();
+    VoiceService.setInactivityTimeoutMs(null);
+    if (!VoiceService.startListening()) {
+      throw new Error('Built-in speech recognition could not start in this window.');
+    }
+  } catch (error) {
+    teardown();
+    throw error;
   }
-  events.onOpen?.();
 
   return {
     engine: 'web-speech',
@@ -208,7 +249,10 @@ export async function createSelectedSttSession(
   const claim: ActiveSelectedSttClaim = { token, superseded: false, cancel: null };
   activeSelectedSttClaim = claim;
   let released = false;
-  const isCurrent = () => !claim.superseded && activeSelectedSttClaim?.token === token;
+  let cancelled = false;
+  let closed = false;
+  const isCurrent = () =>
+    !cancelled && !claim.superseded && activeSelectedSttClaim?.token === token;
   const assertCurrent = () => {
     if (!isCurrent()) throw new Error(SELECTED_STT_SESSION_SUPERSEDED_MESSAGE);
   };
@@ -234,8 +278,13 @@ export async function createSelectedSttSession(
       if (isCurrent()) events.onError?.(message);
     },
     onClose: () => {
+      if (closed) return;
+      closed = true;
       release();
-      if (!claim.superseded) events.onClose?.();
+      if (!claim.superseded) {
+        events.onLevel?.(0);
+        events.onClose?.();
+      }
     },
   };
   const adoptSession = (session: GlobalDictationSession): GlobalDictationSession => {
@@ -249,12 +298,16 @@ export async function createSelectedSttSession(
         }
       },
       cancel: () => {
+        if (cancelled) return;
+        // Invalidate publication before an engine's synchronous stop callbacks.
+        cancelled = true;
         try {
           session.cancel();
         } finally {
-          release();
+          scopedEvents.onClose?.();
         }
       },
+      getFinalText: () => (cancelled || claim.superseded ? '' : session.getFinalText()),
     };
     if (!isCurrent()) {
       try {
@@ -305,7 +358,7 @@ export async function createSelectedSttSession(
         engineLabel: `Deepgram · ${option.label} (${option.runtimeModel}, ${option.endpointVersion}/listen)`,
         streaming: true,
         stop: async () => session.stop(),
-        cancel: () => session.stop(),
+        cancel: () => session.cancel(),
         getFinalText: () => session.getFinalText(),
       });
     }
@@ -315,7 +368,7 @@ export async function createSelectedSttSession(
         `The selected built-in system speech engine is unavailable in this window. ${NO_ENGINE_MESSAGE}`,
       );
     }
-    return adoptSession(createWebSpeechSession(scopedEvents));
+    return adoptSession(await createWebSpeechSession(scopedEvents, assertCurrent));
   } catch (error) {
     release();
     throw error;

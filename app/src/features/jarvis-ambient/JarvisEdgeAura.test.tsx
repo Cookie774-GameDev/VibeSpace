@@ -29,6 +29,51 @@ describe('JarvisEdgeAura', () => {
     expect(aura.textContent).toBe('');
   });
 
+  it('exposes open idle separately from actual listening without fabricated energy', () => {
+    render(
+      <JarvisEdgeAura
+        snapshot={{ ...listening, state: 'idle', energy: 0, active: true }}
+        reducedMotion
+      />,
+    );
+    const aura = screen.getByTestId('jarvis-edge-aura');
+    expect(aura.getAttribute('data-jarvis-ambient-state')).toBe('idle');
+    expect(aura.getAttribute('data-active')).toBe('true');
+    expect(aura.getAttribute('data-energy')).toBe('0.00');
+  });
+
+  it('does not paint a late speaking snapshot after explicit close', () => {
+    let frame!: FrameRequestCallback;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frame = callback;
+      return 1;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+    const context = {
+      clearRect: vi.fn(),
+      setTransform: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      strokeRect: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+    };
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(
+      context as unknown as ReturnType<HTMLCanvasElement['getContext']>,
+    );
+    render(
+      <JarvisEdgeAura
+        snapshot={{ ...listening, state: 'speaking', active: false }}
+        reducedMotion
+      />,
+    );
+    frame(0);
+    expect(context.strokeRect).not.toHaveBeenCalled();
+    expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false');
+  });
+
   it('fails malformed snapshots closed to invisible idle', () => {
     expect(normalizeAmbientSnapshot({ ...listening, energy: 4 })).toMatchObject({
       state: 'idle',

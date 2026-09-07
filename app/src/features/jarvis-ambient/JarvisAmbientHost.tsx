@@ -14,13 +14,19 @@ import type { JarvisAmbientSnapshot } from './types';
 
 const AMBIENT_EVENT = 'jarvis://ambient-snapshot';
 const ENERGY_FRAME_MS = 34;
+let lastPublishedRevision = 0;
 
 function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
 function nextRevision(previous: number): number {
-  return Math.max(previous + 1, Math.trunc(Date.now() * 1_000));
+  lastPublishedRevision = Math.max(
+    previous + 1,
+    lastPublishedRevision + 1,
+    Math.trunc(Date.now() * 1_000),
+  );
+  return lastPublishedRevision;
 }
 
 function currentEnergy(): number {
@@ -38,7 +44,27 @@ export function JarvisAmbientHost() {
     let expiryTimer: number | null = null;
     let revision = 0;
     let lastSignature = '';
-    let sendChain: Promise<unknown> = Promise.resolve();
+    let pendingSnapshot: JarvisAmbientSnapshot | null = null;
+    let sending = false;
+    const drain = async () => {
+      if (sending) return;
+      sending = true;
+      try {
+        while (pendingSnapshot) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const snapshot = pendingSnapshot;
+          pendingSnapshot = null;
+          if (!snapshot || (disposed && snapshot.active !== false)) continue;
+          try {
+            await invoke('set_jarvis_ambient_snapshot', { snapshot });
+          } catch {
+            /* A later authoritative snapshot can retry; never replay stale states. */
+          }
+        }
+      } finally {
+        sending = false;
+      }
+    };
 
     const flush = () => {
       timer = null;
@@ -49,10 +75,11 @@ export function JarvisAmbientHost() {
         observedAt: Date.now(),
         voiceOpen: useUIStore.getState().voiceModalOpen,
         voiceState: useVoiceStore.getState().state,
+        sessionId: useVoiceStore.getState().session?.sessionId,
         runs: Object.values(useJarvisTaskRunStore.getState().runs),
         energy: currentEnergy(),
       });
-      const signature = `${snapshot.state}:${snapshot.source}:${snapshot.energy}:${snapshot.transientUntil ?? 0}`;
+      const signature = `${snapshot.active}:${snapshot.sessionId ?? ''}:${snapshot.state}:${snapshot.source}:${snapshot.energy}:${snapshot.transientUntil ?? 0}`;
       if (expiryTimer !== null) {
         window.clearTimeout(expiryTimer);
         expiryTimer = null;
@@ -65,12 +92,8 @@ export function JarvisAmbientHost() {
       }
       if (signature === lastSignature) return;
       lastSignature = signature;
-      sendChain = sendChain
-        .then(async () => {
-          const { invoke } = await import('@tauri-apps/api/core');
-          return invoke('set_jarvis_ambient_snapshot', { snapshot });
-        })
-        .catch(() => undefined);
+      pendingSnapshot = snapshot;
+      void drain();
     };
 
     const schedule = () => {
@@ -91,6 +114,16 @@ export function JarvisAmbientHost() {
       if (timer !== null) window.clearTimeout(timer);
       if (expiryTimer !== null) window.clearTimeout(expiryTimer);
       for (const unsubscribe of unsubscribers) unsubscribe();
+      // Supersede all queued activity with one monotonic close tombstone.
+      pendingSnapshot = Object.freeze({
+        revision: nextRevision(revision),
+        observedAt: Date.now(),
+        active: false,
+        state: 'idle',
+        source: 'voice',
+        energy: 0,
+      });
+      void drain();
     };
   }, []);
   return null;
@@ -104,16 +137,27 @@ export function JarvisAmbientOverlayView() {
   React.useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const applySnapshot = (value: unknown) => {
+      if (disposed) return;
+      const next = normalizeAmbientSnapshot(value);
+      setSnapshot((current) => (next.revision > current.revision ? next : current));
+    };
     void Promise.all([import('@tauri-apps/api/event'), import('@tauri-apps/api/core')])
       .then(async ([{ listen }, { invoke }]) => {
         unlisten = await listen<unknown>(AMBIENT_EVENT, (event) => {
-          if (!disposed) setSnapshot(normalizeAmbientSnapshot(event.payload));
+          applySnapshot(event.payload);
         });
+        if (disposed) {
+          unlisten();
+          unlisten = undefined;
+          return;
+        }
         const initial = await invoke<unknown>('jarvis_ambient_renderer_ready');
-        if (!disposed) setSnapshot(normalizeAmbientSnapshot(initial));
+        applySnapshot(initial);
       })
       .catch(() => {
-        if (!disposed) setSnapshot(normalizeAmbientSnapshot(null));
+        // Keep a newer authoritative event if the readiness request itself fails.
+        applySnapshot(null);
       });
     return () => {
       disposed = true;

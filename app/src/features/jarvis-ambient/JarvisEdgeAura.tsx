@@ -64,7 +64,7 @@ function drawAura(
   reducedMotion: boolean,
 ) {
   context.clearRect(0, 0, width, height);
-  if (snapshot.state === 'idle') return;
+  if (snapshot.active === false || snapshot.state === 'idle') return;
   const preset = JARVIS_EDGE_PRESETS[snapshot.state];
   const energy =
     snapshot.state === 'listening' || snapshot.state === 'speaking'
@@ -123,6 +123,7 @@ export function JarvisEdgeAura({
   const safeSnapshot = normalizeAmbientSnapshot(snapshot);
   const snapshotRef = React.useRef(safeSnapshot);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const repaintRef = React.useRef<(() => void) | null>(null);
   snapshotRef.current = safeSnapshot;
 
   React.useEffect(() => {
@@ -146,7 +147,7 @@ export function JarvisEdgeAura({
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       const reduce = reducedMotion ?? motionQuery?.matches === true;
       drawAura(context, snapshotRef.current, window.innerWidth, window.innerHeight, now, reduce);
-      if (!reduce && snapshotRef.current.state !== 'idle')
+      if (!reduce && snapshotRef.current.active !== false && snapshotRef.current.state !== 'idle')
         frame = window.requestAnimationFrame(paint);
     };
 
@@ -154,23 +155,32 @@ export function JarvisEdgeAura({
       if (frame !== null) window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(paint);
     };
+    repaintRef.current = repaint;
     repaint();
     window.addEventListener('resize', repaint, { passive: true });
     motionQuery?.addEventListener?.('change', repaint);
     return () => {
       live = false;
+      repaintRef.current = null;
       if (frame !== null) window.cancelAnimationFrame(frame);
       window.removeEventListener('resize', repaint);
       motionQuery?.removeEventListener?.('change', repaint);
       context.clearRect(0, 0, canvas.width, canvas.height);
     };
-  }, [reducedMotion, safeSnapshot.state]);
+  }, [reducedMotion, safeSnapshot.state, safeSnapshot.active]);
+
+  // Static/reduced-motion frames must still reflect actual changing audio energy.
+  React.useEffect(() => {
+    repaintRef.current?.();
+  }, [safeSnapshot.energy]);
 
   return (
     <div
       className="jarvis-edge-aura"
       data-testid="jarvis-edge-aura"
       data-jarvis-ambient-state={safeSnapshot.state}
+      data-active={safeSnapshot.active ?? safeSnapshot.state !== 'idle'}
+      data-voice-session={safeSnapshot.sessionId}
       data-energy={safeSnapshot.energy.toFixed(2)}
       aria-hidden="true"
     >

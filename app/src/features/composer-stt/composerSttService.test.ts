@@ -5,6 +5,7 @@ import {
   COMPOSER_STT_TOGGLE_EVENT,
   requestComposerSttFromToolbar,
   requestComposerSttToggle,
+  startBatchAudioRecorder,
 } from './composerSttService';
 
 describe('composerSttService toolbar routing', () => {
@@ -45,5 +46,118 @@ describe('composerSttService toolbar routing', () => {
     requestComposerSttToggle('toolbar');
     expect(received[0]?.detail?.source).toBe('toolbar');
     window.removeEventListener(COMPOSER_STT_TOGGLE_EVENT, handler);
+  });
+});
+
+describe('batch microphone resource lifetime', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('releases the microphone if creating its audio context fails', async () => {
+    const stopTrack = vi.fn();
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: async () => ({ getTracks: () => [{ stop: stopTrack }] }),
+      },
+    });
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        constructor() {
+          throw new Error('audio context unavailable');
+        }
+      },
+    );
+    await expect(startBatchAudioRecorder(vi.fn(), vi.fn())).rejects.toThrow(
+      'audio context unavailable',
+    );
+    expect(stopTrack).toHaveBeenCalledOnce();
+  });
+
+  it('measures microphone samples without retaining raw audio in meter-only mode', async () => {
+    const processor = {
+      onaudioprocess: null as ((event: unknown) => void) | null,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    vi.stubGlobal('navigator', {
+      mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: vi.fn() }] }) },
+    });
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        sampleRate = 16000;
+        destination = {};
+        createMediaStreamSource() {
+          return { connect: vi.fn(), disconnect: vi.fn() };
+        }
+        createScriptProcessor() {
+          return processor;
+        }
+        close = async () => undefined;
+      },
+    );
+    const onLevel = vi.fn();
+    const recorder = await startBatchAudioRecorder(onLevel, vi.fn(), { retainAudio: false });
+    try {
+      processor.onaudioprocess!({
+        inputBuffer: { getChannelData: () => new Float32Array([0.0625, -0.0625]) },
+      });
+      expect(onLevel).toHaveBeenLastCalledWith(0.5);
+      expect(recorder.captureWav()).toBeNull();
+      processor.onaudioprocess!({
+        inputBuffer: { getChannelData: () => new Float32Array([0, 0]) },
+      });
+      expect(onLevel).toHaveBeenLastCalledWith(0);
+    } finally {
+      recorder.stop();
+    }
+  });
+
+  it('clears captured PCM and ignores queued processing callbacks after stop', async () => {
+    const stopTrack = vi.fn();
+    const processor = {
+      onaudioprocess: null as ((event: unknown) => void) | null,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const source = { connect: vi.fn(), disconnect: vi.fn() };
+    const close = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: async () => ({ getTracks: () => [{ stop: stopTrack }] }),
+      },
+    });
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        sampleRate = 16000;
+        destination = {};
+        createMediaStreamSource() {
+          return source;
+        }
+        createScriptProcessor() {
+          return processor;
+        }
+        close = close;
+      },
+    );
+    const onLevel = vi.fn();
+    const recorder = await startBatchAudioRecorder(onLevel, vi.fn());
+    const callback = processor.onaudioprocess!;
+    callback({ inputBuffer: { getChannelData: () => new Float32Array([0.25, -0.25]) } });
+    expect(recorder.captureWav()?.size).toBe(48);
+    recorder.stop();
+    recorder.stop();
+    const updatesAtStop = onLevel.mock.calls.length;
+    callback({ inputBuffer: { getChannelData: () => new Float32Array([1, -1]) } });
+    expect(recorder.captureWav()).toBeNull();
+    expect(processor.onaudioprocess).toBeNull();
+    expect(onLevel).toHaveBeenLastCalledWith(0);
+    expect(onLevel).toHaveBeenCalledTimes(updatesAtStop);
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

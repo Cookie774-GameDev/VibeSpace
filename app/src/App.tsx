@@ -2118,11 +2118,9 @@ function VoiceModalHost() {
     <>
       <JarvisAmbientHost />
       {open ? (
-        <div hidden data-jarvis-voice-lifecycle-only="true" aria-hidden="true">
-          <React.Suspense fallback={null}>
-            <VoiceModal />
-          </React.Suspense>
-        </div>
+        <React.Suspense fallback={null}>
+          <VoiceModal />
+        </React.Suspense>
       ) : null}
     </>
   );

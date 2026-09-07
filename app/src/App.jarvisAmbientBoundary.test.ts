@@ -13,9 +13,14 @@ describe('App Jarvis ambient boundary', () => {
     );
   });
 
-  it('keeps voice lifecycle mounted but removes the visible legacy panel', () => {
-    expect(source).toContain('<JarvisAmbientHost />');
-    expect(source).toContain('data-jarvis-voice-lifecycle-only="true"');
-    expect(source).toContain('hidden');
+  it('keeps the compact Voice HUD visible alongside the native Aura projection', () => {
+    const start=source.indexOf('function VoiceModalHost()');
+    const end=source.indexOf('function ActionsPaletteHost()',start);
+    expect(start).toBeGreaterThan(-1);expect(end).toBeGreaterThan(start);
+    const host=source.slice(start,end);
+    expect(host).toContain('<JarvisAmbientHost />');
+    expect(host).toContain('<VoiceModal />');
+    expect(host).not.toMatch(/<[^>]+\bhidden(?:\s|=|>)/);
+    expect(host).not.toContain('aria-hidden="true"');
   });
 });

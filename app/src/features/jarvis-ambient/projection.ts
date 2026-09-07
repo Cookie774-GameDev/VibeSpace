@@ -8,6 +8,7 @@ export type JarvisAmbientProjectionInput = Readonly<{
   revision: number;
   observedAt: number;
   voiceOpen?: boolean;
+  sessionId?: string;
   voiceState: VoiceState;
   runs: readonly JarvisTaskRunProjection[];
   energy: number;
@@ -40,10 +41,8 @@ export function projectJarvisAmbientSnapshot(
 ): JarvisAmbientSnapshot {
   const waiting = latestRun(input.runs, new Set(['waiting-for-approval', 'waiting-for-input']));
   const failed = latestRun(input.runs, new Set(['failed', 'blocked']));
-  const voice =
-    voiceProjection(input.voiceState) ??
-    (input.voiceOpen ? (['listening', 'voice'] as const) : undefined);
-  const active = latestRun(input.runs, new Set(['planning', 'running']));
+  const voice = voiceProjection(input.voiceState);
+  const activeRun = latestRun(input.runs, new Set(['planning', 'running']));
   const completed = latestRun(input.runs, new Set(['completed']));
   let state: JarvisAmbientState = 'idle';
   let source: JarvisAmbientSource = 'voice';
@@ -57,7 +56,7 @@ export function projectJarvisAmbientSnapshot(
     source = failed ? 'task' : 'voice';
   } else if (voice) {
     [state, source] = voice;
-  } else if (active) {
+  } else if (activeRun) {
     state = 'working';
     source = 'task';
   } else if (completed) {
@@ -71,7 +70,16 @@ export function projectJarvisAmbientSnapshot(
     }
   }
 
+  const active = input.voiceOpen ?? state !== 'idle';
+  // A closed HUD is authoritative even when a delayed task or audio callback arrives.
+  if (!active) {
+    state = 'idle';
+    source = 'voice';
+    transientUntil = undefined;
+  }
   return Object.freeze({
+    active,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     revision: Math.max(0, Math.trunc(input.revision)),
     state,
     source,

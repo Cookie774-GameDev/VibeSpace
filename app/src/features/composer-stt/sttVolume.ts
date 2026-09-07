@@ -1,79 +1,94 @@
 import type { MutableRefObject } from 'react';
 import { getAudioContextCtor } from './audio';
 
-/** Shared mic level (0–1) for toolbar + composer waveform indicators. */
+/** Shared mic level (0?1) for toolbar and Composer waveforms. */
 export const sttVolumeRef: MutableRefObject<number> = { current: 0 };
-
-type MicVolumeMeter = {
-  stop: () => void;
-};
-
+type MicVolumeMeter = { stop: () => void };
 let activeMeter: MicVolumeMeter | null = null;
+let generation = 0;
 
 export function resetSttVolume(): void {
   sttVolumeRef.current = 0;
 }
-
 export function setSttVolumeLevel(level: number): void {
-  sttVolumeRef.current = Math.min(1, Math.max(0, level));
+  sttVolumeRef.current = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0;
 }
-
 export function stopSttVolumeMeter(): void {
-  activeMeter?.stop();
+  generation += 1;
+  const meter = activeMeter;
   activeMeter = null;
+  meter?.stop();
   resetSttVolume();
 }
 
-/** Live mic level from getUserMedia — idle stays low, speech pushes bars up. */
+/** Sample the microphone; cancelled permission requests never adopt a new stream. */
 export async function startSttVolumeMeter(): Promise<void> {
   stopSttVolumeMeter();
-
+  const ownGeneration = generation;
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
-
+  let stream: MediaStream | null = null;
+  let context: AudioContext | null = null;
+  let source: MediaStreamAudioSourceNode | null = null;
+  let analyser: AnalyserNode | null = null;
+  let rafId: number | null = null;
+  let alive = true;
+  const stop = () => {
+    if (!alive) return;
+    alive = false;
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    try {
+      source?.disconnect();
+    } catch {
+      /* Already disconnected. */
+    }
+    try {
+      analyser?.disconnect();
+    } catch {
+      /* Already disconnected. */
+    }
+    try {
+      void context?.close().catch(() => undefined);
+    } catch {
+      /* Closed context. */
+    }
+    for (const track of stream?.getTracks() ?? []) {
+      try {
+        track.stop();
+      } catch {
+        /* Release every remaining owned track. */
+      }
+    }
+    if (activeMeter?.stop === stop) activeMeter = null;
+    if (generation === ownGeneration) resetSttVolume();
+  };
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const AudioCtor = getAudioContextCtor();
-    if (!AudioCtor) {
-      stream.getTracks().forEach((track) => track.stop());
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (generation !== ownGeneration) {
+      stop();
       return;
     }
-
-    const context = new AudioCtor();
-    const source = context.createMediaStreamSource(stream);
-    const analyser = context.createAnalyser();
+    const AudioCtor = getAudioContextCtor();
+    if (!AudioCtor) {
+      stop();
+      return;
+    }
+    context = new AudioCtor();
+    source = context.createMediaStreamSource(stream);
+    analyser = context.createAnalyser();
     analyser.fftSize = 256;
     source.connect(analyser);
-
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    let rafId: number | null = null;
-    let alive = true;
-
+    const samples = new Uint8Array(analyser.frequencyBinCount);
     const tick = () => {
-      if (!alive) return;
-      analyser.getByteFrequencyData(dataArray);
+      if (!alive || generation !== ownGeneration || !analyser) return;
+      analyser.getByteFrequencyData(samples);
       let sum = 0;
-      for (let i = 0; i < dataArray.length; i += 1) {
-        sum += dataArray[i] ?? 0;
-      }
-      const avg = sum / Math.max(1, dataArray.length);
-      // Quiet room ≈ 0.05–0.15, normal speech ≈ 0.35–0.65, loud ≈ 0.8+
-      setSttVolumeLevel(avg / 48);
+      for (const sample of samples) sum += sample;
+      setSttVolumeLevel(sum / Math.max(1, samples.length) / 48);
       rafId = requestAnimationFrame(tick);
     };
-    rafId = requestAnimationFrame(tick);
-
-    const stop = () => {
-      alive = false;
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      source.disconnect();
-      void context.close().catch(() => {});
-      stream.getTracks().forEach((track) => track.stop());
-      if (activeMeter?.stop === stop) activeMeter = null;
-      resetSttVolume();
-    };
-
     activeMeter = { stop };
+    rafId = requestAnimationFrame(tick);
   } catch {
-    resetSttVolume();
+    stop();
   }
 }

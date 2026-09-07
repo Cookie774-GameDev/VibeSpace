@@ -61,6 +61,7 @@ class JarvisVoiceInputServiceImpl {
   private active = false;
   private wantsActive = false;
   private streaming = true;
+  private finishing = false;
   private generation = 0;
   private inactivityTimeoutMs: number | null = 180_000;
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
@@ -120,6 +121,7 @@ class JarvisVoiceInputServiceImpl {
   }
 
   startListening(): boolean {
+    if (this.finishing) this.cancelListening();
     if (this.wantsActive || this.active || this.pending) return true;
     if (!this.isSupported()) {
       this.emit('voice:error', {
@@ -147,12 +149,12 @@ class JarvisVoiceInputServiceImpl {
           this.emit('voice:partial', { text });
         },
         onFinal: (text) => {
-          if (generation !== this.generation || !this.wantsActive) return;
+          if (generation !== this.generation || (!this.wantsActive && !this.finishing)) return;
           this.armInactivityTimer();
           this.emit('voice:final', { text });
         },
         onError: (message) => {
-          if (generation !== this.generation || !this.wantsActive) return;
+          if (generation !== this.generation || (!this.wantsActive && !this.finishing)) return;
           const safeMessage = safeFailureMessage(new Error(message));
           this.emit('voice:error', {
             kind: classifyFailure(safeMessage),
@@ -176,18 +178,12 @@ class JarvisVoiceInputServiceImpl {
         }
         this.session = session;
         this.streaming = session.streaming;
-        if (!this.active) {
-          this.active = true;
-          this.emit('voice:start', undefined);
-        }
+        // Only the capture engine's onOpen event proves it is listening.
         this.armInactivityTimer();
       },
       (error) => {
         if (this.pending === pending) this.pending = null;
-        if (generation !== this.generation || !this.wantsActive) {
-          this.finishSession();
-          return;
-        }
+        if (generation !== this.generation || !this.wantsActive) return;
         this.wantsActive = false;
         const message = safeFailureMessage(error);
         this.emit('voice:error', { kind: classifyFailure(message), message });
@@ -201,9 +197,15 @@ class JarvisVoiceInputServiceImpl {
     this.wantsActive = false;
     this.clearInactivityTimer();
     const session = this.session;
-    this.session = null;
-    if (!session) return;
-    void session.stop().catch((error) => {
+    if (!session) { this.cancelListening(); return; }
+    if (this.finishing) return;
+    this.active = false;
+    this.finishing = true;
+    const generation = this.generation;
+    void session.stop().then(() => {
+      if (generation === this.generation && this.finishing) this.finishSession();
+    }, (error) => {
+      if (generation !== this.generation) return;
       const message = safeFailureMessage(error);
       this.emit('voice:error', { kind: classifyFailure(message), message });
       this.finishSession();
@@ -211,6 +213,8 @@ class JarvisVoiceInputServiceImpl {
   }
 
   cancelListening(): void {
+    // Invalidate old startup and engine callbacks before cancelling capture.
+    this.generation += 1;
     this.wantsActive = false;
     this.clearInactivityTimer();
     const session = this.session;
@@ -220,7 +224,8 @@ class JarvisVoiceInputServiceImpl {
   }
 
   private finishSession(): void {
-    const wasOpen = this.active || this.pending !== null;
+    const wasOpen = this.active || this.finishing || this.pending !== null;
+    this.finishing = false;
     this.active = false;
     this.wantsActive = false;
     this.streaming = true;

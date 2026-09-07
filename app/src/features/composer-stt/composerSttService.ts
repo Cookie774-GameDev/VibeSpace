@@ -105,7 +105,10 @@ export async function transcribeGroq(blob: Blob, apiKey: string): Promise<string
   return (data.text ?? '').trim();
 }
 
-export async function transcribeFasterWhisper(blob: Blob, modelId: FasterWhisperModelId): Promise<string> {
+export async function transcribeFasterWhisper(
+  blob: Blob,
+  modelId: FasterWhisperModelId,
+): Promise<string> {
   return FasterWhisperManager.transcribe(modelId, blob);
 }
 
@@ -118,49 +121,63 @@ export interface FasterWhisperRecorder {
 export async function startBatchAudioRecorder(
   onVolume: (rms: number) => void,
   onInactivity: () => void,
+  options: { retainAudio?: boolean } = {},
 ): Promise<FasterWhisperRecorder> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const chunks: Float32Array[] = [];
-  const AudioCtor = getAudioContextCtor();
-  if (!AudioCtor) throw new Error('Audio recording is not available in this runtime.');
-
-  const context = new AudioCtor();
-  const source = context.createMediaStreamSource(stream);
-  const processor = context.createScriptProcessor(2048, 1, 1);
-  let lastActivity = Date.now();
-
-  processor.onaudioprocess = (event) => {
-    const channel = event.inputBuffer.getChannelData(0);
-    let sum = 0;
-    for (let i = 0; i < channel.length; i += 1) {
-      const sample = channel[i] ?? 0;
-      sum += sample * sample;
-    }
-    const rms = Math.sqrt(sum / Math.max(1, channel.length));
-    if (rms > STT_ACTIVITY_RMS) lastActivity = Date.now();
-    onVolume(Math.min(1, rms * 8));
-    chunks.push(new Float32Array(channel));
-  };
-
-  source.connect(processor);
-  processor.connect(context.destination);
-
-  const inactivityTimer = window.setInterval(() => {
-    if (Date.now() - lastActivity >= STT_INACTIVITY_MS) onInactivity();
-  }, 1000);
+  let context: AudioContext | null = null;
+  let source: MediaStreamAudioSourceNode | null = null;
+  let processor: ScriptProcessorNode | null = null;
+  let inactivityTimer: number | null = null;
+  let stopped = false;
 
   const teardown = () => {
-    window.clearInterval(inactivityTimer);
+    if (stopped) return;
+    stopped = true;
+    if (inactivityTimer !== null) window.clearInterval(inactivityTimer);
+    if (processor) processor.onaudioprocess = null;
+    chunks.length = 0;
     cleanupAudioRecorder(processor, source, context, stream);
+    onVolume(0);
   };
 
-  return {
-    captureWav() {
-      if (chunks.length === 0) return null;
-      return encodeWav(chunks, context.sampleRate);
-    },
-    stop() {
-      teardown();
-    },
-  };
+  try {
+    const AudioCtor = getAudioContextCtor();
+    if (!AudioCtor) throw new Error('Audio recording is not available in this runtime.');
+    context = new AudioCtor();
+    source = context.createMediaStreamSource(stream);
+    processor = context.createScriptProcessor(2048, 1, 1);
+    let lastActivity = Date.now();
+    const sampleRate = context.sampleRate;
+
+    processor.onaudioprocess = (event) => {
+      if (stopped) return;
+      const channel = event.inputBuffer.getChannelData(0);
+      let sum = 0;
+      for (let i = 0; i < channel.length; i += 1) {
+        const sample = channel[i] ?? 0;
+        sum += sample * sample;
+      }
+      const rms = Math.sqrt(sum / Math.max(1, channel.length));
+      if (rms > STT_ACTIVITY_RMS) lastActivity = Date.now();
+      onVolume(Math.min(1, rms * 8));
+      if (!stopped && options.retainAudio !== false) chunks.push(new Float32Array(channel));
+    };
+    source.connect(processor);
+    processor.connect(context.destination);
+    inactivityTimer = window.setInterval(() => {
+      if (!stopped && Date.now() - lastActivity >= STT_INACTIVITY_MS) onInactivity();
+    }, 1000);
+
+    return {
+      captureWav() {
+        if (stopped || chunks.length === 0) return null;
+        return encodeWav(chunks, sampleRate);
+      },
+      stop: teardown,
+    };
+  } catch (error) {
+    teardown();
+    throw error;
+  }
 }

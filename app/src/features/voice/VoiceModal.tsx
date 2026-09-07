@@ -208,6 +208,7 @@ function VoiceModalPanel() {
   const chatModelSelection = useAuthStore((state) => state.chatModelSelection);
   const commandCenterBinding = useJarvisCommandCenterBinding();
   const [showCommandCenter, setShowCommandCenter] = React.useState(false);
+  const [capturePending, setCapturePending] = React.useState(false);
   const commandCenterDisclosureRef = React.useRef<HTMLButtonElement>(null);
   const [expandedTranscriptIds, setExpandedTranscriptIds] = React.useState<ReadonlySet<string>>(
     () => new Set(),
@@ -459,6 +460,7 @@ function VoiceModalPanel() {
   }, [clampPanelToViewport, open, showCommandCenter]);
 
   const stopListening = React.useCallback((nextState: VoiceState = 'idle') => {
+    setCapturePending(false);
     listeningArmedRef.current = false;
     if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
     utteranceTimerRef.current = null;
@@ -471,7 +473,7 @@ function VoiceModalPanel() {
     pendingPartialRef.current = '';
     pendingUtteranceRef.current = '';
     resumeListeningAfterSpeechRef.current = false;
-    VoiceService.stopListening();
+    VoiceService.cancelListening();
     useUIStore.getState().setVoiceListening(false);
     useVoiceStore.getState().setPartialTranscript('');
     useVoiceStore.getState().setState(nextState);
@@ -496,25 +498,17 @@ function VoiceModalPanel() {
       ),
     );
     const started = VoiceService.startListening();
-    useUIStore.getState().setVoiceListening(started);
+    const capturing = started && VoiceService.isListening();
+    setCapturePending(started && !capturing);
+    useUIStore.getState().setVoiceListening(capturing);
     if (started) {
-      useVoiceStore.getState().setState('listening');
+      useVoiceStore.getState().setState(capturing ? 'listening' : 'idle');
       return true;
     }
-    window.setTimeout(() => {
-      if (
-        !listeningArmedRef.current ||
-        VoiceService.isListening() ||
-        VoiceService.wantsListening()
-      ) {
-        return;
-      }
-      const retried = VoiceService.startListening();
-      useUIStore.getState().setVoiceListening(retried);
-      if (retried) useVoiceStore.getState().setState('listening');
-      else listeningArmedRef.current = false;
-    }, 60);
-    return started;
+    // Failed startup already reports its actionable error. A request acceptance
+    // or a retry timer is never evidence that the microphone is capturing.
+    listeningArmedRef.current = false;
+    return false;
   }, []);
 
   /** Stop the current spoken reply and hand control straight back to the user. */
@@ -538,7 +532,7 @@ function VoiceModalPanel() {
       stopSpeaking();
       return;
     }
-    if (state === 'listening' || useUIStore.getState().voiceListening) {
+    if (capturePending || state === 'listening' || useUIStore.getState().voiceListening) {
       stopListening(voiceAutoListenOnOpen ? 'paused' : 'idle');
       return;
     }
@@ -546,7 +540,7 @@ function VoiceModalPanel() {
       listeningArmedRef.current = true;
     }
     startListening();
-  }, [startListening, state, stopListening, stopSpeaking, voiceAutoListenOnOpen]);
+  }, [capturePending, startListening, state, stopListening, stopSpeaking, voiceAutoListenOnOpen]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -700,6 +694,7 @@ function VoiceModalPanel() {
       pendingUtteranceRef.current = '';
       if (!text) return;
 
+      manuallyStoppedReplyRef.current = false;
       turnBusyRef.current = true;
       disarmPushToTalk();
       stopMicForTurn();
@@ -783,6 +778,7 @@ function VoiceModalPanel() {
 
     const offs = [
       VoiceService.on('voice:start', () => {
+        setCapturePending(false);
         if (!listeningArmedRef.current) {
           VoiceService.stopListening();
           return;
@@ -841,6 +837,7 @@ function VoiceModalPanel() {
         );
       }),
       VoiceService.on('voice:error', ({ kind, message }) => {
+        setCapturePending(false);
         if (!listeningArmedRef.current && useVoiceStore.getState().state === 'paused') return;
         if (kind === 'no_speech' || kind === 'aborted') {
           restartListening();
@@ -876,7 +873,8 @@ function VoiceModalPanel() {
     ];
 
     const onStreamingStart = () => {
-      manuallyStoppedReplyRef.current = false;
+      if (manuallyStoppedReplyRef.current) return;
+      setCapturePending(false);
       flushUtteranceRef.current = () => undefined;
       streamingReplyRef.current = true;
       turnBusyRef.current = true;
@@ -892,7 +890,8 @@ function VoiceModalPanel() {
       scheduleRestartAfterReply();
     };
     const onSpeechStart = () => {
-      manuallyStoppedReplyRef.current = false;
+      if (manuallyStoppedReplyRef.current) return;
+      setCapturePending(false);
       if (streamingReplyRef.current) return;
       // Capture BEFORE flipping turnBusy: a mid-listen preview (turn not
       // busy, mic live) must resume the mic after the speech ends.
@@ -983,9 +982,11 @@ function VoiceModalPanel() {
   }, [session?.activeRunId, smokeSttState]);
 
   const listeningHint =
-    state === 'listening'
-      ? voiceListeningHint(voiceCommitPhrase, voiceAutoListenOnOpen, voiceEndTrigger)
-      : STATE_LABEL[state];
+    capturePending && state === 'idle'
+      ? 'Waiting for microphone'
+      : state === 'listening'
+        ? voiceListeningHint(voiceCommitPhrase, voiceAutoListenOnOpen, voiceEndTrigger)
+        : STATE_LABEL[state];
 
   if (!open) return null;
 
@@ -1017,6 +1018,7 @@ function VoiceModalPanel() {
           state={state}
           personaName={personaCfg.name}
           listeningHint={listeningHint}
+          capturePending={capturePending && state === 'idle'}
           errorMessage={errorMessage}
           voiceAutoListenOnOpen={voiceAutoListenOnOpen}
           voiceCommitPhrase={voiceCommitPhrase}

@@ -31,6 +31,10 @@ pub struct JarvisAmbientSnapshot {
     pub observed_at: i64,
     pub energy: f64,
     pub transient_until: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 struct AmbientInner {
@@ -38,21 +42,26 @@ struct AmbientInner {
     ready: HashSet<String>,
 }
 
-pub struct JarvisAmbientOverlayState(Mutex<AmbientInner>);
+pub struct JarvisAmbientOverlayState(Mutex<AmbientInner>, Mutex<()>);
 
 impl Default for JarvisAmbientOverlayState {
     fn default() -> Self {
-        Self(Mutex::new(AmbientInner {
-            snapshot: JarvisAmbientSnapshot {
-                revision: 0,
-                state: JarvisAmbientState::Idle,
-                source: "voice".to_owned(),
-                observed_at: 0,
-                energy: 0.0,
-                transient_until: None,
-            },
-            ready: HashSet::new(),
-        }))
+        Self(
+            Mutex::new(AmbientInner {
+                snapshot: JarvisAmbientSnapshot {
+                    revision: 0,
+                    state: JarvisAmbientState::Idle,
+                    source: "voice".to_owned(),
+                    observed_at: 0,
+                    energy: 0.0,
+                    transient_until: None,
+                    active: Some(false),
+                    session_id: None,
+                },
+                ready: HashSet::new(),
+            }),
+            Mutex::new(()),
+        )
     }
 }
 
@@ -84,6 +93,11 @@ fn validate_snapshot(
 ) -> Result<(), String> {
     if snapshot.revision <= current_revision {
         return Err("jarvis_ambient_revision_stale".to_owned());
+    }
+    if snapshot.session_id.as_ref().is_some_and(|value| {
+        value.is_empty() || value.len() > 160 || value.chars().any(char::is_control)
+    }) {
+        return Err("jarvis_ambient_session_invalid".to_owned());
     }
     if snapshot.observed_at < 0
         || snapshot.transient_until.is_some_and(|value| value < 0)
@@ -119,6 +133,12 @@ fn stable_monitor_label(index: usize, x: i32, y: i32) -> String {
 
 fn classify_visibility(state: JarvisAmbientState, renderer_ready: bool) -> bool {
     renderer_ready && state != JarvisAmbientState::Idle
+}
+
+fn snapshot_active(snapshot: &JarvisAmbientSnapshot) -> bool {
+    snapshot
+        .active
+        .unwrap_or(snapshot.state != JarvisAmbientState::Idle)
 }
 
 fn should_reconcile_windows(state: JarvisAmbientState, has_existing_window: bool) -> bool {
@@ -180,7 +200,25 @@ fn ensure_windows(
         .webview_windows()
         .keys()
         .any(|label| label.starts_with(AMBIENT_PREFIX));
-    if !should_reconcile_windows(snapshot.state, has_existing_window) {
+    if !snapshot_active(snapshot) {
+        for (label, window) in app.webview_windows() {
+            if label.starts_with(AMBIENT_PREFIX) {
+                window
+                    .close()
+                    .map_err(|_| "jarvis_ambient_window_close_failed".to_owned())?;
+            }
+        }
+        app.state::<JarvisAmbientOverlayState>()
+            .0
+            .lock()
+            .map_err(|_| "jarvis_ambient_state_poisoned".to_owned())?
+            .ready
+            .clear();
+        return Ok(());
+    }
+    if !should_reconcile_windows(snapshot.state, has_existing_window)
+        && snapshot.active != Some(true)
+    {
         return Ok(());
     }
     let monitors = app
@@ -219,8 +257,21 @@ fn ensure_windows(
             built
         };
         configure_window(&window, position, size);
+        let still_current = {
+            let state = app.state::<JarvisAmbientOverlayState>();
+            let inner = state
+                .0
+                .lock()
+                .map_err(|_| "jarvis_ambient_state_poisoned".to_owned())?;
+            inner.snapshot.revision == snapshot.revision && snapshot_active(&inner.snapshot)
+        };
+        if !still_current {
+            return Ok(());
+        }
         let _ = app.emit_to(&label, AMBIENT_EVENT, snapshot);
-        if classify_visibility(snapshot.state, ready.contains(&label)) {
+        if ready.contains(&label)
+            && (snapshot.active == Some(true) || classify_visibility(snapshot.state, true))
+        {
             let _ = window.show();
         } else {
             let _ = window.hide();
@@ -235,6 +286,23 @@ fn ensure_windows(
     Ok(())
 }
 
+// Serialize window mutations off the IPC thread, always using the latest accepted intent.
+fn reconcile_latest(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<JarvisAmbientOverlayState>();
+    let _guard = state
+        .1
+        .lock()
+        .map_err(|_| "jarvis_ambient_reconcile_poisoned".to_owned())?;
+    let (snapshot, ready) = {
+        let inner = state
+            .0
+            .lock()
+            .map_err(|_| "jarvis_ambient_state_poisoned".to_owned())?;
+        (inner.snapshot.clone(), inner.ready.clone())
+    };
+    ensure_windows(app, &snapshot, &ready)
+}
+
 #[tauri::command]
 pub async fn set_jarvis_ambient_snapshot(
     window: WebviewWindow,
@@ -245,16 +313,15 @@ pub async fn set_jarvis_ambient_snapshot(
     if !trusted_caller(window.label(), false) {
         return Err("jarvis_ambient_caller_denied".to_owned());
     }
-    let (accepted, ready) = {
+    {
         let mut inner = state
             .0
             .lock()
             .map_err(|_| "jarvis_ambient_state_poisoned".to_owned())?;
         validate_snapshot(&snapshot, inner.snapshot.revision)?;
-        inner.snapshot = snapshot.clone();
-        (inner.snapshot.clone(), inner.ready.clone())
+        inner.snapshot = snapshot;
     };
-    tauri::async_runtime::spawn_blocking(move || ensure_windows(&app, &accepted, &ready))
+    tauri::async_runtime::spawn_blocking(move || reconcile_latest(&app))
         .await
         .map_err(|_| "jarvis_ambient_reconcile_worker_failed".to_owned())?
 }
@@ -268,16 +335,15 @@ pub async fn jarvis_ambient_renderer_ready(
     if !trusted_caller(window.label(), true) {
         return Err("jarvis_ambient_renderer_denied".to_owned());
     }
-    let (snapshot, ready) = {
+    let snapshot = {
         let mut inner = state
             .0
             .lock()
             .map_err(|_| "jarvis_ambient_state_poisoned".to_owned())?;
         inner.ready.insert(window.label().to_owned());
-        (inner.snapshot.clone(), inner.ready.clone())
+        inner.snapshot.clone()
     };
-    let accepted = snapshot.clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_windows(&app, &accepted, &ready))
+    tauri::async_runtime::spawn_blocking(move || reconcile_latest(&app))
         .await
         .map_err(|_| "jarvis_ambient_reconcile_worker_failed".to_owned())??;
     Ok(snapshot)
@@ -298,7 +364,34 @@ mod tests {
             observed_at: 100,
             energy: 0.5,
             transient_until: None,
+            active: None,
+            session_id: None,
         }
+    }
+
+    #[test]
+    fn ambient_ipc_preserves_explicit_close_and_session_identity() {
+        let value = serde_json::json!({
+            "revision": 2, "state": "speaking", "source": "voice",
+            "observedAt": 100, "energy": 0.5, "active": false,
+            "sessionId": "voice-disposable-test",
+        });
+        let decoded: JarvisAmbientSnapshot = serde_json::from_value(value).unwrap();
+        let encoded = serde_json::to_value(decoded).unwrap();
+        assert_eq!(encoded.get("active"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(
+            encoded.get("sessionId").and_then(|value| value.as_str()),
+            Some("voice-disposable-test")
+        );
+    }
+
+    #[test]
+    fn ambient_ipc_rejects_non_boolean_visibility_intent() {
+        let value = serde_json::json!({
+            "revision": 2, "state": "listening", "source": "voice",
+            "observedAt": 100, "energy": 0.5, "active": "yes",
+        });
+        assert!(serde_json::from_value::<JarvisAmbientSnapshot>(value).is_err());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useChatBackendAffinity } from './useChatBackendAffinity';
 import { NotesPicker, type NotesPickerHandle } from '../notes/NotesPicker';
 import {
@@ -89,10 +89,7 @@ import {
   parseChatPresentationCommand,
   updateConsolePreferences,
 } from './agentic-console/preferences';
-import { VoiceService } from '@/features/voice/VoiceService';
-import { createDeepgramDictationSession } from '@/features/global-dictation/deepgramDictation';
 import { MicWaveform } from './MicWaveform';
-import { formatComposerVoiceFailure } from './composerVoiceFailures';
 import { formatComposerSendFailure } from './composerSendFailures';
 import { HarnessReadinessGate, useHarnessRuntimeState } from './HarnessReadinessGate';
 import { CodexReadinessGate, useCodexRuntimeState } from './CodexReadinessGate';
@@ -133,29 +130,12 @@ export function slashComboboxOwnerAttributes(
   };
 }
 import {
-  COMPOSER_STT_STOP_EVENT,
-  COMPOSER_STT_TOGGLE_EVENT,
-  FasterWhisperManager,
-  getAudioContextCtor,
-  getComposerSttProvider,
-  getFasterWhisperModel,
-  isSystemSttAvailable,
-  startBatchAudioRecorder,
-  sttVolumeRef,
-  setSttVolumeLevel,
-  resetSttVolume,
-  startSttVolumeMeter,
-  stopSttVolumeMeter,
-  transcribeFasterWhisper,
-  resolveComposerSttTextarea,
-  type FasterWhisperRecorder,
+  COMPOSER_STT_STOP_EVENT, COMPOSER_STT_TOGGLE_EVENT,
+  getComposerSttProvider, getFasterWhisperModel,
+  sttVolumeRef, setSttVolumeLevel, resolveComposerSttTextarea,
 } from '@/features/composer-stt';
-import {
-  buildSttCommittedValue,
-  buildSttPreviewValue,
-  captureSttTextSnapshot,
-  type SttFieldSnapshot,
-} from '@/features/composer-stt/sttInterimEditor';
+import { readDeepgramSttOption } from '@/lib/deepgram';
+import { createComposerDictationController } from '@/features/composer-stt/composerDictationController';
 import { JARVIS_COMMAND_CATALOG } from '@/features/assistant/commands';
 import { toast } from '@/components/ui/toast';
 import type {
@@ -1398,10 +1378,6 @@ export function Composer({
   const handoffInstructionRef = useRef(handoffInstruction);
   handoffInstructionRef.current = handoffInstruction;
   // V2 — speech-to-text in the composer.
-  const [sttListening, setSttListening] = useState(false);
-  const [sttAwaitingFinal, setSttAwaitingFinal] = useState(false);
-  const [sttTranscribing, setSttTranscribing] = useState(false);
-  const [sttInterim, setSttInterim] = useState('');
   const composerSttEnabled = useUIStore((s) => s.composerStt);
   const setComposerSttListening = useUIStore((s) => s.setComposerSttListening);
 
@@ -1420,39 +1396,39 @@ export function Composer({
   }, []);
   const optionPickerRef = useRef<SlashCommandOptionPickerRef>(null);
   const themePickerRef = useRef<ThemeSlashPickerRef>(null);
-  const clearSttFinalizeTimer = useCallback(() => {
-    if (sttFinalizeTimerRef.current) {
-      clearTimeout(sttFinalizeTimerRef.current);
-      sttFinalizeTimerRef.current = null;
-    }
-  }, []);
-
-  const captureComposerSttSnapshot = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    sttSnapshotRef.current = captureSttTextSnapshot(
-      text,
-      el.selectionStart ?? text.length,
-      el.selectionEnd ?? text.length,
-    );
-  }, [text]);
-
-  const revertComposerSttPreview = useCallback(() => {
-    const snap = sttSnapshotRef.current;
-    if (!snap) return;
-    setText(snap.before + snap.after);
-    sttSnapshotRef.current = null;
-  }, []);
-
   const volumeRef = sttVolumeRef;
   const voiceReplyRequestedRef = useRef(false);
-  const batchRecorderRef = useRef<FasterWhisperRecorder | null>(null);
-  const deepgramSessionRef = useRef<Awaited<
-    ReturnType<typeof createDeepgramDictationSession>
-  > | null>(null);
-  const sttSnapshotRef = useRef<SttFieldSnapshot | null>(null);
-  const transcribeGenRef = useRef(0);
-  const sttFinalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sttController = useMemo(() => createComposerDictationController({
+    field: () => textareaRef.current,
+    scope: () => JSON.stringify([chatId, resolveAccountIdentity(useAuthStore.getState())?.accountId,
+      getComposerSttProvider(), getFasterWhisperModel(), readDeepgramSttOption()]),
+    onLevel: setSttVolumeLevel,
+    commit: (value, caret) => {
+      voiceReplyRequestedRef.current = true;
+      setText(value);
+      const field = textareaRef.current;
+      requestAnimationFrame(() => {
+        if (field && textareaRef.current === field && field.isConnected && field.value === value) {
+          field.focus(); field.setSelectionRange(caret, caret);
+        }
+      });
+    },
+  }), [chatId]);
+  const sttView = useSyncExternalStore(sttController.subscribe, sttController.getSnapshot);
+  const sttListening = sttView.phase === 'listening';
+  const sttTranscribing = sttView.phase === 'transcribing';
+  const sttInterim = sttView.text;
+  useEffect(() => {
+    const route = () => JSON.stringify([resolveAccountIdentity(useAuthStore.getState())?.accountId,
+      getComposerSttProvider(), getFasterWhisperModel(), readDeepgramSttOption()]);
+    let previous = route();
+    const off = useAuthStore.subscribe(() => {
+      const next = route();
+      if (next !== previous) { previous = next; sttController.cancel(); }
+    });
+    // Cancel is replay-safe under React StrictMode; no old stream survives remount.
+    return () => { off(); sttController.cancel(); };
+  }, [sttController]);
 
   const queuedMessagesRef = useRef(queuedMessages);
   queuedMessagesRef.current = queuedMessages;
@@ -5418,360 +5394,41 @@ export function Composer({
       window.removeEventListener('jarvis:composer:insert-text', onInsertText as EventListener);
   }, [chatId]);
 
-  // ---------- V2 speech-to-text wiring ----------
-  useEffect(() => {
-    if (!sttListening && !sttAwaitingFinal) return;
-
-    const offStart = VoiceService.on('voice:start', () => {
-      captureComposerSttSnapshot();
-    });
-    const offPartial = VoiceService.on('voice:partial', ({ text: partial }) => {
-      const snap = sttSnapshotRef.current;
-      if (snap) {
-        setText(buildSttPreviewValue(snap, partial));
-      } else {
-        setSttInterim(partial);
-      }
-    });
-    const offFinal = VoiceService.on('voice:final', ({ text: finalText }) => {
-      clearSttFinalizeTimer();
-      setSttAwaitingFinal(false);
-      setSttInterim('');
-      // Free/default system STT: 3 minutes (180s) of no speech before timeout.
-      VoiceService.setInactivityTimeoutMs(180_000);
-      const snap = sttSnapshotRef.current;
-      sttSnapshotRef.current = null;
-      voiceReplyRequestedRef.current = true;
-      if (snap) {
-        const committed = buildSttCommittedValue(snap, finalText);
-        if (committed) setText(committed);
-      } else {
-        setText((cur) => {
-          const sep = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
-          return cur + sep + finalText;
-        });
-      }
-      requestAnimationFrame(() => textareaRef.current?.focus());
-    });
-    const offError = VoiceService.on('voice:error', ({ kind, message }) => {
-      clearSttFinalizeTimer();
-      setSttAwaitingFinal(false);
-      setSttListening(false);
-      setSttInterim('');
-      revertComposerSttPreview();
-      stopSttVolumeMeter();
-      if (kind === 'unsupported') {
-        toast.warning('Voice unsupported', message);
-      } else if (kind === 'service_not_allowed' || kind === 'permission_denied') {
-        toast.error('Microphone blocked', message);
-      } else if (kind !== 'no_speech' && kind !== 'aborted') {
-        toast.error('Voice error', message);
-      }
-    });
-    const offEnd = VoiceService.on('voice:end', () => {
-      if (!VoiceService.isListening() && !VoiceService.wantsListening() && !sttAwaitingFinal) {
-        setSttListening(false);
-        stopSttVolumeMeter();
-      }
-    });
-    const offTimeout = VoiceService.on('voice:timeout', ({ reason }) => {
-      clearSttFinalizeTimer();
-      setSttAwaitingFinal(false);
-      setSttListening(false);
-      setSttInterim('');
-      revertComposerSttPreview();
-      stopSttVolumeMeter();
-      toast.info('Speech-to-text stopped', reason);
-    });
-
-    return () => {
-      offStart();
-      offPartial();
-      offFinal();
-      offError();
-      offEnd();
-      offTimeout();
-    };
-  }, [
-    captureComposerSttSnapshot,
-    clearSttFinalizeTimer,
-    revertComposerSttPreview,
-    sttAwaitingFinal,
-    sttListening,
-  ]);
-
-  const startStt = () => {
-    transcribeGenRef.current += 1;
-    setSttTranscribing(false);
-    const provider = getComposerSttProvider();
-    if (provider === 'faster-whisper') {
-      void startFasterWhisperStt();
-      return;
-    }
-    if (provider === 'deepgram') {
-      void startDeepgramStt();
-      return;
-    }
-    void startSystemStt();
-  };
-
-  async function startDeepgramStt() {
-    const generation = transcribeGenRef.current;
-    captureComposerSttSnapshot();
-    setSttInterim('Connecting to Deepgram…');
-    setSttAwaitingFinal(false);
-    try {
-      const session = await createDeepgramDictationSession({
-        onOpen: () => {
-          if (generation !== transcribeGenRef.current) return;
-          setSttListening(true);
-          setSttInterim('Listening with Deepgram…');
-        },
-        onPartial: (partial) => {
-          if (generation !== transcribeGenRef.current) return;
-          const committed = deepgramSessionRef.current?.getFinalText() ?? '';
-          const preview = `${committed} ${partial}`.trim();
-          setSttInterim(preview);
-          const snap = sttSnapshotRef.current;
-          if (snap) setText(buildSttPreviewValue(snap, preview));
-        },
-        onFinal: (finalText) => {
-          if (generation !== transcribeGenRef.current) return;
-          setSttInterim(finalText);
-          const snap = sttSnapshotRef.current;
-          if (snap) setText(buildSttPreviewValue(snap, finalText));
-        },
-        onLevel: setSttVolumeLevel,
-        onError: (message) => {
-          if (generation !== transcribeGenRef.current) return;
-          deepgramSessionRef.current = null;
-          setSttListening(false);
-          setSttInterim('');
-          revertComposerSttPreview();
-          toast.error('Deepgram dictation failed', message);
-        },
-        onClose: () => {
-          if (generation === transcribeGenRef.current) setSttListening(false);
-        },
-      });
-      if (generation !== transcribeGenRef.current) {
-        session.stop();
-        return;
-      }
-      deepgramSessionRef.current = session;
-    } catch {
-      if (generation !== transcribeGenRef.current) return;
-      setSttListening(false);
-      setSttInterim('');
-      sttSnapshotRef.current = null;
-      toast.error(
-        'Deepgram dictation unavailable',
-        'Could not start Deepgram dictation. Check the connection and try again.',
-      );
-    }
-  }
-
-  const startSystemStt = async () => {
-    if (isSystemSttAvailable()) {
-      try {
-        if (VoiceService.isListening() || VoiceService.wantsListening()) {
-          VoiceService.interruptListening();
-        }
-        captureComposerSttSnapshot();
-        VoiceService.setInactivityTimeoutMs(180_000);
-        setSttInterim('');
-        const started = VoiceService.startListening();
-        if (!started) {
-          setSttListening(false);
-          setSttAwaitingFinal(false);
-          sttSnapshotRef.current = null;
-          VoiceService.setInactivityTimeoutMs(180_000);
-          toast.warning(
-            'Voice unsupported',
-            'The selected built-in system speech engine could not start. Check microphone permission or choose a different engine in Settings → Speech to Text.',
-          );
-          return;
-        }
-        setSttListening(true);
-        setSttAwaitingFinal(false);
-        void startSttVolumeMeter();
-      } catch {
-        toast.error('Voice error', formatComposerVoiceFailure('system_startup'));
-        setSttListening(false);
-        setSttAwaitingFinal(false);
-        setSttInterim('');
-        sttSnapshotRef.current = null;
-        VoiceService.setInactivityTimeoutMs(180_000);
-      }
-      return;
-    }
-    toast.warning(
-      'Voice unsupported',
-      'The selected built-in system speech engine is unavailable in this window. Check microphone permission or choose a different engine in Settings → Speech to Text.',
-    );
-  };
-
-  const startFasterWhisperStt = async () => {
-    const modelId = getFasterWhisperModel();
-    const installed = isTauri ? await FasterWhisperManager.checkInstalled(modelId) : false;
-    if (!installed) {
-      toast.warning(
-        'Local model missing',
-        `Download the ${modelId} model in Settings → Speech to Text, or switch to system dictation.`,
-      );
-      return;
-    }
-    if (typeof navigator.mediaDevices?.getUserMedia !== 'function' || !getAudioContextCtor()) {
-      toast.warning('Microphone unavailable', formatComposerVoiceFailure('local_capture'));
-      return;
-    }
-    try {
-      setSttInterim(`Listening with faster-whisper (${modelId})...`);
-      batchRecorderRef.current = await startBatchAudioRecorder(
-        (rms) => {
-          setSttVolumeLevel(rms);
-        },
-        () => {
-          void stopBatchStt(true);
-        },
-      );
-      setSttListening(true);
-    } catch {
-      setSttListening(false);
-      setSttInterim('');
-      toast.error('Voice error', formatComposerVoiceFailure('local_capture'));
-    }
-  };
-
-  const appendTranscript = (finalText: string) => {
-    if (!finalText) return;
-    voiceReplyRequestedRef.current = true;
-    setText((cur) => {
-      const sep = cur.length === 0 || /[ 	]$/.test(cur) ? '' : ' ';
-      return cur + sep + finalText;
-    });
-    requestAnimationFrame(() => textareaRef.current?.focus());
-  };
-
-  const stopBatchStt = async (fromInactivity = false) => {
-    stopSttVolumeMeter();
-    const recorder = batchRecorderRef.current;
-    batchRecorderRef.current = null;
-    const wav = recorder?.captureWav() ?? null;
-    recorder?.stop();
-    setSttListening(false);
-    setSttAwaitingFinal(false);
-    if (!wav || wav.size === 0) {
-      setSttTranscribing(false);
-      setSttInterim('');
-      if (!fromInactivity) {
-        toast.warning('No speech captured', 'Try again and speak for at least one second.');
-      } else {
-        toast.info('Speech-to-text stopped', 'Stopped after 30 seconds without voice activity.');
-      }
-      return;
-    }
-    const gen = transcribeGenRef.current;
-    setSttTranscribing(true);
-    setSttInterim('Transcribing…');
-    try {
-      const transcript = await transcribeFasterWhisper(wav, getFasterWhisperModel());
-      if (gen !== transcribeGenRef.current) return;
-      appendTranscript(transcript);
-    } catch {
-      if (gen !== transcribeGenRef.current) return;
-      toast.error('Local transcription failed', formatComposerVoiceFailure('local_transcription'));
-    } finally {
-      if (gen === transcribeGenRef.current) {
-        setSttTranscribing(false);
-        setSttInterim('');
-      }
-    }
-  };
-
-  const stopStt = () => {
-    transcribeGenRef.current += 1;
-    if (deepgramSessionRef.current) {
-      const session = deepgramSessionRef.current;
-      deepgramSessionRef.current = null;
-      const finalText = session.getFinalText();
-      session.stop();
-      setSttListening(false);
-      setSttAwaitingFinal(false);
-      setSttInterim('');
-      resetSttVolume();
-      const snap = sttSnapshotRef.current;
-      sttSnapshotRef.current = null;
-      if (snap) {
-        setText(
-          (finalText ? buildSttCommittedValue(snap, finalText) : null) ?? snap.before + snap.after,
-        );
-      }
-      if (finalText) voiceReplyRequestedRef.current = true;
-      requestAnimationFrame(() => textareaRef.current?.focus());
-      return;
-    }
-    if (batchRecorderRef.current) {
-      void stopBatchStt(false);
-      return;
-    }
-    setSttListening(false);
-    setSttInterim('');
-    stopSttVolumeMeter();
-    setSttAwaitingFinal(true);
-    clearSttFinalizeTimer();
-    sttFinalizeTimerRef.current = setTimeout(() => {
-      setSttAwaitingFinal(false);
-      revertComposerSttPreview();
-      sttSnapshotRef.current = null;
-      VoiceService.setInactivityTimeoutMs(180_000);
-    }, 2_500);
-    try {
-      VoiceService.stopListening();
-    } catch {
-      // ignore — engine may already be torn down
-    }
-  };
-
-  const toggleStt = () => {
-    if (sttListening || sttTranscribing) stopStt();
-    else startStt();
-  };
-
-  // Stop listening when the chat unmounts/changes.
-  useEffect(() => {
-    return () => {
-      transcribeGenRef.current += 1;
-      clearSttFinalizeTimer();
-      deepgramSessionRef.current?.stop();
-      deepgramSessionRef.current = null;
-      if (sttListening || sttAwaitingFinal) VoiceService.stopListening();
-      stopSttVolumeMeter();
-    };
-  }, [clearSttFinalizeTimer, sttAwaitingFinal, sttListening]);
-
-  // Ctrl+CapsLock is dispatched globally; focused surfaces decide whether to consume it.
+  // Selected capture is shared; this field owns a transient preview and explicit Accept.
+  const toggleStt = useCallback(() => {
+    const phase = sttController.getSnapshot().phase;
+    if (phase === 'starting' || phase === 'transcribing') { sttController.cancel(); return; }
+    if (phase === 'listening') { void sttController.finish(); return; }
+    if (composerSttEnabled) void sttController.start();
+  }, [composerSttEnabled, sttController]);
   useEffect(() => {
     const onToggle = (event: Event) => {
       if (!composerSttEnabled) return;
       const textarea = resolveComposerSttTextarea();
       if (!textarea || textarea !== textareaRef.current) return;
-      event.preventDefault?.();
-      toggleStt();
+      event.preventDefault(); toggleStt();
     };
-    const onStop = () => {
-      if (sttListening || sttTranscribing || sttAwaitingFinal) stopStt();
+    const onStop = () => sttController.cancel();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || sttController.getSnapshot().phase === 'idle') return;
+      const field = textareaRef.current;
+      if (!field || !(event.target instanceof Node) || !field.closest('[data-tour="chat-composer"]')?.contains(event.target)) return;
+      event.preventDefault(); event.stopPropagation(); sttController.cancel(); field.focus();
     };
     window.addEventListener(COMPOSER_STT_TOGGLE_EVENT, onToggle);
     window.addEventListener(COMPOSER_STT_STOP_EVENT, onStop);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('pagehide', onStop);
     return () => {
       window.removeEventListener(COMPOSER_STT_TOGGLE_EVENT, onToggle);
       window.removeEventListener(COMPOSER_STT_STOP_EVENT, onStop);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('pagehide', onStop);
+      sttController.cancel();
     };
-  }, [composerSttEnabled, sttAwaitingFinal, sttListening, sttTranscribing]);
-
-  // Only the main (non-compact) composer drives the global mic indicator — the
-  // Inspector sidebar mounts a second compact composer and must not fight it.
+  }, [composerSttEnabled, sttController, toggleStt]);
+  useEffect(() => { if (!composerSttEnabled) sttController.cancel(); }, [composerSttEnabled, sttController]);
+  // The Inspector's compact Composer must not own the main global indicator.
   useEffect(() => {
     if (compact) return;
     setComposerSttListening(sttListening);
@@ -5783,6 +5440,23 @@ export function Composer({
       className={cn('border-t border-border bg-panel', compact && 'text-[12px]')}
       data-tour="chat-composer"
     >
+      {sttView.phase !== 'idle' ? (
+        <section aria-label="Composer dictation" className="m-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span role="status" aria-live="polite" className="min-w-0 break-words text-muted-foreground">
+              {sttView.phase === 'starting' ? 'Waiting for microphone permission' : sttTranscribing ? 'Transcribing' : sttListening ? 'Listening' : sttView.phase === 'preview' ? 'Review transcript ? not sent' : 'Dictation needs attention'}
+              {sttView.engineLabel ? ' ? ' + sttView.engineLabel : ''}
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              {sttView.phase === 'preview' ? <Button size="sm" type="button" onClick={() => void sttController.accept()}>Accept dictation</Button> : null}
+              {sttView.phase === 'error' ? <Button size="sm" type="button" onClick={() => void sttController.start()}>Retry dictation</Button> : null}
+              <Button size="sm" variant="ghost" type="button" onClick={() => { sttController.cancel(); textareaRef.current?.focus(); }}>Cancel dictation</Button>
+            </div>
+          </div>
+          {sttView.text ? <p aria-label="Dictation preview" className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-foreground">{sttView.text}<span className="ml-2 text-muted-foreground">({sttView.partial ? 'partial' : 'final'})</span></p> : null}
+          {sttView.error ? <p role="alert" className="mt-2 break-words text-destructive">{sttView.error}</p> : null}
+        </section>
+      ) : null}
       {showFreeKeyNudge && (
         <FreeKeyNudge
           onOpenProviders={() => {
@@ -6342,9 +6016,9 @@ export function Composer({
                         variant={sttListening ? 'accent' : 'ghost'}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={toggleStt}
-                        aria-label={sttListening ? 'Stop dictation' : 'Start dictation'}
+                        aria-label={sttView.phase === 'starting' ? 'Cancel microphone request' : sttTranscribing ? 'Cancel transcription' : sttListening ? 'Stop dictation' : 'Start dictation'}
                         aria-pressed={sttListening}
-                        className={cn(sttListening && 'animate-pulse', compact && 'h-6 w-6')}
+                        className={cn(compact && 'h-6 w-6')}
                       >
                         {sttListening ? <MicWaveform volumeRef={volumeRef} /> : <Mic />}
                       </Button>

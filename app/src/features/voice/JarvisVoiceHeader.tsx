@@ -9,6 +9,7 @@ export function JarvisVoiceHeader({
   state,
   personaName,
   listeningHint,
+  capturePending = false,
   errorMessage,
   voiceAutoListenOnOpen,
   voiceCommitPhrase,
@@ -24,6 +25,7 @@ export function JarvisVoiceHeader({
   state: VoiceState;
   personaName: string;
   listeningHint: string;
+  capturePending?: boolean;
   errorMessage?: string | null;
   voiceAutoListenOnOpen: boolean;
   voiceCommitPhrase: string;
@@ -37,18 +39,20 @@ export function JarvisVoiceHeader({
   onPointerCancel: React.PointerEventHandler<HTMLDivElement>;
 }) {
   const errorDetailId = React.useId();
-  const controlLabel =
-    state === 'thinking' || state === 'speaking'
+  const controlLabel = capturePending
+    ? 'Cancel microphone request'
+    : state === 'thinking' || state === 'speaking'
       ? 'Stop response'
       : state === 'listening'
         ? 'Stop listening'
         : state === 'paused'
           ? 'Resume listening'
           : voiceAutoListenOnOpen
-            ? 'Listening active'
+            ? 'Start listening'
             : 'Click to talk';
-  const controlTitle =
-    state === 'thinking' || state === 'speaking'
+  const controlTitle = capturePending
+    ? 'Cancel microphone request'
+    : state === 'thinking' || state === 'speaking'
       ? 'Stop Jarvis mid-reply and ask something else'
       : state === 'listening'
         ? 'Stop listening'

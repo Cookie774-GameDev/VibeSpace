@@ -7,6 +7,7 @@ import {
   SPEECH_SYNTHESIS_END_EVENT,
   SPEECH_SYNTHESIS_START_EVENT,
   STREAMING_VOICE_END_EVENT,
+  STREAMING_VOICE_START_EVENT,
 } from './speechSynthesis';
 
 type VoiceHandler = (payload?: unknown) => void;
@@ -135,6 +136,46 @@ describe('VoiceModal stop control and mic recovery', () => {
     vi.useRealTimers();
   });
 
+  it('shows pending capture without claiming listening until the real capture opens', () => {
+    setupAuth(true);
+    vi.mocked(VoiceService.startListening).mockImplementationOnce(() => true);
+    render(<VoiceModal />);
+    expect(useUIStore.getState().voiceListening).toBe(false);
+    expect(useVoiceStore.getState().state).toBe('idle');
+    expect(screen.getByText('Waiting for microphone')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel microphone request' })).toBeTruthy();
+    act(() => {
+      voiceMockState.listening = true;
+      emitVoice('voice:start');
+    });
+    expect(useUIStore.getState().voiceListening).toBe(true);
+    expect(useVoiceStore.getState().state).toBe('listening');
+  });
+
+  it('cancels a pending microphone request without accepting a late capture start', () => {
+    setupAuth(true);
+    vi.mocked(VoiceService.startListening).mockImplementationOnce(() => true);
+    render(<VoiceModal />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel microphone request' }));
+    expect(VoiceService.cancelListening).toHaveBeenCalledOnce();
+    act(() => emitVoice('voice:start'));
+    expect(useUIStore.getState().voiceListening).toBe(false);
+    expect(useVoiceStore.getState().state).toBe('paused');
+  });
+
+  it('rejects delayed audio-start events after a response was explicitly stopped', () => {
+    setupAuth(false);
+    render(<VoiceModal />);
+    act(() => window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT)));
+    fireEvent.click(screen.getByRole('button', { name: /Stop response/i }));
+    expect(useVoiceStore.getState().state).toBe('idle');
+    act(() => {
+      window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT));
+      window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT));
+    });
+    expect(useVoiceStore.getState().state).toBe('idle');
+  });
+
   it('clicking the orb while Jarvis speaks stops the response and resumes listening (hands-free)', async () => {
     setupAuth(true);
     render(<VoiceModal />);
@@ -233,7 +274,7 @@ describe('VoiceModal stop control and mic recovery', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Stop listening/i }));
 
-    expect(VoiceService.stopListening).toHaveBeenCalledTimes(1);
+    expect(VoiceService.cancelListening).toHaveBeenCalledTimes(1);
     expect(useUIStore.getState().voiceListening).toBe(false);
     expect(useVoiceStore.getState().state).toBe('paused');
     expect(screen.getByRole('button', { name: /Resume listening/i })).toBeTruthy();
