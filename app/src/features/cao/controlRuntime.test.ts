@@ -46,6 +46,28 @@ function harness(overrides: Partial<CaoControlRuntimeDeps> = {}) {
 }
 
 describe('CAO control runtime', () => {
+  it('releases the exact lease when an action throws', async () => {
+    const { runtime, deps } = harness({ action: { execute: async () => { throw new Error('offline'); }, cancel: async () => {} } });
+    expect((await runtime.run({ ...scope, requestId: 'throwing', command, targets })).status).toBe('failed');
+    expect(deps.authority!.release).toHaveBeenCalledWith(expect.objectContaining({ leaseId: 'lease-1' }));
+  });
+
+  it('propagates cancellation to the active action without overwriting the cancelled record', async () => {
+    let notify!: () => void;
+    const ready = new Promise<void>(resolve => { notify = resolve; });
+    let signal: AbortSignal | undefined;
+    const { runtime } = harness({ action: { execute: async input => {
+      signal = input.signal; notify();
+      await new Promise<void>(resolve => input.signal.addEventListener('abort', () => resolve(), { once: true }));
+      return { status: 'cancelled' };
+    }, cancel: async () => {} } });
+    const pending = runtime.run({ ...scope, requestId: 'cancel-active', command, targets });
+    await ready;
+    const result = await runtime.cancel({ ...scope, requestId: 'cancel-active' });
+    expect(signal?.aborted).toBe(true);
+    expect(result.status).toBe('cancelled');
+    expect((await pending).status).toBe('cancelled');
+  });
   it('persists, leases, revalidates, releases, and deduplicates a safe receipt', async () => {
     const { runtime, deps } = harness();
     const input = { ...scope, requestId: 'request-1', command, targets };

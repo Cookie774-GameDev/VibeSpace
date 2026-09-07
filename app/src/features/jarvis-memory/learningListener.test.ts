@@ -33,6 +33,39 @@ describe('Jarvis learning event listener', () => {
     await stop?.();
   });
 
+  it('persists learning from ten messages in each of two backend chats', async () => {
+    const save = vi.fn(async (_accountId: string, _markdown: string) => undefined);
+    stop = startJarvisLearningListener({ getAccountId: () => 'two-chat-account', save, load: async () => null, debounceMs: 0 });
+    for (const backend of ['opencode', 'codex']) {
+      for (let index = 0; index < 10; index++) {
+        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+          chatId: `chat-${backend}`, messageId: `${backend}-${index}`,
+          text: `I prefer ${backend === 'opencode' ? 'concise responses' : 'focused terminal checks'} for project task ${index}.`,
+        } }));
+      }
+    }
+    await vi.waitFor(() => expect(useJarvisLearningStore.getState().currentProfile().lastEvaluationCount).toBe(20));
+    await vi.waitFor(() => expect(save).toHaveBeenCalled());
+    await stop(); stop = undefined;
+    const markdown = save.mock.calls.at(-1)![1];
+    expect(markdown).toContain('# Jarvis Learning');
+    expect(markdown).toContain('concise responses');
+    expect(markdown).toContain('focused terminal checks');
+    expect(new Set(useJarvisLearningStore.getState().currentProfile().items.map(item => item.source.chatId))).toEqual(new Set(['chat-opencode', 'chat-codex']));
+  });
+
+  it('reviews completed turns only and aborts model learning on listener disposal', async () => {
+    const review = vi.fn(async (_account: string, _chat: string, _signal: AbortSignal) => {});
+    stop = startJarvisLearningListener({ getAccountId: () => 'account-a', save: async () => {}, load: async () => null, reviewCaoLearning: review });
+    window.dispatchEvent(new CustomEvent('jarvis:run-state', { detail: { chatId: 'chat1', status: 'running' } }));
+    expect(review).not.toHaveBeenCalled();
+    window.dispatchEvent(new CustomEvent('jarvis:run-state', { detail: { chatId: 'chat1', status: 'done' } }));
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    expect(review.mock.calls[0]?.slice(0, 2)).toEqual(['account-a', 'chat1']);
+    await stop(); stop = undefined;
+    expect(review.mock.calls[0]?.[2].aborted).toBe(true);
+  });
+
   it('persists explicit memory immediately and applies response preferences', async () => {
     const save = vi.fn(async (_accountId: string, _markdown: string) => undefined);
     const statuses: string[] = [];

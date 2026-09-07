@@ -1,0 +1,89 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createCaoLearningExecutor,
+  type CaoLearningExecutorDependencies,
+} from './caoLearningExecutor';
+import { CAO_LEARNER_IDENTITY } from '@/features/cao/bootstrap';
+import type { CaoLearningExecutionInput } from './caoScheduledLearning';
+
+const input: CaoLearningExecutionInput = {
+  accountId: 'account',
+  workspaceId: 'workspace',
+  projectId: 'project',
+  scheduleId: 'schedule',
+  targetId: 'learning-md',
+  passId: 'pass',
+  requestId: 'request',
+  trigger: 'manual_force',
+  fromSeqExclusive: 0,
+  throughSeqInclusive: 20,
+  requestedAt: 1,
+};
+const result = {
+  text: 'Use concise responses and verify changes.',
+  identity: CAO_LEARNER_IDENTITY,
+  requestId: 'request',
+  sessionId: 'session',
+};
+describe('CAO real learner execution', () => {
+  it('runs the pinned learner over sourced learning, then persists its receipt before evaluation advances', async () => {
+    const order: string[] = [];
+    const execute = vi.fn(
+      async (_input: Parameters<CaoLearningExecutorDependencies['execute']>[0]) => {
+        order.push('execute');
+        return result;
+      },
+    );
+    const run = createCaoLearningExecutor({
+      snapshot: async () => ({
+        enabled: true,
+        markdown: '# Jarvis Learning\nPreferences',
+        sourceIds: ['chat-opencode', 'chat-codex'],
+      }),
+      execute,
+      save: async (value) => {
+        order.push('save');
+        expect(value.sourceIds).toEqual(['chat-opencode', 'chat-codex']);
+      },
+      markEvaluated: async () => {
+        order.push('evaluated');
+      },
+    });
+    expect(await run(input, new AbortController().signal)).toEqual({
+      status: 'completed',
+      receiptId: 'cao_receipt_pass',
+    });
+    expect(order).toEqual(['execute', 'save', 'evaluated']);
+    expect(execute.mock.calls[0]![0]).toMatchObject({ identity: CAO_LEARNER_IDENTITY });
+  });
+  it('does not consume learning on a substituted model, missing session, failed persistence, or cancellation', async () => {
+    for (const scenario of ['model', 'session', 'save', 'abort']) {
+      const markEvaluated = vi.fn();
+      const controller = new AbortController();
+      const run = createCaoLearningExecutor({
+        snapshot: async () => ({
+          enabled: true,
+          markdown: '# Jarvis Learning\nPreferences',
+          sourceIds: ['chat'],
+        }),
+        execute: async () => {
+          if (scenario === 'abort') controller.abort();
+          return {
+            ...result,
+            identity:
+              scenario === 'model' ? { ...result.identity, modelId: 'other' } : result.identity,
+            sessionId: scenario === 'session' ? '' : result.sessionId,
+          };
+        },
+        save: async () => {
+          if (scenario === 'save') throw new Error('disk');
+        },
+        markEvaluated,
+      });
+      expect((await run(input, controller.signal)).status).toBe(
+        scenario === 'abort' ? 'cancelled' : 'failed',
+      );
+      expect(markEvaluated).not.toHaveBeenCalled();
+    }
+  });
+});

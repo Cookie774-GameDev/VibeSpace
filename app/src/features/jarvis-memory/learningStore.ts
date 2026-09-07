@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { parseCaoGuidance, renderCaoGuidance, type CaoGuidance } from './caoGuidance';
 
 import type {
   JarvisLearningProfile,
@@ -62,7 +63,8 @@ interface JarvisLearningState {
   setAccount: (accountId: string) => void;
   currentProfile: () => JarvisLearningProfile;
   recordUserMessage: (input: RecordMessageInput) => RecordMessageResult;
-  markEvaluated: () => void;
+  markEvaluated: (throughCount?: number) => void;
+  updateCaoGuidance: (guidance: CaoGuidance) => void;
   remember: (input: RememberInput) => string | null;
   captureEvidence: (input: CaptureEvidenceInput) => string | null;
   hydrateEvidence: (ownerId: string, items: readonly MemoryEvidenceItem[]) => void;
@@ -107,6 +109,7 @@ function profile(accountId: string): JarvisLearningProfile {
 function cloneProfile(value: JarvisLearningProfile): JarvisLearningProfile {
   return {
     ...value,
+    ...(value.caoGuidance ? { caoGuidance: structuredClone(value.caoGuidance) } : {}),
     items: value.items.map((item) => ({
       ...item,
       source: { ...item.source },
@@ -183,7 +186,7 @@ function inferCategory(value: string): JarvisMemoryCategory {
   return 'personal';
 }
 
-function renderMarkdown(value: JarvisLearningProfile): string {
+export function renderMarkdown(value: JarvisLearningProfile): string {
   const lines = [
     '# Jarvis Learning',
     '',
@@ -210,6 +213,7 @@ function renderMarkdown(value: JarvisLearningProfile): string {
     }
     lines.push('');
   }
+  lines.push(...renderCaoGuidance(value.caoGuidance));
   const payload = encodeURIComponent(JSON.stringify(value));
   lines.push(`<!-- jarvis-learning-v1:${payload} -->`);
   return `${lines.join('\n').trim()}\n`;
@@ -253,6 +257,7 @@ export function parseJarvisLearningMarkdown(
       accountId: expectedAccountId,
       enabled: raw.enabled !== false,
       items,
+      ...(raw.caoGuidance ? { caoGuidance: parseCaoGuidance(JSON.stringify(raw.caoGuidance), raw.caoGuidance.sourceIds ?? []) } : {}),
       meaningfulMessageCount: Math.max(0, Number(raw.meaningfulMessageCount) || 0),
       lastEvaluationCount: Math.max(0, Number(raw.lastEvaluationCount) || 0),
       updatedAt: Number(raw.updatedAt) || Date.now(),
@@ -364,12 +369,21 @@ export const useJarvisLearningStore = create<JarvisLearningState>()((set, get) =
         explicitMemoryId,
       };
     },
-    markEvaluated: () => {
+    updateCaoGuidance: (guidance) => {
+      const validated = parseCaoGuidance(JSON.stringify(guidance), guidance.sourceIds);
+      if (Object.values(validated.sections).some(section => isSensitive(section.guidance) || isPromptPoisoning(section.guidance)))
+        throw new Error('cao_guidance_unsafe');
+      replaceCurrent({ ...getCurrent(), caoGuidance: validated, updatedAt: Date.now() });
+    },
+    markEvaluated: (throughCount) => {
       const current = getCurrent();
+      const through = throughCount ?? current.meaningfulMessageCount;
+      if (!Number.isSafeInteger(through) || through < 0 || through > current.meaningfulMessageCount)
+        throw new Error('learning_evaluation_range_invalid');
       replaceCurrent(
         {
           ...current,
-          lastEvaluationCount: current.meaningfulMessageCount,
+          lastEvaluationCount: Math.max(current.lastEvaluationCount, through),
           updatedAt: Date.now(),
         },
         false,

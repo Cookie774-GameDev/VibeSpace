@@ -16,6 +16,7 @@ import {
   type CaoScheduledLearningScope,
 } from './caoScheduledLearning';
 import { useJarvisLearningStore } from './learningStore';
+import { executeProductionCaoLearning } from './caoLearningProduction';
 
 export type CaoScheduledLearningRuntimeState =
   'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -312,18 +313,7 @@ async function productionExecute(
   input: CaoLearningExecutionInput,
   signal: AbortSignal,
 ): Promise<CaoLearningExecutionResult> {
-  signal.throwIfAborted();
-  const state = useJarvisLearningStore.getState();
-  const profile = state.currentProfile();
-  if (state.activeAccountId !== input.accountId || profile.accountId !== input.accountId) {
-    return { status: 'failed' };
-  }
-  if (!profile.enabled) return { status: 'cancelled' };
-  state.markEvaluated();
-  signal.throwIfAborted();
-  const settled = useJarvisLearningStore.getState().currentProfile();
-  if (settled.lastEvaluationCount < input.throughSeqInclusive) return { status: 'failed' };
-  return { status: 'completed', receiptId: `cao_receipt_${input.passId}`.slice(0, 128) };
+  return executeProductionCaoLearning(input, signal);
 }
 
 const productionRuntime = createCaoScheduledLearningRuntime({

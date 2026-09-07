@@ -9,6 +9,7 @@ import { createAccountHydrationAuthority } from './accountHydrationAuthority';
 import { createMemoryEvidenceWriteAuthority } from './memoryEvidenceWriteAuthority';
 
 interface LearningSendDetail {
+  origin?: string;
   chatId?: string;
   text?: string;
   messageId?: string;
@@ -29,6 +30,7 @@ interface LearningListenerBindings {
   evidenceRepository?: MemoryEvidencePersistencePort;
   debounceMs?: number;
   onError?: (error: unknown) => void;
+  reviewCaoLearning?: (accountId: string, chatId: string, signal: AbortSignal) => Promise<void>;
 }
 
 function inferredCandidate(text: string): { value: string; category: JarvisMemoryCategory } | null {
@@ -99,6 +101,8 @@ export function startJarvisLearningListener(
   >();
   let writeQueue: Promise<void> = Promise.resolve();
   let disposed = false;
+  const learningController = new AbortController();
+  let caoQueue: Promise<void> = Promise.resolve();
 
   const mutateAutomaticLearning = <T>(mutation: () => T): T => {
     suppressAutomaticProfilePersistence += 1;
@@ -297,6 +301,7 @@ export function startJarvisLearningListener(
 
   const onSend = (event: Event) => {
     const detail = (event as CustomEvent<LearningSendDetail>).detail;
+    if (detail?.origin === 'cao') return;
     if (typeof detail?.text !== 'string') return;
     const messageText = detail.text;
     const chatId = detail.chatId;
@@ -352,9 +357,24 @@ export function startJarvisLearningListener(
     })().catch((error) => report(bindings, error));
   };
 
+  const onRunState = (event: Event) => {
+    const detail = (event as CustomEvent<{ status?: string; chatId?: string }>).detail;
+    if (!bindings.reviewCaoLearning || detail?.status !== 'done' || !detail.chatId) return;
+    const accountId = bindings.getAccountId().trim();
+    const chatId = detail.chatId;
+    caoQueue = caoQueue.then(async () => {
+      if (disposed || !accountId || bindings.getAccountId().trim() !== accountId) return;
+      if (!(await hydrationAuthority.ready(accountId))) return;
+      if (disposed || !store.getState().currentProfile().enabled) return;
+      await bindings.reviewCaoLearning!(accountId, chatId, learningController.signal);
+    }).catch(error => report(bindings, error));
+  };
+  window.addEventListener('jarvis:run-state', onRunState);
   window.addEventListener(eventName, onSend);
   return async () => {
     disposed = true;
+    learningController.abort();
+    window.removeEventListener('jarvis:run-state', onRunState);
     unsubscribe();
     unsubscribeAccount?.();
     window.removeEventListener(eventName, onSend);

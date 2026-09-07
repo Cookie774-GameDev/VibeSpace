@@ -2,6 +2,32 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import * as learningStoreModule from './learningStore';
 import { useJarvisLearningStore } from './learningStore';
+import { CAO_GUIDANCE_AREAS, parseCaoGuidance } from './caoGuidance';
+
+it('round trips the detailed CAO section inside learning.md without granting permissions', () => {
+  const store = useJarvisLearningStore.getState();
+  store.clearForTests(); store.setAccount('cao-account');
+  const guidance = parseCaoGuidance(JSON.stringify({ sections: Object.fromEntries(CAO_GUIDANCE_AREAS.map(area => [area, { guidance: 'Preserve user wording, report observed actions and ask when evidence conflicts.', sourceIds: ['m1', 'm2'] }])) }), ['m1', 'm2']);
+  store.updateCaoGuidance(guidance);
+  const markdown = store.exportMarkdown();
+  expect(markdown).toContain('## CAO — How to handle my chats and agents');
+  expect(markdown).toContain('### fileHandling');
+  expect(markdown).toContain('Sources: m1, m2');
+  expect(learningStoreModule.parseJarvisLearningMarkdown(markdown, 'cao-account')?.caoGuidance).toEqual(guidance);
+  expect(learningStoreModule.parseJarvisLearningMarkdown(markdown, 'another-account')).toBeNull();
+  expect(store.currentProfile()).not.toHaveProperty('permissionMode');
+  store.clearForTests();
+});
+
+it('marks only the captured learning range evaluated when new messages arrive', () => {
+  const store = useJarvisLearningStore.getState();
+  store.clearForTests(); store.setAccount('cao-bounded-account');
+  for (let i = 0; i < 22; i++) store.recordUserMessage({ text: `Please explain the project testing workflow for task ${i}.` });
+  store.markEvaluated(20);
+  expect(store.currentProfile().lastEvaluationCount).toBe(20);
+  expect(() => store.markEvaluated(23)).toThrow('learning_evaluation_range_invalid');
+  store.clearForTests();
+});
 import type {
   MemoryEvidenceItem,
   MemoryEvidenceStatus,

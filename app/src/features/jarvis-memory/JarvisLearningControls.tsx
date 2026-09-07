@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 
 import { useJarvisLearningStore } from './learningStore';
+import { CaoChatControls } from './CaoChatControls';
 import {
   cancelCaoScheduledLearning,
   getCaoScheduledLearningStatus,
@@ -114,6 +115,7 @@ export function JarvisLearningControls({
       </header>
 
       <div className="space-y-3 p-4">
+        <CaoChatControls />
         <div className="flex flex-wrap items-center gap-2">
           {checkStatus === 'running' ? (
             <Button

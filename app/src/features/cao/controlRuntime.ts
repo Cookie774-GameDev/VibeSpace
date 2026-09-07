@@ -113,6 +113,7 @@ type RunInput = CaoControlScope &
   }>;
 
 export function createCaoControlRuntime(deps: CaoControlRuntimeDeps) {
+  const controllers = new Map<string, AbortController>();
   async function save(
     record: CaoControlRecord,
     patch: Partial<CaoControlRecord>,
@@ -146,18 +147,27 @@ export function createCaoControlRuntime(deps: CaoControlRuntimeDeps) {
       targets: active.targets,
     });
     let result: Awaited<ReturnType<CaoControlRuntimeDeps['action']['execute']>>;
+    const controller = new AbortController();
+    controllers.set(active.runId, controller);
     try {
       result = await deps.action.execute({
         record: structuredClone(active),
-        signal: new AbortController().signal,
+        signal: controller.signal,
       });
     } catch {
+      const current = await deps.store.load(active.requestId);
+      if (current?.status === 'cancelled') return receipt(current);
+      await deps.authority.release({ scope: active, runId: active.runId, leaseId: active.leaseId! }).catch(() => undefined);
       active = await save(active, {
         status: 'failed',
         errorCode: 'cao_control_action_unavailable',
       });
       return receipt(active);
+    } finally {
+      controllers.delete(active.runId);
     }
+    const settled = await deps.store.load(active.requestId);
+    if (settled?.status === 'cancelled') return receipt(settled);
     if (result.status === 'completed') {
       await deps.authority.verify({
         scope: active,
@@ -262,12 +272,14 @@ export function createCaoControlRuntime(deps: CaoControlRuntimeDeps) {
         record.status === 'cancelled'
       )
         return receipt(record);
+      const cancelled = await save(record, { status: 'cancelled' });
+      controllers.get(record.runId)?.abort();
       await deps.action.cancel(record.runId).catch(() => undefined);
       if (record.leaseId && deps.authority)
         await deps.authority
           .release({ scope: record, runId: record.runId, leaseId: record.leaseId })
           .catch(() => undefined);
-      return receipt(await save(record, { status: 'cancelled' }));
+      return receipt(cancelled);
     },
   });
 }

@@ -94,6 +94,7 @@ import { createJarvisCommandCenterDataPort } from '@/features/jarvis-command-cen
 import { selectCurrentRun } from '@/features/jarvis-command-center/selectors';
 import { PromptForgeControl } from '@/features/prompt-forge/PromptForgeControl';
 import { startJarvisLearningListener } from '@/features/jarvis-memory/learningListener';
+import { reviewCaoChatLearning } from '@/features/jarvis-memory/caoLearningProduction';
 import { useJarvisLearningStore } from '@/features/jarvis-memory/learningStore';
 import { startJarvisOperatorListener } from '@/lib/jarvis/operatorListener';
 import { startAllAboutMePersistence } from '@/features/all-about-me/persistence';
@@ -165,7 +166,7 @@ import { GlobalDictationOverlay } from '@/features/global-dictation/GlobalDictat
 import { JarvisAmbientHost, JarvisAmbientOverlayView } from '@/features/jarvis-ambient';
 import { PluginManagementCapabilityProvider } from '@/features/plugins/managementContext';
 import type { PluginManagementCapability } from '@/features/plugins/runtime';
-import type { Agent, AgentId, Message } from '@/types';
+import type { Agent } from '@/types';
 import { KernelSmokeBindingHost } from '@/lib/jarvis/smoke/KernelSmokeBindingHost';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import {
@@ -557,8 +558,8 @@ export async function startJarvisLegacyLifecycleAccountSession(input: {
  * generic spinner would.
  */
 const ChatView = React.lazy(() => import('@/features/chat').then((m) => ({ default: m.ChatView })));
-const CouncilView = React.lazy(() =>
-  import('@/features/council').then((m) => ({ default: m.CouncilView })),
+const CouncilWorkflowPage = React.lazy(() =>
+  import('@/features/council/CouncilWorkflowPage').then((m) => ({ default: m.CouncilWorkflowPage })),
 );
 import { getLastSettingsTab } from '@/features/settings/settingsTabMemory';
 
@@ -671,43 +672,9 @@ async function syncPlanFromProfile(userId: string, requestGeneration: number): P
  * council mode still pulls per-chat agent ids and seeds messages.
  */
 function ActiveCanvas() {
-  const plan = resolveRuntimePlan();
   const route = useUIStore((s) => s.route);
   const chatMode = useUIStore((s) => s.chatMode);
   const activeChatId = useUIStore((s) => s.activeChatId);
-  const [councilAgentIds, setCouncilAgentIds] = React.useState<AgentId[]>([]);
-  const [councilMessages, setCouncilMessages] = React.useState<Message[]>([]);
-  const agentMap = useAgentStore((s) => s.agents);
-
-  // When council mode is on, pull the chat's `active_agent_ids` and stream
-  // messages from the same chat so each panel can filter on agent_id.
-  React.useEffect(() => {
-    if (!plan.persistenceEnabled || chatMode !== 'council' || !activeChatId) {
-      setCouncilAgentIds([]);
-      setCouncilMessages([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const chat = await chatRepo.getById(activeChatId as never);
-        if (cancelled || !chat) return;
-        // Default to all built-in agents if the chat hasn't been wired yet.
-        const ids =
-          chat.active_agent_ids?.length > 0
-            ? chat.active_agent_ids
-            : (Object.values(agentMap) as Agent[]).slice(0, 4).map((a) => a.id);
-        setCouncilAgentIds(ids);
-        const msgs = await messageRepo.listByChat(activeChatId as never);
-        if (!cancelled) setCouncilMessages(msgs);
-      } catch (err) {
-        console.error('Council bootstrap failed:', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [plan.persistenceEnabled, chatMode, activeChatId, agentMap]);
 
   // V3 — non-chat routes go through the lazy PageRouter.
   if (route !== 'chat') {
@@ -717,14 +684,17 @@ function ActiveCanvas() {
   if (chatMode === 'council') {
     return (
       <React.Suspense fallback={null}>
-        <CouncilView agentIds={councilAgentIds} messages={councilMessages} />
+        <CouncilWorkflowPage key={activeChatId} chatId={activeChatId} />
       </React.Suspense>
     );
   }
   // doc / code modes are placeholders in V1 - render the chat as a fallback.
   return (
     <React.Suspense fallback={null}>
-      <ChatView />
+      <div className="flex h-full min-h-0 flex-col">
+        {activeChatId && <div className="flex justify-end px-3 py-1"><button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => useUIStore.getState().setChatMode('council')}>Council</button></div>}
+        <div className="flex-1 min-h-0"><ChatView /></div>
+      </div>
     </React.Suspense>
   );
 }
@@ -1030,6 +1000,7 @@ function useBoot() {
         stopLearning = startJarvisLearningListener({
           ...fixedAccountBindings,
           evidenceRepository: memoryEvidenceRepo,
+          reviewCaoLearning: reviewCaoChatLearning,
         });
         stopAllAboutMePersistence = startAllAboutMePersistence(fixedAccountBindings);
         stopTaskRunLifecycle = await startJarvisLegacyLifecycleAccountSession({
