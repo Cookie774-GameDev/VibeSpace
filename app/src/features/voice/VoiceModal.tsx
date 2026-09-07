@@ -787,7 +787,10 @@ function VoiceModalPanel() {
         useVoiceStore.getState().setState('listening');
       }),
       VoiceService.on('voice:partial', ({ text }) => {
-        if (!listeningArmedRef.current) return;
+        if (!listeningArmedRef.current || turnBusyRef.current) return;
+        // A previous segment's pause is no longer silence once speech resumes.
+        // Wait for the new final segment to start the configured interval again.
+        if (text.trim()) clearUtteranceTimers();
         schedulePartial(text);
       }),
       VoiceService.on('voice:final', ({ text }) => {

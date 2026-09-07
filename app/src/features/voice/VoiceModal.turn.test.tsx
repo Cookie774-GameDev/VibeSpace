@@ -1013,6 +1013,27 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect(messageRepo.create).not.toHaveBeenCalled();
   });
 
+  it('waits for resumed speech to finalize before starting a new silence interval', async () => {
+    useAuthStore.setState({ voiceEndTrigger: 'silence', voiceSilenceDelayMs: 2000 });
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    vi.useFakeTimers();
+    act(() => {
+      emitVoice('voice:final', { text: 'Please add' });
+      vi.advanceTimersByTime(1500);
+      emitVoice('voice:partial', { text: 'milk to my list' });
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(messageRepo.create).not.toHaveBeenCalled();
+    act(() => emitVoice('voice:final', { text: 'milk to my list' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(messageRepo.create).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(messageRepo.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      parts: [{ kind: 'text', text: 'Please add milk to my list' }],
+    }));
+  });
+
   it('disables the listening timeout while send-it mode is active', async () => {
     render(<VoiceModal />);
 
