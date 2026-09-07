@@ -14,7 +14,7 @@ export type TerminalSelector = Readonly<{
 
 export type InstantCommand =
   | { kind: 'legacy'; intent: Exclude<AssistantIntent, { kind: 'unknown' }> }
-  | { kind: 'open-agent-cli'; provider: string; count: number }
+  | { kind: 'open-agent-cli'; provider: string; count: number; modelId?: string; prompt?: string }
   | { kind: 'open-model-picker' }
   | { kind: 'terminal-message'; target: TerminalSelector; payload: string }
   | { kind: 'agent-message'; target: TerminalSelector; payload: string }

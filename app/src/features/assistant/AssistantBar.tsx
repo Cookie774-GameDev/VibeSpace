@@ -268,7 +268,7 @@ function renderInstantPreview(command: InstantCommand): React.ReactNode {
           {verb(
             `queue ${command.count} ${command.provider} terminal${command.count === 1 ? '' : 's'}`,
           )}
-          .
+          {command.modelId ? <> using {command.modelId}, then send: {command.prompt}</> : null}.
         </>
       );
     case 'open-model-picker':

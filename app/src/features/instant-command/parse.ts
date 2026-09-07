@@ -1,5 +1,6 @@
 import { parseAssistantInput } from '@/features/assistant/parse';
 import { INSTANT_COMMAND_INDEX } from './catalog';
+import { parseOpenCodeLaunch } from './openCodeLaunch';
 import type { InstantCommand, InstantInputClassification } from './types';
 
 const MAX_PAYLOAD_LENGTH = 32_768;
@@ -104,6 +105,8 @@ function mostSpecificCatalogMatches(source: string) {
 function parseInstantCommandInternal(input: string): InstantCommand | null {
   if (typeof input !== 'string' || !input.trim() || UNSAFE_CONTROL.test(input)) return null;
   const original = stripFiller(input);
+  const launch = parseOpenCodeLaunch(original);
+  if (launch) return launch;
 
   if (/^open\s+(?:an?\s+)?llm[.!?]*$/i.test(original)) {
     return { kind: 'open-model-picker' };

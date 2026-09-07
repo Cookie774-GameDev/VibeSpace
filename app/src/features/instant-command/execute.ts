@@ -5,6 +5,7 @@ import {
   type TerminalCommand,
 } from '@/features/terminals/terminalCommandQueue';
 import { getTerminalCliPreset } from '@/features/terminals/terminalCliPresets';
+import { openCodeLaunchCommand } from './openCodeLaunch';
 import type { TerminalRef } from '@/features/terminals/terminalRefs';
 import { useUIStore } from '@/stores/ui';
 import { readLiveTargetSnapshot } from './targetSnapshot';
@@ -189,9 +190,27 @@ export async function executeInstantCommand(
           message: 'The instant command deadline elapsed.',
         };
       }
+      const configured = command.modelId !== undefined || command.prompt !== undefined;
+      const startupText =
+        configured &&
+        command.provider === 'opencode' &&
+        command.count === 1 &&
+        typeof command.modelId === 'string' &&
+        typeof command.prompt === 'string'
+          ? openCodeLaunchCommand(command.modelId, command.prompt)
+          : configured
+            ? null
+            : preset.startupText;
+      if (!startupText)
+        return {
+          ok: false,
+          code: 'queue_failed',
+          message: 'An exact OpenCode model and message are required.',
+        };
       dependencies.enqueueBatch(
         Array.from({ length: command.count }, (_, index) => ({
-          command: preset.startupText,
+          command: startupText,
+          ...(configured ? { preserveExisting: true } : {}),
           label: index === 0 ? command.provider : `${command.provider} ${index + 1}`,
           target: 'new' as const,
         })),

@@ -1,6 +1,7 @@
 import { InstantCommandEntryBoundary } from '@/features/instant-command';
 import type { InstantCommandReceipt } from '@/features/instant-command/receipt';
 import { NAVIGATION_COMMAND_INPUTS } from '@/features/instant-command/catalog/navigation';
+import { parseOpenCodeLaunch } from '@/features/instant-command/openCodeLaunch';
 
 export const COMPOSER_INSTANT_SLASH_COMMANDS = Object.freeze([
   'connect',
@@ -49,7 +50,9 @@ function slashCommand(source: string): ComposerInstantSlashCommand | undefined {
 
 export function isComposerInstantCommandSource(source: string): boolean {
   return (
-    slashCommand(source) !== undefined || LOCAL_NAVIGATION_ALIASES.has(source.trim().toLowerCase())
+    slashCommand(source) !== undefined ||
+    LOCAL_NAVIGATION_ALIASES.has(source.trim().toLowerCase()) ||
+    parseOpenCodeLaunch(source) !== null
   );
 }
 
