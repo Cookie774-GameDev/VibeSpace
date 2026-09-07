@@ -22,6 +22,13 @@ const PANEL_DEFAULT_W: f64 = 430.0;
 const PANEL_DEFAULT_H: f64 = 560.0;
 const PANEL_MIN_W: f64 = 360.0;
 const PANEL_MIN_H: f64 = 360.0;
+
+fn restored_panel_size(width: Option<f64>, height: Option<f64>) -> (f64, f64) {
+    (
+        width.filter(|value| value.is_finite() && (PANEL_MIN_W..=4000.0).contains(value)).unwrap_or(PANEL_DEFAULT_W),
+        height.filter(|value| value.is_finite() && (PANEL_MIN_H..=4000.0).contains(value)).unwrap_or(PANEL_DEFAULT_H),
+    )
+}
 const MAIN_NAV_EXCLUSION_LOGICAL_W: f64 = 240.0;
 const PET_AUTOSTART_VALUE_NAME: &str = "VibeSpace";
 const TOPMOST_WATCHDOG_INTERVAL_MS: u64 = 1000;
@@ -2285,8 +2292,7 @@ fn open_or_focus_pet_panel_blocking(
         Err(_) => return Ok(PetPanelOpenResult::failed(created, "geometry_unavailable")),
     };
 
-    let w = geo.panel_w.unwrap_or(PANEL_DEFAULT_W);
-    let h = geo.panel_h.unwrap_or(PANEL_DEFAULT_H);
+    let (w, h) = restored_panel_size(geo.panel_w, geo.panel_h);
     let follow_anchor = if panel_mode == PetPanelMode::FollowPet {
         // Drag/show/display recovery already records physical coordinates.
         // Do not wait on the window event loop while holding geometry state.
@@ -2502,13 +2508,18 @@ pub async fn pet_hide_panel(app: AppHandle) -> Result<(), String> {
             return Ok(());
         }
         if let Some(win) = app.get_webview_window(PET_MINI_PANEL_LABEL) {
-            // Capture size/pos before hide
+            // A minimized window reports its tiny caption rectangle. Never
+            // persist that rectangle as the next full panel's geometry.
+            let geometry = if !win.is_minimized().unwrap_or(true) {
+                win.outer_position().ok().zip(win.outer_size().ok())
+                    .filter(|(_, size)| size.width as f64 >= PANEL_MIN_W && size.height as f64 >= PANEL_MIN_H)
+            } else {
+                None
+            };
             if let Ok(mut geo) = state.geometry.lock() {
-                if let Ok(pos) = win.outer_position() {
+                if let Some((pos, size)) = geometry {
                     geo.panel_x = Some(pos.x as f64);
                     geo.panel_y = Some(pos.y as f64);
-                }
-                if let Ok(size) = win.outer_size() {
                     geo.panel_w = Some(size.width as f64);
                     geo.panel_h = Some(size.height as f64);
                 }
@@ -2587,6 +2598,13 @@ pub fn pet_validate_action(action: String) -> Result<bool, String> {
 /// Unit-testable helpers (pure).
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn panel_restore_rejects_minimized_or_invalid_dimensions() {
+        assert_eq!(super::restored_panel_size(Some(159.0), Some(27.0)), (430.0, 560.0));
+        assert_eq!(super::restored_panel_size(Some(f64::NAN), Some(f64::INFINITY)), (430.0, 560.0));
+        assert_eq!(super::restored_panel_size(Some(800.0), Some(650.0)), (800.0, 650.0));
+        assert_eq!(super::restored_panel_size(None, None), (430.0, 560.0));
+    }
     use super::*;
 
     #[test]
