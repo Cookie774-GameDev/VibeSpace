@@ -13,7 +13,12 @@ const IDLE_SNAPSHOT: JarvisAmbientSnapshot = Object.freeze({
 });
 
 export function normalizeAmbientSnapshot(value: unknown): JarvisAmbientSnapshot {
-  return isJarvisAmbientSnapshot(value) ? Object.freeze({ ...value }) : IDLE_SNAPSHOT;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return IDLE_SNAPSHOT;
+  // Rust serializes an absent Option<i64> as null. Normalize the wire shape
+  // before strict validation; never coerce required fields or visibility intent.
+  const candidate = { ...value } as Record<string, unknown>;
+  if (candidate.transientUntil === null) delete candidate.transientUntil;
+  return isJarvisAmbientSnapshot(candidate) ? Object.freeze(candidate) : IDLE_SNAPSHOT;
 }
 
 function perimeterPoint(distance: number, width: number, height: number, inset: number) {

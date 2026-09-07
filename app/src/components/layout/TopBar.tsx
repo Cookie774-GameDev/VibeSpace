@@ -124,6 +124,7 @@ export function TopBar() {
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
   const toggleInspector = useUIStore((s) => s.toggleInspector);
   const voiceListening = useUIStore((s) => s.voiceListening);
+  const voiceModalOpen = useUIStore((s) => s.voiceModalOpen);
   const composerSttListening = useUIStore((s) => s.composerSttListening);
   const composerSttEnabled = useUIStore((s) => s.composerStt);
   const setVoiceModalOpen = useUIStore((s) => s.setVoiceModalOpen);
@@ -238,8 +239,9 @@ export function TopBar() {
       <div className="no-drag flex min-w-0 items-center gap-1.5">
         <button
           type="button"
-          onClick={() => setVoiceModalOpen(true)}
-          aria-label="Open Jarvis voice panel"
+          onClick={() => setVoiceModalOpen(!voiceModalOpen)}
+          aria-label={voiceModalOpen ? 'Stop Jarvis voice' : 'Start Jarvis voice'}
+          aria-pressed={voiceModalOpen}
           data-warm-brand-mark={warmBenchmarks ? 'true' : undefined}
           data-sik-evidence={kernelSmokeEnabled ? SIK_EVIDENCE.voiceOpen : undefined}
           className={cn(

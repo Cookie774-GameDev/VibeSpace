@@ -83,7 +83,7 @@ describe('TopBar Warm Benchmarks reference state', () => {
     expect(screen.getByText('VibeSpace')).toBeTruthy();
     expect(screen.queryByText('Workspace')).toBeNull();
 
-    const voiceControl = screen.getByRole('button', { name: 'Open Jarvis voice panel' });
+    const voiceControl = screen.getByRole('button', { name: 'Start Jarvis voice' });
     expect(voiceControl.getAttribute('data-warm-brand-mark')).toBe('true');
 
     const accountControl = screen.getByRole('button', { name: 'Open account for Surya' });

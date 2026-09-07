@@ -74,6 +74,14 @@ describe('JarvisEdgeAura', () => {
     expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false');
   });
 
+  it('accepts native Rust Option nulls without hiding a live screen-edge Aura', () => {
+    const decoded = normalizeAmbientSnapshot({ ...listening, active: true, transientUntil: null });
+    expect(decoded).toMatchObject({ revision: 4, state: 'listening', energy: 0.72, active: true });
+    expect(decoded.transientUntil).toBeUndefined();
+    expect(Object.isFrozen(decoded)).toBe(true);
+    expect(normalizeAmbientSnapshot({ ...listening, active: false, transientUntil: null })).toMatchObject({ active: false, revision: 4 });
+  });
+
   it('fails malformed snapshots closed to invisible idle', () => {
     expect(normalizeAmbientSnapshot({ ...listening, energy: 4 })).toMatchObject({
       state: 'idle',

@@ -6,6 +6,7 @@ const ui = vi.hoisted(() => ({
   navOpen: true,
   inspectorOpen: false,
   voiceListening: false,
+  voiceModalOpen: false,
   composerSttListening: false,
   composerStt: true,
   route: 'chat',
@@ -96,6 +97,7 @@ describe('TopBar voice smoke evidence', () => {
     cleanup();
     vi.clearAllMocks();
     ui.voiceListening = false;
+    ui.voiceModalOpen = false;
     ui.composerSttListening = false;
     ui.route = 'chat';
     whatsNew.hasUpdate = false;
@@ -104,7 +106,7 @@ describe('TopBar voice smoke evidence', () => {
   it('fails closed without the exact development smoke flag', async () => {
     renderTopBar(false);
 
-    const opener = screen.getByRole('button', { name: 'Open Jarvis voice panel' });
+    const opener = screen.getByRole('button', { name: 'Start Jarvis voice' });
     expect(opener.getAttribute('data-sik-evidence')).toBeNull();
   });
 
@@ -134,12 +136,21 @@ describe('TopBar voice smoke evidence', () => {
   it('places the unique voice.open selector on the genuine opener', async () => {
     renderTopBar(true);
 
-    const opener = screen.getByRole('button', { name: 'Open Jarvis voice panel' });
+    const opener = screen.getByRole('button', { name: 'Start Jarvis voice' });
     expect(opener.getAttribute('data-sik-evidence')).toBe('voice.open');
     expect(document.querySelectorAll('[data-sik-evidence="voice.open"]')).toHaveLength(1);
 
     fireEvent.click(opener);
     expect(ui.setVoiceModalOpen).toHaveBeenCalledWith(true);
+  });
+
+  it('stops the Aura session from the same button without needing a HUD', () => {
+    ui.voiceModalOpen = true;
+    renderTopBar(false);
+    const stop = screen.getByRole('button', { name: 'Stop Jarvis voice' });
+    expect(stop.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(stop);
+    expect(ui.setVoiceModalOpen).toHaveBeenCalledWith(false);
   });
 
   it('marks every decorative listening pulse for MonoChrome suppression', () => {

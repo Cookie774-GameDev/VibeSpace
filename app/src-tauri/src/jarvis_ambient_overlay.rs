@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -42,7 +43,7 @@ struct AmbientInner {
     ready: HashSet<String>,
 }
 
-pub struct JarvisAmbientOverlayState(Mutex<AmbientInner>, Mutex<()>);
+pub struct JarvisAmbientOverlayState(Mutex<AmbientInner>, Mutex<()>, AtomicBool);
 
 impl Default for JarvisAmbientOverlayState {
     fn default() -> Self {
@@ -61,6 +62,7 @@ impl Default for JarvisAmbientOverlayState {
                 ready: HashSet::new(),
             }),
             Mutex::new(()),
+            AtomicBool::new(false),
         )
     }
 }
@@ -204,7 +206,7 @@ fn ensure_windows(
         for (label, window) in app.webview_windows() {
             if label.starts_with(AMBIENT_PREFIX) {
                 window
-                    .close()
+                    .destroy()
                     .map_err(|_| "jarvis_ambient_window_close_failed".to_owned())?;
             }
         }
@@ -241,22 +243,34 @@ fn ensure_windows(
             )
             .title("VibeSpace Jarvis Aura")
             .inner_size(size.width as f64 / scale, size.height as f64 / scale)
-            .position(position.x as f64 / scale, position.y as f64 / scale)
+            // Materialize WebView2 without exposing unfinished content or stealing focus.
+            .position(-32_000.0, -32_000.0)
             .resizable(false)
             .decorations(false)
             .transparent(true)
             .always_on_top(true)
+            .visible_on_all_workspaces(true)
+            .focusable(false)
             .skip_taskbar(true)
-            .visible(false)
+            .visible(true)
             .focused(false)
             .shadow(false)
+            .additional_browser_args(
+                app.config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|window| window.label == "main")
+                    .and_then(|window| window.additional_browser_args.as_deref())
+                    .unwrap_or(""),
+            )
             .background_color(tauri::window::Color(0, 0, 0, 0))
             .build()
             .map_err(|error| format!("jarvis_ambient_window_create_failed:{error}"))?;
-            configure_window(&built, position, size);
+            #[cfg(debug_assertions)]
+            eprintln!("[jarvis-aura] materialized {label} offscreen");
             built
         };
-        configure_window(&window, position, size);
         let still_current = {
             let state = app.state::<JarvisAmbientOverlayState>();
             let inner = state
@@ -272,15 +286,16 @@ fn ensure_windows(
         if ready.contains(&label)
             && (snapshot.active == Some(true) || classify_visibility(snapshot.state, true))
         {
+            configure_window(&window, position, size);
             let _ = window.show();
-        } else {
-            let _ = window.hide();
         }
+        // Until renderer readiness, keep the transparent host offscreen and
+        // materialized; hiding it here can suspend WebView2 initialization.
     }
 
     for (label, window) in app.webview_windows() {
         if label.starts_with(AMBIENT_PREFIX) && !expected.contains(&label) {
-            let _ = window.close();
+            let _ = window.destroy();
         }
     }
     Ok(())
@@ -303,6 +318,63 @@ fn reconcile_latest(app: &AppHandle) -> Result<(), String> {
     ensure_windows(app, &snapshot, &ready)
 }
 
+// Follow the existing detached Pet host contract: finish the originating IPC,
+// then materialize the native WebView on the event loop. Never await its build
+// from the command that requested it. Coalesce changes to the latest intent.
+fn schedule_reconcile(app: &AppHandle) -> Result<(), String> {
+    if app
+        .state::<JarvisAmbientOverlayState>()
+        .2
+        .swap(true, Ordering::AcqRel)
+    {
+        return Ok(());
+    }
+    let worker_app = app.clone();
+    std::thread::Builder::new()
+        .name("jarvis-aura-reconcile".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(32));
+            let event_app = worker_app.clone();
+            if let Err(error) = worker_app.run_on_main_thread(move || {
+                let intent = || {
+                    event_app
+                        .state::<JarvisAmbientOverlayState>()
+                        .0
+                        .lock()
+                        .ok()
+                        .map(|inner| (inner.snapshot.revision, inner.ready.clone()))
+                };
+                let intent_before = intent();
+                if let Err(error) = reconcile_latest(&event_app) {
+                    eprintln!("[jarvis-aura] reconciliation failed: {error}");
+                }
+                // WebView2 construction can pump nested native events. Keep
+                // coalescing throughout the build, never reenter its mutex.
+                event_app
+                    .state::<JarvisAmbientOverlayState>()
+                    .2
+                    .store(false, Ordering::Release);
+                let intent_after = intent();
+                if intent_before != intent_after {
+                    let _ = schedule_reconcile(&event_app);
+                }
+            }) {
+                worker_app
+                    .state::<JarvisAmbientOverlayState>()
+                    .2
+                    .store(false, Ordering::Release);
+                eprintln!("[jarvis-aura] event-loop dispatch failed: {error}");
+            }
+        })
+        .map(|_| ())
+        .map_err(|_| {
+            app.state::<JarvisAmbientOverlayState>()
+                .2
+                .store(false, Ordering::Release);
+            "jarvis_ambient_reconcile_worker_failed".to_owned()
+        })
+}
+
 #[tauri::command]
 pub async fn set_jarvis_ambient_snapshot(
     window: WebviewWindow,
@@ -321,9 +393,7 @@ pub async fn set_jarvis_ambient_snapshot(
         validate_snapshot(&snapshot, inner.snapshot.revision)?;
         inner.snapshot = snapshot;
     };
-    tauri::async_runtime::spawn_blocking(move || reconcile_latest(&app))
-        .await
-        .map_err(|_| "jarvis_ambient_reconcile_worker_failed".to_owned())?
+    schedule_reconcile(&app)
 }
 
 #[tauri::command]
@@ -343,9 +413,7 @@ pub async fn jarvis_ambient_renderer_ready(
         inner.ready.insert(window.label().to_owned());
         inner.snapshot.clone()
     };
-    tauri::async_runtime::spawn_blocking(move || reconcile_latest(&app))
-        .await
-        .map_err(|_| "jarvis_ambient_reconcile_worker_failed".to_owned())??;
+    schedule_reconcile(&app)?;
     Ok(snapshot)
 }
 
@@ -445,8 +513,10 @@ mod tests {
         let ready_command = &source[ready_start..tests_start];
         assert!(snapshot_command.contains("pub async fn set_jarvis_ambient_snapshot"));
         assert!(ready_command.contains("pub async fn jarvis_ambient_renderer_ready"));
-        assert!(snapshot_command.contains("tauri::async_runtime::spawn_blocking"));
-        assert!(ready_command.contains("tauri::async_runtime::spawn_blocking"));
+        assert!(snapshot_command.contains("schedule_reconcile(&app)"));
+        assert!(!snapshot_command.contains(".await"));
+        assert!(ready_command.contains("schedule_reconcile(&app)"));
+        assert!(!ready_command.contains(".await"));
         assert!(!snapshot_command
             .ends_with("ensure_windows(&app, &accepted, &ready)\n}\n\n#[tauri::command]\n"));
     }
