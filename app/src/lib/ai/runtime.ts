@@ -2590,6 +2590,8 @@ export interface SendDetail {
   voiceSessionId?: string;
   /** Raw user text. */
   text: string;
+  /** Stable original task carried only by hidden stop/resume continuations. */
+  resumeOriginalText?: string;
   /** Exact settled approval that authorizes one hidden post-action continuation turn. */
   approvalContinuation?: {
     messageId: string;
@@ -7817,7 +7819,12 @@ export function startRuntimeListener(
       ...suspended,
       chatId,
       cancellationKey: detail.cancellationKey,
-      text: 'Continue the interrupted response from the exact point already retained in this persistent session. Do not restart, repeat completed work, change model controls, or discard queued context.',
+      resumeOriginalText: suspended.resumeOriginalText ?? suspended.text,
+      text: [
+        'Continue the interrupted task using any progress already retained in this persistent session. If the request was stopped before it reached you, begin the original task below. Do not repeat completed work, change model controls, or discard queued context.',
+        'Original user request:',
+        suspended.resumeOriginalText ?? suspended.text,
+      ].join('\n\n'),
     };
     window.dispatchEvent(new CustomEvent(sendEventName, { detail: resumed }));
   };

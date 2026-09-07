@@ -3,6 +3,7 @@ import { createJarvisDb } from '@/lib/db';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import type { Agent, Message, Part } from '@/types';
 import type { LLMStreamChunk } from './types';
+import type { SendDetail } from './runtime';
 import type { AgentId, ChatId, MessageId, ProviderId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
@@ -8371,6 +8372,39 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       window.removeEventListener('jarvis:run-state', onState);
       errorToast.mockRestore();
       stop();
+    }
+  });
+
+  it('retains the original task across repeated resumes cancelled before provider dispatch', async () => {
+    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Always answer with APPLE.'));
+    const pending = deferred<Awaited<ReturnType<typeof mocks.resolveJarvisContext>>>();
+    mocks.resolveJarvisContext.mockReturnValue(pending.promise);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    const sent: SendDetail[] = [];
+    const observe = (event: Event) => sent.push((event as CustomEvent<SendDetail>).detail);
+    window.addEventListener('jarvis:send', observe);
+    const original = 'Write a TypeScript CSV parser with quoted-field support.';
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', {
+        detail: { chatId: harness.chatId, text: original, cancellationKey: 'msg_kernel_user' },
+      }));
+      for (let round = 0; round < 2; round++) {
+        await vi.waitFor(() => expect(mocks.resolveJarvisContext).toHaveBeenCalledTimes(round + 1));
+        window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId: harness.chatId } }));
+        await stop.whenIdle();
+        window.dispatchEvent(new CustomEvent('jarvis:resume', {
+          detail: { chatId: harness.chatId, cancellationKey: `resume_${round}` },
+        }));
+        expect(sent.at(-1)?.text).toContain(original);
+        expect(sent.at(-1)?.text.match(/Write a TypeScript CSV parser/g)).toHaveLength(1);
+      }
+      expect(sent[1].text).toBe(sent[2].text);
+      expect(mocks.runAgent).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      pending.resolve({ relevantFiles: [], enabledCapabilities: [], sourceReasons: [] });
+      await stop.whenIdle();
+      window.removeEventListener('jarvis:send', observe);
     }
   });
 

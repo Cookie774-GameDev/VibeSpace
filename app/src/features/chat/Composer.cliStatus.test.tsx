@@ -4,6 +4,7 @@ import { TooltipProvider } from '@/components/ui';
 import { toast } from '@/components/ui/toast';
 import { chatRepo } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
+import { getProviderConnectionDescriptor } from '@/lib/ai/adapters/catalog';
 import { Composer } from './Composer';
 
 const state = vi.hoisted(() => ({ version: 1, backend: 'codex' as 'codex' | 'opencode', locked: true, selectedAt: 1, lockedAt: 2 }));
@@ -40,7 +41,8 @@ it('keeps the selected Go model when choosing the Codex CLI', async () => {
   vi.spyOn(chatRepo, 'update').mockResolvedValue(undefined as never);
   state.locked = false;
   state.backend = 'opencode';
-  const selection = { mode: 'single', connectionId: 'opencode-cli', providerId: 'opencode', modelId: 'opencode-go/deepseek-v4-flash-vision-exp' } as const;
+  const connection = getProviderConnectionDescriptor('opencode-cli');
+  const selection = { mode: 'single', connectionId: connection.id, connectionMode: connection.mode, authSource: connection.authSource, capabilities: connection.capabilities, providerId: 'openai', modelId: 'opencode-go/deepseek-v4-flash-vision-exp' } as const;
   useAuthStore.setState({ chatModelSelection: selection });
   render(<TooltipProvider><Composer chatId={'chat-cli-status' as never} /></TooltipProvider>);
   const input = screen.getByRole('textbox', { name: 'Message' });
