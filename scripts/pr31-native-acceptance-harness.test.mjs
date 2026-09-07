@@ -40,6 +40,20 @@ const LOCAL_APP_DATA = 'C:\\Users\\tester\\AppData\\Local';
 const PROFILE = `${LOCAL_APP_DATA}\\ai.jarvis.desktop\\EBWebView`;
 const tempDirectories = [];
 
+test('qualifies an explicitly pinned packaged executable without accepting another app or PID', () => {
+  const state = officialState();
+  const executable = 'D:\\VibeSpace\\VibeSpace-test.exe';
+  state.processes[0].Name = 'VibeSpace-test.exe';
+  state.processes[0].ExecutablePath = executable;
+  const options = { localAppData: LOCAL_APP_DATA, expectedExecutablePath: executable, jarvisPid: 100 };
+  assert.equal(captureOfficialIdentity(state, options).executablePath, executable);
+  assert.throws(() => captureOfficialIdentity(state, { ...options, jarvisPid: undefined }));
+  assert.throws(() => captureOfficialIdentity(state, { ...options, jarvisPid: 101 }));
+  assert.throws(() => captureOfficialIdentity(state, { ...options, expectedExecutablePath: 'C:\\VibeSpace\\VibeSpace-test.exe' }));
+  state.processes[1].ParentProcessId = 999;
+  assert.throws(() => captureOfficialIdentity(state, options));
+});
+
 test('qualifies an explicit nested lane profile and rejects a different profile', () => {
   const state = officialState({ cdpPort: 9224 });
   const expectedProfile = `${PROFILE}\\EBWebView`;

@@ -880,10 +880,17 @@ export function resolveOfficialNativeTarget(rawProcesses, options = {}) {
     .map(normalizeProcess)
     .filter((item) => Number.isInteger(item.pid) && item.pid > 0);
   const byPid = new Map(processes.map((item) => [item.pid, item]));
+  const expectedExecutable = options.expectedExecutablePath;
+  if (expectedExecutable && (!path.win32.isAbsolute(expectedExecutable) || !Number.isInteger(options.jarvisPid) || options.jarvisPid <= 0)) {
+    fail('explicit_executable_requires_pinned_pid', 'identity');
+  }
   const jarvisProcesses = processes.filter(
     (item) =>
-      item.name.toLowerCase() === 'jarvis.exe' &&
-      path.win32.basename(item.executablePath).toLowerCase() === 'jarvis.exe' &&
+      (expectedExecutable
+        ? normalizeWindowsPath(item.executablePath) === normalizeWindowsPath(expectedExecutable) &&
+          item.name.toLowerCase() === path.win32.basename(expectedExecutable).toLowerCase()
+        : item.name.toLowerCase() === 'jarvis.exe' &&
+          path.win32.basename(item.executablePath).toLowerCase() === 'jarvis.exe') &&
       (!options.jarvisPid || item.pid === options.jarvisPid),
   );
   const candidates = [];
@@ -1186,6 +1193,7 @@ export async function attachOfficialNative(options = {}) {
   );
   const identityBefore = captureOfficialIdentity(beforeState, {
     localAppData,
+    expectedExecutablePath: options.expectedExecutablePath,
     expectedProfile: options.expectedProfile,
     cdpPort: options.cdpPort,
     jarvisPid: options.jarvisPid,
@@ -1216,6 +1224,7 @@ export async function attachOfficialNative(options = {}) {
     );
     const identityAfter = captureOfficialIdentity(afterState, {
       localAppData,
+      expectedExecutablePath: options.expectedExecutablePath,
       expectedProfile: options.expectedProfile,
       cdpPort: identityBefore.cdpPort,
       jarvisPid: identityBefore.jarvisPid,
