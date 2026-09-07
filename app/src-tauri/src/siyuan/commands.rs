@@ -10,6 +10,20 @@ use super::supervisor::{SiyuanRuntimeState, SupervisorError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+static READ_WORKERS: async_lock::Semaphore = async_lock::Semaphore::new(4);
+
+async fn run_read<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let permit = READ_WORKERS.acquire().await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        operation()
+    })
+    .await
+    .map_err(|_| "siyuan_state_unavailable".to_owned())?
+}
+
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SiyuanNotebooksResponse {
@@ -111,15 +125,18 @@ pub fn siyuan_version() -> RuntimeVersion {
 }
 
 #[tauri::command]
-pub fn siyuan_list_notebooks(
+pub async fn siyuan_list_notebooks(
     project_id: String,
     state: State<'_, SiyuanRuntimeState>,
 ) -> Result<SiyuanNotebooksResponse, String> {
-    let transport = state.runtime_transport(&project_id).map_err(public_error)?;
-    SiyuanClient::new(true, transport)
-        .list_notebooks()
-        .map(|notebooks| SiyuanNotebooksResponse { notebooks })
-        .map_err(client_error)
+    let runtime = state.inner().clone();
+    run_read(move || {
+        let transport = runtime.runtime_transport(&project_id).map_err(public_error)?;
+        SiyuanClient::new(true, transport)
+            .list_notebooks()
+            .map(|notebooks| SiyuanNotebooksResponse { notebooks })
+            .map_err(client_error)
+    }).await
 }
 
 #[tauri::command]
@@ -164,16 +181,19 @@ pub async fn siyuan_search_blocks(
 }
 
 #[tauri::command]
-pub fn siyuan_get_block(
+pub async fn siyuan_get_block(
     project_id: String,
     id: String,
     state: State<'_, SiyuanRuntimeState>,
 ) -> Result<SiyuanBlockResponse, String> {
-    let transport = state.runtime_transport(&project_id).map_err(public_error)?;
-    SiyuanClient::new(true, transport)
-        .get_block(&id)
-        .map(|block| SiyuanBlockResponse { block })
-        .map_err(client_error)
+    let runtime = state.inner().clone();
+    run_read(move || {
+        let transport = runtime.runtime_transport(&project_id).map_err(public_error)?;
+        SiyuanClient::new(true, transport)
+            .get_block(&id)
+            .map(|block| SiyuanBlockResponse { block })
+            .map_err(client_error)
+    }).await
 }
 
 #[tauri::command]
@@ -369,12 +389,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn read_worker_leaves_the_calling_thread_and_preserves_results() {
+        let caller = std::thread::current().id();
+        tauri::async_runtime::block_on(async {
+            assert_ne!(caller, run_read(|| Ok(std::thread::current().id())).await.unwrap());
+            assert_eq!(run_read(|| Ok(vec!["one", "two"])).await.unwrap(), vec!["one", "two"]);
+            assert_eq!(run_read(|| Err::<(), _>("original error".to_owned())).await,
+                Err("original error".to_owned()));
+        });
+    }
+
+    #[test]
     fn search_command_offloads_blocking_http_transport() {
         let source = include_str!("commands.rs");
         let command = source
             .split("pub async fn siyuan_search_blocks")
             .nth(1)
-            .and_then(|remainder| remainder.split("pub fn siyuan_get_block").next())
+            .and_then(|remainder| remainder.split("pub async fn siyuan_get_block").next())
             .expect("search command must remain async");
 
         assert!(

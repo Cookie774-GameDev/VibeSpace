@@ -229,13 +229,14 @@ fn check_ollama_api(base_url: &str, timeout: Duration) -> bool {
         return false;
     }
 
-    let client = match Client::builder().timeout(timeout).build() {
+    let client = match crate::ollama_http::build_client(0) {
         Ok(client) => client,
         Err(_) => return false,
     };
 
     client
         .get(format!("{base_url}/api/version"))
+        .timeout(timeout)
         .send()
         .map(|response| response.status().is_success())
         .unwrap_or(false)

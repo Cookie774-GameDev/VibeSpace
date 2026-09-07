@@ -14,6 +14,7 @@
 //! Only loopback endpoints are allowed (defense-in-depth, mirrors local_ai.rs).
 
 use std::io::{BufRead, BufReader, Read};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use reqwest::blocking::Client;
@@ -24,6 +25,20 @@ use tauri::{AppHandle, Emitter};
 const OLLAMA_BASE: &str = "http://127.0.0.1:11434";
 const MAX_MODEL_DETAILS_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_TOOL_PROBE_BYTES: u64 = 1024 * 1024;
+static STATUS_READ_WORKERS: async_lock::Semaphore = async_lock::Semaphore::new(4);
+
+async fn run_status_read<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let permit = STATUS_READ_WORKERS.acquire().await;
+    tauri::async_runtime::spawn_blocking(move || {
+        // A cancelled caller must not release capacity while its blocking work still runs.
+        let _permit = permit;
+        operation()
+    })
+    .await
+    .map_err(|_| "ollama_status_worker_failed".to_string())?
+}
 
 fn resolve_base(base_url: Option<String>) -> String {
     let trimmed = base_url
@@ -66,18 +81,41 @@ fn check_ollama_api(base_url: &str, timeout_secs: u64) -> bool {
 
 /// Fast loopback health check — used by the UI before listing models.
 #[tauri::command]
-pub fn ollama_ping(base_url: Option<String>) -> bool {
-    check_ollama_api(&resolve_base(base_url), 5)
+pub async fn ollama_ping(base_url: Option<String>) -> bool {
+    run_status_read(move || Ok(check_ollama_api(&resolve_base(base_url), 5)))
+        .await
+        .unwrap_or(false)
 }
 
-fn build_client(timeout_secs: u64) -> Result<Client, String> {
+pub(crate) fn build_client(timeout_secs: u64) -> Result<Client, String> {
+    // Keep the existing timeout classes separate. These clients hold no cookies,
+    // default authorization, or response cache; each request still validates its endpoint.
+    static CLIENTS: [OnceLock<Client>; 6] = [const { OnceLock::new() }; 6];
+    let slot = match timeout_secs {
+        0 => Some(&CLIENTS[0]),
+        3 => Some(&CLIENTS[1]),
+        5 => Some(&CLIENTS[2]),
+        15 => Some(&CLIENTS[3]),
+        30 => Some(&CLIENTS[4]),
+        180 => Some(&CLIENTS[5]),
+        _ => None,
+    };
+    if let Some(client) = slot.and_then(OnceLock::get) {
+        return Ok(client.clone());
+    }
     let mut builder = Client::builder();
     if timeout_secs > 0 {
         builder = builder.timeout(Duration::from_secs(timeout_secs));
     } else {
         builder = builder.timeout(None);
     }
-    builder.build().map_err(|e| e.to_string())
+    let client = builder.build().map_err(|e| e.to_string())?;
+    if let Some(slot) = slot {
+        // Cache successful construction only, so a transient failure remains retryable.
+        let _ = slot.set(client.clone());
+        return Ok(slot.get().cloned().unwrap_or(client));
+    }
+    Ok(client)
 }
 
 /// Basic model-name guard: letters, digits, `_ . - / :` only. Mirrors the
@@ -104,7 +142,11 @@ pub struct OllamaModel {
 /// List installed models via GET /api/tags. Fast; returns [] on any failure
 /// so the UI can show a friendly "no models / start Ollama" state.
 #[tauri::command]
-pub fn ollama_list_models(base_url: Option<String>) -> Result<Vec<OllamaModel>, String> {
+pub async fn ollama_list_models(base_url: Option<String>) -> Result<Vec<OllamaModel>, String> {
+    run_status_read(move || list_models_blocking(base_url)).await
+}
+
+fn list_models_blocking(base_url: Option<String>) -> Result<Vec<OllamaModel>, String> {
     let base = resolve_base(base_url);
     if !is_allowed_local_endpoint(&base) {
         return Err("invalid_base_url".to_string());
@@ -300,7 +342,7 @@ pub async fn ollama_probe_tools(
 /// Best-effort model discovery for the private OpenCode server. This is
 /// deliberately fixed to the default loopback daemon and never starts Ollama.
 pub(crate) fn harness_model_names() -> Vec<String> {
-    ollama_list_models(Some(OLLAMA_BASE.to_string()))
+    list_models_blocking(Some(OLLAMA_BASE.to_string()))
         .unwrap_or_default()
         .into_iter()
         .map(|model| model.name)
@@ -704,4 +746,105 @@ pub async fn ollama_chat_stream(
     })
     .await
     .map_err(|error| format!("worker: {error}"))?
+}
+
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    #[test]
+    fn status_reads_leave_the_calling_thread_and_preserve_errors() {
+        let caller = std::thread::current().id();
+        tauri::async_runtime::block_on(async {
+            let worker = run_status_read(|| Ok(std::thread::current().id())).await.unwrap();
+            assert_ne!(caller, worker);
+            assert_eq!(run_status_read(|| Err::<(), _>("original error".to_owned())).await,
+                Err("original error".to_owned()));
+            assert!(!ollama_ping(Some("https://example.com".to_owned())).await);
+            assert_eq!(ollama_list_models(Some("https://example.com".to_owned())).await.err(),
+                Some("invalid_base_url".to_owned()));
+        });
+    }
+
+    #[test]
+    fn status_reads_bound_active_workers_and_return_every_result() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        tauri::async_runtime::block_on(async {
+            let jobs: Vec<_> = (0..12).map(|index| {
+                let active = Arc::clone(&active);
+                let peak = Arc::clone(&peak);
+                tauri::async_runtime::spawn(run_status_read(move || {
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(count, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(5));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(index)
+                }))
+            }).collect();
+            for (index, job) in jobs.into_iter().enumerate() {
+                assert_eq!(job.await.unwrap().unwrap(), index);
+            }
+        });
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert!(peak.load(Ordering::SeqCst) <= 4);
+    }
+
+    #[test]
+    fn repeated_reads_reuse_connections_without_caching_responses() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut connections = 0;
+            let mut responses = 0;
+            while responses < 2 && Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("{error}"),
+                };
+                connections += 1;
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                while responses < 2 {
+                    let mut header = Vec::new();
+                    let mut byte = [0];
+                    while !header.ends_with(b"\r\n\r\n") && header.len() < 8192 {
+                        match stream.read(&mut byte) {
+                            Ok(1) => header.push(byte[0]),
+                            _ => break,
+                        }
+                    }
+                    if !header.ends_with(b"\r\n\r\n") { break; }
+                    responses += 1;
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n{responses}").unwrap();
+                    stream.flush().unwrap();
+                }
+            }
+            assert_eq!(responses, 2);
+            connections
+        });
+        for expected in ["1", "2"] {
+            let response = build_client(15).unwrap().get(format!("http://{address}/status"))
+                .send().unwrap().text().unwrap();
+            assert_eq!(response, expected, "responses must remain fresh");
+        }
+        assert_eq!(server.join().unwrap(), 1, "repeated reads should reuse one connection");
+    }
+
+    #[test]
+    fn endpoint_restrictions_are_preserved() {
+        for endpoint in ["https://127.0.0.1:11434", "http://example.com", "file:///tmp/model"] {
+            assert!(!check_ollama_api(endpoint, 5));
+        }
+    }
 }
