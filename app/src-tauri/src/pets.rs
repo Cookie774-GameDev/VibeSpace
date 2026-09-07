@@ -909,7 +909,7 @@ fn native_restore_pet_window_chrome(hwnd: windows::Win32::Foundation::HWND) {
     use windows::core::w;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetPropW, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, WS_THICKFRAME,
-        IsIconic, ShowWindow, SW_SHOWNOACTIVATE,
+        IsIconic, ShowWindow, SW_RESTORE,
         SET_WINDOW_POS_FLAGS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOCOPYBITS,
     };
 
@@ -917,7 +917,7 @@ fn native_restore_pet_window_chrome(hwnd: windows::Win32::Foundation::HWND) {
         // Showing an iconic tool window with SetWindowPos alone leaves its
         // WebView at the minimized caption size instead of restoring the UI.
         if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let _ = ShowWindow(hwnd, SW_RESTORE);
         }
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
         // Keep Windows' sizing behavior on the panel. The client-only subclass
@@ -3221,6 +3221,26 @@ mod tests {
         }
         assert_eq!(outer.right - outer.left, client.right - client.left);
         assert_eq!(outer.bottom - outer.top, client.bottom - client.top);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn minimized_panel_restores_its_normal_window_state() {
+        use windows::{core::w, Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, IsIconic, ShowWindow, SW_MINIMIZE, WS_POPUP,
+        }};
+        let panel = unsafe {
+            CreateWindowExW(Default::default(), w!("STATIC"), w!("panel"), WS_POPUP,
+                -32000, -32000, 430, 560, None, None, None, None)
+        }.unwrap();
+        assert!(set_pet_native_caption(panel, false, "VibeSpace Pet Panel"));
+        install_pet_client_only_frame(panel);
+        unsafe { let _ = ShowWindow(panel, SW_MINIMIZE); }
+        assert!(unsafe { IsIconic(panel).as_bool() });
+        native_restore_pet_window_chrome(panel);
+        let still_minimized = unsafe { IsIconic(panel).as_bool() };
+        unsafe { let _ = DestroyWindow(panel); }
+        assert!(!still_minimized);
     }
 
     #[test]
