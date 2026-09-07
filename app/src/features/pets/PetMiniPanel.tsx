@@ -19,7 +19,7 @@ import {
 import { PetChatSurface } from './PetChatSurface';
 import { PetTerminalSurface } from './PetTerminalSurface';
 import { usePetPresentationStore } from './petPresentationStore';
-import { hidePetPanel, minimizePetPanel } from './petTauriBridge';
+import { hidePetPanel, minimizePetPanel, setPetOverlayPosition, setPetPanelOpenFlag, showPetOverlay } from './petTauriBridge';
 import { setLivePanelUiScale } from '@/lib/ui/panelScale';
 import {
   clampPetPanelSize,
@@ -186,7 +186,26 @@ export function PetMiniPanel({
     return () => window.removeEventListener('focus', restore);
   }, [windowMode, lifecycle, updateLifecycle]);
 
+  const dismissNativePanel = async (minimize: boolean) => {
+    const panelWindow = getCurrentWindow();
+    const position = await panelWindow.outerPosition().catch(() => null);
+    // Position the hidden pet first so it never flashes at its old location.
+    if (position) await setPetOverlayPosition(position.x, position.y);
+    if (minimize) await panelWindow.minimize();
+    else await panelWindow.hide();
+    setPetPanelOpenFlag(false);
+    await showPetOverlay();
+  };
+
   const handleMinimize = () => {
+    if (windowMode) {
+      void dismissNativePanel(true).then(() => {
+        updateLifecycle({ type: 'minimized' });
+        onMinimize?.();
+        onClose();
+      }).catch(() => updateLifecycle({ type: 'opened' }));
+      return;
+    }
     window.clearTimeout(transitionTimerRef.current);
     updateLifecycle({ type: 'request_minimize' });
     transitionTimerRef.current = window.setTimeout(() => {
@@ -203,7 +222,16 @@ export function PetMiniPanel({
     }, transitionDuration());
   };
 
-  const handleCloseRequest = () => updateLifecycle({ type: 'request_close' });
+  const handleCloseRequest = () => {
+    if (windowMode) {
+      void dismissNativePanel(false).then(() => {
+        updateLifecycle({ type: 'closed' });
+        onClose();
+      }).catch(() => updateLifecycle({ type: 'opened' }));
+      return;
+    }
+    updateLifecycle({ type: 'request_close' });
+  };
 
   const handleConfirmClose = () => {
     window.clearTimeout(transitionTimerRef.current);
@@ -348,7 +376,8 @@ export function PetMiniPanel({
         style={
           windowMode
             ? ({
-                ['--pet-ui-scale' as string]: String(uiScale),
+                ['--pet-ui-scale' as string]: '1',
+                ['--pet-content-scale' as string]: String(uiScale),
               } as React.CSSProperties)
             : ({
                 right: panelPos.right,
@@ -357,7 +386,8 @@ export function PetMiniPanel({
                 height: size.h,
                 maxWidth: '96vw',
                 maxHeight: '92vh',
-                ['--pet-ui-scale' as string]: String(uiScale),
+                ['--pet-ui-scale' as string]: '1',
+                ['--pet-content-scale' as string]: String(uiScale),
               } as React.CSSProperties)
         }
         role="dialog"
@@ -371,6 +401,7 @@ export function PetMiniPanel({
         data-pet-preserves-sessions={panelPreservesSessions(lifecycle) ? 'true' : 'false'}
       >
         <PetPanelUiProvider density={density} width={contentSize.w} height={contentSize.h}>
+        <div className="pet-panel-scaled-content" data-testid="pet-panel-scaled-content">
         {/* Accent top edge */}
         {!windowMode && (
           <div
@@ -467,6 +498,34 @@ export function PetMiniPanel({
           </div>
         </div>
 
+        {lifecycle === 'confirmingClose' && (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center bg-background/85 p-4 backdrop-blur-sm [html[data-theme=monochrome]_&]:backdrop-blur-none"
+            data-testid="pet-close-confirm"
+            role="alertdialog"
+            aria-label="Confirm close mini panel"
+          >
+            <div className="max-w-sm rounded-2xl border border-border bg-panel p-5 shadow-2xl flex flex-col gap-4">
+              <p className="text-sm leading-relaxed text-foreground">
+                {PET_PANEL_CLOSE_CONFIRM_MESSAGE}
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={handleCancelClose}>
+                  {PET_PANEL_CLOSE_CONFIRM_BUTTONS.cancel}
+                </Button>
+                <Button
+                  variant="default"
+                  onClick={handleConfirmClose}
+                  data-testid="pet-close-confirm-btn"
+                  className="bg-accent-copper hover:bg-accent-copper/90"
+                >
+                  {PET_PANEL_CLOSE_CONFIRM_BUTTONS.confirm}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+        </div>
         {/* Resize handles */}
         {windowMode && (
           (['West', 'East', 'North', 'South', 'NorthWest', 'NorthEast', 'SouthWest', 'SouthEast'] as const).map((direction) => (
@@ -511,33 +570,6 @@ export function PetMiniPanel({
           </>
         )}
 
-        {lifecycle === 'confirmingClose' && (
-          <div
-            className="absolute inset-0 z-10 flex items-center justify-center bg-background/85 p-4 backdrop-blur-sm [html[data-theme=monochrome]_&]:backdrop-blur-none"
-            data-testid="pet-close-confirm"
-            role="alertdialog"
-            aria-label="Confirm close mini panel"
-          >
-            <div className="max-w-sm rounded-2xl border border-border bg-panel p-5 shadow-2xl flex flex-col gap-4">
-              <p className="text-sm leading-relaxed text-foreground">
-                {PET_PANEL_CLOSE_CONFIRM_MESSAGE}
-              </p>
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" onClick={handleCancelClose}>
-                  {PET_PANEL_CLOSE_CONFIRM_BUTTONS.cancel}
-                </Button>
-                <Button
-                  variant="default"
-                  onClick={handleConfirmClose}
-                  data-testid="pet-close-confirm-btn"
-                  className="bg-accent-copper hover:bg-accent-copper/90"
-                >
-                  {PET_PANEL_CLOSE_CONFIRM_BUTTONS.confirm}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
         </PetPanelUiProvider>
       </div>
     </TooltipProvider>

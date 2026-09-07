@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, cleanup, act } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PetMiniPanel } from './PetMiniPanel';
-import { hidePetPanel, minimizePetPanel } from './petTauriBridge';
+import { hidePetPanel, minimizePetPanel, setPetOverlayPosition, setPetPanelOpenFlag, showPetOverlay } from './petTauriBridge';
 const nativeWindow = vi.hoisted(() => ({
   hide: vi.fn(async () => undefined), minimize: vi.fn(async () => undefined),
+  outerPosition: vi.fn(async () => ({ x: 400, y: 250 })),
   startDragging: vi.fn(async () => undefined),
   startResizeDragging: vi.fn(async () => undefined),
 }));
@@ -16,8 +17,12 @@ vi.mock('./PetTerminalSurface', () => ({
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => nativeWindow,
 }));
-vi.mock('./petTauriBridge', () => ({ hidePetPanel: vi.fn(async () => undefined), minimizePetPanel: vi.fn(async () => undefined) }));
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
+vi.mock('./petTauriBridge', () => ({
+  hidePetPanel: vi.fn(async () => undefined), minimizePetPanel: vi.fn(async () => undefined),
+  setPetOverlayPosition: vi.fn(async () => undefined), setPetPanelOpenFlag: vi.fn(),
+  showPetOverlay: vi.fn(async () => ({ visible: true })),
+}));
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 it('keeps both real surface entry points accessible in the native companion chrome', () => {
   render(<PetMiniPanel open windowMode onClose={vi.fn()} />);
   expect(screen.getByText('Jarvis')).toBeTruthy();
@@ -41,20 +46,47 @@ it('drags from the header and delegates all eight resize directions to the nativ
   }
 });
 
-it('can close again after a native reopen without duplicating the host pet restoration', () => {
+it('closes in one click and immediately restores the pet at the panel position on close and minimize', async () => {
   vi.useFakeTimers();
   render(<PetMiniPanel open windowMode onClose={vi.fn()} />);
   act(() => { vi.advanceTimersByTime(200); });
   for (let attempt = 0; attempt < 2; attempt++) {
-    fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' }));
-    fireEvent.click(screen.getByTestId('pet-close-confirm-btn'));
-    act(() => { vi.advanceTimersByTime(200); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' })); });
+    expect(screen.queryByTestId('pet-close-confirm')).toBeNull();
     expect(nativeWindow.hide).toHaveBeenCalledTimes(attempt + 1);
+    expect(setPetOverlayPosition).toHaveBeenLastCalledWith(400, 250);
+    expect(setPetPanelOpenFlag).toHaveBeenLastCalledWith(false);
+    expect(showPetOverlay).toHaveBeenCalledTimes(attempt + 1);
     fireEvent.focus(window);
   }
-  fireEvent.click(screen.getByRole('button', { name: 'Minimize pet panel' }));
-  act(() => { vi.advanceTimersByTime(200); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Minimize pet panel' })); });
   expect(nativeWindow.minimize).toHaveBeenCalledTimes(1);
+  expect(showPetOverlay).toHaveBeenCalledTimes(3);
+  expect(vi.mocked(setPetOverlayPosition).mock.invocationCallOrder[0]).toBeLessThan(nativeWindow.hide.mock.invocationCallOrder[0]);
+  expect(nativeWindow.hide.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(showPetOverlay).mock.invocationCallOrder[0]);
   expect(hidePetPanel).not.toHaveBeenCalled();
   expect(minimizePetPanel).not.toHaveBeenCalled();
+});
+
+it('scales all content together as the panel grows and shrinks without scaling resize handles twice', () => {
+  vi.useFakeTimers();
+  let width = 460, height = 560;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => (
+    { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+  ));
+  render(<PetMiniPanel open windowMode onClose={vi.fn()} />);
+  const panel = screen.getByRole('dialog');
+  const content = screen.getByTestId('pet-panel-scaled-content');
+  expect(content.contains(screen.getByTestId('pet-panel-header'))).toBe(true);
+  expect(content.contains(screen.getByTestId('real-chat-mount'))).toBe(true);
+  expect(content.contains(screen.getByLabelText('Resize panel West'))).toBe(false);
+  for (const [w, h, expected] of [[460, 560, 1], [920, 1120, 1.45], [300, 300, 0.62]]) {
+    width = w; height = h;
+    fireEvent(window, new Event('resize'));
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(panel.style.getPropertyValue('--pet-content-scale')).toBe(String(expected));
+    expect(panel.style.getPropertyValue('--pet-ui-scale')).toBe('1');
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Terminals' }));
+  expect(content.contains(screen.getByTestId('real-terminal-mount'))).toBe(true);
 });
