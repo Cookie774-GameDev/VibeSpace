@@ -2288,11 +2288,9 @@ fn open_or_focus_pet_panel_blocking(
     let w = geo.panel_w.unwrap_or(PANEL_DEFAULT_W);
     let h = geo.panel_h.unwrap_or(PANEL_DEFAULT_H);
     let follow_anchor = if panel_mode == PetPanelMode::FollowPet {
-        near_x.zip(near_y).or_else(|| {
-            app.get_webview_window(PET_OVERLAY_LABEL)
-                .and_then(|overlay| overlay.outer_position().ok())
-                .map(|position| (position.x as f64, position.y as f64))
-        })
+        // Drag/show/display recovery already records physical coordinates.
+        // Do not wait on the window event loop while holding geometry state.
+        near_x.zip(near_y).or_else(|| geo.overlay_x.zip(geo.overlay_y))
     } else {
         None
     };
@@ -3205,6 +3203,17 @@ mod tests {
         }
         assert_eq!(outer.right - outer.left, client.right - client.left);
         assert_eq!(outer.bottom - outer.top, client.bottom - client.top);
+    }
+
+    #[test]
+    fn follow_pet_anchor_does_not_wait_on_a_window_with_geometry_locked() {
+        let source = include_str!("pets.rs");
+        let start = source.find("let follow_anchor = if panel_mode").unwrap();
+        let end = start + source[start..].find("let (x, y) =").unwrap();
+        let anchor = &source[start..end];
+        assert!(anchor.contains("geo.overlay_x.zip(geo.overlay_y)"));
+        assert!(!anchor.contains("outer_position()"));
+        assert!(!anchor.contains("get_webview_window("));
     }
 
     #[test]
