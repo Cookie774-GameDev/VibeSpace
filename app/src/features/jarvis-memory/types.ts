@@ -29,6 +29,7 @@ export interface JarvisMemoryItem {
 }
 
 export interface JarvisLearningProfile {
+  caoLearningEpoch?: string;
   caoGuidance?: import('./caoGuidance').CaoGuidance;
   accountId: string;
   enabled: boolean;

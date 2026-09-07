@@ -98,6 +98,7 @@ const MAX_HISTORY = 20;
 function profile(accountId: string): JarvisLearningProfile {
   return {
     accountId,
+    caoLearningEpoch: id(),
     enabled: true,
     items: [],
     meaningfulMessageCount: 0,
@@ -255,9 +256,20 @@ export function parseJarvisLearningMarkdown(
       }));
     return {
       accountId: expectedAccountId,
+      ...(typeof raw.caoLearningEpoch === 'string' &&
+      /^[A-Za-z0-9._:-]{1,128}$/.test(raw.caoLearningEpoch)
+        ? { caoLearningEpoch: raw.caoLearningEpoch }
+        : {}),
       enabled: raw.enabled !== false,
       items,
-      ...(raw.caoGuidance ? { caoGuidance: parseCaoGuidance(JSON.stringify(raw.caoGuidance), raw.caoGuidance.sourceIds ?? []) } : {}),
+      ...(raw.caoGuidance
+        ? {
+            caoGuidance: parseCaoGuidance(
+              JSON.stringify(raw.caoGuidance),
+              raw.caoGuidance.sourceIds ?? [],
+            ),
+          }
+        : {}),
       meaningfulMessageCount: Math.max(0, Number(raw.meaningfulMessageCount) || 0),
       lastEvaluationCount: Math.max(0, Number(raw.lastEvaluationCount) || 0),
       updatedAt: Number(raw.updatedAt) || Date.now(),
@@ -371,7 +383,11 @@ export const useJarvisLearningStore = create<JarvisLearningState>()((set, get) =
     },
     updateCaoGuidance: (guidance) => {
       const validated = parseCaoGuidance(JSON.stringify(guidance), guidance.sourceIds);
-      if (Object.values(validated.sections).some(section => isSensitive(section.guidance) || isPromptPoisoning(section.guidance)))
+      if (
+        Object.values(validated.sections).some(
+          (section) => isSensitive(section.guidance) || isPromptPoisoning(section.guidance),
+        )
+      )
         throw new Error('cao_guidance_unsafe');
       replaceCurrent({ ...getCurrent(), caoGuidance: validated, updatedAt: Date.now() });
     },

@@ -87,7 +87,7 @@ export function CouncilWorkflowPage({ chatId }: { chatId: string | null }) {
     !!prompt.trim() &&
     !!mapId &&
     selected.every((id) => options.some((option) => option.id === id)) &&
-    !!synthesisId &&
+    options.some((option) => option.id === synthesisId) &&
     agentIds.every((id) => roster.some((agent) => agent.id === id)) &&
     agentIds[0] !== agentIds[1];
   function route(id: string, effort: string): CouncilRoute {

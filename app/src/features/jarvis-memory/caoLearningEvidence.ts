@@ -24,9 +24,12 @@ export function collectCaoLearningEvidence(
   let size = 0;
   let truncated = candidates.length > 200;
   for (const message of candidates.slice(0, 200)) {
-    const parts = message.parts.flatMap<{ kind: string; text: string }>((part) => {
-      if (part.kind === 'text')
+    if (message.parts.length > 64) truncated = true;
+    const parts = message.parts.slice(0, 64).flatMap<{ kind: string; text: string }>((part) => {
+      if (part.kind === 'text') {
+        if (part.text.length > 6000) truncated = true;
         return [{ kind: part.kind, text: redact(part.text).slice(0, 6000) }];
+      }
       if (
         [
           'tool_call',
@@ -38,17 +41,15 @@ export function collectCaoLearningEvidence(
           'plan_review',
           'chat_handoff',
         ].includes(part.kind)
-      )
-        return [
-          {
-            kind: part.kind,
-            text: redact(
-              JSON.stringify(part, (key, value) =>
-                /password|secret|token|authorization|api.?key/i.test(key) ? '[redacted]' : value,
-              ),
-            ).slice(0, 3000),
-          },
-        ];
+      ) {
+        const text = redact(
+          JSON.stringify(part, (key, value) =>
+            /password|secret|token|authorization|api.?key/i.test(key) ? '[redacted]' : value,
+          ),
+        );
+        if (text.length > 3000) truncated = true;
+        return [{ kind: part.kind, text: text.slice(0, 3000) }];
+      }
       return [];
     });
     if (!parts.length) continue;
@@ -62,7 +63,7 @@ export function collectCaoLearningEvidence(
     });
     if (size + record.length + 1 > 80000) {
       truncated = true;
-      break;
+      continue;
     }
     records.push(record);
     sourceIds.push(message.id);

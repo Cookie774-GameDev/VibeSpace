@@ -52,6 +52,8 @@ export function CaoChatControls() {
     };
   }, [accountId]);
   const mode = permission?.mode ?? 'approve-before-send';
+  const enabled =
+    ready && permission?.enabled === true && permission.learningEpoch === profile?.caoLearningEpoch;
   const configure = async (enabled: boolean, nextMode: CaoSendMode) => {
     setError('');
     try {
@@ -129,7 +131,7 @@ export function CaoChatControls() {
           type="checkbox"
           aria-label="Enable CAO"
           disabled={!ready || busy}
-          checked={ready && permission?.enabled === true}
+          checked={enabled}
           onChange={(event) => void configure(event.target.checked, mode)}
         />
         Enable CAO
@@ -140,9 +142,7 @@ export function CaoChatControls() {
           aria-label="CAO message permissions"
           disabled={!ready || busy}
           value={mode}
-          onChange={(event) =>
-            void configure(permission?.enabled === true, event.target.value as CaoSendMode)
-          }
+          onChange={(event) => void configure(enabled, event.target.value as CaoSendMode)}
         >
           <option value="approve-before-send">Approve before sending</option>
           <option value="full-access">Full access to send messages</option>
@@ -179,7 +179,7 @@ export function CaoChatControls() {
       />
       <Button
         size="sm"
-        disabled={!ready || !permission?.enabled || !chatId || !objective.trim() || busy}
+        disabled={!enabled || !chatId || !objective.trim() || busy}
         onClick={() => void prepare()}
       >
         {busy ? 'Working…' : mode === 'full-access' ? 'Prepare and send' : 'Prepare message'}

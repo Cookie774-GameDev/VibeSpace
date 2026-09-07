@@ -13,6 +13,10 @@ import { CAO_GUIDANCE_AREAS, parseCaoGuidance } from './caoGuidance';
 
 export const caoLearningReviewKey = (accountId: string, projectId: string) =>
   `cao.learning.review.v1:${accountId}:${projectId}`;
+const activeLearningAccounts = new Set<string>();
+const learningPasses = new Map<string, { epoch?: string; signal: AbortSignal }>();
+const passKey = (input: CaoLearningExecutionInput) =>
+  JSON.stringify([input.accountId, input.requestId]);
 
 /** Run after a completed chat turn, so replies and observed actions are available. */
 export async function reviewCaoChatLearning(
@@ -27,9 +31,17 @@ export async function reviewCaoChatLearning(
   if (profile.accountId !== accountId || !profile.enabled) return;
   const key = caoLearningReviewKey(accountId, chat.project_id);
   const previous = (await db.settings.get(key))?.value as
-    { input?: { throughSeqInclusive?: number } } | undefined;
+    { learningEpoch?: string; input?: { throughSeqInclusive?: number } } | undefined;
   const throughSeqInclusive = profile.meaningfulMessageCount;
-  const fromSeqExclusive = previous?.input?.throughSeqInclusive ?? 0;
+  const previousCount = previous?.input?.throughSeqInclusive;
+  const fromSeqExclusive =
+    previous?.learningEpoch === profile.caoLearningEpoch &&
+    typeof previousCount === 'number' &&
+    Number.isSafeInteger(previousCount) &&
+    previousCount >= 0 &&
+    previousCount <= throughSeqInclusive
+      ? previousCount
+      : 0;
   if (throughSeqInclusive - fromSeqExclusive < 20) return;
   const id = crypto.randomUUID();
   const result = await executeProductionCaoLearning(
@@ -53,16 +65,19 @@ export async function reviewCaoChatLearning(
 
 function assertAccount(input: CaoLearningExecutionInput) {
   const state = useJarvisLearningStore.getState();
+  const pass = learningPasses.get(passKey(input));
+  pass?.signal.throwIfAborted();
   if (
     getActiveAccountIdentity()?.accountId !== input.accountId ||
     state.activeAccountId !== input.accountId ||
     state.currentProfile().accountId !== input.accountId ||
-    !state.currentProfile().enabled
+    !state.currentProfile().enabled ||
+    (pass && state.currentProfile().caoLearningEpoch !== pass.epoch)
   )
     throw new Error('cao_learning_account_unavailable');
 }
 
-export const executeProductionCaoLearning = createCaoLearningExecutor({
+const executeLearningPass = createCaoLearningExecutor({
   async snapshot(input) {
     assertAccount(input);
     const [workspace, project] = await Promise.all([
@@ -74,7 +89,11 @@ export const executeProductionCaoLearning = createCaoLearningExecutor({
       throw new Error('cao_learning_scope_unavailable');
     const state = useJarvisLearningStore.getState();
     const profile = state.currentProfile();
-    if (input.throughSeqInclusive > profile.meaningfulMessageCount)
+    if (
+      !Number.isSafeInteger(input.throughSeqInclusive) ||
+      input.throughSeqInclusive < 0 ||
+      input.throughSeqInclusive > profile.meaningfulMessageCount
+    )
       throw new Error('cao_learning_range_unavailable');
     // Keep provenance, but exclude the recovery payload with private account identifiers from the model prompt.
     const chats = await db.chats
@@ -176,25 +195,65 @@ export const executeProductionCaoLearning = createCaoLearningExecutor({
     const guidance = parseCaoGuidance(review.summary, review.sourceIds);
     const key = caoLearningReviewKey(review.input.accountId, review.input.projectId);
     const state = useJarvisLearningStore.getState();
-    const next = { ...state.currentProfile(), caoGuidance: guidance, updatedAt: Date.now() };
+    const current = state.currentProfile();
+    const next = {
+      ...current,
+      caoGuidance: guidance,
+      lastEvaluationCount: Math.max(current.lastEvaluationCount, review.input.throughSeqInclusive),
+      updatedAt: Date.now(),
+    };
     await saveLearningFile(review.input.accountId, renderMarkdown(next));
     assertAccount(review.input);
     useJarvisLearningStore.getState().updateCaoGuidance(guidance);
+    const durableReview = {
+      ...review,
+      learningEpoch: learningPasses.get(passKey(review.input))?.epoch,
+    };
     await db.transaction('rw', db.settings, async () => {
       await db.settings.put({
         key: `${key}:${review.receiptId}`,
-        value: review,
+        value: durableReview,
         updated_at: Date.now(),
       });
-      await db.settings.put({ key, value: review, updated_at: Date.now() });
+      await db.settings.put({ key, value: durableReview, updated_at: Date.now() });
     });
     assertAccount(review.input);
   },
   async markEvaluated(input) {
     assertAccount(input);
-    // Verify the existing physical learning file before consuming the captured range.
-    await saveLearningFile(input.accountId, useJarvisLearningStore.getState().exportMarkdown());
-    assertAccount(input);
+    // The validated guidance and captured cursor were written together in save().
     useJarvisLearningStore.getState().markEvaluated(input.throughSeqInclusive);
   },
 });
+
+export async function executeProductionCaoLearning(
+  input: CaoLearningExecutionInput,
+  signal: AbortSignal,
+) {
+  // Scheduled and automatic reviews must not overwrite one another for the same account.
+  if (activeLearningAccounts.has(input.accountId)) return { status: 'failed' as const };
+  activeLearningAccounts.add(input.accountId);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+  const epoch = useJarvisLearningStore.getState().currentProfile().caoLearningEpoch;
+  learningPasses.set(passKey(input), { epoch, signal: controller.signal });
+  const unsubscribe = useJarvisLearningStore.subscribe((state) => {
+    const profile = state.profiles[input.accountId];
+    if (
+      state.activeAccountId !== input.accountId ||
+      !profile?.enabled ||
+      profile.caoLearningEpoch !== epoch
+    )
+      abort();
+  });
+  try {
+    return await executeLearningPass(input, controller.signal);
+  } finally {
+    unsubscribe();
+    signal.removeEventListener('abort', abort);
+    learningPasses.delete(passKey(input));
+    activeLearningAccounts.delete(input.accountId);
+  }
+}

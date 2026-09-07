@@ -195,6 +195,7 @@ export function createCouncilWorkflow(dependencies: CouncilDependencies) {
         )
           throw new Error('council_route_identity_mismatch');
         if (!response.text.trim()) throw new Error('council_empty_response');
+        if (response.text.length > 128_000) throw new Error('council_response_too_large');
         result.text = response.text;
         result.receipt = structuredClone(response.receipt);
         result.status = 'completed';
@@ -210,6 +211,7 @@ export function createCouncilWorkflow(dependencies: CouncilDependencies) {
         // Partial output is explicitly non-final and never used as synthesis evidence.
       } finally {
         clearTimeout(timeout);
+        controllers.delete(result.id);
         await persist();
       }
     }

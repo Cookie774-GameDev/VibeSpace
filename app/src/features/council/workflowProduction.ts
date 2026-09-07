@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { runAgent, type ProviderCompletionEvidence, type RunAgentRequest } from '@/lib/ai/router';
 import { TOOL_GATEWAY_CATALOG } from '@/lib/harness/toolGatewayProtocol';
 import type { Agent, ChatId, ProviderId, WorkspaceId, ProjectId } from '@/types';
-import { loadPersistedContextMaps } from '@/features/context/contextPersistence';
+import { reloadPersistedContextMaps } from '@/features/context/contextPersistence';
 import {
   createCouncilWorkflow,
   type CouncilExecution,
@@ -144,13 +144,15 @@ export const councilWorkflow = createCouncilWorkflow({
 
 export async function captureCouncilContext(projectId: string, mapId: string) {
   const accountId = activeAccount();
-  const maps = await loadPersistedContextMaps(projectId);
+  const maps = await reloadPersistedContextMaps(projectId);
   const map = maps.find((map) => map.id === mapId && map.status === 'active');
   const canonical = await db.context_maps.get(mapId);
   if (
     activeAccount() !== accountId ||
     !map ||
     !canonical ||
+    canonical.status !== 'active' ||
+    canonical.updatedAt !== map.updatedAt ||
     canonical.accountId !== accountId ||
     canonical.projectId !== projectId
   )

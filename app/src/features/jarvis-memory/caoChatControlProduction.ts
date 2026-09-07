@@ -15,13 +15,21 @@ export const caoPermissionKey = (accountId: string) => `cao.chat.permissions.v1:
 export interface CaoChatPermission {
   enabled: boolean;
   mode: CaoSendMode;
+  revision?: string;
+  learningEpoch?: string;
 }
-function targetAuthority(chat: Awaited<ReturnType<typeof target>>) {
+function targetAuthority(chat: Awaited<ReturnType<typeof target>>, permission?: CaoChatPermission) {
+  const profile = useJarvisLearningStore.getState().currentProfile();
   return JSON.stringify({
     connection: chat.connection,
     agents: chat.active_agent_ids,
     project: chat.project_id,
     workspace: chat.workspace_id,
+    updatedAt: chat.updated_at,
+    backend: chat.backend_affinity,
+    permissionRevision: permission?.revision,
+    learningEpoch: profile.caoLearningEpoch,
+    guidance: profile.caoGuidance,
   });
 }
 
@@ -39,20 +47,28 @@ export async function setCaoChatPermission(accountId: string, permission: CaoCha
     throw new Error('cao_permission_invalid');
   await db.settings.put({
     key: caoPermissionKey(accountId),
-    value: permission,
+    value: {
+      ...permission,
+      revision: crypto.randomUUID(),
+      learningEpoch: profile.caoLearningEpoch,
+    },
     updated_at: Date.now(),
   });
 }
 async function target(accountId: string, chatId: string) {
   assertAccount(accountId);
   const chat = await db.chats.get(chatId as ChatId);
-  const workspace = chat && (await db.workspaces.get(chat.workspace_id));
+  const [workspace, project] = await Promise.all([
+    chat ? db.workspaces.get(chat.workspace_id) : undefined,
+    chat?.project_id ? db.projects.get(chat.project_id) : undefined,
+  ]);
   assertAccount(accountId);
   if (
     !chat ||
     chat.archived ||
     workspace?.owner_id !== accountId ||
     !chat.project_id ||
+    project?.workspace_id !== chat.workspace_id ||
     !chat.connection?.modelId ||
     !chat.active_agent_ids[0]
   )
@@ -67,10 +83,11 @@ export const caoChatControl = createCaoChatControl({
     assertAccount(accountId);
     const profile = useJarvisLearningStore.getState().currentProfile();
     return {
-      enabled: profile.enabled && raw?.enabled === true,
+      enabled:
+        profile.enabled && raw?.enabled === true && raw.learningEpoch === profile.caoLearningEpoch,
       mode: raw?.mode === 'full-access' ? 'full-access' : 'approve-before-send',
       guidance: profile.caoGuidance,
-      authority: targetAuthority(chat),
+      authority: targetAuthority(chat, raw),
     };
   },
   async draft({ accountId, chatId, objective, guidance, signal }) {
@@ -82,6 +99,8 @@ export const caoChatControl = createCaoChatControl({
       .limit(100)
       .toArray();
     const evidence = collectCaoLearningEvidence(messages, [chat.id]);
+    signal.throwIfAborted();
+    assertAccount(accountId);
     const requestId = `cao-draft-${crypto.randomUUID()}`;
     let observed: ProviderCompletionEvidence | undefined;
     const response = await runAgent({
@@ -145,13 +164,15 @@ export const caoChatControl = createCaoChatControl({
   },
   async send(proposal, signal) {
     const chat = await target(proposal.accountId, proposal.chatId);
-    if (targetAuthority(chat) !== proposal.authority) throw new Error('cao_target_changed');
     const permission = (await db.settings.get(caoPermissionKey(proposal.accountId)))?.value as
       CaoChatPermission | undefined;
     const profile = useJarvisLearningStore.getState().currentProfile();
     assertAccount(proposal.accountId);
+    if (targetAuthority(chat, permission) !== proposal.authority)
+      throw new Error('cao_target_changed');
     if (
-      !permission?.enabled ||
+      permission?.enabled !== true ||
+      permission.learningEpoch !== profile.caoLearningEpoch ||
       !profile.enabled ||
       !caoGuidanceReady(profile.caoGuidance) ||
       (proposal.authorization !== 'user-approval' &&
@@ -201,10 +222,15 @@ export const caoChatControl = createCaoChatControl({
         else if (state.status === 'error' || state.status === 'cancelled')
           finish(new Error('cao_send_rejected'));
       };
-      const timer = setTimeout(
-        () => finish(new Error('cao_send_acknowledgement_unavailable')),
-        15000,
-      );
+      const timer = setTimeout(() => {
+        // Stop the exact request before allowing a retry after an ambiguous acknowledgement.
+        finish(new Error('cao_send_acknowledgement_unavailable'));
+        const detail: CancelDetail = {
+          chatId: proposal.chatId,
+          messageId: proposal.id as MessageId,
+        };
+        window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail }));
+      }, 15000);
       window.addEventListener('jarvis:run-state', onState);
       signal.addEventListener('abort', onAbort, { once: true });
       window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));

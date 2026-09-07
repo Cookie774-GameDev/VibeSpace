@@ -67,7 +67,40 @@ const nativeIo: LearningFileIo = {
   },
 };
 
-export async function saveLearningFile(
+// Listener saves, model reviews, and recovery share the same primary/backup/temp files.
+// Serialize their native I/O so an overlapping save cannot corrupt another save's readback.
+const fileOperations = new WeakMap<LearningFileIo, Map<string, Promise<void>>>();
+function withLearningFile<T>(
+  io: LearningFileIo,
+  accountId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let accounts = fileOperations.get(io);
+  if (!accounts) {
+    accounts = new Map();
+    fileOperations.set(io, accounts);
+  }
+  const result = (accounts.get(accountId) ?? Promise.resolve()).then(operation);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  accounts.set(accountId, settled);
+  void settled.then(() => {
+    if (accounts!.get(accountId) === settled) accounts!.delete(accountId);
+  });
+  return result;
+}
+
+export function saveLearningFile(
+  accountId: string,
+  markdown: string,
+  io: LearningFileIo = nativeIo,
+): Promise<LearningFileResult> {
+  return withLearningFile(io, accountId, () => saveLearningFileUnlocked(accountId, markdown, io));
+}
+
+async function saveLearningFileUnlocked(
   accountId: string,
   markdown: string,
   io: LearningFileIo = nativeIo,
@@ -88,7 +121,14 @@ export async function saveLearningFile(
   return { path: target.primary, markdown, recovered: false, recoverySource: null };
 }
 
-export async function loadLearningFile(
+export function loadLearningFile(
+  accountId: string,
+  io: LearningFileIo = nativeIo,
+): Promise<LearningFileResult> {
+  return withLearningFile(io, accountId, () => loadLearningFileUnlocked(accountId, io));
+}
+
+async function loadLearningFileUnlocked(
   accountId: string,
   io: LearningFileIo = nativeIo,
 ): Promise<LearningFileResult> {

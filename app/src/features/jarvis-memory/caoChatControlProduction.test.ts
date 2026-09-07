@@ -4,7 +4,11 @@ import { caoChatControl } from './caoChatControlProduction';
 import { CAO_GUIDANCE_AREAS, parseCaoGuidance } from './caoGuidance';
 import { useJarvisLearningStore } from './learningStore';
 const mocks = vi.hoisted(() => ({
-  permission: { enabled: true, mode: 'full-access' },
+  permission: {
+    enabled: true,
+    mode: 'full-access',
+    learningEpoch: undefined as string | undefined,
+  },
   dispatch: vi.fn(),
 }));
 vi.mock('@/lib/accountIdentity', () => ({
@@ -30,6 +34,7 @@ vi.mock('@/lib/db', () => ({
       }),
     },
     workspaces: { get: async () => ({ owner_id: 'account' }) },
+    projects: { get: async () => ({ workspace_id: 'workspace' }) },
     settings: { get: async () => ({ value: mocks.permission }) },
     messages: {
       where: () => ({
@@ -58,7 +63,11 @@ beforeEach(() => {
       ['message'],
     ),
   );
-  mocks.permission = { enabled: true, mode: 'full-access' };
+  mocks.permission = {
+    enabled: true,
+    mode: 'full-access',
+    learningEpoch: store.currentProfile().caoLearningEpoch,
+  };
   mocks.dispatch.mockImplementation(async (request: RunAgentRequest) => {
     request.onProviderCompletionEvidence?.({
       requestId: request.requestId!,

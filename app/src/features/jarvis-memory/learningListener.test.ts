@@ -35,34 +35,64 @@ describe('Jarvis learning event listener', () => {
 
   it('persists learning from ten messages in each of two backend chats', async () => {
     const save = vi.fn(async (_accountId: string, _markdown: string) => undefined);
-    stop = startJarvisLearningListener({ getAccountId: () => 'two-chat-account', save, load: async () => null, debounceMs: 0 });
+    stop = startJarvisLearningListener({
+      getAccountId: () => 'two-chat-account',
+      save,
+      load: async () => null,
+      debounceMs: 0,
+    });
     for (const backend of ['opencode', 'codex']) {
       for (let index = 0; index < 10; index++) {
-        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-          chatId: `chat-${backend}`, messageId: `${backend}-${index}`,
-          text: `I prefer ${backend === 'opencode' ? 'concise responses' : 'focused terminal checks'} for project task ${index}.`,
-        } }));
+        window.dispatchEvent(
+          new CustomEvent('jarvis:send', {
+            detail: {
+              chatId: `chat-${backend}`,
+              messageId: `${backend}-${index}`,
+              text: `I prefer ${backend === 'opencode' ? 'concise responses' : 'focused terminal checks'} for project task ${index}.`,
+            },
+          }),
+        );
       }
     }
-    await vi.waitFor(() => expect(useJarvisLearningStore.getState().currentProfile().lastEvaluationCount).toBe(20));
+    await vi.waitFor(() =>
+      expect(useJarvisLearningStore.getState().currentProfile().lastEvaluationCount).toBe(20),
+    );
     await vi.waitFor(() => expect(save).toHaveBeenCalled());
-    await stop(); stop = undefined;
+    await stop();
+    stop = undefined;
     const markdown = save.mock.calls.at(-1)![1];
     expect(markdown).toContain('# Jarvis Learning');
     expect(markdown).toContain('concise responses');
     expect(markdown).toContain('focused terminal checks');
-    expect(new Set(useJarvisLearningStore.getState().currentProfile().items.map(item => item.source.chatId))).toEqual(new Set(['chat-opencode', 'chat-codex']));
+    expect(
+      new Set(
+        useJarvisLearningStore
+          .getState()
+          .currentProfile()
+          .items.map((item) => item.source.chatId),
+      ),
+    ).toEqual(new Set(['chat-opencode', 'chat-codex']));
   });
 
   it('reviews completed turns only and aborts model learning on listener disposal', async () => {
     const review = vi.fn(async (_account: string, _chat: string, _signal: AbortSignal) => {});
-    stop = startJarvisLearningListener({ getAccountId: () => 'account-a', save: async () => {}, load: async () => null, reviewCaoLearning: review });
-    window.dispatchEvent(new CustomEvent('jarvis:run-state', { detail: { chatId: 'chat1', status: 'running' } }));
+    stop = startJarvisLearningListener({
+      getAccountId: () => 'account-a',
+      save: async () => {},
+      load: async () => null,
+      reviewCaoLearning: review,
+    });
+    window.dispatchEvent(
+      new CustomEvent('jarvis:run-state', { detail: { chatId: 'chat1', status: 'running' } }),
+    );
     expect(review).not.toHaveBeenCalled();
-    window.dispatchEvent(new CustomEvent('jarvis:run-state', { detail: { chatId: 'chat1', status: 'done' } }));
+    window.dispatchEvent(
+      new CustomEvent('jarvis:run-state', { detail: { chatId: 'chat1', status: 'done' } }),
+    );
     await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
     expect(review.mock.calls[0]?.slice(0, 2)).toEqual(['account-a', 'chat1']);
-    await stop(); stop = undefined;
+    await stop();
+    stop = undefined;
     expect(review.mock.calls[0]?.[2].aborted).toBe(true);
   });
 
@@ -517,7 +547,7 @@ describe('Jarvis learning event listener', () => {
     expect(save.mock.calls[1]?.[1]).toContain('Fresh work after recovery persists');
   });
 
-  it('keeps automatic learning memory-only through nineteen messages and writes on message twenty', async () => {
+  it('persists progress before twenty messages without prematurely inferring preferences', async () => {
     const save = vi.fn(async (_accountId: string, _markdown: string) => undefined);
     stop = startJarvisLearningListener({
       getAccountId: () => 'account-a',
@@ -540,8 +570,9 @@ describe('Jarvis learning event listener', () => {
     await vi.waitFor(() => {
       expect(useJarvisLearningStore.getState().currentProfile().meaningfulMessageCount).toBe(19);
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(save).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(save.mock.calls[0]?.[1]).toContain('No saved learning yet.');
+    expect(useJarvisLearningStore.getState().currentProfile().items).toEqual([]);
 
     window.dispatchEvent(
       new CustomEvent('jarvis:send', {
@@ -555,7 +586,7 @@ describe('Jarvis learning event listener', () => {
     await vi.waitFor(() => {
       expect(useJarvisLearningStore.getState().currentProfile().lastEvaluationCount).toBe(20);
     });
-    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(save).toHaveBeenCalledWith('account-a', expect.stringContaining('Jarvis Learning'));
     expect(
       useJarvisLearningStore
@@ -595,7 +626,7 @@ describe('Jarvis learning event listener', () => {
     expect(load).toHaveBeenCalledWith('account-b');
   });
 
-  it('does not create learning.md when the account changes before twenty messages', async () => {
+  it('flushes pre-review progress only to its original account when switching accounts', async () => {
     let accountId = 'account-a';
     let accountChanged: () => void = () => undefined;
     const save = vi.fn(async (_accountId: string, _markdown: string) => undefined);
@@ -627,8 +658,13 @@ describe('Jarvis learning event listener', () => {
     accountId = 'account-b';
     accountChanged();
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(save).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(save.mock.calls[0]?.[0]).toBe('account-a');
+    expect(save.mock.calls[0]?.[1]).toContain('No saved learning yet.');
+    await vi.waitFor(() =>
+      expect(useJarvisLearningStore.getState().activeAccountId).toBe('account-b'),
+    );
+    expect(useJarvisLearningStore.getState().currentProfile().meaningfulMessageCount).toBe(0);
   });
 
   it('flushes the latest debounced account write before stop resolves', async () => {

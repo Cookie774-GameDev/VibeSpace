@@ -324,6 +324,9 @@ export function startJarvisLearningListener(
         persistProfileNow(currentAccount, store.getState().exportMarkdown(), chatId);
       }
       if (!result.qualifies) return;
+      if (!result.evaluateNow && !result.explicitMemoryId) {
+        persistProfile(currentAccount, store.getState().exportMarkdown());
+      }
 
       const recent = [
         ...(recentByAccount.get(currentAccount) ?? []),
@@ -362,12 +365,14 @@ export function startJarvisLearningListener(
     if (!bindings.reviewCaoLearning || detail?.status !== 'done' || !detail.chatId) return;
     const accountId = bindings.getAccountId().trim();
     const chatId = detail.chatId;
-    caoQueue = caoQueue.then(async () => {
-      if (disposed || !accountId || bindings.getAccountId().trim() !== accountId) return;
-      if (!(await hydrationAuthority.ready(accountId))) return;
-      if (disposed || !store.getState().currentProfile().enabled) return;
-      await bindings.reviewCaoLearning!(accountId, chatId, learningController.signal);
-    }).catch(error => report(bindings, error));
+    caoQueue = caoQueue
+      .then(async () => {
+        if (disposed || !accountId || bindings.getAccountId().trim() !== accountId) return;
+        if (!(await hydrationAuthority.ready(accountId))) return;
+        if (disposed || !store.getState().currentProfile().enabled) return;
+        await bindings.reviewCaoLearning!(accountId, chatId, learningController.signal);
+      })
+      .catch((error) => report(bindings, error));
   };
   window.addEventListener('jarvis:run-state', onRunState);
   window.addEventListener(eventName, onSend);
