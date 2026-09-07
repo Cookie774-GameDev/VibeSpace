@@ -6261,6 +6261,38 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     });
   }
 
+  it.each(['codex', 'opencode'] as const)(
+    'sends hidden approval and resume instructions as the current %s turn without a visible user bubble',
+    async (backend) => {
+      const harness = kernelRuntimeBindings(agent('agent_current_turn', 'coder', 'Answer the current request.'));
+      mocks.lockChatBackendForDispatch.mockResolvedValue({
+        version: 1, backend, locked: true, selectedAt: 1, lockedAt: 2,
+      });
+      const stop = trackListener(startRuntimeListener(harness.bindings));
+      const turns = [
+        'Build this approved plan: create only the requested verification note.',
+        'Resume the interrupted request from where you stopped. Original request: create the verification note.',
+        'Run the kernel gate.',
+      ];
+      try {
+        for (const text of turns) {
+          mocks.runAgent.mockClear();
+          window.dispatchEvent(new CustomEvent('jarvis:send', {
+            detail: { chatId: harness.chatId, text, interactionMode: 'agent' },
+          }));
+          await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
+          await stop.whenIdle();
+          const request = mocks.runAgent.mock.calls[0]![0];
+          expect(request.backend).toBe(backend);
+          const users = request.messages.filter(message => message.role === 'user');
+          expect(users.at(-1)?.content).toBe(text);
+          expect(users).toHaveLength(text === 'Run the kernel gate.' ? 1 : 2);
+        }
+        expect(harness.bindings.appendMessage.mock.calls.every(([message]) => message.role !== 'user')).toBe(true);
+      } finally { stop(); await stop.whenIdle(); }
+    },
+  );
+
   it.each(['codex', 'opencode', 'opencode-native-provider'] as const)(
     'keeps protected %s turns on the selected backend and stable chat',
     async (route) => {
@@ -6303,7 +6335,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
             new CustomEvent('jarvis:send', {
               detail: {
                 chatId: harness.chatId,
-                text: 'Run the kernel gate.',
+                text: turn === 0 ? 'Run the kernel gate.' : 'Continue with the approved next step.',
                 interactionMode: 'ask',
               },
             }),
@@ -6316,6 +6348,8 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         const requests = mocks.runAgent.mock.calls.map(([request]) => request);
         expect(requests.map((request) => request.chatId)).toEqual([harness.chatId, harness.chatId]);
         expect(requests[0]!.requestId).not.toBe(requests[1]!.requestId);
+        expect(requests[1]!.messages.filter(message => message.role === 'user').at(-1)?.content)
+          .toBe('Continue with the approved next step.');
         for (const request of requests) {
           expect(request.backend).toBe(backend);
           expect(request.connectionId).toBe(

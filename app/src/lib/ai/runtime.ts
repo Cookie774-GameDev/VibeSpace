@@ -3634,8 +3634,10 @@ function toLLMMessages(
   history: Message[],
   excludeId?: MessageId,
   includeImages = true,
+  currentTurnText?: string,
 ): LLMMessage[] {
   const out: LLMMessage[] = [];
+  let lastIncludedMessage: Message | undefined;
   const lastUserIndex = history.reduce(
     (last, message, index) =>
       (!excludeId || message.id !== excludeId) && message.role === 'user' ? index : last,
@@ -3669,6 +3671,19 @@ function toLLMMessages(
       role: m.role === 'user' ? 'user' : 'assistant',
       content,
     });
+    lastIncludedMessage = m;
+  }
+  // Approval and resume dispatches intentionally have no persisted user bubble.
+  // Compare the source text so an already-persisted turn keeps its image parts.
+  const lastUserText = lastIncludedMessage?.parts
+    .flatMap((part) => (part.kind === 'text' ? [part.text] : []))
+    .join('\n')
+    .trim();
+  if (
+    currentTurnText?.trim() &&
+    (lastIncludedMessage?.role !== 'user' || lastUserText !== currentTurnText.trim())
+  ) {
+    out.push({ role: 'user', content: currentTurnText.trim() });
   }
   return out;
 }
@@ -6303,7 +6318,7 @@ export function startRuntimeListener(
           if (!userMessage) throw new Error('kernel_user_message_missing');
           const includeImages = modelSupportsVision(runnable.model.provider, runnable.model.model);
           let kernelTokenReceipt: TokenOptimizationReceipt | null = null;
-          const llmMessages = toLLMMessages(history, undefined, includeImages);
+          const llmMessages = toLLMMessages(history, undefined, includeImages, text);
           useAgentStore.getState().setRunState(agent.id, 'streaming');
           useAgentStore.getState().setVerb(agent.id, 'thinking');
           dispatchCurrentRunState('running');
@@ -6834,7 +6849,7 @@ export function startRuntimeListener(
         stackStepsEarly.length > 0
           ? stackStepsEarly.every((step) => modelSupportsVision(step.provider, step.model))
           : modelSupportsVision(runnable.model.provider, runnable.model.model);
-      const llmMessages = toLLMMessages(history, placeholder.id, includeImages);
+      const llmMessages = toLLMMessages(history, placeholder.id, includeImages, text);
       let requestMessages = llmMessages;
       let tokenOptimizationReceipt: TokenOptimizationReceipt | null = null;
       const userOptimizationOutputLimit =
