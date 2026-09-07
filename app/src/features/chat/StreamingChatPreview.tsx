@@ -1,15 +1,19 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
 import { AssistantActivityLedger } from './activity-ledger/AssistantActivityLedger';
 import type { Message } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
-import { getChatPreview, subscribePreviews } from './streamingPreviewStore';
+import { getChatPreview, subscribeChatPreviews } from './streamingPreviewStore';
 
 /** Only already-filtered public prose from this account and chat is displayed. */
 export function StreamingChatPreview({ chatId, fallback }: { chatId: string; fallback?: ReactNode }) {
   const accountId = useAuthStore((state) => resolveAccountIdentity(state)?.accountId ?? '');
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeChatPreviews(accountId, chatId, listener),
+    [accountId, chatId],
+  );
   const preview = useSyncExternalStore(
-    subscribePreviews,
+    subscribe,
     () => getChatPreview(accountId, chatId),
     () => null,
   );

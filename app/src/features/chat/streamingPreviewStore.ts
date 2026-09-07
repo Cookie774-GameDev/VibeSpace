@@ -13,13 +13,32 @@ export interface JarvisStreamingPreview {
 }
 
 const listeners = new Set<() => void>();
+const chatListeners = new Map<string, Set<() => void>>();
+
+export function subscribeChatPreviews(accountId: string, chatId: string, listener: () => void): () => void {
+  const chatKey = key(accountId, chatId);
+  let scoped = chatListeners.get(chatKey);
+  if (!scoped) {
+    scoped = new Set();
+    chatListeners.set(chatKey, scoped);
+  }
+  scoped.add(listener);
+  return () => {
+    scoped.delete(listener);
+    if (scoped.size === 0 && chatListeners.get(chatKey) === scoped) chatListeners.delete(chatKey);
+  };
+}
+
 export function subscribePreviews(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
-function notifyPreviews(): void {
+function notifyPreviews(changedChats: ReadonlySet<string>): void {
+  for (const chatKey of changedChats) {
+    for (const listener of chatListeners.get(chatKey) ?? []) listener();
+  }
   for (const listener of listeners) listener();
 }
 
@@ -65,7 +84,9 @@ export function setPreview(preview: JarvisStreamingPreview): void {
   )
     return;
   previews.set(key(detached.accountId, detached.runId), detached);
-  notifyPreviews();
+  const changedChats = new Set([key(detached.accountId, detached.chatId)]);
+  if (existing) changedChats.add(key(existing.accountId, existing.chatId));
+  notifyPreviews(changedChats);
 }
 
 export function getPreview(accountId: string, runId: string): JarvisStreamingPreview | null {
@@ -73,12 +94,20 @@ export function getPreview(accountId: string, runId: string): JarvisStreamingPre
 }
 
 export function clearPreview(accountId: string, runId: string): void {
-  if (previews.delete(key(accountId, runId))) notifyPreviews();
+  const entryKey = key(accountId, runId);
+  const existing = previews.get(entryKey);
+  if (existing && previews.delete(entryKey)) {
+    notifyPreviews(new Set([key(existing.accountId, existing.chatId)]));
+  }
 }
 
 export function clearAccountPreviews(accountId: string): void {
+  const changedChats = new Set<string>();
   for (const [entryKey, preview] of previews) {
-    if (preview.accountId === accountId) previews.delete(entryKey);
+    if (preview.accountId === accountId) {
+      previews.delete(entryKey);
+      changedChats.add(key(preview.accountId, preview.chatId));
+    }
   }
-  notifyPreviews();
+  notifyPreviews(changedChats);
 }

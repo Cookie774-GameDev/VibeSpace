@@ -84,6 +84,7 @@ import { subscribeTerminalOutput, type TerminalOutputSubscription } from './term
 import { createTerminalRenderQueue } from './terminalRenderQueue';
 import { terminalWebglBudget, type TerminalWebglLease } from './terminalWebglBudget';
 import { RESOURCE_PRESSURE_EVENT } from '@/stability/resourcePressure';
+import { writeTerminalWithCompletion } from './terminalWriteCompletion';
 import { stabilityDiagnostics } from '@/stability/stabilityDiagnostics';
 import { shouldSendTerminalResize, type TerminalGridSize } from './terminalGeometry';
 import { applyTerminalFollowScroll, terminalUserHasScrolled } from './terminalViewport';
@@ -1272,27 +1273,26 @@ export function TerminalView({
         const followUserScrolled = userHasScrolledRef.current;
         if (currentTerm) {
           terminalWriteInFlight = true;
-          latestTerminalWrite = new Promise<void>((resolve) => {
-            currentTerm.write(displayData, () => {
-              if (!cancelled) {
-                const live = termRef.current;
-                if (live) {
-                  // Short buffers pin to top (PS prompt at top of pane); long
-                  // scrollback follows the bottom only while the user hasn't
-                  // scrolled away. Never thrash between top and bottom.
-                  applyTerminalFollowScroll(live, { userHasScrolled: followUserScrolled });
-                }
-                if (!followUserScrolled) {
-                  userHasScrolledRef.current = false;
-                }
-                scheduleTerminalSnapshot();
+          latestTerminalWrite = writeTerminalWithCompletion(currentTerm, displayData, () => {
+            if (!cancelled) {
+              const live = termRef.current;
+              if (live) {
+                // Preserve the user's scroll position while committing rendered output.
+                applyTerminalFollowScroll(live, { userHasScrolled: followUserScrolled });
               }
-              terminalWriteInFlight = false;
-              resolve();
-              if (!cancelled && !renderQueue.isEmpty() && outputRafToken == null) {
-                outputRafToken = requestAnimationFrame(flushTerminalOutput);
-              }
-            });
+              if (!followUserScrolled) userHasScrolledRef.current = false;
+              scheduleTerminalSnapshot();
+            }
+          }).finally(() => {
+            terminalWriteInFlight = false;
+            if (!cancelled && !renderQueue.isEmpty() && outputRafToken == null) {
+              outputRafToken = requestAnimationFrame(flushTerminalOutput);
+            }
+          });
+          // Observe the rejection without turning a failed write into a successful
+          // persistence barrier. Teardown must not capture an incomplete render.
+          void latestTerminalWrite.catch((err) => {
+            console.warn('[Jarvis] terminal render write failed:', err);
           });
         }
       } catch (err) {
@@ -2061,7 +2061,9 @@ export function TerminalView({
       };
       window.addEventListener('jarvis:terminal:clear', onClear);
       onPersistNow = () => {
-        if (!cancelled) void flushTerminalPersistenceNow();
+        if (!cancelled) void flushTerminalPersistenceNow().catch((err) => {
+          console.warn('[Jarvis] terminal persistence flush failed:', err);
+        });
       };
       window.addEventListener('jarvis:terminal:persist-now', onPersistNow);
 

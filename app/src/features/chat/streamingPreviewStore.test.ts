@@ -3,7 +3,10 @@ import {
   clearAccountPreviews,
   clearPreview,
   getPreview,
+  getChatPreview,
   setPreview,
+  subscribeChatPreviews,
+  subscribePreviews,
 } from './streamingPreviewStore';
 
 const preview = {
@@ -60,5 +63,82 @@ describe('streaming preview store', () => {
     expect(getItem).not.toHaveBeenCalled();
     expect(setItem).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
+  });
+
+  it('notifies only the changed account/chat while preserving global subscribers', () => {
+    const changed = vi.fn();
+    const otherChat = vi.fn();
+    const otherAccount = vi.fn();
+    const all = vi.fn();
+    const stops = [
+      subscribeChatPreviews('account-a', 'chat-1', changed),
+      subscribeChatPreviews('account-a', 'chat-2', otherChat),
+      subscribeChatPreviews('account-b', 'chat-1', otherAccount),
+      subscribePreviews(all),
+    ];
+    try {
+      setPreview(preview);
+      setPreview({ ...preview, updatedAt: 99 }); // Existing no-op semantics.
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(all).toHaveBeenCalledTimes(1);
+      expect(otherChat).not.toHaveBeenCalled();
+      expect(otherAccount).not.toHaveBeenCalled();
+      expect(getChatPreview('account-a', 'chat-1')?.updatedAt).toBe(10);
+    } finally { stops.forEach((stop) => stop()); }
+  });
+
+  it('invalidates both chats when a run moves and preserves latest-preview ordering', () => {
+    setPreview(preview);
+    setPreview({ ...preview, runId: 'run-2', text: 'Later', updatedAt: 20 });
+    const oldChat = vi.fn();
+    const newChat = vi.fn();
+    const stops = [
+      subscribeChatPreviews('account-a', 'chat-1', oldChat),
+      subscribeChatPreviews('account-a', 'chat-2', newChat),
+    ];
+    try {
+      setPreview({ ...preview, runId: 'run-2', chatId: 'chat-2', text: 'Moved', updatedAt: 30 });
+      expect(oldChat).toHaveBeenCalledTimes(1);
+      expect(newChat).toHaveBeenCalledTimes(1);
+      expect(getChatPreview('account-a', 'chat-1')?.runId).toBe('run-1');
+      expect(getChatPreview('account-a', 'chat-2')?.text).toBe('Moved');
+      clearPreview('account-a', 'run-2');
+      expect(newChat).toHaveBeenCalledTimes(2);
+      expect(getChatPreview('account-a', 'chat-2')).toBeNull();
+    } finally { stops.forEach((stop) => stop()); }
+  });
+
+  it('clears each affected chat once and releases subscriptions', () => {
+    setPreview(preview);
+    setPreview({ ...preview, runId: 'run-2' });
+    const changed = vi.fn();
+    const other = vi.fn();
+    const stop = subscribeChatPreviews('account-a', 'chat-1', changed);
+    const stopOther = subscribeChatPreviews('account-b', 'chat-1', other);
+    try {
+      clearAccountPreviews('account-a');
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(other).not.toHaveBeenCalled();
+      clearAccountPreviews('account-a');
+      expect(changed).toHaveBeenCalledTimes(1);
+      stop(); stop();
+      setPreview(preview);
+      expect(changed).toHaveBeenCalledTimes(1);
+    } finally { stop(); stopOther(); }
+  });
+
+  it('avoids unrelated snapshot checks across 20 mounted chats', () => {
+    const listeners = Array.from({ length: 20 }, () => vi.fn());
+    const legacyListeners = Array.from({ length: 20 }, () => vi.fn());
+    const stops = [
+      ...listeners.map((listener, i) => subscribeChatPreviews('account-a', `chat-${i}`, listener)),
+      ...legacyListeners.map(subscribePreviews),
+    ];
+    try {
+      for (let i = 0; i < 100; i++) setPreview({ ...preview, text: `Delta ${i}`, updatedAt: i });
+      expect(listeners[1]).toHaveBeenCalledTimes(100);
+      expect(listeners.reduce((sum, listener) => sum + listener.mock.calls.length, 0)).toBe(100);
+      expect(legacyListeners.reduce((sum, listener) => sum + listener.mock.calls.length, 0)).toBe(2_000);
+    } finally { stops.forEach((stop) => stop()); }
   });
 });
