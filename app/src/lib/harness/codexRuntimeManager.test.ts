@@ -28,6 +28,45 @@ function adapter(overrides: Partial<CodexRuntimeNativeAdapter> = {}): CodexRunti
 }
 
 describe('Codex runtime manager', () => {
+  it('shares pending native detection across chat view unmount and remount', async () => {
+    const pending = deferred<Awaited<ReturnType<CodexRuntimeNativeAdapter['detect']>>>();
+    const native = adapter({ detect: vi.fn(() => pending.promise) });
+    const manager = createCodexRuntimeManager(native);
+    const stopFirstView = manager.subscribe(() => {});
+    stopFirstView();
+    const stopSecondView = manager.subscribe(() => {});
+    const refresh = manager.refresh();
+    expect(native.detect).toHaveBeenCalledOnce();
+    pending.resolve({
+      status: 'ready',
+      codexVersion: '0.151.0',
+      openCodexVersion: '5.0.0',
+      executableId: 'cli-executable-0000000000000004',
+    });
+    await refresh;
+    expect(manager.getSnapshot()).toMatchObject({ kind: 'ready' });
+    stopSecondView();
+  });
+
+  it('retains an authorized install result when its initiating view closes', async () => {
+    const pending = deferred<Awaited<ReturnType<CodexRuntimeNativeAdapter['install']>>>();
+    const native = adapter({ install: vi.fn(() => pending.promise) });
+    const manager = createCodexRuntimeManager(native);
+    const stop = manager.subscribe(() => {});
+    await manager.refresh();
+    const install = manager.install();
+    stop();
+    pending.resolve({
+      status: 'ready',
+      codexVersion: '0.151.0',
+      openCodexVersion: '5.0.0',
+      executableId: 'cli-executable-0000000000000005',
+    });
+    await install;
+    expect(manager.getSnapshot()).toMatchObject({ kind: 'ready' });
+    expect(native.install).toHaveBeenCalledOnce();
+  });
+
   it('shares detection across simultaneous startup requests', async () => {
     const pending = deferred<Awaited<ReturnType<CodexRuntimeNativeAdapter['detect']>>>();
     const native = adapter({ detect: vi.fn(() => pending.promise) });

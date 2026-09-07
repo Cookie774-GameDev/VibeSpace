@@ -172,7 +172,8 @@ export function createCodexRuntimeManager(
         subscribers.delete(listener);
         if (subscribers.size === 0) {
           lifecycle += 1;
-          operation += 1;
+          // Views own event listeners, not the native check or an authorized install.
+          // Keep the operation so a remount shares its flight and adopts its result.
           unlisten?.();
           unlisten = undefined;
         }
