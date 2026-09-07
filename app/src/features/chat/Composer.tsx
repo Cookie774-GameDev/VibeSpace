@@ -1852,16 +1852,6 @@ export function Composer({
     setChatModelSelection,
   ]);
 
-  useEffect(() => {
-    if (
-      chatBackendAffinity?.locked &&
-      optionPickerCtx &&
-      normalizeSlashCmd(optionPickerCtx.cmd.cmd) === 'cli'
-    ) {
-      setOptionPickerCtx(null);
-    }
-  }, [chatBackendAffinity?.locked, optionPickerCtx]);
-
   // Generate options for option picker based on current command
   const optionPickerOptions = useMemo<SlashCommandOption[]>(() => {
     if (!optionPickerCtx) return [];
@@ -1873,7 +1863,17 @@ export function Composer({
     }
 
     if (normalizeSlashCmd(cmd) === 'cli') {
-      if (!chatBackendAffinity || chatBackendAffinity.locked) return [];
+      if (!chatBackendAffinity) return [];
+      if (chatBackendAffinity.locked) {
+        return [
+          {
+            id: 'status',
+            label: chatBackendAffinity.backend === 'codex' ? 'Codex' : 'OpenCode',
+            description: 'Current CLI · locked for this chat',
+            metadata: 'active',
+          },
+        ];
+      }
       return [
         {
           id: 'opencode',
@@ -2457,8 +2457,7 @@ export function Composer({
         backend,
         Date.now(),
       );
-      if (backend === 'codex' && (chatModelSelection.mode !== 'single' ||
-          chatModelSelection.connectionId !== 'openai-codex')) {
+      if (backend === 'codex' && chatModelSelection.mode !== 'single') {
         const option = accessibleChatModels.flatOptions.find(option => option.connectionId === 'openai-codex');
         const selection = selectionFromOption('openai', option?.modelId ?? 'gpt-5.4-mini',
           getProviderConnectionDescriptor('openai-codex'));
@@ -2512,11 +2511,14 @@ export function Composer({
       return;
     }
 
-    if (canonical === 'cli' && (option.id === 'opencode' || option.id === 'codex')) {
+    if (
+      canonical === 'cli' &&
+      (option.id === 'status' || option.id === 'opencode' || option.id === 'codex')
+    ) {
       setOptionPickerCtx(null);
       setSelectedOptionId('');
       setText('');
-      void chooseChatBackend(option.id);
+      if (option.id !== 'status') void chooseChatBackend(option.id);
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
