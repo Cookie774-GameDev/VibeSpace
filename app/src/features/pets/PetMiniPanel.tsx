@@ -175,6 +175,17 @@ export function PetMiniPanel({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, windowMode, lifecycle, updateLifecycle]);
 
+  React.useEffect(() => {
+    if (!windowMode) return;
+    const restore = () => {
+      if (lifecycle !== 'closed' && lifecycle !== 'minimized') return;
+      updateLifecycle({ type: 'request_open' });
+      updateLifecycle({ type: 'opened' });
+    };
+    window.addEventListener('focus', restore);
+    return () => window.removeEventListener('focus', restore);
+  }, [windowMode, lifecycle, updateLifecycle]);
+
   const handleMinimize = () => {
     window.clearTimeout(transitionTimerRef.current);
     updateLifecycle({ type: 'request_minimize' });
@@ -384,9 +395,9 @@ export function PetMiniPanel({
               <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
             )}
             {windowMode && (
-              <span className="pet-panel-brand" data-tauri-drag-region>
+              <span className="pet-panel-brand">
                 <span className="pet-panel-brand-mark" aria-hidden>✦</span>
-                <span data-tauri-drag-region>Jarvis</span>
+                <span>Jarvis</span>
               </span>
             )}
             <nav className="pet-panel-nav flex min-w-0 gap-1" aria-label="Compact panel sections">
