@@ -1,3 +1,5 @@
+import { mountWithFeedback } from './bootstrapFeedback';
+
 const rootEl = document.getElementById('root');
 if (!rootEl) {
   throw new Error('#root element not found');
@@ -14,7 +16,12 @@ if (viewParam === 'cold-start-intro') {
     mountPetSurface(rootEl, viewParam);
   });
 } else {
-  void import('./bootstrapApp').then(({ mountApp }) => {
-    mountApp(rootEl);
-  });
+  void mountWithFeedback(
+    rootEl,
+    async () => {
+      const { mountApp } = await import('./bootstrapApp');
+      mountApp(rootEl);
+    },
+    () => window.location.reload(),
+  );
 }
