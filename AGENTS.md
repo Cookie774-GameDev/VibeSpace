@@ -22,9 +22,9 @@ ALWAYS test VibeSpace / Jarvis in the official full native desktop app. NOTHING 
 This is a standing user mandate. Do not ask to use the web. Do not use the web.
 
 - Allowed: the live native window from `npm run tauri:dev`, or the built `jarvis.exe` / packaged VibeSpace app.
-- **Preferred number-one control for human-like manual QA:** Playwright attached directly to the already-running official Tauri WebView. It may drive that native app in the background/offscreen for fast, stable clicking, typing, sending, navigation, screenshots, parallel-chat checks, and timing evidence.
+- **Required control for live UI verification:** Playwright attached directly to the already-running official Tauri WebView. It may drive that native app in the background/offscreen for clicking, typing, sending, navigation, screenshots, parallel-chat checks, and timing evidence.
 - Before accepting Playwright evidence, verify and record that the target WebView belongs to the intended running `jarvis.exe` / packaged VibeSpace process and official app profile. Exercise real native backends and record exact provider/model/connection/effort identity where relevant.
-- Windows Computer Use is a fallback for behavior that cannot be exercised through the native WebView attachment or requires operating-system chrome.
+- Do not use Computer Use. Operate only the instance assigned to you; preserve every other agent's and the user's instances. If a check cannot be exercised through the native WebView, report that limitation.
 - Forbidden as product / live / manual / visual QA: a standalone browser, headless browser copy, copied page, BrowserMCP tab, or Vite web preview (`http://localhost:5173`) that is not the real running native Tauri WebView.
 - Unit and focused tests may still run as code checks. They do not replace an official-app check.
 - If the official app is not running, start it. Never fall back to the web.
