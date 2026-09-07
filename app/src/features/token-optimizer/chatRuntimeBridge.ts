@@ -41,6 +41,7 @@ export interface ChatTokenOptimizationRequest {
 }
 
 export interface ChatTokenOptimizationResult {
+  readonly selectedContextIds: readonly string[];
   readonly messages: LLMMessage[];
   readonly systemPrompt: string;
   readonly outputTokenLimit: number;
@@ -121,7 +122,19 @@ async function optimizeWith(
       reason: 'Protected system authority',
     });
   }
+  const optionalContext = new Map<string, { id: string; relevance: number }>();
   for (const context of request.contextSegments ?? []) {
+    if (context.protected) continue;
+    const key = JSON.stringify([context.kind, context.text]);
+    if (!optionalContext.has(key) || optionalContext.get(key)!.relevance < context.relevance) {
+      optionalContext.set(key, { id: context.id, relevance: context.relevance });
+    }
+  }
+  for (const context of request.contextSegments ?? []) {
+    const duplicateKey = JSON.stringify([context.kind, context.text]);
+    const retainedId = context.protected ? undefined : optionalContext.get(duplicateKey)?.id;
+    const duplicateOf =
+      retainedId && retainedId !== context.id ? `runtime-${retainedId}` : undefined;
     segments.push({
       id: `runtime-${context.id}`,
       kind: context.kind,
@@ -129,6 +142,7 @@ async function optimizeWith(
       relevance: context.relevance,
       protected: context.protected,
       reason: context.reason,
+      ...(duplicateOf ? { duplicateOf } : {}),
     });
   }
   for (const group of groups) {
@@ -148,17 +162,13 @@ async function optimizeWith(
     mode: request.mode,
     providerId: request.providerId,
     modelId: request.modelId,
-    modelContextLimit: safeLimit(
-      request.modelContextLimit,
-      FALLBACK_CONTEXT_WINDOW_TOKENS,
-    ),
+    modelContextLimit: safeLimit(request.modelContextLimit, FALLBACK_CONTEXT_WINDOW_TOKENS),
     requestedOutputTokens: safeLimit(
       request.requestedOutputTokens,
       DEFAULT_REQUESTED_OUTPUT_TOKENS,
     ),
     segments,
-    allowProviderTokenCountTransport:
-      request.allowProviderTokenCountTransport === true,
+    allowProviderTokenCountTransport: request.allowProviderTokenCountTransport === true,
     ...(request.signal ? { signal: request.signal } : {}),
   });
   const selected = new Set(optimized.selectedSegments.map(({ id }) => id));
@@ -166,6 +176,9 @@ async function optimizeWith(
     .filter(({ id }) => selected.has(`runtime-${id}`))
     .map(({ text }) => text);
   return Object.freeze({
+    selectedContextIds: (request.contextSegments ?? [])
+      .filter(({ id }) => selected.has(`runtime-${id}`))
+      .map(({ id }) => id),
     messages: groups
       .filter(({ id }) => selected.has(id))
       .flatMap(({ messages: selectedMessages }) => selectedMessages),

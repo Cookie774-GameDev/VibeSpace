@@ -242,7 +242,6 @@ import {
 import {
   buildJarvisRuntimeContextCandidates,
   type JarvisRuntimeContextBlock,
-  type JarvisRuntimeContextBlockKey,
 } from '@/lib/jarvis/runtimeContextCandidates';
 import { buildRoutedMcpTaskContext } from '@/lib/mcp/taskContext';
 import { getJarvisConnectivityInventoryBlock } from '@/lib/jarvis/connectivityInventory';
@@ -314,13 +313,13 @@ import {
   tokenOptimizationReceiptToTelemetry,
   tokenUsageReceiptToTelemetry,
   TokenOptimizationOverflowError,
-  type ContextBudgetKind,
   type IntelligenceTelemetryEnvelope,
   type ReconciledTokenUsage,
   type TokenOptimizationReceipt,
   type TokenOptimizationMode,
 } from '@/features/token-optimizer';
 import { getModelOptions } from './models';
+import { optimizeKernelRuntimeContext, isProtectedTokenOptimizationContext, tokenOptimizationContextKind, tokenOptimizationContextRelevance } from './runtimeTokenOptimization';
 import { localIntelligenceTelemetryRuntime } from './intelligenceTelemetryRuntime';
 import { browserGoalLaunchRuntime } from '@/features/browser/browserGoalLaunchRuntime';
 import { projectOpenCodeLiveToolActivity } from './openCodeLiveToolActivity';
@@ -2712,64 +2711,6 @@ export function resolveOptimizedOutputLimit(
   return requestedLimit === undefined ? ceiling : Math.min(requestedLimit, ceiling);
 }
 
-const PROTECTED_TOKEN_OPTIMIZATION_CONTEXT = new Set<JarvisRuntimeContextBlockKey>([
-  'default_write_folder',
-  'mcp_tool_schemas',
-  'selected_skills',
-  'intent_policy',
-  'interaction_mode',
-  'structured_context',
-  'explicit_context',
-  'explicit_files',
-  'explicit_terminal',
-  'coordination',
-  'terminal_operating',
-  'connected_files',
-  'completion_instruction',
-]);
-
-function isProtectedTokenOptimizationContext(key: JarvisRuntimeContextBlockKey): boolean {
-  return PROTECTED_TOKEN_OPTIMIZATION_CONTEXT.has(key);
-}
-
-function tokenOptimizationContextKind(key: JarvisRuntimeContextBlockKey): ContextBudgetKind {
-  if (key === 'mcp_tool_schemas') return 'tool_schema';
-  if (key === 'structured_context') return 'structured_tool_data';
-  if (key === 'explicit_context') return 'pinned_context_node';
-  if (key === 'explicit_files' || key === 'explicit_terminal' || key === 'connected_files') {
-    return 'explicit_attachment';
-  }
-  if (key === 'project' || key === 'repository_context' || key === 'local_knowledge') {
-    return 'repository_file';
-  }
-  if (key === 'project_tree' || key === 'resolved_context') return 'context_map_node';
-  if (key === 'user_identity' || key === 'all_about_me') return 'memory';
-  if (key === 'terminal_transcript' || key === 'mentioned_agents') {
-    return 'conversation_history';
-  }
-  if (
-    key === 'intent_policy' ||
-    key === 'interaction_mode' ||
-    key === 'coordination' ||
-    key === 'terminal_operating' ||
-    key === 'completion_instruction'
-  ) {
-    return 'approval_requirement';
-  }
-  return 'documentation';
-}
-
-function tokenOptimizationContextRelevance(
-  score: number | undefined,
-  index: number,
-  count: number,
-): number {
-  if (typeof score === 'number' && Number.isFinite(score) && score >= 0) {
-    return Math.min(1, score <= 1 ? score : score / (score + 1));
-  }
-  return count <= 1 ? 1 : Math.max(0.1, 1 - index / count);
-}
-
 async function recordTokenOptimizationTelemetry(input: {
   receipt: TokenOptimizationReceipt;
   usage: ReconciledTokenUsage | null;
@@ -4131,6 +4072,7 @@ async function createRuntimeKernelTurn(input: {
   model: import('@/lib/jarvis/contracts').JarvisModelSnapshot;
   providerOptions?: Readonly<Record<string, unknown>>;
   runtimeSettings?: Readonly<ChatRuntimeSettings>;
+  tokenOptimization?: { mode: TokenOptimizationMode; outputTokens?: number; signal: AbortSignal; onReceipt(receipt: TokenOptimizationReceipt): void };
 }): Promise<JarvisKernelTurnInput> {
   const account = resolveAccountIdentity(useAuthStore.getState());
   if (!account) throw new Error('canonical_account_identity_unavailable');
@@ -4167,11 +4109,42 @@ async function createRuntimeKernelTurn(input: {
       return routedMcpContext ? [...input.contextBlocks, routedMcpContext] : input.contextBlocks;
     })(),
   });
-  const context = await buildJarvisContextPackForAi({
+  let context = await buildJarvisContextPackForAi({
     accountId,
     maxChars: 16_384,
     candidates: contextCandidates,
   });
+  let messages = input.messages;
+  if (input.tokenOptimization && input.tokenOptimization.mode !== 'off') {
+    // Optimize admitted, bounded data; never count or reintroduce legacy prompt
+    // blocks that the canonical context gate already rejected or truncated.
+    const optimized = await optimizeKernelRuntimeContext({
+      mode: input.tokenOptimization.mode,
+      providerId: input.model.providerId,
+      modelId: input.model.modelId,
+      systemPrompt: [JARVIS_IDENTITY_POLICY.responseContract, JARVIS_IDENTITY_POLICY.identityCore].join('\n\n'),
+      blocks: context.items.map(item => ({
+        key: item.conflict || item.source.trust === 'user_direct' ||
+          ['execution', 'capability', 'preference'].includes(item.purpose) ||
+          contextCandidates.some(candidate => candidate.source.id === item.source.id && candidate.explicitlyAttached)
+          ? 'explicit_context' : 'resolved_context',
+        text: item.excerpt, source: item.source, score: item.score,
+      })),
+      messages,
+      modelContextLimit: getModelOptions(input.agent.model.provider).find(({ id }) => id === input.model.modelId)?.contextWindowTokens,
+      requestedOutputTokens: resolveOptimizedOutputLimit(input.tokenOptimization.mode, input.tokenOptimization.outputTokens),
+      signal: input.tokenOptimization.signal,
+    });
+    const kept = new Set(optimized.blocks.map(block => block.source!.id));
+    const items = context.items.filter(item => kept.has(item.source.id));
+    context = {
+      ...context, items,
+      budget: { ...context.budget, usedChars: items.reduce((total, item) => total + item.excerpt.length, 0) },
+      exclusions: [...context.exclusions, ...context.items.filter(item => !kept.has(item.source.id)).map(item => ({ source: item.source, reason: 'token_optimization' }))],
+    };
+    messages = optimized.messages;
+    if (optimized.receipt) input.tokenOptimization.onReceipt(optimized.receipt);
+  }
   if (
     input.speakReply &&
     (!input.voiceSessionId ||
@@ -4216,7 +4189,7 @@ async function createRuntimeKernelTurn(input: {
     ...(input.execution ? { execution: { ...input.execution } } : {}),
     interactionMode: input.interactionMode,
     userText: input.providerUserText ?? input.text,
-    messageHistory: [...input.messages],
+    messageHistory: [...messages],
     model: input.model,
     ...(input.providerOptions === undefined
       ? {}
@@ -6303,6 +6276,7 @@ export function startRuntimeListener(
           const userMessage = [...history].reverse().find((message) => message.role === 'user');
           if (!userMessage) throw new Error('kernel_user_message_missing');
           const includeImages = modelSupportsVision(runnable.model.provider, runnable.model.model);
+          let kernelTokenReceipt: TokenOptimizationReceipt | null = null;
           const llmMessages = toLLMMessages(history, undefined, includeImages);
           useAgentStore.getState().setRunState(agent.id, 'streaming');
           useAgentStore.getState().setVerb(agent.id, 'thinking');
@@ -6484,6 +6458,7 @@ export function startRuntimeListener(
               providerOptions: reasoningPolicy?.providerOptions,
               runtimeSettings,
               execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
+              tokenOptimization: { mode: tokenOptimizationMode, outputTokens: detail.tokenOptimizationOutputLimit, signal: controller.signal, onReceipt: receipt => { kernelTokenReceipt = receipt; } },
             });
             if (continuationOutcome) {
               approvalContinuationOutcomesByRun.set(turn.run.id, continuationOutcome);
@@ -6663,6 +6638,17 @@ export function startRuntimeListener(
             // Canonical persistence is complete; tab naming remains best-effort.
           }
           controller.signal.throwIfAborted();
+          if (kernelTokenReceipt) {
+            const receipt = kernelTokenReceipt as TokenOptimizationReceipt;
+            devConsole.log({ channel: 'ai', level: 'info', message: 'Kernel token optimization applied', detail: { mode: receipt.mode, provider: receipt.providerId, model: receipt.modelId, estimatedTokensSaved: receipt.estimatedTokensSaved } });
+            if (detail.showTokenOptimizationReport !== false) {
+              try {
+                await bindings.appendMessage({ chat_id: chatId as ChatId, role: 'system', parts: [{ kind: 'token_optimization_receipt', receipt }] });
+              } catch {
+                devConsole.log({ channel: 'ai', level: 'warn', message: 'Kernel token optimization receipt could not be saved' });
+              }
+            }
+          }
           const canonicalInspector = retrievedResponseContext
             ? buildContextResponseInspector(
                 projectId ? String(projectId) : null,

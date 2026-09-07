@@ -3,9 +3,43 @@ import { describe, expect, it, vi } from 'vitest';
 import { createChatTokenOptimizationRuntime } from './chatRuntimeBridge';
 
 describe('chat token optimization runtime tokenizers', () => {
+  it('removes exact optional context duplicates and returns the retained IDs for kernel admission', async () => {
+    const runtime = createChatTokenOptimizationRuntime();
+    const context = {
+      kind: 'documentation' as const,
+      text: 'same optional evidence',
+      relevance: 0.8,
+      protected: false,
+      reason: 'retrieved',
+    };
+    const result = await runtime.optimizeMessages({
+      mode: 'saver',
+      providerId: 'unknown',
+      modelId: 'selected-model',
+      modelContextLimit: 4000,
+      contextSegments: [
+        { ...context, id: 'first' },
+        { ...context, id: 'duplicate' },
+        { ...context, id: 'explicit', protected: true },
+      ],
+      messages: [{ role: 'user', content: 'Keep this exact request.' }],
+    });
+    expect(result.selectedContextIds).toEqual(['first', 'explicit']);
+    expect(result.receipt.exclusions).toContainEqual(
+      expect.objectContaining({ reason: 'duplicate' }),
+    );
+    expect(result.receipt.estimatedTokensSaved).toBeGreaterThan(0);
+    expect(result.messages[0]?.content).toBe('Keep this exact request.');
+    expect(result.receipt.modelId).toBe('selected-model');
+  });
   it('uses the selected OpenAI family locally without changing provider or model', async () => {
     const encode = vi.fn((text: string) =>
-      text.trim() ? text.trim().split(/\s+/u).map((_word, index) => index) : [],
+      text.trim()
+        ? text
+            .trim()
+            .split(/\s+/u)
+            .map((_word, index) => index)
+        : [],
     );
     const runtime = createChatTokenOptimizationRuntime({
       loadOpenAiO200k: async () => ({ encode }),
@@ -105,7 +139,12 @@ describe('chat token optimization runtime tokenizers', () => {
     const runtime = createChatTokenOptimizationRuntime({
       loadOpenAiO200k: async () => ({
         encode: (text: string) =>
-          text.trim() ? text.trim().split(/\s+/u).map((_word, index) => index) : [],
+          text.trim()
+            ? text
+                .trim()
+                .split(/\s+/u)
+                .map((_word, index) => index)
+            : [],
       }),
     });
     const protectedContext = Array.from({ length: 70 }, (_, index) => `rule-${index}`).join(' ');

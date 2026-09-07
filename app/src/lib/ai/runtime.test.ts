@@ -6594,6 +6594,32 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(harness.bindings.appendMessage).not.toHaveBeenCalled();
   });
 
+  it('applies Token Saver on the canonical kernel path and persists its receipt', async () => {
+    const selection = configureCaoRuntimeSelection();
+    const protectedJarvis = agent('agent_kernel_tokens', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
+    const harness = kernelRuntimeBindings(protectedJarvis);
+    const database = createJarvisDb(uniqueTestDbName('runtime-kernel-tokens'), TEST_INDEXED_DB);
+    await database.open();
+    await database.chats.add({ id: harness.chatId, workspace_id: 'workspace_kernel_tokens' as never, title: 'Kernel tokens', mode: 'chat', active_agent_ids: [protectedJarvis.id], created_at: 1, updated_at: 1 });
+    mocks.runAgent.mockResolvedValueOnce({ text: 'SAVER_OK', usage: { input_tokens: 10, output_tokens: 2, cost_usd: 0 }, provider: 'openai', model: 'gpt-5.6-terra' });
+    const disposeHost = await installKernelTestHost(database, 'runtime-kernel-tokens');
+    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        accountId: 'runtime-test-account', chatId: harness.chatId, text: 'Give a brief answer.',
+        modelSelectionOverride: selection, tokenOptimizationMode: 'saver',
+        reasoningPreference: { mode: 'normal', effortOverride: 'high' }, automaticModelRoutingEligible: false,
+      } }));
+      await vi.waitFor(() => expect(harness.bindings.appendMessage, JSON.stringify(mocks.devLog.mock.calls.filter(([entry]) => entry.level === 'error'))).toHaveBeenCalledWith(expect.objectContaining({
+        role: 'system', parts: [expect.objectContaining({ kind: 'token_optimization_receipt', receipt: expect.objectContaining({ mode: 'saver', modelChanged: false }) })],
+      })), { timeout: 5000 });
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      expect(mocks.runAgent.mock.calls[0]![0].compiledPrompt.systemText).not.toContain('LEGACY SYSTEM PROMPT');
+    } finally {
+      stop(); await stop.whenIdle(); disposeHost(); database.close(); await database.delete();
+    }
+  }, 15000);
+
   it('publishes a kernel CAO turn only from the exact canonical response envelope identity', async () => {
     const selection = configureCaoRuntimeSelection();
     const protectedJarvis = agent('agent_kernel_cao_exact', 'jarvis', 'LEGACY SYSTEM PROMPT', true);

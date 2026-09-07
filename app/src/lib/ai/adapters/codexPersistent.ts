@@ -106,7 +106,7 @@ function promptText(request: Readonly<ProviderRequest>): string {
 
 function effort(request: Readonly<ProviderRequest>): string | null {
   const value = request.reasoningEffort ?? request.runtimeSettings?.effort;
-  if (!value || value === 'auto' || value === 'minimal') return null;
+  if (!value || value === 'auto') return null;
   if (value === 'ultra') return 'max';
   return value;
 }

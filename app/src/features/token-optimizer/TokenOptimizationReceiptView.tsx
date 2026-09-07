@@ -74,7 +74,7 @@ export function TokenOptimizationReceiptView({
           <dd>{formatCount(receipt.estimatedInputTokensAfter)}</dd>
         </div>
         <div>
-          <dt>Output limit</dt>
+          <dt>Requested output budget</dt>
           <dd>{formatCount(receipt.outputTokenLimit)}</dd>
         </div>
         <div>
