@@ -103,10 +103,12 @@ export function jsonResponse(
 ): Response {
   const headers = new Headers(extraHeaders);
   headers.set('content-type', 'application/json; charset=utf-8');
-  headers.set(
-    'cache-control',
-    status >= 400 ? 'no-store' : 'public, max-age=60, stale-while-revalidate=300',
-  );
+  if (status >= 400 || !headers.has('cache-control')) {
+    headers.set(
+      'cache-control',
+      status >= 400 ? 'no-store' : 'public, max-age=60, stale-while-revalidate=300',
+    );
+  }
   for (const [key, value] of Object.entries(CORS_HEADERS)) headers.set(key, value);
   return new Response(JSON.stringify(payload), { status, headers });
 }

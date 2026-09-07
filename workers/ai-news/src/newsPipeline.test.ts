@@ -42,6 +42,16 @@ function candidate(overrides: Partial<NewsCandidate> = {}): NewsCandidate {
 }
 
 describe('official news parsing and clustering', () => {
+  it('retains recognized model announcements even without generic AI keywords', () => {
+    const xml = `<rss><channel>
+      <item><title>GPT-6 Astra: A new generation of intelligence</title><link>https://example.com/astra</link><pubDate>Thu, 03 Sep 2026 12:00:00 GMT</pubDate><description>Our latest release.</description></item>
+      <item><title>Office picnic next week</title><link>https://example.com/picnic</link><pubDate>Thu, 03 Sep 2026 12:00:00 GMT</pubDate><description>Lunch in the park.</description></item>
+      <item><title>Command the team to assemble</title><link>https://example.com/team</link><pubDate>Thu, 03 Sep 2026 12:00:00 GMT</pubDate><description>Meet in the office.</description></item>
+    </channel></rss>`;
+    const parsed = parseOfficialFeed(feedSource, xml);
+    expect(parsed.map((item) => item.url)).toEqual(['https://example.com/astra']);
+    expect(parsed[0]?.modelNames.length).toBeGreaterThan(0);
+  });
   it('preserves full timestamps and RSS media metadata', () => {
     const xml = `<?xml version="1.0"?>
       <rss><channel><item>

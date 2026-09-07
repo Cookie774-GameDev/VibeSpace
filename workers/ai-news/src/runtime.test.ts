@@ -4,6 +4,7 @@ import {
   PipelineError,
   acquirePipelineLease,
   boundedFetch,
+  jsonResponse,
   runKeyFor,
   type Env,
 } from './runtime';
@@ -13,6 +14,13 @@ afterEach(() => {
 });
 
 describe('bounded Worker runtime', () => {
+  it('preserves explicit no-store for health and private responses', () => {
+    expect(
+      jsonResponse({}, 200, { 'cache-control': 'no-store' }).headers.get('cache-control'),
+    ).toBe('no-store');
+    expect(jsonResponse({}, 200).headers.get('cache-control')).toContain('public');
+    expect(jsonResponse({}, 503).headers.get('cache-control')).toBe('no-store');
+  });
   it('rejects oversized responses before unbounded parsing', async () => {
     vi.stubGlobal(
       'fetch',

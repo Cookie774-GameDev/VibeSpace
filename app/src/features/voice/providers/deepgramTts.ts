@@ -18,6 +18,7 @@ async function speakViaCloudEdge(
   const client = getSupabaseClient();
   if (!client) throw new Error('cloud_unauthenticated');
   const { data: sessionData } = await client.auth.getSession();
+  if (options.signal.aborted) return undefined;
   const token = sessionData.session?.access_token;
   if (!token) throw new Error('cloud_unauthenticated');
 
@@ -26,33 +27,31 @@ async function speakViaCloudEdge(
   const onAbort = () => timeout.abort();
   options.signal.addEventListener('abort', onAbort, { once: true });
 
-  let res: Response;
+  let body: TtsSpeakResponse;
   try {
-    res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/tts-speak`, {
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/tts-speak`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ text, provider: 'deepgram_tts', voicePreset: options.preset }),
       signal: timeout.signal,
+    }).catch(() => {
+      throw new Error('cloud_unavailable');
     });
-  } catch {
-    throw new Error('cloud_unavailable');
+    if (!res.ok) {
+      let code = `cloud_${res.status}`;
+      try {
+        const errorBody = await res.json();
+        if (errorBody?.error) code = String(errorBody.error);
+      } catch {
+        /* retain HTTP status */
+      }
+      throw new Error(code);
+    }
+    body = (await res.json()) as TtsSpeakResponse;
   } finally {
     clearTimeout(timer);
     options.signal.removeEventListener('abort', onAbort);
   }
-
-  if (!res.ok) {
-    let code = `cloud_${res.status}`;
-    try {
-      const body = await res.json();
-      if (body?.error) code = String(body.error);
-    } catch {
-      /* ignore */
-    }
-    throw new Error(code);
-  }
-
-  const body = (await res.json()) as TtsSpeakResponse;
   if (options.signal.aborted) return undefined;
   return playBase64Audio(body.audio, body.mime || 'audio/mpeg', {
     volume: options.volume ?? 1,
@@ -63,6 +62,7 @@ async function speakViaCloudEdge(
 class DeepgramTtsProvider implements VoiceProvider {
   readonly id = 'deepgram_tts' as const;
   private stopFn: (() => void) | null = null;
+  private activeRequest: AbortController | null = null;
 
   async isAvailable(): Promise<boolean> {
     if (await getDeepgramVoiceKey()) return true;
@@ -78,21 +78,34 @@ class DeepgramTtsProvider implements VoiceProvider {
 
   async speakChunk(text: string, options: SpeakChunkOptions): Promise<void> {
     if (options.signal.aborted) return;
-    const apiKey = await getDeepgramVoiceKey();
-    if (apiKey) {
-      this.stopFn = await speakDeepgramWithKey(
-        apiKey,
-        text,
-        options.preset,
-        options.signal,
-        options.volume ?? 1,
-      );
-      return;
+    this.stop();
+    const request = new AbortController();
+    this.activeRequest = request;
+    const onAbort = () => request.abort();
+    options.signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      const apiKey = await getDeepgramVoiceKey();
+      if (request.signal.aborted) return;
+      const stop = apiKey
+        ? await speakDeepgramWithKey(
+            apiKey,
+            text,
+            options.preset,
+            request.signal,
+            options.volume ?? 1,
+          )
+        : await speakViaCloudEdge(text, { ...options, signal: request.signal });
+      if (request.signal.aborted) stop?.();
+      else this.stopFn = stop ?? null;
+    } finally {
+      options.signal.removeEventListener('abort', onAbort);
+      if (this.activeRequest === request) this.activeRequest = null;
     }
-    this.stopFn = (await speakViaCloudEdge(text, options)) ?? null;
   }
 
   stop(): void {
+    this.activeRequest?.abort();
+    this.activeRequest = null;
     this.stopFn?.();
     this.stopFn = null;
   }

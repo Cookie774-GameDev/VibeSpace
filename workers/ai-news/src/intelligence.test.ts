@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { routeRequest } from './intelligence';
 import type { Env } from './runtime';
+import { resolveNewsFreshness } from './newsPipeline';
 
-function healthEnv(): Env {
+function healthEnv(newsStatus = 'success'): Env {
   const recent = new Date(Date.now() - 60_000).toISOString();
   const db = {
     prepare(sql: string) {
@@ -12,7 +13,7 @@ function healthEnv(): Env {
           return {
             pipeline,
             completed_at: recent,
-            status: 'success',
+            status: pipeline === 'news-hourly' ? newsStatus : 'success',
             fetched_count: 197,
             stored_count: 197,
             succeeded_sources: 1,
@@ -51,6 +52,30 @@ function healthEnv(): Env {
 }
 
 describe('intelligence health', () => {
+  it('preserves stale and never states and degrades a new failure after a usable refresh', () => {
+    const now = Date.parse('2026-09-07T21:30:00Z');
+    const usable = { status: 'success', completed_at: '2026-09-07T21:07:00Z' };
+    const failed = { status: 'failed', completed_at: '2026-09-07T21:20:00Z' };
+    expect(resolveNewsFreshness(usable, failed, now).state).toBe('degraded');
+    expect(resolveNewsFreshness(usable, usable, now).state).toBe('fresh');
+    expect(resolveNewsFreshness(usable, failed, now + 5 * 3600_000).state).toBe('stale');
+    expect(resolveNewsFreshness(null, null, now).state).toBe('never');
+  });
+  it('reports partial news ingestion as degraded in health as well as the feed', async () => {
+    const response = await routeRequest(
+      new Request('https://intelligence.example/health'),
+      healthEnv('partial'),
+      { waitUntil: () => {} },
+    );
+    const payload = (await response.json()) as {
+      news: { freshness: { state: string; warning?: string } };
+    };
+    expect(payload.news.freshness).toMatchObject({
+      state: 'degraded',
+      warning: 'Some approved sources failed during the latest refresh.',
+    });
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
   it('reports a recent dataset without page completeness as degraded, not fresh', async () => {
     const response = await routeRequest(
       new Request('https://intelligence.example/health'),

@@ -5,10 +5,14 @@ import {
   runBenchmarkIngestion,
 } from './benchmarkPipeline';
 import { NEWS_SOURCES } from './newsSources';
-import { readNewsApi, readSourcesApi, runNewsIngestion } from './newsPipeline';
+import {
+  readNewsApi,
+  readSourcesApi,
+  resolveNewsFreshness,
+  runNewsIngestion,
+} from './newsPipeline';
 import { handleNewsNotifications, handleNewsSubscriptions } from './newsSubscriptions';
 import {
-  freshnessFromTimestamp,
   jsonResponse,
   nowIso,
   optionsResponse,
@@ -140,7 +144,7 @@ async function healthPayload(env: Env): Promise<Record<string, unknown>> {
   ]);
 
   const slaMinutes = Number.parseInt(env.FRESHNESS_SLA_MINUTES ?? '120', 10) || 120;
-  const newsFreshness = freshnessFromTimestamp(newsUsable?.completed_at, Date.now(), slaMinutes);
+  const newsFreshness = resolveNewsFreshness(newsUsable, newsLatest, Date.now(), slaMinutes);
   const benchmarkCompleteness = benchmarkCurrent
     ? benchmarkDatasetCompleteness(benchmarkCurrent.metadata_json, benchmarkCurrent.row_count)
     : null;

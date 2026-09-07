@@ -321,8 +321,13 @@ export function parseOfficialFeed(
       xmlTag(block, ['summary', 'description', 'content:encoded', 'content']) ?? '',
     );
     const combined = `${title} ${description}`;
-    if (!AI_RELEVANCE.test(combined) && source.sourceType !== 'github_releases') continue;
     const modelNames = extractModelNames(combined);
+    if (
+      !AI_RELEVANCE.test(combined) &&
+      !modelNames.some((name) => /\d/.test(name)) &&
+      source.sourceType !== 'github_releases'
+    )
+      continue;
     const media = bestMedia(block, url);
     const externalId = truncate(stripHtml(xmlTag(block, ['guid', 'id']) ?? url), 500);
     candidates.push({
@@ -1112,6 +1117,36 @@ function parseJsonArray(value: string): string[] {
   }
 }
 
+type NewsRunFreshness = { completed_at: string | null; status: string };
+
+export function resolveNewsFreshness(
+  latestUsableRun: NewsRunFreshness | null,
+  latestRun: NewsRunFreshness | null,
+  now = Date.now(),
+  slaMinutes = 120,
+) {
+  const baseFreshness = freshnessFromTimestamp(latestUsableRun?.completed_at, now, slaMinutes);
+  const latestFailedAfterUsable = Boolean(
+    latestRun?.status === 'failed' &&
+    latestRun.completed_at &&
+    (!latestUsableRun?.completed_at ||
+      Date.parse(latestRun.completed_at) > Date.parse(latestUsableRun.completed_at)),
+  );
+  return latestFailedAfterUsable
+    ? {
+        state: baseFreshness.state === 'fresh' ? ('degraded' as const) : baseFreshness.state,
+        ...(baseFreshness.ageMs === undefined ? {} : { ageMs: baseFreshness.ageMs }),
+        warning: 'The latest source refresh failed. Showing the last verified news items.',
+      }
+    : latestRun?.status === 'partial' && baseFreshness.state === 'fresh'
+      ? {
+          state: 'degraded' as const,
+          ...(baseFreshness.ageMs === undefined ? {} : { ageMs: baseFreshness.ageMs }),
+          warning: 'Some approved sources failed during the latest refresh.',
+        }
+      : baseFreshness;
+}
+
 export async function readNewsApi(
   env: Env,
   requestedLimit: number,
@@ -1181,30 +1216,7 @@ export async function readNewsApi(
     error_json: string;
   }>();
   const slaMinutes = Number.parseInt(env.FRESHNESS_SLA_MINUTES ?? '120', 10) || 120;
-  const baseFreshness = freshnessFromTimestamp(
-    latestUsableRun?.completed_at,
-    Date.now(),
-    slaMinutes,
-  );
-  const latestFailedAfterUsable = Boolean(
-    latestRun?.status === 'failed' &&
-    latestRun.completed_at &&
-    (!latestUsableRun?.completed_at ||
-      Date.parse(latestRun.completed_at) > Date.parse(latestUsableRun.completed_at)),
-  );
-  const freshness = latestFailedAfterUsable
-    ? {
-        state: baseFreshness.state === 'fresh' ? ('degraded' as const) : baseFreshness.state,
-        ...(baseFreshness.ageMs === undefined ? {} : { ageMs: baseFreshness.ageMs }),
-        warning: 'The latest source refresh failed. Showing the last verified news items.',
-      }
-    : latestRun?.status === 'partial' && baseFreshness.state === 'fresh'
-      ? {
-          state: 'degraded' as const,
-          ...(baseFreshness.ageMs === undefined ? {} : { ageMs: baseFreshness.ageMs }),
-          warning: 'Some approved sources failed during the latest refresh.',
-        }
-      : baseFreshness;
+  const freshness = resolveNewsFreshness(latestUsableRun, latestRun, Date.now(), slaMinutes);
 
   const repositories = await readRepositoryTrends(env);
   return {

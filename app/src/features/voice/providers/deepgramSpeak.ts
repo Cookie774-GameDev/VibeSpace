@@ -20,23 +20,38 @@ export async function speakDeepgramWithKey(
   signal: AbortSignal,
   volume = 1,
 ): Promise<() => void> {
-  const model = PRESET_MODEL[preset] ?? PRESET_MODEL.jarvis;
-  const res = await fetch(`https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Token ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ text }),
-    signal,
-  });
-  if (!res.ok) {
-    const detail = (await res.text().catch(() => '')).slice(0, 120);
-    throw new Error(detail ? `deepgram_${res.status}: ${detail}` : `deepgram_${res.status}`);
-  }
-  const audio = await res.arrayBuffer();
   if (signal.aborted) return () => {};
-  const mime = res.headers.get('content-type') || 'audio/mpeg';
+  const model = PRESET_MODEL[preset] ?? PRESET_MODEL.jarvis;
+  const request = new AbortController();
+  const onAbort = () => request.abort();
+  signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(onAbort, 20_000);
+  let audio: ArrayBuffer;
+  let mime: string;
+  try {
+    const res = await fetch(
+      `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Token ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text }),
+        signal: request.signal,
+      },
+    );
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => '')).slice(0, 120);
+      throw new Error(detail ? `deepgram_${res.status}: ${detail}` : `deepgram_${res.status}`);
+    }
+    audio = await res.arrayBuffer();
+    mime = res.headers.get('content-type') || 'audio/mpeg';
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+  }
+  if (signal.aborted) return () => {};
   return playBase64Audio(bufToBase64(audio), mime, { volume, signal });
 }
 
