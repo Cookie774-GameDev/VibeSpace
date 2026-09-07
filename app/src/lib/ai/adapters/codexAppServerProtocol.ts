@@ -213,8 +213,21 @@ function modePolicy(mode: CodexExecutionMode): {
   };
 }
 
-function configFor(identity: Readonly<CodexBackendIdentity>): Record<string, string> | undefined {
-  return identity.effort === null ? undefined : { model_reasoning_effort: identity.effort };
+function configFor(
+  identity: Readonly<CodexBackendIdentity>,
+  sandbox: SandboxPolicy,
+): Record<string, unknown> | undefined {
+  const config: Record<string, unknown> = {};
+  if (identity.effort !== null) config.model_reasoning_effort = identity.effort;
+  if (sandbox.type === 'workspaceWrite') {
+    config.sandbox_workspace_write = {
+      writable_roots: sandbox.writableRoots,
+      network_access: sandbox.networkAccess,
+      exclude_tmpdir_env_var: sandbox.excludeTmpdirEnvVar,
+      exclude_slash_tmp: sandbox.excludeSlashTmp,
+    };
+  }
+  return Object.keys(config).length ? config : undefined;
 }
 
 export function buildCodexThreadStartRequest(input: Readonly<CodexThreadRequestInput>) {
@@ -232,7 +245,9 @@ export function buildCodexThreadStartRequest(input: Readonly<CodexThreadRequestI
       approvalPolicy: policy.approvalPolicy,
       approvalsReviewer: 'user' as const,
       sandbox: policy.sandbox,
-      ...(configFor(identity) ? { config: configFor(identity) } : {}),
+      ...(configFor(identity, policy.sandboxPolicy)
+        ? { config: configFor(identity, policy.sandboxPolicy) }
+        : {}),
       ephemeral: false,
       threadSource: 'vibespace',
     },
@@ -256,7 +271,9 @@ export function buildCodexThreadResumeRequest(input: Readonly<CodexThreadResumeR
       approvalPolicy: policy.approvalPolicy,
       approvalsReviewer: 'user' as const,
       sandbox: policy.sandbox,
-      ...(configFor(identity) ? { config: configFor(identity) } : {}),
+      ...(configFor(identity, policy.sandboxPolicy)
+        ? { config: configFor(identity, policy.sandboxPolicy) }
+        : {}),
       excludeTurns: true,
     },
   };
@@ -268,7 +285,7 @@ export function buildCodexTurnStartRequest(input: Readonly<CodexTurnStartRequest
   const clientUserMessageId = requireIdentifier(input.clientUserMessageId, 'message');
   const identity = requireIdentity(input.identity);
   const policy = modePolicy(input.mode);
-  if (!input.text || input.text.length > MAX_TEXT || UNSAFE_CONTROL.test(input.text)) {
+  if (!input.text || input.text.length > MAX_TEXT || UNSAFE_ANSWER_CONTROL.test(input.text)) {
     throw new Error('Codex user text is invalid.');
   }
   return {
@@ -366,10 +383,11 @@ export function validateCodexModelListResponse(
   ) {
     return { ok: false, reason: 'capability_mismatch', field: 'reasoningEffort' };
   }
-  if (!Array.isArray(selected.serviceTiers) || selected.serviceTiers.length > MAX_MODEL_OPTIONS) {
+  const serviceTiers = selected.serviceTiers === undefined ? [] : selected.serviceTiers;
+  if (!Array.isArray(serviceTiers) || serviceTiers.length > MAX_MODEL_OPTIONS) {
     return { ok: false, reason: 'invalid_response', field: 'serviceTier' };
   }
-  const tiers = selected.serviceTiers.map(recordOf);
+  const tiers = serviceTiers.map(recordOf);
   if (tiers.some((tier) => !tier || typeof tier.id !== 'string')) {
     return { ok: false, reason: 'invalid_response', field: 'serviceTier' };
   }
@@ -385,17 +403,28 @@ export function validateCodexModelListResponse(
   };
 }
 
-function sandboxMatches(observed: Record<string, unknown> | undefined, expected: SandboxPolicy) {
+function sandboxMatches(
+  observed: Record<string, unknown> | undefined,
+  expected: SandboxPolicy,
+  cwd: string,
+) {
+  // Codex can reduce an untrusted Windows workspace to read-only. Respect that
+  // stricter policy instead of rejecting an otherwise usable chat session.
+  if (expected.type === 'workspaceWrite' && observed?.type === 'readOnly') {
+    return observed.networkAccess === false;
+  }
   if (!observed || observed.type !== expected.type) return false;
   if (expected.type === 'readOnly') return observed.networkAccess === false;
   if (expected.type === 'dangerFullAccess') return true;
+  const roots = observed.writableRoots;
   return (
     observed.networkAccess === expected.networkAccess &&
     observed.excludeTmpdirEnvVar === true &&
     observed.excludeSlashTmp === true &&
-    Array.isArray(observed.writableRoots) &&
-    observed.writableRoots.length === expected.writableRoots.length &&
-    observed.writableRoots.every((root, index) => root === expected.writableRoots[index])
+    Array.isArray(roots) &&
+    // Codex makes cwd writable implicitly and can omit it from writableRoots.
+    roots.every((root) => typeof root === 'string' && expected.writableRoots.includes(root)) &&
+    expected.writableRoots.every((root) => root === cwd || roots.includes(root))
   );
 }
 
@@ -420,17 +449,24 @@ export function validateCodexThreadStartResponse(
     return { ok: false, reason: 'invalid_response', field: 'threadId' };
   }
   const sandbox = recordOf(result.sandbox);
-  if (!sandboxMatches(sandbox, policy.sandboxPolicy)) {
+  if (!sandboxMatches(sandbox, policy.sandboxPolicy, identity.cwd)) {
     return { ok: false, reason: 'identity_mismatch', field: 'sandbox' };
   }
-  const comparisons: readonly [string, unknown, unknown][] = [
+  const comparisons: readonly (readonly [string, unknown, unknown])[] = [
     ['model', result.model, identity.model],
     ['modelProvider', result.modelProvider, identity.modelProvider],
-    ['serviceTier', result.serviceTier, identity.serviceTier],
+    [
+      'serviceTier',
+      result.serviceTier === 'default' ? null : (result.serviceTier ?? null),
+      identity.serviceTier === 'default' ? null : identity.serviceTier,
+    ],
     ['cwd', result.cwd, identity.cwd],
     ['approvalPolicy', result.approvalPolicy, policy.approvalPolicy],
     ['approvalsReviewer', result.approvalsReviewer, 'user'],
-    ['reasoningEffort', result.reasoningEffort, identity.effort],
+    // Auto lets Codex select its model default. Explicit effort still must match.
+    ...(identity.effort !== null
+      ? [['reasoningEffort', result.reasoningEffort, identity.effort] as const]
+      : []),
   ];
   for (const [field, observed, expected] of comparisons) {
     if (observed !== expected) {

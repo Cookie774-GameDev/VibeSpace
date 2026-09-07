@@ -22,6 +22,177 @@ const IDENTITY: CodexBackendIdentity = {
 };
 
 describe('Codex app-server request protocol', () => {
+  it('accepts Codex implicit cwd write access and default tier without accepting extra roots', () => {
+    const identity = { ...IDENTITY, serviceTier: null };
+    const mode = {
+      kind: 'agent' as const,
+      approvalPolicy: 'on-request' as const,
+      sandbox: {
+        kind: 'workspace-write' as const,
+        writableRoots: [IDENTITY.cwd],
+        networkAccess: false,
+      },
+    };
+    const response = {
+      id: 'start',
+      result: {
+        thread: { id: 'thread' },
+        model: identity.model,
+        modelProvider: identity.modelProvider,
+        cwd: identity.cwd,
+        serviceTier: 'default',
+        reasoningEffort: identity.effort,
+        approvalPolicy: 'on-request',
+        approvalsReviewer: 'user',
+        sandbox: {
+          type: 'workspaceWrite',
+          writableRoots: [] as string[],
+          networkAccess: false,
+          excludeTmpdirEnvVar: true,
+          excludeSlashTmp: true,
+        },
+      },
+    };
+    expect(validateCodexThreadStartResponse(response, 'start', identity, mode).ok).toBe(true);
+    response.result.sandbox.writableRoots = ['C:\\unrequested'];
+    expect(validateCodexThreadStartResponse(response, 'start', identity, mode)).toMatchObject({
+      ok: false,
+      field: 'sandbox',
+    });
+  });
+
+  it('accepts multiline system and user prompts but rejects unsafe control bytes', () => {
+    const input = {
+      requestId: 'turn',
+      threadId: 'thread',
+      clientUserMessageId: 'message',
+      identity: IDENTITY,
+      mode: { kind: 'ask' as const },
+      text: 'System instructions.\n\nUser:\r\n\tHello',
+    };
+    expect(buildCodexTurnStartRequest(input).params.input[0].text).toBe(input.text);
+    expect(() => buildCodexTurnStartRequest({ ...input, text: 'hello\u0000world' })).toThrow(
+      'text',
+    );
+  });
+
+  it('respects a native read-only restriction on an untrusted Agent workspace', () => {
+    const response = {
+      id: 'start',
+      result: {
+        thread: { id: 'thread' },
+        model: IDENTITY.model,
+        modelProvider: IDENTITY.modelProvider,
+        cwd: IDENTITY.cwd,
+        serviceTier: 'priority',
+        reasoningEffort: 'high',
+        approvalPolicy: 'on-request',
+        approvalsReviewer: 'user',
+        sandbox: { type: 'readOnly', networkAccess: false },
+      },
+    };
+    const mode = {
+      kind: 'agent' as const,
+      approvalPolicy: 'on-request' as const,
+      sandbox: {
+        kind: 'workspace-write' as const,
+        writableRoots: [IDENTITY.cwd],
+        networkAccess: false,
+      },
+    };
+    expect(validateCodexThreadStartResponse(response, 'start', IDENTITY, mode).ok).toBe(true);
+    response.result.sandbox.networkAccess = true;
+    expect(validateCodexThreadStartResponse(response, 'start', IDENTITY, mode)).toMatchObject({
+      ok: false,
+      field: 'sandbox',
+    });
+  });
+
+  it('accepts omitted optional tiers for standard speed but still rejects unsupported fast mode', () => {
+    const response = {
+      id: 'models',
+      result: {
+        data: [{ model: IDENTITY.model, supportedReasoningEfforts: [{ reasoningEffort: 'high' }] }],
+        nextCursor: null,
+      },
+    };
+    expect(
+      validateCodexModelListResponse(response, 'models', { ...IDENTITY, serviceTier: null }).ok,
+    ).toBe(true);
+    expect(validateCodexModelListResponse(response, 'models', IDENTITY)).toMatchObject({
+      ok: false,
+      field: 'serviceTier',
+    });
+  });
+
+  it('lets Auto use the server effort while validating explicit effort', () => {
+    const response = {
+      id: 'start',
+      result: {
+        thread: { id: 'thread' },
+        model: IDENTITY.model,
+        modelProvider: IDENTITY.modelProvider,
+        cwd: IDENTITY.cwd,
+        approvalPolicy: 'never',
+        approvalsReviewer: 'user',
+        sandbox: { type: 'readOnly', networkAccess: false },
+        reasoningEffort: 'medium',
+      },
+    };
+    expect(
+      validateCodexThreadStartResponse(
+        response,
+        'start',
+        {
+          ...IDENTITY,
+          effort: null,
+          serviceTier: null,
+        },
+        { kind: 'ask' },
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateCodexThreadStartResponse(
+        response,
+        'start',
+        {
+          ...IDENTITY,
+          serviceTier: null,
+        },
+        { kind: 'ask' },
+      ),
+    ).toMatchObject({ ok: false, field: 'reasoningEffort' });
+  });
+
+  it('starts and resumes with the same explicitly restricted writable roots as the turn', () => {
+    const input = {
+      requestId: 'start',
+      identity: IDENTITY,
+      mode: {
+        kind: 'agent' as const,
+        approvalPolicy: 'on-request' as const,
+        sandbox: {
+          kind: 'workspace-write' as const,
+          writableRoots: [IDENTITY.cwd],
+          networkAccess: false,
+        },
+      },
+    };
+    const expected = {
+      writable_roots: [IDENTITY.cwd],
+      network_access: false,
+      exclude_tmpdir_env_var: true,
+      exclude_slash_tmp: true,
+    };
+    expect(buildCodexThreadStartRequest(input).params.config?.sandbox_workspace_write).toEqual(
+      expected,
+    );
+    expect(
+      buildCodexThreadResumeRequest({ ...input, threadId: 'thread' }).params.config
+        ?.sandbox_workspace_write,
+    ).toEqual(expected);
+  });
+
   it('starts an Ask thread with exact backend identity and no prompt or credential override', () => {
     const request = buildCodexThreadStartRequest({
       requestId: 'start_1',

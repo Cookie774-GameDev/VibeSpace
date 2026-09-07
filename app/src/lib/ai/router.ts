@@ -396,7 +396,8 @@ export interface RunAgentRequest {
 function codexQualifiedModel(req: Readonly<RunAgentRequest>): string {
   const model = req.agent.model.model.trim();
   if (!model) throw new NoModelSelectedError();
-  if (req.agent.model.provider === 'openai') return model.replace(/^openai\//u, '');
+  if (model.startsWith('openai/')) return model.slice('openai/'.length);
+  if (req.agent.model.provider === 'openai') return model;
   return model.includes('/') ? model : req.agent.model.provider + '/' + model;
 }
 

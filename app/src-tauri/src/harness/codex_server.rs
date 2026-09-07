@@ -21,11 +21,11 @@ use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, Webview};
 
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const READER_CHANNEL_CAPACITY: usize = 256;
 const READER_CHUNK_BYTES: usize = 64 * 1024;
 const OPENCODEX_PORT: u16 = 10_101;
-const OPENCODEX_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const OPENCODEX_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -760,6 +760,7 @@ fn run_bounded_ready_probe(mut command: Command, timeout: Duration) -> bool {
 fn start_owned_opencodex(
     app: &AppHandle,
     model_id: &str,
+    owner_id: &str,
 ) -> Result<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime), String> {
     let endpoint = SocketAddrV4::new(Ipv4Addr::LOCALHOST, OPENCODEX_PORT);
     if TcpStream::connect_timeout(&endpoint.into(), Duration::from_millis(150)).is_ok() {
@@ -769,7 +770,7 @@ fn start_owned_opencodex(
         .path()
         .app_data_dir()
         .map_err(|_| "VibeSpace app data is unavailable.".to_string())?;
-    let profile = build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, OPENCODEX_PORT, model_id)
+    let profile = build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, OPENCODEX_PORT, model_id, owner_id)
         .map_err(|_| "The managed Codex proxy profile is invalid.".to_string())?;
     let storage_root = crate::harness::managed_codex_storage::storage_root(&app_data)?;
     let paths = materialize_isolated_profile(&storage_root, &profile)
@@ -837,6 +838,15 @@ fn start_owned_opencodex(
     Ok((proxy, paths.codex_home, sealed_runtime))
 }
 
+fn retry_uninitialized_start<T>(mut start: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+    match start() {
+        // No thread or prompt has been sent at this point, so one cold-start
+        // retry cannot duplicate a model turn or tool execution.
+        Err(error) if error == "Codex app-server ended before initialization." => start(),
+        result => result,
+    }
+}
+
 fn start_internal(
     app: &AppHandle,
     caller_label: &str,
@@ -865,22 +875,24 @@ fn start_internal(
     }
 
     let cli_state = app.state::<CliBridgeState>();
-    let launch = resolve_launch_request(&request.executable_id, |executable_id| {
-        cli_state.resolve_trusted_executable(executable_id)
+    let running = retry_uninitialized_start(|| {
+        let launch = resolve_launch_request(&request.executable_id, |executable_id| {
+            cli_state.resolve_trusted_executable(executable_id)
+        })?;
+        let proxy = if request.model_id.starts_with("opencode-go/") {
+            Some(start_owned_opencodex(app, &request.model_id, &request.owner_id)?)
+        } else {
+            None
+        };
+        launch_server(
+            launch,
+            request.executable_id.clone(),
+            request.model_id.clone(),
+            caller_label.to_string(),
+            request.owner_id.clone(),
+            proxy,
+        )
     })?;
-    let proxy = if request.model_id.starts_with("opencode-go/") {
-        Some(start_owned_opencodex(app, &request.model_id)?)
-    } else {
-        None
-    };
-    let running = launch_server(
-        launch,
-        request.executable_id,
-        request.model_id,
-        caller_label.to_string(),
-        request.owner_id,
-        proxy,
-    )?;
     let generation = running.generation.clone();
     inner.running = Some(running);
     Ok(CodexAppServerStartResponse { generation })
@@ -1062,6 +1074,30 @@ pub fn shutdown_owned_server(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn startup_retries_only_an_uninitialized_exit_once() {
+        let mut attempts = 0;
+        let result = super::retry_uninitialized_start(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err("Codex app-server ended before initialization.".to_string())
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(result, Ok(42));
+        assert_eq!(attempts, 2);
+        for error in ["Codex app-server ended before initialization.", "Codex app-server rejected initialization."] {
+            let mut attempts = 0;
+            let result: Result<(), String> = super::retry_uninitialized_start(|| {
+                attempts += 1;
+                Err(error.to_string())
+            });
+            assert_eq!(result, Err(error.to_string()));
+            assert_eq!(attempts, if error.contains("ended before") { 2 } else { 1 });
+        }
+    }
+
     use super::*;
 
     #[cfg(windows)]

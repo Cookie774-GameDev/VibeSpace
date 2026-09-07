@@ -1,4 +1,5 @@
 import { createCodexControlBridge } from './codexControlBridge';
+import { resolveCodexWorkingDirectory } from './codexWorkingDirectory';
 import {
   nativeCodexFrames,
   startNativeCodexAppServer,
@@ -28,6 +29,7 @@ import { codexRuntimeManager, type CodexRuntimeManager } from '@/lib/harness/cod
 type NativeFrame = Record<string, unknown>;
 
 export interface CodexPersistentDependencies {
+  workingDirectory?(selected: string | undefined): Promise<string>;
   findExecutable(): Promise<Readonly<{ executableId: string }> | undefined>;
   start(
     executableId: string,
@@ -74,6 +76,7 @@ export async function resolveCodexExecutable(
 }
 
 const defaultDependencies: CodexPersistentDependencies = {
+  workingDirectory: resolveCodexWorkingDirectory,
   findExecutable: () => resolveCodexExecutable(),
   start: startNativeCodexAppServer,
   frames: (generation) => {
@@ -198,6 +201,13 @@ async function* sendCodexRequest(
   if (request.connection.id !== 'openai-codex') {
     throw new Error('Codex backend requires the exact Codex connection.');
   }
+  request = {
+    ...request,
+    workingDirectory: await (dependencies.workingDirectory ?? resolveCodexWorkingDirectory)(
+      request.workingDirectory,
+    ),
+  };
+  if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   const mode = executionMode(request);
   const executable = await dependencies.findExecutable();
   if (!executable) throw new Error('Codex CLI is not installed.');

@@ -612,6 +612,7 @@ mod tests {
             Ipv4Addr::LOCALHOST,
             10_101,
             "opencode-go/deepseek-v4-flash-vision-exp",
+            "chat_1",
         )
         .unwrap();
         let first = materialize_isolated_profile(&fixture, &profile).expect("first");
@@ -634,6 +635,7 @@ mod tests {
             Ipv4Addr::LOCALHOST,
             10_101,
             "opencode-go/deepseek-v4-flash-vision-exp",
+            "chat_1",
         )
         .unwrap();
         assert_eq!(

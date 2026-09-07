@@ -53,6 +53,23 @@ function events(text: string) {
 }
 
 describe('explicit Chat backend routing', () => {
+  it('normalizes a subscription model selected from the shared OpenCode catalog', async () => {
+    await runAgent({
+      backend: 'codex',
+      agent: {
+        ...agent,
+        model: { provider: 'opencode' as Agent['model']['provider'], model: 'openai/gpt-5.6-luna' },
+      },
+      chatId: 'chat_luna',
+      requestId: 'request_luna',
+      connectionId: 'openai-codex',
+      interactionMode: 'agent',
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
+    expect(codexSend).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gpt-5.6-luna' }));
+    expect(openCodeSend).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     codexSend.mockReset();
     codexSend.mockImplementation(() => events('codex complete'));
