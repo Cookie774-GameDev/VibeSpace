@@ -103,10 +103,11 @@ function mostSpecificCatalogMatches(source: string) {
 }
 
 function parseInstantCommandInternal(input: string): InstantCommand | null {
-  if (typeof input !== 'string' || !input.trim() || UNSAFE_CONTROL.test(input)) return null;
-  const original = stripFiller(input);
-  const launch = parseOpenCodeLaunch(original);
+  if (typeof input !== 'string') return null;
+  const launch = parseOpenCodeLaunch(input);
   if (launch) return launch;
+  if (!input.trim() || UNSAFE_CONTROL.test(input)) return null;
+  const original = stripFiller(input);
 
   if (/^open\s+(?:an?\s+)?llm[.!?]*$/i.test(original)) {
     return { kind: 'open-model-picker' };

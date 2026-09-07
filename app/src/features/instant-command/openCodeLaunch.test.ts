@@ -6,6 +6,56 @@ import { openCodeLaunchCommand } from './openCodeLaunch';
 import { execFileSync } from 'node:child_process';
 
 const source = `Hey please open opencode into a new terminal and then send this message 'Hi there' and click enter but make sure the model is at deepseek v4 flash from opencode go`;
+it('recognizes the exact Markdown launch-only request without inventing a message', async () => {
+  const input =
+    '**HEY PLEASE LAUCNH OPENCODE IN A NEW TERMINAL WITH THIS MODEL deepseek v4 flash exp from opencode go**\n';
+  const command = parseInstantCommand(input);
+  expect(isComposerInstantCommandSource(input)).toBe(true);
+  expect(command).toEqual({
+    kind: 'open-agent-cli',
+    provider: 'opencode',
+    count: 1,
+    modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+  });
+  const enqueueBatch = vi.fn((_commands: unknown) => ['launch-one']);
+  await expect(
+    executeInstantCommand(command!, { enqueueBatch, routeToTerminal: vi.fn() } as never),
+  ).resolves.toMatchObject({ ok: true });
+  expect(JSON.stringify(enqueueBatch.mock.calls)).not.toContain('--prompt');
+});
+
+it('times ten launch-only variants through detection and queue acceptance', async () => {
+  const base =
+    'launch opencode in a new terminal with this model deepseek v4 flash exp from opencode go';
+  const inputs = [
+    base,
+    base.toUpperCase(),
+    `hey ${base}`,
+    `please ${base}`,
+    `Hey please ${base}`,
+    `**${base}**`,
+    `${base}\n`,
+    ` '${base}' `,
+    base.replace('launch', 'laucnh'),
+    base.replace('launch', 'open'),
+  ];
+  const timings = [];
+  for (const source of inputs) {
+    const start = performance.now();
+    expect(isComposerInstantCommandSource(source)).toBe(true);
+    const command = parseInstantCommand(source);
+    expect(command).not.toBeNull();
+    const enqueueBatch = vi.fn((_commands: unknown) => ['launch']);
+    await expect(
+      executeInstantCommand(command!, { enqueueBatch, routeToTerminal: vi.fn() } as never),
+    ).resolves.toMatchObject({ ok: true, code: 'queued' });
+    expect(enqueueBatch).toHaveBeenCalledOnce();
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs).toBeLessThan(500);
+    timings.push({ source, elapsedMs });
+  }
+  console.info('LAUNCH_ONLY_TIMINGS', JSON.stringify(timings));
+});
 it('pieces a complete request into one model-bound launch without a chat model', async () => {
   expect(isComposerInstantCommandSource(source)).toBe(true);
   const parsed = parseInstantCommand(source);

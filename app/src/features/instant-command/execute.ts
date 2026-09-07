@@ -196,7 +196,7 @@ export async function executeInstantCommand(
         command.provider === 'opencode' &&
         command.count === 1 &&
         typeof command.modelId === 'string' &&
-        typeof command.prompt === 'string'
+        (command.prompt === undefined || typeof command.prompt === 'string')
           ? openCodeLaunchCommand(command.modelId, command.prompt)
           : configured
             ? null
@@ -205,7 +205,7 @@ export async function executeInstantCommand(
         return {
           ok: false,
           code: 'queue_failed',
-          message: 'An exact OpenCode model and message are required.',
+          message: 'An exact OpenCode model and a valid optional message are required.',
         };
       dependencies.enqueueBatch(
         Array.from({ length: command.count }, (_, index) => ({
