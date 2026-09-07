@@ -866,7 +866,7 @@ fn is_pet_native_title(title: &str) -> bool {
 }
 
 fn strip_pet_native_frame_style(style: isize) -> isize {
-    style & !PET_NATIVE_FRAME_STYLE_BITS
+    (style & !PET_NATIVE_FRAME_STYLE_BITS) | 0x8000_0000 // WS_POPUP: no native caption surface.
 }
 
 fn strip_pet_native_frame_ex_style(ex_style: isize) -> isize {
@@ -874,15 +874,50 @@ fn strip_pet_native_frame_ex_style(ex_style: isize) -> isize {
 }
 
 #[cfg(target_os = "windows")]
+fn install_pet_client_only_frame(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        UI::{Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+            WindowsAndMessaging::{WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCPAINT}},
+    };
+    unsafe extern "system" fn frame_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, id: usize, _: usize) -> LRESULT {
+        match message {
+            WM_NCCALCSIZE | WM_NCPAINT => LRESULT(0),
+            WM_NCACTIVATE => LRESULT(1),
+            _ => {
+                if message == WM_NCDESTROY {
+                    let _ = unsafe { RemoveWindowSubclass(hwnd, Some(frame_proc), id) };
+                }
+                unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+            }
+        }
+    }
+    // Install on the owning event-loop thread. Leave WM_NCHITTEST to Tao so
+    // frameless resize edges keep working; only suppress native frame pixels.
+    let _ = unsafe { SetWindowSubclass(hwnd, Some(frame_proc), 0x5653_5045, 0) };
+}
+
+#[cfg(target_os = "windows")]
 fn native_restore_pet_window_chrome(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::core::w;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
-        SET_WINDOW_POS_FLAGS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        GetPropW, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, WS_THICKFRAME,
+        IsIconic, ShowWindow, SW_SHOWNOACTIVATE,
+        SET_WINDOW_POS_FLAGS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOCOPYBITS,
     };
 
     unsafe {
+        // Showing an iconic tool window with SetWindowPos alone leaves its
+        // WebView at the minimized caption size instead of restoring the UI.
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let repaired_style = strip_pet_native_frame_style(style);
+        // Keep Windows' sizing behavior on the panel. The client-only subclass
+        // removes its painted frame without disabling native edge resizing.
+        let panel = GetPropW(hwnd, w!("VibeSpace.PetPanel")).0 == hwnd.0;
+        let repaired_style = strip_pet_native_frame_style(style)
+            | if panel { WS_THICKFRAME.0 as isize } else { 0 };
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let repaired_ex_style = strip_pet_native_frame_ex_style(ex_style);
         if repaired_style == style && repaired_ex_style == ex_style {
@@ -895,7 +930,7 @@ fn native_restore_pet_window_chrome(hwnd: windows::Win32::Foundation::HWND) {
             let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, repaired_ex_style);
         }
         let flags = SET_WINDOW_POS_FLAGS(
-            SWP_FRAMECHANGED.0 | SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0,
+            SWP_FRAMECHANGED.0 | SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_NOCOPYBITS.0,
         );
         let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, flags);
     }
@@ -943,7 +978,8 @@ fn native_pin_hwnd_topmost_noactivate(win: &WebviewWindow) {
 fn set_pet_native_caption(hwnd: windows::Win32::Foundation::HWND, overlay: bool, title: &str) -> bool {
     use windows::core::{w, PCWSTR};
     use windows::Win32::{Foundation::HANDLE, UI::WindowsAndMessaging::{SetPropW, SetWindowTextW}};
-    if overlay && unsafe { SetPropW(hwnd, w!("VibeSpace.PetOverlay"), Some(HANDLE(hwnd.0))) }.is_err() {
+    let property = if overlay { w!("VibeSpace.PetOverlay") } else { w!("VibeSpace.PetPanel") };
+    if unsafe { SetPropW(hwnd, property, Some(HANDLE(hwnd.0))) }.is_err() {
         return false;
     }
     let caption: Vec<u16> = (if overlay { "" } else { title }).encode_utf16().chain(Some(0)).collect();
@@ -989,6 +1025,8 @@ fn configure_pet_surface_on_main_thread(
     let win = win.clone();
     if app
         .run_on_main_thread(move || {
+            #[cfg(debug_assertions)]
+            eprintln!("[pets] configure {} starting", win.label());
             let ready = native_configure_pet_window(&win, title, x, y, width, height, focus)
                 .map(|raw| {
                     if let Some(slot) =
@@ -999,6 +1037,8 @@ fn configure_pet_surface_on_main_thread(
                     true
                 })
                 .unwrap_or(false);
+            #[cfg(debug_assertions)]
+            eprintln!("[pets] configure {} complete: {ready}", win.label());
             let _ = sender.send(ready);
         })
         .is_err()
@@ -1056,10 +1096,11 @@ fn native_configure_pet_window(
         SWP_SHOWWINDOW | SWP_NOACTIVATE
     };
     unsafe {
-        native_restore_pet_window_chrome(hwnd);
+        install_pet_client_only_frame(hwnd);
         if !set_pet_native_caption(hwnd, win.label() == PET_OVERLAY_LABEL, title) {
             return None;
         }
+        native_restore_pet_window_chrome(hwnd);
         let positioned = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, flags);
         if focus {
             let _ = SetForegroundWindow(hwnd);
@@ -1079,37 +1120,33 @@ fn native_show_pet_window(win: &WebviewWindow, _title: &str, _focus: bool) -> bo
 
 #[cfg(target_os = "windows")]
 fn native_pet_hwnds(label: &str) -> Vec<windows::Win32::Foundation::HWND> {
-    use windows::core::{w, PCWSTR};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetPropW, GetWindowThreadProcessId};
+    use windows::core::{w, BOOL, PCWSTR};
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetPropW, GetWindowThreadProcessId};
 
-    let Some(expected_title) = pet_native_title_for_label(label) else {
-        return Vec::new();
-    };
-    let title = (if label == PET_OVERLAY_LABEL { "" } else { expected_title })
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let mut windows = Vec::new();
-    let mut after: Option<HWND> = None;
-    loop {
-        let Ok(hwnd) =
-            (unsafe { FindWindowExW(None, after, PCWSTR::null(), PCWSTR(title.as_ptr())) })
-        else {
-            break;
-        };
+    struct Lookup { property: PCWSTR, windows: Vec<HWND> }
+    unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
+        let lookup = unsafe { &mut *(data.0 as *mut Lookup) };
         let mut process_id = 0;
         unsafe {
             GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         }
-        let tagged = label != PET_OVERLAY_LABEL
-            || unsafe { GetPropW(hwnd, w!("VibeSpace.PetOverlay")) }.0 == hwnd.0;
-        if process_id == std::process::id() && tagged {
-            windows.push(hwnd);
+        if process_id == std::process::id()
+            && unsafe { GetPropW(hwnd, lookup.property) }.0 == hwnd.0 {
+            lookup.windows.push(hwnd);
         }
-        after = Some(hwnd);
+        true.into()
     }
-    windows
+    let property = match label {
+        PET_OVERLAY_LABEL => w!("VibeSpace.PetOverlay"),
+        PET_MINI_PANEL_LABEL => w!("VibeSpace.PetPanel"),
+        _ => return Vec::new(),
+    };
+    let mut lookup = Lookup { property, windows: Vec::new() };
+    // Never ask window procedures for captions from a focus callback. Native
+    // properties identify our surfaces without a synchronous window message.
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM((&mut lookup as *mut Lookup) as isize)) };
+    lookup.windows
 }
 
 #[cfg(target_os = "windows")]
@@ -1219,6 +1256,17 @@ fn pet_window_should_stay_topmost(win: &WebviewWindow) -> bool {
 
 #[cfg(target_os = "windows")]
 fn native_pin_visible_pet_hwnds() {
+    static PINNING: AtomicBool = AtomicBool::new(false);
+    if PINNING.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        return;
+    }
+    struct PinGuard;
+    impl Drop for PinGuard {
+        fn drop(&mut self) { PINNING.store(false, Ordering::Release); }
+    }
+    // Focus notifications can re-enter while the watchdog changes native
+    // window position. Coalesce them instead of recursively repairing frames.
+    let _pin_guard = PinGuard;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, IsIconic, IsWindowVisible, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE,
         HWND_TOPMOST, WS_EX_TOPMOST,
@@ -1661,11 +1709,13 @@ fn build_pet_panel<M: Manager<tauri::Wry>>(
         pet_webview_url(app, "pet-mini-panel")?,
     )
     .title("VibeSpace Pet Panel")
+    .shadow(false)
     .inner_size(PANEL_DEFAULT_W, PANEL_DEFAULT_H)
     .min_inner_size(PANEL_MIN_W, PANEL_MIN_H)
     .resizable(true)
     .decorations(false)
-    .transparent(false)
+    .transparent(true)
+    .background_color(tauri::window::Color(0, 0, 0, 0))
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(visible)
@@ -2560,9 +2610,10 @@ mod tests {
             .map(|offset| hwnd_lookup_start + offset)
             .expect("native Pet HWND lookup is bounded");
         let hwnd_lookup = &source[hwnd_lookup_start..hwnd_lookup_end];
-        assert!(hwnd_lookup.contains("FindWindowExW("));
+        assert!(hwnd_lookup.contains("EnumWindows("));
+        assert!(hwnd_lookup.contains("GetPropW("));
         assert!(hwnd_lookup.contains("GetWindowThreadProcessId("));
-        assert!(!hwnd_lookup.contains("EnumWindows("));
+        assert!(!hwnd_lookup.contains("FindWindowExW("));
         assert!(!hwnd_lookup.contains("SendMessageTimeoutW("));
         assert!(!hwnd_lookup.contains("WM_GETTEXT"));
 
@@ -3067,10 +3118,17 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn overlay_caption_is_empty_and_lookup_requires_our_window_property() {
-        use windows::{core::w, Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetWindowTextW, WS_POPUP}};
-        let tagged = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!("old pet title"), WS_POPUP, 0, 0, 144, 144, None, None, None, None) }.unwrap();
+        use windows::{core::w, Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetWindowTextW, IsIconic, WS_POPUP, WS_MINIMIZE}};
+        let tagged = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!("old pet title"), WS_POPUP | WS_MINIMIZE, -32000, -32000, 144, 144, None, None, None, None) }.unwrap();
         let unrelated = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!(""), WS_POPUP, 0, 0, 144, 144, None, None, None, None) }.unwrap();
         assert!(set_pet_native_caption(tagged, true, "VibeSpace Pet"));
+        install_pet_client_only_frame(tagged);
+        native_restore_pet_window_chrome(tagged);
+        assert!(!unsafe { IsIconic(tagged).as_bool() });
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWL_STYLE};
+        let style = unsafe { GetWindowLongPtrW(tagged, GWL_STYLE) };
+        assert_eq!(style & PET_NATIVE_FRAME_STYLE_BITS, 0);
+        assert_ne!(style & 0x8000_0000, 0);
         let mut caption = [0u16; 64];
         assert_eq!(unsafe { GetWindowTextW(tagged, &mut caption) }, 0);
         let matches = native_pet_hwnds(PET_OVERLAY_LABEL);
@@ -3106,7 +3164,7 @@ mod tests {
 
     #[test]
     fn native_pet_chrome_repair_removes_caption_and_edge_styles() {
-        assert_eq!(strip_pet_native_frame_style(0x14CB0000), 0x14000000);
+        assert_eq!(strip_pet_native_frame_style(0x14CB0000), 0x94000000);
         assert_eq!(strip_pet_native_frame_ex_style(0x40118), 0x40018);
 
         let source = include_str!("pets.rs");
@@ -3119,6 +3177,34 @@ mod tests {
             .expect("native configure helper has a bounded source slice");
         assert!(source[configure_start..configure_end]
             .contains("native_restore_pet_window_chrome(hwnd)"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn panel_keeps_native_resize_style_without_a_painted_frame() {
+        use windows::{core::w, Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
+            GetWindowRect, GWL_STYLE, WS_POPUP, WS_THICKFRAME,
+        }};
+        let panel = unsafe {
+            CreateWindowExW(Default::default(), w!("STATIC"), w!("panel"), WS_POPUP,
+                -32000, -32000, 240, 180, None, None, None, None)
+        }.unwrap();
+        assert!(set_pet_native_caption(panel, false, "VibeSpace Pet Panel"));
+        install_pet_client_only_frame(panel);
+        native_restore_pet_window_chrome(panel);
+        let style = unsafe { GetWindowLongPtrW(panel, GWL_STYLE) };
+        assert_ne!(style & WS_THICKFRAME.0 as isize, 0);
+        assert_eq!(style & 0x00c0_0000, 0); // No caption.
+        let mut outer = windows::Win32::Foundation::RECT::default();
+        let mut client = windows::Win32::Foundation::RECT::default();
+        unsafe {
+            GetWindowRect(panel, &mut outer).unwrap();
+            GetClientRect(panel, &mut client).unwrap();
+            let _ = DestroyWindow(panel);
+        }
+        assert_eq!(outer.right - outer.left, client.right - client.left);
+        assert_eq!(outer.bottom - outer.top, client.bottom - client.top);
     }
 
     #[test]

@@ -30,7 +30,6 @@ export function PetOverlayWindow({ runtimeEffectsEnabled = true }: PetOverlayWin
   const reducedMotion = usePetSettingsStore((s) => s.reducedMotion);
   const sleepTimeoutMs = usePetSettingsStore((s) => s.sleepTimeoutMs);
   const idleFunIntervalMs = usePetSettingsStore((s) => s.idleFunIntervalMs);
-  const panelMode = usePetSettingsStore((s) => s.panelMode) ?? 'normal';
   const setOverlayVisible = usePetSettingsStore((s) => s.setOverlayVisible);
   const theme = useUIStore((s) => s.theme);
   const [viewport, setViewport] = React.useState(() =>
@@ -169,7 +168,7 @@ export function PetOverlayWindow({ runtimeEffectsEnabled = true }: PetOverlayWin
           if (!runtimeEffectsEnabled) return;
           // Shared Axo+Glitch path: single-flight open, confirm-then-hide overlay.
           // Does NOT hide overlay optimistically before confirm (avoids both-hidden).
-          void openOrFocusPetMiniPanel(undefined, undefined, panelMode)
+          void openOrFocusPetMiniPanel(undefined, undefined, 'follow-pet')
             .then(({ panelVisible }) => {
               if (!panelVisible) {
                 // Bridge already restored overlay + cleared flag; keep fail-open.

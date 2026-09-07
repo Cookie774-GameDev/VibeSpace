@@ -16,7 +16,7 @@ import {
 import { PET_PANEL_MAX_TERMINALS, PET_PANEL_TERMINAL_LIMIT_MESSAGE } from './petPanelLifecycle';
 
 describe('pet terminal grid layout helpers', () => {
-  it('migrates the retired Grid preference to the single-terminal tabs view', () => {
+  it('restores either view and defaults unknown preferences to tabs', () => {
     const mem = new Map<string, string>();
     const storage = {
       getItem: (k: string) => mem.get(k) ?? null,
@@ -29,6 +29,8 @@ describe('pet terminal grid layout helpers', () => {
     expect(mem.get(PET_TERMINAL_VIEW_MODE_KEY)).toBe('tabs');
     expect(loadPetTerminalViewMode(storage)).toBe('tabs');
     mem.set(PET_TERMINAL_VIEW_MODE_KEY, 'grid');
+    expect(loadPetTerminalViewMode(storage)).toBe('grid');
+    mem.set(PET_TERMINAL_VIEW_MODE_KEY, 'invalid');
     expect(loadPetTerminalViewMode(storage)).toBe('tabs');
   });
 

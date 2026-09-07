@@ -60,7 +60,7 @@ export function PetMiniPanelWindow({ runtimeEffectsEnabled = true }: PetMiniPane
     <div
       data-pet-window="pet-mini-panel"
       data-monochrome-surface="pet-mini-panel-window"
-      className="h-screen w-screen overflow-hidden bg-background [html[data-theme=monochrome]_&]:font-sans [html[data-theme=monochrome]_&_*]:shadow-none"
+      className="h-screen w-screen overflow-hidden bg-transparent [html[data-theme=monochrome]_&]:font-sans [html[data-theme=monochrome]_&_*]:shadow-none"
     >
       {runtimeEffectsEnabled ? <AuthGate>{panel}</AuthGate> : panel}
     </div>

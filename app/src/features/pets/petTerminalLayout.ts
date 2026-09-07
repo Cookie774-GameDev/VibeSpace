@@ -1,10 +1,8 @@
 /**
- * Legacy terminal-view preference migration for the Pet mini-panel.
- * Grid was retired because mounting several WebGL/xterm surfaces inside the
- * tiny companion window was both visually dense and unnecessarily expensive.
+ * Presentation preference only; switching layouts never recreates a PTY.
  */
 
-export type PetTerminalViewMode = 'tabs';
+export type PetTerminalViewMode = 'tabs' | 'grid';
 
 export const PET_TERMINAL_VIEW_MODE_KEY = 'vibespace-pet-terminal-view-mode';
 
@@ -13,10 +11,8 @@ export function loadPetTerminalViewMode(
     ? localStorage
     : null,
 ): PetTerminalViewMode {
-  // Read once so blocked storage remains harmless, but intentionally migrate
-  // every old "grid" value to the only supported lightweight presentation.
   try {
-    storage?.getItem(PET_TERMINAL_VIEW_MODE_KEY);
+    if (storage?.getItem(PET_TERMINAL_VIEW_MODE_KEY) === 'grid') return 'grid';
   } catch {
     /* ignore */
   }

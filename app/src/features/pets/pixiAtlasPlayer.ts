@@ -348,7 +348,20 @@ export class PixiAtlasPlayer {
    * Initialize (or re-bind) a single Pixi Application into `host`.
    * Safe to call again with the same host — does not create a second app.
    */
+  private initializing: Promise<void> | null = null;
+
   async init(host: HTMLElement, opts: PixiAtlasPlayerOptions = {}): Promise<void> {
+    if (this.initializing) await this.initializing;
+    const pending = this.initialize(host, opts);
+    this.initializing = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.initializing === pending) this.initializing = null;
+    }
+  }
+
+  private async initialize(host: HTMLElement, opts: PixiAtlasPlayerOptions): Promise<void> {
     if (this.destroyed) {
       throw new Error('PixiAtlasPlayer: cannot init after dispose');
     }
@@ -386,6 +399,13 @@ export class PixiAtlasPlayer {
       // WebGL must allocate an alpha buffer (otherwise clear is opaque black)
       multiView: false,
     });
+
+    // Disposal can happen while WebGL initializes (StrictMode or window resize).
+    // A retired player must never publish a canvas over its replacement.
+    if (this.destroyed) {
+      app.destroy(true, { children: true, texture: false, textureSource: false });
+      return;
+    }
 
     // The sprite advances at 12 FPS; rendering at 24 FPS preserves every visual
     // frame while avoiding a wasteful 60/120 Hz transparent WebGL loop.
@@ -712,7 +732,7 @@ export class PixiAtlasPlayer {
   ensureAliveRendering(): boolean {
     if (this.destroyed) return false;
     if (this.isContextUnhealthy()) return false;
-    if (!this.app || !this.sprite) return false;
+    if (!this.app || !this.sprite || this.frameNames.length === 0) return false;
     try {
       this.forceTransparentBackground(this.app);
       if (!this.isTickerStarted()) {

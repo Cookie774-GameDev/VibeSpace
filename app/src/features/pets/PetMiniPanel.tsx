@@ -278,9 +278,13 @@ export function PetMiniPanel({
     };
 
   const onHeaderDrag = (e: React.PointerEvent) => {
-    if (windowMode || e.button !== 0) return;
+    if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
+    if (windowMode) {
+      void getCurrentWindow().startDragging().catch(() => undefined);
+      return;
+    }
     const target = e.currentTarget;
     target.setPointerCapture?.(e.pointerId);
     const startX = e.clientX;
@@ -349,6 +353,7 @@ export function PetMiniPanel({
         aria-modal="true"
         aria-label="Pet mini panel"
         data-pet-mini-panel="true"
+        data-pet-native-window={windowMode ? "true" : undefined}
         data-pet-panel-lifecycle={lifecycle}
         data-pet-panel-density={density}
         data-pet-ui-scale={uiScale.toFixed(2)}
@@ -377,6 +382,12 @@ export function PetMiniPanel({
           >
             {!windowMode && (
               <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
+            )}
+            {windowMode && (
+              <span className="pet-panel-brand" data-tauri-drag-region>
+                <span className="pet-panel-brand-mark" aria-hidden>✦</span>
+                <span data-tauri-drag-region>Jarvis</span>
+              </span>
             )}
             <nav className="pet-panel-nav flex min-w-0 gap-1" aria-label="Compact panel sections">
               {(
@@ -446,6 +457,22 @@ export function PetMiniPanel({
         </div>
 
         {/* Resize handles */}
+        {windowMode && (
+          (['West', 'East', 'North', 'South', 'NorthWest', 'NorthEast', 'SouthWest', 'SouthEast'] as const).map((direction) => (
+            <div
+              key={direction}
+              className="pet-panel-native-resize"
+              data-edge={direction}
+              aria-label={`Resize panel ${direction}`}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                event.stopPropagation();
+                void getCurrentWindow().startResizeDragging(direction).catch(() => undefined);
+              }}
+            />
+          ))
+        )}
         {resizable && !windowMode && (
           <>
             <div

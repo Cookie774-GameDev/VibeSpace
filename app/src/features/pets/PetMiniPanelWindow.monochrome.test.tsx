@@ -18,8 +18,8 @@ describe('PetMiniPanelWindow MonoChrome appearance', () => {
     // MonoChrome uses the flat sans voice and removes every descendant painted shadow.
     expect(source).toContain(MONO_FONT_SANS);
     expect(source).toContain(MONO_SHADOW_NONE);
-    // The window keeps a flat opaque background (not a gradient) in every theme.
-    expect(source).toContain('bg-background');
+    // The rounded panel paints its surface; the native corner boundary stays clear.
+    expect(source).toContain('bg-transparent');
   });
 
   it('preserves auth-gated boot and runtime-effect behavior (no functional regression)', () => {

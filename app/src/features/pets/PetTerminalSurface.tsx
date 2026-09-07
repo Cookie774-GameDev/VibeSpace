@@ -1,7 +1,7 @@
 /**
  * Pet mini-panel terminals — same live PTY + pane chrome as the main app.
  *
- * - No grid: one visible terminal at a time (tabs switch focus).
+ * - Tabs or a four-terminal grid share the same mounted sessions.
  * - Max 4 terminals (enforced by presentation store).
  * - PaneToolbar copy: palette, T (font cycle), Clear (hold→confirm), X (hold→confirm).
  * - Sessions stay mounted (hidden when inactive) so tab switches stay lag-free
@@ -10,7 +10,7 @@
 import * as React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { invoke } from '@tauri-apps/api/core';
-import { Plus } from 'lucide-react';
+import { Plus, LayoutGrid, PanelTop } from 'lucide-react';
 import { TerminalView } from '@/features/terminals/TerminalView';
 import {
   DEFAULT_FONT_SIZE,
@@ -24,7 +24,7 @@ import { useUIStore } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
 import { PET_PANEL_MAX_TERMINALS, PET_PANEL_TERMINAL_LIMIT_MESSAGE } from './petPanelLifecycle';
 import { usePetPresentationStore } from './petPresentationStore';
-import type { PetTerminalViewMode } from './petTerminalLayout';
+import { loadPetTerminalViewMode, savePetTerminalViewMode, type PetTerminalViewMode } from './petTerminalLayout';
 import { cn } from '@/lib/utils';
 
 export type { PetTerminalViewMode };
@@ -64,6 +64,8 @@ export function PetTerminalSurface({ className }: { className?: string }) {
 
   const [fontSizes, setFontSizes] = React.useState<Record<string, number>>(loadFontSizes);
   const [fullscreenId, setFullscreenId] = React.useState<string | null>(null);
+  const [viewMode, setViewMode] = React.useState<PetTerminalViewMode>(loadPetTerminalViewMode);
+  const gridVisible = viewMode === 'grid' && !fullscreenId;
 
   const sessions = useLiveQuery(
     async () => {
@@ -163,16 +165,16 @@ export function PetTerminalSurface({ className }: { className?: string }) {
     }));
   };
 
-  const showTabs = !fullscreenId && petTerms.length > 0;
+  const showTabs = !fullscreenId && viewMode === 'tabs' && petTerms.length > 0;
 
   return (
     <div
       className={cn('flex h-full min-h-0 min-w-0 flex-col gap-2', className)}
       data-pet-terminal-surface="true"
-      data-pet-terminal-layout="tabs"
+      data-pet-terminal-layout={viewMode}
     >
       {!fullscreenId && (
-        <div className="flex min-h-6 shrink-0 items-center gap-0.5" data-pet-terminal-toolbar="true">
+        <div className="flex min-h-6 shrink-0 items-center gap-2" data-pet-terminal-toolbar="true">
           <Button
             size="icon-sm"
             variant="secondary"
@@ -192,6 +194,19 @@ export function PetTerminalSurface({ className }: { className?: string }) {
           <span className="text-metadata text-muted-foreground" aria-label="Terminal count">
             {petTerminalCount()}/{PET_PANEL_MAX_TERMINALS}
           </span>
+          <div className="pet-terminal-view-switch ml-auto" role="group" aria-label="Terminal view">
+            {([['tabs', PanelTop, 'Tabs'], ['grid', LayoutGrid, 'Grid']] as const).map(([mode, Icon, label]) => (
+              <button
+                key={mode}
+                type="button"
+                aria-label={`${label} view`}
+                aria-pressed={viewMode === mode}
+                onClick={() => { setViewMode(mode); savePetTerminalViewMode(mode); }}
+              >
+                <Icon size={13} aria-hidden />{label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -233,7 +248,8 @@ export function PetTerminalSurface({ className }: { className?: string }) {
       )}
 
       <div
-        className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-background"
+        className={cn('pet-terminal-stage relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-background', gridVisible && 'pet-terminal-stage-grid')}
+        data-terminal-count={petTerms.length}
         data-pet-terminal-stage="true"
       >
         {petTerms.length === 0 ? (
@@ -246,6 +262,7 @@ export function PetTerminalSurface({ className }: { className?: string }) {
             const sessionId = isPending ? null : t.ptyId;
             const isActive = t.terminalId === active?.terminalId;
             const isFs = fullscreenId === t.terminalId;
+            const isVisible = fullscreenId ? isFs : gridVisible || isActive;
             const fontSize = fontSizes[t.terminalId] ?? defaultFontSize;
             const paneId = `pet-pane-${t.terminalId}`;
 
@@ -255,14 +272,17 @@ export function PetTerminalSurface({ className }: { className?: string }) {
               <div
                 key={t.terminalId}
                 className={cn(
-                  'absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden bg-background',
-                  !isActive && !isFs && 'invisible pointer-events-none',
+                  'pet-terminal-tile flex min-h-0 min-w-0 flex-col overflow-hidden bg-background',
+                  gridVisible ? 'relative' : 'absolute inset-0',
+                  !isVisible && 'invisible pointer-events-none',
                   isFs && 'z-10',
                 )}
                 data-pet-terminal-tile={t.terminalId}
                 data-pet-terminal-focused={isActive ? 'true' : 'false'}
                 data-pty-id={t.ptyId}
-                aria-hidden={!isActive}
+                aria-hidden={!isVisible}
+                onPointerDownCapture={() => setPanelActiveTerminalId(t.terminalId)}
+                onFocusCapture={() => setPanelActiveTerminalId(t.terminalId)}
               >
                 <div
                   className="flex h-6 shrink-0 items-center justify-between gap-1 border-b border-border bg-paper-soft px-1.5"

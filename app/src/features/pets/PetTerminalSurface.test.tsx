@@ -52,7 +52,7 @@ vi.mock('@/stores/ui', () => ({
     selector({ defaultTerminalFontSize: 13 }),
 }));
 
-describe('PetTerminalSurface main-app chrome (no grid, max 4)', () => {
+describe('PetTerminalSurface main-app chrome (tabs and grid, max 4)', () => {
   beforeEach(() => {
     localStorage.clear();
     clearTerminalSession.mockClear();
@@ -79,10 +79,9 @@ describe('PetTerminalSurface main-app chrome (no grid, max 4)', () => {
     });
   });
 
-  it('has no grid control and keeps all sessions mounted for lag-free tab switch', () => {
+  it('keeps all sessions mounted across grid and tab switches', () => {
     render(<PetTerminalSurface />);
 
-    expect(screen.queryByRole('button', { name: /grid/i })).toBeNull();
     // Both live PTYs stay mounted (hidden when inactive) — max 4, no remount on switch.
     const live = screen.getAllByTestId('live-terminal');
     expect(live).toHaveLength(2);
@@ -90,6 +89,16 @@ describe('PetTerminalSurface main-app chrome (no grid, max 4)', () => {
       'pty-first',
       'pty-second',
     ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
+    expect(document.querySelector('[data-pet-terminal-layout="grid"]')).not.toBeNull();
+    expect(screen.queryByRole('tablist', { name: 'Terminals' })).toBeNull();
+    expect(document.querySelectorAll('[data-pet-terminal-tile][aria-hidden="false"]')).toHaveLength(2);
+    fireEvent.pointerDown(document.querySelector('[data-pet-terminal-tile="second"]')!);
+    expect(usePetPresentationStore.getState().panelActiveTerminalId).toBe('second');
+    expect(screen.getAllByTestId('live-terminal')).toEqual(live);
+    fireEvent.click(screen.getByRole('button', { name: 'Tabs view' }));
+    expect(document.querySelectorAll('[data-pet-terminal-tile][aria-hidden="false"]')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Open terminal Second' }));
     expect(usePetPresentationStore.getState().panelActiveTerminalId).toBe('second');
@@ -118,10 +127,16 @@ describe('PetTerminalSurface main-app chrome (no grid, max 4)', () => {
     expect(screen.queryByRole('button', { name: 'Confirm clear' })).toBeNull();
   });
 
-  it('enforces max 4 and never offers a grid layout attribute', () => {
+  it('shows all four terminals in grid and keeps the four-session limit', () => {
+    const first = usePetPresentationStore.getState().terminals.first;
+    usePetPresentationStore.setState((s) => ({ terminals: { ...s.terminals,
+      third: { ...first, terminalId: 'third', ptyId: 'pty-third' },
+      fourth: { ...first, terminalId: 'fourth', ptyId: 'pty-fourth' },
+    } }));
     render(<PetTerminalSurface />);
-    const surface = document.querySelector('[data-pet-terminal-surface="true"]');
-    expect(surface?.getAttribute('data-pet-terminal-layout')).toBe('tabs');
-    expect(surface?.getAttribute('data-pet-terminal-layout')).not.toBe('grid');
+    fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
+    expect(document.querySelectorAll('[data-pet-terminal-tile][aria-hidden="false"]')).toHaveLength(4);
+    expect((screen.getByRole('button', { name: 'New terminal' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(localStorage.getItem('vibespace-pet-terminal-view-mode')).toBe('grid');
   });
 });

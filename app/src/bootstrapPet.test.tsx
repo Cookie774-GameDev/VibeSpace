@@ -10,6 +10,28 @@ vi.mock('./features/pets/PetMiniPanelWindow', () => ({
 }));
 
 describe('detached Pet bootstrap', () => {
+  it('shows loading feedback until the real panel is ready', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    let finish!: (value: { PetMiniPanelWindow: () => React.JSX.Element }) => void;
+    const panel = new Promise<{ PetMiniPanelWindow: () => React.JSX.Element }>((resolve) => {
+      finish = resolve;
+    });
+    const { mountPetSurface } = await import('./bootstrapPet');
+    await act(async () => {
+      mountPetSurface(root, 'pet-mini-panel', {
+        panel: () => panel,
+        overlay: vi.fn(),
+      });
+    });
+    expect(root.querySelector('[role="status"]')?.textContent).toContain('Loading Chat and Terminals');
+    await act(async () => {
+      finish({ PetMiniPanelWindow: () => <div data-testid="loaded-panel" /> });
+    });
+    await waitFor(() => expect(root.querySelector('[data-testid="loaded-panel"]')).not.toBeNull());
+    expect(root.querySelector('[role="status"]')).toBeNull();
+  });
+
   afterEach(() => {
     document.body.replaceChildren();
     document.documentElement.removeAttribute('data-vibespace-view');
@@ -70,5 +92,8 @@ describe('detached Pet bootstrap', () => {
     });
     expect(overlayLoader).not.toHaveBeenCalled();
     expect(panelLoader).toHaveBeenCalledTimes(1);
+    for (const element of [document.documentElement, document.body, root]) {
+      expect(element.style.backgroundColor).toBe('transparent');
+    }
   });
 });

@@ -163,10 +163,10 @@ describe('PetOverlay StrictMode player lifecycle', () => {
     vi.unstubAllGlobals();
   });
 
-  it('allows the enlarged native pet without enlarging the in-app default', () => {
+  it('caps an oversized native pet while retaining the in-app default', () => {
     const view = render(<PetOverlay tauriWindowMode displaySize={176} />);
     expect((view.container.querySelector('[data-pet-overlay]') as HTMLElement).style.width).toBe(
-      '176px',
+      '128px',
     );
     view.rerender(<PetOverlay />);
     expect((view.container.querySelector('[data-pet-overlay]') as HTMLElement).style.width).toBe(
@@ -324,6 +324,19 @@ describe('PetOverlay StrictMode player lifecycle', () => {
     view.unmount();
   });
 
+  it('opens on a stationary click without racing an edge snap', () => {
+    const onOpenPanel = vi.fn();
+    const view = render(<PetOverlay tauriWindowMode edgeSnapping onOpenPanel={onOpenPanel} />);
+    const overlay = view.container.querySelector('[data-pet-overlay="true"]') as HTMLElement;
+    overlay.setPointerCapture = vi.fn();
+    const pointer = { button: 0, pointerId: 8, clientX: 40, clientY: 40, screenX: 200, screenY: 200 };
+    fireEvent.pointerDown(overlay, pointer);
+    fireEvent.pointerUp(overlay, pointer);
+    expect(onOpenPanel).toHaveBeenCalledTimes(1);
+    expect(snapPetOverlayToEdge).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
   it.each([1, 1.25, 2])(
     'tracks desktop coordinates at scale %s while window-relative coordinates stay fixed',
     async (scale) => {
@@ -425,6 +438,16 @@ describe('PetOverlay StrictMode player lifecycle', () => {
       expect(stale.setAnimationCalls).toBe(0);
     }
 
+    view.unmount();
+  });
+
+  it('restarts playback after scheduler settings invalidate the same animation', async () => {
+    const view = render(<PetOverlay sleepTimeoutMs={60_000} />);
+    await waitFor(() => expect(playerState.instances.some((p) => p.setAnimationCalls === 1)).toBe(true));
+    const live = playerState.instances.find((p) => p.initialized && !p.disposed)!;
+    view.rerender(<PetOverlay sleepTimeoutMs={90_000} />);
+    await waitFor(() => expect(live.setAnimationCalls).toBe(2));
+    expect(view.container.querySelector('[data-pet-render-ready="true"]')).not.toBeNull();
     view.unmount();
   });
 

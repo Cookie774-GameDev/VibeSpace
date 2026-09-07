@@ -56,6 +56,32 @@ describe('openOrFocusPetMiniPanel / openPetPanelSafely', () => {
     vi.resetModules();
   });
 
+  it('finishes configuring a newly scheduled native panel before hiding the pet', async () => {
+    let attempts = 0;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pet_open_or_focus_panel') {
+        attempts += 1;
+        return attempts === 1
+          ? nativePanelOpenResult({
+              visible: false,
+              focused: false,
+              topmostApplied: false,
+              reason: 'not_visible',
+            })
+          : nativePanelOpenResult({ created: false });
+      }
+      if (cmd === 'pet_is_panel_visible') return true;
+      if (cmd === 'pet_show_overlay') return nativeOverlayShowResult();
+      return undefined;
+    });
+    const { openOrFocusPetMiniPanel } = await import('./petTauriBridge');
+    const result = await openOrFocusPetMiniPanel();
+    expect(result.panelVisible).toBe(true);
+    expect(attempts).toBe(2);
+    expect(invoked('pet_show_overlay')).toBe(false);
+    expect(invoked('pet_hide_overlay')).toBe(true);
+  });
+
   it('hides the overlay when the panel is confirmed visible', async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'pet_open_or_focus_panel') return nativePanelOpenResult();

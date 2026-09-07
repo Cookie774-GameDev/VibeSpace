@@ -142,6 +142,7 @@ export function PetOverlay({
   characterIdRef.current = characterId;
 
   const [animLabel, setAnimLabel] = React.useState<PetAnimId>('welcome');
+  const [bootEpoch, setBootEpoch] = React.useState(0);
   const [renderReady, setRenderReady] = React.useState(false);
   const [pixiFallback, setPixiFallback] = React.useState(false);
   const [systemReducedMotion, setSystemReducedMotion] = React.useState(false);
@@ -488,6 +489,9 @@ export function PetOverlay({
     const s0 = reducePetEvent(createInitialPetState(), { type: 'boot' });
     stateRef.current = s0;
     setAnimLabel(s0.anim);
+    // Scheduler/settings changes invalidate in-flight playback even when the
+    // animation label stays "welcome". Explicitly start the new generation.
+    setBootEpoch((epoch) => epoch + 1);
     onAnimChangeRef.current?.(s0.anim);
 
     const sched = createPetScheduler({
@@ -672,7 +676,7 @@ export function PetOverlay({
     } else if (s.anim !== 'idleFun') {
       schedulerRef.current?.onHighPriority();
     }
-  }, [enabled, animLabel, motionPolicy.animationsEnabled, playAnim]);
+  }, [enabled, animLabel, bootEpoch, motionPolicy.animationsEnabled, playAnim]);
 
   // Scheduler tick
   React.useEffect(() => {
@@ -913,7 +917,7 @@ export function PetOverlay({
     lastWalkAnimRef.current = null;
     if (d.canMove) {
       setState(reducePetEvent(stateRef.current, { type: 'drag_end' }));
-      if (tauriWindowMode && edgeSnapping) {
+      if (tauriWindowMode && edgeSnapping && d.gesture.dragged) {
         const generation = dragGeneration.current;
         void positionQueue
           .flush()
@@ -923,7 +927,7 @@ export function PetOverlay({
             }
           })
           .catch(() => undefined);
-      } else if (!tauriWindowMode && edgeSnapping) {
+      } else if (!tauriWindowMode && edgeSnapping && d.gesture.dragged) {
         const sw = typeof window !== 'undefined' ? window.innerWidth : 1920;
         const sh = typeof window !== 'undefined' ? window.innerHeight : 1080;
         setPos((current) => {

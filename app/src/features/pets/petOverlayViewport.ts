@@ -1,6 +1,6 @@
 const DEFAULT_SHELL_SIZE = 192;
-export const PET_OVERLAY_DISPLAY_SIZE = 176;
-const SHELL_PADDING = DEFAULT_SHELL_SIZE - PET_OVERLAY_DISPLAY_SIZE;
+export const PET_OVERLAY_DISPLAY_SIZE = 128;
+const SHELL_PADDING = 16;
 
 function finiteViewportDimension(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return DEFAULT_SHELL_SIZE;

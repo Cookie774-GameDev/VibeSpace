@@ -427,6 +427,14 @@ export async function openOrFocusPetMiniPanel(
     }
 
     let nativeResult = await openOrFocusPetPanel(nearX, nearY, panelMode);
+    // Creation is queued after the first invoke returns. Finish configuring the
+    // materialized window rather than leaving its initial native host exposed.
+    if (nativeResult.created && nativeResult.reason === 'not_visible') {
+      for (let attempt = 0; attempt < 6 && nativeResult.reason === 'not_visible'; attempt += 1) {
+        await waitMs(160);
+        nativeResult = await openOrFocusPetPanel(nearX, nearY, panelMode);
+      }
+    }
     if (!nativeResult.visible || !nativeResult.focused) {
       return restoreDetachedOverlay(nativeResult.reason ?? 'not_visible');
     }

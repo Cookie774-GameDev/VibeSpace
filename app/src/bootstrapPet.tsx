@@ -43,6 +43,12 @@ export function mountPetSurface(
   view: PetSurfaceView,
   loaders: PetSurfaceLoaders = defaultPetSurfaceLoaders,
 ): void {
+  // Both companions paint their own silhouette, including rounded panel corners.
+  for (const element of [document.documentElement, document.body, rootEl]) {
+    element.style.background = 'transparent';
+    element.style.backgroundColor = 'transparent';
+    element.style.backgroundImage = 'none';
+  }
   const runtimeEffectsEnabled = resolveRuntimePlan().petEnabled;
   const Surface = React.lazy(async () => ({
     default:
@@ -54,7 +60,18 @@ export function mountPetSurface(
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>
       <ErrorBoundary>
-        <React.Suspense fallback={null}>
+        <React.Suspense
+          fallback={view === 'pet-mini-panel' ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex h-screen flex-col rounded-[14px] border border-border bg-background p-4 text-foreground"
+            >
+              <strong className="text-sm">Jarvis</strong>
+              <span className="mt-3 text-sm text-muted-foreground">Loading Chat and Terminals…</span>
+            </div>
+          ) : null}
+        >
           <Surface runtimeEffectsEnabled={runtimeEffectsEnabled} />
         </React.Suspense>
       </ErrorBoundary>

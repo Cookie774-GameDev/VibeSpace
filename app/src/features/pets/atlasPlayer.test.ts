@@ -86,6 +86,35 @@ vi.mock('pixi.js', async () => {
 });
 
 describe('PixiAtlasPlayer', () => {
+  it('shares asynchronous initialization without leaking a second renderer', async () => {
+    const before = getLivePixiApplicationCount();
+    const host = document.createElement('div');
+    const player = new PixiAtlasPlayer();
+    await Promise.all([player.init(host), player.init(host)]);
+    expect(getLivePixiApplicationCount()).toBe(before + 1);
+    expect(host.querySelectorAll('canvas')).toHaveLength(1);
+    player.dispose();
+    expect(getLivePixiApplicationCount()).toBe(before);
+  });
+
+  it('does not publish a renderer after disposal during initialization', async () => {
+    const before = getLivePixiApplicationCount();
+    const host = document.createElement('div');
+    const player = new PixiAtlasPlayer();
+    const pending = player.init(host);
+    player.dispose();
+    await pending;
+    expect(host.childElementCount).toBe(0);
+    expect(getLivePixiApplicationCount()).toBe(before);
+  });
+
+  it('requests recovery when a canvas has no animation frames', async () => {
+    const player = new PixiAtlasPlayer();
+    await player.init(document.createElement('div'));
+    expect(player.ensureAliveRendering()).toBe(false);
+    player.dispose();
+  });
+
   afterEach(() => {
     pixiMockState.initOptions.length = 0;
   });
@@ -141,9 +170,9 @@ describe('PixiAtlasPlayer', () => {
     expect(canvas.style.background).toBe('transparent');
     expect(canvas.style.backgroundColor).toBe('transparent');
     expect(canvas.dataset.petPixiCanvas).toBe('true');
-    // Healthy init is soft-recoverable without a hard re-init.
+    // A transparent canvas alone is not a successfully rendered animation.
     expect(p.isContextUnhealthy()).toBe(false);
-    expect(p.ensureAliveRendering()).toBe(true);
+    expect(p.ensureAliveRendering()).toBe(false);
 
     p.dispose();
     host.remove();

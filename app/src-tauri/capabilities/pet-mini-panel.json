@@ -24,6 +24,7 @@
     "core:window:allow-unminimize",
     "core:window:allow-is-minimized",
     "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
     "core:window:allow-close",
     "core:app:default",
     "core:path:default",
