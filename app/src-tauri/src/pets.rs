@@ -1790,25 +1790,31 @@ fn show_pet_overlay_with_lifecycle_held(
     app: AppHandle,
     state: &PetWindowState,
 ) -> Result<PetOverlayShowResult, String> {
+    // Window/monitor queries dispatch to the UI thread, whose callbacks also
+    // persist geometry. Never wait for that thread with geometry locked.
+    let geo_snapshot = match state.geometry.lock() {
+        Ok(geo) => geo.clone(),
+        Err(_) => return Ok(PetOverlayShowResult::failed("geometry_unavailable")),
+    };
+    let (recovered_x, recovered_y) = recover_position(
+        &app,
+        geo_snapshot.overlay_x,
+        geo_snapshot.overlay_y,
+        OVERLAY_SIZE as f64,
+        OVERLAY_SIZE as f64,
+        geo_snapshot.overlay_monitor_name.as_deref(),
+    );
+    let (x, y) = constrain_overlay_position(
+        &app,
+        recovered_x,
+        recovered_y,
+        geo_snapshot.overlay_monitor_name.as_deref(),
+    );
     let (x, y) = {
         let mut geo = match state.geometry.lock() {
             Ok(geo) => geo,
             Err(_) => return Ok(PetOverlayShowResult::failed("geometry_unavailable")),
         };
-        let (recovered_x, recovered_y) = recover_position(
-            &app,
-            geo.overlay_x,
-            geo.overlay_y,
-            OVERLAY_SIZE as f64,
-            OVERLAY_SIZE as f64,
-            geo.overlay_monitor_name.as_deref(),
-        );
-        let (x, y) = constrain_overlay_position(
-            &app,
-            recovered_x,
-            recovered_y,
-            geo.overlay_monitor_name.as_deref(),
-        );
         geo.overlay_x = Some(x);
         geo.overlay_y = Some(y);
         save_geometry(&app, &geo);
@@ -2128,14 +2134,15 @@ pub async fn pet_set_overlay_position(app: AppHandle, x: f64, y: f64) -> Result<
     let (cx, cy) = constrain_overlay_position(&app, x, y, None);
     let _ = win.set_position(PhysicalPosition::new(cx as i32, cy as i32));
     pin_pet_window_topmost(&win, false);
+    let monitor_name = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .and_then(|monitor| monitor.name().cloned());
     if let Ok(mut geo) = app.state::<PetWindowState>().geometry.lock() {
         geo.overlay_x = Some(cx);
         geo.overlay_y = Some(cy);
-        geo.overlay_monitor_name = win
-            .current_monitor()
-            .ok()
-            .flatten()
-            .and_then(|monitor| monitor.name().cloned());
+        geo.overlay_monitor_name = monitor_name;
         save_geometry(&app, &geo);
     }
     Ok(())
@@ -2278,17 +2285,8 @@ fn open_or_focus_pet_panel_blocking(
     };
     let panel_mode = panel_mode.unwrap_or_default();
 
-    let mut open = match state.panel_open.lock() {
-        Ok(open) => open,
-        Err(_) => {
-            return Ok(PetPanelOpenResult::failed(
-                created,
-                "panel_state_unavailable",
-            ))
-        }
-    };
-    let mut geo = match state.geometry.lock() {
-        Ok(geo) => geo,
+    let geo = match state.geometry.lock() {
+        Ok(geo) => geo.clone(),
         Err(_) => return Ok(PetPanelOpenResult::failed(created, "geometry_unavailable")),
     };
 
@@ -2353,12 +2351,14 @@ fn open_or_focus_pet_panel_blocking(
             return Ok(PetPanelOpenResult::failed(created, "not_visible"));
         }
         ensure_pet_topmost_watchdog(&app);
+        let mut geo = state.geometry.lock().map_err(|_| "geometry_unavailable")?;
         geo.panel_x = Some(x);
         geo.panel_y = Some(y);
         geo.panel_w = Some(w);
         geo.panel_h = Some(h);
         save_geometry(&app, &geo);
-        *open = true;
+        drop(geo);
+        *state.panel_open.lock().map_err(|_| "panel_state_unavailable")? = true;
         return Ok(PetPanelOpenResult::visible_and_focused(created));
     }
 
@@ -2404,19 +2404,20 @@ fn open_or_focus_pet_panel_blocking(
             return Ok(PetPanelOpenResult::failed(created, "not_visible"));
         }
 
-        geo.panel_x = Some(x);
-        geo.panel_y = Some(y);
-        geo.panel_w = Some(w);
-        geo.panel_h = Some(h);
-        geo.panel_monitor_name = win
+        let monitor_name = win
             .current_monitor()
             .ok()
             .flatten()
             .and_then(|monitor| monitor.name().cloned());
+        let mut geo = state.geometry.lock().map_err(|_| "geometry_unavailable")?;
+        geo.panel_x = Some(x);
+        geo.panel_y = Some(y);
+        geo.panel_w = Some(w);
+        geo.panel_h = Some(h);
+        geo.panel_monitor_name = monitor_name;
         save_geometry(&app, &geo);
-        *open = true;
-        drop(open);
         drop(geo);
+        *state.panel_open.lock().map_err(|_| "panel_state_unavailable")? = true;
 
         // Intentionally do not hide pet-overlay here — JS confirm-then-hide.
         Ok(PetPanelOpenResult::visible_and_focused(created))
