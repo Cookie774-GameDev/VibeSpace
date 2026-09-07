@@ -53,18 +53,19 @@ it('closes in one click and immediately restores the pet at the panel position o
   for (let attempt = 0; attempt < 2; attempt++) {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' })); });
     expect(screen.queryByTestId('pet-close-confirm')).toBeNull();
-    expect(nativeWindow.hide).toHaveBeenCalledTimes(attempt + 1);
+    expect(hidePetPanel).toHaveBeenCalledTimes(attempt + 1);
     expect(setPetOverlayPosition).toHaveBeenLastCalledWith(400, 250);
     expect(setPetPanelOpenFlag).toHaveBeenLastCalledWith(false);
     expect(showPetOverlay).toHaveBeenCalledTimes(attempt + 1);
     fireEvent.focus(window);
   }
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Minimize pet panel' })); });
-  expect(nativeWindow.minimize).toHaveBeenCalledTimes(1);
+  expect(hidePetPanel).toHaveBeenCalledTimes(3);
+  expect(nativeWindow.minimize).not.toHaveBeenCalled();
+  expect(nativeWindow.hide).not.toHaveBeenCalled();
   expect(showPetOverlay).toHaveBeenCalledTimes(3);
-  expect(vi.mocked(setPetOverlayPosition).mock.invocationCallOrder[0]).toBeLessThan(nativeWindow.hide.mock.invocationCallOrder[0]);
-  expect(nativeWindow.hide.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(showPetOverlay).mock.invocationCallOrder[0]);
-  expect(hidePetPanel).not.toHaveBeenCalled();
+  expect(vi.mocked(setPetOverlayPosition).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(hidePetPanel).mock.invocationCallOrder[0]);
+  expect(vi.mocked(hidePetPanel).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(showPetOverlay).mock.invocationCallOrder[0]);
   expect(minimizePetPanel).not.toHaveBeenCalled();
 });
 

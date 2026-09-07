@@ -186,20 +186,21 @@ export function PetMiniPanel({
     return () => window.removeEventListener('focus', restore);
   }, [windowMode, lifecycle, updateLifecycle]);
 
-  const dismissNativePanel = async (minimize: boolean) => {
+  const dismissNativePanel = async () => {
     const panelWindow = getCurrentWindow();
     const position = await panelWindow.outerPosition().catch(() => null);
     // Position the hidden pet first so it never flashes at its old location.
     if (position) await setPetOverlayPosition(position.x, position.y);
-    if (minimize) await panelWindow.minimize();
-    else await panelWindow.hide();
+    // The native command cancels pending opens. A raw window hide cannot do
+    // that. Both companion dismiss actions hide the window and retain sessions.
+    await hidePetPanel();
     setPetPanelOpenFlag(false);
     await showPetOverlay();
   };
 
   const handleMinimize = () => {
     if (windowMode) {
-      void dismissNativePanel(true).then(() => {
+      void dismissNativePanel().then(() => {
         updateLifecycle({ type: 'minimized' });
         onMinimize?.();
         onClose();
@@ -224,7 +225,7 @@ export function PetMiniPanel({
 
   const handleCloseRequest = () => {
     if (windowMode) {
-      void dismissNativePanel(false).then(() => {
+      void dismissNativePanel().then(() => {
         updateLifecycle({ type: 'closed' });
         onClose();
       }).catch(() => updateLifecycle({ type: 'opened' }));

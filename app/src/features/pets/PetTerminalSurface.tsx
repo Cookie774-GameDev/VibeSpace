@@ -149,7 +149,7 @@ export function PetTerminalSurface({ className }: { className?: string }) {
       return;
     }
     usePetPresentationStore.setState({ lastLimitMessage: null });
-    const tempId = `pending_${Date.now()}`;
+    const tempId = `pending_${crypto.randomUUID()}`;
     setPanelActiveTerminalId(tempId);
     usePetPresentationStore.setState((s) => ({
       terminals: {
@@ -157,6 +157,7 @@ export function PetTerminalSurface({ className }: { className?: string }) {
         [tempId]: {
           terminalId: tempId,
           ptyId: tempId,
+          paneId: `pet-pane-${tempId}`,
           owner: 'pet-mini-panel',
           title: 'new',
           status: 'running',
@@ -264,13 +265,13 @@ export function PetTerminalSurface({ className }: { className?: string }) {
             const isFs = fullscreenId === t.terminalId;
             const isVisible = fullscreenId ? isFs : gridVisible || isActive;
             const fontSize = fontSizes[t.terminalId] ?? defaultFontSize;
-            const paneId = `pet-pane-${t.terminalId}`;
+            const paneId = t.paneId ?? `pet-pane-${t.terminalId}`;
 
             // Keep every pet terminal mounted (max 4) so focus switches are lag-free
             // and the same live PTY is never torn down just by changing tabs.
             return (
               <div
-                key={t.terminalId}
+                key={paneId}
                 className={cn(
                   'pet-terminal-tile flex min-h-0 min-w-0 flex-col overflow-hidden bg-background',
                   gridVisible ? 'relative' : 'absolute inset-0',
@@ -315,7 +316,7 @@ export function PetTerminalSurface({ className }: { className?: string }) {
                 </div>
                 <div className="min-h-0 flex-1" data-pet-terminal-input="true">
                   <TerminalView
-                    key={t.ptyId}
+                    key={paneId}
                     sessionId={sessionId}
                     paneId={paneId}
                     hideChrome
@@ -332,6 +333,7 @@ export function PetTerminalSurface({ className }: { className?: string }) {
                         next[readySessionId] = {
                           terminalId: readySessionId,
                           ptyId: readySessionId,
+                          paneId,
                           owner: 'pet-mini-panel',
                           title: t.title === 'new' ? 'terminal' : t.title || 'terminal',
                           cwd: t.cwd,
@@ -347,6 +349,7 @@ export function PetTerminalSurface({ className }: { className?: string }) {
                         };
                       });
                       setFontSizes((prevMap) => {
+                        if (prev === readySessionId) return prevMap;
                         if (!(prev in prevMap)) return prevMap;
                         const nextMap = { ...prevMap, [readySessionId]: prevMap[prev]! };
                         delete nextMap[prev];

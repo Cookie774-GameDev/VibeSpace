@@ -15,9 +15,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 vi.mock('@/features/terminals/TerminalView', () => ({
-  TerminalView: ({ sessionId }: { sessionId: string | null }) => (
-    <div data-testid="live-terminal" data-session={sessionId ?? 'pending'}>
+  TerminalView: ({ sessionId, paneId, onReady }: { sessionId: string | null; paneId: string; onReady: (id: string) => void }) => (
+    <div data-testid="live-terminal" data-session={sessionId ?? 'pending'} data-pane={paneId}>
       {sessionId ?? 'pending'}
+      {!sessionId && <button onClick={() => onReady('new-live-pty')}>Report ready</button>}
     </div>
   ),
 }));
@@ -103,6 +104,22 @@ describe('PetTerminalSurface main-app chrome (tabs and grid, max 4)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Open terminal Second' }));
     expect(usePetPresentationStore.getState().panelActiveTerminalId).toBe('second');
     expect(screen.getAllByTestId('live-terminal')).toHaveLength(2);
+  });
+
+  it('preserves the live renderer and pane identity when a new shell becomes ready', () => {
+    usePetPresentationStore.setState({ terminals: {}, panelActiveTerminalId: null });
+    render(<PetTerminalSurface />);
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal' }));
+    const terminal = screen.getByTestId('live-terminal');
+    const paneId = terminal.getAttribute('data-pane');
+    fireEvent.click(screen.getByRole('button', { name: 'Report ready' }));
+    expect(screen.getByTestId('live-terminal')).toBe(terminal);
+    expect(terminal.getAttribute('data-session')).toBe('new-live-pty');
+    expect(terminal.getAttribute('data-pane')).toBe(paneId);
+    expect(usePetPresentationStore.getState().terminals['new-live-pty'].paneId).toBe(paneId);
+    fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tabs view' }));
+    expect(screen.getByTestId('live-terminal')).toBe(terminal);
   });
 
   it('exposes the same PaneToolbar controls: palette, T, clear hold, close hold', () => {

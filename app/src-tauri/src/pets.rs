@@ -2525,7 +2525,7 @@ pub async fn pet_hide_panel(app: AppHandle) -> Result<(), String> {
                 }
                 save_geometry(&app, &geo);
             }
-            let _ = win.hide();
+            hide_pet_window(&win).map_err(str::to_string)?;
         }
         if let Ok(mut open) = state.panel_open.lock() {
             *open = false;
@@ -3241,6 +3241,31 @@ mod tests {
         let still_minimized = unsafe { IsIconic(panel).as_bool() };
         unsafe { let _ = DestroyWindow(panel); }
         assert!(!still_minimized);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn panel_dismiss_hides_native_shown_window_and_verifies_visibility() {
+        use windows::{core::w, Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, IsWindowVisible, ShowWindow, SW_SHOWNOACTIVATE, WS_POPUP,
+        }};
+        let panel = unsafe {
+            CreateWindowExW(Default::default(), w!("STATIC"), w!("panel"), WS_POPUP,
+                -32000, -32000, 430, 560, None, None, None, None)
+        }.unwrap();
+        assert!(set_pet_native_caption(panel, false, "VibeSpace Pet Panel"));
+        unsafe { let _ = ShowWindow(panel, SW_SHOWNOACTIVATE); }
+        assert!(unsafe { IsWindowVisible(panel).as_bool() });
+        let hidden = hide_pet_windows_by_label(PET_MINI_PANEL_LABEL);
+        let still_visible = unsafe { IsWindowVisible(panel).as_bool() };
+        unsafe { let _ = DestroyWindow(panel); }
+        assert!(hidden.is_ok());
+        assert!(!still_visible);
+        let source = include_str!("pets.rs");
+        let start = source.find("pub async fn pet_hide_panel").unwrap();
+        let end = source.find("pub async fn pet_is_panel_visible").unwrap();
+        assert!(source[start..end].contains("hide_pet_window(&win).map_err(str::to_string)?"));
+        assert!(!source[start..end].contains("let _ = win.hide()"));
     }
 
     #[test]
