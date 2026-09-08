@@ -6,6 +6,8 @@ import { useJarvisLearningStore } from './learningStore';
 import { useAgentStore } from '@/stores/agents';
 import type { Agent } from '@/types';
 const mocks = vi.hoisted(() => ({
+  createMessage: vi.fn(),
+  chatUpdatedAt: 1,
   activeAgents: ['agent'],
   permission: {
     enabled: true,
@@ -19,6 +21,7 @@ vi.mock('@/lib/accountIdentity', () => ({
 }));
 vi.mock('@/lib/ai/router', () => ({ runAgent: (input: RunAgentRequest) => mocks.dispatch(input) }));
 vi.mock('@/lib/db', () => ({
+  messageRepo: { create: (...args: unknown[]) => mocks.createMessage(...args) },
   db: {
     chats: {
       get: async () => ({
@@ -26,6 +29,7 @@ vi.mock('@/lib/db', () => ({
         workspace_id: 'workspace',
         project_id: 'project',
         active_agent_ids: mocks.activeAgents,
+        updated_at: mocks.chatUpdatedAt,
         connection: {
           id: 'openai-codex',
           providerId: 'openai',
@@ -47,6 +51,12 @@ vi.mock('@/lib/db', () => ({
   },
 }));
 beforeEach(() => {
+  mocks.chatUpdatedAt = 1;
+  mocks.createMessage.mockReset();
+  mocks.createMessage.mockImplementation(async (input) => {
+    mocks.chatUpdatedAt = input.created_at;
+    return { ...input, updated_at: input.created_at };
+  });
   mocks.activeAgents = ['agent'];
   const agent: Agent = {
     id: 'agent' as Agent['id'],
@@ -64,7 +74,12 @@ beforeEach(() => {
   useAgentStore.setState({
     agents: {
       [agent.id]: agent,
-      ['jarvis' as Agent['id']]: { ...agent, id: 'jarvis' as Agent['id'], slug: 'jarvis', builtin: true },
+      ['jarvis' as Agent['id']]: {
+        ...agent,
+        id: 'jarvis' as Agent['id'],
+        slug: 'jarvis',
+        builtin: true,
+      },
     },
   });
   const store = useJarvisLearningStore.getState();
@@ -168,6 +183,14 @@ it('rejects approval after the resolved default agent revision changes', async (
 it('dispatches the exact selected chat route and correlates its runtime acknowledgement', async () => {
   const onSend = vi.fn((event: Event) => {
     const detail = (event as CustomEvent).detail;
+    expect(mocks.createMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: detail.cancellationKey,
+        chat_id: 'chat',
+        role: 'user',
+        parts: [{ kind: 'text', text: detail.text }],
+      }),
+    );
     expect(detail).toMatchObject({
       chatId: 'chat',
       origin: 'cao',
@@ -203,6 +226,45 @@ it('dispatches the exact selected chat route and correlates its runtime acknowle
   }
   expect(onSend).toHaveBeenCalledOnce();
 });
+it('does not dispatch when saving the outgoing CAO message fails', async () => {
+  mocks.createMessage.mockRejectedValueOnce(new Error('storage unavailable'));
+  const onSend = vi.fn();
+  window.addEventListener('jarvis:send', onSend);
+  try {
+    await expect(
+      caoChatControl.prepare('account', 'chat', 'Continue', new AbortController().signal),
+    ).rejects.toThrow('storage unavailable');
+    expect(onSend).not.toHaveBeenCalled();
+  } finally {
+    window.removeEventListener('jarvis:send', onSend);
+  }
+});
+
+it.each(['permission', 'agent', 'cancel'] as const)(
+  'rechecks %s after persisting the outgoing message',
+  async (change) => {
+    const controller = new AbortController();
+    mocks.createMessage.mockImplementationOnce(async (input) => {
+      mocks.chatUpdatedAt = input.created_at;
+      if (change === 'permission') mocks.permission.enabled = false;
+      if (change === 'agent')
+        useAgentStore.getState().updateAgent('agent' as Agent['id'], { name: 'Changed' });
+      if (change === 'cancel') controller.abort();
+      return { ...input, updated_at: input.created_at };
+    });
+    const onSend = vi.fn();
+    window.addEventListener('jarvis:send', onSend);
+    try {
+      await expect(
+        caoChatControl.prepare('account', 'chat', 'Continue', controller.signal),
+      ).rejects.toThrow();
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(onSend).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('jarvis:send', onSend);
+    }
+  },
+);
 it('cancels only the submitted turn while awaiting runtime acknowledgement', async () => {
   const controller = new AbortController();
   let key = '';

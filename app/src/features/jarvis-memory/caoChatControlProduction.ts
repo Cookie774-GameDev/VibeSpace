@@ -1,4 +1,4 @@
-import { db } from '@/lib/db';
+import { db, messageRepo } from '@/lib/db';
 import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { runAgent, type ProviderCompletionEvidence } from '@/lib/ai/router';
 import { selectionFromOption } from '@/lib/ai/modelSelection';
@@ -176,19 +176,26 @@ export const caoChatControl = createCaoChatControl({
     const permission = (await db.settings.get(caoPermissionKey(proposal.accountId)))?.value as
       | CaoChatPermission
       | undefined;
-    const profile = useJarvisLearningStore.getState().currentProfile();
-    assertAccount(proposal.accountId);
-    if (targetAuthority(chat, permission) !== proposal.authority)
-      throw new Error('cao_target_changed');
-    if (
-      permission?.enabled !== true ||
-      permission.learningEpoch !== profile.caoLearningEpoch ||
-      !profile.enabled ||
-      !caoGuidanceReady(profile.caoGuidance) ||
-      (proposal.authorization !== 'user-approval' &&
-        !(proposal.authorization === 'full-access' && permission.mode === 'full-access'))
-    )
-      throw new Error('cao_send_authority_revoked');
+    const authorize = (
+      currentChat: Awaited<ReturnType<typeof target>>,
+      currentPermission: CaoChatPermission | undefined,
+      expectedAuthority: string | undefined,
+    ) => {
+      assertAccount(proposal.accountId);
+      if (targetAuthority(currentChat, currentPermission) !== expectedAuthority)
+        throw new Error('cao_target_changed');
+      const profile = useJarvisLearningStore.getState().currentProfile();
+      if (
+        currentPermission?.enabled !== true ||
+        currentPermission.learningEpoch !== profile.caoLearningEpoch ||
+        !profile.enabled ||
+        !caoGuidanceReady(profile.caoGuidance) ||
+        (proposal.authorization !== 'user-approval' &&
+          !(proposal.authorization === 'full-access' && currentPermission.mode === 'full-access'))
+      )
+        throw new Error('cao_send_authority_revoked');
+    };
+    authorize(chat, permission, proposal.authority);
     const selection = selectionFromOption(
       chat.connection!.providerId as ProviderId,
       chat.connection!.modelId!,
@@ -197,9 +204,30 @@ export const caoChatControl = createCaoChatControl({
     if (selection.mode !== 'single') throw new Error('cao_target_model_unavailable');
     assertAccount(proposal.accountId);
     signal.throwIfAborted();
+    const text = `[CAO acting for user]\n${proposal.text}`;
+    const createdAt = Date.now();
+    const persistedAuthority = targetAuthority({ ...chat, updated_at: createdAt }, permission);
+    // The runtime expects the caller to persist its user turn before dispatch, as Composer does.
+    await messageRepo.create({
+      id: proposal.id as MessageId,
+      chat_id: proposal.chatId as ChatId,
+      role: 'user',
+      parts: [{ kind: 'text', text }],
+      created_at: createdAt,
+    });
+    const [currentChat, currentPermission] = await Promise.all([
+      target(proposal.accountId, proposal.chatId),
+      db.settings.get(caoPermissionKey(proposal.accountId)),
+    ]);
+    authorize(
+      currentChat,
+      currentPermission?.value as CaoChatPermission | undefined,
+      persistedAuthority,
+    );
+    signal.throwIfAborted();
     const detail: SendDetail & { origin: 'cao' } = {
       chatId: proposal.chatId,
-      text: `[CAO acting for user]\n${proposal.text}`,
+      text,
       origin: 'cao',
       cancellationKey: proposal.id as MessageId,
       agentId: chat.caoAgentId,
