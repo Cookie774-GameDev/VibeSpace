@@ -125,6 +125,29 @@ describe('useAccessibleChatModels', () => {
     useAuthStore.setState({ defaultLocalModel: '', apiKeys: {}, offlineMode: false, plan: 'free' });
   });
 
+  it('retries connection detection once when a cold runtime becomes ready', () => {
+    const hook = renderHook(() => useAccessibleChatModels());
+    ensureExternalConnectionAutoDetection.mockClear();
+    const connection = { version: '1.18.29', source: 'system' as const, generation: 'cold-ready' };
+    act(() => {
+      runtimeManagerHarness.emit({ kind: 'ready' }, connection);
+      runtimeManagerHarness.emit({ kind: 'ready' }, connection);
+    });
+    expect(ensureExternalConnectionAutoDetection).toHaveBeenCalledExactlyOnceWith({ force: true });
+    hook.unmount();
+  });
+
+  it('does not rescan connections on a ready transition while offline', () => {
+    useAuthStore.setState({ offlineMode: true });
+    const hook = renderHook(() => useAccessibleChatModels());
+    ensureExternalConnectionAutoDetection.mockClear();
+    act(() => runtimeManagerHarness.emit({ kind: 'ready' }, {
+      version: '1.18.29', source: 'system', generation: 'offline-ready',
+    }));
+    expect(ensureExternalConnectionAutoDetection).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+
   it('includes discovered Ollama models in picker groups', () => {
     syncDiscoveredOllamaModels(['qwen3:4b']);
 

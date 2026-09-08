@@ -629,6 +629,11 @@ function reconcileOpenCodeRuntimeCatalogAuthority(): void {
   invalidateOpenCodePersistentModelCache();
   clearOpenCodeCatalogEvidence();
   openCodeRuntimeCatalogSubscribers.forEach((subscriber) => subscriber());
+  if (next.ready && !useAuthStore.getState().offlineMode) {
+    // A cold inspection may have finished before the native server was ready.
+    // The existing detector queues/deduplicates this generation's fresh scan.
+    void ensureExternalConnectionAutoDetection({ force: true }).catch(() => undefined);
+  }
 }
 
 function subscribeOpenCodeRuntimeCatalogAuthority(subscriber: () => void): () => void {

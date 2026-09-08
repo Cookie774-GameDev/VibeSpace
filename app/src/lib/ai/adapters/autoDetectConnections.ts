@@ -279,8 +279,10 @@ export function createExternalConnectionAutoDetector(
 
 const defaultDetector = createExternalConnectionAutoDetector();
 
-export function ensureExternalConnectionAutoDetection(): Promise<ConnectionMetadata> {
-  return defaultDetector.ensure();
+export function ensureExternalConnectionAutoDetection(
+  options?: Readonly<{ force?: boolean }>,
+): Promise<ConnectionMetadata> {
+  return defaultDetector.ensure(options);
 }
 
 export function refreshExternalConnectionAutoDetection(): Promise<ConnectionMetadata> {
