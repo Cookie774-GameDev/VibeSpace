@@ -67,12 +67,14 @@ export type CaoControlRuntimeDeps = Readonly<{
       signal: AbortSignal;
     }): Promise<{ status: 'completed'; receiptId: string } | { status: 'failed' | 'cancelled' }>;
     cancel(runId: string): Promise<void>;
+    /** Trusted production proof for an action whose expected effect changes target revision. */
+    verifyCompletion?(input: { record: CaoControlRecord; receiptId: string }): Promise<void>;
   }>;
   now(): number;
   newRunId(): string;
 }>;
 
-const MUTATING = new Set<CaoControlAction>(['restart', 'force-check']);
+const MUTATING = new Set<CaoControlAction>(['restart', 'force-check', 'cancel']);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function sameEnvelope(record: CaoControlRecord, input: RunInput): boolean {
@@ -169,12 +171,17 @@ export function createCaoControlRuntime(deps: CaoControlRuntimeDeps) {
     const settled = await deps.store.load(active.requestId);
     if (settled?.status === 'cancelled') return receipt(settled);
     if (result.status === 'completed') {
-      await deps.authority.verify({
-        scope: active,
-        runId: active.runId,
-        leaseId: active.leaseId!,
-        targets: active.targets,
-      });
+      try {
+        if (deps.action.verifyCompletion) {
+          await deps.action.verifyCompletion({ record: active, receiptId: result.receiptId });
+        } else {
+          await deps.authority.verify({
+            scope: active, runId: active.runId, leaseId: active.leaseId!, targets: active.targets,
+          });
+        }
+      } catch {
+        result = { status: 'failed' };
+      }
     }
     await deps.authority
       .release({ scope: active, runId: active.runId, leaseId: active.leaseId! })

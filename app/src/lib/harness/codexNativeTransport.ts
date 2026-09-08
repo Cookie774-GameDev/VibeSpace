@@ -116,6 +116,22 @@ function messageBytes(message: NativeCodexStreamMessage): number {
   return 0;
 }
 
+// Preserve text and ordering during a slow renderer without increasing queue limits.
+// Never combine RPC replies, controls, different items, or differently scoped notifications.
+function adjacentDelta(previous: NativeCodexStreamMessage | undefined, next: NativeCodexStreamMessage): NativeCodexStreamMessage | undefined {
+  if (previous?.kind !== 'frame' || next.kind !== 'frame' || 'id' in previous.frame || 'id' in next.frame) return;
+  const methods = ['item/agentMessage/delta', 'item/reasoning/summaryTextDelta', 'item/reasoning/textDelta'];
+  if (!methods.includes(String(next.frame.method)) || previous.frame.method !== next.frame.method) return;
+  const before = recordOf(previous.frame.params);
+  const after = recordOf(next.frame.params);
+  if (typeof before?.delta !== 'string' || typeof after?.delta !== 'string' || before.delta.length + after.delta.length > 32_768) return;
+  if (!before.threadId || !before.turnId || !before.itemId) return;
+  const { delta: beforeText, ...beforeScope } = before;
+  const { delta: afterText, ...afterScope } = after;
+  if (JSON.stringify({ ...previous.frame, params: beforeScope }) !== JSON.stringify({ ...next.frame, params: afterScope })) return;
+  return { kind: 'frame', frame: { ...previous.frame, params: { ...before, delta: beforeText + afterText } } };
+}
+
 export async function* nativeCodexFrames(
   generation: string,
   signal?: AbortSignal,
@@ -133,6 +149,17 @@ export async function* nativeCodexFrames(
   let overflowed = false;
   const push = (message: NativeCodexStreamMessage) => {
     if (terminal || overflowed) return;
+    const last = queued.at(-1);
+    const combined = adjacentDelta(last?.message, message);
+    if (last && combined) {
+      const bytes = messageBytes(combined);
+      if (queuedBytes - last.bytes + bytes <= MAX_QUEUED_BYTES) {
+        queuedBytes += bytes - last.bytes;
+        last.message = combined;
+        last.bytes = bytes;
+        return;
+      }
+    }
     const bytes = messageBytes(message);
     if (queued.length >= MAX_QUEUED_FRAMES || queuedBytes + bytes > MAX_QUEUED_BYTES) {
       overflowed = true;

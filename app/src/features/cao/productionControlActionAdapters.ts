@@ -107,7 +107,11 @@ export function createProductionCaoControlActionAdapters(input: {
               if (!SAFE_RECEIPT_ID.test(result.receiptId)) return { status: 'failed' };
               receipts.push(result.receiptId);
             }
-            const receiptId = receipts.join('.');
+            let receiptId = receipts.join('.');
+            if (receiptId.length > 128) {
+              const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(receipts)));
+              receiptId = `cao_aggregate_${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
+            }
             return SAFE_RECEIPT_ID.test(receiptId)
               ? { status: 'completed', receiptId }
               : { status: 'failed' };

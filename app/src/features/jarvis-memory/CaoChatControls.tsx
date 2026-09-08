@@ -145,9 +145,14 @@ export function CaoChatControls() {
           onChange={(event) => void configure(enabled, event.target.value as CaoSendMode)}
         >
           <option value="approve-before-send">Approve before sending</option>
-          <option value="full-access">Full access to send messages</option>
+          <option value="full-access">Full access to CAO chat controls</option>
         </select>
       </label>
+      <p className="text-xs text-muted-foreground">
+        Full access permits CAO messages and exact chat stop/resume commands. The agent’s tool permissions still apply.
+        In chat, use CAO diagnose, supervise, verify, grade, force-check, restart, or cancel followed by chat:"Exact chat title".
+        Reviews inspect current evidence; they do not start a background schedule.
+      </p>
       <label className="block text-sm">
         Target chat
         <select

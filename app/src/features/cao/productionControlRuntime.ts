@@ -38,6 +38,7 @@ export type ProductionCaoControlRuntimeDependencies = Readonly<{
   registry: CaoTargetRegistry;
   actions: Partial<Record<CaoControlAction, CaoControlActionAdapter>>;
   cancelRun(runId: string): Promise<void>;
+  verifyCompletedAction?: CaoControlRuntimeDeps['action']['verifyCompletion'];
   now(): number;
   newRunId(): string;
   newLeaseId(): string;
@@ -243,6 +244,7 @@ export function createProductionCaoControlRuntime(
         return adapter.execute({ record: structuredClone(input.record), signal: input.signal });
       },
       cancel: dependencies.cancelRun,
+      verifyCompletion: dependencies.verifyCompletedAction,
     },
     now: dependencies.now,
     newRunId: dependencies.newRunId,

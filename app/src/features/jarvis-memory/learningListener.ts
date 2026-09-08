@@ -376,6 +376,7 @@ export function startJarvisLearningListener(
   };
   window.addEventListener('jarvis:run-state', onRunState);
   window.addEventListener(eventName, onSend);
+  window.addEventListener('jarvis:user-command', onSend);
   return async () => {
     disposed = true;
     learningController.abort();
@@ -383,6 +384,7 @@ export function startJarvisLearningListener(
     unsubscribe();
     unsubscribeAccount?.();
     window.removeEventListener(eventName, onSend);
+    window.removeEventListener('jarvis:user-command', onSend);
     flushScheduled();
     await writeQueue;
   };

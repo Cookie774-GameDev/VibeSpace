@@ -431,6 +431,7 @@ import {
   type EscapeCancelState,
 } from './composerEscapeCancel';
 import { getChatRunState } from './runtime/chatRunState';
+import { CaoCommandPanel, type CaoCommandInput } from '@/features/cao/CaoCommandPanel';
 import { agentSelectorOptions } from './listLiveChatAgents';
 import { openNativeChildChat } from '@/features/jarvis-interaction/openNativeChildChat';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
@@ -1268,6 +1269,7 @@ export function Composer({
   disableRouteSlashCommands = false,
 }: ComposerProps) {
   const noteScope = useNoteScope();
+  const [caoCommandInput, setCaoCommandInput] = useState<CaoCommandInput>();
   const [text, setText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
   const [notesCtx, setNotesCtx] = useState<NotesCommandSpan | null>(null);
   const [attachedNotes, setAttachedNotes] = useState<NoteReference[]>(
@@ -3635,77 +3637,31 @@ export function Composer({
     // Nothing provider-bound may queue or dispatch until its runtime is ready.
     if (backendRuntimeBlocked) return false;
 
-    if (jarvisRunning && !options.bypassQueue && (!overrideText || options.promptForgeApproved)) {
+    const caoDecision = bootstrapCaoLearning({
+      text: rawSendText,
+      confirmedReferenceKeys: confirmedCatalogReferences.map((reference) => reference.key),
+    });
+    if (!caoDecision?.control && jarvisRunning && !options.bypassQueue && (!overrideText || options.promptForgeApproved)) {
       // Send button defaults to after-run; Enter passes after-tool explicitly.
       if (!enqueueCurrentMessage(trimmed, options.flushMode ?? 'after-run')) return false;
       playUiSound('chat_message_send');
       return true;
     }
 
-    const confirmedReferenceKeysForSend = confirmedCatalogReferences.map(
-      (reference) => reference.key,
-    );
-    const caoDecision = bootstrapCaoLearning({
-      text: rawSendText,
-      confirmedReferenceKeys: confirmedReferenceKeysForSend,
-    });
     if (caoDecision?.control) {
       const accountId = resolveAccountIdentity(useAuthStore.getState())?.accountId ?? '';
       if (!accountId || !workspaceId || !projectId) {
-        toast.error(
-          'CAO control unavailable',
-          'An exact account, workspace, and project are required.',
-        );
+        toast.error('CAO control unavailable', 'An exact account, workspace, and project are required.');
         return false;
       }
-      try {
-        const [chats, terminals] = await Promise.all([
-          chatRepo.listByProject(projectId as ProjectId),
-          terminalSessionRepo.listByProject(projectId as ProjectId),
-        ]);
-        resolveComposerCaoControl({
-          decision: caoDecision,
-          scope: { accountId, workspaceId: String(workspaceId), projectId: String(projectId) },
-          candidates: [
-            ...chats.map((chat) => ({
-              accountId,
-              workspaceId: String(chat.workspace_id),
-              projectId: String(chat.project_id),
-              kind: 'chat' as const,
-              targetId: String(chat.id),
-              title: chat.title,
-              revision: chat.updated_at,
-              selected: true,
-              locked: Boolean(chat.archived),
-            })),
-            ...terminals.map((terminal) => ({
-              accountId,
-              workspaceId: String(terminal.workspace_id),
-              projectId: String(terminal.project_id ?? ''),
-              kind: 'terminal' as const,
-              targetId: String(terminal.id),
-              title: terminal.title,
-              revision: terminal.last_active_at,
-              selected: true,
-              locked: terminal.status === 'exited',
-            })),
-          ],
-        });
-      } catch (error) {
-        toast.error(
-          'CAO control unavailable',
-          error instanceof Error && /^cao_control_[a-z0-9_]+$/u.test(error.message)
-            ? error.message
-            : 'cao_control_target_resolution_unavailable',
-        );
-        return false;
-      }
-      // The canonical target registry has not yet been composed in production. Do not let the
-      // provider or an ad-hoc client path execute the command without its durable authority.
-      toast.error('CAO control unavailable', 'cao_control_authority_unavailable');
-      return false;
+      const commandMessage = await messageRepo.create({ chat_id: chatId as ChatId, role: 'user', parts: [{ kind: 'text', text: rawSendText }] });
+      window.dispatchEvent(new CustomEvent('jarvis:user-command', { detail: {
+        origin: 'user', chatId: String(chatId), messageId: commandMessage.id, text: rawSendText,
+      } }));
+      setCaoCommandInput({ nonce: crypto.randomUUID(), command: caoDecision.control });
+      setText('');
+      return true;
     }
-
     const currentReasoning = readChatReasoningPreference(String(chatId));
     const currentRuntime = readChatRuntimePolicyState(String(chatId));
     const invalidEffort = [currentReasoning.effortOverride, currentRuntime.settings.effort].find(
@@ -4558,7 +4514,11 @@ export function Composer({
     // Bare Enter: send when idle; queue after-tool when Jarvis is running.
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      if (jarvisRunning && text.trim()) {
+      const caoControl = bootstrapCaoLearning({
+        text,
+        confirmedReferenceKeys: confirmedCatalogReferences.map((reference) => reference.key),
+      })?.control;
+      if (jarvisRunning && text.trim() && !caoControl) {
         enqueueCurrentMessage(text, 'after-tool');
       } else {
         void handleSend(undefined, { flushMode: 'after-run' });
@@ -5454,6 +5414,10 @@ export function Composer({
       className={cn('border-t border-border bg-panel', compact && 'text-[12px]')}
       data-tour="chat-composer"
     >
+      <CaoCommandPanel chatId={String(chatId)} request={caoCommandInput} scope={{
+        accountId: resolveAccountIdentity(useAuthStore.getState())?.accountId ?? '',
+        workspaceId: String(workspaceId ?? ''), projectId: String(projectId ?? ''),
+      }} />
       {sttView.phase !== 'idle' ? (
         <section aria-label="Composer dictation" className="m-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">

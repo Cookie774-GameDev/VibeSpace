@@ -226,6 +226,7 @@ import type {
   JarvisStructuredContext,
 } from '@/features/jarvis-interaction/types';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
+import { caoResumePolicy } from '@/features/cao/chatCommandResumePolicy';
 import { readChatReasoningPreference } from '@/features/chat/reasoningSlashStore';
 import {
   createOversizedMessageAttachment,
@@ -2583,6 +2584,8 @@ export interface RuntimeBindings {
 
 /** The shape of the `jarvis:send` event detail. */
 export interface SendDetail {
+  /** Runtime-captured resolved agent; retained only for exact CAO resume checks. */
+  resumeAgentAuthority?: { agentId: string; revision: number };
   queueIfBusy?: boolean;
   /** Chat the message belongs to. */
   chatId: string;
@@ -2776,6 +2779,8 @@ export interface ResumeDetail {
   chatId: string;
   /** Fresh caller-visible key for cancelling the continued turn. */
   cancellationKey: MessageId;
+  /** CAO binding to the selected model and actual resolved agent. */
+  caoExpectedAuthority?: string;
 }
 
 /** The shape of a live `jarvis:steer` instruction. */
@@ -5018,6 +5023,7 @@ export function startRuntimeListener(
       return;
     }
     dispatchKernelSmokeRuntimeStage('agent');
+    activeSendDetails.set(controller, { ...detail, resumeAgentAuthority: { agentId: agent.id, revision: agent.updated_at } });
     const isProtectedJarvis = isProtectedJarvisAgent(agent);
 
     const modelCtx = modelSelectionContextFromAuth(authState);
@@ -7829,9 +7835,20 @@ export function startRuntimeListener(
       });
       return;
     }
+    let currentCaoPolicy: ReturnType<typeof caoResumePolicy> | undefined;
+    if (detail.caoExpectedAuthority) {
+      try {
+        currentCaoPolicy = caoResumePolicy(suspended, detail.caoExpectedAuthority,
+          useJarvisInteractionStore.getState().modeForChat(chatId), readPermissionAccess(chatId).access);
+      } catch {
+        publishChatRunState({ chatId, cancellationKey: detail.cancellationKey, status: 'error', errorCode: 'cao_control_resume_authority_changed' });
+        return;
+      }
+    }
     suspendedSendDetails.delete(chatId);
     const resumed: SendDetail = {
       ...suspended,
+      ...currentCaoPolicy,
       chatId,
       cancellationKey: detail.cancellationKey,
       resumeOriginalText: suspended.resumeOriginalText ?? suspended.text,

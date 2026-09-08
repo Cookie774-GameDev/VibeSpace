@@ -62,6 +62,14 @@ function harness() {
 }
 
 describe('production CAO control action adapters', () => {
+  it('keeps a bounded aggregate identity when valid child receipts exceed 128 characters', async () => {
+    const h = harness();
+    const child = { execute: vi.fn(async () => ({ status: 'completed' as const, receiptId: 'r'.repeat(100) })) };
+    const bundle = createProductionCaoControlActionAdapters({ registry: h.registry, capabilities: { verify: { chat: child, terminal: child } } });
+    const result = await bundle.actions.verify.execute({ record, signal: new AbortController().signal });
+    expect(result.status).toBe('completed');
+    if (result.status === 'completed') expect(result.receiptId.length).toBeLessThanOrEqual(128);
+  });
   it('revalidates exact authority and executes the selected targets in order with truthful receipts', async () => {
     const h = harness();
     const bundle = createProductionCaoControlActionAdapters({

@@ -46,6 +46,24 @@ function harness(overrides: Partial<CaoControlRuntimeDeps> = {}) {
 }
 
 describe('CAO control runtime', () => {
+  it('requires a scoped completion proof when an authorized action changes target revision', async () => {
+    const verifyCompletion = vi.fn(async () => {});
+    const { runtime, deps } = harness({ action: {
+      execute: async () => ({ status: 'completed', receiptId: 'receipt-1' }),
+      cancel: async () => {}, verifyCompletion,
+    } });
+    expect((await runtime.run({ ...scope, requestId: 'effect-proof', command, targets })).status).toBe('completed');
+    expect(verifyCompletion).toHaveBeenCalledWith(expect.objectContaining({ receiptId: 'receipt-1', record: expect.objectContaining({ leaseId: 'lease-1' }) }));
+    expect(deps.authority!.verify).toHaveBeenCalledTimes(1);
+  });
+  it('persists failed and releases its lease when completion proof is rejected', async () => {
+    const { runtime, deps } = harness({ action: {
+      execute: async () => ({ status: 'completed', receiptId: 'receipt-1' }), cancel: async () => {},
+      verifyCompletion: async () => { throw Error('stale'); },
+    } });
+    expect((await runtime.run({ ...scope, requestId: 'bad-proof', command, targets })).status).toBe('failed');
+    expect(deps.authority!.release).toHaveBeenCalledTimes(1);
+  });
   it('releases the exact lease when an action throws', async () => {
     const { runtime, deps } = harness({ action: { execute: async () => { throw new Error('offline'); }, cancel: async () => {} } });
     expect((await runtime.run({ ...scope, requestId: 'throwing', command, targets })).status).toBe('failed');
