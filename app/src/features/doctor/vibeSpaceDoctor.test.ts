@@ -1,7 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DevLogEntry } from '@/features/dev-console';
+// These orchestration tests inject every backend. Do not initialize the real
+// app's provider/context graph just to exercise the diagnostic decisions.
+vi.mock('@/lib/db', () => ({ db: {}, terminalSessionRepo: {} }));
+vi.mock('@/lib/harness/runtimeManager', () => ({ harnessRuntimeManager: {} }));
+vi.mock('@/lib/harness/codexRuntimeManager', () => ({ codexRuntimeManager: {} }));
+vi.mock('@/lib/doctor/storageDoctor', () => ({ runStorageDoctor: vi.fn() }));
+vi.mock('@/features/skills', () => ({ getAllCatalogSkills: vi.fn() }));
+vi.mock('@/features/token-optimizer', () => ({ browserTokenOptimizationPreferences: {} }));
+vi.mock('@/stores/agents', () => ({ useAgentStore: {} }));
+vi.mock('@/stores/auth', () => ({ useAuthStore: {} }));
+vi.mock('@/lib/ai/adapters/autoDetectConnections', () => ({
+  refreshExternalConnectionAutoDetection: vi.fn(),
+}));
+vi.mock('@/lib/harness/toolGatewayProduction', () => ({
+  installToolGatewayRlmContextPort: vi.fn(),
+}));
+vi.mock('@/features/context/contextRlmProduction', () => ({ productionRlmContextTool: {} }));
+vi.mock('@/features/context/siyuanRlmProduction', () => ({ getProductionSiyuanRlmPort: vi.fn() }));
+vi.mock('@/features/dev-console/store', () => ({ useDevConsoleStore: {} }));
+vi.mock('./playwrightFeaturePackBridge', () => ({
+  runDefaultPlaywrightFeaturePackDoctorCheck: vi.fn(),
+}));
 import {
   collectRecentDoctorHealthSignals,
+  createVibeSpaceDoctorRunner,
   refreshDoctorContextBindings,
   runVibeSpaceDoctorWithDependencies,
   summarizeOpenCodeProviderRecord,
@@ -59,6 +82,89 @@ function dependencies(
 }
 
 describe('VibeSpace slash Doctor', () => {
+  it('shares concurrent requests and allows a fresh check after completion', async () => {
+    let finish!: (value: { code: 'healthy'; attempts: 1 }) => void;
+    const deps = dependencies({
+      runStorage: vi.fn(
+        () =>
+          new Promise<{ code: 'healthy'; attempts: 1 }>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    });
+    const run = createVibeSpaceDoctorRunner(deps);
+    const first = run();
+    expect(run()).toBe(first);
+    await Promise.resolve();
+    finish({ code: 'healthy', attempts: 1 });
+    await first;
+    expect(deps.runStorage).toHaveBeenCalledTimes(1);
+    const second = run();
+    expect(second).not.toBe(first);
+    await Promise.resolve();
+    finish({ code: 'healthy', attempts: 1 });
+    await second;
+    expect(deps.runStorage).toHaveBeenCalledTimes(2);
+  });
+
+  it('continues diagnostics after storage stops responding', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = dependencies({ runStorage: vi.fn(() => new Promise<never>(() => {})) });
+      const pending = runVibeSpaceDoctorWithDependencies(deps);
+      await vi.advanceTimersByTimeAsync(20_000);
+      const report = await pending;
+      expect(report.ok).toBe(false);
+      expect(deps.runAdditionalChecks).toHaveBeenCalledOnce();
+      expect(report.text).toContain('Route controls — Unchanged');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each(['checking', 'installing'] as const)(
+    'does not reinstall Codex while %s',
+    async (kind) => {
+      const repairCodexRuntime = vi.fn();
+      const report = await runVibeSpaceDoctorWithDependencies(
+        dependencies({
+          inspectCodexRuntime: vi.fn().mockResolvedValue({ kind }),
+          repairCodexRuntime,
+        }),
+      );
+      expect(repairCodexRuntime).not.toHaveBeenCalled();
+      expect(report.ok).toBe(false);
+      expect(report.text).toContain(`codex_runtime_${kind}`);
+    },
+  );
+
+  it('reports an unknown Codex inspection failure without guessing that installation is broken', async () => {
+    const repairCodexRuntime = vi.fn();
+    const report = await runVibeSpaceDoctorWithDependencies(
+      dependencies({
+        inspectCodexRuntime: vi.fn().mockRejectedValue(new Error('private token')),
+        repairCodexRuntime,
+      }),
+    );
+    expect(repairCodexRuntime).not.toHaveBeenCalled();
+    expect(report.text).toContain('codex_runtime_inspection_failed');
+    expect(report.text).not.toContain('private token');
+  });
+
+  it.each(['checking', 'starting', 'installing'] as const)(
+    'does not replace OpenCode while %s',
+    async (kind) => {
+      const repairOpenCode = vi.fn();
+      await runVibeSpaceDoctorWithDependencies(
+        dependencies({
+          getOpenCodeState: vi.fn().mockReturnValue({ kind }),
+          getOpenCodeConnection: vi.fn(),
+          repairOpenCode,
+        }),
+      );
+      expect(repairOpenCode).not.toHaveBeenCalled();
+    },
+  );
+
   it('repairs a diagnosed missing managed Codex harness with the pinned installer', async () => {
     const inspectCodexRuntime = vi.fn().mockResolvedValue({ kind: 'missing' });
     const repairCodexRuntime = vi.fn().mockResolvedValue({

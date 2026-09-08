@@ -19,6 +19,7 @@ import { getProductionSiyuanRlmPort } from '@/features/context/siyuanRlmProducti
 import { useDevConsoleStore, type DevLogEntry } from '@/features/dev-console/store';
 import { runDefaultPlaywrightFeaturePackDoctorCheck } from './playwrightFeaturePackBridge';
 import { codexRuntimeManager, type CodexRuntimeState } from '@/lib/harness/codexRuntimeManager';
+import { runDefaultDoctorSystemChecks, withDoctorDeadline } from './doctorSystemChecks';
 
 const OPENCODE_SETTLE_TIMEOUT_MS = 20_000;
 
@@ -141,38 +142,42 @@ async function safeSubsystemCheck(
   check: () => string | Promise<string>,
 ): Promise<VibeSpaceDoctorSubsystemCheck> {
   try {
-    return { label, ok: true, detail: await check() };
+    return { label, ok: true, detail: await withDoctorDeadline(check) };
   } catch {
     return { label, ok: false, detail: `Check failed safely · ${diagnosticCode}` };
   }
 }
 
 async function runDefaultAdditionalChecks(): Promise<readonly VibeSpaceDoctorSubsystemCheck[]> {
-  return Promise.all([
-    safeSubsystemCheck('Agents', 'agents_roster_unavailable', () => {
-      const count = Object.keys(useAgentStore.getState().agents).length;
-      return `Ready · ${count} loaded`;
-    }),
-    safeSubsystemCheck('Skills', 'skills_catalog_unavailable', () => {
-      const count = getAllCatalogSkills().length;
-      return `Ready · ${count} available`;
-    }),
-    safeSubsystemCheck('Terminals', 'terminal_sessions_unavailable', async () => {
-      const count = (await terminalSessionRepo.listRecentByLastActive(20)).length;
-      return `Ready · ${count} recent ${count === 1 ? 'session' : 'sessions'}`;
-    }),
-    safeSubsystemCheck('Optimization', 'optimization_settings_unavailable', () => {
-      const preferences = browserTokenOptimizationPreferences.getSnapshot();
-      if (!preferences.neverChangeSelectedModel) {
-        throw new Error('model selection protection is disabled');
-      }
-      return `Ready · ${preferences.globalMode} · selected model protected`;
-    }),
-    safeSubsystemCheck('Settings', 'settings_store_unavailable', async () => {
-      await db.settings.limit(1).toArray();
-      return 'Readable';
-    }),
+  const [local, connected] = await Promise.all([
+    Promise.all([
+      safeSubsystemCheck('Agents', 'agents_roster_unavailable', () => {
+        const count = Object.keys(useAgentStore.getState().agents).length;
+        return `Ready · ${count} loaded`;
+      }),
+      safeSubsystemCheck('Skills', 'skills_catalog_unavailable', () => {
+        const count = getAllCatalogSkills().length;
+        return `Ready · ${count} available`;
+      }),
+      safeSubsystemCheck('Terminal storage', 'terminal_sessions_unavailable', async () => {
+        const count = (await terminalSessionRepo.listRecentByLastActive(20)).length;
+        return `Readable · ${count} recent ${count === 1 ? 'session' : 'sessions'}; PTY execution not tested`;
+      }),
+      safeSubsystemCheck('Optimization', 'optimization_settings_unavailable', () => {
+        const preferences = browserTokenOptimizationPreferences.getSnapshot();
+        if (!preferences.neverChangeSelectedModel) {
+          throw new Error('model selection protection is disabled');
+        }
+        return `Ready · ${preferences.globalMode} · selected model protected`;
+      }),
+      safeSubsystemCheck('Settings', 'settings_store_unavailable', async () => {
+        await db.settings.limit(1).toArray();
+        return 'Readable';
+      }),
+    ]),
+    runDefaultDoctorSystemChecks(),
   ]);
+  return [...local, ...connected];
 }
 
 function isOpenCodeSettled(state: HarnessRuntimeState): boolean {
@@ -232,7 +237,7 @@ function openCodeSummary(
   if (state.kind === 'download_required' || state.kind === 'missing') {
     return {
       ok: false,
-      text: 'Not available; no install was attempted · opencode_runtime_missing',
+      text: 'Not available · opencode_runtime_missing',
     };
   }
   return { ok: false, text: `Did not become ready · ${state.kind}` };
@@ -379,7 +384,7 @@ export async function runVibeSpaceDoctorWithDependencies(
   }
   let storage: { ok: boolean; text: string };
   try {
-    storage = storageSummary(await dependencies.runStorage());
+    storage = storageSummary(await withDoctorDeadline(dependencies.runStorage));
   } catch {
     storage = { ok: false, text: 'Check failed safely · storage_doctor_unavailable' };
   }
@@ -405,14 +410,21 @@ export async function runVibeSpaceDoctorWithDependencies(
     });
   } else {
     let codexState: CodexRuntimeState | undefined;
+    let codexRepairAttempted = false;
     try {
-      codexState = await dependencies.inspectCodexRuntime();
+      codexState = await withDoctorDeadline(dependencies.inspectCodexRuntime);
     } catch {
       codexState = undefined;
     }
-    if (!codexState || codexState.kind !== 'ready') {
+    if (
+      codexState &&
+      (codexState.kind === 'missing' ||
+        codexState.kind === 'incomplete' ||
+        (codexState.kind === 'failed' && codexState.recoverable))
+    ) {
+      codexRepairAttempted = true;
       try {
-        codexState = await dependencies.repairCodexRuntime();
+        codexState = await withDoctorDeadline(dependencies.repairCodexRuntime, 180_000);
       } catch {
         codexState = undefined;
       }
@@ -423,25 +435,37 @@ export async function runVibeSpaceDoctorWithDependencies(
         : {
             label: 'Codex tools',
             ok: false,
-            detail: 'Repair failed safely · codex_runtime_repair_failed',
+            detail: codexRepairAttempted
+              ? 'Repair failed safely · codex_runtime_repair_failed'
+              : 'Inspection failed safely · codex_runtime_inspection_failed',
           },
     );
     try {
-      await dependencies.refreshOpenCode();
-      await dependencies.waitForOpenCodeSettled();
+      await withDoctorDeadline(dependencies.refreshOpenCode);
+      await withDoctorDeadline(
+        dependencies.waitForOpenCodeSettled,
+        OPENCODE_SETTLE_TIMEOUT_MS + 1_000,
+      );
       let state = dependencies.getOpenCodeState();
       let connection = dependencies.getOpenCodeConnection();
       openCode = openCodeSummary(state, connection);
-      if (!openCode.ok) {
-        await dependencies.repairOpenCode();
-        await dependencies.waitForOpenCodeSettled();
+      if (
+        !openCode.ok &&
+        (['missing', 'download_required', 'incompatible'].includes(state.kind) ||
+          (state.kind === 'failed' && state.recoverable))
+      ) {
+        await withDoctorDeadline(dependencies.repairOpenCode, 180_000);
+        await withDoctorDeadline(
+          dependencies.waitForOpenCodeSettled,
+          OPENCODE_SETTLE_TIMEOUT_MS + 1_000,
+        );
         state = dependencies.getOpenCodeState();
         connection = dependencies.getOpenCodeConnection();
         openCode = openCodeSummary(state, connection);
       }
       if (openCode.ok) {
         try {
-          runtimeChecks.push(await dependencies.refreshOpenCodeProvider());
+          runtimeChecks.push(await withDoctorDeadline(dependencies.refreshOpenCodeProvider));
         } catch {
           runtimeChecks.push({
             label: 'OpenCode provider',
@@ -454,7 +478,7 @@ export async function runVibeSpaceDoctorWithDependencies(
       openCode = { ok: false, text: 'Check failed safely · opencode_runtime_unavailable' };
     }
     try {
-      runtimeChecks.push(...(await dependencies.refreshContextBindings()));
+      runtimeChecks.push(...(await withDoctorDeadline(dependencies.refreshContextBindings)));
     } catch {
       runtimeChecks.push({
         label: 'RLM / SiYuan',
@@ -463,7 +487,7 @@ export async function runVibeSpaceDoctorWithDependencies(
       });
     }
     try {
-      runtimeChecks.push(await dependencies.checkPlaywrightFeaturePack());
+      runtimeChecks.push(await withDoctorDeadline(dependencies.checkPlaywrightFeaturePack));
     } catch {
       runtimeChecks.push({
         label: 'Playwright acceptance runtime',
@@ -475,7 +499,7 @@ export async function runVibeSpaceDoctorWithDependencies(
 
   let additionalChecks: readonly VibeSpaceDoctorSubsystemCheck[];
   try {
-    additionalChecks = await dependencies.runAdditionalChecks();
+    additionalChecks = await withDoctorDeadline(dependencies.runAdditionalChecks);
   } catch {
     additionalChecks = [
       {
@@ -530,11 +554,12 @@ export async function runVibeSpaceDoctorWithDependencies(
   return {
     ok,
     text: [
-      `VibeSpace Doctor — ${ok ? 'All supported checks passed' : 'Attention needed'}`,
+      `VibeSpace Doctor — ${ok ? 'Checks completed' : 'Attention needed'}`,
       `${storage.ok ? '✓' : '•'} Local chat storage — ${storage.text}`,
       `${openCode.ok ? '✓' : '•'} OpenCode — ${openCode.text}`,
       ...allChecks.map((check) => `${check.ok ? '✓' : '•'} ${check.label} — ${check.detail}`),
       `Completed in ${elapsedMs} ms.`,
+      'Checks describe verified capabilities only. Live execution, delivery, and backup restoration require separate tests.',
       ok
         ? 'No credentials, user content, or route controls were changed; only supported runtime refresh/rebind and non-destructive storage recovery ran.'
         : 'No destructive cleanup was attempted. Persistent storage repair still requires explicit confirmation; unknown errors are reported rather than guessed.',
@@ -542,30 +567,38 @@ export async function runVibeSpaceDoctorWithDependencies(
   };
 }
 
-export function runVibeSpaceDoctor(): Promise<VibeSpaceDoctorReport> {
-  return runVibeSpaceDoctorWithDependencies({
-    nativeRuntime: isTauri,
-    runStorage: () => runStorageDoctor({ force: true }),
-    refreshOpenCode: () => harnessRuntimeManager.refresh(),
-    repairOpenCode: () => harnessRuntimeManager.repair(),
-    getOpenCodeState: () => harnessRuntimeManager.getSnapshot(),
-    getOpenCodeConnection: () => harnessRuntimeManager.getConnection(),
-    waitForOpenCodeSettled: () => waitForOpenCodeSettled(harnessRuntimeManager),
-    inspectCodexRuntime: async () => {
-      await codexRuntimeManager.refresh();
-      return codexRuntimeManager.getSnapshot();
-    },
-    repairCodexRuntime: async () => {
-      await codexRuntimeManager.install();
-      return codexRuntimeManager.getSnapshot();
-    },
-    refreshOpenCodeProvider: refreshDefaultOpenCodeProvider,
-    refreshContextBindings: refreshDefaultContextBindings,
-    checkPlaywrightFeaturePack: runDefaultPlaywrightFeaturePackDoctorCheck,
-    readRecentHealthSignals: () =>
-      collectRecentDoctorHealthSignals(useDevConsoleStore.getState().entries, Date.now()),
-    captureProtectedRouteState: captureDefaultProtectedRouteState,
-    runAdditionalChecks: runDefaultAdditionalChecks,
-    now: () => performance.now(),
-  });
+export function createVibeSpaceDoctorRunner(dependencies: VibeSpaceDoctorDependencies) {
+  let active: Promise<VibeSpaceDoctorReport> | undefined;
+  return (): Promise<VibeSpaceDoctorReport> => {
+    active ??= runVibeSpaceDoctorWithDependencies(dependencies).finally(() => {
+      active = undefined;
+    });
+    return active;
+  };
 }
+
+export const runVibeSpaceDoctor = createVibeSpaceDoctorRunner({
+  nativeRuntime: isTauri,
+  runStorage: () => runStorageDoctor({ force: true }),
+  refreshOpenCode: () => harnessRuntimeManager.refresh(),
+  repairOpenCode: () => harnessRuntimeManager.repair(),
+  getOpenCodeState: () => harnessRuntimeManager.getSnapshot(),
+  getOpenCodeConnection: () => harnessRuntimeManager.getConnection(),
+  waitForOpenCodeSettled: () => waitForOpenCodeSettled(harnessRuntimeManager),
+  inspectCodexRuntime: async () => {
+    await codexRuntimeManager.refresh();
+    return codexRuntimeManager.getSnapshot();
+  },
+  repairCodexRuntime: async () => {
+    await codexRuntimeManager.install();
+    return codexRuntimeManager.getSnapshot();
+  },
+  refreshOpenCodeProvider: refreshDefaultOpenCodeProvider,
+  refreshContextBindings: refreshDefaultContextBindings,
+  checkPlaywrightFeaturePack: runDefaultPlaywrightFeaturePackDoctorCheck,
+  readRecentHealthSignals: () =>
+    collectRecentDoctorHealthSignals(useDevConsoleStore.getState().entries, Date.now()),
+  captureProtectedRouteState: captureDefaultProtectedRouteState,
+  runAdditionalChecks: runDefaultAdditionalChecks,
+  now: () => performance.now(),
+});
