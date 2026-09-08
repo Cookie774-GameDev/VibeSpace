@@ -99,6 +99,37 @@ describe('flushWorkspacePersistence', () => {
     unbind();
   });
 
+  it.each(['jarvis-terminal-transcripts', terminalTreeStorageKey('project-a')])(
+    'reports a failed durable write to %s and allows a later successful retry',
+    async (failedKey) => {
+      captureLiveTree('project-a', leaf('pane-a', 'pty-live'));
+      useTerminalTranscriptStore.getState().registerSession('pty-live', {
+        paneId: 'pane-a',
+        projectId: 'project-a',
+        command: 'powershell.exe',
+      });
+      useTerminalTranscriptStore.getState().appendOutput('pty-live', 'unsaved work');
+      const original = Storage.prototype.setItem;
+      const writes = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+        this: Storage,
+        key,
+        value,
+      ) {
+        if (key === failedKey) throw new DOMException('synthetic full disk', 'QuotaExceededError');
+        return original.call(this, key, value);
+      });
+      try {
+        expect((await flushWorkspacePersistence('pre-update-install')).failed).toBeGreaterThan(0);
+      } finally {
+        writes.mockRestore();
+      }
+      expect((await flushWorkspacePersistence('retry')).failed).toBe(0);
+      expect(window.localStorage.getItem(failedKey)).toContain(
+        failedKey === 'jarvis-terminal-transcripts' ? 'unsaved work' : 'pane-a',
+      );
+    },
+  );
+
   it('contains a Canvas persistence failure without rejecting the workspace flush', async () => {
     const unbind = bindCanvasWorkspaceFlush(async () => {
       throw new Error('synthetic canvas failure');

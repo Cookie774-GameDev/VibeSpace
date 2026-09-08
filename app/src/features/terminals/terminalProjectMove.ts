@@ -185,16 +185,18 @@ export function loadStoredTerminalTree(
 export function saveTerminalTree(
   projectId: ProjectId | string | null | undefined,
   tree: PaneNode,
-): void {
-  if (typeof window === 'undefined') return;
+): boolean {
+  if (typeof window === 'undefined') return true;
   try {
     const ownedTree = withProjectOwnership(tree, normalizeTerminalProjectId(projectId));
     window.localStorage.setItem(
       terminalTreeStorageKey(projectId),
       JSON.stringify(ownedTree, stripVolatileTerminalFields),
     );
+    return true;
   } catch {
     // localStorage may be full; live cache still preserves this session.
+    return false;
   }
 }
 

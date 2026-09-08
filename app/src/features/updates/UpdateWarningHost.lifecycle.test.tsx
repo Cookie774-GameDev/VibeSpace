@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UpdateWarningHost } from './UpdateWarningHost';
 
@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   installPrepared: vi.fn(),
   playUiSound: vi.fn(),
+  restartSafe: vi.fn(),
+  notify: vi.fn(),
   listeners: new Map<string, () => void>(),
   toast: { error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
@@ -22,6 +24,8 @@ vi.mock('@/lib/updates', () => ({
 }));
 
 vi.mock('@/lib/sfx/playUiSound', () => ({ playUiSound: mocks.playUiSound }));
+vi.mock('./updateStartupPolicy', () => ({ canInstallStartupUpdate: mocks.restartSafe }));
+vi.mock('@/lib/tauri', () => ({ notify: mocks.notify }));
 vi.mock('@/components/ui/toast', () => ({ toast: mocks.toast }));
 vi.mock('@/lib/utils', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/utils')>()),
@@ -42,6 +46,8 @@ describe('UpdateWarningHost deferred lifecycle', () => {
     window.localStorage.clear();
     mocks.listeners.clear();
     mocks.autoUpdate = true;
+    mocks.restartSafe.mockResolvedValue(false);
+    mocks.notify.mockResolvedValue({ channel: 'native' });
     mocks.check.mockResolvedValue({
       available: true,
       installed: false,
@@ -86,7 +92,7 @@ describe('UpdateWarningHost deferred lifecycle', () => {
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 
-  it('stages automatic updates once and installs only after the next main-window close event', async () => {
+  it('keeps running terminals alive when the main window hides to the tray', async () => {
     await detectUpdate();
     await act(async () => undefined);
 
@@ -99,10 +105,10 @@ describe('UpdateWarningHost deferred lifecycle', () => {
       mocks.listeners.get('jarvis:before-hide')?.();
       await Promise.resolve();
     });
-    expect(mocks.installPrepared).toHaveBeenCalledWith({ relaunch: false });
+    expect(mocks.installPrepared).not.toHaveBeenCalled();
   });
 
-  it('uses the already-requested persistence flush when the tray exits the app', async () => {
+  it('does not race the native shutdown flush with an updater installation', async () => {
     await detectUpdate();
     await act(async () => undefined);
 
@@ -110,10 +116,38 @@ describe('UpdateWarningHost deferred lifecycle', () => {
       mocks.listeners.get('jarvis:persist-now')?.();
       await Promise.resolve();
     });
-    expect(mocks.installPrepared).toHaveBeenCalledWith({
-      relaunch: false,
-      persistenceAlreadyRequested: true,
-    });
+    expect(mocks.installPrepared).not.toHaveBeenCalled();
+  });
+
+  it('installs automatically on an idle startup after downloading the signed update', async () => {
+    mocks.restartSafe.mockResolvedValue(true);
+    await detectUpdate();
+    expect(mocks.installPrepared).toHaveBeenCalledWith({ relaunch: true });
+    expect(mocks.notify).toHaveBeenCalledOnce();
+  });
+
+  it('defers an automatic restart if the user starts working during download', async () => {
+    mocks.restartSafe.mockResolvedValue(true);
+    let downloaded!: () => void;
+    mocks.prepare.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          downloaded = () => resolve({ prepared: true, version: '2.4.0' });
+        }),
+    );
+    await detectUpdate();
+    fireEvent.keyDown(window, { key: 'a' });
+    await act(async () => downloaded());
+    expect(mocks.installPrepared).not.toHaveBeenCalled();
+  });
+
+  it('lets the user reopen a deferred update and install from its notification', async () => {
+    mocks.autoUpdate = false;
+    await detectUpdate();
+    fireEvent.click(screen.getByRole('button', { name: 'Remind Me Later' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Update to v2.4.0' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update Now' })));
+    expect(mocks.installPrepared).toHaveBeenCalledWith({ relaunch: true });
   });
 
   it('does not replay the notification sound for the same persisted version', async () => {

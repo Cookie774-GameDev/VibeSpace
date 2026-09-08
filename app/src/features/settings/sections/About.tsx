@@ -273,7 +273,7 @@ export function About() {
             <Label htmlFor="auto-update-toggle">Auto-install updates</Label>
             <p className="text-metadata text-muted-foreground">
               {isTauri
-                ? 'Jarvis checks on launch and installs signed updates automatically after warning at 1 hour, 30 minutes, and 5 minutes. Use Update Later to defer.'
+                ? 'VibeSpace checks on launch, downloads signed updates, and installs on an idle startup. Active terminals, agents, or user activity defer the restart. Update Now remains available.'
                 : 'Install the desktop app to receive signed updates.'}
             </p>
           </div>
@@ -294,9 +294,9 @@ export function About() {
             <h3 className="text-ui-strong text-foreground">Updates</h3>
             <p className="text-secondary text-muted-foreground">
               Signed releases are delivered from GitHub Releases. Jarvis verifies every bundle,
-              shows pre-install warnings, and lets you update now or later. All terminal information
-              may not be saved across an update: layouts and recent output are restored, but live
-              terminal processes cannot survive the restart.
+              shows release notes, and lets you update now or later. Workspace saving must finish
+              before installation. Hiding to the tray keeps terminals running; a full restart
+              restores saved state but cannot preserve a live process.
             </p>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">

@@ -34,16 +34,22 @@ describe('checkForAppUpdate persistence gates', () => {
     mocks.exit.mockResolvedValue(undefined);
   });
 
-  it('awaits persistence before install and again before relaunch', async () => {
+  it('saves edits after the download, awaits persistence before install and again before relaunch', async () => {
+    let releaseDownload: (() => void) | undefined;
     let releaseInstallFlush: (() => void) | undefined;
     let releaseRelaunchFlush: (() => void) | undefined;
-    const downloadAndInstall = vi.fn(async (onEvent: (event: { event: string }) => void) => {
-      onEvent({ event: 'Finished' });
-    });
+    const download = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDownload = resolve;
+        }),
+    );
+    const install = vi.fn();
     mocks.check.mockResolvedValue({
       version: '9.9.9',
       body: 'synthetic update',
-      downloadAndInstall,
+      download,
+      install,
     });
     mocks.flush
       .mockImplementationOnce(
@@ -60,11 +66,14 @@ describe('checkForAppUpdate persistence gates', () => {
       );
 
     const pending = checkForAppUpdate({ install: true });
+    await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+    expect(mocks.flush).not.toHaveBeenCalled();
+    releaseDownload?.();
     await vi.waitFor(() => expect(mocks.flush).toHaveBeenCalledWith('pre-update-install'));
-    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
 
     releaseInstallFlush?.();
-    await vi.waitFor(() => expect(downloadAndInstall).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(mocks.flush).toHaveBeenCalledWith('pre-update-relaunch'));
     expect(mocks.relaunch).not.toHaveBeenCalled();
 
@@ -126,7 +135,7 @@ describe('deferred updater lifecycle', () => {
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
-  it('does not duplicate the native exit persistence flush', async () => {
+  it('waits for verified persistence even when a native flush was already requested', async () => {
     const download = vi.fn();
     const install = vi.fn();
     mocks.check.mockResolvedValue({ version: '9.9.7', body: 'Notes', download, install });
@@ -134,9 +143,28 @@ describe('deferred updater lifecycle', () => {
 
     await installPreparedAppUpdate({ relaunch: false, persistenceAlreadyRequested: true });
 
-    expect(mocks.flush).not.toHaveBeenCalled();
+    expect(mocks.flush).toHaveBeenCalledWith('pre-update-install');
     expect(install).toHaveBeenCalledOnce();
     expect(mocks.exit).toHaveBeenCalledWith(0);
+  });
+
+  it.each([
+    { completed: 0, failed: 1, timedOut: false },
+    { completed: 0, failed: 0, timedOut: true },
+    {
+      completed: 1,
+      failed: 0,
+      timedOut: false,
+      canvas: { completed: 0, failed: 1, timedOut: false },
+    },
+  ])('does not install when workspace persistence is incomplete: %j', async (result) => {
+    const install = vi.fn();
+    mocks.check.mockResolvedValue({ version: '9.9.6', download: vi.fn(), install });
+    await prepareAppUpdate({ expectedVersion: '9.9.6' });
+    mocks.flush.mockResolvedValue(result);
+    await expect(installPreparedAppUpdate({ relaunch: true })).rejects.toThrow(/workspace.*saved/i);
+    expect(install).not.toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
   it('refuses to stage a different version than the one shown to the user', async () => {
@@ -175,17 +203,19 @@ describe('checkForAppUpdate runtime-profile effect guards', () => {
     mocks.relaunch.mockResolvedValue(undefined);
   });
 
-  it('ordinary mode calls every effect adapter exactly as before', async () => {
-    const downloadAndInstall = vi.fn();
-    mocks.check.mockResolvedValue({ version: '9.9.9', body: 'synthetic', downloadAndInstall });
-    mocks.flush.mockResolvedValue(undefined);
+  it('ordinary mode downloads, saves, installs and relaunches', async () => {
+    const download = vi.fn();
+    const install = vi.fn();
+    mocks.check.mockResolvedValue({ version: '9.9.9', body: 'synthetic', download, install });
+    mocks.flush.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
     await expect(checkForAppUpdate({ install: true })).resolves.toMatchObject({
       available: true,
       installed: true,
     });
     expect(mocks.check).toHaveBeenCalledOnce();
     expect(mocks.flush).toHaveBeenCalledTimes(2);
-    expect(downloadAndInstall).toHaveBeenCalledOnce();
+    expect(download).toHaveBeenCalledOnce();
+    expect(install).toHaveBeenCalledOnce();
     expect(mocks.relaunch).toHaveBeenCalledOnce();
   });
 
@@ -217,13 +247,14 @@ describe('checkForAppUpdate runtime-profile effect guards', () => {
   });
 
   it('ordinary mode invokes the native updater, persistence, and process adapters', async () => {
-    const downloadAndInstall = vi.fn(async (onEvent: (event: { event: string }) => void) => {
+    const download = vi.fn(async (onEvent: (event: { event: string }) => void) => {
       onEvent({ event: 'Finished' });
     });
     mocks.check.mockResolvedValue({
       version: '9.9.9',
       body: 'synthetic update',
-      downloadAndInstall,
+      download,
+      install: vi.fn(),
     });
     mocks.flush.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
     await expect(checkForAppUpdate({ install: true })).resolves.toMatchObject({
@@ -231,7 +262,7 @@ describe('checkForAppUpdate runtime-profile effect guards', () => {
       installed: true,
     });
     expect(mocks.check).toHaveBeenCalledOnce();
-    expect(downloadAndInstall).toHaveBeenCalledOnce();
+    expect(download).toHaveBeenCalledOnce();
     expect(mocks.flush).toHaveBeenCalledWith('pre-update-install');
     expect(mocks.flush).toHaveBeenCalledWith('pre-update-relaunch');
     expect(mocks.relaunch).toHaveBeenCalledOnce();

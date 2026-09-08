@@ -51,11 +51,6 @@ interface UpdateEffectSeams {
   checkUpdate(): Promise<PendingUpdate | undefined>;
   /** Rows 2 & 4: flush workspace persistence before install/relaunch (persistence). */
   flushPersistence(reason: 'pre-update-install' | 'pre-update-relaunch'): Promise<unknown>;
-  /** Row 3: download and install the pending update (network/update effect). */
-  installUpdate(
-    update: PendingUpdate,
-    onEvent: (event: UpdateDownloadEvent) => void,
-  ): Promise<void>;
   /** Download a pending update without installing it. */
   downloadUpdate(
     update: PendingUpdate,
@@ -78,12 +73,6 @@ const updateEffectAdapters: UpdateEffectSeams = {
   },
   async flushPersistence(reason) {
     return flushWorkspacePersistence(reason);
-  },
-  async installUpdate(update, onEvent) {
-    const handle = update.handle as {
-      downloadAndInstall(cb: (event: UpdateDownloadEvent) => void): Promise<void>;
-    };
-    await handle.downloadAndInstall(onEvent);
   },
   async downloadUpdate(update, onEvent) {
     const handle = update.handle as {
@@ -121,9 +110,40 @@ function assertUpdateEffectsAllowed(effect: string): void {
   }
 }
 
+async function saveBeforeUpdate(
+  reason: 'pre-update-install' | 'pre-update-relaunch',
+): Promise<void> {
+  assertUpdateEffectsAllowed(
+    reason === 'pre-update-install' ? 'persistence-flush-install' : 'persistence-flush-relaunch',
+  );
+  const result = (await updateEffectAdapters.flushPersistence(reason)) as
+    | {
+        failed?: number;
+        timedOut?: boolean;
+        canvas?: { failed?: number; timedOut?: boolean };
+      }
+    | undefined;
+  if (
+    !result ||
+    result.failed !== 0 ||
+    result.timedOut !== false ||
+    (result.canvas && (result.canvas.failed !== 0 || result.canvas.timedOut !== false))
+  ) {
+    throw new Error(
+      reason === 'pre-update-install'
+        ? 'The workspace could not be fully saved. The update was not installed; retry after saving your work.'
+        : 'The update was installed, but the workspace could not be fully saved. Save your work before restarting.',
+    );
+  }
+}
+
 export function getAutoUpdateEnabled(): boolean {
   if (typeof window === 'undefined') return true;
-  return window.localStorage.getItem(AUTO_UPDATE_KEY) !== '0';
+  try {
+    return window.localStorage.getItem(AUTO_UPDATE_KEY) !== '0';
+  } catch {
+    return false;
+  }
 }
 
 export function setAutoUpdateEnabled(enabled: boolean): void {
@@ -225,10 +245,8 @@ export async function installPreparedAppUpdate(options: {
   const update = preparedUpdate;
   if (!update) throw new Error('No downloaded update is ready to install.');
 
-  if (!options.persistenceAlreadyRequested) {
-    assertUpdateEffectsAllowed('persistence-flush-install');
-    await updateEffectAdapters.flushPersistence('pre-update-install');
-  }
+  // A native flush request is not proof of completion. Await the shared barrier.
+  await saveBeforeUpdate('pre-update-install');
   assertUpdateEffectsAllowed('install-prepared-update');
   await updateEffectAdapters.installPreparedUpdate(update);
   preparedUpdate = undefined;
@@ -286,38 +304,17 @@ export async function checkForAppUpdate(
     };
   }
 
-  // Row 2: persistence flush before install.
-  assertUpdateEffectsAllowed('persistence-flush-install');
-  await updateEffectAdapters.flushPersistence('pre-update-install');
-
-  let downloadedBytes = 0;
-  let totalBytes: number | undefined;
-  options.onProgress?.({ phase: 'downloading', downloadedBytes, totalBytes });
-
-  // Row 3: download and install (network/update effect).
-  assertUpdateEffectsAllowed('download-and-install');
-  await updateEffectAdapters.installUpdate(update, (event) => {
-    if (event.event === 'Started') {
-      downloadedBytes = 0;
-      totalBytes = event.data?.contentLength ?? undefined;
-      options.onProgress?.({ phase: 'downloading', downloadedBytes, totalBytes });
-      return;
-    }
-    if (event.event === 'Progress') {
-      downloadedBytes += event.data?.chunkLength ?? 0;
-      options.onProgress?.({ phase: 'downloading', downloadedBytes, totalBytes });
-      return;
-    }
-    if (event.event === 'Finished') {
-      options.onProgress?.({ phase: 'installing', downloadedBytes, totalBytes });
-    }
-  });
-
-  options.onProgress?.({ phase: 'installed', downloadedBytes, totalBytes });
+  // Finish the download first: the user can make new edits while it runs.
+  assertUpdateEffectsAllowed('updater-download');
+  await updateEffectAdapters.downloadUpdate(update, reportDownloadProgress(options.onProgress));
+  await saveBeforeUpdate('pre-update-install');
+  assertUpdateEffectsAllowed('install-prepared-update');
+  options.onProgress?.({ phase: 'installing' });
+  await updateEffectAdapters.installPreparedUpdate(update);
+  options.onProgress?.({ phase: 'installed' });
 
   // Row 4: persistence flush before relaunch.
-  assertUpdateEffectsAllowed('persistence-flush-relaunch');
-  await updateEffectAdapters.flushPersistence('pre-update-relaunch');
+  await saveBeforeUpdate('pre-update-relaunch');
 
   // Row 5: relaunch (process effect).
   assertUpdateEffectsAllowed('relaunch');

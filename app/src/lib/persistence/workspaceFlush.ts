@@ -32,8 +32,9 @@ const PERSIST_KEY_PREFIXES = [
   'jarvis-tools',
 ] as const;
 
-function flushDebouncedLocalStorageKeys(): void {
-  if (typeof window === 'undefined') return;
+function flushDebouncedLocalStorageKeys(): number {
+  if (typeof window === 'undefined') return 0;
+  let failed = 0;
   for (const key of PERSIST_KEY_PREFIXES) {
     try {
       const value = window.localStorage.getItem(key);
@@ -41,7 +42,7 @@ function flushDebouncedLocalStorageKeys(): void {
         window.localStorage.setItem(key, value);
       }
     } catch {
-      /* quota or private mode */
+      failed += 1;
     }
   }
 
@@ -53,13 +54,15 @@ function flushDebouncedLocalStorageKeys(): void {
       if (value !== null) window.localStorage.setItem(key, value);
     }
   } catch {
-    /* ignore */
+    failed += 1;
   }
+  return failed;
 }
 
 /** Flush terminal transcripts, pane trees, and persisted UI state to disk. */
 export async function flushWorkspacePersistence(reason?: string): Promise<WorkspaceFlushResult> {
   const flushReason = reason ?? 'manual';
+  let failedWrites = 0;
   try {
     if (typeof window !== 'undefined') {
       const detail = { reason: flushReason };
@@ -70,11 +73,12 @@ export async function flushWorkspacePersistence(reason?: string): Promise<Worksp
       );
     }
     forEachLiveTree((projectId, tree) => {
-      saveTerminalTree(projectId, tree);
+      if (!saveTerminalTree(projectId, tree)) failedWrites += 1;
     });
-    flushTranscriptStorage();
-    flushDebouncedLocalStorageKeys();
+    if (!flushTranscriptStorage()) failedWrites += 1;
+    failedWrites += flushDebouncedLocalStorageKeys();
   } catch (err) {
+    failedWrites += 1;
     console.warn('[workspace] persistence flush failed:', err);
   }
   // Start the awaitable Canvas flush synchronously so bound controllers begin
@@ -87,10 +91,10 @@ export async function flushWorkspacePersistence(reason?: string): Promise<Worksp
   ]);
   if (reason && import.meta.env.DEV) {
     console.info(
-      `[workspace] flushed persistence (${reason}; completed=${result.completed}, failed=${result.failed}, timedOut=${result.timedOut})`,
+      `[workspace] flushed persistence (${reason}; completed=${result.completed}, failed=${result.failed + failedWrites}, timedOut=${result.timedOut})`,
     );
   }
-  return { ...result, canvas };
+  return { ...result, failed: result.failed + failedWrites, canvas };
 }
 
 export async function flushWorkspacePersistenceAndAcknowledge(

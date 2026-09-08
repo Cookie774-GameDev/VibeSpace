@@ -412,8 +412,9 @@ export function loadInitialSessions(): Record<string, SessionTranscript> {
   return primary ?? backup ?? {};
 }
 
-export function flushTranscriptStorage(): void {
-  if (typeof window === 'undefined') return;
+export function flushTranscriptStorage(): boolean {
+  if (typeof window === 'undefined') return true;
+  let saved = true;
   if (transcriptStorageTimer) {
     clearTimeout(transcriptStorageTimer);
     transcriptStorageTimer = null;
@@ -432,7 +433,7 @@ export function flushTranscriptStorage(): void {
     // durable terminal history. (User intentionally clearing goes through a
     // separate explicit path, not this debounced flush.)
     if (isEmpty && currentCount > 0) {
-      return;
+      return true;
     }
     // Preserve last-known-good in the backup slot before overwriting primary.
     if (current && current !== serialized && currentCount > 0) {
@@ -440,16 +441,19 @@ export function flushTranscriptStorage(): void {
     }
     pendingStorageWrites.set(TRANSCRIPT_STORAGE_KEY, serialized);
   } catch {
-    // If serialization fails, skip this flush rather than blocking output.
+    // Keep rendering, but tell an awaiting updater that this save failed.
+    saved = false;
   }
   for (const [name, value] of pendingStorageWrites) {
     try {
       window.localStorage.setItem(name, value);
+      pendingStorageWrites.delete(name);
     } catch {
-      // Terminal rendering should not stall if localStorage is full.
+      // Retain failed writes for the next flush without stalling rendering.
+      saved = false;
     }
   }
-  pendingStorageWrites.clear();
+  return saved;
 }
 
 function scheduleTranscriptStorageFlush(): void {
