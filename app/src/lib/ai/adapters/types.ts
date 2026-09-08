@@ -149,6 +149,8 @@ export interface ProviderRequest {
   projectId?: string;
   worktreeId?: string;
   prompt: string;
+  /** Supplied conversation context for a newly created persistent thread only. */
+  historyPrompt?: string;
   modelId?: string;
   reasoningEffort?: string;
   systemPrompt?: string;

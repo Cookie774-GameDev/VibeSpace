@@ -454,11 +454,16 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
     projectId: req.projectId,
     worktreeId: req.worktreeId,
     prompt: promptForOpenCode(req.messages),
+    historyPrompt: req.messages
+      .filter((message) => message.role !== 'system')
+      .map((message) => `${message.role}: ${llmContentToText(message.content)}`)
+      .join('\n\n'),
     modelId,
     reasoningEffort: resolveOpenCodeVariant(req.provider_options),
     systemPrompt: req.compiledPrompt?.systemText ?? req.agent.system_prompt,
     workingDirectory: req.workingDirectory,
     sessionId: req.expectedSessionId,
+    expectedSessionId: req.expectedSessionId,
     runtimeSettings: req.runtimeSettings,
     interactionMode: req.interactionMode,
     accessLevel: req.accessLevel,

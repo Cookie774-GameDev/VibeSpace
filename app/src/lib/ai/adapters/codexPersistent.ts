@@ -99,9 +99,10 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function promptText(request: Readonly<ProviderRequest>): string {
+function promptText(request: Readonly<ProviderRequest>, newThread = false): string {
   const system = request.systemPrompt?.trim();
-  return system ? system + '\n\n' + request.prompt : request.prompt;
+  const prompt = newThread ? request.historyPrompt?.trim() || request.prompt : request.prompt;
+  return system ? system + '\n\n' + prompt : prompt;
 }
 
 function effort(request: Readonly<ProviderRequest>): string | null {
@@ -196,6 +197,7 @@ async function validateModelCapability(
 async function* sendCodexRequest(
   request: ProviderRequest,
   dependencies: CodexPersistentDependencies,
+  recoverImplicitThread = false,
 ): AsyncGenerator<ProviderEvent> {
   if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   if (request.connection.id !== 'openai-codex') {
@@ -262,7 +264,7 @@ async function* sendCodexRequest(
       dependencies.write,
       request.requestId,
     );
-    const threadRequestId = requestId(request.requestId, request.sessionId ? 'resume' : 'thread');
+    let threadRequestId = requestId(request.requestId, request.sessionId ? 'resume' : 'thread');
     const threadRequest = request.sessionId
       ? buildCodexThreadResumeRequest({
           requestId: threadRequestId,
@@ -276,8 +278,23 @@ async function* sendCodexRequest(
           mode,
         });
     await dependencies.write(generation, threadRequest);
-    const threadResponse = await responseFrame(reader, threadRequestId);
-    if (request.sessionId) {
+    let threadResponse = await responseFrame(reader, threadRequestId);
+    let resumed = Boolean(request.sessionId);
+    const resumeError = recordOf(threadResponse.error);
+    if (resumed && recoverImplicitThread && !request.expectedSessionId &&
+      resumeError?.code === -32600 && typeof resumeError.message === 'string' &&
+      /^no rollout found for thread id\b/i.test(resumeError.message)) {
+      if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+      // Isolated provider profiles may not contain an implicitly cached thread.
+      // No turn was sent: start once and restore the supplied chat context.
+      threadRequestId = requestId(request.requestId, 'thread');
+      await dependencies.write(generation, buildCodexThreadStartRequest({
+        requestId: threadRequestId, identity: exactIdentity, mode,
+      }));
+      threadResponse = await responseFrame(reader, threadRequestId);
+      resumed = false;
+    }
+    if (resumed) {
       const projection = normalizeCodexThreadBindingResponse(threadResponse, threadRequestId);
       const session = projection.events.find(
         (event): event is Extract<ProviderEvent, { type: 'session' }> => event.type === 'session',
@@ -305,7 +322,7 @@ async function* sendCodexRequest(
         requestId: requestId(request.requestId, 'turn'),
         threadId,
         clientUserMessageId: requestId(request.requestId, 'message'),
-        text: promptText(request),
+        text: promptText(request, !resumed),
         identity: exactIdentity,
         mode,
       }),
@@ -373,7 +390,9 @@ export function createCodexPersistentAdapter(
           if (stored && /^[A-Za-z0-9._:-]{1,256}$/u.test(stored)) sessionId = stored;
         } catch { /* Native startup still works when local persistence is unavailable. */ }
       }
-      for await (const event of sendCodexRequest({ ...request, sessionId }, dependencies)) {
+      for await (const event of sendCodexRequest(
+        { ...request, sessionId }, dependencies, !request.sessionId && !request.expectedSessionId,
+      )) {
         if (key && event.type === 'session') {
           try { localStorage.setItem(key, event.sessionId); } catch { /* Current turn remains usable. */ }
         }
