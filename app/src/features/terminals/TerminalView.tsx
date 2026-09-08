@@ -124,6 +124,7 @@ import {
   type TerminalScreenSnapshotLease,
 } from './terminalScreenSnapshotCache';
 import { terminalRestartDecision } from './terminalRestartPolicy';
+import { prepareManagedClaudeContinuity } from './managedClaudeContinuity';
 import {
   attachTerminalExecution,
   authorizeCanonicalTerminalSpawn,
@@ -1577,6 +1578,7 @@ export function TerminalView({
       let executionAttached = false;
       let viewSessionBound = false;
       let nativeStartupCommandConsumed = false;
+      let managedStartupCommand: string | null = null;
       let restoredInput = '';
       let sessionCwd: string | null = cwd ?? null;
       let processAttachment: TerminalProcessAttachment | null = null;
@@ -1631,7 +1633,7 @@ export function TerminalView({
           restoredInput = restoreDecision.restoredInput;
           let spawnCommand = command;
           const isRecoveredSession = restoreDecision.source !== 'new-pane';
-          const nativeStartupCommand =
+          let nativeStartupCommand =
             isRecoveredSession || startupCommands?.length ? undefined : startupCommand;
           if (isRecoveredSession) {
             const restart = terminalRestartDecision(command, startupCommand);
@@ -1639,6 +1641,26 @@ export function TerminalView({
             if (restart.kind === 'confirm') {
               deferredRestartCommand = restart.deferredCommand;
             }
+          }
+
+          const managedClaude = await prepareManagedClaudeContinuity({
+            accountId: terminalAccountId,
+            projectId,
+            paneId,
+            cwd,
+            restore: isRecoveredSession,
+            command,
+            startupCommand,
+            startupCommands,
+          });
+          if (cancelled) return;
+          if (managedClaude) {
+            spawnCommand = command?.trim() === 'claude' ? undefined : command;
+            nativeStartupCommand = managedClaude.startupCommand;
+            managedStartupCommand = managedClaude.startupCommand;
+            deferredRestartCommand = null;
+            // A stale shell draft must never become input to a recovered agent.
+            restoredInput = '';
           }
 
           if (restoreDecision.restoredText) {
@@ -1971,11 +1993,13 @@ export function TerminalView({
       const executionWasCancelled = executionId
         ? useTerminalExecutionStore.getState().executions[executionId]?.status === 'cancelled'
         : false;
-      const orderedStartupCommands = startupCommands?.length
-        ? startupCommands
-        : startupCommand
-          ? [startupCommand]
-          : [];
+      const orderedStartupCommands = managedStartupCommand
+        ? [managedStartupCommand]
+        : startupCommands?.length
+          ? startupCommands
+          : startupCommand
+            ? [startupCommand]
+            : [];
       if (
         spawnedFresh &&
         orderedStartupCommands.length > 0 &&

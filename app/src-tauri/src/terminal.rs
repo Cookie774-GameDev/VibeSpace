@@ -989,6 +989,30 @@ fn decode_terminal_bytes(pending_utf8: &mut Vec<u8>, chunk: &[u8]) -> Option<Str
     }
 }
 
+#[tauri::command]
+pub async fn terminal_claude_continuity_prepare(
+    app: AppHandle,
+    account_id: String,
+    project_id: String,
+    pane_id: String,
+    cwd: Option<String>,
+    restore: bool,
+    shell: Option<String>,
+) -> Result<crate::terminal_continuity::PreparedClaude, String> {
+    use tauri::Manager;
+    if crate::runtime_profile::resolve_from_env()? != crate::runtime_profile::RuntimeProfile::Ordinary {
+        return Err("terminal continuity is disabled in this runtime profile".into());
+    }
+    let root = app.path().app_data_dir().map_err(|_| "continuity profile unavailable")?
+        .join("terminal-cli-continuity");
+    let executable = std::env::current_exe().map_err(|_| "continuity executable unavailable")?;
+    let powershell = is_powershell(&pick_default_shell(shell));
+    let cwd = cwd.unwrap_or_else(default_terminal_cwd);
+    spawn_blocking(move || crate::terminal_continuity::prepare(
+        &root, &executable, &account_id, &project_id, &pane_id, std::path::Path::new(&cwd), restore, powershell,
+    )).await.map_err(|_| "continuity preparation interrupted".to_string())?
+}
+
 /// Spawn a new PTY-backed child process and return its session id. The reader
 /// task is started in the background; subsequent output flows over the
 /// `terminal://output` event.

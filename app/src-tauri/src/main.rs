@@ -19,6 +19,15 @@ fn attach_parent_console_for_cli() {
 
 fn main() {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments.first().map(String::as_str) == Some("--vibespace-claude-session-hook") {
+        if !matches!(
+            jarvis_lib::runtime_profile::resolve_from_env(),
+            Ok(jarvis_lib::runtime_profile::RuntimeProfile::Ordinary)
+        ) {
+            std::process::exit(1);
+        }
+        std::process::exit(jarvis_lib::terminal_continuity::run_hook(&arguments[1..]));
+    }
     if arguments.first().map(String::as_str) == Some("--vibespace-cli") {
         #[cfg(target_os = "windows")]
         attach_parent_console_for_cli();

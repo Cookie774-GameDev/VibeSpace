@@ -79,6 +79,7 @@ mod static_server;
 mod terminal;
 mod terminal_clipboard;
 pub mod terminal_cli;
+pub mod terminal_continuity;
 mod terminal_peer_fabric;
 mod terminal_snapshot;
 mod wallpaper_master;
@@ -771,6 +772,7 @@ fn run_ordinary(
             fsread::fs_read_text_sample,
             fsread::fs_write_text,
             terminal::terminal_spawn,
+            terminal::terminal_claude_continuity_prepare,
             terminal::terminal_validate_directory,
             terminal::terminal_write,
             terminal::terminal_resize,
@@ -1102,6 +1104,7 @@ fsread::fs_read_text
 fsread::fs_read_text_sample
 fsread::fs_write_text
 terminal::terminal_spawn
+terminal::terminal_claude_continuity_prepare
 terminal::terminal_validate_directory
 terminal::terminal_write
 terminal::terminal_resize
