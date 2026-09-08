@@ -176,10 +176,13 @@ export async function* nativeCodexFrames(
       streamId: id,
       onEvent: channel,
     })
+    .then(() => {
+      // Native registration is asynchronous; writes require its acknowledgement.
+      if (!terminal && !overflowed && !signal?.aborted) onSubscribed?.();
+    })
     .catch((error) =>
       push({ kind: 'error', message: safeError(error, 'Codex native stream failed.').message }),
     );
-  onSubscribed?.();
   const abort = () => {
     void stopNativeCodexAppServer(exactGeneration, bridgeFactory).catch(() => false);
     push({ kind: 'done' });
