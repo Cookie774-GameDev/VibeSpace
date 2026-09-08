@@ -21,6 +21,13 @@ do not claim a maximum-model review if the tool cannot select or confirm it.
 Respect an explicit user prohibition on subagents. If delegation is unavailable,
 perform the checks yourself and report that independent review was unavailable.
 
+On the OpenCode backend, use the native task tool with subagent_type
+`vibespace-reviewer` for independent verification. This dedicated reviewer can
+request approval for native test commands; the generic `general` agent does not
+have that shell capability. Give it the complete original prompt and references.
+Wait for its real result and honor every approval or cancellation. On Codex, use
+the available native review/delegation tools and verify the actual child identity.
+
 Ask the reviewer to act as a strict teacher and critique the finished result against
 the user's requirements. Grade out of 100 using correctness (40), requirement and
 reference coverage (25), verification evidence (20), and usability/maintainability

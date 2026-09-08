@@ -689,10 +689,17 @@ fn scoped_provider_config(
         "deny",
         "deny",
     );
+    let mut reviewer_agent = execution_agent(
+        "Independent VibeSpace reviewer: inspect the supplied deliverable and request approval to run verification commands.",
+        "deny", "ask", "deny", "deny",
+    );
+    reviewer_agent["mode"] = json!("subagent");
+    reviewer_agent["prompt"] = json!("Independently review the complete supplied user request, references, deliverable and evidence. Preserve all files. Use native read/search tools and request approval through bash for scoped verification commands; do not create terminal panes. Never install dependencies, access the network, or modify files without explicit task authorization. Report actual checks, concrete defects and a strict score out of 100; never invent verification. Follow the parent-supplied scope and model/effort requirements.");
     root.insert(
         "agent".to_string(),
         json!({
             "title": { "disable": true },
+            "vibespace-reviewer": reviewer_agent,
             "vibespace": readonly_agent.clone(),
             "vibespace-readonly": readonly_agent,
             "vibespace-write": execution_agent(
@@ -2781,6 +2788,14 @@ mod tests {
         assert_eq!(config["permission"]["edit"], "deny");
         assert_eq!(config["permission"]["bash"], "deny");
         assert_eq!(config["permission"]["task"], "deny");
+        let reviewer = &config["agent"]["vibespace-reviewer"];
+        assert_eq!(reviewer["mode"], "subagent");
+        assert_eq!(reviewer["permission"]["bash"], "ask");
+        for capability in ["*", "edit", "task", "external_directory", "terminal_spawn", "terminal_write"] {
+            assert_eq!(reviewer["permission"][capability], "deny");
+        }
+        assert_eq!(reviewer["permission"]["read"]["**/.env"], "deny");
+        assert!(reviewer.get("model").is_none());
         assert_eq!(config["permission"]["todo"], "allow");
         assert_eq!(config["permission"]["todoread"], "allow");
         assert_eq!(config["permission"]["todowrite"], "allow");
@@ -2842,7 +2857,8 @@ mod tests {
         );
         assert_eq!(
             config["agent"]["vibespace-full-auto"]["permission"]["plugins_run"],
-            "allow"
+            "ask",
+            "semantic gateway mutations still require an observable approval receipt"
         );
 
         let plugin = fs::read_to_string(
