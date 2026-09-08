@@ -1,0 +1,19 @@
+{
+  "identity": {
+    "jarvisPid": 1936,
+    "webViewPid": 30436,
+    "executablePath": "D:\\CodexBuilds\\VibeSpace-UnifiedChungus-Final-codex\\debug\\VibeSpace-PluginPack-20260907.exe",
+    "profile": "D:\\VibeSpace-Instance-2-current-941e2764-profile\\Local\\ai.jarvis.desktop\\EBWebView\\EBWebView",
+    "cdpPort": 9238,
+    "endpoint": "http://127.0.0.1:9238",
+    "ownership": "jarvis_descendant_exact_official_profile",
+    "listenerAddress": "127.0.0.1",
+    "capturedAt": "2026-09-07T19:22:02.1557892-05:00",
+    "targetId": "FAF98570F5E1ECBB1B5C42EEE679B6C3",
+    "url": "http://localhost:5174/"
+  },
+  "at": "2026-09-08T01:07:57.617Z",
+  "snapshot": "OpenCode MCP serversThese are the MCP servers OpenCode uses for this project. Changes apply to OpenCode's own configuration and lifecycle.vibespace-desktop-commanderConnectedDisconnectServer nameRemoteLocalLocal commandPut the executable on the first line and one argument on each following line.Add OpenCode MCP server",
+  "refreshedConnected": true,
+  "transport": "native proxy to real OpenCode /mcp"
+}

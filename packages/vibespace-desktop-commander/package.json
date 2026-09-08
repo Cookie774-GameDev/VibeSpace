@@ -14,6 +14,8 @@
     "start": "node gateway.mjs"
   },
   "files": [
+    ".gitignore",
+    ".gitattributes",
     "upstream/dist",
     "upstream/LICENSE",
     "upstream/package.json",

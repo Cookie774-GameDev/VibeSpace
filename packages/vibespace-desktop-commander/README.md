@@ -14,10 +14,11 @@ npm start
 
 Keep that gateway running. It prints the path of `state/connection.json`, never its credential. In VibeSpace, open Settings → Browser Agent → Desktop Commander. Paste that file path and select **Connect Desktop Commander**. Edit a setting and select its Save button. The panel checks the running MCP's value before saving and reads it back afterward. Reload when a conflict or uncertain response is reported; do not replay a timed-out mutation blindly.
 
-Use **Open MCP connections** to add a local MCP named `vibespace-desktop-commander`. Its command array is:
+Use **Open MCP connections** to add a local MCP named `vibespace-desktop-commander`. Choose **Local** and put the executable on the first line of **Local command**, with the script path on the second line:
 
-```json
-["node", "C:/YOUR_PRIVATE_PACKAGE_FOLDER/mcp.mjs"]
+```text
+node
+C:/YOUR_PRIVATE_PACKAGE_FOLDER/mcp.mjs
 ```
 
 Use the actual absolute path. This stdio proxy connects to the same gateway as the settings panel. Review and approve tools through the existing MCP manager. It exposes the original Desktop Commander tools plus `browser_command`; it does not replace VibeSpace's existing browser engine or bypass its approvals. The package is optional, not silently installed into every release.

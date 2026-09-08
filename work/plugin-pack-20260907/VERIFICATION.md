@@ -22,9 +22,12 @@ Agent: VS-PLUGIN-PACK-20260907-G. Repository: C:/Users/viper/VibeSpace-UnifiedCh
 
 - No successful provider OAuth authorization or authenticated cloud tool call is claimed. GitHub needs a registered public OAuth client. Supabase's MCP OAuth lifecycle is not implemented; its sources are actively locked by the OAuth agent. Cloudflare currently offers manual token entry. No user keys were entered.
 - The Cloudflare provider-page button was clicked, but the attempted native-call observer returned no evidence; `provider-page-open-proof.json` has an empty evidence array. It does not prove that the external page loaded.
-- Local MCP registration through the app's OpenCode manager remains unverified. Package-level proxy/tool verification does not replace that integration check.
-- Typecheck reports5 missing-method errors in peer-owned OpenCode OAuth test files. Frontend build and additional required checks are recorded separately when they finish. Deferred broad-check attempts are not passes.
+- Local MCP registration now passes through the app's OpenCode manager: `native-mcp-connection.json` records the connected server after refreshing real native OpenCode /mcp status. The first command submission occurred while the manager was busy and did not register it; the subsequent enabled-button click did. Setup instructions were corrected to match the manager's executable/argument-per-line format.
+- Typecheck and the standard frontend build both report5 missing-method errors in peer-owned OpenCode OAuth test files. `cargo-check-final.txt` passed in11m30s. The full app suite is running; its early output includes the same OAuth failures and unrelated runtime overlay failures. Deferred broad-check attempts are not passes.
 - Development reloads and resource pressure interrupted native checks. The Playwright harness temporarily filters only Vite update/full-reload messages for this assigned page; model/native traffic is not mocked. Restore normal Vite forwarding before handoff. A private Playwright-core copy handles WebView2 shared-worker targets lacking browserContextId; the app and root dependency were not patched for that workaround.
 - Setup video does not authenticate, create a key, provision a tunnel or verify remote deployment. Gateway remains local and authenticated. Runtime startup is explicit, not globally registered.
 
 Follow-up terminal collaboration, Prompt Forge and billing work is listed in NEXT-REQUEST.md. No claim that those follow-up tasks are complete.
+
+Native tutorial playback: native-video-proof.json records readyState4, currentTime43.08/duration43.08, no media error. ZIP verification:268entries, zero runtime state files, ignore rules included; hash in archive-proof.json.
+

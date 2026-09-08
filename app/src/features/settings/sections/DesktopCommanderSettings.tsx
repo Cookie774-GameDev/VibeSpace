@@ -136,8 +136,9 @@ export function DesktopCommanderSettings({
           </li>
           <li>
             Open MCP connections, add a local server named <code>vibespace-desktop-commander</code>,
-            and use the command array <code>["node", "ABSOLUTE_PACKAGE_PATH/mcp.mjs"]</code>. Review
-            the tools before enabling them for your model.
+            choose Local, and enter <code>node</code> on the first line of Local command and{' '}
+            <code>ABSOLUTE_PACKAGE_PATH/mcp.mjs</code> on the second line. Review the tools before
+            enabling them for your model.
           </li>
           <li>
             For browser actions, use the <code>browser_command</code> tool with a unique session

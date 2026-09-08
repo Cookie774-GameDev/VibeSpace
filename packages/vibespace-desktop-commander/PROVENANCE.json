@@ -1,5 +1,5 @@
 {
-  "createdAt": "2026-09-08T00:37:09.730Z",
+  "createdAt": "2026-09-08T01:09:16.762Z",
   "desktopCommanderVersion": "0.2.46-stable.2",
   "desktopCommanderSource": "C:/Users/viper/Documents/Codex/Plugin-2/runtime/desktop-commander-stable-v2",
   "companionSource": "C:/Users/viper/Documents/Codex/Plugin-2/extensions/codex-kit/browser.mjs",
@@ -21,13 +21,23 @@
   "files": [
     {
       "path": "package.json",
-      "bytes": 1857,
-      "sha256": "5af32d40ada2938bed123b5b85a0eb9711586ee30e5ebb9bd57fdbda16587890"
+      "bytes": 1897,
+      "sha256": "514e169b9b89b2aac15d87c051dd7e34df9af0d684b55163cfdcb40c69de65b9"
     },
     {
       "path": "package-lock.json",
       "bytes": 276718,
       "sha256": "edcf3df1b2d98bb76010dbb4b6cbb54b84768b490cda88f42fd4a3f92e55faee"
+    },
+    {
+      "path": ".gitignore",
+      "bytes": 97,
+      "sha256": "2861bd4818ca4fde5549e12bec0d25f8742b23c3f13fd5e4dd4007e3095ec57e"
+    },
+    {
+      "path": ".gitattributes",
+      "bytes": 83,
+      "sha256": "197c89e69fbf78d797256fea96bcf196db193b863afcb584eba5fcf768bfbcd0"
     },
     {
       "path": "upstream/dist/bootstrap.d.ts",
@@ -1831,8 +1841,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 6439,
-      "sha256": "9d15977a58cd60af9ac8127ba6cf8499b86978edd16102da9646acead1b5a059"
+      "bytes": 6531,
+      "sha256": "cf5ce73a0953aacd2b7cf18c5d77a7df2ee7e4d97394cca5c2e2959315e69d6e"
     },
     {
       "path": "browser/tool.mjs",

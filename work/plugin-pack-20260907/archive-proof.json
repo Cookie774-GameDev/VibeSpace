@@ -1,6 +1,7 @@
 {
   "testIncluded": true,
-  "entries": 266,
-  "sha256": "6763ABB3DE14FC16B409AD9E5C859A6E6EFA030A159ECE74250920052BFCB291",
-  "excludedStateFiles": 0
+  "sha256": "9F994F90D185D4E3B643CB1B3F3A1B90AA00ECCDF34CB8ECC87F081BDCAEDBE7",
+  "entries": 268,
+  "excludedStateFiles": 0,
+  "ignoreRulesIncluded": true
 }
