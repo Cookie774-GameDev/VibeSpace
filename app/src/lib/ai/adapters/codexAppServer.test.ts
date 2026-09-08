@@ -1,3 +1,4 @@
+import { parseJarvisPlanBlocks } from '@/features/jarvis-interaction/planParser';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -718,13 +719,30 @@ it('projects native Codex child identity and running state without copying its p
   expect(JSON.stringify(value)).not.toContain('Private task instructions');
 });
 
-it('projects completed native plans as authoritative public text', () => {
-  expect(normalizeCodexAppServerMessage({
+it('projects completed native plans into the existing approval contract', () => {
+  const result = normalizeCodexAppServerMessage({
     method: 'item/completed',
     params: { threadId: 'thr_123', turnId: 'turn_1',
-      item: { type: 'plan', id: 'plan_1', text: '# Plan\n1. Create the approved file.' } },
-  })).toEqual({ recognized: true,
-    events: [{ type: 'text', delta: '# Plan\n1. Create the approved file.', mode: 'replace', streamPartId: 'plan_1' }],
-    controls: [{ type: 'plan_snapshot', itemId: 'plan_1', text: '# Plan\n1. Create the approved file.' }],
+      item: { type: 'plan', id: 'plan_1', text: 'Create the acceptance marker file.\nWrite exactly \"ALPHA\".' } },
   });
+  const event = result.events[0];
+  expect(event).toMatchObject({ type: 'text', mode: 'replace', streamPartId: 'plan_1' });
+  if (event.type !== 'text') throw new Error('Expected public plan');
+  const parsed = parseJarvisPlanBlocks(event.delta);
+  expect(parsed.hasPlanBlocks).toBe(true);
+  expect(parsed.parts).toEqual([expect.objectContaining({ kind: 'plan_review', plan: expect.objectContaining({
+    id: 'codex_plan_plan_1', summary: 'Create the acceptance marker file.\nWrite exactly \"ALPHA\".', status: 'pending',
+  }) })]);
+  expect(result.controls).toEqual([{ type: 'plan_snapshot', itemId: 'plan_1', text: 'Create the acceptance marker file.\nWrite exactly \"ALPHA\".' }]);
+});
+
+it('preserves code fences inside native plan reviews', () => {
+  const text = 'Create a file:\n```sh\necho ALPHA\n```';
+  const event = normalizeCodexAppServerMessage({ method: 'item/completed', params: {
+    threadId: 'thr_123', turnId: 'turn_1', item: { type: 'plan', id: 'plan_code', text },
+  } }).events[0];
+  if (event.type !== 'text') throw new Error('Expected public plan');
+  const parsed = parseJarvisPlanBlocks(event.delta);
+  expect(parsed.parts).toHaveLength(1);
+  expect(parsed.parts[0]).toMatchObject({ kind: 'plan_review', plan: { summary: text, status: 'pending' } });
 });

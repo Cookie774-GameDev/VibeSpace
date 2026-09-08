@@ -612,8 +612,14 @@ export function normalizeCodexAppServerMessage(
     if (item?.type === 'plan') {
       const itemId = safeIdentifier(item.id);
       const text = safePublicText(item.text);
+      // Reuse the chat's plan review contract; prose heuristics miss native plans.
+      const publicText = method === 'item/completed' && itemId && text
+        ? '```jarvis_plan\n' + JSON.stringify({
+            id: `codex_plan_${itemId}`, title: 'Review plan', summary: text, steps: [],
+          }).replaceAll('`', '\\u0060') + '\n```'
+        : text;
       return projection(
-        itemId && text ? [{ type: 'text', delta: text, mode: 'replace', streamPartId: itemId }] : [],
+        itemId && publicText ? [{ type: 'text', delta: publicText, mode: 'replace', streamPartId: itemId }] : [],
         itemId && text ? [{ type: 'plan_snapshot', itemId, text }] : [],
       );
     }
