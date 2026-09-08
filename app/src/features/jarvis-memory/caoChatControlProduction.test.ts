@@ -287,3 +287,24 @@ it('cancels only the submitted turn while awaiting runtime acknowledgement', asy
   }
   expect(onCancel).toHaveBeenCalledOnce();
 });
+
+it.each(['agent', 'ask', 'plan'] as const)('preserves the target %s mode and selected access without borrowing one-shot approval', async mode => {
+  const { useJarvisInteractionStore } = await import('@/features/jarvis-interaction/sessionStore');
+  const { writeChatRuntimePolicyState, DEFAULT_CHAT_RUNTIME_POLICY_STATE } = await import('@/features/chat/runtime/chatRuntimeSettingsStore');
+  useJarvisInteractionStore.getState().setChatMode('chat', mode);
+  writeChatRuntimePolicyState('chat', { ...DEFAULT_CHAT_RUNTIME_POLICY_STATE, access: 'read-only', approveAllForRun: true });
+  let sent: Record<string, unknown> | undefined;
+  const listener = (event: Event) => { sent=(event as CustomEvent).detail; window.dispatchEvent(new CustomEvent('jarvis:run-state', {detail: {chatId:'chat', cancellationKey:sent!.cancellationKey,status:'running'}})); };
+  window.addEventListener('jarvis:send',listener);
+  try { await caoChatControl.prepare('account','chat','Build inside assigned directory',new AbortController().signal);
+    expect(sent).toMatchObject({interactionMode:mode,accessLevel:'read-only',approveAllForRun:false});
+  } finally { window.removeEventListener('jarvis:send',listener); }
+});
+it('rejects a pending CAO approval when the target switches interaction mode', async () => {
+ const { useJarvisInteractionStore } = await import('@/features/jarvis-interaction/sessionStore');
+ useJarvisInteractionStore.getState().setChatMode('chat','agent');mocks.permission.mode='approve-before-send';
+ const proposal=await caoChatControl.prepare('account','chat','Build the game',new AbortController().signal);
+ useJarvisInteractionStore.getState().setChatMode('chat','ask');
+ await expect(caoChatControl.approve(proposal.id)).rejects.toThrow('cao_target_changed');
+ expect(mocks.createMessage).not.toHaveBeenCalled();
+});

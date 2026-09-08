@@ -10,6 +10,24 @@ const OPENCODEX_SOURCE_ENTRYPOINT: &str = "node_modules/@bitkyc08/opencodex/src/
 const OPENCODEX_PACKAGE_JSON: &str = "node_modules/@bitkyc08/opencodex/package.json";
 const OPENCODEX_BUN_EXECUTABLE: &str = "node_modules/@oven/bun-windows-x64/bin/bun.exe";
 const OPENCODEX_DEPENDENCY_LOCK: &str = "bun.lock";
+// Official rust-v0.151.0 companion; the main Windows ZIP does not contain it.
+pub(crate) const CODEX_CODE_MODE_HOST: &str = "codex-code-mode-host.exe";
+pub(crate) const CODEX_CODE_MODE_HOST_SHA256: &str =
+    "4ea17cf938023f2d0c292b6dbcd4d51e7fbdf72f3885cf341017a380a87e77dc";
+pub(crate) const CODEX_CODE_MODE_HOST_MISSING: &str = "Managed Codex code-mode helper is missing.";
+
+pub(crate) fn inspect_codex_code_mode_host(root: &Path) -> Result<(), &'static str> {
+    if !root.join(CODEX_CODE_MODE_HOST).try_exists().map_err(|_| "Managed Codex code-mode helper is unavailable.")? {
+        return Err(CODEX_CODE_MODE_HOST_MISSING);
+    }
+    let file = regular_file_within(root, CODEX_CODE_MODE_HOST)
+        .ok_or("Managed Codex code-mode helper is unsafe.")?;
+    if file_sha256(&file).as_deref() != Some(CODEX_CODE_MODE_HOST_SHA256) {
+        return Err("Managed Codex code-mode helper integrity failed.");
+    }
+    Ok(())
+}
+
 const CODEX_ENTRYPOINT_SHA256: &str =
     "cf68265897197ac5f3bff6a10c168eec159842b353129726da5e3ed6b91ef0f4";
 const OPENCODEX_ENTRYPOINT_SHA256: &str =
@@ -471,6 +489,11 @@ pub fn inspect_managed_runtime(
             reason: "Managed CLI entrypoint checksum is mismatched.",
         };
     }
+    if release.kind == ManagedCliKind::Codex {
+        if let Err(reason) = inspect_codex_code_mode_host(&version_root) {
+            return ManagedCliReadiness::Incomplete { reason };
+        }
+    }
     if release.kind == ManagedCliKind::OpenCodex {
         if let Err(reason) = inspect_opencodex_closure(&version_root, release, &receipt) {
             return ManagedCliReadiness::Incomplete { reason };
@@ -858,5 +881,18 @@ mod tests {
                 ManagedCliReadiness::Incomplete { .. }
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod cao_codex_helper_tests {
+    #[test]
+    fn missing_or_modified_code_mode_host_cannot_be_ready() {
+        let root = std::env::temp_dir().join(format!("cao-codex-helper-{}", nanoid::nanoid!(12)));
+        std::fs::create_dir(&root).unwrap();
+        assert_eq!(super::inspect_codex_code_mode_host(&root), Err(super::CODEX_CODE_MODE_HOST_MISSING));
+        std::fs::write(root.join(super::CODEX_CODE_MODE_HOST), b"untrusted helper").unwrap();
+        assert_eq!(super::inspect_codex_code_mode_host(&root), Err("Managed Codex code-mode helper integrity failed."));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

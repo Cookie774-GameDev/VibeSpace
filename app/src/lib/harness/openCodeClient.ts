@@ -89,6 +89,8 @@ export interface OpenCodeHttpClient {
   ): Promise<Readonly<Record<string, OpenCodeMcpStatus>>>;
   connectMcp(name: string, directory?: string): Promise<boolean>;
   disconnectMcp(name: string, directory?: string): Promise<boolean>;
+  authenticateMcp(name: string, directory?: string): Promise<OpenCodeMcpStatus>;
+  removeMcpAuth(name: string, directory?: string): Promise<boolean>;
   createSession(
     input: { title?: string; parentID?: string },
     directory?: string,
@@ -423,6 +425,7 @@ export function createOpenCodeHttpClient(
     expected: 'json' | 'void' = 'json',
     maximumBytes = MAX_JSON_BYTES,
     directory?: string,
+    timeoutMs = 30_000,
   ): Promise<unknown> => {
     let response: Response;
     try {
@@ -438,7 +441,7 @@ export function createOpenCodeHttpClient(
               ...init.headers,
             },
           })
-        : await nativeOpenCodeRequest(connection.generation, requestPath, init);
+        : await nativeOpenCodeRequest(connection.generation, requestPath, init, timeoutMs);
     } catch (error) {
       throw new Error(
         sanitize(error instanceof Error ? error.message : 'OpenCode request failed.'),
@@ -545,6 +548,24 @@ export function createOpenCodeHttpClient(
       booleanRequest(
         `/mcp/${encodeURIComponent(requireMcpName(name))}/disconnect`,
         { method: 'POST' },
+        directory,
+      ),
+    async authenticateMcp(name, directory) {
+      const validName = requireMcpName(name);
+      const value = await request(
+        `/mcp/${encodeURIComponent(validName)}/auth/authenticate`,
+        { method: 'POST' },
+        'json',
+        MAX_JSON_BYTES,
+        directory,
+        330_000,
+      );
+      return requireMcpStatus({ [validName]: value })[validName];
+    },
+    removeMcpAuth: (name, directory) =>
+      booleanRequest(
+        `/mcp/${encodeURIComponent(requireMcpName(name))}/auth`,
+        { method: 'DELETE' },
         directory,
       ),
     async createSession(input, directory) {

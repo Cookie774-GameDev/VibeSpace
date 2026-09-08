@@ -1404,6 +1404,12 @@ enum OpenCodeTransportRoute {
     McpDisconnect {
         name: String,
     },
+    McpAuthenticate {
+        name: String,
+    },
+    McpAuthRemove {
+        name: String,
+    },
     QuestionList,
     PermissionList,
     QuestionReply {
@@ -1548,6 +1554,14 @@ fn transport_route_parts(
         OpenCodeTransportRoute::McpDisconnect { name } => (
             reqwest::Method::POST,
             format!("/mcp/{}/disconnect", encoded_route_identifier(name)?),
+        ),
+        OpenCodeTransportRoute::McpAuthenticate { name } => (
+            reqwest::Method::POST,
+            format!("/mcp/{}/auth/authenticate", encoded_route_identifier(name)?),
+        ),
+        OpenCodeTransportRoute::McpAuthRemove { name } => (
+            reqwest::Method::DELETE,
+            format!("/mcp/{}/auth", encoded_route_identifier(name)?),
         ),
         OpenCodeTransportRoute::QuestionList => (reqwest::Method::GET, "/question".to_string()),
         OpenCodeTransportRoute::PermissionList => (reqwest::Method::GET, "/permission".to_string()),
@@ -3482,6 +3496,23 @@ mod tests {
             ),
         )
         .is_err());
+    }
+
+    #[test]
+    fn cao_repair_mcp_oauth_routes_are_exact_and_encoded() {
+        for (kind, method, suffix) in [
+            ("mcp_authenticate", reqwest::Method::POST, "/auth/authenticate"),
+            ("mcp_auth_remove", reqwest::Method::DELETE, "/auth"),
+        ] {
+            let route: super::OpenCodeTransportRoute = serde_json::from_value(
+                serde_json::json!({"kind": kind, "name": "supabase:readonly"})).unwrap();
+            let parts = super::transport_route_parts(&route).unwrap();
+            assert_eq!(parts.0, method);
+            assert_eq!(parts.1, format!("/mcp/supabase%3Areadonly{suffix}"));
+            let invalid: super::OpenCodeTransportRoute = serde_json::from_value(
+                serde_json::json!({"kind": kind, "name": "unsafe\u{0}name"})).unwrap();
+            assert!(super::transport_route_parts(&invalid).is_err());
+        }
     }
 
     #[test]

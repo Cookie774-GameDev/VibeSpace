@@ -363,6 +363,7 @@ function scopeForEvent(
 export interface CaoManualLearningDeps {
   getAccountIdentity(): { accountId: string } | null;
   getWorkspaceId(): string | null;
+  getProjectId?(): string | null;
   listEvents(workspaceId: string): Promise<EventRow[]>;
   recover(
     scope: CaoScheduledLearningScope,
@@ -375,6 +376,7 @@ export interface CaoManualLearningDeps {
 const productionManualLearningDeps: CaoManualLearningDeps = {
   getAccountIdentity: getActiveAccountIdentity,
   getWorkspaceId: () => useAuthStore.getState().workspaceId ?? null,
+  getProjectId: () => useAuthStore.getState().projectId ?? null,
   listEvents: (workspaceId) => eventRepo.list({ workspace_id: workspaceId as never }),
   recover: productionRuntime.recover,
   run: productionRuntime.run,
@@ -401,6 +403,11 @@ export async function runManualCaoLearningChecks(
     .filter((scope): scope is CaoScheduledLearningScope => scope !== null)
     .forEach((scope) => uniqueScopes.set(scopeKey(scope), scope));
   const scopes = [...uniqueScopes.values()];
+  const projectId = deps.getProjectId?.();
+  if (scopes.length === 0 && projectId) {
+    scopes.push({ accountId: account.accountId, workspaceId, projectId,
+      scheduleId: 'cao-manual-project', targetId: 'jarvis-cao', scheduleAnchorAt: 0 });
+  }
   if (scopes.length === 0) return { status: 'failed' };
   for (const scope of scopes) {
     try {

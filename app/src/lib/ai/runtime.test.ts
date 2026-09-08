@@ -5280,6 +5280,63 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     stop();
   });
 
+  it.each([{ timeline: [] }, { timeline: [{ kind: 'text' as const, text: 'Native provider response.' }] }])('preserves native refusal instead of inventing a filtered approval card (%j)', async ({ timeline: publicTimeline }) => {
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_native_no_fake_approval' as ChatId;
+    const placeholderId = 'msg_native_no_fake_approval_assistant' as MessageId;
+    const updateMessage = vi.fn(async () => undefined);
+    const userMessage: Message = {
+      id: 'msg_native_no_fake_approval_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: 'Create C:\\games\\chat-platformer\\index.html now with a complete platform game. Use file tools.' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.runAgent.mockResolvedValueOnce({
+      text: "I cannot perform the requested file mutation in this session, sir.",
+      usage: { input_tokens: 1, output_tokens: 8, cost_usd: 0 },
+      public_timeline: publicTimeline,
+      provider: 'ollama',
+      model: 'llama3.2:1b',
+    });
+
+    const stop = trackListener(
+      startRuntimeListener({
+        getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+        getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+        getAgentForChat: vi.fn(async () => jarvis),
+        getMessages: vi.fn(async () => [userMessage]),
+        appendMessage: vi.fn(async (msg) => ({
+          ...msg,
+          id: placeholderId,
+          created_at: 2,
+          updated_at: 2,
+        })),
+        updateMessage,
+      }),
+    );
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: { chatId, text: 'Create C:\\games\\chat-platformer\\index.html now with a complete platform game. Use file tools.' },
+      }),
+    );
+
+    await vi.waitFor(() => expect(updateMessage).toHaveBeenCalled());
+    const updateCalls = updateMessage.mock.calls as unknown as Array<
+      [MessageId, { parts: Part[] }]
+    >;
+    const finalWrite = updateCalls[updateCalls.length - 1]?.[1];
+    if (!finalWrite) throw new Error('expected a final assistant message write');
+    expect(finalWrite.parts.some(part => part.kind === 'action_proposal')).toBe(false);
+    const prose = finalWrite.parts.flatMap(part => part.kind === 'text' ? [part.text] : []).join(' ');
+    expect(prose).toContain('I cannot perform the requested file mutation in this session, sir.');
+    expect(prose).not.toContain('awaiting your authorisation');
+
+    stop();
+  });
+
   it('adds an approval proposal when a tiny local model answers an app-control request in prose', async () => {
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_action_fallback' as ChatId;

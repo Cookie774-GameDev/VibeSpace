@@ -55,7 +55,7 @@ export function createCaoChatControl(dependencies: CaoChatControlDependencies) {
         })
       ).trim();
       signal.throwIfAborted();
-      if (!text || text.length > 8000) throw new Error('cao_message_invalid');
+      if (!text || text.length > 17000) throw new Error('cao_message_invalid');
       const current = await check(accountId, chatId);
       if (current.authority !== state.authority) throw new Error('cao_target_changed');
       if (JSON.stringify(current.guidance) !== JSON.stringify(state.guidance))

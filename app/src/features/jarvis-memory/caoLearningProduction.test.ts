@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { RunAgentRequest } from '@/lib/ai/router';
 import { CAO_GUIDANCE_AREAS } from './caoGuidance';
 import { useJarvisLearningStore } from './learningStore';
-import { executeProductionCaoLearning } from './caoLearningProduction';
+import { executeProductionCaoLearning, reviewCaoChatLearning } from './caoLearningProduction';
 import type { CaoLearningExecutionInput } from './caoScheduledLearning';
 
 const mocks = vi.hoisted(() => ({
@@ -26,6 +26,7 @@ vi.mock('@/lib/db', () => ({
     workspaces: { get: async () => ({ owner_id: 'account' }) },
     projects: { get: async () => ({ workspace_id: 'workspace' }) },
     chats: {
+      get: async () => ({ id: 'new-chat', project_id: 'new-project', workspace_id: 'workspace' }),
       where: () => ({
         equals: () => ({
           filter: () => ({
@@ -48,7 +49,7 @@ vi.mock('@/lib/db', () => ({
         }),
       }),
     },
-    settings: { put: (...args: unknown[]) => mocks.put(...args) },
+    settings: { get: async () => undefined, put: (...args: unknown[]) => mocks.put(...args) },
     transaction: async (_mode: unknown, _table: unknown, action: () => Promise<void>) => action(),
   },
 }));
@@ -149,4 +150,20 @@ it('rejects an account switch during model extraction', async () => {
     'failed',
   );
   expect(mocks.file).not.toHaveBeenCalled();
+});
+
+it('retains established source-backed areas omitted by a later partial project review', async () => {
+ await executeProductionCaoLearning(input,new AbortController().signal);
+ const prior=useJarvisLearningStore.getState().currentProfile().caoGuidance!.sections.corrections;
+ const dispatch=mocks.dispatch.getMockImplementation()!;
+ mocks.dispatch.mockImplementation(async request=>{const result=await dispatch(request);const value=JSON.parse(result.text);delete value.sections.corrections;return {text:JSON.stringify(value)}});
+ expect((await executeProductionCaoLearning({...input,trigger:'manual_force'},new AbortController().signal)).status).toBe('completed');
+ expect(useJarvisLearningStore.getState().currentProfile().caoGuidance!.sections.corrections).toEqual(prior);
+});
+
+it('does not re-evaluate old account messages merely because the active project changes', async () => {
+ useJarvisLearningStore.getState().markEvaluated(20);
+ useJarvisLearningStore.getState().recordUserMessage({text:'New project setup: work only in this assigned directory and wait for details.',chatId:'new-chat'});
+ await reviewCaoChatLearning('account','new-chat',new AbortController().signal);
+ expect(mocks.dispatch).not.toHaveBeenCalled();
 });

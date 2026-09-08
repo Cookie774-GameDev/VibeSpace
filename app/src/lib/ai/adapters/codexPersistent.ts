@@ -1,4 +1,5 @@
 import { createCodexControlBridge } from './codexControlBridge';
+import { codexTurnLease } from './codexTurnLease';
 import { resolveCodexWorkingDirectory } from './codexWorkingDirectory';
 import {
   nativeCodexFrames,
@@ -332,6 +333,10 @@ async function* sendCodexRequest(
       if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
       const frame = await nextFrame(reader, 'Codex app-server ended before terminal state.');
       if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+      if (frame.id === requestId(request.requestId, 'turn') && recordOf(frame.error)) {
+        const code = recordOf(frame.error)?.code;
+        throw new Error(`Codex rejected turn/start (${Number.isInteger(code) ? code : 'unknown'}).`);
+      }
       const projection = normalizeCodexAppServerMessage(frame, {
         scope: {
           activeGeneration: 1,
@@ -380,6 +385,23 @@ export function createCodexPersistentAdapter(
   return Object.freeze({
     id: 'codex-app-server',
     send: async function* (request: ProviderRequest) {
+      const release = await codexTurnLease.acquire(request.signal);
+      try {
+      await codexTurnLease.recover(dependencies.stop);
+      const ownedDependencies = {
+        ...dependencies,
+        async start(...args: Parameters<CodexPersistentDependencies['start']>) {
+          const result = await dependencies.start(...args);
+          try { codexTurnLease.remember(result.generation); }
+          catch (error) { await dependencies.stop(result.generation); throw error; }
+          return result;
+        },
+        async stop(generation: string) {
+          const stopped = await dependencies.stop(generation);
+          codexTurnLease.forget(generation);
+          return stopped;
+        },
+      };
       const key = request.accountId && request.chatId && request.workingDirectory
         ? 'vibespace.codex-thread.v1:' + JSON.stringify([request.accountId, request.workspaceId,
             request.projectId, request.chatId, request.workingDirectory]) : undefined;
@@ -391,13 +413,14 @@ export function createCodexPersistentAdapter(
         } catch { /* Native startup still works when local persistence is unavailable. */ }
       }
       for await (const event of sendCodexRequest(
-        { ...request, sessionId }, dependencies, !request.sessionId && !request.expectedSessionId,
+        { ...request, sessionId }, ownedDependencies, !request.sessionId && !request.expectedSessionId,
       )) {
         if (key && event.type === 'session') {
           try { localStorage.setItem(key, event.sessionId); } catch { /* Current turn remains usable. */ }
         }
         yield event;
       }
+      } finally { release(); }
     },
     cancel: async () => undefined,
   });

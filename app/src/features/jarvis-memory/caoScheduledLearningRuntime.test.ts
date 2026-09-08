@@ -359,3 +359,10 @@ describe('CAO scheduled learning production runtime', () => {
     },
   );
 });
+
+it('runs a manual review for the current project when no schedules exist', async () => {
+ const run=vi.fn(async()=>({status:'completed' as const}));
+ const result=await runManualCaoLearningChecks({getAccountIdentity:()=>({accountId:'account'}),getWorkspaceId:()=> 'workspace',getProjectId:()=> 'project',listEvents:async()=>[],recover:async()=>null,run});
+ expect(result.status).toBe('completed');
+ expect(run).toHaveBeenCalledWith({scope:{accountId:'account',workspaceId:'workspace',projectId:'project',scheduleId:'cao-manual-project',targetId:'jarvis-cao',scheduleAnchorAt:0},trigger:'manual_force'});
+});

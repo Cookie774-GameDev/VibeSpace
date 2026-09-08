@@ -459,7 +459,8 @@ export function applyChatModelSelectionToAgent(agent: Agent, selection: ChatMode
   if (selection.mode !== 'single') return agent;
   if (
     !isProtectedJarvisAgent(agent) &&
-    !agentUsesDefaultProvider(agent.model.provider, agent.model.model)
+    !agentUsesDefaultProvider(agent.model.provider, agent.model.model) &&
+    !(agent.builtin && agent.model.provider === 'mock' && agent.model.model === 'mock-default')
   ) {
     return agent;
   }

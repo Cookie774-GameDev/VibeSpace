@@ -36,6 +36,7 @@ import { Mic, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal, type ITheme } from 'xterm';
+import { registerCaoTerminalEvidence } from '@/features/cao/terminalEvidence';
 import { isTauri } from '@/lib/utils';
 import { classifyResourceShell } from '@/lib/resourceInteraction';
 import { formatTerminalClipboard, installTerminalPaste } from './terminalClipboard';
@@ -696,6 +697,17 @@ export function TerminalView({
   const contextDeliveryQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(existingSessionId ?? null);
+  useEffect(() => {
+    if (!activeSessionId || !paneId || !projectId || !terminalAccountId) return;
+    return registerCaoTerminalEvidence({ accountId: terminalAccountId, projectId, paneId, sessionId: activeSessionId }, () => {
+      const buffer = termRef.current?.buffer.active;
+      if (!buffer || sessionRef.current !== activeSessionId) return '';
+      const lines: string[] = [];
+      for (let line = Math.max(0, buffer.length - 120); line < buffer.length; line++)
+        lines.push(buffer.getLine(line)?.translateToString(true) ?? '');
+      return lines.join('\n');
+    });
+  }, [activeSessionId, paneId, projectId, terminalAccountId]);
   const [isFocused, setIsFocused] = useState(false);
   const [warmIdleInteractionAt, setWarmIdleInteractionAt] = useState(() => Date.now());
   const [warmIdlePointerEnteredAt, setWarmIdlePointerEnteredAt] = useState<number | null>(null);

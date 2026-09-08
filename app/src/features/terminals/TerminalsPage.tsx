@@ -47,6 +47,8 @@ import {
 } from './terminalCommandQueue';
 import { processTerminalFleetRequest } from './terminalFleetRuntime';
 import { useTerminalFleetStore } from './terminalFleetStore';
+import { DirectOpenCodeLauncher } from '@/features/cao/DirectOpenCodeLauncher';
+import { caoTerminalPaneRegistry } from '@/features/cao/terminalPaneControl';
 import {
   claimTerminalExecution,
   hasCanonicalTerminalExecution,
@@ -63,7 +65,7 @@ import {
 } from './terminalProjectMove';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { projectRepo } from '@/lib/db';
-import { getActiveAccountIdentity } from '@/lib/accountIdentity';
+import { getActiveAccountIdentity, resolveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { captureLiveTree, getLiveTree } from './terminalLiveCache';
@@ -280,6 +282,16 @@ export function TerminalsPage({ routeVisible = true }: { routeVisible?: boolean 
   });
   const [treeProjectId, setTreeProjectId] = React.useState<string | null>(() => currentProjectId);
   const treeReady = treeProjectId === currentProjectId;
+  const caoAccountId = useAuthStore((state) => resolveAccountIdentity(state)?.accountId);
+  const caoTree = React.useRef(tree);
+  caoTree.current = tree;
+  React.useEffect(() => {
+    if (!treeReady || !currentProjectId || !caoAccountId) return;
+    return caoTerminalPaneRegistry.register(caoAccountId, currentProjectId,
+      () => getActiveAccountIdentity()?.accountId === caoAccountId && useAuthStore.getState().projectId === currentProjectId,
+      () => caoTree.current,
+      (next) => { caoTree.current = next; setTree(next); });
+  }, [caoAccountId, currentProjectId, treeReady]);
 
   /**
    * Currently fullscreened pane id, or null when in normal grid view.
@@ -621,6 +633,7 @@ export function TerminalsPage({ routeVisible = true }: { routeVisible?: boolean 
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-1">
+          <DirectOpenCodeLauncher disabled={atCap} onLaunch={leaf => setTree(current => appendLeaf(current, leaf))} />
           <Button
             variant="ghost"
             size="sm"

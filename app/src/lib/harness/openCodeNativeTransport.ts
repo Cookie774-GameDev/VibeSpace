@@ -18,6 +18,8 @@ type NativeTransportRoute =
   | { kind: 'mcp_add' }
   | { kind: 'mcp_connect'; name: string }
   | { kind: 'mcp_disconnect'; name: string }
+  | { kind: 'mcp_authenticate'; name: string }
+  | { kind: 'mcp_auth_remove'; name: string }
   | { kind: 'question_list' }
   | { kind: 'permission_list' }
   | { kind: 'question_reply'; requestId: string }
@@ -36,7 +38,9 @@ type NativeTransportRoute =
   | { kind: 'instance_dispose' };
 
 type NativeStreamMessage =
-  { kind: 'event'; data: string } | { kind: 'done' } | { kind: 'error'; message: string };
+  | { kind: 'event'; data: string }
+  | { kind: 'done' }
+  | { kind: 'error'; message: string };
 
 const MAX_QUEUED_NATIVE_EVENTS = 256;
 const MAX_QUEUED_NATIVE_BYTES = 8 * 1024 * 1024;
@@ -133,6 +137,21 @@ function nativeRoute(
     else throw new Error('OpenCode native transport route is invalid.');
   } else if (key === 'GET /mcp') route = { kind: 'mcp_status' };
   else if (key === 'POST /mcp') route = { kind: 'mcp_add' };
+  else if (
+    segments[0] === 'mcp' &&
+    segments.length === 4 &&
+    method === 'POST' &&
+    segments[2] === 'auth' &&
+    segments[3] === 'authenticate'
+  )
+    route = { kind: 'mcp_authenticate', name: decodedIdentifier(segments[1]) };
+  else if (
+    segments[0] === 'mcp' &&
+    segments.length === 3 &&
+    method === 'DELETE' &&
+    segments[2] === 'auth'
+  )
+    route = { kind: 'mcp_auth_remove', name: decodedIdentifier(segments[1]) };
   else if (segments[0] === 'mcp' && segments.length === 3 && method === 'POST') {
     const name = decodedIdentifier(segments[1]);
     if (segments[2] === 'connect') route = { kind: 'mcp_connect', name };
@@ -208,12 +227,19 @@ export async function nativeOpenCodeRequest(
       if (timer !== undefined) clearTimeout(timer);
       init.signal?.removeEventListener('abort', abort);
     };
-    const fail = (error: unknown) => { cleanup(); reject(error); };
+    const fail = (error: unknown) => {
+      cleanup();
+      reject(error);
+    };
     const abort = () => fail(init.signal?.reason ?? new DOMException('Aborted', 'AbortError'));
-    if (timeoutMs > 0) timer = setTimeout(() => fail(new Error('OpenCode native request timed out.')), timeoutMs);
+    if (timeoutMs > 0)
+      timer = setTimeout(() => fail(new Error('OpenCode native request timed out.')), timeoutMs);
     init.signal?.addEventListener('abort', abort, { once: true });
     if (init.signal?.aborted) abort();
-    void nativeRequest.then(value => { cleanup(); resolve(value); }, fail);
+    void nativeRequest.then((value) => {
+      cleanup();
+      resolve(value);
+    }, fail);
   });
   const response = result as NativeTransportResponse;
   const body = [204, 205, 304].includes(response.status) ? null : response.body;

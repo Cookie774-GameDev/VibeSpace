@@ -565,6 +565,42 @@ impl From<&PtyHandle> for KillTarget {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn terminal_child_killer(child: &(dyn Child + Send + Sync)) -> Result<Box<dyn ChildKiller + Send + Sync>, String> {
+    Ok(child.clone_killer())
+}
+
+// portable-pty 0.8.1's Windows cloned killer reverses TerminateProcess's BOOL.
+// Retain a duplicated process handle so PID reuse cannot redirect termination.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug)]
+struct WindowsTerminalKiller(Arc<std::os::windows::io::OwnedHandle>);
+
+#[cfg(target_os = "windows")]
+impl ChildKiller for WindowsTerminalKiller {
+    fn kill(&mut self) -> std::io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::{Foundation::HANDLE, System::Threading::TerminateProcess};
+        // SAFETY: this owned handle remains valid throughout the call.
+        unsafe { TerminateProcess(HANDLE(self.0.as_raw_handle()), 1) }
+            .map_err(std::io::Error::other)
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn terminal_child_killer(child: &(dyn Child + Send + Sync)) -> Result<Box<dyn ChildKiller + Send + Sync>, String> {
+    use std::os::windows::io::BorrowedHandle;
+    let raw = child.as_raw_handle().ok_or_else(|| "terminal: process handle unavailable".to_string())?;
+    // SAFETY: the child still owns raw while it is borrowed and duplicated.
+    let handle = unsafe { BorrowedHandle::borrow_raw(raw) }.try_clone_to_owned()
+        .map_err(|_| "terminal: process handle duplication failed".to_string())?;
+    Ok(Box::new(WindowsTerminalKiller(Arc::new(handle))))
+}
+
 async fn deliver_kill(
     app: &AppHandle,
     sessions: &Arc<AsyncMutex<HashMap<String, PtyHandle>>>,
@@ -1173,7 +1209,7 @@ pub async fn terminal_spawn(
         .master
         .take_writer()
         .map_err(|e| format!("terminal: writer take failed: {e}"))?;
-    let killer = child.clone_killer();
+    let killer = terminal_child_killer(child.as_ref())?;
 
     let response_cwd = resolved_cwd.clone();
     let info = TerminalInfo {
@@ -1301,16 +1337,33 @@ pub fn terminal_validate_directory(path: String) -> Result<String, String> {
 }
 
 /// Forward keystrokes (or any UTF-8 byte stream) into the PTY's stdin.
+fn cao_agent_message(command: &str, data: &str) -> Result<String, String> {
+    // Only a directly spawned CLI is safe: its exit cannot expose a shell prompt.
+    let normalized = command.replace('\\', "/");
+    let executable = normalized.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    if !matches!(executable.as_str(), "opencode" | "opencode.exe") {
+        return Err("terminal: CAO messages require a directly launched OpenCode agent".into());
+    }
+    let message = data.trim();
+    if message.is_empty() || message.len() > 32000 || message.starts_with('/')
+        || message.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err("terminal: invalid CAO agent message".into());
+    }
+    Ok(format!("\u{1b}[200~[CAO acting for user]\n{message}\u{1b}[201~\r"))
+}
+
 #[tauri::command]
 pub async fn terminal_write(
     state: State<'_, TerminalState>,
     session_id: String,
     data: String,
     expected_binding: Option<TerminalWriteBinding>,
+    agent_message: Option<bool>,
 ) -> Result<(), String> {
     // Clone just the writer Arc out of the map so we don't hold the global
     // state lock across the actual I/O.
-    let writer_arc = {
+    let (writer_arc, data) = {
         let map = state.0.lock().await;
         let h = map
             .get(&session_id)
@@ -1318,7 +1371,16 @@ pub async fn terminal_write(
         if let Some(expected) = expected_binding.as_ref() {
             validate_terminal_write_binding(&h.info, expected)?;
         }
-        h.writer.clone()
+        if !h.active.load(Ordering::SeqCst) || h.deleted.load(Ordering::SeqCst) {
+            return Err("terminal: process has exited".into());
+        }
+        let data = if agent_message == Some(true) {
+            if expected_binding.is_none() {
+                return Err("terminal: CAO process binding required".into());
+            }
+            cao_agent_message(&h.info.command, &data)?
+        } else { data };
+        (h.writer.clone(), data)
     };
     spawn_blocking(move || {
         let mut writer = writer_arc.blocking_lock();
@@ -1379,11 +1441,16 @@ pub async fn terminal_kill(
     app: AppHandle,
     session_id: String,
     cancellation_token: Option<String>,
+    expected_binding: Option<TerminalWriteBinding>,
 ) -> Result<TerminalKillResult, String> {
     let request = validated_kill_request(cancellation_token)?;
     let target = {
         let map = state.0.lock().await;
-        map.get(&session_id).map(KillTarget::from)
+        let handle = map.get(&session_id);
+        if let (Some(handle), Some(expected)) = (handle, expected_binding.as_ref()) {
+            validate_terminal_write_binding(&handle.info, expected)?;
+        }
+        handle.map(KillTarget::from)
     };
 
     let Some(target) = target else {
@@ -1521,6 +1588,18 @@ mod tests {
         ] {
             assert!(super::validate_terminal_write_binding(&info, &changed).is_err());
         }
+    }
+
+    #[test]
+    fn cao_messages_cannot_become_shell_input_or_tui_commands() {
+        for command in ["powershell.exe", "cmd.exe", "opencode.exe -NoExit", "opencode.exe; powershell"] {
+            assert!(super::cao_agent_message(command, "Build the game").is_err());
+        }
+        for message in ["", "/exit", "\u{1b}[201~exit", "hello\rquit", "hello\u{3}"] {
+            assert!(super::cao_agent_message("opencode.exe", message).is_err());
+        }
+        assert_eq!(super::cao_agent_message("C:\\agents\\opencode.exe", "Build\nand test").unwrap(),
+            "\u{1b}[200~[CAO acting for user]\nBuild\nand test\u{1b}[201~\r");
     }
 
     fn exit_process_binding() -> NativeProcessBinding {
@@ -1757,6 +1836,21 @@ mod tests {
 
         child.kill().expect("terminate disposable pty child");
         child.wait().expect("reap disposable pty child");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cao_cloned_killer_reports_real_delivery() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        let pair = native_pty_system().openpty(PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut command = CommandBuilder::new("powershell.exe");
+        command.args(["-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 10"]);
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        let mut killer = super::terminal_child_killer(child.as_ref()).unwrap();
+        let delivered = killer.kill();
+        let exited = child.wait().unwrap();
+        assert!(!exited.success(), "The disposable child must have been terminated");
+        assert!(delivered.is_ok(), "Real Windows signal delivery must return success: {delivered:?}");
     }
 
     #[test]

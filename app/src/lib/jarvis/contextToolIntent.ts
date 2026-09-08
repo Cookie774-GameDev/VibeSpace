@@ -479,7 +479,14 @@ function exactBulletAddressTuples(userText: string): readonly DirectAddressTuple
  * never silently removes capabilities needed to satisfy an authorized mutation.
  */
 export function requestsReadOnlyContextTool(userText: string): boolean {
-  if (EXPLICIT_CONTEXT_TOOL.test(userText)) return true;
+  // Do not replace a conversational setup/acknowledgement with a forced tool call.
+  if (/\b(?:do\s+not|don['’]t|never)\s+(?:use|run|call|invoke|execute)\s+(?:any\s+)?tools?\b/iu.test(userText))
+    return false;
+  const contextIntent = userText.replace(
+    /\b(?:no|do\s+not|don['’]t|never|avoid|without)\b(?:(?![.;\r\n]|\b(?:but|however|instead|then)\b).){0,512}/giu,
+    ' ',
+  );
+  if (EXPLICIT_CONTEXT_TOOL.test(contextIntent)) return true;
   const affirmativeText = userText.replace(NEGATED_MUTATING_SEGMENT, ' ');
   if (MUTATING_REQUEST.test(affirmativeText)) return false;
   // Registered disk reads must stay on files.read, not Context-map search.

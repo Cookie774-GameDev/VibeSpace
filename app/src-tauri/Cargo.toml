@@ -113,3 +113,5 @@ jarvis-voice = ["dep:piper-rs"]
 [patch.crates-io]
 espeak-rs-sys = { path = "vendor/espeak-rs-sys-0.2.0" }
 dirs = { path = "vendor/dirs-local-6.0.0" }
+# Backport upstream #1215 without changing Tao's public API or other platforms.
+tao = { path = "vendor/tao-0.35.3" }

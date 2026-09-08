@@ -1,3 +1,6 @@
+import { caoMessageEnvelope } from '@/features/cao/caoMessageEnvelope';
+import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
+import { readChatRuntimePolicyState } from '@/features/chat/runtime/chatRuntimeSettingsStore';
 import { db, messageRepo } from '@/lib/db';
 import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { runAgent, type ProviderCompletionEvidence } from '@/lib/ai/router';
@@ -30,6 +33,7 @@ function targetAuthority(chat: Awaited<ReturnType<typeof target>>, permission?: 
     workspace: chat.workspace_id,
     updatedAt: chat.updated_at,
     backend: chat.backend_affinity,
+    runtimePolicy: chat.caoRuntimePolicy,
     permissionRevision: permission?.revision,
     learningEpoch: profile.caoLearningEpoch,
     guidance: profile.caoGuidance,
@@ -81,7 +85,14 @@ async function target(accountId: string, chatId: string) {
     ? agents[selectedAgentId]
     : findProtectedJarvisAgent(Object.values(agents));
   if (!agent) throw new Error('cao_target_agent_unavailable');
-  return { ...chat, caoAgentId: agent.id, caoAgentRevision: agent.updated_at };
+  const runtimePolicy = readChatRuntimePolicyState(chatId);
+  return { ...chat, caoAgentId: agent.id, caoAgentRevision: agent.updated_at,
+    caoRuntimePolicy: {
+      interactionMode: useJarvisInteractionStore.getState().modeForChat(chatId),
+      accessLevel: runtimePolicy.access,
+      runtimeSettings: runtimePolicy.settings,
+    },
+  };
 }
 export const caoChatControl = createCaoChatControl({
   async state(accountId, chatId) {
@@ -169,7 +180,7 @@ export const caoChatControl = createCaoChatControl({
         reasoningEffort: observed.reasoningEffort ?? '',
       },
     });
-    return response.text;
+    return caoMessageEnvelope(response.text, objective);
   },
   async send(proposal, signal) {
     const chat = await target(proposal.accountId, proposal.chatId);
@@ -232,7 +243,7 @@ export const caoChatControl = createCaoChatControl({
       cancellationKey: proposal.id as MessageId,
       agentId: chat.caoAgentId,
       modelSelectionOverride: selection,
-      interactionMode: 'ask',
+      ...chat.caoRuntimePolicy,
       approveAllForRun: false,
     };
     await new Promise<void>((resolve, reject) => {

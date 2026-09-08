@@ -11,6 +11,7 @@ import {
   type CaoChatPermission,
 } from './caoChatControlProduction';
 import type { CaoChatProposal, CaoSendMode } from './caoChatControl';
+import { CaoTerminalControls } from '@/features/cao/CaoTerminalControls';
 
 export function CaoChatControls() {
   const accountId = useJarvisLearningStore((state) => state.activeAccountId);
@@ -226,6 +227,7 @@ export function CaoChatControls() {
           {error}
         </p>
       )}
+      <CaoTerminalControls accountId={accountId} enabled={enabled} mode={mode} />
     </section>
   );
 }

@@ -1973,7 +1973,8 @@ export async function installJarvisKernelRuntimeHost(
                     ? consumeToolGatewayContextCitationItems(contextCitationSessionId)
                     : Object.freeze([]),
                 );
-                providerPublicTimeline.set(raw, Object.freeze([...(result.public_timeline ?? [])]));
+                if (result.public_timeline !== undefined)
+                  providerPublicTimeline.set(raw, Object.freeze([...result.public_timeline]));
                 providerChecklistEvidence.set(
                   raw,
                   Object.freeze([...(result.checklist_evidence ?? [])]),
@@ -2039,14 +2040,20 @@ export async function installJarvisKernelRuntimeHost(
     async processResponse(raw, request) {
       const contextCitations = providerContextCitationItems.get(raw) ?? [];
       providerContextCitationItems.delete(raw);
-      const responseRequest = appendToolGatewayContextCitations(request, contextCitations);
+      const hasNativeTimeline = providerPublicTimeline.has(raw);
+      const publicTimeline = providerPublicTimeline.get(raw) ?? [];
+      providerPublicTimeline.delete(raw);
+      const citedRequest = appendToolGatewayContextCitations(request, contextCitations);
+      // Native tool/approval events own actions. Inferring legacy cards here
+      // changes a refusal into approval narration whose card is then discarded.
+      const responseRequest = hasNativeTimeline
+        ? { ...citedRequest, outputContract: { ...citedRequest.outputContract, allowActionBlocks: false } }
+        : citedRequest;
       const processedEnvelope = await responseModule.processJarvisResponse(raw, responseRequest, {
         async repair() {
           throw new Error('kernel_response_repair_provider_unavailable');
         },
       });
-      const publicTimeline = providerPublicTimeline.get(raw) ?? [];
-      providerPublicTimeline.delete(raw);
       const suppressedEnvelopeParts = processedEnvelope.parts.filter(
         isSupersededOpenCodeEnvelopePart,
       ).length;
@@ -2184,6 +2191,7 @@ export async function installJarvisKernelRuntimeHost(
               parts: Object.freeze([...envelope.parts, ...checklistParts]),
             })
           : envelope;
+      if (hasNativeTimeline) return envelopeWithChecklist;
       const { inferFallbackActionProposals, shouldReplaceModelActionsWithFileReadFallback } =
         await import('@/lib/actions/fallbackActions');
       const existingIds = envelopeWithChecklist.parts
@@ -3717,7 +3725,7 @@ function textToParts(
   text: string,
   userText?: string,
   interactionMode: JarvisInteractionMode = 'agent',
-  fallbackOptions: { workingDirectory?: string | null } = {},
+  fallbackOptions: { workingDirectory?: string | null; inferActions?: boolean } = {},
 ): Part[] {
   const requestIntent = classifyJarvisIntent({ text: userText ?? '' });
   const questionResult = parseJarvisQuestionBlocks(text);
@@ -3745,7 +3753,7 @@ function textToParts(
   }
   if (!result.hasActionBlocks) {
     const fallbackProposals =
-      userText && interactionMode === 'agent'
+      userText && interactionMode === 'agent' && fallbackOptions.inferActions !== false
         ? inferFallbackActionProposals(userText, text, fallbackOptions)
         : [];
     if (fallbackProposals.length === 0) return [{ kind: 'text', text }];
@@ -3800,7 +3808,7 @@ function textToParts(
       Boolean(seg.kind === 'action' && seg.ok),
     )
     .map((seg) => seg.proposal.action_id);
-  if (userText && interactionMode === 'agent') {
+  if (userText && interactionMode === 'agent' && fallbackOptions.inferActions !== false) {
     const fallbackProposals = inferFallbackActionProposals(userText, text, fallbackOptions);
     const replaceValidCommandWithFileCreate =
       hasValidAction &&
@@ -7444,6 +7452,7 @@ export function startRuntimeListener(
           ? [{ kind: 'text', text: finalText }]
           : textToParts(finalText, text, interactionMode, {
               workingDirectory: providerRequest.workingDirectory,
+              inferActions: response.public_timeline === undefined,
             });
       let oversizedResponseAttachment: Awaited<
         ReturnType<typeof createOversizedMessageAttachment>
@@ -7482,13 +7491,13 @@ export function startRuntimeListener(
         (part): Part => structuredClone(part),
       );
       const authoritativeDisplayResponseParts =
-        authoritativePublicTimeline.length > 0
+        response.public_timeline !== undefined
           ? displayResponseParts.filter((part) => !isSupersededOpenCodeEnvelopePart(part))
           : displayResponseParts;
       const finalParts: Part[] = [
         ...(authoritativePublicTimeline.length > 0
           ? [...authoritativePublicTimeline, ...authoritativeDisplayResponseParts]
-          : [...displayResponseParts, ...currentOpenCodeToolParts()]),
+          : [...authoritativeDisplayResponseParts, ...currentOpenCodeToolParts()]),
         ...openCodeChecklistParts(response.checklist_evidence ?? []),
         ...currentOpenCodeQuestionParts(),
         ...currentOpenCodePermissionParts(),
