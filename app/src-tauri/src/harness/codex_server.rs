@@ -7,11 +7,13 @@ use crate::harness::managed_codex_proxy_runtime::{
     materialize_isolated_profile, seal_reviewed_opencodex_runtime, SealedReviewedOpenCodexRuntime,
 };
 use crate::harness::opencode_go_auth::{default_auth_store_path, read_opencode_go_credential};
+#[path = "managed_codex_connected_provider.rs"]
+mod connected_provider;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::io::{BufReader, Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,8 +26,11 @@ use tauri::{AppHandle, Manager, Webview};
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const READER_CHANNEL_CAPACITY: usize = 256;
 const READER_CHUNK_BYTES: usize = 64 * 1024;
-const OPENCODEX_PORT: u16 = 10_101;
-const OPENCODEX_READY_TIMEOUT: Duration = Duration::from_secs(60);
+// OpenCodex 2.36 permits three sequential 30s Windows ACL checks at startup.
+// Native diagnosis reached identity-checked readiness at 90.7s; a 75s outer
+// deadline killed that healthy launch. Leave room for CLI loading and sync,
+// while retaining the reviewed CLI's readiness contract and a hard deadline.
+const OPENCODEX_READY_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -81,7 +86,7 @@ fn validate_start_request(
     if !valid_identifier(&request.owner_id, 256) {
         return Err("Codex owner identity is invalid.".to_string());
     }
-    if !(request.model_id.starts_with("opencode-go/") || request.model_id.starts_with("gpt-"))
+    if !(request.model_id.split_once('/').is_some_and(|(provider, model)| !provider.is_empty() && !model.is_empty()) || request.model_id.starts_with("gpt-"))
         || !valid_identifier(&request.model_id, 256) {
         return Err("Codex model identity is invalid.".to_string());
     }
@@ -762,18 +767,28 @@ fn start_owned_opencodex(
     model_id: &str,
     owner_id: &str,
 ) -> Result<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime), String> {
-    let endpoint = SocketAddrV4::new(Ipv4Addr::LOCALHOST, OPENCODEX_PORT);
-    if TcpStream::connect_timeout(&endpoint.into(), Duration::from_millis(150)).is_ok() {
-        return Err("The VibeSpace OpenCodex loopback endpoint is already occupied.".to_string());
-    }
+    let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .map_err(|_| "Could not reserve a private OpenCodex endpoint.")?;
+    let port = reservation.local_addr().map_err(|_| "Could not read the OpenCodex endpoint.")?.port();
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|_| "VibeSpace app data is unavailable.".to_string())?;
-    let profile = build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, OPENCODEX_PORT, model_id, owner_id)
-        .map_err(|_| "The managed Codex proxy profile is invalid.".to_string())?;
+    let (profile, environment) = if model_id.starts_with("opencode-go/") {
+        let profile = build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, port, model_id, owner_id)
+            .map_err(|_| "The managed Codex proxy profile is invalid.".to_string())?;
+        let credential_path = default_auth_store_path().map_err(|_| "The OpenCode credential store is unavailable.")?;
+        let credential = read_opencode_go_credential(&credential_path)
+            .map_err(|_| "OpenCode Go is not connected; connect it in OpenCode first.")?;
+        let environment = vec![(profile.provider_environment_name.to_string(), credential.expose_to_child_environment().to_string())];
+        (profile, environment)
+    } else {
+        let provider = connected_provider::resolve(app, model_id)?;
+        (provider.profile(port)?, provider.environment)
+    };
     let storage_root = crate::harness::managed_codex_storage::storage_root(&app_data)?;
-    let paths = materialize_isolated_profile(&storage_root, &profile)
+    let instance_root = storage_root.join("instances").join(format!("{}-{port}", std::process::id()));
+    let paths = materialize_isolated_profile(&instance_root, &profile)
         .map_err(|_| "The isolated Codex proxy profile could not be prepared.".to_string())?;
     let managed_base = storage_root.join("managed-runtime");
     let roaming = std::env::var_os("APPDATA").map(PathBuf::from);
@@ -781,20 +796,13 @@ fn start_owned_opencodex(
         .map_err(|_| {
             "Reviewed OpenCodex 2.36.0 is unavailable; run VibeSpace Doctor.".to_string()
         })?;
-    let credential_path = default_auth_store_path()
-        .map_err(|_| "The OpenCode credential store is unavailable.".to_string())?;
-    let credential = read_opencode_go_credential(&credential_path)
-        .map_err(|_| "OpenCode Go is not connected; connect it in OpenCode first.".to_string())?;
     let runtime = &sealed_runtime.runtime;
 
     let configure = |command: &mut Command| {
         command
             .env("OPENCODEX_HOME", &paths.opencodex_home)
             .env("CODEX_HOME", &paths.codex_home)
-            .env(
-                profile.provider_environment_name,
-                credential.expose_to_child_environment(),
-            )
+            .envs(environment.iter().map(|(name, value)| (name, value)))
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -805,8 +813,9 @@ fn start_owned_opencodex(
         .arg(&runtime.source_entrypoint)
         .arg("start")
         .arg("--port")
-        .arg(OPENCODEX_PORT.to_string());
+        .arg(port.to_string());
     configure(&mut start);
+    drop(reservation);
     let mut proxy = spawn_owned_child_verified(start, "OpenCodex", || {
         sealed_runtime
             .revalidate()
@@ -879,7 +888,7 @@ fn start_internal(
         let launch = resolve_launch_request(&request.executable_id, |executable_id| {
             cli_state.resolve_trusted_executable(executable_id)
         })?;
-        let proxy = if request.model_id.starts_with("opencode-go/") {
+        let proxy = if request.model_id.contains('/') {
             Some(start_owned_opencodex(app, &request.model_id, &request.owner_id)?)
         } else {
             None
@@ -1219,6 +1228,10 @@ mod tests {
             model_id: "gpt-5.4-mini".to_string(),
         };
         assert!(validate_start_request("main", &direct).is_ok());
+        for model in ["anthropic/claude-test", "nararouter/vendor/model", "alibaba-token-plan/qwen-test"] {
+            let connected = CodexAppServerStartRequest { model_id: model.into(), ..direct.clone() };
+            assert!(validate_start_request("main", &connected).is_ok());
+        }
 
 
         assert!(serde_json::from_value::<CodexAppServerStartRequest>(json!({
