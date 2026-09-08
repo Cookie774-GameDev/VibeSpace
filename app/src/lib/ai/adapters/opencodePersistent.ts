@@ -1,5 +1,6 @@
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { resolveOpenCodeChildControl } from './openCodeChildControls';
+import { newOpenCodeMessageId, sendOpenCodePromptOnce } from './openCodePromptAcceptance';
 import { bindCodexQuestionRoute, replyCodexQuestion, replyCodexApproval } from './codexControlBridge';
 import { isTauri } from '@/lib/utils';
 import { questionEventsWithActivity } from '../openCodeQuestionActivity';
@@ -317,14 +318,17 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
     promptAsync: async (input: {
       path: { id: string };
       body: Readonly<Record<string, unknown>>;
-    }): Promise<unknown> =>
-      requestJson(
-        this.handle.generation,
-        this.handle.scope,
-        `/session/${encodeURIComponent(input.path.id)}/prompt_async`,
-        { method: 'POST', body: JSON.stringify(input.body) },
-        30_000,
-      ),
+    }): Promise<unknown> => {
+      const messageId = newOpenCodeMessageId();
+      const path = `/session/${encodeURIComponent(input.path.id)}`;
+      return sendOpenCodePromptOnce({
+        sessionId: input.path.id,
+        messageId,
+        send: () => requestJson(this.handle.generation, this.handle.scope, `${path}/prompt_async`,
+          { method: 'POST', body: JSON.stringify({ ...input.body, messageID: messageId }) }, 30_000),
+        messages: () => requestJson(this.handle.generation, this.handle.scope, `${path}/message`, {}, 5_000),
+      });
+    },
     command: async (input: {
       path: { id: string };
       body: {
@@ -2232,21 +2236,6 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       await request.onApprovalRequested(registered);
       return true;
     };
-    const recoverPendingApprovals = async (register = true): Promise<VibeSpaceApproval[]> => {
-      const propertiesList = await client.http.pendingPermissions().catch(() => []);
-      const recovered: VibeSpaceApproval[] = [];
-      if (done || abortEvents.signal.aborted) return recovered;
-      for (const properties of propertiesList) {
-        for (const event of normalizeOpenCodeEvent(
-          { type: 'permission.asked', properties }, sessionId,
-        )) {
-          if (event.type === 'approval.requested' && (!register || await registerApproval(event.approval))) recovered.push(event.approval);
-        }
-      }
-      return recovered;
-    };
-    const recoverPendingQuestions = async (register = true): Promise<
-      Extract<ProviderEvent, { type: 'question' }>[]
     const controlSession = async (event: OpenCodeRawEvent): Promise<string | undefined> => {
       if (eventSessionId(event) === dispatch.sessionId) return dispatch.sessionId;
       if (done || abortEvents.signal.aborted ||
@@ -2267,12 +2256,29 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       boundChildSessions.add(child);
       return child;
     };
+    const recoverPendingApprovals = async (register = true): Promise<VibeSpaceApproval[]> => {
+      const propertiesList = await client.http.pendingPermissions().catch(() => []);
+      const recovered: VibeSpaceApproval[] = [];
+      if (done || abortEvents.signal.aborted) return recovered;
+      for (const properties of propertiesList) {
+        const sessionId = await controlSession({ type: 'permission.asked', properties });
+        if (!sessionId) continue;
+        for (const event of normalizeOpenCodeEvent(
+          { type: 'permission.asked', properties }, sessionId,
+        )) {
+          if (event.type === 'approval.requested' && (!register || await registerApproval(event.approval))) recovered.push(event.approval);
+        }
+      }
+      return recovered;
+    };
+    const recoverPendingQuestions = async (register = true): Promise<
+      Extract<ProviderEvent, { type: 'question' }>[]
     > => {
       const propertiesList = await client.http.pendingQuestions().catch(() => []);
       if (done || abortEvents.signal.aborted) return [];
       const recovered: Extract<ProviderEvent, { type: 'question' }>[] = [];
       for (const properties of propertiesList) {
-        const sessionId = await controlSession({ type: 'permission.asked', properties });
+        const sessionId = await controlSession({ type: 'question.asked', properties });
         if (!sessionId) continue;
         const question = normalizeQuestionEvent(
           { type: 'question.asked', properties },
@@ -2289,8 +2295,6 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     const schedulePoll = (delay = TURN_IDLE_POLL_MS) => (async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, delay));
       if (done || abortEvents.signal.aborted) throw new DOMException("Recovery stopped", "AbortError");
-        const sessionId = await controlSession({ type: 'question.asked', properties });
-        if (!sessionId) continue;
       const revision = streamRevision;
       const [statusLookup, recoveredQuestions, recoveredApprovals, messages] = await Promise.all([
           client.http
@@ -2648,6 +2652,11 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   } finally {
     request.signal?.removeEventListener('abort', abort);
     abortEvents.abort();
+    for (const child of boundChildSessions) {
+      if (activeApprovalSessions.get(child)?.requestId === request.requestId) activeApprovalSessions.delete(child);
+      if (activeQuestionSessions.get(child)?.requestId === request.requestId) activeQuestionSessions.delete(child);
+      releaseToolGatewaySessionAuthority(child);
+    }
     if (boundSessionId) {
       const active = activeApprovalSessions.get(boundSessionId);
       if (active?.requestId === request.requestId) {
@@ -2663,11 +2672,6 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     activeRequests.delete(request.requestId);
   }
 }
-    for (const child of boundChildSessions) {
-      if (activeApprovalSessions.get(child)?.requestId === request.requestId) activeApprovalSessions.delete(child);
-      if (activeQuestionSessions.get(child)?.requestId === request.requestId) activeQuestionSessions.delete(child);
-      releaseToolGatewaySessionAuthority(child);
-    }
 
 async function detectPersistent(): Promise<DetectionResult> {
   if (!isTauri)

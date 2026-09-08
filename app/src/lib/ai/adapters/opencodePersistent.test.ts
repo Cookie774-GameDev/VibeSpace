@@ -321,6 +321,28 @@ async function drain(iterator: AsyncIterator<ProviderEvent>): Promise<void> {
 }
 
 describe('persistent OpenCode question transport authority', () => {
+  it('continues an exactly accepted prompt after an ambiguous dispatch timeout without resending', async () => {
+    configureManagedQuestionTransport([questionAskedEvent()]);
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let acceptedMessageId: string | undefined;
+    let sends = 0;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.includes('/prompt_async')) {
+        sends += 1;
+        acceptedMessageId = JSON.parse(String(init?.body)).messageID;
+        throw new Error('OpenCode request timed out.');
+      }
+      if (acceptedMessageId && path.includes('/message?')) {
+        return new Response(JSON.stringify([{ info: { id: acceptedMessageId, role: 'user', sessionID: 'ses_question_exact' } }]));
+      }
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('accepted-after-timeout'))[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: 'session', sessionId: 'ses_question_exact' });
+    expect(acceptedMessageId).toMatch(/^msg_[0-9a-f]{12}[A-Za-z0-9]{14}$/);
+    expect(sends).toBe(1);
+    await iterator.return?.();
+  });
   it('projects an owned child question without changing parent identity and revokes it when stopped', async () => {
     const asked = questionAskedEvent();
     configureManagedQuestionTransport([{ ...asked, properties: { ...asked.properties, sessionID: 'ses_child' } }]);
@@ -826,6 +848,45 @@ describe('persistent OpenCode question transport authority', () => {
 });
 
 describe('persistent OpenCode approval recovery', () => {
+  it('forwards a verified reviewer permission, replies to that child, and revokes it on completion', async () => {
+    const onApprovalRequested = vi.fn<NonNullable<ProviderRequest['onApprovalRequested']>>(async () => undefined);
+    configureManagedQuestionTransport([], { pendingPermissions: [{ ...pendingPermission(), sessionID: 'ses_child' }], sessionStatuses: ['busy'] });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/session/ses_child?')) return new Response(JSON.stringify({ id: 'ses_child', parentID: 'ses_question_exact' }));
+      if (path.startsWith('/session/ses_child/permissions/')) return new Response('true');
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!({ ...questionProviderRequest('child-permission'), onApprovalRequested })[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.next();
+    expect(onApprovalRequested).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'ses_child', id: 'perm_external_write' }));
+    const approval = onApprovalRequested.mock.calls[0][0];
+    expect(isActiveOpenCodeChildApproval('ses_question_exact', approval)).toBe(true);
+    expect(isActiveOpenCodeChildApproval('foreign', approval)).toBe(false);
+    expect(isActiveOpenCodeChildApproval('ses_question_exact', { ...approval })).toBe(false);
+    await respondToPersistentOpenCodeApproval({ sessionId: 'ses_child', approvalId: 'perm_external_write', response: 'once' });
+    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/session/ses_child/permissions/perm_external_write'))).toBe(true);
+    await iterator.return?.();
+    expect(isActiveOpenCodeChildApproval('ses_question_exact', approval)).toBe(false);
+    await expect(respondToPersistentOpenCodeApproval({ sessionId: 'ses_child', approvalId: 'different', response: 'once' })).rejects.toThrow(/no longer active/i);
+  });
+
+  it('does not surface a permission belonging to another chat', async () => {
+    const onApprovalRequested = vi.fn(async () => undefined);
+    configureManagedQuestionTransport([], { pendingPermissions: [{ ...pendingPermission(), sessionID: 'ses_foreign' }], sessionStatuses: ['busy'] });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/session/ses_foreign?')) return new Response(JSON.stringify({ id: 'ses_foreign' }));
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!({ ...questionProviderRequest('foreign-permission'), onApprovalRequested })[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.next();
+    expect(onApprovalRequested).not.toHaveBeenCalled();
+    await iterator.return?.();
+  });
+
   beforeEach(async () => {
     await disposeOpenCodePersistentRuntimes();
     invalidateOpenCodePersistentCaches();
@@ -867,45 +928,6 @@ describe('persistent OpenCode approval recovery', () => {
       pattern: ['D:\\VibeSpace-Testing\\temp\\approval.txt'],
     });
 
-    await iterator.return?.();
-  });
-
-  it('forwards a verified reviewer permission, replies to that child, and revokes it on completion', async () => {
-    const onApprovalRequested = vi.fn<NonNullable<ProviderRequest['onApprovalRequested']>>(async () => undefined);
-    configureManagedQuestionTransport([], { pendingPermissions: [{ ...pendingPermission(), sessionID: 'ses_child' }], sessionStatuses: ['busy'] });
-    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
-    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
-      if (path.startsWith('/session/ses_child?')) return new Response(JSON.stringify({ id: 'ses_child', parentID: 'ses_question_exact' }));
-      if (path.startsWith('/session/ses_child/permissions/')) return new Response('true');
-      return original(generation, path, init, timeout);
-    });
-    const iterator = openCodePersistentAdapter.send!({ ...questionProviderRequest('child-permission'), onApprovalRequested })[Symbol.asyncIterator]();
-    await iterator.next();
-    await iterator.next();
-    expect(onApprovalRequested).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'ses_child', id: 'perm_external_write' }));
-    const approval = onApprovalRequested.mock.calls[0][0];
-    expect(isActiveOpenCodeChildApproval('ses_question_exact', approval)).toBe(true);
-    expect(isActiveOpenCodeChildApproval('foreign', approval)).toBe(false);
-    expect(isActiveOpenCodeChildApproval('ses_question_exact', { ...approval })).toBe(false);
-    await respondToPersistentOpenCodeApproval({ sessionId: 'ses_child', approvalId: 'perm_external_write', response: 'once' });
-    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/session/ses_child/permissions/perm_external_write'))).toBe(true);
-    await iterator.return?.();
-    expect(isActiveOpenCodeChildApproval('ses_question_exact', approval)).toBe(false);
-    await expect(respondToPersistentOpenCodeApproval({ sessionId: 'ses_child', approvalId: 'different', response: 'once' })).rejects.toThrow(/no longer active/i);
-  });
-
-  it('does not surface a permission belonging to another chat', async () => {
-    const onApprovalRequested = vi.fn(async () => undefined);
-    configureManagedQuestionTransport([], { pendingPermissions: [{ ...pendingPermission(), sessionID: 'ses_foreign' }], sessionStatuses: ['busy'] });
-    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
-    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
-      if (path.startsWith('/session/ses_foreign?')) return new Response(JSON.stringify({ id: 'ses_foreign' }));
-      return original(generation, path, init, timeout);
-    });
-    const iterator = openCodePersistentAdapter.send!({ ...questionProviderRequest('foreign-permission'), onApprovalRequested })[Symbol.asyncIterator]();
-    await iterator.next();
-    await iterator.next();
-    expect(onApprovalRequested).not.toHaveBeenCalled();
     await iterator.return?.();
   });
 

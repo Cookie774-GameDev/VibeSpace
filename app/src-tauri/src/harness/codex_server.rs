@@ -822,16 +822,19 @@ fn start_owned_opencodex(
             .map_err(|_| "OpenCodex managed runtime changed before launch.".to_string())
     })?;
 
-    // The reviewed CLI owns one identity-checked readiness wait. Repeated
-    // three-second cold launches can expire before Bun loads on Windows.
+    // Run the pinned upstream readiness module directly. Loading the complete
+    // interactive CLI adds unrelated startup work before its bounded wait.
+    // The same upstream identity checks and readiness deadline still apply.
     let mut ready = Command::new(&runtime.bun_executable);
+    let ready_module = url::Url::from_file_path(runtime.source_entrypoint.with_file_name("ready.ts"))
+        .map_err(|_| "The reviewed OpenCodex readiness module is unavailable.".to_string())?;
     ready
-        .arg(&runtime.source_entrypoint)
-        .arg("ready")
-        .arg("--json")
-        .arg("--wait")
-        .arg("--timeout")
-        .arg(OPENCODEX_READY_TIMEOUT.as_secs().to_string());
+        .arg("--eval")
+        .arg(format!(
+            "import {{ runReady }} from {}; process.exit(await runReady({{json:true,wait:true,timeoutSeconds:{}}}));",
+            serde_json::to_string(ready_module.as_str()).map_err(|_| "The readiness module URL is invalid.".to_string())?,
+            OPENCODEX_READY_TIMEOUT.as_secs(),
+        ));
     configure(&mut ready);
     if !run_bounded_ready_probe(ready, OPENCODEX_READY_TIMEOUT + Duration::from_secs(15)) {
         let _ = proxy.stop();
@@ -921,14 +924,27 @@ pub async fn codex_app_server_start(
 }
 
 #[tauri::command]
-pub fn codex_app_server_stream(
+pub async fn codex_app_server_stream(
+    app: AppHandle,
     webview: Webview,
-    state: tauri::State<'_, CodexAppServerState>,
     generation: String,
     stream_id: String,
     on_event: Channel<CodexAppServerStreamMessage>,
 ) -> Result<(), String> {
-    if !caller_allowed(webview.label()) {
+    let caller = webview.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        stream_internal(&app.state::<CodexAppServerState>(), &caller, generation, stream_id, on_event)
+    }).await.map_err(|_| "Codex app-server stream worker failed.".to_string())?
+}
+
+fn stream_internal(
+    state: &CodexAppServerState,
+    caller: &str,
+    generation: String,
+    stream_id: String,
+    on_event: Channel<CodexAppServerStreamMessage>,
+) -> Result<(), String> {
+    if !caller_allowed(caller) {
         return Err("Codex app-server caller is not authorized.".to_string());
     }
     if !valid_identifier(&generation, 256) || !valid_identifier(&stream_id, 128) {
@@ -943,7 +959,7 @@ pub fn codex_app_server_stream(
         .as_mut()
         .ok_or_else(|| "Codex app-server is unavailable.".to_string())?;
     if running.generation != generation
-        || running.caller_label != webview.label()
+        || running.caller_label != caller
         || running.has_exited_or_lost_integrity()?
     {
         return Err("Codex app-server generation is unavailable.".to_string());
@@ -1002,7 +1018,7 @@ pub fn codex_app_server_stream(
     });
     running.active_stream = Some(ActiveStream {
         stream_id,
-        caller_label: webview.label().to_string(),
+        caller_label: caller.to_string(),
         cancelled,
         task: Some(task),
     });
@@ -1010,13 +1026,25 @@ pub fn codex_app_server_stream(
 }
 
 #[tauri::command]
-pub fn codex_app_server_write(
+pub async fn codex_app_server_write(
+    app: AppHandle,
     webview: Webview,
-    state: tauri::State<'_, CodexAppServerState>,
     generation: String,
     message: Value,
 ) -> Result<(), String> {
-    if !caller_allowed(webview.label()) {
+    let caller = webview.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        write_internal(&app.state::<CodexAppServerState>(), &caller, generation, message)
+    }).await.map_err(|_| "Codex app-server write worker failed.".to_string())?
+}
+
+fn write_internal(
+    state: &CodexAppServerState,
+    caller: &str,
+    generation: String,
+    message: Value,
+) -> Result<(), String> {
+    if !caller_allowed(caller) {
         return Err("Codex app-server caller is not authorized.".to_string());
     }
     if !valid_identifier(&generation, 256) {
@@ -1032,7 +1060,7 @@ pub fn codex_app_server_write(
         .as_mut()
         .ok_or_else(|| "Codex app-server is unavailable.".to_string())?;
     if running.generation != generation
-        || running.caller_label != webview.label()
+        || running.caller_label != caller
         || running.has_exited_or_lost_integrity()?
     {
         return Err("Codex app-server generation is unavailable.".to_string());
@@ -1041,7 +1069,7 @@ pub fn codex_app_server_write(
         .active_stream
         .as_ref()
         .ok_or_else(|| "Codex app-server stream must be subscribed before writes.".to_string())?;
-    if active.caller_label != webview.label() || active.stream_id.is_empty() {
+    if active.caller_label != caller || active.stream_id.is_empty() {
         return Err("Codex app-server stream owner is unavailable.".to_string());
     }
     let stdin = running
@@ -1058,12 +1086,19 @@ pub fn codex_app_server_write(
 }
 
 #[tauri::command]
-pub fn codex_app_server_stop(
+pub async fn codex_app_server_stop(
+    app: AppHandle,
     webview: Webview,
-    state: tauri::State<'_, CodexAppServerState>,
     generation: String,
 ) -> Result<bool, String> {
-    if !caller_allowed(webview.label()) {
+    let caller = webview.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        stop_internal(&app.state::<CodexAppServerState>(), &caller, &generation)
+    }).await.map_err(|_| "Codex app-server stop worker failed.".to_string())?
+}
+
+fn stop_internal(state: &CodexAppServerState, caller: &str, generation: &str) -> Result<bool, String> {
+    if !caller_allowed(caller) {
         return Err("Codex app-server caller is not authorized.".to_string());
     }
     if !valid_identifier(&generation, 256) {
@@ -1073,7 +1108,7 @@ pub fn codex_app_server_stop(
         .inner
         .lock()
         .map_err(|_| "Codex app-server state is unavailable.".to_string())?;
-    stop_running(&mut inner.running, webview.label(), &generation)
+    stop_running(&mut inner.running, caller, generation)
 }
 
 pub fn shutdown_owned_server(app: &AppHandle) {
@@ -1083,6 +1118,19 @@ pub fn shutdown_owned_server(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn background_control_helpers_preserve_caller_and_generation_validation() {
+        let state = super::CodexAppServerState::default();
+        for caller in ["pet-overlay", ""] {
+            assert!(super::write_internal(&state, caller, "valid-generation".into(), serde_json::json!({})).unwrap_err().contains("caller"));
+            assert!(super::stop_internal(&state, caller, "valid-generation").unwrap_err().contains("caller"));
+        }
+        for generation in ["", "../foreign"] {
+            assert!(super::write_internal(&state, "main", generation.into(), serde_json::json!({})).unwrap_err().contains("generation"));
+            assert!(super::stop_internal(&state, "main", generation).unwrap_err().contains("generation"));
+        }
+    }
+
     #[test]
     fn startup_retries_only_an_uninitialized_exit_once() {
         let mut attempts = 0;

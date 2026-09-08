@@ -31,7 +31,7 @@ import {
 import {
   Send,
   Play,
-  Square,
+  Pause,
   ChevronDown,
   Sparkles,
   Mic,
@@ -6057,7 +6057,7 @@ export function Composer({
                         aria-label="Stop current request"
                         className={cn('shrink-0', compact && 'h-6 w-6 min-h-6 min-w-6')}
                       >
-                        <Square />
+                        <Pause />
                       </Button>
                     </Hint>
                   ) : stoppedRequest && !hasDraft ? (
