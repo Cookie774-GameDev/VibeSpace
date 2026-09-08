@@ -1,0 +1,12 @@
+{
+  "at": "2026-09-07T23:42:09.507Z",
+  "targetId": "BB4369766F7E0B2D117C5075DDB1272B",
+  "url": "http://localhost:5174/?route=account",
+  "steps": [
+    {
+      "action": "click",
+      "text": "Use a key instead"
+    }
+  ],
+  "snapshot": "- main \"Workspace\":\n  - tabpanel \"Profile\":\n    - status: Up to date\n    - status: Sign in to check for recoverable cloud data.\n    - status: Nothing changes until you preview and confirm.\n    - status: Sign in to use encrypted cloud backup.\n- dialog \"Connect GitHub\":\n  - heading \"Connect GitHub\" [level=2]\n  - paragraph: GitHub authorization could not start. Review the exact requirement or use the supported fallback.\n  - group:\n    - text: Use a key instead\n    - paragraph: This fallback is optional. The provider sign-in flow above is the recommended connection method. Values entered here are saved to the desktop OS keychain.\n    - text: Personal access token\n    - textbox \"Personal access token\":\n      - /placeholder: github_pat_...\n    - paragraph: Use a fine-grained token with only the repositories and permissions VibeSpace needs.\n    - button \"Save and verify key\":\n      - img\n      - text: Save and verify key\n    - button \"Open provider key page\":\n      - img\n      - text: Open provider key page\n  - group: Permissions requested\n  - alert:\n    - paragraph: GitHub authorization requires a registered VibeSpace OAuth client.\n    - button \"View provider requirements\":\n      - img\n      - text: View provider requirements\n  - button \"Close\"\n  - button \"Close\""
+}

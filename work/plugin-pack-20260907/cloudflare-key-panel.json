@@ -1,0 +1,16 @@
+{
+  "identity": {
+    "jarvisPid": 1936,
+    "webViewPid": 30436,
+    "executablePath": "D:\\CodexBuilds\\VibeSpace-UnifiedChungus-Final-codex\\debug\\VibeSpace-PluginPack-20260907.exe",
+    "profile": "D:\\VibeSpace-Instance-2-current-941e2764-profile\\Local\\ai.jarvis.desktop\\EBWebView\\EBWebView",
+    "cdpPort": 9238,
+    "endpoint": "http://127.0.0.1:9238",
+    "ownership": "jarvis_descendant_exact_official_profile",
+    "listenerAddress": "127.0.0.1",
+    "capturedAt": "2026-09-07T19:22:02.1557892-05:00",
+    "targetId": "FAF98570F5E1ECBB1B5C42EEE679B6C3",
+    "url": "http://localhost:5174/"
+  },
+  "snapshot": "- dialog \"Connect Cloudflare\":\n  - heading \"Connect Cloudflare\" [level=2]\n  - paragraph: Open the official provider page, create the narrowest credential available, then test the connection.\n  - paragraph: What this plugin does\n  - paragraph: Cloudflare integration for cloud & hosting workflows, agent context, and MCP-style tools.\n  - paragraph: \"Provider: Cloudflare · Auth: token\"\n  - paragraph: \"Authorization capability: manual fallback\"\n  - paragraph: Official provider account page\n  - paragraph: Sign in or create your Cloudflare account on the provider-owned page. Keep this panel open to finish the supported credential fallback.\n  - button \"Open Cloudflare account page\":\n    - img\n    - text: Open Cloudflare account page\n  - paragraph: Setup steps\n  - list:\n    - listitem: Create a Cloudflare API token.\n    - listitem: Paste and test.\n  - img\n  - paragraph: Secure credential storage\n  - paragraph: Values saved here go to the OS keychain on desktop (session-only memory in browser preview). VibeSpace does not print them in logs or terminal context.\n  - text: API token\n  - textbox \"API token\":\n    - /placeholder: ...\n  - paragraph: Create a token with Account read access.\n  - paragraph: Declared tools\n  - text: cloud_context · read-only\n  - link \"Open connection documentation\":\n    - /url: https://developers.cloudflare.com/api/\n    - text: Open connection documentation\n    - img\n  - button \"Close\"\n  - button \"Connect\"\n  - button \"Close\""
+}

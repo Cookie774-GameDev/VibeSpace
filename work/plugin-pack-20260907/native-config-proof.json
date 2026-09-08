@@ -1,0 +1,84 @@
+{
+  "identity": {
+    "jarvisPid": 1936,
+    "webViewPid": 30436,
+    "executablePath": "D:\\CodexBuilds\\VibeSpace-UnifiedChungus-Final-codex\\debug\\VibeSpace-PluginPack-20260907.exe",
+    "profile": "D:\\VibeSpace-Instance-2-current-941e2764-profile\\Local\\ai.jarvis.desktop\\EBWebView\\EBWebView",
+    "cdpPort": 9238,
+    "endpoint": "http://127.0.0.1:9238",
+    "ownership": "jarvis_descendant_exact_official_profile",
+    "listenerAddress": "127.0.0.1",
+    "capturedAt": "2026-09-07T19:22:02.1557892-05:00",
+    "targetId": "FAF98570F5E1ECBB1B5C42EEE679B6C3",
+    "url": "http://localhost:5174/"
+  },
+  "at": "2026-09-08T00:35:45.600Z",
+  "method": "Playwright native keyboard + fill",
+  "changes": [
+    {
+      "field": "File Read Limit",
+      "value": 10001,
+      "readback": true,
+      "elapsedMs": 2645.426600000006
+    },
+    {
+      "field": "File Read Limit",
+      "value": 10000,
+      "readback": true,
+      "elapsedMs": 3402.5701000000117
+    },
+    {
+      "field": "File Write Limit",
+      "value": 51,
+      "readback": true,
+      "elapsedMs": 2035.1316000000807
+    },
+    {
+      "field": "File Write Limit",
+      "value": 50,
+      "readback": true,
+      "elapsedMs": 2442.9220000000205
+    },
+    {
+      "field": "Default Shell",
+      "value": "cmd.exe",
+      "readback": true
+    },
+    {
+      "field": "Default Shell",
+      "value": "powershell.exe",
+      "readback": true
+    },
+    {
+      "field": "Blocked Commands",
+      "entries": 34,
+      "restored": false,
+      "readback": true
+    },
+    {
+      "field": "Blocked Commands",
+      "entries": 33,
+      "restored": true,
+      "readback": true
+    },
+    {
+      "field": "Allowed Folders",
+      "entries": 1,
+      "restored": false,
+      "readback": true
+    },
+    {
+      "field": "Allowed Folders",
+      "entries": 0,
+      "restored": true,
+      "readback": true
+    }
+  ],
+  "telemetry": {
+    "before": "false",
+    "changed": "true",
+    "restored": "false",
+    "persistedChange": false
+  },
+  "snapshot": "- region \"Desktop Commander configuration\":\n  - heading \"Desktop Commander\" [level=4]\n  - paragraph: Configure the VibeSpace copy. Changes are saved to its running MCP and checked by reading them back.\n  - group: Setup Desktop Commander and browser tools\n  - text: Connection file\n  - textbox \"Desktop Commander connection file\":\n    - /placeholder: C:\\…\\state\\connection.json\n    - text: C:/Users/viper/VibeSpace-UnifiedChungus-Final/packages/vibespace-desktop-commander/state/connection.json\n  - button \"Connect Desktop Commander\"\n  - button \"Reload configuration\"\n  - text: Blocked Commands\n  - paragraph: Commands Desktop Commander refuses to run. Add one command per line.\n  - paragraph: 33 commands blocked\n  - button \"Edit Blocked Commands\": Edit\n  - text: Allowed Folders\n  - paragraph: Folders Desktop Commander may read and edit. An empty list permits all folders. This setting does not sandbox terminal commands.\n  - paragraph: All folders allowed (no restriction)\n  - button \"Edit Allowed Folders\": Edit\n  - text: Default Shell\n  - paragraph: Shell executable used for new command sessions. Existing terminals keep their current shell.\n  - combobox \"Default Shell\": powershell.exe\n  - text: Anonymous Telemetry\n  - paragraph: Send anonymous Desktop Commander usage information when enabled.\n  - switch \"Anonymous Telemetry\"\n  - text: File Read Limit\n  - paragraph: Maximum number of lines returned in one file read action.\n  - spinbutton \"File Read Limit\": \"10000\"\n  - text: File Write Limit\n  - paragraph: Maximum number of lines written in one file edit operation.\n  - spinbutton \"File Write Limit\": \"50\"\n  - status: Configuration reloaded."
+}

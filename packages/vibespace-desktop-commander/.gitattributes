@@ -1,0 +1,2 @@
+# Preserve the bytes recorded in PROVENANCE.json across Windows checkouts.
+* -text

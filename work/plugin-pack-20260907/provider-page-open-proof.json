@@ -1,0 +1,17 @@
+{
+  "identity": {
+    "jarvisPid": 1936,
+    "webViewPid": 30436,
+    "executablePath": "D:\\CodexBuilds\\VibeSpace-UnifiedChungus-Final-codex\\debug\\VibeSpace-PluginPack-20260907.exe",
+    "profile": "D:\\VibeSpace-Instance-2-current-941e2764-profile\\Local\\ai.jarvis.desktop\\EBWebView\\EBWebView",
+    "cdpPort": 9238,
+    "endpoint": "http://127.0.0.1:9238",
+    "ownership": "jarvis_descendant_exact_official_profile",
+    "listenerAddress": "127.0.0.1",
+    "capturedAt": "2026-09-07T19:22:02.1557892-05:00",
+    "targetId": "FAF98570F5E1ECBB1B5C42EEE679B6C3",
+    "url": "http://localhost:5174/"
+  },
+  "evidence": [],
+  "scope": "native shell request completion, not provider authentication"
+}

@@ -1,0 +1,6 @@
+node_modules/
+state/
+upstream/.candidate-state/
+browser/node_modules/
+browser/workspaces/
+*.tgz

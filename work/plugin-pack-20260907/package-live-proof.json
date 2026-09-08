@@ -1,0 +1,39 @@
+{
+  "at": "2026-09-07T23:26:05.240Z",
+  "package": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\packages\\vibespace-desktop-commander",
+  "configuration": {
+    "allSixRead": true,
+    "blockedCount": 33,
+    "saveAndRestoreReadLimit": true,
+    "saveReadbackMs": [
+      701.568,
+      591.8548000000001
+    ]
+  },
+  "mcp": {
+    "transport": "stdio proxy → authenticated loopback MCP → copied Desktop Commander",
+    "toolCount": 27,
+    "browserTool": true
+  },
+  "browser": {
+    "session": "vs-plugin-pack-20260907",
+    "openResult": {
+      "content": [
+        {
+          "type": "text",
+          "text": "### Browser `p2-vs-plugin-pack-20260907` opened with pid 37244.\n### Ran Playwright code\n```js\nawait page.goto('https://example.com');\n```\n### Page\n- Page URL: https://example.com/\n- Page Title: Example Domain\n### Snapshot\n- [Snapshot](artifacts\\page-2026-09-07T23-26-03-440Z.yml)\n"
+        }
+      ],
+      "isError": false
+    },
+    "snapshotResult": {
+      "content": [
+        {
+          "type": "text",
+          "text": "### Page\n- Page URL: https://example.com/\n- Page Title: Example Domain\n### Snapshot\n```yaml\n- generic [ref=e2]:\n  - heading \"Example Domain\" [level=1] [ref=e3]\n  - paragraph [ref=e4]: This domain is for use in documentation examples without needing permission. Avoid use in operations.\n  - paragraph [ref=e5]:\n    - link \"Learn more\" [ref=e6] [cursor=pointer]:\n      - /url: https://iana.org/domains/example\n```\n"
+        }
+      ],
+      "isError": false
+    }
+  }
+}

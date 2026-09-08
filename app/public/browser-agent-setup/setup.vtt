@@ -1,0 +1,25 @@
+WEBVTT
+
+1
+00:00:01.204 --> 00:00:07.240
+Optional remote setup • This is an Edge documentation walkthrough. Local Desktop Commander and Playwright require no tunnel or OpenAI key.
+
+2
+00:00:07.240 --> 00:00:13.770
+Install cloudflared, then run: cloudflared tunnel login. Complete sign-in yourself. Keep the resulting certificate and tunnel credentials private.
+
+3
+00:00:13.770 --> 00:00:20.300
+Create a named tunnel with cloudflared tunnel create YOUR_NAME. Configure only the intended local service. Protect remote access with Cloudflare Access and the gateway bearer token.
+
+4
+00:00:20.300 --> 00:00:28.146
+For this package: forward only /mcp, use the current loopback port from connection.json, and set httpHostHeader to 127.0.0.1:PORT. Do not expose /config or put a token in the URL.
+
+5
+00:00:28.146 --> 00:00:34.948
+Optional model setup • OpenAI’s official quickstart links to API keys. Choose your own project and create a secret key. This recording does not create or reveal a credential.
+
+6
+00:00:34.948 --> 00:00:41.465
+Sign in privately, choose the correct project, and create a key. Save it in VibeSpace’s OpenAI provider settings, never in chat or the MCP connection file. API usage may incur charges.

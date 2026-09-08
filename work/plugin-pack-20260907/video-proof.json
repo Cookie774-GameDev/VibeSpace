@@ -1,0 +1,37 @@
+{
+  "browser": "Microsoft Edge via Playwright",
+  "type": "official documentation and sign-in walkthrough; no credentials created",
+  "durationSeconds": 41.465,
+  "cues": [
+    {
+      "start": 1.204,
+      "text": "Optional remote setup • This is an Edge documentation walkthrough. Local Desktop Commander and Playwright require no tunnel or OpenAI key.",
+      "end": 7.24
+    },
+    {
+      "start": 7.24,
+      "text": "Install cloudflared, then run: cloudflared tunnel login. Complete sign-in yourself. Keep the resulting certificate and tunnel credentials private.",
+      "end": 13.77
+    },
+    {
+      "start": 13.77,
+      "text": "Create a named tunnel with cloudflared tunnel create YOUR_NAME. Configure only the intended local service. Protect remote access with Cloudflare Access and the gateway bearer token.",
+      "end": 20.3
+    },
+    {
+      "start": 20.3,
+      "text": "For this package: forward only /mcp, use the current loopback port from connection.json, and set httpHostHeader to 127.0.0.1:PORT. Do not expose /config or put a token in the URL.",
+      "end": 28.146
+    },
+    {
+      "start": 28.146,
+      "text": "Optional model setup • OpenAI’s official quickstart links to API keys. Choose your own project and create a secret key. This recording does not create or reveal a credential.",
+      "end": 34.948
+    },
+    {
+      "start": 34.948,
+      "text": "Sign in privately, choose the correct project, and create a key. Save it in VibeSpace’s OpenAI provider settings, never in chat or the MCP connection file. API usage may incur charges.",
+      "end": 41.465
+    }
+  ]
+}

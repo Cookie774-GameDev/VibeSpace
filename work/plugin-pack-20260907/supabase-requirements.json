@@ -1,0 +1,16 @@
+{
+  "identity": {
+    "jarvisPid": 1936,
+    "webViewPid": 30436,
+    "executablePath": "D:\\CodexBuilds\\VibeSpace-UnifiedChungus-Final-codex\\debug\\VibeSpace-PluginPack-20260907.exe",
+    "profile": "D:\\VibeSpace-Instance-2-current-941e2764-profile\\Local\\ai.jarvis.desktop\\EBWebView\\EBWebView",
+    "cdpPort": 9238,
+    "endpoint": "http://127.0.0.1:9238",
+    "ownership": "jarvis_descendant_exact_official_profile",
+    "listenerAddress": "127.0.0.1",
+    "capturedAt": "2026-09-07T19:22:02.1557892-05:00",
+    "targetId": "FAF98570F5E1ECBB1B5C42EEE679B6C3",
+    "url": "http://localhost:5174/"
+  },
+  "snapshot": "- dialog \"Connect Supabase\":\n  - heading \"Connect Supabase\" [level=2]\n  - paragraph: Supabase offers provider-hosted browser sign-in for its remote MCP server, but VibeSpace has not implemented the MCP OAuth discovery, callback, or token lifecycle required to connect it safely.\n  - paragraph: What this plugin does\n  - paragraph: Database, authentication, storage, edge functions, and project API context.\n  - paragraph: \"Provider: Supabase · Auth: api key\"\n  - paragraph: \"Authorization capability: external blocker\"\n  - alert:\n    - paragraph: External authorization prerequisite\n    - paragraph: Supabase offers provider-hosted browser sign-in for its remote MCP server, but VibeSpace has not implemented the MCP OAuth discovery, callback, or token lifecycle required to connect it safely.\n    - button \"Open Supabase configuration\":\n      - img\n      - text: Open Supabase configuration\n  - paragraph: Setup steps\n  - list:\n    - listitem: Integrate the official hosted Supabase MCP endpoint through OAuth discovery; never substitute a project API-key page for sign-in.\n    - listitem: Implement and verify the exact redirect callback, PKCE/state validation, secure token storage and refresh, cancellation, reconnect, revocation, and error recovery.\n    - listitem: Complete native provider-owned login and consent verification without exposing project credentials.\n  - paragraph: The existing bounded REST probe can validate a publishable project key, but it does not satisfy provider-hosted authorization and is not exposed as a replacement for Supabase MCP OAuth.\n  - paragraph: Declared tools\n  - text: connection_info · read-only schema_context · read-only\n  - link \"Open connection documentation\":\n    - /url: https://supabase.com/docs/guides/ai-tools/mcp\n    - text: Open connection documentation\n    - img\n  - button \"Close\"\n  - button \"Close\""
+}

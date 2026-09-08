@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { remoteMcpSetupRuntime } from '@/lib/mcp/remoteSetupRuntime';
 import { browserAgentPreferences } from '../browserAgentPreferences';
+import { DesktopCommanderSettings } from './DesktopCommanderSettings';
 
 function ToggleRow({
   label,
@@ -159,6 +160,7 @@ export function BrowserAgentSettings() {
           Clear session and revoke leases
         </Button>
       </div>
+      <DesktopCommanderSettings />
     </section>
   );
 }
