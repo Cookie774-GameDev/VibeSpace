@@ -267,6 +267,14 @@ describe('Codex app-server request protocol', () => {
         model: 'gpt-5.6-sol',
         serviceTierForTurn: 'priority',
         effort: 'high',
+        collaborationMode: {
+          mode: 'default',
+          settings: {
+            model: 'gpt-5.6-sol',
+            reasoning_effort: 'high',
+            developer_instructions: null,
+          },
+        },
         summary: 'concise',
       },
     });
@@ -285,6 +293,14 @@ describe('Codex app-server request protocol', () => {
       });
       expect(request.params.approvalPolicy).toBe('never');
       expect(request.params.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
+      expect(request.params).toHaveProperty('collaborationMode', {
+        mode: kind === 'plan' ? 'plan' : 'default',
+        settings: {
+          model: IDENTITY.model,
+          reasoning_effort: IDENTITY.effort,
+          developer_instructions: null,
+        },
+      });
     },
   );
 

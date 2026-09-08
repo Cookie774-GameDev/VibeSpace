@@ -303,6 +303,16 @@ export function buildCodexTurnStartRequest(input: Readonly<CodexTurnStartRequest
       model: identity.model,
       serviceTierForTurn: identity.serviceTier,
       effort: identity.effort,
+      // Collaboration mode enables Codex's native planning/question tools;
+      // sandbox policy alone does not switch it out of Default mode.
+      collaborationMode: {
+        mode: input.mode.kind === 'plan' ? 'plan' as const : 'default' as const,
+        settings: {
+          model: identity.model,
+          reasoning_effort: identity.effort,
+          developer_instructions: null,
+        },
+      },
       summary: 'concise' as const,
     },
   };

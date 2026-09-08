@@ -152,7 +152,8 @@ pub fn codex_app_server_handshake(
                 "version": client_version,
             },
             "capabilities": {
-                "experimentalApi": false,
+                // Required by turn/start collaborationMode (native Plan mode).
+                "experimentalApi": true,
                 "requestAttestation": false,
                 "optOutNotificationMethods": CODEX_APP_SERVER_PRIVATE_REASONING_METHODS,
             },
@@ -305,7 +306,7 @@ mod tests {
         assert_eq!(initialize["params"]["clientInfo"]["version"], "1.5.0");
         assert_eq!(
             initialize["params"]["capabilities"]["experimentalApi"],
-            false
+            true
         );
         assert_eq!(
             initialize["params"]["capabilities"]["requestAttestation"],
