@@ -6,6 +6,8 @@ import type { SendDetail, CancelDetail } from '@/lib/ai/runtime';
 import type { AgentId, ChatId, MessageId, ProviderId } from '@/types';
 import { CAO_LEARNER_IDENTITY, assertCaoLearnerExecutionIdentity } from '@/features/cao/bootstrap';
 import { TOOL_GATEWAY_CATALOG } from '@/lib/harness/toolGatewayProtocol';
+import { useAgentStore } from '@/stores/agents';
+import { findProtectedJarvisAgent } from '@/lib/jarvis/identity';
 import { useJarvisLearningStore } from './learningStore';
 import { collectCaoLearningEvidence } from './caoLearningEvidence';
 import { caoGuidanceReady } from './caoGuidance';
@@ -23,6 +25,7 @@ function targetAuthority(chat: Awaited<ReturnType<typeof target>>, permission?: 
   return JSON.stringify({
     connection: chat.connection,
     agents: chat.active_agent_ids,
+    resolvedAgent: { id: chat.caoAgentId, revision: chat.caoAgentRevision },
     project: chat.project_id,
     workspace: chat.workspace_id,
     updatedAt: chat.updated_at,
@@ -69,17 +72,23 @@ async function target(accountId: string, chatId: string) {
     workspace?.owner_id !== accountId ||
     !chat.project_id ||
     project?.workspace_id !== chat.workspace_id ||
-    !chat.connection?.modelId ||
-    !chat.active_agent_ids[0]
+    !chat.connection?.modelId
   )
     throw new Error('cao_target_unavailable');
-  return chat;
+  const agents = useAgentStore.getState().agents;
+  const selectedAgentId = chat.active_agent_ids[0];
+  const agent = selectedAgentId
+    ? agents[selectedAgentId]
+    : findProtectedJarvisAgent(Object.values(agents));
+  if (!agent) throw new Error('cao_target_agent_unavailable');
+  return { ...chat, caoAgentId: agent.id, caoAgentRevision: agent.updated_at };
 }
 export const caoChatControl = createCaoChatControl({
   async state(accountId, chatId) {
     const chat = await target(accountId, chatId);
     const raw = (await db.settings.get(caoPermissionKey(accountId)))?.value as
-      CaoChatPermission | undefined;
+      | CaoChatPermission
+      | undefined;
     assertAccount(accountId);
     const profile = useJarvisLearningStore.getState().currentProfile();
     return {
@@ -165,7 +174,8 @@ export const caoChatControl = createCaoChatControl({
   async send(proposal, signal) {
     const chat = await target(proposal.accountId, proposal.chatId);
     const permission = (await db.settings.get(caoPermissionKey(proposal.accountId)))?.value as
-      CaoChatPermission | undefined;
+      | CaoChatPermission
+      | undefined;
     const profile = useJarvisLearningStore.getState().currentProfile();
     assertAccount(proposal.accountId);
     if (targetAuthority(chat, permission) !== proposal.authority)
@@ -192,7 +202,7 @@ export const caoChatControl = createCaoChatControl({
       text: `[CAO acting for user]\n${proposal.text}`,
       origin: 'cao',
       cancellationKey: proposal.id as MessageId,
-      agentId: chat.active_agent_ids[0],
+      agentId: chat.caoAgentId,
       modelSelectionOverride: selection,
       interactionMode: 'ask',
       approveAllForRun: false,

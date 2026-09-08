@@ -3,7 +3,10 @@ import type { RunAgentRequest } from '@/lib/ai/router';
 import { caoChatControl } from './caoChatControlProduction';
 import { CAO_GUIDANCE_AREAS, parseCaoGuidance } from './caoGuidance';
 import { useJarvisLearningStore } from './learningStore';
+import { useAgentStore } from '@/stores/agents';
+import type { Agent } from '@/types';
 const mocks = vi.hoisted(() => ({
+  activeAgents: ['agent'],
   permission: {
     enabled: true,
     mode: 'full-access',
@@ -22,7 +25,7 @@ vi.mock('@/lib/db', () => ({
         id: 'chat',
         workspace_id: 'workspace',
         project_id: 'project',
-        active_agent_ids: ['agent'],
+        active_agent_ids: mocks.activeAgents,
         connection: {
           id: 'openai-codex',
           providerId: 'openai',
@@ -44,6 +47,26 @@ vi.mock('@/lib/db', () => ({
   },
 }));
 beforeEach(() => {
+  mocks.activeAgents = ['agent'];
+  const agent: Agent = {
+    id: 'agent' as Agent['id'],
+    slug: 'coder',
+    name: 'Coder',
+    description: '',
+    system_prompt: 'Follow the selected task.',
+    model: { provider: 'openai', model: 'target-model' },
+    tools_allowed: [],
+    memory_scope: 'project',
+    capabilities: [],
+    created_at: 0,
+    updated_at: 1,
+  };
+  useAgentStore.setState({
+    agents: {
+      [agent.id]: agent,
+      ['jarvis' as Agent['id']]: { ...agent, id: 'jarvis' as Agent['id'], slug: 'jarvis', builtin: true },
+    },
+  });
   const store = useJarvisLearningStore.getState();
   store.clearForTests();
   store.setAccount('account');
@@ -81,6 +104,66 @@ beforeEach(() => {
     });
     return { text: 'Please run focused checks and report observed results.' };
   });
+});
+it('prepares and sends to protected Jarvis when a normal chat has no explicit agent', async () => {
+  mocks.activeAgents = [];
+  const onSend = vi.fn((event: Event) => {
+    const detail = (event as CustomEvent).detail;
+    expect(detail.agentId).toBe('jarvis');
+    window.dispatchEvent(
+      new CustomEvent('jarvis:run-state', {
+        detail: { chatId: 'chat', cancellationKey: detail.cancellationKey, status: 'running' },
+      }),
+    );
+  });
+  window.addEventListener('jarvis:send', onSend);
+  try {
+    expect(
+      (
+        await caoChatControl.prepare(
+          'account',
+          'chat',
+          'Continue the simulation',
+          new AbortController().signal,
+        )
+      ).status,
+    ).toBe('sent');
+    expect(onSend).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener('jarvis:send', onSend);
+  }
+});
+
+it.each([{ ids: [] }, { ids: ['missing-agent'] }])(
+  'rejects an unavailable target agent without substituting another: $ids',
+  async ({ ids }) => {
+    mocks.activeAgents = ids;
+    if (ids.length === 0) {
+      // A different available agent must not replace the protected default.
+      const agent = useAgentStore.getState().agents['agent' as Agent['id']];
+      useAgentStore.setState({ agents: { [agent.id]: agent } });
+    }
+    mocks.dispatch.mockClear();
+    await expect(
+      caoChatControl.prepare('account', 'chat', 'Continue', new AbortController().signal),
+    ).rejects.toThrow('cao_target_agent_unavailable');
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  },
+);
+
+it('rejects approval after the resolved default agent revision changes', async () => {
+  mocks.activeAgents = [];
+  mocks.permission.mode = 'approve-before-send';
+  const proposal = await caoChatControl.prepare(
+    'account',
+    'chat',
+    'Continue',
+    new AbortController().signal,
+  );
+  useAgentStore
+    .getState()
+    .updateAgent('jarvis' as Agent['id'], { system_prompt: 'Changed agent policy.' });
+  await expect(caoChatControl.approve(proposal.id)).rejects.toThrow('cao_target_changed');
 });
 it('dispatches the exact selected chat route and correlates its runtime acknowledgement', async () => {
   const onSend = vi.fn((event: Event) => {
