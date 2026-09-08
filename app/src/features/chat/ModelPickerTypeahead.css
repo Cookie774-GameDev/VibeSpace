@@ -170,3 +170,20 @@
     opacity: 0.32;
   }
 }
+.model-route-speed {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .model-picker-typeahead:has([data-model-route-fast='true']:hover) {
+    animation-duration: 2s;
+  }
+  .model-picker-typeahead [data-model-route-fast='true']:hover {
+    animation-duration: calc(2s / 1.5);
+  }
+}

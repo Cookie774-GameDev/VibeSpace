@@ -1032,6 +1032,15 @@ describe('persistent OpenCode live authority', () => {
     }
   });
 
+  it('recognizes provider Fast routes only from fixed live service-tier options', () => {
+    const models = parseOpenCodeLiveModels({ providers: [{ id: 'openai', models: {
+      'gpt-5.6-luna-fast': { options: { serviceTier: 'priority' }, variants: { xhigh: {} } },
+      'pretend-fast': { variants: { high: {} } },
+    } }] });
+    expect(models.find((m) => m.upstreamModelId === 'gpt-5.6-luna-fast')?.isFastRoute).toBe(true);
+    expect(models.find((m) => m.upstreamModelId === 'pretend-fast')?.isFastRoute).toBeUndefined();
+  });
+
   it('preserves exact provider capability fields and combined effort/Fast variant semantics', () => {
     const [model] = parseOpenCodeLiveModels({
       providers: [

@@ -140,6 +140,7 @@ export interface OpenCodeLiveModel {
   supportsIndependentReasoningEffort: boolean;
   serviceTiers: readonly string[];
   supportsOpenCodeFastMode: boolean;
+  isFastRoute?: boolean;
 }
 
 export interface OpenCodeMessageRecord {
@@ -952,6 +953,8 @@ export function parseOpenCodeLiveModels(value: unknown): readonly OpenCodeLiveMo
         supportsIndependentReasoningEffort,
         serviceTiers: serviceTiersFrom(model),
         supportsOpenCodeFastMode,
+        ...(['fast', 'priority'].includes(String(recordOf(model.options)?.serviceTier ?? '').toLowerCase())
+          ? { isFastRoute: true } : {}),
       });
     }
   }
@@ -985,6 +988,7 @@ export async function openCodeCatalogRevision(
       supportsIndependentReasoningEffort: model.supportsIndependentReasoningEffort,
       serviceTiers: [...model.serviceTiers],
       supportsOpenCodeFastMode: model.supportsOpenCodeFastMode,
+      isFastRoute: model.isFastRoute,
     })),
   );
   const digest = await globalThis.crypto?.subtle?.digest(
@@ -1040,6 +1044,7 @@ function modelMetadata(model: OpenCodeLiveModel, connectionId: string): LiveMode
     supportsIndependentReasoningEffort: model.supportsIndependentReasoningEffort,
     serviceTiers: model.serviceTiers,
     supportsOpenCodeFastMode: model.supportsOpenCodeFastMode,
+    isFastRoute: model.isFastRoute,
   };
 }
 
@@ -1433,6 +1438,7 @@ export function buildObservedOpenCodeGatewayAuthority(
   const fastVariant =
     observedFastVariant ??
     observedFastTier ??
+    (input.model.isFastRoute ? input.model.upstreamModelId : undefined) ??
     (input.controls.openCodeFastMode ? undefined : 'standard');
   if (!fastVariant) {
     throw new Error('OpenCode Fast execution completed without an exact observed route variant.');

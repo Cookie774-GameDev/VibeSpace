@@ -1,3 +1,4 @@
+import { isFastModelRoute } from './runtime/fastRouteSelection';
 import {
   forwardRef,
   useEffect,
@@ -591,7 +592,7 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                         )}
                       </span>
                       <span className="relative z-[1] min-w-0 flex-1 font-medium">
-                        {effort.label}
+                        {effort.upstreamEffort ?? effort.label}
                       </span>
                       {effort.label === 'auto' ? (
                         <span className="relative z-[1] text-[10px] normal-case text-muted-foreground">
@@ -614,7 +615,9 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                     id={`${pickerId}-route-${route.id}`}
                     role="option"
                     data-value={route.id}
-                    aria-label={`${route.label} · ${route.modelId}`}
+                    aria-label={`${route.label} · ${isFastModelRoute(route.modelId) ? 'Fast' : 'Standard'} · ${route.modelId}`}
+                    title={route.modelId}
+                    data-model-route-fast={isFastModelRoute(route.modelId) || undefined}
                     aria-selected={route.id === selectedId}
                     aria-disabled={route.available === false}
                     aria-pressed={selected}
@@ -644,6 +647,7 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                         {route.authLabel ? ` · ${route.authLabel}` : ''}
                       </span>
                     </span>
+                    <span className="model-route-speed">{isFastModelRoute(route.modelId) ? 'Fast' : 'Standard'}</span>
                   </button>
                 );
               })}
@@ -766,6 +770,7 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                               <div
                                 id={`${pickerId}-model-${option.id}`}
                                 data-value={option.id}
+                                data-model-route-fast={!option.alternativeRoutes && isFastModelRoute(option.modelId) || undefined}
                                 role="option"
                                 aria-selected={ariaSelected}
                                 data-sik-evidence={
@@ -819,6 +824,9 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                                     {option.authLabel ? ` · ${option.authLabel}` : ''}
                                   </span>
                                 </div>
+                                {!option.alternativeRoutes && isFastModelRoute(option.modelId) && (
+                                  <span className="model-route-speed">Fast</span>
+                                )}
                                 {isActive && (
                                   <span className="shrink-0 text-[11px] font-medium text-accent-copper">
                                     active

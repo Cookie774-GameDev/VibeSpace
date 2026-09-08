@@ -76,24 +76,22 @@ describe('model-specific variants and fast mode', () => {
     ).toMatchObject({ supported: false, transport: 'off' });
   });
 
-  it('keeps Ultra last and excludes it from the exact GPT-5.6 Luna route', () => {
+  it('trusts live Luna efforts and orders xhigh before max', () => {
     const all = ['none', 'low', 'medium', 'high', 'xhigh', 'max'].map((id) => ({ id }));
     expect(
       listEffortOptions(all, 'openai/gpt-5.6-sol')
         .filter((item) => item.available)
         .map((item) => item.label),
-    ).toEqual(['auto', 'minimal', 'low', 'medium', 'high', 'max', 'ultra']);
+    ).toEqual(['auto', 'minimal', 'low', 'medium', 'high', 'ultra', 'max']);
     expect(
       listEffortOptions(all, 'openrouter/openai/gpt-5.6-luna')
         .filter((item) => item.available)
         .map((item) => item.label),
-    ).toEqual(['auto', 'minimal', 'low', 'medium', 'high', 'max']);
-    expect(() => resolveEffortVariant('openai/gpt-5.6-luna', 'ultra', all)).toThrow(
-      VariantNotAvailableError,
-    );
+    ).toEqual(['auto', 'minimal', 'low', 'medium', 'high', 'ultra', 'max']);
+    expect(resolveEffortVariant('openai/gpt-5.6-luna', 'ultra', all)).toBe('xhigh');
   });
 
-  it('rejects Fast metadata on API, aggregator, and non-Codex routes', () => {
+  it('accepts explicit live Fast capabilities without a model-name allowlist', () => {
     for (const metadata of [
       { connectionId: 'openai-api', modelId: 'gpt-5.6-sol', serviceTiers: ['fast'] },
       {
@@ -103,7 +101,7 @@ describe('model-specific variants and fast mode', () => {
       },
       { connectionId: 'opencode-cli', modelId: 'qwen/qwen3.8-max', variants: [{ id: 'fast' }] },
     ]) {
-      expect(resolveFastMode(true, metadata)).toMatchObject({ supported: false, transport: 'off' });
+      expect(resolveFastMode(true, metadata).supported).toBe(true);
     }
   });
 });

@@ -23,6 +23,7 @@ export interface LiveModelRuntimeMetadata {
   serviceTiers?: readonly string[];
   /** OpenCode exposes a native subscription/Codex fast control. */
   supportsOpenCodeFastMode?: boolean;
+  isFastRoute?: boolean;
 }
 
 export interface RuntimeModelPreferences {
@@ -189,7 +190,7 @@ export function parseRuntimeSlashCommand(input: string): RuntimeSlashCommand | n
   const tokens = input.trim().toLocaleLowerCase('en-US').split(/\s+/u).filter(Boolean);
   if (tokens[0] === '/effort') {
     if (tokens.length > 2) return null;
-    const value = tokens[1];
+    const value = tokens[1] === 'xhigh' ? 'ultra' : tokens[1] === 'none' ? 'minimal' : tokens[1];
     if (!value) return { kind: 'effort' };
     if (['auto', 'minimal', 'low', 'medium', 'high', 'ultra', 'max', 'status'].includes(value)) {
       return { kind: 'effort', value: value as EffortPreference | 'status' };

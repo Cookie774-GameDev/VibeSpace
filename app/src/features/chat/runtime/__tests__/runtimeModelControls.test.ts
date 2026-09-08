@@ -21,8 +21,8 @@ describe('runtime model controls', () => {
       'low',
       'medium',
       'high',
-      'max',
       'ultra',
+      'max',
     ]);
   });
 
@@ -76,7 +76,7 @@ describe('runtime model controls', () => {
     });
   });
 
-  it('hides Fast for direct API and aggregator routes even when metadata looks fast', () => {
+  it('accepts advertised Fast capabilities on any exact route', () => {
     for (const metadata of [
       { ...sol, connectionId: 'openai-api', modelId: 'gpt-5.6-sol' },
       { ...sol, modelId: 'openrouter/openai/gpt-5.6-sol' },
@@ -84,10 +84,19 @@ describe('runtime model controls', () => {
       expect(
         resolveRuntimeModelControls({ effort: 'auto', fastMode: 'on' }, metadata),
       ).toMatchObject({
-        ok: false,
-        code: 'FAST_MODE_UNSUPPORTED',
+        ok: true,
+        controls: { serviceTier: 'fast' },
       });
     }
+  });
+
+  it('keeps fixed Fast model routes executable without unsupported prompt fields', () => {
+    expect(resolveRuntimeModelControls({ effort: 'ultra', fastMode: 'on' }, {
+      ...sol, modelId: 'openai/gpt-5.6-luna-fast', serviceTiers: [],
+      supportsIndependentReasoningEffort: false, isFastRoute: true,
+    })).toEqual({ ok: true, controls: { variant: 'xhigh', usageWarningRequired: true } });
+    expect(parseRuntimeSlashCommand('/effort xhigh')).toEqual({ kind: 'effort', value: 'ultra' });
+    expect(parseRuntimeSlashCommand('/effort none')).toEqual({ kind: 'effort', value: 'minimal' });
   });
 
   it('fails unsupported Spark max and unsupported Fast before provider send', () => {

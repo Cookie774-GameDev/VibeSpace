@@ -391,12 +391,13 @@ import {
   writeChatReasoningEffort,
   writeChatReasoningMode,
 } from './reasoningSlashStore';
-import type { EffortLabel } from '@/lib/ai/catalog/modelVariants';
+import { listEffortOptions, type EffortLabel } from '@/lib/ai/catalog/modelVariants';
 import {
   applyChatRuntimeCommand,
   parseChatRuntimeCommand,
 } from './runtime/chatRuntimeCommandController';
 import { supportedEffortPreferences } from './runtime/runtimeModelControls';
+import { findFastModelRoute } from './runtime/fastRouteSelection';
 import {
   clearApproveAllForRun,
   readChatRuntimePolicyState,
@@ -2878,6 +2879,20 @@ export function Composer({
         return true;
       }
       const result = applyChatRuntimeCommand(runtimePolicy.settings, parsed);
+      if (parsed.kind === 'fast' && (parsed.value === 'on' || parsed.value === 'off') &&
+          chatBackendAffinity?.backend !== 'codex' && chatModelSelection.mode === 'single') {
+        const route = findFastModelRoute(chatModelSelection, accessibleChatModels.flatOptions, parsed.value === 'on');
+        if (route && route.modelId !== chatModelSelection.modelId) {
+          const selection = selectionFromOption(route.provider, route.modelId, route.connection);
+          if (selection.mode === 'single' && selection.connectionId) {
+            await chatRepo.update(chatId as ChatId, {
+              connection: { ...getProviderConnectionDescriptor(selection.connectionId), modelId: selection.modelId },
+            });
+          }
+          setRetainedExactChatSelection(selection.mode === 'single' ? selection : null);
+          setChatModelSelection(selection);
+        }
+      }
       const next = writeChatRuntimePolicyState(String(chatId), {
         ...runtimePolicy,
         settings: result.settings,
@@ -2969,7 +2984,7 @@ export function Composer({
         setRuntimePolicy(next);
         if (result.kind === 'updated' || result.kind === 'status') await addSystem(result.message);
         if (result.kind === 'updated') {
-          const effort = parseReasoningEffortArgument(rest);
+          const effort = requested === 'auto' ? null : requested ?? parseReasoningEffortArgument(rest);
           if (effort !== undefined) {
             writeChatReasoningEffort(String(chatId), effort);
             setReasoningPreference(readChatReasoningPreference(String(chatId)));
@@ -6216,6 +6231,10 @@ function ModelPicker({
   const displayLabel = formatChatModelSelectionLabel(selection, modelCtx);
   const activeProvider = selection.mode === 'single' ? selection.providerId : undefined;
   const activeModel = selection.mode === 'single' ? selection.modelId : undefined;
+  const activeRoute = flatOptions.flatMap((option) => option.alternativeRoutes ?? [option])
+    .find((option) => option.id === selectionOptionId(selection));
+  const effortLabel = listEffortOptions((activeRoute?.variants ?? []).map((id) => ({ id })))
+    .find((option) => option.label === initialEffort)?.upstreamEffort ?? initialEffort;
 
   const flatOptionIds = useMemo(
     () => flatOptions.map((option) => option.id).join('\0'),
@@ -6328,7 +6347,7 @@ function ModelPicker({
               )}
             >
               <Sparkles aria-hidden="true" className="h-2.5 w-2.5" />
-              {initialEffort}
+              {effortLabel}
             </span>
           ) : null}
           <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 opacity-70', compact && 'h-3 w-3')} />

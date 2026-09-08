@@ -388,7 +388,8 @@ export async function resolveCapturedRuntimeReasoningPolicy(
     return await openCodePersistentAdapter.listModels?.() ?? [];
   },
 ): Promise<ReturnType<typeof resolveReasoningPolicy>> {
-  if (selection.connectionId !== 'opencode-cli' || preference.mode === 'normal') {
+  if (selection.connectionId !== 'opencode-cli' ||
+      (preference.mode === 'normal' && preference.effortOverride === null)) {
     return resolveRuntimeReasoningPolicy(selection, preference);
   }
   const model = (await listModels()).find(item => item.id === selection.modelId);
@@ -6512,7 +6513,7 @@ export function startRuntimeListener(
               model,
               providerOptions: reasoningPolicy?.providerOptions,
               runtimeSettings,
-              execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
+              execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.providerEffort ?? reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
               tokenOptimization: { mode: tokenOptimizationMode, outputTokens: detail.tokenOptimizationOutputLimit, signal: controller.signal, onReceipt: receipt => { kernelTokenReceipt = receipt; } },
             });
             if (continuationOutcome) {
@@ -7517,7 +7518,7 @@ export function startRuntimeListener(
       await bindings.updateMessage(placeholder.id, {
         parts: finalParts,
         usage: {
-          execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
+          execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.providerEffort ?? reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
           ...(response.usage.provenance ? { provenance: response.usage.provenance } : {}),
           input_tokens: response.usage.input_tokens,
           output_tokens: response.usage.output_tokens,

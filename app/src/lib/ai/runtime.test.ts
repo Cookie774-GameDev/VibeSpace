@@ -1176,6 +1176,14 @@ describe('startRuntimeListener agent routing', () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
+  it('resolves explicit Normal effort from the captured catalog before saving its receipt', async () => {
+    const selected = { providerId: 'opencode', connectionId: 'opencode-cli', modelId: 'openai/gpt-5.6-luna-fast' };
+    const list = vi.fn(async () => [{ id: selected.modelId, label: 'Luna Fast', variants: ['none', 'high', 'xhigh', 'max'] }]);
+    await expect(resolveCapturedRuntimeReasoningPolicy(selected, { mode: 'normal', effortOverride: 'ultra' }, list))
+      .resolves.toMatchObject({ resolvedEffort: 'ultra', providerEffort: 'xhigh' });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves an explicit-root request verbatim when the Context tool is disabled', () => {
     const message = {
       role: 'user' as const,

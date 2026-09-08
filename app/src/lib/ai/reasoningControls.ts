@@ -1,3 +1,4 @@
+import { listEffortOptions } from './catalog/modelVariants';
 import finalBossSkill from '../../../.jarvis/skills/token-final-boss/SKILL.md?raw';
 import { ponytailInstructions } from './ponytailInstructions';
 
@@ -26,6 +27,8 @@ export interface ResolvedReasoningPolicy {
   selection: ReasoningSelection;
   requestedEffort: ReasoningEffort | null;
   resolvedEffort: ReasoningEffort | null;
+  /** Exact provider effort, retained with the response rather than the UI alias. */
+  providerEffort?: string | null;
   providerOptions: Record<string, unknown>;
   maxOutputTokens: number | undefined;
   executionInstructions: string;
@@ -172,12 +175,13 @@ export function getReasoningCapabilities(
 ): ReasoningCapabilities {
   const base = staticReasoningCapabilities(selection);
   if (liveVariants === undefined || (liveVariants.length === 0 && !liveVariantsAuthoritative)) return base;
-  const supported = EFFORTS.filter(
-    (effort) => liveVariants.includes(effort) || liveVariants.includes(base.wireEffort(effort)),
-  );
+  const options = listEffortOptions(liveVariants.map((id) => ({ id })), selection.modelId)
+    .filter((option) => option.available && option.label !== 'auto');
+  const supported = options.map((option) => option.label as ReasoningEffort);
   return {
     ...base,
     supportedEfforts: supported,
+    wireEffort: (effort) => options.find((option) => option.label === effort)?.upstreamEffort ?? base.wireEffort(effort),
     // Live variants prove effort availability, not a provider-specific API key.
     // Native OpenCode routes carry the resolved effort through runtimeSettings.
     providerOptionKey: supported.length > 0 ? base.providerOptionKey : null,
@@ -236,6 +240,7 @@ export function resolveReasoningPolicy({
     selection,
     requestedEffort,
     resolvedEffort,
+    providerEffort: resolvedEffort ? capabilities.wireEffort(resolvedEffort) : null,
     providerOptions,
     maxOutputTokens: preference.mode === 'token-saver' ? 2048 : undefined,
     executionInstructions: EXECUTION_INSTRUCTIONS[preference.mode],

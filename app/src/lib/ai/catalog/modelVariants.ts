@@ -51,15 +51,6 @@ function normalize(value: string): string {
   return value.trim().toLocaleLowerCase('en-US');
 }
 
-function isExactGpt56Luna(modelId: string): boolean {
-  const normalized = normalize(modelId);
-  return (
-    normalized === 'gpt-5.6-luna' ||
-    normalized === 'openai/gpt-5.6-luna' ||
-    normalized === 'openrouter/openai/gpt-5.6-luna'
-  );
-}
-
 export function variantReasoningEffort(
   variant: Readonly<LiveVariant>,
 ): UpstreamReasoningEffort | undefined {
@@ -81,17 +72,14 @@ export function isCombinedVariant(variant: Readonly<LiveVariant>): boolean {
   );
 }
 
-export function listEffortOptions(variants: readonly LiveVariant[], modelId = ''): EffortOption[] {
+export function listEffortOptions(variants: readonly LiveVariant[], _modelId = ''): EffortOption[] {
   const options: EffortOption[] = [{ label: 'auto', available: true }];
-  for (const label of ['minimal', 'low', 'medium', 'high', 'max', 'ultra'] as const) {
+  for (const label of ['minimal', 'low', 'medium', 'high', 'ultra', 'max'] as const) {
     const efforts = EFFORT_CANDIDATES[label];
-    const matched =
-      label === 'ultra' && isExactGpt56Luna(modelId)
-        ? undefined
-        : variants.find((variant) => {
-            const effort = variantReasoningEffort(variant);
-            return effort !== undefined && efforts.includes(effort) && !isFastVariant(variant);
-          });
+    const matched = variants.find((variant) => {
+      const effort = variantReasoningEffort(variant);
+      return effort !== undefined && efforts.includes(effort) && !isFastVariant(variant);
+    });
     options.push({
       label,
       ...(matched
@@ -151,9 +139,11 @@ export interface FastCapabilityMetadata {
   serviceTiers?: readonly string[];
   /** OpenCode reports a native subscription/Codex fast control independent of model variants. */
   supportsOpenCodeFastMode?: boolean;
+  /** The exact live model route has a fixed provider Fast service tier. */
+  isFastRoute?: boolean;
 }
 
-export type FastTransport = 'service-tier' | 'opencode-native' | 'variant' | 'off';
+export type FastTransport = 'service-tier' | 'opencode-native' | 'variant' | 'model-route' | 'off';
 
 export interface FastResolution {
   enabled: boolean;
@@ -175,30 +165,12 @@ export function resolveFastMode(
   enabled: boolean,
   metadata: FastCapabilityMetadata,
 ): FastResolution {
-  const connectionId = normalize(metadata.connectionId);
-  const modelId = normalize(metadata.modelId);
-  const codexModelId =
-    connectionId === 'opencode-cli'
-      ? /^openai\/[^/]+$/u.test(modelId)
-        ? modelId.slice('openai/'.length)
-        : ''
-      : connectionId === 'openai-codex' && !modelId.includes('/')
-        ? modelId
-        : '';
-  const eligibleCodexModel =
-    /^(?:gpt-5\.2|gpt-5\.3-codex(?:-spark)?|gpt-5\.4(?:-mini)?|gpt-5\.5|gpt-5\.6(?:-(?:sol|terra|luna))?)$/u.test(
-      codexModelId,
-    );
   if (!enabled) {
-    return {
-      enabled: false,
-      supported: eligibleCodexModel,
-      transport: 'off',
-      usageWarningRequired: false,
-    };
+    return { enabled: false, supported: resolveFastMode(true, metadata).supported,
+      transport: 'off', usageWarningRequired: false };
   }
-  if (!eligibleCodexModel) {
-    return { enabled: true, supported: false, transport: 'off', usageWarningRequired: false };
+  if (metadata.isFastRoute) {
+    return { enabled: true, supported: true, transport: 'model-route', usageWarningRequired: true };
   }
   const tiers = new Set((metadata.serviceTiers ?? []).map(normalize));
   if (tiers.has('fast') || tiers.has('priority')) {

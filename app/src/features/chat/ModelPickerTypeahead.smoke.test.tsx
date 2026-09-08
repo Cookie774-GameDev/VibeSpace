@@ -501,6 +501,9 @@ describe('ModelPickerTypeahead smoke transports', () => {
     );
     fireEvent.click(screen.getByText('GPT-5.6 Luna'));
     const routeListbox = screen.getByRole('listbox', { name: 'GPT-5.6 Luna route options' });
+    expect(screen.getByText('Fast')).toBeTruthy();
+    expect(screen.getByText('Standard')).toBeTruthy();
+    expect(screen.getByRole('option', { name: /Fast.*luna-fast/i }).getAttribute('data-model-route-fast')).toBe('true');
     const initialRouteDescendant = routeListbox.getAttribute('aria-activedescendant');
     expect(document.getElementById(initialRouteDescendant!)).not.toBeNull();
     act(() => ref.current?.moveDown());
@@ -618,14 +621,14 @@ describe('ModelPickerTypeahead smoke transports', () => {
     fireEvent.click(screen.getByText('GPT-5.6 Sol'));
     expect(document.querySelector('[data-effort-icon="auto"]')).not.toBeNull();
     expect(document.querySelector('[data-effort-icon="ultra"]')).not.toBeNull();
-    const ultra = screen.getByRole('option', { name: /ultra/i });
+    const ultra = screen.getByRole('option', { name: /xhigh/i });
     expect(ultra.querySelector('[data-ultra-roots="true"]')).not.toBeNull();
     expect(ultra.querySelector('[data-ultra-sigil="true"]')).not.toBeNull();
     expect(ultra.className).toContain('vibespace-effort-row');
     expect(ultra).toBe(document.querySelector('[data-effort-level]:last-child'));
   });
 
-  it('shows every Luna effort except Ultra, with Max at the bottom', () => {
+  it('shows exact live Luna effort names, with Max at the bottom', () => {
     render(
       <ModelPickerTypeahead
         groups={[
@@ -653,7 +656,9 @@ describe('ModelPickerTypeahead smoke transports', () => {
     const labels = Array.from(document.querySelectorAll('[data-effort-level]')).map((node) =>
       node.getAttribute('data-effort-level'),
     );
-    expect(labels).toEqual(['auto', 'minimal', 'low', 'medium', 'high', 'max']);
+    expect(labels).toEqual(['auto', 'minimal', 'low', 'medium', 'high', 'ultra', 'max']);
+    expect(screen.getByRole('option', { name: /^none$/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /^xhigh$/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /ultra/i })).toBeNull();
   });
 

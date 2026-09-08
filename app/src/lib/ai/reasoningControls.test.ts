@@ -12,6 +12,15 @@ function selection(providerId: string, modelId: string, connectionId?: string): 
 }
 
 describe('reasoning controls', () => {
+  it('maps exact live none and xhigh for every provider and keeps max distinct', () => {
+    for (const model of ['openai/gpt-5.6-luna', 'openai/gpt-5.6-sol', 'vendor/other']) {
+      const capabilities = getReasoningCapabilities(selection('opencode', model, 'opencode-cli'), ['none', 'high', 'xhigh', 'max'], true);
+      expect(capabilities.supportedEfforts).toEqual(['minimal', 'high', 'ultra', 'max']);
+      expect(capabilities.wireEffort('minimal')).toBe('none');
+      expect(capabilities.wireEffort('ultra')).toBe('xhigh');
+      expect(capabilities.wireEffort('max')).toBe('max');
+    }
+  });
   it('Final Boss overrides a stale lower effort with the highest live supported level', () => {
     const selected = selection('openai', 'gpt-5.6-sol', 'openai-codex');
     const policy = resolveReasoningPolicy({
@@ -20,6 +29,7 @@ describe('reasoning controls', () => {
       liveVariants: ['low', 'medium', 'high', 'xhigh'],
     });
     expect(policy.resolvedEffort).toBe('ultra');
+    expect(policy.providerEffort).toBe('xhigh');
     expect(policy.providerOptions).toEqual({ reasoning_effort: 'xhigh' });
     expect(policy.selection).toEqual(selected);
     expect(policy.executionInstructions).toContain('SKILL.md');
