@@ -33,6 +33,39 @@ function transcript(sessionId: string, paneId: string, command: string): Session
 }
 
 describe('buildLiveTargetSnapshot', () => {
+  it.each([307, 327])(
+    'does not lose live targets because a saved launch command has %i characters',
+    (length) => {
+      const tree = fromLeaves([
+        { ...newLeaf(), kind: 'leaf', id: 'pane-a', sessionId: 'tty-a', command: 'powershell.exe' },
+      ]);
+      const command = `powershell.exe\n${'x'.repeat(length - 15)}`;
+      const snapshot = buildLiveTargetSnapshot({
+        projectId: 'project-a',
+        tree,
+        transcripts: {
+          'tty-a': transcript('tty-a', 'pane-a', 'powershell.exe'),
+          other: { ...transcript('other', 'other-pane', command), projectId: 'project-b' },
+        },
+        nativeSessions: [native('tty-a')],
+      });
+      expect(snapshot.map((target) => target.sessionId)).toEqual(['tty-a']);
+    },
+  );
+  it.each(['x'.repeat(32_769), 'cmd\u0000.exe'])(
+    'rejects unbounded or unsafe command metadata',
+    (command) => {
+      const tree = fromLeaves([{ ...newLeaf(), kind: 'leaf', id: 'pane-a', sessionId: 'tty-a' }]);
+      expect(
+        buildLiveTargetSnapshot({
+          projectId: 'project-a',
+          tree,
+          transcripts: { 'tty-a': transcript('tty-a', 'pane-a', command) },
+          nativeSessions: [native('tty-a')],
+        }),
+      ).toEqual([]);
+    },
+  );
   it('uses visual tree order and only uses native sessions to reject stale targets', () => {
     const tree = fromLeaves([
       { ...newLeaf(), kind: 'leaf', id: 'pane-b', sessionId: 'tty-b', command: 'claude' },

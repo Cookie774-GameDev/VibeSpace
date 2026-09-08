@@ -3734,6 +3734,7 @@ export function Composer({
     ) {
       try {
         const upgraded = await promptForgeUpgradeForSendRef.current(rawSendText);
+        if (upgraded.reason === 'cancelled') return false;
         if (upgraded.requiresReview) return true;
         if (upgraded.upgraded && upgraded.text.trim()) {
           rawSendText = upgraded.text.trim();

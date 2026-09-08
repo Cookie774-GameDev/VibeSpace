@@ -55,6 +55,7 @@ import {
   type AccountTabId,
 } from './accountTabs';
 import { AccountSecurityPanel } from './AccountSecurityPanel';
+import { BillingReceipts } from './BillingReceipts';
 import { StatusDashboard } from './StatusDashboard';
 import './sakura-account.css';
 
@@ -550,6 +551,7 @@ export function AccountPage() {
                   })}
                 </div>
               </div>
+              <BillingReceipts accountId={cloudUserId ?? null} />
             </PanelCard>
           </TabsContent>
 

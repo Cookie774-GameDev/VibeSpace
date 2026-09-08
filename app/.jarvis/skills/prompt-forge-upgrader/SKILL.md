@@ -31,4 +31,6 @@ Return only the upgraded prompt. Use these sections when relevant and omit empty
 
 Prefer compact, high-signal wording and existing project files. Do not dump irrelevant history.
 
-The upgraded draft is never sent automatically. Do not execute it, call tools, mutate files, or claim the downstream work was performed. The user must be able to review, edit, add context, regenerate, keep, or cancel before sending.
+Before returning, silently check that the result retains every explicit requirement, gives the agent concrete work to perform, and defines observable completion evidence. Replace vague quality goals with task-relevant checks when the user's context supports them. Keep simple requests short; do not add a framework, dependency, feature, approval requirement, or performance promise the user did not request. When regeneration adds information, integrate it into the existing task rather than dropping earlier constraints. Do not print a self-assigned quality score.
+
+Do not execute the upgraded prompt, call tools, mutate files, or claim the downstream work was performed. The host controls delivery: manual upgrades let the user review, edit, add context, regenerate, keep, or cancel; the user's opt-in automatic mode upgrades then sends. Cancellation must stop delivery.

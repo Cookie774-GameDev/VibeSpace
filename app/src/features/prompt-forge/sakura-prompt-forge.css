@@ -1,3 +1,23 @@
+@keyframes vs-forge-strike {
+  0%,
+  65%,
+  100% {
+    transform: rotate(-8deg);
+  }
+  35% {
+    transform: rotate(24deg) translateY(1px);
+  }
+}
+.vs-forge-hammer {
+  transform-origin: 75% 80%;
+  animation: vs-forge-strike 850ms ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vs-forge-hammer {
+    animation: none;
+  }
+}
+
 html[data-theme='sakura'] [data-sakura-surface='prompt-forge'] {
   border: 1px solid hsl(var(--sakura-ivory-hsl) / var(--sakura-decorative-border-alpha));
   border-radius: 11px;

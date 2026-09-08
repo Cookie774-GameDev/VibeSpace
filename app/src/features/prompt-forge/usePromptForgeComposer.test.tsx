@@ -332,13 +332,12 @@ describe('usePromptForgeComposer', () => {
       ).resolves.toEqual({
         text: execution.upgradedPrompt,
         upgraded: true,
-        requiresReview: true,
       });
     });
-    expect(successful.result.current.reviewOpen).toBe(true);
+    expect(successful.result.current.reviewOpen).toBe(false);
     expect(successful.result.current.status).toBe('ready');
     expect(successful.result.current.isRunning).toBe(false);
-    expect(setDraft).toHaveBeenLastCalledWith(execution.upgradedPrompt);
+    expect(setDraft).not.toHaveBeenCalled();
 
     const failing = renderHook(() =>
       usePromptForgeComposer({
@@ -810,95 +809,111 @@ describe('usePromptForgeComposer', () => {
     expect(jobs.size).toBe(0);
   });
 
-  it('aborts and ignores a stale run when the account, chat, or project scope changes', async () => {
-    const { repository } = memoryRepository();
-    let releaseExecution!: (value: PromptForgeExecutionResult) => void;
-    const pendingExecution = new Promise<PromptForgeExecutionResult>((resolve) => {
-      releaseExecution = resolve;
-    });
-    let executionSignal: AbortSignal | undefined;
-    const setDraftOne = vi.fn();
-    const setDraftTwo = vi.fn();
-    const common = {
-      projectId: 'project-1',
-      draft: 'Build a runner game.',
-      originalAttachments: [],
-      contextAttachments: [],
-      additionalSources: [],
-      modelSelection: { mode: 'prefer_local' as const },
-      modelOptions: [
-        {
-          id: 'ollama-local:qwen3:8b',
-          providerId: 'ollama' as const,
-          modelId: 'qwen3:8b',
-          label: 'Qwen 3 8B',
-          connectionId: 'ollama-local',
-          connectionMode: 'local' as const,
-          localOnly: true,
-          available: true,
+  it.each(['manual', 'automatic', 'cancel'] as const)(
+    'aborts and ignores a stale or cancelled %s run',
+    async (mode) => {
+      const { repository } = memoryRepository();
+      let releaseExecution!: (value: PromptForgeExecutionResult) => void;
+      const pendingExecution = new Promise<PromptForgeExecutionResult>((resolve) => {
+        releaseExecution = resolve;
+      });
+      let executionSignal: AbortSignal | undefined;
+      const setDraftOne = vi.fn();
+      const setDraftTwo = vi.fn();
+      const common = {
+        projectId: 'project-1',
+        draft: 'Build a runner game.',
+        originalAttachments: [],
+        contextAttachments: [],
+        additionalSources: [],
+        modelSelection: { mode: 'prefer_local' as const },
+        modelOptions: [
+          {
+            id: 'ollama-local:qwen3:8b',
+            providerId: 'ollama' as const,
+            modelId: 'qwen3:8b',
+            label: 'Qwen 3 8B',
+            connectionId: 'ollama-local',
+            connectionMode: 'local' as const,
+            localOnly: true,
+            available: true,
+          },
+        ],
+        currentChatSelection: { mode: 'none' as const },
+        offlineMode: false,
+        defaultLocalModel: 'qwen3:8b',
+        repository,
+        executor: {
+          execute: vi.fn(async ({ signal }) => {
+            executionSignal = signal;
+            return pendingExecution;
+          }),
         },
-      ],
-      currentChatSelection: { mode: 'none' as const },
-      offlineMode: false,
-      defaultLocalModel: 'qwen3:8b',
-      repository,
-      executor: {
-        execute: vi.fn(async ({ signal }) => {
-          executionSignal = signal;
-          return pendingExecution;
+        retrieveContext: async () => ({
+          queryId: 'query-1',
+          mapRevisions: {},
+          items: [],
+          relatedEntities: [],
+          omittedCount: 0,
+          staleItems: [],
+          warnings: [],
+          builtAt: 100,
+          sourceLabels: {},
+          evidenceKinds: {},
         }),
-      },
-      retrieveContext: async () => ({
-        queryId: 'query-1',
-        mapRevisions: {},
-        items: [],
-        relatedEntities: [],
-        omittedCount: 0,
-        staleItems: [],
-        warnings: [],
-        builtAt: 100,
-        sourceLabels: {},
-        evidenceKinds: {},
-      }),
-      now: () => 100,
-      createJobId: () => 'forge-job-scope',
-      recordActivity: vi.fn(),
-    };
-    const { result, rerender } = renderHook(
-      ({ accountId, chatId, setDraft }) =>
-        usePromptForgeComposer({ ...common, accountId, chatId, setDraft }),
-      {
-        initialProps: {
-          accountId: 'account-1',
-          chatId: 'chat-1',
-          setDraft: setDraftOne,
+        now: () => 100,
+        createJobId: () => 'forge-job-scope',
+        recordActivity: vi.fn(),
+      };
+      const { result, rerender } = renderHook(
+        ({ accountId, chatId, setDraft }) =>
+          usePromptForgeComposer({ ...common, accountId, chatId, setDraft }),
+        {
+          initialProps: {
+            accountId: 'account-1',
+            chatId: 'chat-1',
+            setDraft: setDraftOne,
+          },
         },
-      },
-    );
+      );
 
-    let running!: Promise<PromptForgeJob | null>;
-    await act(async () => {
-      running = result.current.start();
-      await vi.waitFor(() => expect(executionSignal).toBeDefined());
-    });
-    rerender({
-      accountId: 'account-2',
-      chatId: 'chat-2',
-      setDraft: setDraftTwo,
-    });
-    const wasAbortedAfterScopeChange = executionSignal?.aborted;
-    releaseExecution(execution);
-    await act(async () => {
-      await running;
-    });
+      let running!: Promise<unknown>;
+      await act(async () => {
+        running =
+          mode === 'manual' ? result.current.start() : result.current.upgradeForSend(common.draft);
+        await vi.waitFor(() => expect(executionSignal).toBeDefined());
+      });
+      if (mode === 'cancel') {
+        await act(async () => {
+          await result.current.cancel();
+        });
+      } else {
+        rerender({
+          accountId: 'account-2',
+          chatId: 'chat-2',
+          setDraft: setDraftTwo,
+        });
+      }
+      const wasAbortedAfterScopeChange = executionSignal?.aborted;
+      releaseExecution(execution);
+      await act(async () => {
+        const outcome = await running;
+        if (mode !== 'manual')
+          expect(outcome).toEqual({
+            text: common.draft,
+            upgraded: false,
+            reason: 'cancelled',
+          });
+      });
 
-    expect(wasAbortedAfterScopeChange).toBe(true);
-    expect(result.current.status).toBe('idle');
-    expect(result.current.reviewOpen).toBe(false);
-    act(() => result.current.replace());
-    expect(setDraftOne).not.toHaveBeenCalled();
-    expect(setDraftTwo).not.toHaveBeenCalled();
-  });
+      expect(wasAbortedAfterScopeChange).toBe(true);
+      expect(result.current.status).toBe(mode === 'cancel' ? 'cancelled' : 'idle');
+      expect(result.current.reviewOpen).toBe(false);
+      act(() => result.current.replace());
+      expect(setDraftOne).not.toHaveBeenCalled();
+      expect(setDraftTwo).not.toHaveBeenCalled();
+    },
+  );
 
   it('restores and explicitly resumes an interrupted job only in the current scope', async () => {
     const interrupted = transitionPromptForgeJob(

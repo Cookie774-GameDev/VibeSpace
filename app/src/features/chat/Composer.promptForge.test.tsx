@@ -6,6 +6,12 @@ import { requestsReadOnlyContextTool } from '@/lib/jarvis/contextToolIntent';
 const source = readFileSync(resolve(process.cwd(), 'src/features/chat/Composer.tsx'), 'utf8');
 
 describe('Composer Prompt Forge integration', () => {
+  it('stops Send immediately when the automatic upgrade was cancelled', () => {
+    const autoSend = source.slice(source.indexOf('// Shared Prompt Upgrade Engine:'));
+    expect(autoSend).toMatch(
+      /const upgraded = await promptForgeUpgradeForSendRef\.current\(rawSendText\);\s*if \(upgraded\.reason === 'cancelled'\) return false;/u,
+    );
+  });
   it('uses the same typed-or-dictated draft and existing attachment state without auto-sending', () => {
     const hookStart = source.indexOf('const promptForge = usePromptForgeComposer({');
     const hookEnd = source.indexOf('\n  });', hookStart);

@@ -657,8 +657,8 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
   );
 
   /**
-   * Upgrade a draft for Send and require visible approval before dispatch.
-   * Always returns the original text on failure/cancel so the caller can fail open.
+   * Upgrade for the user's opt-in automatic Send without opening manual review.
+   * Failures retain the original; cancellation tells the caller to stop Send.
    */
   const upgradeForSend = useCallback(
     async (
@@ -680,12 +680,15 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
           reason: currentModelDisabledReason,
         };
       }
-      const completed = await start(undefined, original, { openReview: true });
+      const sendScopeKey = currentScopeKeyRef.current;
+      const completed = await start(undefined, original, { openReview: false });
+      if (currentScopeKeyRef.current !== sendScopeKey) {
+        return { text: original, upgraded: false, reason: 'cancelled' };
+      }
       if (completed?.status === 'ready' && completed.generatedDraft?.trim()) {
         return {
           text: completed.generatedDraft.trim(),
           upgraded: true,
-          requiresReview: true,
         };
       }
       if (completed?.status === 'cancelled') {

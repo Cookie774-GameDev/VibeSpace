@@ -1,0 +1,118 @@
+/* Independent implementation inspired by dqnamo.com/experiments/receipt-printer. */
+.vs-receipts {
+  margin-top: 1.5rem;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 1.5rem;
+}
+.vs-receipt-machine {
+  width: min(100%, 340px);
+  margin: 2rem auto 1rem;
+}
+.vs-receipt-device {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.25rem 1.5rem 2rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 1.25rem 1.25rem 0.65rem 0.65rem;
+  background: hsl(var(--panel));
+  box-shadow:
+    inset 0 2px 0 #ffffff18,
+    0 6px 16px #0002;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+}
+.vs-receipt-device i {
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: hsl(var(--success));
+}
+.vs-receipt-slot {
+  position: absolute;
+  inset: auto 1.25rem 0.6rem;
+  height: 7px;
+  border-radius: 10px;
+  background: #161616;
+  box-shadow: 0 1px 0 #ffffff20;
+}
+.vs-receipt-feed {
+  overflow: hidden;
+  margin: -0.8rem 1.75rem 0;
+  padding-bottom: 0.5rem;
+}
+.vs-receipt-paper {
+  position: relative;
+  padding: 1.7rem 1.25rem 1.5rem;
+  border-bottom: 5px dotted hsl(var(--panel));
+  background: #f9f6ec;
+  color: #2c2925;
+  font:
+    11px/1.65 ui-monospace,
+    monospace;
+  box-shadow: 0 3px 8px #0002;
+  animation: vs-receipt-feed 1.45s steps(28, end) both;
+}
+.vs-receipt-paper p {
+  margin: 0.3rem 0;
+  overflow-wrap: anywhere;
+}
+.vs-receipt-brand {
+  text-align: center;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+.vs-receipt-caption {
+  text-align: center;
+  font-size: 9px;
+}
+.vs-receipt-paper hr {
+  margin: 0.9rem 0;
+  border: 0;
+  border-top: 1px dashed #9b968a;
+}
+.vs-receipt-paper dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+.vs-receipt-paper dd {
+  text-align: right;
+  font-weight: 700;
+}
+.vs-receipt-period {
+  font-size: 10px;
+}
+.vs-receipt-link {
+  display: block;
+  margin: 0.75rem auto 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@keyframes vs-receipt-feed {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vs-receipt-paper {
+    animation: none;
+  }
+}
+@media print {
+  .vs-receipt-device {
+    display: none;
+  }
+  .vs-receipt-paper {
+    animation: none;
+    transform: none;
+  }
+}

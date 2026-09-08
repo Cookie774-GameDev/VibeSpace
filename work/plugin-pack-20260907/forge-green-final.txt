@@ -1,0 +1,16 @@
+
+> @jarvis/app@1.5.0 test
+> vitest run --run src/features/prompt-forge/usePromptForgeComposer.test.tsx src/features/chat/Composer.promptForge.test.tsx src/features/prompt-forge/promptForgeExecutor.test.ts src/features/prompt-forge/promptForgeService.test.ts --maxWorkers=1
+
+
+ RUN  v3.2.7 C:/Users/viper/VibeSpace-UnifiedChungus-Final/app
+
+ ✓ src/features/prompt-forge/promptForgeExecutor.test.ts (5 tests) 21ms
+ ✓ src/features/prompt-forge/usePromptForgeComposer.test.tsx (19 tests) 726ms
+ ✓ src/features/chat/Composer.promptForge.test.tsx (8 tests) 20ms
+ ✓ src/features/prompt-forge/promptForgeService.test.ts (8 tests) 21ms
+
+ Test Files  4 passed (4)
+      Tests  40 passed (40)
+   Start at  20:27:25
+   Duration  13.02s (transform 1.62s, setup 117ms, collect 4.13s, tests 788ms, environment 6.14s, prepare 581ms)

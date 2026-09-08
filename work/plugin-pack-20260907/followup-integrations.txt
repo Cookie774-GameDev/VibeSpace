@@ -1,0 +1,19 @@
+
+> @jarvis/app@1.5.0 test
+> vitest run --run src/features/account/AccountPage.identity.test.tsx src/features/account/AccountPage.statusSupport.test.tsx src/features/account/sakura-account.appearance.test.tsx src/features/prompt-forge/PromptForgeReview.test.tsx src/features/terminals/terminalPromptUpgrade.test.ts --maxWorkers=1
+
+
+ RUN  v3.2.7 C:/Users/viper/VibeSpace-UnifiedChungus-Final/app
+
+ ✓ src/features/account/AccountPage.identity.test.tsx (7 tests) 1660ms
+   ✓ AccountPage account ownership > does not request or project cloud usage without a cloud account  533ms
+   ✓ AccountPage account ownership > clears Account A usage immediately and ignores its delayed result after switching to B  405ms
+ ✓ src/features/account/AccountPage.statusSupport.test.tsx (6 tests) 950ms
+   ✓ AccountPage status support > offers explicit keyboard buttons for each support email copy action  426ms
+ ✓ src/features/prompt-forge/PromptForgeReview.test.tsx (3 tests) 383ms
+ ✓ src/features/terminals/terminalPromptUpgrade.test.ts (8 tests) 13ms
+
+ Test Files  4 passed (4)
+      Tests  24 passed (24)
+   Start at  20:51:50
+   Duration  31.21s (transform 4.80s, setup 221ms, collect 13.31s, tests 3.01s, environment 9.37s, prepare 1.11s)

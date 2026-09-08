@@ -1,0 +1,18 @@
+
+> @jarvis/app@1.5.0 test
+> vitest run --run src/features/account/BillingReceipts.test.tsx src/lib/billing/receipts.test.ts src/features/prompt-forge/PromptForgeControl.test.tsx src/features/prompt-forge/PromptForge.sakuraAppearance.test.tsx --maxWorkers=1
+
+
+ RUN  v3.2.7 C:/Users/viper/VibeSpace-UnifiedChungus-Final/app
+
+ ✓ src/features/account/BillingReceipts.test.tsx (4 tests) 332ms
+ ✓ src/features/prompt-forge/PromptForgeControl.test.tsx (5 tests) 946ms
+   ✓ Prompt Forge control > names and dismisses configuration while restoring focus to its trigger  532ms
+ ✓ src/features/prompt-forge/PromptForge.sakuraAppearance.test.tsx (3 tests) 486ms
+   ✓ Prompt Forge Sakura appearance > adds presentation hooks without changing explicit start or configuration behavior  477ms
+ ✓ src/lib/billing/receipts.test.ts (3 tests) 34ms
+
+ Test Files  4 passed (4)
+      Tests  15 passed (15)
+   Start at  20:46:00
+   Duration  18.28s (transform 1.56s, setup 145ms, collect 6.92s, tests 1.80s, environment 6.82s, prepare 511ms)

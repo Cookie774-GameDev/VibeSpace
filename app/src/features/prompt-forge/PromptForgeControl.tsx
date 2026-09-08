@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { ChevronDown, Sparkles, Square } from 'lucide-react';
+import { ChevronDown, Hammer, Sparkles, Square } from 'lucide-react';
 import { Button, Hint, Popover, PopoverContent, PopoverTrigger } from '@/components/ui';
 import { ModelPickerTypeahead } from '@/features/chat/ModelPickerTypeahead';
 import { HOTKEYS } from '@/lib/hotkeys';
@@ -119,8 +119,8 @@ export function PromptForgeControl({
         >
           {isRunning ? (
             <>
-              <Sparkles className="motion-safe:animate-pulse" />
-              <Square className="absolute h-1.5 w-1.5 fill-current" />
+              <Hammer aria-hidden="true" className="vs-forge-hammer" />
+              <Square aria-hidden="true" className="absolute bottom-1 right-1 h-1.5 w-1.5 fill-current" />
             </>
           ) : (
             <Sparkles />
@@ -324,7 +324,7 @@ export function PromptForgeControl({
           aria-live="polite"
           className={cn('max-w-36 truncate text-metadata text-accent-cyan', compact && 'sr-only')}
         >
-          {statusMessage}
+          Forging · {statusMessage}
         </span>
       ) : null}
       {error ? (

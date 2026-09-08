@@ -1,0 +1,17 @@
+(node:28428) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/viper/VibeSpace-UnifiedChungus-Final/supabase/functions/list-billing-receipts/handler.test.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to \\?\C:\Users\viper\VibeSpace-UnifiedChungus-Final\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ authenticates and derives customer only from the server profile (41.3649ms)
+✔ denies unsigned requests before reading a profile (1.1681ms)
+✔ excludes draft invoices, foreign invoices and unsafe links (1.4634ms)
+✔ returns no invented bill for an account without a customer (1.1454ms)
+✔ fails closed on provider errors without returning provider secrets (1.8985ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 411.3207

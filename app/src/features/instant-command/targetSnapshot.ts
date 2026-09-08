@@ -16,6 +16,17 @@ export type NativeTerminalIdentity = BackendTerminalInfo;
 const MAX_NATIVE_SESSIONS = 1_024;
 const MAX_TRANSCRIPTS = 2_048;
 const MAX_IDENTIFIER_LENGTH = 256;
+const MAX_COMMAND_LENGTH = 32_768;
+
+// Launch scripts are command metadata, not session identifiers. Generated PowerShell
+// launchers legitimately exceed 256 characters and may contain line breaks.
+function validCommandMetadata(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    value.length <= MAX_COMMAND_LENGTH &&
+    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
+  );
+}
 
 function stableNativeIdentifier(value: unknown): value is string {
   return (
@@ -49,7 +60,7 @@ function validTranscript(value: unknown): value is SessionTranscript {
     stableNativeIdentifier(transcript.sessionId) &&
     stableNativeIdentifier(transcript.paneId) &&
     (transcript.projectId == null || stableNativeIdentifier(transcript.projectId)) &&
-    (transcript.command == null || stableNativeIdentifier(transcript.command)) &&
+    (transcript.command == null || validCommandMetadata(transcript.command)) &&
     (transcript.agentSlug == null || stableNativeIdentifier(transcript.agentSlug))
   );
 }
