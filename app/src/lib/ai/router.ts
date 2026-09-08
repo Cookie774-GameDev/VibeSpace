@@ -568,8 +568,29 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
   } finally {
     await iterator.return?.();
   }
+  if (req.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   if (!terminalObserved) throw new Error('provider_completion_terminal_missing');
   if (!sessionId) throw new Error('provider_completion_session_missing');
+  if (req.onProviderCompletionEvidence) {
+    // The adapter validates this model/effort against the native thread before yielding its session.
+    const requestedEffort = providerRequest.reasoningEffort ?? req.runtimeSettings?.effort;
+    await req.onProviderCompletionEvidence({
+      observedAt: Date.now(),
+      requestId,
+      sessionId,
+      providerId: connection.providerId,
+      connectionId: connection.id,
+      modelId,
+      reasoningEffort:
+        !requestedEffort || requestedEffort === 'auto'
+          ? null
+          : requestedEffort === 'ultra'
+            ? 'xhigh'
+            : requestedEffort,
+      usage: usage ?? { capturedAt: Date.now() },
+      ...(finishReason ? { finishReason } : {}),
+    });
+  }
   req.onChunk?.({ delta: '', done: true });
   const publicSnapshot = snapshot();
   await req.onPublicTimelineSnapshot?.(publicSnapshot);
