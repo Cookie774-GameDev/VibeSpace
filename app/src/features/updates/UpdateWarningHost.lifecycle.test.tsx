@@ -150,6 +150,22 @@ describe('UpdateWarningHost deferred lifecycle', () => {
     expect(mocks.installPrepared).toHaveBeenCalledWith({ relaunch: true });
   });
 
+  it('honors Remind Me Later without relying on pointer or keyboard events', async () => {
+    mocks.restartSafe.mockResolvedValue(true);
+    let downloaded!: () => void;
+    mocks.prepare.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          downloaded = () => resolve({ prepared: true, version: '2.4.0' });
+        }),
+    );
+    await detectUpdate();
+    // Accessibility activation can dispatch click without pointerdown/keydown.
+    fireEvent.click(screen.getByRole('button', { name: 'Remind Me Later' }));
+    await act(async () => downloaded());
+    expect(mocks.installPrepared).not.toHaveBeenCalled();
+  });
+
   it('does not replay the notification sound for the same persisted version', async () => {
     window.localStorage.setItem('jarvis-update-notified-version', '2.4.0');
     await detectUpdate();

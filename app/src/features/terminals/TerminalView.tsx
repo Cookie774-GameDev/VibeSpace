@@ -123,7 +123,7 @@ import {
   readTerminalScreenSnapshot,
   type TerminalScreenSnapshotLease,
 } from './terminalScreenSnapshotCache';
-import { terminalRestartDecision } from './terminalRestartPolicy';
+import { confirmTerminalRestart, terminalRestartDecision } from './terminalRestartPolicy';
 import { prepareManagedClaudeContinuity } from './managedClaudeContinuity';
 import {
   attachTerminalExecution,
@@ -1034,6 +1034,7 @@ export function TerminalView({
     let screenSnapshotLease: TerminalScreenSnapshotLease | null = null;
     let lastSnapshotFingerprint = '';
     let deferredRestartCommand: string | null = null;
+    let deferredRestartCommands: readonly string[] | null = null;
     let restartConfirmationHandled = false;
     let startupRestoreMode = false;
     let sshSession = isSshSessionCommand(startupCommand);
@@ -1105,16 +1106,21 @@ export function TerminalView({
     };
 
     const confirmDeferredRestart = (): void => {
-      if (!deferredRestartCommand || restartConfirmationHandled) return;
+      if (deferredRestartCommand === null || restartConfirmationHandled) return;
       const sid = sessionRef.current;
       if (!sid) return;
       restartConfirmationHandled = true;
-      const deferred = deferredRestartCommand;
-      deferredRestartCommand = null;
-      if (!window.confirm(`Restart the previous terminal command?\n\n${deferred}`)) return;
-      invoke('terminal_write', {
-        sessionId: sid,
-        data: commandToInput(deferred),
+      const deferred = deferredRestartCommands ?? [deferredRestartCommand];
+      // Keep automatic startup replay blocked if focus arrives during initialization.
+      void confirmTerminalRestart(deferred, {
+        confirm: (commands) =>
+          window.confirm(`Restart the previous terminal commands?\n\n${commands.join('\n')}`),
+        isCurrent: () => !cancelled && sessionRef.current === sid,
+        write: (command) =>
+          invoke('terminal_write', {
+            sessionId: sid,
+            data: commandToInput(command),
+          }),
       }).catch(() => {
         /* backend probably gone */
       });
@@ -1636,10 +1642,11 @@ export function TerminalView({
           let nativeStartupCommand =
             isRecoveredSession || startupCommands?.length ? undefined : startupCommand;
           if (isRecoveredSession) {
-            const restart = terminalRestartDecision(command, startupCommand);
+            const restart = terminalRestartDecision(command, startupCommand, startupCommands);
             spawnCommand = restart.spawnCommand;
             if (restart.kind === 'confirm') {
               deferredRestartCommand = restart.deferredCommand;
+              deferredRestartCommands = restart.deferredCommands ?? [restart.deferredCommand];
             }
           }
 
@@ -1659,6 +1666,7 @@ export function TerminalView({
             nativeStartupCommand = managedClaude.startupCommand;
             managedStartupCommand = managedClaude.startupCommand;
             deferredRestartCommand = null;
+            deferredRestartCommands = null;
             // A stale shell draft must never become input to a recovered agent.
             restoredInput = '';
           }
@@ -2004,7 +2012,7 @@ export function TerminalView({
         spawnedFresh &&
         orderedStartupCommands.length > 0 &&
         !nativeStartupCommandConsumed &&
-        !deferredRestartCommand &&
+        deferredRestartCommand === null &&
         !executionWasCancelled
       ) {
         setInitializationPhase('kernel_terminal_phase_startup_command_readiness');
@@ -2039,7 +2047,7 @@ export function TerminalView({
       } else if (executionId && !nativeStartupCommandConsumed && !executionWasCancelled) {
         markTerminalExecution(executionId, 'running', { sessionId: sid });
       }
-      if (spawnedFresh && restoredInput && !deferredRestartCommand) {
+      if (spawnedFresh && restoredInput && deferredRestartCommand === null) {
         window.setTimeout(
           () => {
             invoke('terminal_write', {

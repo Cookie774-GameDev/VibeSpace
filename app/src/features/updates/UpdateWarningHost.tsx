@@ -187,6 +187,7 @@ export function UpdateWarningHost({
 
   const handleClose = () => {
     if (phase === 'installing') return;
+    interactedRef.current = true;
     dismissedVersionRef.current = targetVersion;
     setIsOpen(false);
   };
