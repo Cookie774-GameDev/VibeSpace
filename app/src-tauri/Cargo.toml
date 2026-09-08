@@ -82,6 +82,11 @@ windows = { version = "0.61", features = [
 [profile.dev]
 incremental = true
 
+# Keep repeated native runtime integrity checks fast in tauri:dev.
+# Hash the same bytes with the same algorithm; only optimize this dependency.
+[profile.dev.package.sha2]
+opt-level = 3
+
 # Production profile – Tauri's recommended settings for smaller, faster bundles.
 #
 # We use `thin` LTO and 4 codegen-units instead of `lto=true` + `codegen-units=1`
