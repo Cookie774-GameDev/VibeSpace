@@ -226,7 +226,11 @@ fn seal_directory_dacls(
     directories: &[PathBuf],
 ) -> Result<DirectoryDaclGuard, ManagedCodexProxyRuntimeError> {
     let mut guard = DirectoryDaclGuard { saved: Vec::new() };
-    for directory in directories {
+    // Paths are sorted parent-first. Protect descendants before changing a
+    // parent's inheritable ACL, avoiding repeated Windows propagation through
+    // the entire runtime. Reverse drop order then restores parents first while
+    // their descendants are still protected.
+    for directory in directories.iter().rev() {
         let saved = read_directory_dacl(directory)?;
         deny_directory_entry_creation(&saved)?;
         guard.saved.push(saved);
@@ -553,6 +557,30 @@ mod tests {
             .err(),
             Some(ManagedCodexProxyRuntimeError::RuntimeUnavailable)
         );
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nested_directory_seal_preserves_protection_and_restores_every_level() {
+        let fixture = temp_root("nested-seal");
+        let nested = fixture.join("a/b/c/d");
+        fs::create_dir_all(&nested).unwrap();
+        let mut directories = vec![fixture.clone(), fixture.join("a"), fixture.join("a/b"), fixture.join("a/b/c"), nested.clone()];
+        directories.sort();
+        let before = directories.iter().map(|path| read_directory_dacl(path).unwrap().protected).collect::<Vec<_>>();
+        let seal = seal_directory_dacls(&directories).unwrap();
+        assert_eq!(seal.saved.first().unwrap().path, nested);
+        assert_eq!(seal.saved.last().unwrap().path, fixture);
+        for directory in &directories {
+            assert!(fs::write(directory.join("injected.js"), b"unexpected").is_err());
+            assert!(read_directory_dacl(directory).unwrap().protected);
+        }
+        drop(seal);
+        for (directory, protected) in directories.iter().zip(before) {
+            assert_eq!(read_directory_dacl(directory).unwrap().protected, protected);
+            fs::write(directory.join("released.txt"), b"allowed after release").unwrap();
+        }
         fs::remove_dir_all(fixture).unwrap();
     }
 

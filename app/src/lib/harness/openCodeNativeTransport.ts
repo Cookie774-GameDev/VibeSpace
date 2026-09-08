@@ -19,6 +19,7 @@ type NativeTransportRoute =
   | { kind: 'mcp_connect'; name: string }
   | { kind: 'mcp_disconnect'; name: string }
   | { kind: 'question_list' }
+  | { kind: 'permission_list' }
   | { kind: 'question_reply'; requestId: string }
   | { kind: 'question_reject'; requestId: string }
   | { kind: 'session_create' }
@@ -124,6 +125,7 @@ function nativeRoute(
     else throw new Error('OpenCode native transport route is invalid.');
   } else if (key === 'POST /session') route = { kind: 'session_create' };
   else if (key === 'GET /question') route = { kind: 'question_list' };
+  else if (key === 'GET /permission') route = { kind: 'permission_list' };
   else if (segments[0] === 'question' && segments.length === 3 && method === 'POST') {
     const requestId = decodedIdentifier(segments[1]);
     if (segments[2] === 'reply') route = { kind: 'question_reply', requestId };

@@ -1398,6 +1398,7 @@ enum OpenCodeTransportRoute {
         name: String,
     },
     QuestionList,
+    PermissionList,
     QuestionReply {
         request_id: String,
     },
@@ -1542,6 +1543,7 @@ fn transport_route_parts(
             format!("/mcp/{}/disconnect", encoded_route_identifier(name)?),
         ),
         OpenCodeTransportRoute::QuestionList => (reqwest::Method::GET, "/question".to_string()),
+        OpenCodeTransportRoute::PermissionList => (reqwest::Method::GET, "/permission".to_string()),
         OpenCodeTransportRoute::QuestionReply { request_id } => (
             reqwest::Method::POST,
             format!("/question/{}/reply", encoded_route_identifier(request_id)?),
@@ -1627,6 +1629,7 @@ fn validate_transport_body(
             | OpenCodeTransportRoute::McpConnect { .. }
             | OpenCodeTransportRoute::McpDisconnect { .. }
             | OpenCodeTransportRoute::QuestionList
+            | OpenCodeTransportRoute::PermissionList
             | OpenCodeTransportRoute::QuestionReject { .. }
             | OpenCodeTransportRoute::SessionGet { .. }
             | OpenCodeTransportRoute::SessionDelete { .. }
@@ -3300,6 +3303,7 @@ mod tests {
                 name: "github:copilot".into(),
             },
             OpenCodeTransportRoute::QuestionList,
+            OpenCodeTransportRoute::PermissionList,
             OpenCodeTransportRoute::QuestionReply {
                 request_id: "que_exact".into(),
             },

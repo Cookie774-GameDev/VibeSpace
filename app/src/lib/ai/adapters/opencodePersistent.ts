@@ -1,4 +1,5 @@
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { resolveOpenCodeChildControl } from './openCodeChildControls';
 import { bindCodexQuestionRoute, replyCodexQuestion, replyCodexApproval } from './codexControlBridge';
 import { isTauri } from '@/lib/utils';
 import { questionEventsWithActivity } from '../openCodeQuestionActivity';
@@ -585,6 +586,24 @@ type ActivePersistentQuestionSession = {
   readonly authorities: Map<string, Readonly<OpenCodeQuestionRequestAuthority>>;
 };
 const activeQuestionSessions = new Map<string, ActivePersistentQuestionSession>();
+export function isActiveOpenCodeChildApproval(
+  rootSessionId: string,
+  approval: Readonly<VibeSpaceApproval>,
+): boolean {
+  const root = activeApprovalSessions.get(rootSessionId);
+  return approval.sessionId !== rootSessionId && root !== undefined &&
+    activeApprovalSessions.get(approval.sessionId) === root &&
+    root.approvals.get(approval.id) === approval;
+}
+export function isActiveOpenCodeChildQuestion(
+  rootSessionId: string,
+  question: Readonly<ProviderQuestionRequest>,
+): boolean {
+  const root = activeQuestionSessions.get(rootSessionId);
+  return question.sessionId !== rootSessionId && root !== undefined &&
+    activeQuestionSessions.get(question.sessionId) === root &&
+    root.pending.get(question.id) === question;
+}
 const TOOL_GATEWAY_NAMES = new Set<string>(TOOL_GATEWAY_CATALOG);
 const OPENCODE_BUILTIN_TOOL_NAMES = Object.freeze([
   'bash',
@@ -1913,6 +1932,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   activeRequests.set(request.requestId, { scope, chatId });
   const abortEvents = new AbortController();
   let boundSessionId: string | undefined;
+  const boundChildSessions = new Set<string>();
   const abort = () => {
     turnGate.cancel(chatId);
     abortEvents.abort();
@@ -2162,7 +2182,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     const registerQuestion = async (
       question: Extract<ProviderEvent, { type: 'question' }>,
     ): Promise<boolean> => {
-      const active = activeQuestionSessions.get(dispatch.sessionId);
+      const active = activeQuestionSessions.get(question.request.sessionId);
       if (!active || active.requestId !== request.requestId) {
         await client.abort(dispatch.sessionId).catch(() => undefined);
         throw new Error('OpenCode question arrived outside the active request binding.');
@@ -2181,7 +2201,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       return true;
     };
     const registerApproval = async (approval: Readonly<VibeSpaceApproval>): Promise<boolean> => {
-      const active = activeApprovalSessions.get(dispatch.sessionId);
+      const active = activeApprovalSessions.get(approval.sessionId);
       if (!active || active.requestId !== request.requestId) {
         await client.abort(dispatch.sessionId).catch(() => undefined);
         throw new Error('OpenCode approval arrived outside the active request binding.');
@@ -2199,16 +2219,17 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         }
         return false;
       }
-      active.approvals.set(approval.id, Object.freeze({ ...approval }));
+      const registered = Object.freeze({ ...approval });
+      active.approvals.set(approval.id, registered);
       if (!request.onApprovalRequested) {
         await respondToPersistentOpenCodeApproval({
-          sessionId: dispatch.sessionId,
+          sessionId: approval.sessionId,
           approvalId: approval.id,
           response: 'reject',
         }).catch(() => undefined);
         throw new Error('OpenCode requested approval without an active approval handler.');
       }
-      await request.onApprovalRequested(approval);
+      await request.onApprovalRequested(registered);
       return true;
     };
     const recoverPendingApprovals = async (register = true): Promise<VibeSpaceApproval[]> => {
@@ -2217,7 +2238,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       if (done || abortEvents.signal.aborted) return recovered;
       for (const properties of propertiesList) {
         for (const event of normalizeOpenCodeEvent(
-          { type: 'permission.asked', properties }, dispatch.sessionId,
+          { type: 'permission.asked', properties }, sessionId,
         )) {
           if (event.type === 'approval.requested' && (!register || await registerApproval(event.approval))) recovered.push(event.approval);
         }
@@ -2226,14 +2247,36 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     };
     const recoverPendingQuestions = async (register = true): Promise<
       Extract<ProviderEvent, { type: 'question' }>[]
+    const controlSession = async (event: OpenCodeRawEvent): Promise<string | undefined> => {
+      if (eventSessionId(event) === dispatch.sessionId) return dispatch.sessionId;
+      if (done || abortEvents.signal.aborted ||
+        (boundChildSessions.size >= 64 && !boundChildSessions.has(eventSessionId(event) ?? ''))) return;
+      const child = await resolveOpenCodeChildControl(event, dispatch.sessionId, async id =>
+        unwrapData(await requestJson(client.http.handle.generation, client.http.handle.scope,
+          `/session/${encodeURIComponent(id)}`, { signal: abortEvents.signal }, 5_000)),
+      );
+      if (!child || done || abortEvents.signal.aborted) return;
+      const approvals = activeApprovalSessions.get(dispatch.sessionId);
+      const questions = activeQuestionSessions.get(dispatch.sessionId);
+      if (approvals?.requestId !== request.requestId || questions?.requestId !== request.requestId) return;
+      const existing = activeApprovalSessions.get(child);
+      if (existing && existing.requestId !== request.requestId) return;
+      if (gatewayAuthority && !bindToolGatewaySessionAuthority(child, gatewayAuthority)) return;
+      activeApprovalSessions.set(child, approvals);
+      activeQuestionSessions.set(child, questions);
+      boundChildSessions.add(child);
+      return child;
+    };
     > => {
       const propertiesList = await client.http.pendingQuestions().catch(() => []);
       if (done || abortEvents.signal.aborted) return [];
       const recovered: Extract<ProviderEvent, { type: 'question' }>[] = [];
       for (const properties of propertiesList) {
+        const sessionId = await controlSession({ type: 'permission.asked', properties });
+        if (!sessionId) continue;
         const question = normalizeQuestionEvent(
           { type: 'question.asked', properties },
-          dispatch.sessionId,
+          sessionId,
         );
         if (question && (!register || await registerQuestion(question))) recovered.push(question);
       }
@@ -2246,6 +2289,8 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     const schedulePoll = (delay = TURN_IDLE_POLL_MS) => (async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, delay));
       if (done || abortEvents.signal.aborted) throw new DOMException("Recovery stopped", "AbortError");
+        const sessionId = await controlSession({ type: 'question.asked', properties });
+        if (!sessionId) continue;
       const revision = streamRevision;
       const [statusLookup, recoveredQuestions, recoveredApprovals, messages] = await Promise.all([
           client.http
@@ -2386,7 +2431,20 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const event = next.value.value;
       pendingEvent = nextEventOrEof();
       const eventScope = eventSessionId(event);
-      if (eventScope && eventScope !== dispatch.sessionId) continue;
+      if (eventScope && eventScope !== dispatch.sessionId) {
+        const child = await controlSession(event);
+        if (child) {
+          for (const normalized of normalizeOpenCodeEvent(event, child)) {
+            if (normalized.type === 'approval.requested') await registerApproval(normalized.approval);
+          }
+          const question = normalizeQuestionEvent(event, child);
+          if (question && await registerQuestion(question)) {
+            yield* questionEventsWithActivity(question, toolCallIdFor, emittedToolStates,
+              () => request.onActionDispatch?.({ observedAt: Date.now() }));
+          }
+        }
+        continue;
+      }
       if (event.type.startsWith('message.')) streamRevision += 1;
 
       if (event.type === 'message.updated') {
@@ -2605,6 +2663,11 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     activeRequests.delete(request.requestId);
   }
 }
+    for (const child of boundChildSessions) {
+      if (activeApprovalSessions.get(child)?.requestId === request.requestId) activeApprovalSessions.delete(child);
+      if (activeQuestionSessions.get(child)?.requestId === request.requestId) activeQuestionSessions.delete(child);
+      releaseToolGatewaySessionAuthority(child);
+    }
 
 async function detectPersistent(): Promise<DetectionResult> {
   if (!isTauri)

@@ -87,6 +87,7 @@ import {
 } from '@/features/jarvis-interaction/permissionAccessStore';
 import {
   bindPersistentOpenCodeQuestionRoute,
+  isActiveOpenCodeChildApproval,
   respondToPersistentOpenCodeApproval,
 } from '@/lib/ai/adapters/opencodePersistent';
 import { openCodeChecklistParts } from '@/lib/ai/openCodeChecklist';
@@ -1808,7 +1809,9 @@ export async function installJarvisKernelRuntimeHost(
                     const port = activeKernelQuestionProjectionPorts.get(providerInput.runId);
                     if (!port || port.accountId !== providerInput.accountId ||
                         port.requestId !== providerInput.requestId ||
-                        approval.sessionId !== contextCitationSessionId) {
+                        !contextCitationSessionId ||
+                        (approval.sessionId !== contextCitationSessionId &&
+                          !isActiveOpenCodeChildApproval(contextCitationSessionId, approval))) {
                       throw new Error('kernel_provider_approval_scope_unavailable');
                     }
                     await port.project({ kind: 'permission_request', request: openCodePermissionRequest(approval, {

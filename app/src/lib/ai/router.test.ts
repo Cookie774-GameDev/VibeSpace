@@ -5,13 +5,15 @@ import { useAuthStore } from '@/stores/auth';
 import { providerActivityTracker } from '@/features/taskbar-usage/activityTracker';
 import { AGENT_DEFAULT_PROVIDER_MODEL } from './agentProviderOptions';
 
-const { openCodeDetect, openCodeProbeAuth, openCodeSend } = vi.hoisted(() => ({
+const { openCodeDetect, openCodeProbeAuth, openCodeSend, isActiveChildQuestion } = vi.hoisted(() => ({
   openCodeDetect: vi.fn(),
   openCodeProbeAuth: vi.fn(),
   openCodeSend: vi.fn(),
+  isActiveChildQuestion: vi.fn(() => false),
 }));
 
 vi.mock('./adapters/opencodePersistent', () => ({
+  isActiveOpenCodeChildQuestion: isActiveChildQuestion,
   openCodePersistentAdapter: {
     id: 'opencode-cli',
     detect: openCodeDetect,
@@ -921,6 +923,22 @@ describe('canonical OpenCode AI routing', () => {
       }),
     ).rejects.toThrow('provider_question_duplicate');
     expect(onQuestionRequested).toHaveBeenCalledOnce();
+  });
+
+  it('projects a child question only with the active adapter authority while retaining the parent session', async () => {
+    const question = { type: 'question', request: { id: 'que_child', sessionId: 'ses_child', questions: [
+      { header: 'Review', prompt: 'Allow the review check?', options: [], multiple: false, allowCustomAnswer: true },
+    ] } } as const;
+    isActiveChildQuestion.mockReturnValueOnce(true);
+    const onQuestionRequested = vi.fn();
+    openCodeSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'session', sessionId: 'ses_parent' } as const;
+      yield question;
+      yield* successfulOpenCodeEvents();
+    })());
+    await runAgent({ agent: openaiAgent, messages: [{ role: 'user', content: 'Review it.' }], expectedSessionId: 'ses_parent', onQuestionRequested });
+    expect(isActiveChildQuestion).toHaveBeenCalledWith('ses_parent', question.request);
+    expect(onQuestionRequested).toHaveBeenCalledWith(expect.objectContaining({ route: expect.objectContaining({ sessionId: 'ses_child' }) }));
   });
 
   it.each([

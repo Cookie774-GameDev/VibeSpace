@@ -95,6 +95,7 @@ const mocks = vi.hoisted(() => ({
   nativeFetch: vi.fn(),
   buildRoutedMcpTaskContext: vi.fn(),
   bindPersistentOpenCodeQuestionRoute: vi.fn(),
+  isActiveOpenCodeChildApproval: vi.fn(() => false),
   kernelRuntimeInterceptor: null as
     ((composition: JarvisKernelRuntimeComposition) => JarvisKernelRuntimeComposition) | null,
 }));
@@ -118,6 +119,7 @@ vi.mock('./adapters/opencodePersistent', async (importOriginal) => {
   return {
     ...actual,
     bindPersistentOpenCodeQuestionRoute: mocks.bindPersistentOpenCodeQuestionRoute,
+    isActiveOpenCodeChildApproval: mocks.isActiveOpenCodeChildApproval,
     openCodePersistentAdapter: {
       ...actual.openCodePersistentAdapter,
       listModels: () => mocks.listOpenCodeModels.getMockImplementation()
@@ -7252,6 +7254,14 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(providerInput.onApprovalRequested).toEqual(expect.any(Function));
       await providerInput.onHarnessSessionBound?.({ sessionId: 'ses_installed_kernel_host' });
       await providerInput.onApprovalRequested?.({ id: 'approval_installed_kernel_host', sessionId: 'ses_installed_kernel_host', capability: 'terminal.spawn', title: 'Open terminal' });
+      const childApproval = { id: 'approval_child', sessionId: 'ses_child', capability: 'terminal.spawn' as const, title: 'Review terminal' };
+      await expect(providerInput.onApprovalRequested?.(childApproval)).rejects.toThrow('kernel_provider_approval_scope_unavailable');
+      mocks.isActiveOpenCodeChildApproval.mockReturnValueOnce(true);
+      await providerInput.onApprovalRequested?.(childApproval);
+      expect(mocks.isActiveOpenCodeChildApproval).toHaveBeenCalledWith('ses_installed_kernel_host', childApproval);
+      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        parts: [expect.objectContaining({kind: 'permission_request', request: expect.objectContaining({id: 'approval_child', status: 'pending'})})],
+      }));
       expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
         parts: [expect.objectContaining({kind: 'permission_request', request: expect.objectContaining({id: 'approval_installed_kernel_host', status: 'pending'})})],
       }));
@@ -7486,7 +7496,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(mocks.buildRoutedMcpTaskContext).toHaveBeenCalledWith(
         'Run the installed kernel host.',
       );
-      expect(harness.bindings.appendMessage).toHaveBeenCalledTimes(2);
+      expect(harness.bindings.appendMessage).toHaveBeenCalledTimes(3);
       expect(harness.bindings.appendMessage).toHaveBeenCalledWith({
         chat_id: harness.chatId,
         role: 'assistant',

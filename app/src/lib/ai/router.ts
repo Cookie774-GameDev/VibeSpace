@@ -42,7 +42,7 @@ import type {
   UsageSnapshot,
 } from './adapters/types';
 import { CONNECTION_MODEL_OPTIONS, getProviderConnectionDescriptor } from './adapters/catalog';
-import { openCodePersistentAdapter } from './adapters/opencodePersistent';
+import { isActiveOpenCodeChildQuestion, openCodePersistentAdapter } from './adapters/opencodePersistent';
 import { codexPersistentAdapter } from './adapters/codexPersistent';
 import type { ChatBackend } from './backend/chatBackend';
 import { kernelSmokeCliAdapter } from './adapters/cliBridge';
@@ -521,10 +521,11 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
         sessionId = event.sessionId;
         await req.onHarnessSessionBound?.({ sessionId: event.sessionId });
       } else if (event.type === 'question') {
-        if (!sessionId || event.request.sessionId !== sessionId) {
+        if (!sessionId || (event.request.sessionId !== sessionId &&
+          !isActiveOpenCodeChildQuestion(sessionId, event.request))) {
           throw new Error('provider_question_session_mismatch');
         }
-        const projection = projectOpenCodeQuestionEvent(event, sessionId);
+        const projection = projectOpenCodeQuestionEvent(event, event.request.sessionId);
         if (!projection || !req.onQuestionRequested) {
           throw new Error('provider_question_handler_missing');
         }
@@ -905,10 +906,11 @@ async function executePersistentOpenCode(
         } else if (event.type === 'question') {
           const exactSessionId = observedSessionId ?? req.expectedSessionId;
           if (!exactSessionId) throw new Error('provider_question_session_missing');
-          if (event.request.sessionId !== exactSessionId) {
+          if (event.request.sessionId !== exactSessionId &&
+            !isActiveOpenCodeChildQuestion(exactSessionId, event.request)) {
             throw new Error('provider_question_session_mismatch');
           }
-          const projection = projectOpenCodeQuestionEvent(event, exactSessionId);
+          const projection = projectOpenCodeQuestionEvent(event, event.request.sessionId);
           if (!projection) throw new Error('provider_question_invalid');
           if (observedQuestionRequestIds.has(projection.route.requestId)) {
             throw new Error('provider_question_duplicate');

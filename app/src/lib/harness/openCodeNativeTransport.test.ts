@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { nativeOpenCodeEvents, nativeOpenCodeRequest } from './openCodeNativeTransport';
 
 describe('native OpenCode transport', () => {
+  it('recovers pending permissions through a read-only generation-bound native route', async () => {
+    const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '[]' }));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    await nativeOpenCodeRequest('generation', '/permission?directory=C%3A%5Cproject', {}, 5000, bridge);
+    expect(invoke).toHaveBeenCalledWith('opencode_server_request', {
+      request: expect.objectContaining({ generation: 'generation', route: { kind: 'permission_list' }, directory: 'C:\\project' }),
+    });
+    await expect(nativeOpenCodeRequest('generation', '/permission', { method: 'POST' }, 5000, bridge)).rejects.toThrow(/route/i);
+  });
   it('settles a pending native request promptly on caller cancellation', async () => {
     const controller = new AbortController();
     const invoke = vi.fn(() => new Promise<never>(() => {}));
