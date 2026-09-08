@@ -683,7 +683,7 @@ describe('Codex app-server structured event normalization', () => {
       }),
     ).toEqual({
       recognized: true,
-      events: [],
+      events: [{ type: 'text', delta: '1. Inspect\n', streamPartId: 'plan_1' }],
       controls: [{ type: 'plan_delta', itemId: 'plan_1', delta: '1. Inspect\n' }],
     });
   });
@@ -716,4 +716,15 @@ it('projects native Codex child identity and running state without copying its p
   expect(value.events).toEqual([expect.objectContaining({ type: 'tool', name: 'task', status: 'completed',
     nativeTask: { name: 'Codex agent', sessionId: 'child_1', status: 'running', currentStep: 'spawnAgent', modelLabel: 'gpt-5.4-mini' } })]);
   expect(JSON.stringify(value)).not.toContain('Private task instructions');
+});
+
+it('projects completed native plans as authoritative public text', () => {
+  expect(normalizeCodexAppServerMessage({
+    method: 'item/completed',
+    params: { threadId: 'thr_123', turnId: 'turn_1',
+      item: { type: 'plan', id: 'plan_1', text: '# Plan\n1. Create the approved file.' } },
+  })).toEqual({ recognized: true,
+    events: [{ type: 'text', delta: '# Plan\n1. Create the approved file.', mode: 'replace', streamPartId: 'plan_1' }],
+    controls: [{ type: 'plan_snapshot', itemId: 'plan_1', text: '# Plan\n1. Create the approved file.' }],
+  });
 });

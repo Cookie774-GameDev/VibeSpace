@@ -602,14 +602,20 @@ export function normalizeCodexAppServerMessage(
   if (method === 'item/plan/delta') {
     const itemId = safeIdentifier(params.itemId);
     const delta = safePublicText(params.delta);
-    return projection([], itemId && delta ? [{ type: 'plan_delta', itemId, delta }] : []);
+    return projection(
+      itemId && delta ? [{ type: 'text', delta, streamPartId: itemId }] : [],
+      itemId && delta ? [{ type: 'plan_delta', itemId, delta }] : [],
+    );
   }
   if (method === 'item/started' || method === 'item/completed') {
     const item = recordOf(params.item);
     if (item?.type === 'plan') {
       const itemId = safeIdentifier(item.id);
       const text = safePublicText(item.text);
-      return projection([], itemId && text ? [{ type: 'plan_snapshot', itemId, text }] : []);
+      return projection(
+        itemId && text ? [{ type: 'text', delta: text, mode: 'replace', streamPartId: itemId }] : [],
+        itemId && text ? [{ type: 'plan_snapshot', itemId, text }] : [],
+      );
     }
     return projection(item ? normalizeItem(item, method) : []);
   }
