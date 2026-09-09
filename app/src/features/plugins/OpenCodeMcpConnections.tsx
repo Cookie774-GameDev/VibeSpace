@@ -18,6 +18,8 @@ import {
   type OpenCodeServerConnection,
 } from '@/lib/harness/runtimeManager';
 import { useAuthStore } from '@/stores/auth';
+import { isTauri } from '@/lib/utils';
+import { HOSTED_MCP_PROVIDERS, type HostedMcpProvider } from './hostedMcpProviders';
 
 type ServerKind = 'remote' | 'local';
 
@@ -25,6 +27,7 @@ export interface OpenCodeMcpConnectionsProps {
   runtime?: HarnessRuntimeManager;
   clientFactory?: (connection: OpenCodeServerConnection) => OpenCodeHttpClient;
   directory?: string;
+  initialProvider?: HostedMcpProvider;
 }
 
 const STATUS_ERROR = 'OpenCode MCP status is unavailable.';
@@ -49,6 +52,7 @@ export function OpenCodeMcpConnections({
   runtime = harnessRuntimeManager,
   clientFactory = createOpenCodeHttpClient,
   directory: configuredDirectory,
+  initialProvider,
 }: OpenCodeMcpConnectionsProps) {
   const projectId = useAuthStore((state) => state.projectId);
   const directory = configuredDirectory ?? (getStoredProjectRoot(projectId).trim() || undefined);
@@ -67,12 +71,28 @@ export function OpenCodeMcpConnections({
   const [servers, setServers] = React.useState<Readonly<Record<string, OpenCodeMcpStatus>>>({});
   const [error, setError] = React.useState<string>();
   const [busy, setBusy] = React.useState<string>();
+  const [authorizing, setAuthorizing] = React.useState<string>();
+  const pendingAuthorization = React.useRef<
+    | {
+        client: OpenCodeHttpClient;
+        name: string;
+        directory?: string;
+      }
+    | undefined
+  >(undefined);
   const [projectionAuthority, setProjectionAuthority] = React.useState<string>();
   const [kind, setKind] = React.useState<ServerKind>('remote');
   const [name, setName] = React.useState('');
   const [remoteUrl, setRemoteUrl] = React.useState('');
   const [localCommand, setLocalCommand] = React.useState('');
   const generation = React.useRef(0);
+
+  React.useEffect(() => {
+    if (!initialProvider) return;
+    setKind('remote');
+    setName(initialProvider.id);
+    setRemoteUrl(initialProvider.url);
+  }, [initialProvider]);
 
   const loadStatus = React.useCallback(async () => {
     if (!client || !authorityKey) return;
@@ -96,15 +116,64 @@ export function OpenCodeMcpConnections({
     setServers({});
     setError(undefined);
     setBusy(undefined);
+    setAuthorizing(undefined);
     if (client) {
       void loadStatus();
       return () => {
         generation.current += 1;
+        const pending = pendingAuthorization.current;
+        pendingAuthorization.current = undefined;
+        if (pending)
+          void pending.client.removeMcpAuth(pending.name, pending.directory).catch(() => undefined);
       };
     }
     if (runtimeState.kind === 'checking') void runtime.refresh();
     return undefined;
   }, [authorityKey, client, loadStatus, runtime, runtimeState.kind]);
+
+  async function authorizeServer(serverName: string, current: number) {
+    if (!client || current !== generation.current) return;
+    const pending = { client, name: serverName, directory };
+    pendingAuthorization.current = pending;
+    setAuthorizing(serverName);
+    setBusy(`authorize:${serverName}`);
+    try {
+      const result = await client.authenticateMcp(serverName, directory);
+      if (current !== generation.current) return;
+      if (result.status !== 'connected') throw new Error(ACTION_ERROR);
+      const next = await client.mcpStatus(directory);
+      if (current !== generation.current) return;
+      setServers(next);
+      if (next[serverName]?.status !== 'connected') throw new Error(ACTION_ERROR);
+    } finally {
+      if (pendingAuthorization.current === pending) pendingAuthorization.current = undefined;
+      if (current === generation.current) setAuthorizing(undefined);
+    }
+  }
+
+  async function cancelAuthorization() {
+    const pending = pendingAuthorization.current;
+    if (!pending) return;
+    pendingAuthorization.current = undefined;
+    const current = ++generation.current;
+    setAuthorizing(undefined);
+    setBusy('cancel-authorization');
+    setError(undefined);
+    try {
+      if (!(await pending.client.removeMcpAuth(pending.name, pending.directory)))
+        throw new Error(ACTION_ERROR);
+      const next = await pending.client.mcpStatus(pending.directory);
+      if (current === generation.current) setServers(next);
+    } catch {
+      if (current === generation.current) setError(ACTION_ERROR);
+    } finally {
+      if (current === generation.current) setBusy(undefined);
+    }
+  }
+
+  function needsAuthorization(status: OpenCodeMcpStatus | undefined) {
+    return status?.status === 'needs_auth' || status?.status === 'needs_client_registration';
+  }
 
   async function updateServer(nameToUpdate: string, action: 'connect' | 'disconnect') {
     if (!client || !authorityKey) return;
@@ -113,10 +182,18 @@ export function OpenCodeMcpConnections({
     setBusy(`${action}:${nameToUpdate}`);
     setError(undefined);
     try {
+      if (action === 'connect' && needsAuthorization(servers[nameToUpdate])) {
+        await authorizeServer(nameToUpdate, current);
+        return;
+      }
       const ok = await client[`${action}Mcp`](nameToUpdate, directory);
       if (!ok) throw new Error('OpenCode rejected the MCP lifecycle request.');
       const next = await client.mcpStatus(directory);
-      if (current === generation.current) setServers(next);
+      if (current !== generation.current) return;
+      setServers(next);
+      if (action === 'connect' && needsAuthorization(next[nameToUpdate])) {
+        await authorizeServer(nameToUpdate, current);
+      }
     } catch {
       if (current === generation.current) setError(ACTION_ERROR);
     } finally {
@@ -150,6 +227,9 @@ export function OpenCodeMcpConnections({
       setName('');
       setRemoteUrl('');
       setLocalCommand('');
+      if (kind === 'remote' && needsAuthorization(next[normalizedName])) {
+        await authorizeServer(normalizedName, current);
+      }
     } catch {
       if (current === generation.current) setError(ACTION_ERROR);
     } finally {
@@ -194,11 +274,13 @@ export function OpenCodeMcpConnections({
 
       {!ready ? (
         <p className="text-secondary text-muted-foreground">
-          {runtimeState.kind === 'download_required'
-            ? 'OpenCode must be installed before MCP servers can be managed.'
-            : runtimeState.kind === 'incompatible' || runtimeState.kind === 'failed'
-              ? 'OpenCode is unavailable in this app session.'
-              : 'Starting OpenCode…'}
+          {!isTauri && runtime === harnessRuntimeManager
+            ? 'Browser preview cannot start the desktop OAuth runtime. Open VibeSpace desktop to finish provider sign-in.'
+            : runtimeState.kind === 'download_required'
+              ? 'OpenCode must be installed before MCP servers can be managed.'
+              : runtimeState.kind === 'incompatible' || runtimeState.kind === 'failed'
+                ? 'OpenCode is unavailable in this app session.'
+                : 'Starting OpenCode…'}
         </p>
       ) : null}
 
@@ -206,6 +288,26 @@ export function OpenCodeMcpConnections({
         <p role="alert" className="text-secondary text-destructive">
           {visibleError}
         </p>
+      ) : null}
+
+      {projectionCurrent && authorizing ? (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3"
+        >
+          <span className="text-secondary text-muted-foreground">
+            Complete authorization for {authorizing} in your browser. Waiting for verified
+            connection status…
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void cancelAuthorization()}
+          >
+            Cancel authorization
+          </Button>
+        </div>
       ) : null}
 
       {ready && !visibleBusy && entries.length === 0 && !visibleError ? (
@@ -255,6 +357,50 @@ export function OpenCodeMcpConnections({
 
       {ready ? (
         <form className="space-y-3 border-t border-border pt-4" onSubmit={addServer}>
+          <div className="space-y-1.5">
+            <Label htmlFor="opencode-mcp-provider">Official provider</Label>
+            <select
+              id="opencode-mcp-provider"
+              className="w-full rounded-md border border-input bg-background p-2 text-foreground"
+              value={
+                kind === 'remote'
+                  ? (HOSTED_MCP_PROVIDERS.find((provider) => provider.url === remoteUrl)?.id ?? '')
+                  : ''
+              }
+              disabled={Boolean(visibleBusy)}
+              onChange={(event) => {
+                const provider = HOSTED_MCP_PROVIDERS.find(
+                  (item) => item.id === event.target.value,
+                );
+                if (provider) {
+                  setKind('remote');
+                  setName(provider.id);
+                  setRemoteUrl(provider.url);
+                }
+              }}
+            >
+              <option value="">Custom server</option>
+              {HOSTED_MCP_PROVIDERS.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-metadata text-muted-foreground">
+              Adding a provider starts browser authorization when required. Approve access on the
+              provider page; this panel confirms the returned connection status.
+            </p>
+            {HOSTED_MCP_PROVIDERS.filter(
+              (provider) => provider.url === remoteUrl && 'setup' in provider,
+            ).map((provider) => (
+              <p key={provider.id} role="note" className="text-metadata text-warning">
+                {'setup' in provider ? provider.setup : ''}{' '}
+                <a href={provider.docs} target="_blank" rel="noreferrer">
+                  Provider setup guide
+                </a>
+              </p>
+            ))}
+          </div>
           <div className="flex flex-wrap items-end gap-2">
             <div className="min-w-[180px] flex-1 space-y-1.5">
               <Label htmlFor="opencode-mcp-name">Server name</Label>

@@ -2,7 +2,10 @@ import type { ActionResult, RegisteredActionExecutionContext } from '@/lib/actio
 import type { JarvisRepositories } from '@/lib/db/jarvisRepositories';
 import type { JarvisEntitlementSnapshotProvider } from '@/lib/admin';
 import { createExistingPluginCredentialAdapter } from '@/features/plugins/credentials';
-import { createGitHubDeviceAuthorizationAuthority } from '@/features/plugins/githubDeviceAuthorization';
+import {
+  createGitHubDeviceAuthorizationAuthority,
+  VIBESPACE_GITHUB_OAUTH_CLIENT_ID,
+} from '@/features/plugins/githubDeviceAuthorization';
 import type {
   JarvisExistingCredentialAuthorization,
   JarvisExistingCredentialAuthorizationAuthority,
@@ -101,7 +104,10 @@ export function createJarvisSecurityRuntime(
   });
   let pluginRuntime!: ReturnType<typeof createAccountScopedPluginRuntime>;
   const providerAuthorization = createGitHubDeviceAuthorizationAuthority({
-    clientId: input.githubOAuthClientId ?? import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID,
+    clientId:
+      input.githubOAuthClientId ??
+      import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID ??
+      VIBESPACE_GITHUB_OAUTH_CLIENT_ID,
     async onConnected({ accountId, credential }) {
       if (input.activeAccountId() !== accountId) return;
       await pluginRuntime.management.saveCredential({

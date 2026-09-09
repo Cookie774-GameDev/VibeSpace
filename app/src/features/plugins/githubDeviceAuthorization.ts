@@ -1,6 +1,9 @@
 import { nativeFetch } from '@/lib/nativeFetch';
 import type { PluginAuthorizationAuthority, PluginAuthorizationStartResult } from './runtime';
 
+/** Registered public application identifier; intentionally shipped, never a client secret. */
+export const VIBESPACE_GITHUB_OAUTH_CLIENT_ID = 'Ov23li5E2zk5XnjmrKTE';
+
 const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const GITHUB_ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_VERIFICATION_URL = 'https://github.com/login/device';
@@ -97,15 +100,16 @@ function defaultWait(milliseconds: number, signal: AbortSignal): Promise<void> {
       reject(new DOMException('Aborted', 'AbortError'));
       return;
     }
-    const timer = globalThis.setTimeout(resolve, milliseconds);
-    signal.addEventListener(
-      'abort',
-      () => {
-        globalThis.clearTimeout(timer);
-        reject(new DOMException('Aborted', 'AbortError'));
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -150,6 +154,7 @@ export function createGitHubDeviceAuthorizationAuthority(
         });
         if (!response.ok) throw new Error('provider_request_failed');
         const payload = await readJson(response);
+        if (input.controller.signal.aborted) return;
         if (!isRecord(payload)) throw new Error('invalid_provider_response');
         const token = boundedString(payload.access_token, 1_024);
         if (token && payload.token_type === 'bearer') {
@@ -222,6 +227,8 @@ export function createGitHubDeviceAuthorizationAuthority(
         });
         if (!response.ok) throw new Error('provider_request_failed');
         const device = parseDeviceCodeResponse(await readJson(response));
+        if (controller.signal.aborted)
+          return { ok: false, error: 'GitHub authorization was cancelled.' };
         if (!device) {
           if (activeSessions.get(key) === controller) activeSessions.delete(key);
           return invalidResponse();

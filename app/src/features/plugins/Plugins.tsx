@@ -47,6 +47,7 @@ import type { ClassifiedPluginManifest, PluginConnection } from './types';
 import { isConnectableStatus } from './types';
 import { PluginLogo } from './PluginLogo';
 import { OpenCodeMcpConnections } from './OpenCodeMcpConnections';
+import { hostedMcpProvider, type HostedMcpProvider } from './hostedMcpProviders';
 import { PLUGIN_COMPATIBILITY_BY_ID } from './compatibilityMatrix';
 import { OPEN_MCP_MANAGER_EVENT, consumePendingMcpManagerOpenRequest } from './openMcpManager';
 import {
@@ -84,9 +85,9 @@ function statusBadgeLabel(
   plugin: ClassifiedPluginManifest,
   connectionState: PluginConnection['state'],
 ): string {
+  if (connectionState === 'connected') return STATUS_LABELS.connected;
   if (plugin.authorizationCapability.kind === 'external_blocker') return 'External blocker';
   if (plugin.status === 'needs_credentials' || plugin.status === 'blocked') {
-    if (connectionState === 'connected') return STATUS_LABELS.connected;
     if (connectionState === 'error') return STATUS_LABELS.error;
     return 'Manual Setup Required';
   }
@@ -123,6 +124,7 @@ export function Plugins() {
     null,
   );
   const [mcpOpen, setMcpOpen] = React.useState(false);
+  const [mcpProvider, setMcpProvider] = React.useState<HostedMcpProvider>();
   const management = usePluginManagementCapability();
 
   React.useEffect(() => {
@@ -306,7 +308,7 @@ export function Plugins() {
 
       {mcpOpen ? (
         <div id="plugins-mcp-connections">
-          <OpenCodeMcpConnections />
+          <OpenCodeMcpConnections initialProvider={mcpProvider} />
         </div>
       ) : null}
 
@@ -554,6 +556,14 @@ export function Plugins() {
         accountId={accountId}
         plugin={selected}
         onClose={() => setSelected(null)}
+        onOpenHosted={(provider) => {
+          setSelected(null);
+          setMcpProvider(provider);
+          setMcpOpen(true);
+          requestAnimationFrame(() =>
+            document.getElementById('plugins-mcp-connections')?.scrollIntoView({ block: 'start' }),
+          );
+        }}
       />
       <PluginAuthorizationDialog
         accountId={accountId}
@@ -839,10 +849,12 @@ function PluginSetupDialog({
   accountId,
   plugin,
   onClose,
+  onOpenHosted,
 }: {
   accountId: string;
   plugin: ClassifiedPluginManifest | null;
   onClose: () => void;
+  onOpenHosted: (provider: HostedMcpProvider) => void;
 }) {
   const management = usePluginManagementCapability();
   const connection = usePluginStore((state) =>
@@ -852,11 +864,13 @@ function PluginSetupDialog({
   const [testing, setTesting] = React.useState(false);
   const [error, setError] = React.useState('');
   const [setupUrl, setSetupUrl] = React.useState('');
+  const [useProjectKey, setUseProjectKey] = React.useState(false);
 
   React.useEffect(() => {
     setDraft({});
     setError('');
     setSetupUrl('');
+    setUseProjectKey(false);
   }, [plugin?.id]);
 
   if (!plugin) return null;
@@ -865,23 +879,29 @@ function PluginSetupDialog({
   const compatibility = PLUGIN_COMPATIBILITY_BY_ID[activePlugin.id];
   const authorizationCapability = activePlugin.authorizationCapability;
   const usesProviderAuthorization = isProviderHostedAuthorization(authorizationCapability);
-  const isExternallyBlocked = authorizationCapability.kind === 'external_blocker';
+  const isExternallyBlocked = authorizationCapability.kind === 'external_blocker' && !useProjectKey;
   const configuredFields = new Set(connection?.configuredFields ?? []);
   const hasAutomatedTest = Boolean(activePlugin.httpTest) || activePlugin.authType === 'none';
   const providerConnectLabel = `Continue with ${activePlugin.provider}`;
   const requiresLocalCredential =
-    authorizationCapability.kind === 'manual_fallback' && activePlugin.fields.length > 0;
-  const displayedSetupSteps = usesProviderAuthorization
+    (authorizationCapability.kind === 'manual_fallback' || useProjectKey) &&
+    activePlugin.fields.length > 0;
+  const displayedSetupSteps = useProjectKey
     ? [
-        `Choose Continue with ${activePlugin.provider}.`,
-        'Review the exact permissions on the provider-owned authorization page.',
-        'Approve or decline there, then return to VibeSpace for verification.',
+        'Enter your Supabase project URL and a publishable or anon API key.',
+        'Choose Connect to verify access. This connects the project API only; hosted browser sign-in is separate.',
       ]
-    : authorizationCapability.kind === 'manual_fallback'
-      ? [...authorizationCapability.externalPrerequisites, ...activePlugin.setupSteps]
-      : authorizationCapability.kind === 'external_blocker'
-        ? [...authorizationCapability.externalPrerequisites]
-        : activePlugin.setupSteps;
+    : usesProviderAuthorization
+      ? [
+          `Choose Continue with ${activePlugin.provider}.`,
+          'Review the exact permissions on the provider-owned authorization page.',
+          'Approve or decline there, then return to VibeSpace for verification.',
+        ]
+      : authorizationCapability.kind === 'manual_fallback'
+        ? [...authorizationCapability.externalPrerequisites, ...activePlugin.setupSteps]
+        : authorizationCapability.kind === 'external_blocker'
+          ? [...authorizationCapability.externalPrerequisites]
+          : activePlugin.setupSteps;
 
   async function authorize() {
     setError('');
@@ -1013,11 +1033,13 @@ function PluginSetupDialog({
             </span>
           </DialogTitle>
           <DialogDescription>
-            {usesProviderAuthorization
-              ? `Authorize ${plugin.name} on ${plugin.provider}’s official page. VibeSpace receives only a token-free connection receipt in this interface.`
-              : isExternallyBlocked
-                ? authorizationCapability.reason
-                : plugin.help}
+            {useProjectKey
+              ? 'Connect limited project API access using a publishable or anon key. Your existing database access rules still apply.'
+              : usesProviderAuthorization
+                ? `Authorize ${plugin.name} on ${plugin.provider}’s official page. VibeSpace receives only a token-free connection receipt in this interface.`
+                : isExternallyBlocked
+                  ? authorizationCapability.reason
+                  : plugin.help}
           </DialogDescription>
         </DialogHeader>
 
@@ -1031,9 +1053,24 @@ function PluginSetupDialog({
               Provider: {plugin.provider} · Auth: {plugin.authType.replace(/_/g, ' ')}
             </p>
             <p className="mt-1 text-metadata text-muted-foreground">
-              Authorization capability: {authorizationCapability.kind.replace(/_/g, ' ')}
+              Connection method:{' '}
+              {useProjectKey ? 'Project API key' : authorizationCapability.kind.replace(/_/g, ' ')}
             </p>
           </div>
+
+          {hostedMcpProvider(plugin.id) && (
+            <div className="space-y-2 rounded-xl border border-border bg-panel p-3">
+              <p className="text-secondary font-medium">Browser sign-in with {plugin.name}</p>
+              <p className="text-metadata text-muted-foreground">
+                Connect the official hosted server through OpenCode. Its OAuth connection is managed
+                separately from this catalog’s API connection. Existing key or token fields below
+                remain available for the API features they support.
+              </p>
+              <Button type="button" onClick={() => onOpenHosted(hostedMcpProvider(plugin.id)!)}>
+                Connect {plugin.name} with browser sign-in
+              </Button>
+            </div>
+          )}
 
           {(plugin.requiredScopes?.length ?? 0) > 0 && (
             <div className="rounded-md border border-accent-cyan/25 bg-accent-cyan/5 p-3">
@@ -1146,6 +1183,24 @@ function PluginSetupDialog({
             </div>
           )}
 
+          {activePlugin.id === 'supabase' && (
+            <div className="space-y-2 rounded-xl border border-border p-3">
+              <p className="text-secondary font-medium">Project API-key fallback</p>
+              <p className="text-metadata text-muted-foreground">
+                For the limited project API connector, you can use a publishable or anon key. This
+                does not authorize the hosted MCP server. Service-role and secret keys are rejected.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                aria-pressed={useProjectKey}
+                onClick={() => setUseProjectKey((value) => !value)}
+              >
+                {useProjectKey ? 'Hide project API-key fields' : 'Use a project API key instead'}
+              </Button>
+            </div>
+          )}
+
           {requiresLocalCredential && (
             <div className="rounded-xl border border-border bg-panel/70 p-3">
               <div className="mb-3 flex items-start gap-2">
@@ -1196,7 +1251,7 @@ function PluginSetupDialog({
             </div>
           )}
 
-          {plugin.limitations && (
+          {plugin.limitations && !useProjectKey && (
             <p className="text-metadata text-muted-foreground">{plugin.limitations}</p>
           )}
 
