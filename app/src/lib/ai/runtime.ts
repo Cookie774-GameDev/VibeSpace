@@ -5397,8 +5397,7 @@ export function startRuntimeListener(
       }
     }
     if (
-      !explicitReadRoot &&
-      !requestsContextTool &&
+      autoRetrieveProjectKnowledge &&
       typeof projectId === 'string' &&
       projectId.trim().length > 0
     ) {

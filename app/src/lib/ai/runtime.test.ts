@@ -4141,6 +4141,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
     expect(mocks.getProjectContextBlock).toHaveBeenCalledWith('project_chat');
     expect(mocks.getProjectContextTreeBlock).toHaveBeenCalledWith('project_chat');
+    expect(mocks.prepareProductionRlmContext).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'project_chat' }),
+    );
     expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain(
       'project-context-for-chat',
     );
@@ -4215,6 +4218,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(mocks.getProjectContextBlock).toHaveBeenCalledWith('project_chat');
     expect(mocks.getProjectContextTreeBlock).not.toHaveBeenCalled();
     expect(mocks.retrieveApprovedLocalKnowledge).not.toHaveBeenCalled();
+    expect(mocks.prepareProductionRlmContext).not.toHaveBeenCalled();
     expect(mocks.runAgent.mock.calls[0][0].agent.system_prompt).toContain(
       'project-context-for-chat',
     );
