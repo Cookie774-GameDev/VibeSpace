@@ -26,6 +26,21 @@ const draft: ScheduleDraft = {
 };
 
 describe('Schedule draft persistence', () => {
+  it('preserves delayed routing and detects unsaved timing or destination changes', () => {
+    const delayed: ScheduleDraft = {
+      ...draft,
+      scheduleMode: 'jarvis',
+      timingMode: 'delay',
+      delayMinutes: 3,
+      targetChatId: 'chat_current',
+    };
+    expect(writeScheduleDraft('workspace_1', delayed)).toBe(true);
+    expect(readScheduleDraft('workspace_1')).toEqual(delayed);
+    expect(scheduleDraftsEqual(delayed, { ...delayed, delayMinutes: 4 })).toBe(false);
+    expect(scheduleDraftsEqual(delayed, { ...delayed, targetChatId: undefined })).toBe(false);
+    expect(writeScheduleDraft('workspace_1', { ...delayed, delayMinutes: 0 })).toBe(false);
+    expect(writeScheduleDraft('workspace_1', { ...delayed, delayMinutes: 1.5 })).toBe(false);
+  });
   beforeEach(() => {
     window.localStorage.clear();
   });

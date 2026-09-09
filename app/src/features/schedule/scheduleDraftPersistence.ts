@@ -29,6 +29,9 @@ export interface ScheduleDraft {
   readonly jarvisRecurrence: JarvisScheduleRecurrence;
   readonly intervalAmount: number;
   readonly intervalUnit: 'minutes' | 'hours' | 'days';
+  readonly timingMode?: 'date' | 'delay';
+  readonly delayMinutes?: number;
+  readonly targetChatId?: string;
   readonly jarvisModelOptionId: string;
   readonly editing?: ScheduleDraftEditingToken;
 }
@@ -96,6 +99,15 @@ function isScheduleDraft(value: unknown): value is ScheduleDraft {
       (offset) => Number.isSafeInteger(offset) && offset >= 0 && offset <= 10_080,
     ) &&
     (candidate.scheduleMode === 'event' || candidate.scheduleMode === 'jarvis') &&
+    (candidate.timingMode === undefined ||
+      candidate.timingMode === 'date' ||
+      candidate.timingMode === 'delay') &&
+    (candidate.delayMinutes === undefined ||
+      (Number.isSafeInteger(candidate.delayMinutes) &&
+        candidate.delayMinutes >= 1 &&
+        candidate.delayMinutes <= 43_200)) &&
+    (candidate.targetChatId === undefined ||
+      (boundedString(candidate.targetChatId, 128) && candidate.targetChatId.trim().length > 0)) &&
     RECURRENCES.includes(candidate.jarvisRecurrence as JarvisScheduleRecurrence) &&
     Number.isSafeInteger(candidate.intervalAmount) &&
     Number(candidate.intervalAmount) >= 1 &&
@@ -172,6 +184,9 @@ export function scheduleDraftsEqual(left: ScheduleDraft, right: ScheduleDraft): 
     left.jarvisRecurrence === right.jarvisRecurrence &&
     left.intervalAmount === right.intervalAmount &&
     left.intervalUnit === right.intervalUnit &&
+    (left.timingMode ?? 'date') === (right.timingMode ?? 'date') &&
+    (left.delayMinutes ?? 5) === (right.delayMinutes ?? 5) &&
+    left.targetChatId === right.targetChatId &&
     left.jarvisModelOptionId === right.jarvisModelOptionId &&
     editingTokensEqual(left.editing, right.editing) &&
     left.reminderOffsets.length === right.reminderOffsets.length &&

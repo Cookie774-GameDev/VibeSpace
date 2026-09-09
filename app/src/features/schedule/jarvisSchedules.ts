@@ -99,6 +99,14 @@ export const JARVIS_MIN_INTERVAL_MS = 5 * 60 * 1000;
 /** Maximum custom interval (~30 days). */
 export const JARVIS_MAX_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Resolve a one-time delay when saved, so time spent editing is not counted. */
+export function delayedJarvisRunAt(minutes: number, now = Date.now()): number | undefined {
+  if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 43_200 || !Number.isFinite(now)) {
+    return undefined;
+  }
+  return now + minutes * 60_000;
+}
+
 export function normalizeJarvisIntervalMs(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
   const rounded = Math.round(value);
@@ -271,6 +279,7 @@ export function buildJarvisScheduleEventInput(input: {
   modelSelection: ChatModelSelection;
   agentId: AgentId | string;
   projectId?: string;
+  outputChatId?: string;
   caoSupervision?: CaoSupervisionScheduleMetadataV1;
   chatSupervision?: ChatSupervisionBindingV1;
 }): EventCreateInput {
@@ -289,6 +298,7 @@ export function buildJarvisScheduleEventInput(input: {
     createdBy:
       input.createdBy.startsWith('agt_') || input.createdBy.includes('jarvis') ? 'jarvis' : 'user',
     nextRunAt: input.startAt,
+    ...(input.outputChatId ? { outputChatId: input.outputChatId } : {}),
     runHistory: [],
     errorHistory: [],
     ...(input.caoSupervision ? { caoSupervision: input.caoSupervision } : {}),

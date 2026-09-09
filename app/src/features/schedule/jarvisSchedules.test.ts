@@ -4,6 +4,7 @@ import type { WorkspaceId } from '@/types/common';
 import {
   buildJarvisScheduleEventUpdate,
   buildJarvisScheduleEventInput,
+  delayedJarvisRunAt,
   findScheduleConflicts,
   isJarvisScheduleEvent,
   parseJarvisScheduleMetadata,
@@ -26,6 +27,13 @@ const chatSupervision: ChatSupervisionBindingV1 = {
 };
 
 describe('Jarvis schedules', () => {
+  it('calculates one-time delays from save time and rejects invalid minutes', () => {
+    expect(delayedJarvisRunAt(1, 1000)).toBe(61000);
+    expect(delayedJarvisRunAt(43200, 1000)).toBe(2592001000);
+    for (const minutes of [0, -1, 1.5, NaN, Infinity, 43201]) {
+      expect(delayedJarvisRunAt(minutes, 1000)).toBeUndefined();
+    }
+  });
   it('builds a real event row input with Jarvis schedule metadata', () => {
     const input = buildJarvisScheduleEventInput({
       workspaceId: 'workspace_1' as WorkspaceId,

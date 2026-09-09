@@ -25,7 +25,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { eventRepo } from '@/lib/db';
+import { chatRepo, eventRepo } from '@/lib/db';
 import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { flushUiStatePersistence, useUIStore } from '@/stores/ui';
@@ -51,7 +51,7 @@ import { cn } from '@/lib/utils';
 import { completeTask, useUpcomingTasks } from '@/features/tasks';
 import type { EventReminder, EventRow } from '@/types/event';
 import type { Task } from '@/types/task';
-import type { WorkspaceId } from '@/types/common';
+import type { ChatId, WorkspaceId } from '@/types/common';
 import { useJarvisScheduleEvents, useUpcomingEvents } from './hooks';
 import {
   parseCustomRecurrence,
@@ -77,6 +77,7 @@ import { visualForEventTitle, visualForTask } from './scheduleIcons';
 import {
   buildJarvisScheduleEventUpdate,
   buildJarvisScheduleEventInput,
+  delayedJarvisRunAt,
   formatJarvisIntervalLabel,
   intervalMsFromParts,
   isJarvisScheduleEvent,
@@ -503,6 +504,13 @@ export function SchedulePage() {
     initialScheduleDraft.jarvisRecurrence,
   );
   const [intervalAmount, setIntervalAmount] = React.useState(initialScheduleDraft.intervalAmount);
+  const [timingMode, setTimingMode] = React.useState<'date' | 'delay'>(
+    initialScheduleDraft.timingMode ?? 'date',
+  );
+  const [delayMinutes, setDelayMinutes] = React.useState(initialScheduleDraft.delayMinutes ?? 5);
+  const [targetChatId, setTargetChatId] = React.useState(initialScheduleDraft.targetChatId);
+  const activeChatId = useUIStore((state) => state.activeChatId);
+  const saveInFlightRef = React.useRef(false);
   const [intervalUnit, setIntervalUnit] = React.useState<'minutes' | 'hours' | 'days'>(
     initialScheduleDraft.intervalUnit,
   );
@@ -584,6 +592,9 @@ export function SchedulePage() {
     setScheduleMode(nextDraft.scheduleMode);
     setJarvisRecurrence(nextDraft.jarvisRecurrence);
     setIntervalAmount(nextDraft.intervalAmount);
+    setTimingMode(nextDraft.timingMode ?? 'date');
+    setDelayMinutes(nextDraft.delayMinutes ?? 5);
+    setTargetChatId(nextDraft.targetChatId);
     setIntervalUnit(nextDraft.intervalUnit);
     setJarvisModelOptionId(
       nextDraft.jarvisModelOptionId || selectionOptionId(chatModelSelection) || '',
@@ -609,6 +620,9 @@ export function SchedulePage() {
       scheduleMode,
       jarvisRecurrence,
       intervalAmount,
+      timingMode,
+      delayMinutes,
+      targetChatId,
       intervalUnit,
       jarvisModelOptionId,
       ...(editingToken
@@ -639,6 +653,9 @@ export function SchedulePage() {
     editingToken,
     eventRecurrenceRule,
     intervalAmount,
+    timingMode,
+    delayMinutes,
+    targetChatId,
     intervalUnit,
     jarvisModelOptionId,
     jarvisRecurrence,
@@ -775,9 +792,14 @@ export function SchedulePage() {
     setEditingToken(undefined);
     setCaoPolicyId('');
     setEditingJarvisModelSelection(null);
+    setTimingMode('date');
+    setDelayMinutes(5);
+    setTargetChatId(undefined);
   }, []);
 
   const handleEditEvent = React.useCallback((event: EventRow) => {
+    setTimingMode('date');
+    setTargetChatId(undefined);
     const nextStartInput = toLocalDateTimeInput(event.start_at);
     setEditingEventId(event.id);
     setStartInput(nextStartInput);
@@ -850,6 +872,7 @@ export function SchedulePage() {
   );
 
   const handleSave = async () => {
+    if (saveInFlightRef.current) return;
     if (!workspaceId) {
       toast.error('No workspace', 'Finish onboarding first.');
       return;
@@ -877,15 +900,24 @@ export function SchedulePage() {
       return;
     }
 
-    const start = fromLocalDateTimeInput(startInput);
+    const delayed = scheduleMode === 'jarvis' && timingMode === 'delay';
+    const delayedStart = delayed ? delayedJarvisRunAt(delayMinutes) : undefined;
+    if (delayed && delayedStart === undefined) {
+      toast.warning('Check the delay', 'Enter a whole number from 1 to 43,200 minutes.');
+      return;
+    }
+    const start = delayedStart ?? fromLocalDateTimeInput(startInput);
     if (!Number.isFinite(start)) {
       toast.warning('Check the start time', 'That date/time could not be read.');
       return;
     }
     const rawEnd = fromLocalDateTimeInput(endInput);
     const jarvisAction = scheduleMode === 'jarvis';
-    const end =
-      !jarvisAction && allDay ? start + DAY_MS - 1 : Math.max(rawEnd, start + 5 * 60 * 1000);
+    const end = delayed
+      ? start + 5 * 60 * 1000
+      : !jarvisAction && allDay
+        ? start + DAY_MS - 1
+        : Math.max(rawEnd, start + 5 * 60 * 1000);
     const reminders: EventReminder[] = jarvisAction
       ? []
       : reminderOffsets.map((offset_min) => ({
@@ -927,7 +959,20 @@ export function SchedulePage() {
       }
     }
 
+    saveInFlightRef.current = true;
     try {
+      let targetProjectId: string | undefined;
+      if (jarvisAction && !editingEventId && !caoSupervisedLearning && targetChatId) {
+        const targetChat = await chatRepo.getById(targetChatId as ChatId);
+        if (
+          !targetChat ||
+          String(targetChat.workspace_id) !== String(workspaceId) ||
+          useAuthStore.getState().workspaceId !== workspaceId
+        ) {
+          throw new Error('The selected chat is unavailable in this workspace. Choose a new chat.');
+        }
+        targetProjectId = targetChat.project_id;
+      }
       const safeEditingJarvisEvent = editingJarvisEvent;
       if (editingCao) {
         if (!safeEditingJarvisEvent || !editingToken) {
@@ -963,7 +1008,7 @@ export function SchedulePage() {
                   prompt: description.trim() || title.trim(),
                   startAt: start,
                   durationMs: Math.max(current.end_at - current.start_at, 5 * 60 * 1000),
-                  recurrence: jarvisRecurrence,
+                  recurrence: delayed ? 'once' : jarvisRecurrence,
                   ...(customIntervalMs !== undefined ? { intervalMs: customIntervalMs } : {}),
                   timezone,
                   modelSelection: currentMetadata.modelSelection,
@@ -1008,7 +1053,7 @@ export function SchedulePage() {
                 safeEditingJarvisEvent.end_at - safeEditingJarvisEvent.start_at,
                 5 * 60 * 1000,
               ),
-              recurrence: jarvisRecurrence,
+              recurrence: delayed ? 'once' : jarvisRecurrence,
               ...(customIntervalMs !== undefined ? { intervalMs: customIntervalMs } : {}),
               timezone,
               modelSelection: jarvisModelSelectionForSave!,
@@ -1045,7 +1090,9 @@ export function SchedulePage() {
             prompt: description.trim() || title.trim(),
             startAt: start,
             durationMs: end - start,
-            recurrence: jarvisRecurrence,
+            recurrence: delayed ? 'once' : jarvisRecurrence,
+            ...(targetChatId && !caoBootstrap ? { outputChatId: targetChatId } : {}),
+            ...(targetProjectId && !caoBootstrap ? { projectId: targetProjectId } : {}),
             ...(customIntervalMs !== undefined ? { intervalMs: customIntervalMs } : {}),
             timezone,
             modelSelection: jarvisModelSelectionForSave!,
@@ -1128,9 +1175,14 @@ export function SchedulePage() {
       setJarvisRecurrence('once');
       setIntervalAmount(2);
       setIntervalUnit('hours');
+      setTimingMode('date');
+      setDelayMinutes(5);
+      setTargetChatId(undefined);
       setCaoSupervisedLearning(false);
     } catch (err) {
       toast.error('Could not save', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      saveInFlightRef.current = false;
     }
   };
 
@@ -1874,7 +1926,7 @@ export function SchedulePage() {
                     </div>
                   )}
                 </div>
-                <div className="mt-3 space-y-1.5">
+                <div hidden={timingMode === 'delay'} className="mt-3 space-y-1.5">
                   <Label className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-1.5')}>
                     <Repeat className="h-3.5 w-3.5" /> Repeats
                   </Label>
@@ -1963,38 +2015,100 @@ export function SchedulePage() {
                   <Clock className="h-3.5 w-3.5 text-accent-copper" /> When
                 </Label>
               </div>
-              <div
-                className={cn(
-                  'grid gap-3',
-                  scheduleMode === 'jarvis' ? 'grid-cols-1' : 'grid-cols-2',
-                )}
-              >
-                <div>
-                  <Label htmlFor="event-start" className="text-metadata text-muted-foreground">
-                    {scheduleMode === 'jarvis' ? 'Run at' : 'Start'}
-                  </Label>
-                  <Input
-                    id="event-start"
-                    type="datetime-local"
-                    value={startInput}
-                    onChange={(e) => setStartInput(e.target.value)}
-                  />
+              {scheduleMode === 'jarvis' && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {(['date', 'delay'] as const).map((mode) => (
+                    <Button
+                      key={mode}
+                      type="button"
+                      size="sm"
+                      variant={timingMode === mode ? 'default' : 'outline'}
+                      aria-pressed={timingMode === mode}
+                      onClick={() => {
+                        setTimingMode(mode);
+                        if (mode === 'delay') setJarvisRecurrence('once');
+                      }}
+                    >
+                      {mode === 'delay' ? 'Run in…' : 'Choose date'}
+                    </Button>
+                  ))}
                 </div>
-                {scheduleMode === 'event' && (
+              )}
+              {scheduleMode === 'jarvis' && timingMode === 'delay' ? (
+                <div>
+                  <Label htmlFor="schedule-delay-minutes">Wait (minutes)</Label>
+                  <Input
+                    id="schedule-delay-minutes"
+                    type="number"
+                    min={1}
+                    max={43200}
+                    step={1}
+                    value={delayMinutes}
+                    onChange={(event) => setDelayMinutes(Number(event.target.value))}
+                  />
+                  <p className={FIELD_HINT_CLASS}>
+                    Runs once after this many minutes, starting when you save.
+                  </p>
+                </div>
+              ) : (
+                <div
+                  className={cn(
+                    'grid gap-3',
+                    scheduleMode === 'jarvis' ? 'grid-cols-1' : 'grid-cols-2',
+                  )}
+                >
                   <div>
-                    <Label htmlFor="event-end" className="text-metadata text-muted-foreground">
-                      End
+                    <Label htmlFor="event-start" className="text-metadata text-muted-foreground">
+                      {scheduleMode === 'jarvis' ? 'Run at' : 'Start'}
                     </Label>
                     <Input
-                      id="event-end"
+                      id="event-start"
                       type="datetime-local"
-                      value={endInput}
-                      onChange={(e) => setEndInput(e.target.value)}
-                      disabled={allDay}
+                      value={startInput}
+                      onChange={(e) => setStartInput(e.target.value)}
                     />
                   </div>
-                )}
-              </div>
+                  {scheduleMode === 'event' && (
+                    <div>
+                      <Label htmlFor="event-end" className="text-metadata text-muted-foreground">
+                        End
+                      </Label>
+                      <Input
+                        id="event-end"
+                        type="datetime-local"
+                        value={endInput}
+                        onChange={(e) => setEndInput(e.target.value)}
+                        disabled={allDay}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+              {scheduleMode === 'jarvis' && !editingEventId && !caoSupervisedLearning && (
+                <div className="mt-3">
+                  <Label htmlFor="schedule-chat-destination">Run in chat</Label>
+                  <select
+                    id="schedule-chat-destination"
+                    value={targetChatId ? 'same' : 'new'}
+                    onChange={(event) =>
+                      setTargetChatId(
+                        event.target.value === 'same' ? (activeChatId ?? undefined) : undefined,
+                      )
+                    }
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value="new">New chat</option>
+                    <option value="same" disabled={!activeChatId && !targetChatId}>
+                      Same chat
+                    </option>
+                  </select>
+                  <p className={FIELD_HINT_CLASS}>
+                    {targetChatId
+                      ? 'The result will appear in the chat selected when you saved this task.'
+                      : 'A new chat will be created when this task runs.'}
+                  </p>
+                </div>
+              )}
             </div>
 
             {scheduleMode === 'event' ? (

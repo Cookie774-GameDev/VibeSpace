@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
 import { useJarvisLearningStore } from '@/features/jarvis-memory/learningStore';
 import type { WorkspaceId } from '@/types/common';
 import type { EventRow } from '@/types/event';
@@ -18,6 +19,7 @@ const {
   createEvent,
   deleteEvent,
   getEventById,
+  getChatById,
   jarvisEventsState,
   runCaoScheduledLearning,
   recoverCaoScheduledLearning,
@@ -30,6 +32,7 @@ const {
   createEvent: vi.fn(),
   deleteEvent: vi.fn(),
   getEventById: vi.fn(),
+  getChatById: vi.fn(),
   jarvisEventsState: { rows: [] as EventRow[] },
   runCaoScheduledLearning: vi.fn(),
   recoverCaoScheduledLearning: vi.fn(),
@@ -47,6 +50,7 @@ vi.mock('@/lib/db', async () => {
   const actual = await vi.importActual<typeof import('@/lib/db')>('@/lib/db');
   return {
     ...actual,
+    chatRepo: { ...actual.chatRepo, getById: getChatById },
     eventRepo: {
       create: createEvent,
       getById: getEventById,
@@ -192,6 +196,14 @@ describe('SchedulePage Jarvis lifecycle', () => {
     updateEvent.mockReset().mockResolvedValue({});
     deleteEvent.mockReset().mockResolvedValue(undefined);
     getEventById.mockReset();
+    getChatById
+      .mockReset()
+      .mockResolvedValue({
+        id: 'chat_current',
+        workspace_id: 'workspace_1',
+        project_id: 'project_1',
+      });
+    useUIStore.setState({ activeChatId: 'chat_current' });
     runCaoScheduledLearning.mockReset().mockResolvedValue({ status: 'completed' });
     recoverCaoScheduledLearning.mockReset().mockResolvedValue(null);
     runWorkspaceCaoLearningChecks.mockReset().mockResolvedValue({ status: 'completed' });
@@ -247,6 +259,51 @@ describe('SchedulePage Jarvis lifecycle', () => {
     });
     useJarvisLearningStore.getState().clearForTests();
     useJarvisLearningStore.getState().setAccount('usr_local');
+  });
+
+  it.each(['new', 'same'])(
+    'saves a one-time delayed task in the %s chat without date fields',
+    async (destination) => {
+      jarvisEventsState.rows = [];
+      const before = Date.now();
+      render(<SchedulePage />);
+      fireEvent.click(screen.getByRole('button', { name: 'Jarvis Action' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Run in…' }));
+      expect(screen.queryByLabelText('Run at')).toBeNull();
+      expect(screen.queryByLabelText('End')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Jarvis action model' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Every…' })).toBeNull();
+      fireEvent.change(screen.getByLabelText('Wait (minutes)'), { target: { value: '3' } });
+      fireEvent.change(screen.getByLabelText('Run in chat'), { target: { value: destination } });
+      fireEvent.change(screen.getByLabelText(/action title/i), {
+        target: { value: 'Delayed review' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Save Jarvis Action/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Save Jarvis Action/i }));
+      await waitFor(() => expect(createEvent).toHaveBeenCalledOnce());
+      const input = createEvent.mock.calls[0]![0];
+      expect(input.start_at).toBeGreaterThanOrEqual(before + 180_000);
+      expect(input.start_at).toBeLessThanOrEqual(Date.now() + 180_000);
+      expect(input.recurrence_rule).toBeUndefined();
+      const metadata = parseJarvisScheduleMetadata({ ...buildJarvisEvent('scheduled'), ...input });
+      expect(metadata?.recurrence).toBe('once');
+      expect(metadata?.nextRunAt).toBe(input.start_at);
+      expect(metadata?.outputChatId).toBe(destination === 'same' ? 'chat_current' : undefined);
+    },
+  );
+
+  it('rejects a delayed task targeting a chat in another workspace', async () => {
+    getChatById.mockResolvedValue({ id: 'chat_current', workspace_id: 'workspace_other' });
+    render(<SchedulePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Jarvis Action' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run in…' }));
+    fireEvent.change(screen.getByLabelText('Run in chat'), { target: { value: 'same' } });
+    fireEvent.change(screen.getByLabelText(/action title/i), {
+      target: { value: 'Delayed review' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save Jarvis Action/i }));
+    await waitFor(() => expect(getChatById).toHaveBeenCalled());
+    expect(createEvent).not.toHaveBeenCalled();
   });
 
   it('creates a project-scoped CAO learning schedule from the real Schedule form', async () => {
