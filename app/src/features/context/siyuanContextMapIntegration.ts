@@ -346,6 +346,19 @@ function nodeId(value: string, recordId: string, index: number): string {
   return `${recordId}-siyuan-${index}`;
 }
 
+function generatedRootContent(markdown: string): string {
+  // SiYuan adds block IDs and empty quote lines when exporting Markdown.
+  // Keep custom attributes and all actual content so user edits prevent repair.
+  return markdown
+    .split(/\r?\n/u)
+    .filter(
+      (line) =>
+        !/^\s*(?:>\s*)?\{:(?:\s+(?:id|updated|type|title)="[^"]*")+\s*\}$/u.test(line) &&
+        !/^\s*>?\s*$/u.test(line),
+    )
+    .join('\n');
+}
+
 function contextMapMarkdown(record: ContextMapRecord): string {
   const payload = encodeTree(record.tree);
   const lines = [
@@ -1628,6 +1641,44 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       if (!document) return null;
       managedDocumentIds.set(documentKey(exactProjectId, record.id), document.id);
       try {
+        const payload = /\bpayload=([A-Za-z0-9_-]+)\s*-->/u.exec(document.markdown)?.[1];
+        const legacy = payload ? decodeTree(payload) : null;
+        // Upgrade only untouched generated metadata roots. User-authored SiYuan
+        // content remains authoritative; the native update also checks old text.
+        if (
+          manifest?.status === 'ready' &&
+          legacy?.model === 'siyuan-metadata-index-v1' &&
+          legacy.fileCount === 0 &&
+          generatedRootContent(document.markdown) ===
+            generatedRootContent(contextMapMarkdown({ ...record, tree: legacy }))
+        ) {
+          const entries = await readSiyuanIndexEntries(exactProjectId, record.id);
+          if (entries.length > 0) {
+            const tree = buildProjectContextTreeFromSiyuanIndex(legacy, entries);
+            const markdown = contextMapMarkdown({ ...record, tree });
+            let updated: SiyuanManagedDocument;
+            try {
+              updated = await port.updateManagedDocument(
+                exactProjectId,
+                document.id,
+                document.markdown,
+                markdown,
+                document.id,
+              );
+            } catch (error) {
+              // A concurrent reader may have committed the same repair already.
+              // Accept only the exact expected document, never an unrelated write.
+              updated = await port.getBlock(exactProjectId, document.id);
+              if (
+                updated.id !== document.id ||
+                updated.notebookId !== document.notebookId ||
+                generatedRootContent(updated.markdown) !== generatedRootContent(markdown)
+              )
+                throw error;
+            }
+            return parseContextMapMarkdown(updated, record);
+          }
+        }
         return parseContextMapMarkdown(document, record);
       } catch (error) {
         if (

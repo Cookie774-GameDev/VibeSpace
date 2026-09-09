@@ -194,6 +194,94 @@ describe('SiYuan Context Map integration', () => {
     );
   });
 
+  it.each([
+    { edited: false, committedError: false },
+    { edited: true, committedError: false },
+    { edited: false, committedError: true },
+    { edited: false, committedError: 'different' },
+  ])('repairs only an unedited legacy metadata root (%j)', async ({ edited, committedError }) => {
+    const nativePort = port();
+    const record = map();
+    const initial = await createSiyuanContextMapIntegration(nativePort).sync('project-1', record);
+    const legacy = {
+      ...record.tree,
+      model: 'siyuan-metadata-index-v1',
+      fileCount: 0,
+      totalBytes: 0,
+      nodes: [],
+    };
+    const payload = btoa(JSON.stringify(legacy))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+    const markdown =
+      initial.document.markdown
+        .replace(/payload=[A-Za-z0-9_-]+/, 'payload=' + payload)
+        .replace('Files: 1 · Bytes: 42', 'Files: 0 · Bytes: 0')
+        .replace('-->\n', '-->\n{: id="20260909004655-l454w1s" updated="20260909004655"}\n\n') +
+      (edited ? '\nUser note: preserve me.\n' : '');
+    await nativePort.updateManagedDocument(
+      'project-1',
+      initial.document.id,
+      initial.document.markdown,
+      markdown,
+      initial.document.id,
+    );
+    const job = createSiyuanIndexJob({
+      accountId: 'account-1',
+      projectId: 'project-1',
+      mapId: record.id,
+      canonicalRoot: record.rootDir,
+      policyFingerprint: 'legacy',
+    });
+    await replaceSiyuanIndexJob(job, {
+      path: record.rootDir,
+      relativePath: '',
+      parentNodeId: null,
+    });
+    await checkpointSiyuanIndexJob({
+      job,
+      appendedEntries: [
+        {
+          nodeId: 'path:index.ts',
+          parentNodeId: null,
+          title: 'index.ts',
+          kind: 'file',
+          relativePath: 'index.ts',
+          sourcePointer: record.rootDir + '/index.ts',
+          summary: null,
+          sizeBytes: 42,
+          modifiedAt: 2,
+        },
+      ],
+    });
+    vi.mocked(nativePort.updateManagedDocument).mockClear();
+    if (committedError) {
+      const update = vi.mocked(nativePort.updateManagedDocument).getMockImplementation()!;
+      vi.mocked(nativePort.updateManagedDocument).mockImplementationOnce(async (...args) => {
+        await update(...args);
+        if (committedError === 'different') {
+          await update(args[0], args[1], args[3], args[3] + '\nUser edit.\n', args[4]);
+        }
+        throw new Error('concurrent_native_readback');
+      });
+    }
+    const reading = createSiyuanContextMapIntegration(nativePort).read('project-1', record);
+    if (committedError === 'different') {
+      await expect(reading).rejects.toThrow('concurrent_native_readback');
+      return;
+    }
+    const reopened = await reading;
+    if (edited) {
+      expect(reopened?.document.markdown).toBe(markdown);
+      expect(nativePort.updateManagedDocument).not.toHaveBeenCalled();
+    } else {
+      expect(reopened?.tree.fileCount).toBe(1);
+      expect(reopened?.document.markdown).toContain('Files: 1 · Bytes: 42');
+      expect(nativePort.updateManagedDocument).toHaveBeenCalledOnce();
+    }
+  });
+
   it('reopens the durable root when child hits crowd it out of bounded search', async () => {
     const nativePort = port();
     const record = map();
