@@ -41,7 +41,7 @@ export type FabricReceipt = Readonly<{
 }>;
 
 export interface TerminalPeerFabricCommandPort {
-  capability(): Promise<TerminalPeerFabricCapability>;
+  capability(refresh?: boolean): Promise<TerminalPeerFabricCapability>;
   connect(request: ConnectTeamRequest): Promise<FabricReceipt>;
   command(request: FabricCommandRequest): Promise<FabricReceipt>;
 }
@@ -129,7 +129,8 @@ export function createTerminalPeerFabricCommandPort(
   invoke: InvokeFn = tauriInvoke,
 ): TerminalPeerFabricCommandPort {
   let capabilityPromise: Promise<TerminalPeerFabricCapability> | null = null;
-  const capability = () => {
+  const capability = (refresh = false) => {
+    if (refresh) capabilityPromise = null;
     capabilityPromise ??= invoke<unknown>('terminal_peer_fabric', {
       request: { action: 'capability' },
     })

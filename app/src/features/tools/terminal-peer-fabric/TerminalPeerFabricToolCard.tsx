@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Network, Play } from 'lucide-react';
+import { Network, Play, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { readLiveTargetSnapshot } from '@/features/instant-command/targetSnapshot';
 import {
@@ -22,12 +22,14 @@ export function TerminalPeerFabricToolCard({
 }: TerminalPeerFabricToolCardProps) {
   const [capability, setCapability] = React.useState<CapabilityState>('checking');
   const [discoveredCount, setDiscoveredCount] = React.useState(eligibleTerminalCount ?? 0);
+  const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
 
   React.useEffect(() => {
     let active = true;
+    setCapability('checking');
     const probe = window.setTimeout(() => {
       void port
-        .capability()
+        .capability(revision > 0)
         .then((result) => {
           if (active) {
             setCapability(
@@ -41,16 +43,20 @@ export function TerminalPeerFabricToolCard({
           if (active) setCapability('unavailable');
         });
       if (eligibleTerminalCount == null) {
-        void readLiveTargetSnapshot().then((targets) => {
-          if (active) setDiscoveredCount(targets.length);
-        });
+        void readLiveTargetSnapshot()
+          .then((targets) => {
+            if (active) setDiscoveredCount(targets.length);
+          })
+          .catch(() => {
+            if (active) setDiscoveredCount(0);
+          });
       }
     }, 0);
     return () => {
       active = false;
       window.clearTimeout(probe);
     };
-  }, [eligibleTerminalCount, port]);
+  }, [eligibleTerminalCount, port, revision]);
 
   const count = eligibleTerminalCount ?? discoveredCount;
   const canRun = capability === 'available' && count >= 2;
@@ -77,6 +83,17 @@ export function TerminalPeerFabricToolCard({
           {status}
         </span>
       </span>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        aria-label="Refresh Terminal Peer Fabric availability"
+        title="Recheck native capability and eligible terminals"
+        disabled={capability === 'checking'}
+        onClick={refresh}
+      >
+        <RefreshCw className="h-3.5 w-3.5" />
+      </Button>
       <Button
         type="button"
         size="sm"
