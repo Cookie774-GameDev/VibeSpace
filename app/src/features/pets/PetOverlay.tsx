@@ -65,6 +65,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/ui';
 import { installPetContextMenuDismissal } from './petContextMenuDismissal';
+import { petContextMenuPosition } from './petContextMenuPosition';
 
 const DEFAULT_DISPLAY_SIZE = 128;
 const DEBUG_ANIMS: PetAnimId[] = [
@@ -700,6 +701,25 @@ export function PetOverlay({
   const route = useUIStore((state) => state.route);
   const routeRef = React.useRef(route);
 
+  React.useLayoutEffect(() => {
+    if (!ctxMenu) return;
+    const placeMenu = () => {
+      const menu = contextMenuRef.current?.getBoundingClientRect();
+      if (!menu) return;
+      setCtxMenu((point) => {
+        if (!point) return null;
+        const next = petContextMenuPosition(point, menu, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
+        return next.x === point.x && next.y === point.y ? point : next;
+      });
+    };
+    placeMenu();
+    window.addEventListener('resize', placeMenu);
+    return () => window.removeEventListener('resize', placeMenu);
+  }, [ctxMenu]);
+
   React.useEffect(() => {
     if (routeRef.current !== route) setCtxMenu(null);
     routeRef.current = route;
@@ -1129,7 +1149,14 @@ export function PetOverlay({
         <div
           ref={contextMenuRef}
           className="fixed z-[90] min-w-[120px] rounded-lg border border-border bg-panel shadow-lg p-1"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          style={{
+            left: ctxMenu.x,
+            top: ctxMenu.y,
+            minWidth: 'min(120px, calc(100vw - 8px))',
+            maxWidth: 'calc(100vw - 8px)',
+            maxHeight: 'calc(100vh - 8px)',
+            overflowY: 'auto',
+          }}
           data-pet-context-menu="true"
           role="menu"
         >
