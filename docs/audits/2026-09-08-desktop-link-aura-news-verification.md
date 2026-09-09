@@ -25,7 +25,7 @@ The assigned native app reproduced a network failure while a key was configured.
 
 Credential validation now uses the documented [authentication test endpoint](https://developers.deepgram.com/guides/fundamentals/authenticating). Project metadata remains optional. Credential tests and synthesis use the existing native HTTP transport, with a scoped Deepgram host allowance in the main and Workbench capabilities. Tests retain stored keys on temporary failures and never publish credential values.
 
-Native success requires the rebuilt executable containing the new capability. A configured key or passing mock test is not proof of provider acceptance.
+The rebuilt assigned executable was subsequently checked through its own Tauri WebView: the saved key returned `configured: true, health: connected`. No credential value was logged. This verifies authentication, not every possible speech operation.
 
 ## Separately named MCP
 
@@ -59,8 +59,12 @@ Source-health data reports broken feeds including Anthropic RSS (404), Microsoft
 
 ## Verification status
 
-Focused Deepgram tests: 20 passed. Benchmark/news focused tests: 29 passed, including hourly refresh and stale/degraded display. Final expanded focused checks, native build, production build and native acceptance are recorded in the completion checkpoint.
+Focused Deepgram tests: 20 passed. Benchmark/news focused tests: 29 passed, including hourly refresh and stale/degraded display. The final expanded run passed 67 tests across 12 files. All 45 release-manifest tests passed. Production typecheck/build passed; Vite bundling completed in 1m 28s. Native compilation passed with existing warnings.
+
+The assigned development executable needed its existing port 5174 specified during compilation; the default port 5173 produced a launch error and a native-permission origin mismatch. The corrected build passed in 3m 18s and reopened at the proper native development URL. Quick checks then returned: Deepgram connected; 633 fresh benchmark rows with `fromCache: false`; 50 news items with truthful degraded freshness. No MCP-through-chat test was performed.
+
+Source changes were committed as `909b65c5` (165 owned files, including earlier fixes). The assigned executable was updated, its previous binary preserved for rollback, and its final test process closed. Other VibeSpace instances were not stopped. The isolated connector's saved-state location remains discoverable across native reconnects.
 
 A broader app suite was started and stopped after seven failing files were recorded, including Chat/runtime areas explicitly excluded by the user. Those failures were not repaired or silently ignored. Earlier successful checks for Settings padding, 112 bundled logos, Workbench selection and Command Center availability remain historical evidence until separately exercised in the rebuilt app.
 
-Remaining acceptance: native Deepgram success, native overlay rendering, completed authenticated tunnel/ChatGPT attachment, full news-source recovery, Notes work held by another active owner, and a fully passing whole-app suite. The user will supply the tutorial video.
+Remaining acceptance: native overlay visual approval, completed authenticated tunnel/ChatGPT attachment, full news-source recovery, Notes work held by another active owner, and a fully passing whole-app suite. The user will supply the tutorial video. This chat currently exposes no VibeSpace Desktop Link tools; a local MCP test is not equivalent to a ChatGPT-side connection test. Custom ChatGPT app registration and public directory submission are separate from an OpenAI-published official plugin.
