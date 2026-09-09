@@ -16,10 +16,12 @@ export type ChatWorkspaceLayoutV1 = Readonly<{
 }>;
 
 export type AddChatPaneResult =
-  ChatWorkspaceLayoutV1 | Readonly<{ ok: false; reason: 'pane_limit' }>;
+  | ChatWorkspaceLayoutV1
+  | Readonly<{ ok: false; reason: 'pane_limit' }>;
 
 export type SaveChatWorkspaceLayoutResult =
-  Readonly<{ ok: true }> | Readonly<{ ok: false; reason: 'storage_unavailable' }>;
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; reason: 'storage_unavailable' }>;
 
 type WorkspaceStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type ResolvedWorkspaceStorage = Readonly<{
@@ -204,6 +206,11 @@ export function replacePrimaryChatPane(
   chatId: string,
 ): ChatWorkspaceLayoutV1 {
   if (layout.chatIds.includes(chatId)) return focusChatPane(layout, chatId);
+  // Opening a new chat in an existing split fills its next slot. Replacing the
+  // first pane here reordered the group and silently removed its first chat.
+  if (layout.chatIds.length > 1 && layout.chatIds.length < CHAT_WORKSPACE_PANE_LIMIT) {
+    return { ...layout, chatIds: [...layout.chatIds, chatId], focusedChatId: chatId };
+  }
   return {
     version: CHAT_WORKSPACE_LAYOUT_VERSION,
     chatIds: [chatId, ...layout.chatIds.slice(1)],

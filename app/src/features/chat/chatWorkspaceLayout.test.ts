@@ -194,7 +194,7 @@ describe('chatWorkspaceLayout', () => {
     }
   });
 
-  it('replaces the primary pane for global navigation without disturbing other bindings', () => {
+  it('fills the next free pane for global navigation without disturbing existing bindings', () => {
     expect(
       replacePrimaryChatPane(
         { version: 1, chatIds: ['chat-1', 'chat-2', 'chat-3'], focusedChatId: 'chat-2' },
@@ -202,7 +202,7 @@ describe('chatWorkspaceLayout', () => {
       ),
     ).toEqual({
       version: 1,
-      chatIds: ['chat-4', 'chat-2', 'chat-3'],
+      chatIds: ['chat-1', 'chat-2', 'chat-3', 'chat-4'],
       focusedChatId: 'chat-4',
     });
     expect(

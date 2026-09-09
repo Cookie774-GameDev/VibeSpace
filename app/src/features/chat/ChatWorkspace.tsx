@@ -9,6 +9,7 @@ import { WarmChatWelcome } from './WarmChatWelcome';
 import { TokenBossCinematic } from './token-boss/TokenBossCinematic';
 import { ChatOutputPanel } from './ChatOutputPanel';
 import { useChatPointerDrag } from './useChatPointerDrag';
+import './chat-workspace.css';
 import {
   CHAT_OPEN_BESIDE_EVENT,
   VIBESPACE_CHAT_MIME,
@@ -81,7 +82,7 @@ function NativeChatSurface({
     <>
       <div
         data-testid={`chat-conversation-region-${chatId}`}
-        className="relative flex min-h-0 flex-1 flex-col"
+        className="chat-pane-conversation relative flex min-h-0 flex-1 flex-col"
         onDragOver={(event) => {
           if (!Array.from(event.dataTransfer.types).includes(VIBESPACE_CHAT_MIME)) return;
           event.preventDefault();
@@ -192,6 +193,7 @@ function ChatPane({
       aria-label={`${title} chat pane`}
       data-testid={`chat-pane-${chatId}`}
       data-chat-id={chatId}
+      data-multi-pane={multiPane ? 'true' : 'false'}
       data-focused={focused ? 'true' : 'false'}
       data-chat-drag-over={dragOver ? 'true' : 'false'}
       onPointerDownCapture={(event) => {
@@ -201,7 +203,7 @@ function ChatPane({
         if (!isPaneActionTarget(event.target)) onFocus();
       }}
       className={cn(
-        'relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background transition-[box-shadow,border-color] duration-150 motion-reduce:transition-none',
+        'chat-workspace-pane relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background transition-[box-shadow,border-color] duration-150 motion-reduce:transition-none',
         tall && 'row-span-2',
         multiPane && 'border border-border/70',
         multiPane &&

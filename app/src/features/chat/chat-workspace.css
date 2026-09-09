@@ -1,0 +1,95 @@
+/* Size against the individual pane, never the full window. Keep chat text at
+   its normal reading size; reduce decorative space and reflow controls. */
+.chat-workspace-pane[data-multi-pane='true'] {
+  container: chat-pane / size;
+}
+
+html .chat-workspace-pane[data-multi-pane='true'] .chat-pane-conversation {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome {
+  position: relative;
+  inset: auto;
+  flex-shrink: 0;
+  margin: auto 0;
+  padding: 16px;
+  width: 100%;
+}
+
+html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome__content {
+  width: min(100%, 620px);
+  margin: auto;
+  transform: none;
+}
+
+html
+  [data-vibespace-page='chat']
+  .chat-workspace-pane[data-multi-pane='true']
+  [data-tour='chat-composer'] {
+  flex-shrink: 0;
+  margin: 6px 8px 8px;
+}
+
+@container chat-pane (max-height: 600px) {
+  html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome {
+    padding: 10px 14px;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome__art {
+    width: 84px;
+    height: 64px;
+    margin: 0 auto 4px;
+    object-fit: contain;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome h1 {
+    font-size: 24px;
+    line-height: 1.15;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome__content > p {
+    margin: 5px 0 10px;
+    font-size: 14px;
+    line-height: 1.35;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome__prompts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] [data-warm-quick-prompt] {
+    grid-template-columns: 24px minmax(0, 1fr);
+    min-height: 44px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    box-shadow: none;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] [data-warm-quick-prompt] > svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] [data-warm-quick-prompt] strong {
+    font-size: 13px;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] [data-warm-quick-prompt] small {
+    font-size: 11px;
+  }
+}
+
+@container chat-pane (max-width: 760px) {
+  html .chat-workspace-pane[data-multi-pane='true'] [data-composer-toolbar] {
+    align-items: flex-end;
+  }
+
+  html .chat-workspace-pane[data-multi-pane='true'] [data-composer-toolbar] > div:first-child {
+    flex-wrap: wrap;
+    overflow: visible;
+    row-gap: 3px;
+  }
+}

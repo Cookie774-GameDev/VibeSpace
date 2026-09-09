@@ -145,6 +145,9 @@ describe('ChatWorkspace', () => {
     render(<WorkspaceHarness initial={layout('chat-1', 'chat-2', 'chat-3', 'chat-4')} />);
 
     expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(4);
+    for (const pane of screen.getAllByTestId(/^chat-pane-/)) {
+      expect(pane.getAttribute('data-multi-pane')).toBe('true');
+    }
     expect(screen.queryByTestId('chat-workspace-empty-cell')).toBeNull();
     for (const chatId of ['chat-1', 'chat-2', 'chat-3', 'chat-4']) {
       expect(screen.getByTestId(`thread-${chatId}`).getAttribute('data-chat-id')).toBe(chatId);
