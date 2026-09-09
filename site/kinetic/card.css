@@ -1,0 +1,20 @@
+#many-minds .many-head{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(280px,360px);column-gap:clamp(28px,4vw,80px);row-gap:30px;align-items:start}
+#many-minds .many-head>div:first-child{grid-column:1;grid-row:1}
+#many-minds .many-head #manyTitle{font-size:clamp(64px,7.2vw,138px);max-width:100%;line-height:.92}
+#many-minds .many-head>.body-copy{grid-column:1;grid-row:2;margin:0!important;max-width:850px!important;width:auto!important;align-self:start;font-size:clamp(16px,1.3vw,23px)}
+#many-minds .kinetic-brand-card{grid-column:2;grid-row:1/span 2;align-self:center;width:100%;aspect-ratio:808/1435;position:relative;isolation:isolate;background:#000;border:1px solid #ffffff15;border-radius:18px;overflow:hidden;color:#fff;box-shadow:0 20px 60px #0003}
+.kinetic-brand-card .kinetic-wordmark{position:absolute;top:4%;left:8%;margin:0;font-family:Arial,sans-serif;font-size:clamp(26px,2.4vw,39px);font-weight:700;letter-spacing:-1.8px;color:#fff;z-index:2}
+.kinetic-brand-card h3{position:absolute;top:15%;left:8%;right:6%;margin:0;font:500 clamp(22px,1.7vw,28px)/1.08 Arial,sans-serif;letter-spacing:-1px;color:#fff;z-index:2}
+.kinetic-brand-card canvas{position:absolute;left:0;top:30.3%;width:100%;height:69.7%;pointer-events:none}
+.kinetic-brand-card button{position:absolute;right:15px;bottom:12px;z-index:3;background:#000c;color:#ddd;border:1px solid #ffffff30;border-radius:20px;font:10px/1.3 Arial,sans-serif;padding:7px 11px;cursor:pointer}
+.kinetic-brand-card button:focus-visible{outline:2px solid #e7865d;outline-offset:3px}
+@media(max-width:900px){#many-minds .many-head{grid-template-columns:minmax(0,1fr);gap:28px}#many-minds .many-head #manyTitle{font-size:clamp(48px,10vw,88px)}#many-minds .kinetic-brand-card{grid-column:1;grid-row:3;max-width:360px;justify-self:center}.kinetic-brand-card .kinetic-wordmark{font-size:35px}.kinetic-brand-card h3{font-size:25px}}
+
+#many-minds .many-head{max-width:none!important;width:100%} 
+
+
+#many-minds .many-head{width:calc(100% - var(--gutter))} 
+
+#many-minds .kinetic-brand-card{background:linear-gradient(145deg,#0b0b0a,#100d0b);border-color:rgba(231,134,93,.2);box-shadow:0 16px 45px #0002}
+.kinetic-brand-card .kinetic-wordmark,.kinetic-brand-card h3{color:var(--paper,#eee9dd)}
+.kinetic-brand-card button{color:#d3b79e;border-color:#e7865d40;background:#100d0b}
