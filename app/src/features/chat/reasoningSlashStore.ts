@@ -89,7 +89,7 @@ export function writeChatReasoningEffort(
 ): void {
   const state = readState(storage);
   state.chats[chatId] = {
-    mode: 'normal',
+    mode: normalizeReasoningPreference(state.chats[chatId]).mode,
     effortOverride,
     updatedAt: nextUpdatedAt(),
   };

@@ -52,6 +52,23 @@ describe('per-chat reasoning slash preferences', () => {
     });
   });
 
+  it.each(['token-saver', 'token-final-boss'] as const)(
+    'keeps %s selected when the model effort changes or resets',
+    (mode) => {
+      writeChatReasoningMode('chat-mode', mode, localStorage);
+      writeChatReasoningEffort('chat-mode', 'low', localStorage);
+      expect(readChatReasoningPreference('chat-mode', localStorage)).toEqual({
+        mode,
+        effortOverride: 'low',
+      });
+      writeChatReasoningEffort('chat-mode', null, localStorage);
+      expect(readChatReasoningPreference('chat-mode', localStorage)).toEqual({
+        mode,
+        effortOverride: null,
+      });
+    },
+  );
+
   it('keeps persistence bounded to the 128 most recently written chats', () => {
     for (let index = 0; index < 140; index += 1) {
       writeChatReasoningEffort(`chat-${index}`, 'low', localStorage);

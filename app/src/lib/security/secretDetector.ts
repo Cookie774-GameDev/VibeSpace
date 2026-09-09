@@ -105,6 +105,22 @@ function entropy(value: string): number {
   return result;
 }
 
+function isHighEntropyCandidate(value: string): boolean {
+  const characterClasses = [
+    /[A-Z]/u.test(value),
+    /[a-z]/u.test(value),
+    /[0-9]/u.test(value),
+    /[+/_=-]/u.test(value),
+  ].filter(Boolean).length;
+  return (
+    value.length >= 32 &&
+    !/^[a-f0-9]+$/iu.test(value) &&
+    !/^([A-Za-z0-9])\1+$/u.test(value) &&
+    characterClasses >= 3 &&
+    entropy(value) >= 4.1
+  );
+}
+
 function highEntropyCandidates(
   text: string,
   limit: number,
@@ -114,21 +130,17 @@ function highEntropyCandidates(
   for (const match of text.matchAll(pattern)) {
     const value = match[0];
     const start = match.index;
-    const characterClasses = [
-      /[A-Z]/u.test(value),
-      /[a-z]/u.test(value),
-      /[0-9]/u.test(value),
-      /[+/_=-]/u.test(value),
-    ].filter(Boolean).length;
-    if (
-      start === undefined ||
-      /^[a-f0-9]+$/iu.test(value) ||
-      /^([A-Za-z0-9])\1+$/u.test(value) ||
-      characterClasses < 3 ||
-      entropy(value) < 4.1
-    ) {
+    if (start === undefined || !isHighEntropyCandidate(value)) {
       continue;
     }
+    // Separators can make an ordinary absolute Windows path look like one
+    // random token. Secret-like path components still require redaction.
+    if (
+      /^[A-Za-z]:$/u.test(text.slice(Math.max(0, start - 2), start)) &&
+      value.startsWith('/') &&
+      !value.split('/').some(isHighEntropyCandidate)
+    )
+      continue;
     findings.push({
       secretClass: 'high_entropy_candidate',
       start,

@@ -85,6 +85,15 @@ describe('unified secret detector', () => {
     ]);
   });
 
+  it('preserves ordinary Windows paths without exempting secrets inside paths', () => {
+    for (const drive of ['C', 'D']) {
+      const path = `${drive}:/Users/example/VibeSpace-UnifiedChungus-Final/work/rlm-connected-20260909/terminal-project/normal`;
+      expect(applySecretPolicy(path, 'redact').text).toBe(path);
+      expect(hasDetectedSecret(`${path}/${GITHUB_TOKEN_FIXTURE}`)).toBe(true);
+      expect(hasDetectedSecret(`${path}/mJ8vQ2xN7pL4sR9tW3yK6dF1hB5cG0zA`)).toBe(true);
+    }
+  });
+
   it('rejects a truncated private-key block before it can be persisted', () => {
     const text = '-----BEGIN PRIVATE KEY-----\ntruncated-key-material';
     expect(detectSecrets(text)).toEqual([
