@@ -2638,7 +2638,16 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         part.error === 'Tool failed' &&
         failedContextCalls.has(part.call_id),
     );
-    if (contextGatewayFailed) {
+    const contextGatewayRecovered = publicTimeline.timeline.some(
+      (part) =>
+        part.kind === 'tool_result' &&
+        !part.error &&
+        recordOf(part.result)?.status === 'completed' &&
+        failedContextCalls.has(part.call_id),
+    );
+    // Keep rejected calls visible, but do not discard a canonical final answer
+    // merely because an earlier bounded Context operation failed.
+    if (contextGatewayFailed && !contextGatewayRecovered) {
       failureStage = 'context_gateway';
       throw new Error('OpenCode Context Gateway failed safely.');
     }

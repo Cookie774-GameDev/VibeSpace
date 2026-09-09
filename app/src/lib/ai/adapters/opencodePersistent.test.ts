@@ -1852,6 +1852,46 @@ describe('persistent OpenCode live authority', () => {
     expect(JSON.stringify(events)).not.toMatch(/must-not-survive|private/iu);
   });
 
+  it('preserves canonical completion after a failed Context call and a successful retry', async () => {
+    configureManagedQuestionTransport([], {
+      sessionStatuses: [null],
+      persistedMessages: [{
+        info: {
+          id: 'message-context-recovered', role: 'assistant', providerID: 'openai',
+          modelID: 'gpt-question-test', time: { completed: 1 }, finish: 'stop',
+        },
+        parts: [
+          ...[false, true].map((ok, index) => ({
+            id: `part-recovered-${index}`, sessionID: 'ses_question_exact',
+            messageID: 'message-context-recovered', type: 'tool', tool: 'vibespace_context',
+            callID: `private-recovered-${index}`,
+            state: {
+              status: 'completed', input: { operation: 'open' },
+              output: JSON.stringify({ requestId: `private-recovery-request-${index}`,
+                ok, code: ok ? 'ok' : 'tool_failed', message: ok ? 'The semantic tool completed.' : 'The semantic tool could not be completed.',
+                ...(ok ? { data: { text: 'Verified source evidence.' } } : {}),
+              }),
+            },
+          })),
+          { id: 'part-recovered-final', sessionID: 'ses_question_exact',
+            messageID: 'message-context-recovered', type: 'text',
+            text: 'The retry returned verified source evidence.',
+          },
+        ],
+      }],
+    });
+    const events: ProviderEvent[] = [];
+    for await (const event of openCodePersistentAdapter.send!(questionProviderRequest('request-context-recovered'))) {
+      events.push(event);
+    }
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'tool', name: 'vibespace_context', status: 'failed' }),
+      expect.objectContaining({ type: 'tool', name: 'vibespace_context', status: 'completed' }),
+      expect.objectContaining({ type: 'text', delta: 'The retry returned verified source evidence.' }),
+    ]));
+    expect(events.at(-1)).toMatchObject({ type: 'done' });
+  });
+
   it('fails the protected turn after projecting a failed Context Gateway envelope truthfully', async () => {
     configureManagedQuestionTransport([], {
       sessionStatuses: [null],

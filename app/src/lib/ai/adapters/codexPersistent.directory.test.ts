@@ -63,9 +63,10 @@ describe('projectless Codex requests', () => {
       for (const method of ['thread/start', 'turn/start']) {
         expect(writes.find((message) => message.method === method)?.params.cwd).toBe(cwd);
       }
-      expect(writes.find((message) => message.method === 'turn/start')?.params.input[0].text).toBe(
-        'System instructions.\n\nHello\nthere',
+      expect(writes.find((message) => message.method === 'thread/start')?.params.developerInstructions).toContain(
+        'System instructions.',
       );
+      expect(writes.find((message) => message.method === 'turn/start')?.params.input[0].text).toBe('Hello\nthere');
       expect(events).toContainEqual(expect.objectContaining({ type: 'done' }));
       expect(stop).toHaveBeenCalledWith('generation');
     },
