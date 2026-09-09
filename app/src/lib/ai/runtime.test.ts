@@ -2330,15 +2330,15 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     ]);
   });
 
-  it('routes a negated prior-pointer expand request through ordinary safe research', () => {
+  it('preserves a negated prior-pointer request without inventing a retrieval', () => {
     const content =
       'Using only the exact six search-result pointers already returned in this chat for shard-0000.txt, shard-0025.txt, shard-0047.txt, shard-0048.txt, shard-0063.txt, and shard-0095.txt, do not make exactly six vibespace_context expand calls, each with beforeBytes=256 and afterBytes=0. Do not call search.';
     const prepared = String(
       prepareOpenCodeMessagesForInteractionMode([{ role: 'user', content }])[0]?.content,
     );
 
-    expect(prepared).not.toBe(content);
-    expect(prepared).toContain('"operation":"investigate"');
+    expect(prepared).toBe(content);
+    expect(prepared).not.toContain('"operation":"investigate"');
     expect(prepared).not.toContain('"operation":"expand"');
   });
 
@@ -4378,6 +4378,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   });
 
   it('uses an explicit leading read root without injecting unrelated project knowledge', async () => {
+    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek fixture', variants: ['high'] }]);
     const openCodeConnection = PROVIDER_CONNECTIONS.find(
       (connection) => connection.id === 'opencode-cli',
     )!;
@@ -6968,6 +6969,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   }, 15_000);
 
   it('fails an unsafe grounded audit closed through the installed kernel before any preview is visible', async () => {
+    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek fixture', variants: ['medium'] }]);
     const openCodeConnection = PROVIDER_CONNECTIONS.find(
       (connection) => connection.id === 'opencode-cli',
     )!;
@@ -7451,7 +7453,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const liveCategories: string[] = [];
     const unsubscribeActivity = useChatActivityStore.subscribe((state) => {
       const runningAgent = state.eventsByChat[harness.chatId]?.find(
-        (event) => event.kind === 'agent' && event.status === 'running',
+        (event) => event.kind === 'agent' && event.agentId === protectedJarvis.id && event.status === 'running',
       );
       if (runningAgent?.category && liveCategories.at(-1) !== runningAgent.category) {
         liveCategories.push(runningAgent.category);
