@@ -3,6 +3,7 @@ import { MessageSquare, MoreHorizontal, Pin, PinOff } from 'lucide-react';
 import type { Chat } from '@/types/chat';
 import { cn } from '@/lib/utils';
 import { isChatPinned } from '@/features/chat/chatPin';
+import { useChatPointerDrag } from '@/features/chat/useChatPointerDrag';
 import {
   ChatListActivityIndicator,
   type ChatActivityEvent,
@@ -47,12 +48,13 @@ export function ChatNavRow({
   const label = (chat.title || 'Untitled chat').trim() || 'Untitled chat';
   const pinned = isChatPinned(chat);
   const dragProps = {
-    draggable: true,
+    ...useChatPointerDrag(chat),
     'data-testid': `chat-nav-row-${String(chat.id)}`,
     onDragStart: (event: React.DragEvent<HTMLElement>) => {
       writeChatDragPayload(event.dataTransfer, chat);
       event.dataTransfer.effectAllowed = 'link';
     },
+    style: { userSelect: 'none' as const },
   };
 
   if (!navOpen) {
