@@ -650,9 +650,10 @@ fn scoped_provider_config(
         for (name, action) in [("edit", edit), ("bash", bash), ("task", task)] {
             permission.insert(name.to_string(), json!(action));
         }
-        for name in ["external_directory", "doom_loop"] {
-            permission.insert(name.to_string(), json!("deny"));
-        }
+        // Outside-project references require an observable per-directory approval.
+        // A blanket deny prevents the UI from ever asking the user.
+        permission.insert("external_directory".to_string(), json!("ask"));
+        permission.insert("doom_loop".to_string(), json!("deny"));
         for name in [
             "terminal_open",
             "terminal_focus",
@@ -678,7 +679,6 @@ fn scoped_provider_config(
             "description": description,
             "mode": "primary",
             "prompt": "Follow the supplied protected system contract and current user request. Use enabled tools directly. Never describe disabled tools. A question answer is clarification only and never grants tool permission.",
-            "steps": 12,
             "permission": Value::Object(permission)
         })
     };
@@ -2805,7 +2805,7 @@ mod tests {
         let reviewer = &config["agent"]["vibespace-reviewer"];
         assert_eq!(reviewer["mode"], "subagent");
         assert_eq!(reviewer["permission"]["bash"], "ask");
-        for capability in ["*", "edit", "task", "external_directory", "terminal_spawn", "terminal_write"] {
+        for capability in ["*", "edit", "task", "terminal_spawn", "terminal_write"] {
             assert_eq!(reviewer["permission"][capability], "deny");
         }
         assert_eq!(reviewer["permission"]["read"]["**/.env"], "deny");
@@ -2814,6 +2814,12 @@ mod tests {
         assert_eq!(config["permission"]["todoread"], "allow");
         assert_eq!(config["permission"]["todowrite"], "allow");
         assert_eq!(config["permission"]["external_directory"], "deny");
+        for name in ["vibespace", "vibespace-readonly", "vibespace-write", "vibespace-write-auto", "vibespace-full", "vibespace-full-auto", "vibespace-reviewer"] {
+            assert_eq!(config["agent"][name]["permission"]["external_directory"], "ask", "{name} must surface an approval for outside-project references");
+            assert_eq!(config["agent"][name]["permission"]["doom_loop"], "deny");
+            assert!(config["agent"][name].get("steps").is_none(), "{name} must not truncate a long task at an app-defined step ceiling");
+            assert_eq!(config["agent"][name]["permission"]["read"]["**/.env"], "deny");
+        }
         assert_eq!(config["permission"]["terminal_list"], "allow");
         assert_eq!(config["permission"]["terminal_write"], "ask");
         assert_eq!(config["permission"]["vibespace_context"], "allow");

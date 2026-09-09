@@ -312,6 +312,7 @@ import {
   optimizeChatMessages,
   optimizationModePolicy,
   reasoningPreferenceForOptimization,
+  activeTokenOptimizationMode,
   reconcileTokenUsage,
   tokenOptimizationReceiptToTelemetry,
   tokenUsageReceiptToTelemetry,
@@ -5113,7 +5114,13 @@ export function startRuntimeListener(
 
     const projectId = chatRecord?.project_id ?? authState.projectId;
     const pluginAccountId = resolveAccountIdentity(authState)?.accountId ?? '';
-    const tokenOptimizationMode = detail.tokenOptimizationMode ?? 'off';
+    const requestedOptimizationMode = detail.tokenOptimizationMode ?? 'off';
+    const baseReasoningPreference =
+      detail.reasoningPreference ?? readChatReasoningPreference(String(chatId));
+    const tokenOptimizationMode = activeTokenOptimizationMode(
+      requestedOptimizationMode,
+      baseReasoningPreference.mode,
+    );
     const activity = useChatActivityStore.getState();
     const agentActivityId = createChatActivityId('agent');
     const hasAttachedFiles =
@@ -5635,7 +5642,9 @@ export function startRuntimeListener(
           });
         }
       }
-      if (!explicitReadRoot) {
+      // Selection and selected skills already travel with the turn. The entire
+      // connectivity catalog is useful only when the user asks about it.
+      if (!explicitReadRoot && /\b(?:models?|providers?|skills?|connections?)\b/iu.test(text)) {
         try {
           modelSkillInventoryContext = getJarvisConnectivityInventoryBlock(
             authState,
@@ -5825,10 +5834,8 @@ export function startRuntimeListener(
       dispatchKernelSmokeRuntimeStage('validated');
       useAllAboutMeStore.getState().recordUserMessage();
     }
-    const baseReasoningPreference =
-      detail.reasoningPreference ?? readChatReasoningPreference(String(chatId));
     const effectiveReasoningPreference = reasoningPreferenceForOptimization(
-      tokenOptimizationMode,
+      baseReasoningPreference.mode === 'token-final-boss' ? 'final_boss' : requestedOptimizationMode,
       baseReasoningPreference,
     );
     let reasoningPolicy: ReturnType<typeof resolveReasoningPolicy> | null = null;

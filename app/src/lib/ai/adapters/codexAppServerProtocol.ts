@@ -24,6 +24,7 @@ export interface CodexThreadRequestInput {
   requestId: string;
   identity: Readonly<CodexBackendIdentity>;
   mode: CodexExecutionMode;
+  developerInstructions?: string;
 }
 
 export interface CodexThreadResumeRequestInput extends CodexThreadRequestInput {
@@ -250,6 +251,7 @@ export function buildCodexThreadStartRequest(input: Readonly<CodexThreadRequestI
         : {}),
       ephemeral: false,
       threadSource: 'vibespace',
+      ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
     },
   };
 }
@@ -275,6 +277,7 @@ export function buildCodexThreadResumeRequest(input: Readonly<CodexThreadResumeR
         ? { config: configFor(identity, policy.sandboxPolicy) }
         : {}),
       excludeTurns: true,
+      ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
     },
   };
 }

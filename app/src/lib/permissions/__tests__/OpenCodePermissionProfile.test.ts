@@ -16,7 +16,7 @@ describe('buildEffectivePermissionProfile', () => {
         });
         expect(profile.gateway.projectRoot).toBe('C:/work/project');
         expect(profile.openCode.read['C:/work/project/**']).toBe('allow');
-        expect(profile.openCode.external_directory).toBe('deny');
+        expect(profile.openCode.external_directory).toBe('ask');
         expect(profile.gateway.hardDenyExternalDirectory).toBe(true);
       }
     }
@@ -108,7 +108,7 @@ describe('buildEffectivePermissionProfile', () => {
     expect(profile.openCode.read['**/.env.*']).toBe('deny');
     expect(profile.openCode.read['**/.ssh/**']).toBe('deny');
     expect(profile.openCode.read['**/*.key']).toBe('deny');
-    expect(profile.openCode.external_directory).toBe('deny');
+    expect(profile.openCode.external_directory).toBe('ask');
     expect(profile.openCode.doom_loop).toBe('deny');
   });
 });

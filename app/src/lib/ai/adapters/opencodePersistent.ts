@@ -1507,6 +1507,8 @@ function persistedAssistantTurnSettled(messages: readonly OpenCodeMessageRecord[
     if (cleanIdentifier(message.info?.role, 32)?.toLocaleLowerCase('en-US') !== 'assistant') {
       continue;
     }
+    // A completed tool-call step is not completion of the user's turn.
+    if (message.info?.finish === 'tool-calls') return false;
     const completed = recordOf(message.info?.time)?.completed;
     if (completed === undefined || completed === null) return false;
     return !(message.parts ?? []).some((part) => {
@@ -2554,10 +2556,10 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         };
         return;
       }
-      if (event.type === 'session.idle') done = true;
+      if (event.type === 'session.idle') pendingPoll = schedulePoll(0);
       if (event.type === 'session.status') {
         const status = statusType(event.properties?.status);
-        if (status === 'idle') done = true;
+        if (status === 'idle') pendingPoll = schedulePoll(0);
         if (status === 'error') {
           finishReason = 'error';
           reportPersistentTurnFailure('provider_reported');

@@ -56,13 +56,21 @@ export function TokenOptimizationReceiptView({
         <div>
           <p className="token-opt-eyebrow">Optimization receipt</p>
           <h2 id="token-opt-receipt-title">
-            Estimated {formatCount(receipt.estimatedTokensSaved)} tokens saved
+            Estimated {formatCount(receipt.estimatedTokensSaved)} input tokens trimmed
           </h2>
         </div>
         <span className="token-opt-model-lock">
           {receipt.modelChanged ? 'Model changed' : 'Model unchanged'}
         </span>
       </header>
+
+      {receipt.mode === 'saver' ? (
+        <p>
+          Ponytail Full guides this turn. These counts measure local context trimming only;
+          they do not measure Ponytail's effect on tool calls or output. Zero means no input
+          was removed, not that Ponytail was disabled. Total savings require a comparable run.
+        </p>
+      ) : null}
 
       <dl className="token-opt-metrics">
         <div>

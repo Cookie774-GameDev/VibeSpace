@@ -1,6 +1,6 @@
 const EXPLICIT_CONTEXT_TOOL = /\b(?:vibespace_context|context map)\b/i;
 const MUTATING_REQUEST =
-  /\b(?:write|create|save|delete|remove|rename|move|edit|modify|change|run|execute|launch|start|command|terminal)\b/i;
+  /\b(?:write|create|make|build|generate|save|delete|remove|rename|move|edit|modify|change|run|execute|launch|start|command|terminal)\b/i;
 const NEGATED_MUTATING_SEGMENT =
   /\b(?:do\s+not|don't|never|avoid|without)\b(?:(?![.;\r\n]|\b(?:but|however|instead|then)\b).){0,512}/giu;
 const READ_OR_EVIDENCE_REQUEST =

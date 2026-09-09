@@ -5879,12 +5879,13 @@ export function Composer({
                     open={modelPickerOpen}
                     onOpenChange={setModelPickerOpen}
                     initialEffort={reasoningPreference.effortOverride ?? 'auto'}
+                    reasoningMode={reasoningPreference.mode}
                     pickerRef={modelPickerRef}
                     compact={compact}
                     groups={accessibleChatModels.groups}
                     flatOptions={accessibleChatModels.flatOptions}
                     onSelect={(next, effort) => {
-                      if (effort) {
+                      if (effort && reasoningPreference.mode === 'normal') {
                         writeChatReasoningEffort(String(chatId), effort === 'auto' ? null : effort);
                         setReasoningPreference(readChatReasoningPreference(String(chatId)));
                       }
@@ -6206,6 +6207,7 @@ interface ModelPickerProps {
   onOpenChange: (open: boolean) => void;
   onSelect: (selection: ChatModelSelection, effort?: EffortLabel) => void;
   initialEffort: EffortLabel;
+  reasoningMode: ReasoningMode;
   pickerRef: React.RefObject<ModelPickerTypeaheadRef | null>;
   compact?: boolean;
   groups: ModelPickerGroup[];
@@ -6218,7 +6220,8 @@ function ModelPicker({
   open,
   onOpenChange,
   onSelect,
-  initialEffort,
+  initialEffort: manualEffort,
+  reasoningMode,
   pickerRef,
   compact = false,
   groups,
@@ -6233,7 +6236,11 @@ function ModelPicker({
   const activeModel = selection.mode === 'single' ? selection.modelId : undefined;
   const activeRoute = flatOptions.flatMap((option) => option.alternativeRoutes ?? [option])
     .find((option) => option.id === selectionOptionId(selection));
-  const effortLabel = listEffortOptions((activeRoute?.variants ?? []).map((id) => ({ id })))
+  const effortOptions = listEffortOptions((activeRoute?.variants ?? []).map((id) => ({ id })));
+  const initialEffort = reasoningMode === 'token-final-boss'
+    ? effortOptions.at(-1)?.label ?? 'auto'
+    : manualEffort;
+  const effortLabel = effortOptions
     .find((option) => option.label === initialEffort)?.upstreamEffort ?? initialEffort;
 
   const flatOptionIds = useMemo(

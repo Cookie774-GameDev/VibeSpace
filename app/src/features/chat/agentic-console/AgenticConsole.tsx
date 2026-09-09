@@ -510,7 +510,8 @@ function LiveTurnStatus({ event, compact }: { event: ChatActivityEvent; compact?
     filePath: event.filePath,
   });
   if (!motion) return null;
-  const publicDetail = event.detail ? sanitizeConsoleText(event.detail, 320).trim() : '';
+  const thinking = event.category === 'thinking';
+  const publicDetail = !thinking && event.detail ? sanitizeConsoleText(event.detail, 320).trim() : '';
 
   return (
     <div
@@ -522,7 +523,7 @@ function LiveTurnStatus({ event, compact }: { event: ChatActivityEvent; compact?
     >
       <PerceptibleAgentMotionIndicator motion={motion} compact={compact} />
       <span className="agentic-live-status__text">
-        {event.title}
+        {thinking ? 'Jarvis is thinking…' : event.title}
         {publicDetail ? ` · ${publicDetail}` : ''}
       </span>
     </div>

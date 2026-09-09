@@ -101,9 +101,7 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 }
 
 function promptText(request: Readonly<ProviderRequest>, newThread = false): string {
-  const system = request.systemPrompt?.trim();
-  const prompt = newThread ? request.historyPrompt?.trim() || request.prompt : request.prompt;
-  return system ? system + '\n\n' + prompt : prompt;
+  return newThread ? request.historyPrompt?.trim() || request.prompt : request.prompt;
 }
 
 function effort(request: Readonly<ProviderRequest>): string | null {
@@ -272,11 +270,13 @@ async function* sendCodexRequest(
           threadId: request.sessionId,
           identity: exactIdentity,
           mode,
+          developerInstructions: request.systemPrompt,
         })
       : buildCodexThreadStartRequest({
           requestId: threadRequestId,
           identity: exactIdentity,
           mode,
+          developerInstructions: request.systemPrompt,
         });
     await dependencies.write(generation, threadRequest);
     let threadResponse = await responseFrame(reader, threadRequestId);
@@ -291,6 +291,7 @@ async function* sendCodexRequest(
       threadRequestId = requestId(request.requestId, 'thread');
       await dependencies.write(generation, buildCodexThreadStartRequest({
         requestId: threadRequestId, identity: exactIdentity, mode,
+        developerInstructions: request.systemPrompt,
       }));
       threadResponse = await responseFrame(reader, threadRequestId);
       resumed = false;

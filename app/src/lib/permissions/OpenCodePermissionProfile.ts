@@ -188,7 +188,8 @@ export function buildEffectivePermissionProfile(
       skill: 'allow',
       webfetch: 'allow',
       websearch: 'allow',
-      external_directory: 'deny',
+      // Native tools request a scoped approval; gateway tools remain project-bound.
+      external_directory: 'ask',
       doom_loop: 'deny',
     },
     gateway: {

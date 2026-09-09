@@ -80,7 +80,9 @@ describe('Token Optimize standalone UI', () => {
     render(<TokenOptimizationReceiptView receipt={receipt} />);
     expect(screen.getByText('Why included')).toBeTruthy();
     expect(screen.getByText(/protected content/i)).toBeTruthy();
-    expect(screen.getByText(/400 tokens saved/i)).toBeTruthy();
+    expect(screen.getByText(/400 input tokens trimmed/i)).toBeTruthy();
+    expect(screen.getByText(/Ponytail Full guides this turn/)).toBeTruthy();
+    expect(screen.getByText(/Zero means no input was removed, not that Ponytail was disabled/)).toBeTruthy();
     expect(document.body.textContent).not.toContain('raw private text');
   });
 });

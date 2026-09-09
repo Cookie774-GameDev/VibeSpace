@@ -185,7 +185,7 @@ function configureManagedQuestionTransport(
     if (path.startsWith('/permission?')) return jsonResponse(options.pendingPermissions ?? []);
     if (path.includes('/permissions/')) return jsonResponse(true);
     if (path.startsWith('/session/status')) {
-      const statuses = options.sessionStatuses ?? ['busy'];
+      const statuses = options.sessionStatuses ?? [events.some(event => event.type === 'session.idle') ? 'idle' : 'busy'];
       const status = statuses[Math.min(statusReadIndex, statuses.length - 1)]!;
       statusReadIndex += 1;
       return jsonResponse(status === null ? {} : { ses_question_exact: { type: status } });
@@ -681,7 +681,6 @@ describe('persistent OpenCode question transport authority', () => {
           },
         },
       },
-      questionAskedEvent(),
       { type: 'session.idle' },
     ]);
     const request = questionProviderRequest('request-gateway-observed');
@@ -2157,6 +2156,77 @@ describe('persistent OpenCode live authority', () => {
     expect(dispatched).toBe(true);
     expect(result).toBe('OpenCode runtime disconnected. Retry to reconnect.');
     expect(observed).not.toContainEqual(expect.objectContaining({ type: 'done' }));
+  });
+
+  it('keeps an idle notification from ending an intermediate tool-call step', async () => {
+    const step = {
+      info: {
+        id: 'step-read',
+        role: 'assistant',
+        providerID: 'openai',
+        modelID: 'gpt-question-test',
+        finish: 'tool-calls',
+        time: { completed: 1 },
+      },
+      parts: [
+        { type: 'text', text: 'Reading the references.' },
+        {
+          type: 'tool',
+          tool: 'read',
+          callID: 'read-ref',
+          state: {
+            status: 'completed',
+            input: { filePath: 'C:/project/notes.md' },
+            output: 'reference',
+          },
+        },
+      ],
+    };
+    const running = {
+      info: {
+        id: 'step-build',
+        role: 'assistant',
+        providerID: 'openai',
+        modelID: 'gpt-question-test',
+      },
+      parts: [
+        {
+          type: 'tool',
+          tool: 'write',
+          callID: 'write-html',
+          state: {
+            status: 'running',
+            input: { filePath: 'C:/project/index.html' },
+          },
+        },
+      ],
+    };
+    const completed = {
+      info: { ...running.info, finish: 'stop', time: { completed: 2 } },
+      parts: [{ type: 'text', text: 'The HTML is ready.' }],
+    };
+    configureManagedQuestionTransport(
+      [{ type: 'session.idle', properties: { sessionID: 'ses_question_exact' } }],
+      {
+        sessionStatuses: ['idle'],
+        persistedMessagePolls: [[], [step], [step, running], [step, completed]],
+      },
+    );
+    const events: ProviderEvent[] = [];
+    for await (const event of openCodePersistentAdapter.send!(
+      questionProviderRequest(
+        'idle-between-tool-steps',
+        new AbortController().signal,
+      ),
+    ))
+      events.push(event);
+    expect(
+      events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.delta)
+        .join(''),
+    ).toContain('The HTML is ready.');
+    expect(events.at(-1)).toMatchObject({ type: 'done' });
   });
 
   it('reconciles ordered persisted text and tool parts before completing on an immediate idle event', async () => {

@@ -1,6 +1,14 @@
 import type { ReasoningMode, ReasoningPreference } from '@/lib/ai/reasoningControls';
 import type { TokenOptimizationMode } from './contracts';
 
+/** Final Boss uses the provider's output allowance, without compression or a savings receipt. */
+export function activeTokenOptimizationMode(
+  mode: TokenOptimizationMode,
+  reasoningMode: ReasoningMode,
+): TokenOptimizationMode {
+  return mode === 'final_boss' || reasoningMode === 'token-final-boss' ? 'off' : mode;
+}
+
 const REASONING_MODE_BY_OPTIMIZATION: Readonly<
   Record<Exclude<TokenOptimizationMode, 'off'>, ReasoningMode>
 > = Object.freeze({

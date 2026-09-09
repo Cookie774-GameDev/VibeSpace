@@ -318,59 +318,33 @@ fn reconcile_latest(app: &AppHandle) -> Result<(), String> {
     ensure_windows(app, &snapshot, &ready)
 }
 
-// Follow the existing detached Pet host contract: finish the originating IPC,
-// then materialize the native WebView on the event loop. Never await its build
-// from the command that requested it. Coalesce changes to the latest intent.
+// WebView2 construction must run outside an event-loop callback on Windows.
+// Tauri's builder dispatches the native operations itself. Coalesce updates
+// while it builds, then reconcile the latest accepted intent.
 fn schedule_reconcile(app: &AppHandle) -> Result<(), String> {
-    if app
-        .state::<JarvisAmbientOverlayState>()
-        .2
-        .swap(true, Ordering::AcqRel)
-    {
+    if app.state::<JarvisAmbientOverlayState>().2.swap(true, Ordering::AcqRel) {
         return Ok(());
     }
     let worker_app = app.clone();
     std::thread::Builder::new()
         .name("jarvis-aura-reconcile".into())
         .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(32));
-            let event_app = worker_app.clone();
-            if let Err(error) = worker_app.run_on_main_thread(move || {
-                let intent = || {
-                    event_app
-                        .state::<JarvisAmbientOverlayState>()
-                        .0
-                        .lock()
-                        .ok()
-                        .map(|inner| (inner.snapshot.revision, inner.ready.clone()))
-                };
-                let intent_before = intent();
-                if let Err(error) = reconcile_latest(&event_app) {
-                    eprintln!("[jarvis-aura] reconciliation failed: {error}");
-                }
-                // WebView2 construction can pump nested native events. Keep
-                // coalescing throughout the build, never reenter its mutex.
-                event_app
-                    .state::<JarvisAmbientOverlayState>()
-                    .2
-                    .store(false, Ordering::Release);
-                let intent_after = intent();
-                if intent_before != intent_after {
-                    let _ = schedule_reconcile(&event_app);
-                }
-            }) {
-                worker_app
-                    .state::<JarvisAmbientOverlayState>()
-                    .2
-                    .store(false, Ordering::Release);
-                eprintln!("[jarvis-aura] event-loop dispatch failed: {error}");
+            let intent = || {
+                worker_app.state::<JarvisAmbientOverlayState>().0.lock().ok()
+                    .map(|inner| (inner.snapshot.revision, inner.ready.clone()))
+            };
+            let intent_before = intent();
+            if let Err(error) = reconcile_latest(&worker_app) {
+                eprintln!("[jarvis-aura] reconciliation failed: {error}");
+            }
+            worker_app.state::<JarvisAmbientOverlayState>().2.store(false, Ordering::Release);
+            if intent_before != intent() {
+                let _ = schedule_reconcile(&worker_app);
             }
         })
         .map(|_| ())
         .map_err(|_| {
-            app.state::<JarvisAmbientOverlayState>()
-                .2
-                .store(false, Ordering::Release);
+            app.state::<JarvisAmbientOverlayState>().2.store(false, Ordering::Release);
             "jarvis_ambient_reconcile_worker_failed".to_owned()
         })
 }
@@ -509,6 +483,11 @@ mod tests {
             .expect("renderer-ready command exists");
         let tests_start = source.rfind("#[cfg(test)]").expect("tests are bounded");
 
+        let scheduler = source.split("fn schedule_reconcile(app:").nth(1).unwrap()
+            .split("#[tauri::command]").next().unwrap();
+        assert!(scheduler.contains(".spawn(move ||"));
+        assert!(scheduler.contains("reconcile_latest(&worker_app)"));
+        assert!(!scheduler.contains("run_on_main_thread"));
         let snapshot_command = &source[snapshot_start..ready_start];
         let ready_command = &source[ready_start..tests_start];
         assert!(snapshot_command.contains("pub async fn set_jarvis_ambient_snapshot"));

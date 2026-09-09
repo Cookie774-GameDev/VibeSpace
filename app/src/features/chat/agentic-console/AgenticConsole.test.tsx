@@ -675,13 +675,29 @@ describe('AgenticConsole', () => {
     expect(screen.queryByRole('button', { name: /show activity details/i })).toBeNull();
   });
 
+  it('keeps thinking details out of the public status line', () => {
+    const rendered = renderConsole({
+      chatId: 'chat-console',
+      messages: [message('user-thinking', 'user', 5, [{ kind: 'text', text: 'Build the page.' }])],
+      activity: [{
+        id: 'thinking', chatId: 'chat-console', kind: 'agent', category: 'thinking',
+        status: 'running', title: 'Internal deliberation', detail: 'Private reasoning detail', ts: 10,
+      }],
+      sessionEvidence: { status: 'running', currentOperation: 'Working' },
+    });
+    const status = rendered.container.querySelector('[data-live-turn-status]');
+    expect(status?.textContent).toContain('Jarvis is thinking');
+    expect(status?.textContent).not.toContain('Internal deliberation');
+    expect(status?.textContent).not.toContain('Private reasoning detail');
+  });
+
   it('shows pre-event thinking, hands off to canonical live work, and removes it at terminal state', () => {
     const providerSecret = ['sk', 'proj', '1234567890abcdefghijklmnop'].join('-');
     const baseActivity: ChatActivityEvent = {
       id: 'phase',
       chatId: 'chat-console',
       kind: 'agent',
-      category: 'thinking',
+      category: 'file',
       status: 'pending',
       title: 'Working',
       detail: `Inspecting package.json; token ${providerSecret}`,
