@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { TooltipProvider } from '@/components/ui';
 import { useAuthStore } from '@/stores/auth';
@@ -349,8 +350,15 @@ export function ChatView() {
           ? focusChatPane(current, canonicalId)
           : addChatPane(current, canonicalId);
       if ('ok' in next) return { ...next, source };
-      if (!commitLayout(next)) return { ok: false, reason: 'chat_unavailable' };
-      setActiveChat(next.focusedChatId);
+      // Validation resumes outside React's event batch. Publish layout and
+      // navigation together at synchronous priority, so neither can reconcile
+      // against the other's old value and overwrite the confirmed group/focus.
+      let committed = false;
+      flushSync(() => {
+        committed = commitLayout(next);
+        if (committed) setActiveChat(next.focusedChatId);
+      });
+      if (!committed) return { ok: false, reason: 'chat_unavailable' };
       return { ok: true, paneCount: next.chatIds.length, action, source };
     },
     [commitLayout, projectId, setActiveChat, workspaceId],

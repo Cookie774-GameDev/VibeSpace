@@ -145,6 +145,35 @@ async function settleComposerEffects() {
 }
 
 describe('ChatView handoff workspace integration', () => {
+  it('keeps the confirmed layout through synchronous external navigation outside act batching', async () => {
+    render(<ChatView />);
+    await settleComposerEffects();
+    // Deliberately exercise the real async continuation rather than having act
+    // combine React local state with the synchronous Zustand notification.
+    const actEnvironment = (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean })
+      .IS_REACT_ACT_ENVIRONMENT;
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      for (const [index, chatId] of ['chat-2', 'chat-3', 'chat-4'].entries()) {
+        window.dispatchEvent(
+          new CustomEvent(CHAT_OPEN_BESIDE_EVENT, { detail: openBesideDetail(chatId) }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(useUIStore.getState().activeChatId).toBe(chatId);
+        expect(screen.getByTestId('chat-workspace').getAttribute('data-pane-count')).toBe(
+          String(index + 2),
+        );
+      }
+      const saved = JSON.parse(localStorage.getItem(chatWorkspaceStorageKey(scope))!);
+      expect(saved.chatIds).toEqual(['chat-1', 'chat-2', 'chat-3', 'chat-4']);
+      useUIStore.getState().setActiveChat('chat-1');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(screen.getByTestId('chat-workspace').getAttribute('data-pane-count')).toBe('4');
+    } finally {
+      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+        actEnvironment;
+    }
+  });
   it('previews real panes on pointer hover, confirms up to four, restores membership and drags a pane out', async () => {
     class Transfer {
       values = new Map<string, string>();
