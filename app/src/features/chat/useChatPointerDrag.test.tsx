@@ -124,6 +124,39 @@ it('preserves normal clicks and pin buttons and cancels on Escape', () => {
   expect(drop).not.toHaveBeenCalled();
 });
 
+it('detaches a pane only on release outside its workspace, not on cancel or an inside release', () => {
+  const detach = vi.fn();
+  function Pane() {
+    return (
+      <div data-testid="chat-workspace">
+        <button {...useChatPointerDrag(null, detach)}>Pane title</button>
+      </div>
+    );
+  }
+  render(
+    <>
+      <Pane />
+      <div data-testid="outside" />
+    </>,
+  );
+  const drag = () => {
+    fireEvent.pointerDown(screen.getByText('Pane title'), { button: 0, pointerId: 1 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 100, clientY: 100 });
+  };
+  vi.spyOn(document, 'elementFromPoint').mockReturnValue(screen.getByTestId('chat-workspace'));
+  drag();
+  fireEvent.pointerUp(window, { pointerId: 1 });
+  expect(detach).not.toHaveBeenCalled();
+  vi.spyOn(document, 'elementFromPoint').mockReturnValue(screen.getByTestId('outside'));
+  drag();
+  fireEvent.keyDown(window, { key: 'Escape' });
+  fireEvent.pointerUp(window, { pointerId: 1 });
+  expect(detach).not.toHaveBeenCalled();
+  drag();
+  fireEvent.pointerUp(window, { pointerId: 1 });
+  expect(detach).toHaveBeenCalledTimes(1);
+});
+
 it('does not activate the control underneath the drop when the browser sends its follow-up click', () => {
   const activate = vi.fn();
   const drop = vi.fn();

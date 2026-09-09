@@ -8,6 +8,7 @@ import { Composer } from './Composer';
 import { WarmChatWelcome } from './WarmChatWelcome';
 import { TokenBossCinematic } from './token-boss/TokenBossCinematic';
 import { ChatOutputPanel } from './ChatOutputPanel';
+import { useChatPointerDrag } from './useChatPointerDrag';
 import {
   CHAT_OPEN_BESIDE_EVENT,
   VIBESPACE_CHAT_MIME,
@@ -131,6 +132,7 @@ function ChatPane({
   tall: boolean;
 }) {
   const engine = useBrowserChatStore((state) => resolveChatEngine(state, chatId));
+  const detachDrag = useChatPointerDrag(null, onClose);
   const [dragOver, setDragOver] = useState(false);
   useEffect(() => {
     const clear = () => setDragOver(false);
@@ -211,12 +213,14 @@ function ChatPane({
       {multiPane ? (
         <header className="flex h-8 shrink-0 items-center gap-2 border-b border-border/70 bg-panel/80 px-2">
           <button
+            {...detachDrag}
             type="button"
             data-chat-pane-action="true"
             aria-label={`Focus ${title}`}
             aria-pressed={focused}
             onClick={onFocus}
-            className="min-w-0 flex-1 truncate rounded-sm text-left text-metadata font-medium text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            title="Drag outside the conversation to remove this pane"
+            className="min-w-0 flex-1 cursor-grab select-none truncate rounded-sm text-left text-metadata font-medium text-foreground outline-none active:cursor-grabbing focus-visible:ring-1 focus-visible:ring-ring"
           >
             {title}
           </button>
@@ -259,6 +263,8 @@ export function ChatWorkspace({
   const [announcement, setAnnouncement] = useState(focusAnnouncement);
   const draggedChat = useRef<ReturnType<typeof readChatDragPayload>>(null);
   const [preview, setPreview] = useState<{ chatId: string | null; title: string } | null>(null);
+  const confirming = useRef(false);
+  const [dropError, setDropError] = useState<string | null>(null);
 
   useEffect(() => {
     const start = (event: globalThis.DragEvent) => {
@@ -268,7 +274,7 @@ export function ChatWorkspace({
     };
     const clear = () => {
       draggedChat.current = null;
-      setPreview(null);
+      if (!confirming.current) setPreview(null);
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') clear();
@@ -289,7 +295,12 @@ export function ChatWorkspace({
 
   const existing = preview?.chatId ? layout.chatIds.includes(preview.chatId) : false;
   const atLimit = !!preview && !existing && layout.chatIds.length >= 4;
-  const previewIds = existing || atLimit ? layout.chatIds : [...layout.chatIds, '__incoming__'];
+  // Only preview IDs from the accessible chat list. Drop still uses canonical
+  // validation in ChatView; a drag payload alone cannot mount arbitrary chats.
+  const previewIds =
+    preview?.chatId && Object.hasOwn(chatTitles, preview.chatId) && !existing && !atLimit
+      ? [...layout.chatIds, preview.chatId]
+      : layout.chatIds;
 
   useEffect(() => {
     setAnnouncement(focusAnnouncement);
@@ -298,6 +309,8 @@ export function ChatWorkspace({
   const openBeside = useCallback(
     async (payload: unknown, destinationChatId = layout.focusedChatId) => {
       const destinationTitle = paneTitle(chatTitles, destinationChatId);
+      confirming.current = true;
+      setDropError(null);
       try {
         const result = await onOpenBeside(payload, destinationChatId);
         if (result.ok) {
@@ -309,16 +322,22 @@ export function ChatWorkspace({
           return;
         }
         if (result.reason === 'pane_limit') {
+          setDropError('Four chats already open. Remove a pane to add another.');
           setAnnouncement(
             `Cannot open ${result.source.title} beside ${destinationTitle}. This workspace supports up to four chats.`,
           );
           return;
         }
+        setDropError('Could not add this chat. It may no longer be available in this project.');
         setAnnouncement(
           `Cannot open a chat beside ${destinationTitle}. The chat is unavailable or inaccessible.`,
         );
       } catch {
+        setDropError('Could not add this chat. Please try again.');
         setAnnouncement(`Cannot open a chat beside ${destinationTitle}. Please try again.`);
+      } finally {
+        confirming.current = false;
+        setPreview(null);
       }
     },
     [chatTitles, layout.focusedChatId, onOpenBeside],
@@ -340,7 +359,9 @@ export function ChatWorkspace({
       onDragOverCapture={(event) => {
         if (
           !Array.from(event.dataTransfer.types).includes(VIBESPACE_CHAT_MIME) ||
-          (event.target instanceof Element && event.target.closest('[data-tour="chat-composer"]'))
+          (!preview &&
+            event.target instanceof Element &&
+            event.target.closest('[data-tour="chat-composer"]'))
         ) {
           setPreview(null);
           return;
@@ -360,33 +381,48 @@ export function ChatWorkspace({
         )
           setPreview(null);
       }}
-      onDropCapture={() => setPreview(null)}
-      onDrop={(event) => {
-        // Also accept the thin gaps between panes; composers retain their own
-        // chat-context and attachment drop behavior.
-        if (event.target instanceof Element && event.target.closest('[data-tour="chat-composer"]'))
+      onDropCapture={(event) => {
+        // Resolve once at the stable workspace boundary, including new preview
+        // panes. Do not let a nested surface dispatch a second asynchronous drop.
+        if (
+          !preview &&
+          event.target instanceof Element &&
+          event.target.closest('[data-tour="chat-composer"]')
+        )
           return;
         const payload = readChatDragPayload(event.dataTransfer);
         if (!payload) return;
         event.preventDefault();
-        void openBeside(payload);
+        event.stopPropagation();
+        const targetId =
+          event.target instanceof Element
+            ? event.target.closest('[data-chat-id]')?.getAttribute('data-chat-id')
+            : null;
+        void openBeside(
+          payload,
+          targetId && layout.chatIds.includes(targetId) ? targetId : layout.focusedChatId,
+        );
       }}
       className={cn(
         'relative isolate grid h-full min-h-0 w-full gap-px overflow-hidden bg-border/70 transition-[grid-template-columns,grid-template-rows] duration-150 motion-reduce:transition-none',
-        layoutClassForPaneCount(layout.chatIds.length),
+        layoutClassForPaneCount(previewIds.length),
       )}
     >
-      {layout.chatIds.map((chatId, index) => (
+      {previewIds.map((chatId, index) => (
         <ChatPane
           key={chatId}
           chatId={chatId}
           title={paneTitle(chatTitles, chatId)}
           focused={layout.focusedChatId === chatId}
-          multiPane={layout.chatIds.length > 1}
-          tall={layout.chatIds.length === 3 && index === 0}
+          multiPane={previewIds.length > 1}
+          tall={previewIds.length === 3 && index === 0}
           fixtureMessages={fixtureMessagesByChat?.[chatId]}
-          onFocus={() => onFocus(chatId)}
-          onClose={() => onClose(chatId)}
+          onFocus={() => {
+            if (!preview) onFocus(chatId);
+          }}
+          onClose={() => {
+            if (!preview) onClose(chatId);
+          }}
           onDropChat={(event) => {
             const payload = readChatDragPayload(event.dataTransfer);
             if (!payload) return;
@@ -400,46 +436,18 @@ export function ChatWorkspace({
         <div
           data-testid="chat-layout-drop-preview"
           data-preview-pane-count={previewIds.length}
-          aria-hidden="true"
-          className={cn(
-            'pointer-events-none absolute inset-0 z-40 grid gap-2 bg-background/55 p-2',
-            layoutClassForPaneCount(previewIds.length),
-          )}
+          className="pointer-events-none absolute bottom-2 left-1/2 z-40 -translate-x-1/2 rounded-full border border-border/70 bg-panel/95 px-3 py-1 text-[11px] text-foreground shadow-sm"
         >
-          {atLimit ? (
-            <div className="col-span-full row-span-full m-auto rounded-xl border border-accent-copper/50 bg-panel p-4 text-center shadow-lg">
-              <p className="font-medium text-foreground">Four chats already open</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Close a pane to add another chat.
-              </p>
-            </div>
-          ) : (
-            previewIds.map((id, index) => {
-              const incoming = id === '__incoming__' || (existing && id === preview.chatId);
-              return (
-                <div
-                  key={id}
-                  className={cn(
-                    'flex min-h-0 min-w-0 flex-col justify-center rounded-xl border bg-panel/90 p-4 text-center',
-                    previewIds.length === 3 && index === 0 && 'row-span-2',
-                    incoming
-                      ? 'border-2 border-dashed border-accent-copper text-foreground shadow-[inset_0_0_24px_hsl(var(--accent-copper)/0.12)]'
-                      : 'border-border text-muted-foreground',
-                  )}
-                >
-                  <span className="truncate text-sm font-medium">
-                    {id === '__incoming__' ? preview.title : paneTitle(chatTitles, id)}
-                  </span>
-                  {incoming ? (
-                    <span className="mt-2 text-xs text-accent-copper">
-                      {existing ? 'Focus existing chat' : 'Release to open here'}
-                    </span>
-                  ) : null}
-                </div>
-              );
-            })
-          )}
+          {atLimit ? 'Four chats already open' : 'Release to confirm'}
         </div>
+      ) : null}
+      {dropError ? (
+        <p
+          role="alert"
+          className="absolute bottom-2 left-2 right-2 z-40 rounded-md border border-border bg-panel px-3 py-2 text-xs text-foreground"
+        >
+          {dropError}
+        </p>
       ) : null}
       <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {announcement}

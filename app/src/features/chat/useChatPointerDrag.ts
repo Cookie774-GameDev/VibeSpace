@@ -21,7 +21,7 @@ function suppressReleaseClick() {
 }
 
 /** Keep internal chat drags in the WebView; native OS file drops remain untouched. */
-export function useChatPointerDrag(chat: Chat) {
+export function useChatPointerDrag(chat: Chat | null, onOutsideDrop?: () => void) {
   const cleanup = useRef<() => void>(() => undefined);
   const suppressClick = useRef(false);
   useEffect(() => () => cleanup.current(), []);
@@ -60,7 +60,7 @@ export function useChatPointerDrag(chat: Chat) {
         if (!transfer && Math.hypot(point.clientX - origin.x, point.clientY - origin.y) < 6) return;
         if (!transfer) {
           transfer = new DataTransfer();
-          writeChatDragPayload(transfer, chat);
+          if (chat) writeChatDragPayload(transfer, chat);
           transfer.effectAllowed = 'link';
           suppressClick.current = true;
           try {
@@ -82,7 +82,11 @@ export function useChatPointerDrag(chat: Chat) {
           point.preventDefault();
           suppressReleaseClick();
           const target = document.elementFromPoint(point.clientX, point.clientY);
-          if (target && point.type === 'pointerup') send(target, 'drop', point);
+          if (target && point.type === 'pointerup') {
+            const workspace = source.closest('[data-testid="chat-workspace"]');
+            if (!chat && workspace && !workspace.contains(target)) onOutsideDrop?.();
+            else if (chat) send(target, 'drop', point);
+          }
         }
         cleanup.current();
       };

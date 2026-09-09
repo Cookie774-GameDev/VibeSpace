@@ -238,21 +238,28 @@ describe('ChatWorkspace', () => {
   });
 
   it.each([1, 2, 3])(
-    'previews the actual next layout from %i panes without mounting extra chats',
+    'previews the actual next layout from %i panes with real chat contents before confirmation',
     async (count) => {
       render(
         <WorkspaceHarness initial={layout(...['chat-1', 'chat-2', 'chat-3'].slice(0, count))} />,
       );
       const incoming = `chat-${count + 1}`;
+      const originalThread = screen.getByTestId('thread-chat-1');
+      const originalComposer = screen.getByTestId('composer-chat-1');
       const region = screen.getByTestId('chat-conversation-region-chat-1');
       fireEvent.dragOver(region, { dataTransfer: typedTransfer(incoming) });
       const preview = screen.getByTestId('chat-layout-drop-preview');
       expect(preview.getAttribute('data-preview-pane-count')).toBe(String(count + 1));
-      expect(within(preview).getByText(titles[incoming])).toBeTruthy();
-      expect(screen.getAllByTestId(/^thread-/)).toHaveLength(count);
+      expect(preview.textContent).toBe('Release to confirm');
+      expect(screen.getByTestId(`thread-${incoming}`)).toBeTruthy();
+      expect(screen.getByTestId('thread-chat-1')).toBe(originalThread);
+      expect(screen.getByTestId('composer-chat-1')).toBe(originalComposer);
+      const incomingThread = screen.getByTestId(`thread-${incoming}`);
+      expect(screen.getAllByTestId(/^thread-/)).toHaveLength(count + 1);
       fireEvent.drop(region, { dataTransfer: typedTransfer(incoming) });
       await waitFor(() => expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(count + 1));
       expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull();
+      expect(screen.getByTestId(`thread-${incoming}`)).toBe(incomingThread);
     },
   );
 
@@ -265,6 +272,7 @@ describe('ChatWorkspace', () => {
     expect(screen.getByTestId('chat-layout-drop-preview')).toBeTruthy();
     fireEvent.dragEnd(window);
     expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull();
+    expect(screen.queryByTestId('thread-chat-2')).toBeNull();
     expect(screen.getByTestId('chat-pane-chat-1').getAttribute('data-chat-drag-over')).toBe(
       'false',
     );
@@ -277,7 +285,7 @@ describe('ChatWorkspace', () => {
       dataTransfer: { types: [VIBESPACE_CHAT_MIME], getData: () => '' },
     });
     expect(screen.getByTestId('chat-layout-drop-preview').textContent).toContain(
-      'Focus existing chat',
+      'Release to confirm',
     );
     expect(screen.queryByText('Four chats already open')).toBeNull();
   });

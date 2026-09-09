@@ -155,6 +155,9 @@ export function ChatView() {
   const commitLayout = useCallback(
     (next: ChatWorkspaceLayoutV1) => {
       if (!scope || !scopeKey || activeScopeKeyRef.current !== scopeKey) return false;
+      // Pointer release/composer focus can repeat the current selection while
+      // canonical drop validation is pending. A no-op must not cancel that drop.
+      if (layoutRef.current && sameLayout(layoutRef.current, next)) return true;
       operationEpochRef.current += 1;
       layoutRef.current = next;
       setLayoutState({ key: scopeKey, layout: next });

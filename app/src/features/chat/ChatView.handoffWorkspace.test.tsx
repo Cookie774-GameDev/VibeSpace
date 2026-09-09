@@ -6,6 +6,15 @@ import { useUIStore } from '@/stores/ui';
 import { VIBESPACE_CHAT_MIME, CHAT_OPEN_BESIDE_EVENT } from './chatDragPayload';
 import { chatWorkspaceStorageKey } from './chatWorkspaceLayout';
 import { ChatView } from './ChatView';
+import { useChatPointerDrag } from './useChatPointerDrag';
+
+function DragSource({ chat }: { chat: Chat }) {
+  return (
+    <div {...useChatPointerDrag(chat)} data-testid={`source-${chat.id}`}>
+      <button>{chat.title}</button>
+    </div>
+  );
+}
 
 const chats = vi.hoisted(() =>
   ['chat-1', 'chat-2', 'chat-3', 'chat-4', 'chat-5'].map((id, index) => ({
@@ -136,6 +145,118 @@ async function settleComposerEffects() {
 }
 
 describe('ChatView handoff workspace integration', () => {
+  it('previews real panes on pointer hover, confirms up to four, restores membership and drags a pane out', async () => {
+    class Transfer {
+      values = new Map<string, string>();
+      setData(type: string, value: string) {
+        this.values.set(type, value);
+      }
+      getData(type: string) {
+        return this.values.get(type) ?? '';
+      }
+      get types() {
+        return [...this.values.keys()];
+      }
+    }
+    class Drag extends MouseEvent {
+      dataTransfer: DataTransfer | null;
+      constructor(type: string, init: DragEventInit = {}) {
+        super(type, init);
+        this.dataTransfer = init.dataTransfer ?? null;
+      }
+    }
+    class Pointer extends MouseEvent {
+      pointerId: number;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+      }
+    }
+    vi.stubGlobal('DataTransfer', Transfer);
+    vi.stubGlobal('DragEvent', Drag);
+    vi.stubGlobal('PointerEvent', Pointer);
+    const originalHitTest = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
+    const hitTest = vi.fn();
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: hitTest });
+    try {
+      const view = render(
+        <>
+          <aside data-testid="sidebar">
+            {chats.map((chat) => (
+              <DragSource key={chat.id} chat={chat as Chat} />
+            ))}
+          </aside>
+          <ChatView />
+        </>,
+      );
+      await settleComposerEffects();
+      for (const id of ['chat-2', 'chat-3', 'chat-4']) {
+        fireEvent.pointerDown(screen.getByTestId(`source-${id}`).firstElementChild!, {
+          button: 0,
+          pointerId: 1,
+          clientX: 0,
+          clientY: 0,
+        });
+        hitTest.mockReturnValue(screen.getByTestId('thread-chat-1'));
+        fireEvent.pointerMove(window, { pointerId: 1, clientX: 200, clientY: 100 });
+        expect(screen.getByTestId(`thread-${id}`)).toBeTruthy();
+        expect(screen.getByText('Release to confirm')).toBeTruthy();
+        // Layout reflow can place the incoming composer's controls under the
+        // pointer. That release must still confirm the preview, not send context.
+        hitTest.mockReturnValue(
+          screen.getByTestId(`chat-pane-${id}`).querySelector('[data-tour="chat-composer"]'),
+        );
+        fireEvent.pointerUp(window, { pointerId: 1, clientX: 200, clientY: 100 });
+        await waitFor(() => expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull());
+        expect(screen.getByTestId(`thread-${id}`)).toBeTruthy();
+      }
+      expect(screen.getByTestId('chat-workspace').getAttribute('data-pane-count')).toBe('4');
+      for (const id of ['chat-1', 'chat-2', 'chat-3', 'chat-4']) {
+        act(() => useUIStore.getState().setActiveChat(id));
+        expect(screen.getByTestId('chat-workspace').getAttribute('data-pane-count')).toBe('4');
+      }
+      hitTest.mockReturnValue(screen.getByTestId('sidebar'));
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'Focus Chat 2' }), {
+        button: 0,
+        pointerId: 1,
+      });
+      fireEvent.pointerMove(window, { pointerId: 1, clientX: 20, clientY: 20 });
+      fireEvent.pointerUp(window, { pointerId: 1, clientX: 20, clientY: 20 });
+      await waitFor(() => expect(screen.queryByTestId('thread-chat-2')).toBeNull());
+      view.unmount();
+      render(<ChatView />);
+      await settleComposerEffects();
+      expect(screen.getByTestId('chat-workspace').getAttribute('data-pane-count')).toBe('3');
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalHitTest) Object.defineProperty(document, 'elementFromPoint', originalHitTest);
+      else Reflect.deleteProperty(document, 'elementFromPoint');
+    }
+  });
+  it('keeps a drop pending while its destination receives redundant focus', async () => {
+    render(<ChatView />);
+    await settleComposerEffects();
+    let resolveSource!: (chat: Chat) => void;
+    testState.getChat.mockImplementation((id: string) =>
+      id === 'chat-2'
+        ? new Promise<Chat>((resolve) => {
+            resolveSource = resolve;
+          })
+        : Promise.resolve(chats.find((chat) => chat.id === id)),
+    );
+    fireEvent.drop(screen.getByTestId('chat-conversation-region-chat-1'), {
+      dataTransfer: typedTransfer('chat-2'),
+    });
+    fireEvent.focus(screen.getByTestId('thread-chat-1'));
+    await act(async () => {
+      resolveSource(chats[1] as Chat);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-workspace').getAttribute('data-pane-count')).toBe('2'),
+    );
+    act(() => useUIStore.getState().setActiveChat('chat-1'));
+    expect(screen.getByTestId('thread-chat-2')).toBeTruthy();
+  });
   it('does not revert a newly selected persisted chat while the live list catches up', async () => {
     testState.liveChats = [chats[0]];
     const view = render(<ChatView />);
