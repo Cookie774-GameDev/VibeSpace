@@ -40,9 +40,9 @@ it('makes activation available after learning, but leaves it off until the user 
     ),
   );
   render(<CaoChatControls />);
-  const enable = screen.getByLabelText('Enable CAO') as HTMLInputElement;
+  const enable = screen.getByLabelText('Enable CAO') as HTMLButtonElement;
   expect(enable.disabled).toBe(false);
-  expect(enable.checked).toBe(false);
+  expect(enable.getAttribute('aria-checked')).toBe('false');
   expect((screen.getByLabelText('CAO message permissions') as HTMLSelectElement).value).toBe(
     'approve-before-send',
   );

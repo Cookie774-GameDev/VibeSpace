@@ -752,7 +752,9 @@ export function AllAboutMe({
           </CardContent>
         </Card>
 
-        <JarvisLearningControls />
+        <div className="min-w-0 xl:col-span-2">
+          <JarvisLearningControls />
+        </div>
       </section>
 
       <Dialog

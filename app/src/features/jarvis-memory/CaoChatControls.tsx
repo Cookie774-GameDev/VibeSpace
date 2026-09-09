@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import '@/features/cao/cao-controls.css';
 import { useJarvisLearningStore } from './learningStore';
 import { CAO_GUIDANCE_AREAS, caoGuidanceReady } from './caoGuidance';
 import {
@@ -103,12 +105,27 @@ export function CaoChatControls() {
     }
   };
   return (
-    <section className="space-y-3 border-t border-border pt-3" aria-label="CAO chat management">
-      <h4 className="font-medium">CAO chat management</h4>
-      <p className="text-sm text-muted-foreground">
-        Learns from your wording, conversation logs, file actions, corrections, and agent
-        management. Guidance is saved in learning.md.
-      </p>
+    <section
+      className="cao-controls space-y-3 border-t border-border pt-3"
+      aria-label="CAO chat management"
+    >
+      <div className="cao-heading">
+        <div>
+          <h4 className="font-medium">CAO agent management</h4>
+          <p className="text-sm text-muted-foreground">
+            Coordinate chats and terminals using your learned preferences.
+          </p>
+        </div>
+        <label className="cao-enable">
+          <Switch
+            aria-label="Enable CAO"
+            disabled={!ready || busy}
+            checked={enabled}
+            onCheckedChange={(checked) => void configure(checked, mode)}
+          />
+          <span>Enable CAO</span>
+        </label>
+      </div>
       <p aria-label="CAO learning readiness" className="text-sm">
         {ready
           ? 'Guidance ready — you can enable CAO.'
@@ -116,10 +133,22 @@ export function CaoChatControls() {
       </p>
       <details>
         <summary className="cursor-pointer text-sm">Review learned CAO guidance</summary>
-        <div className="space-y-2 mt-2">
+        <div className="cao-guidance-grid mt-3">
           {CAO_GUIDANCE_AREAS.map((area) => (
             <div key={area}>
-              <strong className="text-sm">{area}</strong>
+              <strong className="text-sm">
+                {
+                  {
+                    communication: 'Communication',
+                    delegation: 'Delegation',
+                    fileHandling: 'File handling',
+                    agentManagement: 'Agent management',
+                    corrections: 'Corrections',
+                    verification: 'Verification',
+                    boundaries: 'Boundaries',
+                  }[area]
+                }
+              </strong>
               <p className="text-sm whitespace-pre-wrap">
                 {profile?.caoGuidance?.sections[area]?.guidance ?? 'More evidence needed.'}
               </p>
@@ -127,17 +156,7 @@ export function CaoChatControls() {
           ))}
         </div>
       </details>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          aria-label="Enable CAO"
-          disabled={!ready || busy}
-          checked={enabled}
-          onChange={(event) => void configure(event.target.checked, mode)}
-        />
-        Enable CAO
-      </label>
-      <label className="flex items-center gap-2 text-sm">
+      <label className="cao-permissions block text-sm">
         Message permissions
         <select
           aria-label="CAO message permissions"
@@ -149,85 +168,96 @@ export function CaoChatControls() {
           <option value="full-access">Full access to CAO chat controls</option>
         </select>
       </label>
-      <p className="text-xs text-muted-foreground">
-        Full access permits CAO messages and exact chat stop/resume commands. The agent’s tool permissions still apply.
-        In chat, use CAO diagnose, supervise, verify, grade, force-check, restart, or cancel followed by chat:"Exact chat title".
-        Reviews inspect current evidence; they do not start a background schedule.
-      </p>
-      <label className="block text-sm">
-        Target chat
-        <select
-          aria-label="CAO target chat"
-          value={chatId}
-          disabled={busy}
-          onChange={(event) => {
-            setChatId(event.target.value);
-            if (proposalRef.current) caoChatControl.reject(proposalRef.current.id);
-            setProposal(undefined);
-          }}
-        >
-          <option value="">Choose a chat</option>
-          {chats?.map((chat) => (
-            <option key={chat.id} value={chat.id}>
-              {chat.title}
-            </option>
-          ))}
-        </select>
-      </label>
-      <textarea
-        className="w-full rounded border border-border bg-background p-2 text-sm"
-        aria-label="CAO objective"
-        placeholder="What should CAO help this agent accomplish?"
-        value={objective}
-        maxLength={8000}
-        disabled={busy}
-        onChange={(event) => setObjective(event.target.value)}
-      />
-      <Button
-        size="sm"
-        disabled={!enabled || !chatId || !objective.trim() || busy}
-        onClick={() => void prepare()}
-      >
-        {busy ? 'Working…' : mode === 'full-access' ? 'Prepare and send' : 'Prepare message'}
-      </Button>
-      {busy && (
-        <Button size="sm" variant="ghost" onClick={() => controller.current?.abort()}>
-          Cancel
-        </Button>
-      )}
-      {proposal && (
-        <div className="space-y-2">
-          <p className="text-sm whitespace-pre-wrap">{proposal.text}</p>
-          {proposal.status === 'approval-required' ? (
-            <>
-              <Button size="sm" disabled={busy} onClick={() => void approve()}>
-                Approve and send
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => {
-                  caoChatControl.reject(proposal.id);
-                  setProposal(undefined);
-                }}
-              >
-                Discard
-              </Button>
-            </>
-          ) : (
-            <p role="status" className="text-sm">
-              Message sent to the selected chat.
+      <details className="cao-help">
+        <summary>Permissions and chat commands</summary>
+        <p className="text-xs text-muted-foreground">
+          Full access permits CAO messages and exact chat stop/resume commands. The agent’s tool
+          permissions still apply. In chat, use CAO diagnose, supervise, verify, grade, force-check,
+          restart, or cancel followed by chat:"Exact chat title". Reviews inspect current evidence;
+          they do not start a background schedule.
+        </p>
+      </details>
+      <div className="cao-action-grid">
+        <section className="cao-action-panel" aria-label="Send to a chat">
+          <h5>Chat agent</h5>
+          <p className="text-xs text-muted-foreground">Choose a chat and describe the next step.</p>
+          <label className="block text-sm">
+            Target chat
+            <select
+              aria-label="CAO target chat"
+              value={chatId}
+              disabled={busy}
+              onChange={(event) => {
+                setChatId(event.target.value);
+                if (proposalRef.current) caoChatControl.reject(proposalRef.current.id);
+                setProposal(undefined);
+              }}
+            >
+              <option value="">Choose a chat</option>
+              {chats?.map((chat) => (
+                <option key={chat.id} value={chat.id}>
+                  {chat.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <textarea
+            className="w-full rounded border border-border bg-background p-2 text-sm"
+            aria-label="CAO objective"
+            rows={3}
+            placeholder="What should this agent do next? Include the goal and any constraints."
+            value={objective}
+            maxLength={8000}
+            disabled={busy}
+            onChange={(event) => setObjective(event.target.value)}
+          />
+          <Button
+            size="sm"
+            disabled={!enabled || !chatId || !objective.trim() || busy}
+            onClick={() => void prepare()}
+          >
+            {busy ? 'Working…' : mode === 'full-access' ? 'Prepare and send' : 'Prepare message'}
+          </Button>
+          {busy && (
+            <Button size="sm" variant="ghost" onClick={() => controller.current?.abort()}>
+              Cancel
+            </Button>
+          )}
+          {proposal && (
+            <div className="space-y-2">
+              <p className="text-sm whitespace-pre-wrap">{proposal.text}</p>
+              {proposal.status === 'approval-required' ? (
+                <>
+                  <Button size="sm" disabled={busy} onClick={() => void approve()}>
+                    Approve and send
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      caoChatControl.reject(proposal.id);
+                      setProposal(undefined);
+                    }}
+                  >
+                    Discard
+                  </Button>
+                </>
+              ) : (
+                <p role="status" className="text-sm">
+                  Message sent to the selected chat.
+                </p>
+              )}
+            </div>
+          )}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
             </p>
           )}
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <CaoTerminalControls accountId={accountId} enabled={enabled} mode={mode} />
+        </section>
+        <CaoTerminalControls accountId={accountId} enabled={enabled} mode={mode} />
+      </div>
     </section>
   );
 }

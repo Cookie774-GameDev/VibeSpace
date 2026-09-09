@@ -94,7 +94,7 @@ export function JarvisLearningControls({
 
   return (
     <section
-      className="overflow-hidden rounded-lg border border-border bg-panel"
+      className="cao-learning-workspace overflow-hidden rounded-lg border border-border bg-panel"
       aria-labelledby="jarvis-learning-title"
     >
       <header className="flex items-start justify-between gap-4 border-b border-border/70 p-4">
@@ -115,7 +115,6 @@ export function JarvisLearningControls({
       </header>
 
       <div className="space-y-3 p-4">
-        <CaoChatControls />
         <div className="flex flex-wrap items-center gap-2">
           {checkStatus === 'running' ? (
             <Button
@@ -196,71 +195,75 @@ export function JarvisLearningControls({
           </span>
         </div>
 
-        {recent.length ? (
-          <ul className="divide-y divide-border/60 rounded-md border border-border bg-background/35">
-            {recent.map((item) => (
-              <li key={item.id} className="flex items-start gap-3 px-3 py-2.5">
-                <span className="mt-0.5 rounded-sm border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {item.category}
-                </span>
-                <div className="min-w-0 flex-1">
-                  {editingId === item.id ? (
-                    <div className="flex items-center gap-2">
-                      <input
-                        aria-label="Memory value"
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-secondary text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      />
+        <CaoChatControls />
+        <details className="cao-memory-details">
+          <summary>Learned preferences · {recent.length}</summary>
+          {recent.length ? (
+            <ul className="divide-y divide-border/60 rounded-md border border-border bg-background/35">
+              {recent.map((item) => (
+                <li key={item.id} className="flex items-start gap-3 px-3 py-2.5">
+                  <span className="mt-0.5 rounded-sm border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {item.category}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {editingId === item.id ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          aria-label="Memory value"
+                          value={draft}
+                          onChange={(event) => setDraft(event.target.value)}
+                          className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-secondary text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        />
+                        <Button
+                          size="icon"
+                          variant="default"
+                          className="h-8 w-8"
+                          onClick={saveEdit}
+                          aria-label="Save memory"
+                        >
+                          <Save className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-secondary text-foreground">{item.value}</p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">
+                          {item.source.kind} · confidence {Math.round(item.confidence * 100)}%
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  {editingId !== item.id && (
+                    <div className="flex shrink-0 items-center gap-1">
                       <Button
                         size="icon"
-                        variant="default"
-                        className="h-8 w-8"
-                        onClick={saveEdit}
-                        aria-label="Save memory"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        onClick={() => beginEdit(item.id, item.value)}
+                        aria-label={`Edit memory ${item.id}`}
                       >
-                        <Save className="h-3.5 w-3.5" />
+                        <Edit3 className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        onClick={() => remove(item.id)}
+                        aria-label={`Remove memory ${item.id}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
-                  ) : (
-                    <>
-                      <p className="text-secondary text-foreground">{item.value}</p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">
-                        {item.source.kind} · confidence {Math.round(item.confidence * 100)}%
-                      </p>
-                    </>
                   )}
-                </div>
-                {editingId !== item.id && (
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7"
-                      onClick={() => beginEdit(item.id, item.value)}
-                      aria-label={`Edit memory ${item.id}`}
-                    >
-                      <Edit3 className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7"
-                      onClick={() => remove(item.id)}
-                      aria-label={`Remove memory ${item.id}`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="rounded-md border border-dashed border-border px-4 py-5 text-secondary text-muted-foreground">
-            No learned preferences yet. Say “Remember that…” for an immediate, visible entry.
-          </div>
-        )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="rounded-md border border-dashed border-border px-4 py-5 text-secondary text-muted-foreground">
+              No learned preferences yet. Say “Remember that…” for an immediate, visible entry.
+            </div>
+          )}
+        </details>
       </div>
     </section>
   );

@@ -104,11 +104,10 @@ export function CaoTerminalControls({
   };
   const selected = targets.find((row) => row.sessionId === terminalId);
   return (
-    <section aria-label="CAO terminal management" className="space-y-3 border-t border-border pt-3">
-      <h4 className="font-medium">CAO terminal management</h4>
+    <section aria-label="CAO terminal management" className="cao-action-panel space-y-3">
+      <h5>Terminal agent</h5>
       <p className="text-sm text-muted-foreground">
-        Uses the same learned guidance and message permission above. Reviews use the selected
-        terminal’s current output. Agent tool permissions still apply.
+        Review live output or direct an OpenCode agent in this project.
       </p>
       <label className="block text-sm">
         Target terminal
@@ -122,7 +121,7 @@ export function CaoTerminalControls({
             setReport('');
           }}
         >
-          <option value="">Choose a terminal in the current project</option>
+          <option value="">Choose a terminal</option>
           {targets.map((target) => (
             <option key={target.sessionId} value={target.sessionId}>
               {target.label || target.sessionId}
@@ -149,7 +148,15 @@ export function CaoTerminalControls({
           <option value="restart">Restart OpenCode process</option>
           {(['diagnose', 'supervise', 'verify', 'grade', 'force-check'] as const).map((value) => (
             <option key={value} value={value}>
-              {value}
+              {
+                {
+                  diagnose: 'Diagnose an issue',
+                  supervise: 'Review progress',
+                  verify: 'Verify results',
+                  grade: 'Grade the work',
+                  'force-check': 'Check again',
+                }[value]
+              }
             </option>
           ))}
         </select>
@@ -161,7 +168,8 @@ export function CaoTerminalControls({
         maxLength={8000}
         disabled={busy}
         onChange={(event) => setObjective(event.target.value)}
-        placeholder="Describe the goal and what CAO should inspect or improve."
+        rows={3}
+        placeholder="What should CAO inspect or improve? Include the expected result."
       />
       {selected && (action === 'draft' || lifecycle) && !selected.canMessage && (
         <p className="text-sm">
