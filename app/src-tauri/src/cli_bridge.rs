@@ -1308,7 +1308,7 @@ fn scan_with_state(
     Ok(CliDetectionResult { executables })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cli_bridge_scan(
     state: tauri::State<'_, CliBridgeState>,
     request: CliScanRequest,
@@ -1316,7 +1316,7 @@ pub fn cli_bridge_scan(
     scan_with_state(&state, request)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cli_bridge_codex_account_snapshot(
     state: tauri::State<'_, CliBridgeState>,
     request: CodexAccountSnapshotRequest,
@@ -1843,7 +1843,7 @@ fn probe_with_state(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cli_bridge_probe(
     state: tauri::State<'_, CliBridgeState>,
     request: CliProbeRequest,
