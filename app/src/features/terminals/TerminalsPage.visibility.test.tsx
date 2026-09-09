@@ -46,3 +46,5 @@ describe('TerminalsPage cached-route visibility', () => {
     );
   });
 });
+
+vi.mock('@/features/tools/terminal-peer-fabric/TerminalFabricOverlay', () => ({ TerminalFabricOverlay: () => null }));

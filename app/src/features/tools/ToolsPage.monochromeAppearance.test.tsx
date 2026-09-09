@@ -28,7 +28,7 @@ describe('ToolsPage MonoChrome appearance', () => {
 
   it('removes the route paper texture while retaining the ordinary theme class and content', async () => {
     const { container } = render(<ToolsPage />);
-    await screen.findByText('Available in the installed VibeSpace desktop app.');
+    await screen.findByRole('heading', { name: 'Author your own actions' });
     const route = container.querySelector<HTMLElement>('[data-monochrome-route="tools"]');
     expect(route).not.toBeNull();
 
@@ -49,7 +49,7 @@ describe('ToolsPage MonoChrome appearance', () => {
 
   it('removes the quick-start paper texture on MonoChrome hover without changing the action', async () => {
     render(<ToolsPage />);
-    await screen.findByText('Available in the installed VibeSpace desktop app.');
+    await screen.findByRole('heading', { name: 'Author your own actions' });
     const quickStart = screen.getByRole('button', { name: /Claude in my project/i });
 
     expect(quickStart.className).toContain('hover:bg-paper-warm');

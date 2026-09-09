@@ -48,10 +48,11 @@ describe('Native Aura materialization', () => {
 
 it('coalesces nested window events until the current Aura build finishes', () => {
   const native = readFileSync(resolve(__dirname, '../src-tauri/src/jarvis_ambient_overlay.rs'), 'utf8');
-  const start = native.indexOf('worker_app.run_on_main_thread(move || {');
+  const start = native.indexOf('let intent_before = intent();');
   const callback = native.slice(start, native.indexOf('}) {', start));
-  expect(callback.indexOf('.store(false, Ordering::Release)')).toBeGreaterThan(callback.indexOf('reconcile_latest(&event_app)'));
-  expect(callback).toContain('intent_before != intent_after');
+  expect(start).toBeGreaterThan(-1);
+  expect(callback.indexOf('.store(false, Ordering::Release)')).toBeGreaterThan(callback.indexOf('reconcile_latest(&worker_app)'));
+  expect(callback).toContain('intent_before != intent()');
 });
 
 

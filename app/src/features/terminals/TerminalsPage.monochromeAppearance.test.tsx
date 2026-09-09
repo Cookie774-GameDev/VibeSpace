@@ -48,3 +48,5 @@ describe('TerminalsPage MonoChrome appearance', () => {
     fireEvent.mouseLeave(reset);
   });
 });
+
+vi.mock('@/features/tools/terminal-peer-fabric/TerminalFabricOverlay', () => ({ TerminalFabricOverlay: () => null }));
