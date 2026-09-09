@@ -970,6 +970,31 @@ trait ProcessLauncher {
     fn launch(&self, spec: &ServerLaunchSpec) -> Result<Box<dyn OwnedProcess>, ServerFailure>;
 }
 
+#[cfg(any(windows, test))]
+fn select_windows_tool_shell(inherited_shell: Option<&std::ffi::OsStr>, candidates: &[PathBuf]) -> Option<PathBuf> {
+    if inherited_shell.is_some_and(|shell| !shell.is_empty()) { return None; }
+    candidates.iter().find(|path| path.is_file()).cloned()
+}
+
+#[cfg(windows)]
+fn preferred_windows_tool_shell() -> Option<PathBuf> {
+    let inherited_shell = std::env::var_os("SHELL");
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("OPENCODE_GIT_BASH_PATH") { candidates.push(PathBuf::from(path)); }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(variable) { candidates.push(PathBuf::from(root).join("Git/bin/bash.exe")); }
+    }
+    if let Some(root) = std::env::var_os("LOCALAPPDATA") { candidates.push(PathBuf::from(root).join("Programs/Git/bin/bash.exe")); }
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            if directory.join("git.exe").is_file() {
+                if let Some(parent) = directory.parent() { candidates.push(parent.join("bin/bash.exe")); }
+            }
+        }
+    }
+    select_windows_tool_shell(inherited_shell.as_deref(), &candidates)
+}
+
 struct ProductionLauncher;
 
 impl ProcessLauncher for ProductionLauncher {
@@ -999,6 +1024,10 @@ impl ProcessLauncher for ProductionLauncher {
 
         #[cfg(windows)]
         {
+            // Avoid the upstream PowerShell native-command capture failure when no shell was selected.
+            if let Some(shell) = preferred_windows_tool_shell() {
+                command.env("SHELL", &shell).env("OPENCODE_GIT_BASH_PATH", &shell);
+            }
             let job = windows_process_tree::KillOnCloseJob::create()?;
             let child = windows_process_tree::spawn_contained(&mut command, &job)?;
             Ok(Box::new(ProductionProcess {
@@ -2779,6 +2808,17 @@ mod tests {
         );
         assert_eq!(config["agent"]["vibespace"]["permission"]["*"], "deny");
         assert!(ollama["models"].get("gemma3").is_none());
+    }
+
+    #[test]
+    fn windows_tool_shell_preserves_explicit_choices_and_requires_a_file() {
+        let fixture = FixtureRoot::new("windows-tool-shell");
+        let valid = fixture.path().join("bash.exe");
+        fs::write(&valid, b"fixture").unwrap();
+        let candidates = vec![fixture.path().join("missing.exe"), fixture.path().to_path_buf(), valid.clone()];
+        assert_eq!(super::select_windows_tool_shell(None, &candidates), Some(valid));
+        assert!(super::select_windows_tool_shell(Some(std::ffi::OsStr::new("custom-shell")), &candidates).is_none());
+        assert!(super::select_windows_tool_shell(None, &[]).is_none());
     }
 
     #[test]

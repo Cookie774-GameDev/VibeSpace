@@ -25,3 +25,23 @@ describe('bare links in formatted factual answers', () => {
     ).toEqual(['https://example.com/reference', 'javascript:alert(1)', 'custom:**payload']);
   });
 });
+
+it('preserves canonical Context identifiers as inert text while checking links', () => {
+  const hash = 'a'.repeat(64);
+  for (const id of [
+    `ptr:rlm:${hash}:0:263`,
+    `ptr:rlm:${hash}:0:263:expand:6144:6144`,
+    `rlm-source:${hash}`,
+    `sha256:${hash}`,
+  ]) {
+    expect(findJarvisDisplayLinks(`Source identifier: \`${id}\``)).toEqual([]);
+    expect(findJarvisDisplayLinks(`[source](${id})`)).toHaveLength(1);
+  }
+  expect(findJarvisDisplayLinks('javascript:alert(1)')).toHaveLength(1);
+});
+
+it('keeps a Context handle type label inert without trusting navigation links', () => {
+  expect(findJarvisDisplayLinks('ptr:rlm evidence ID:')).toEqual([]);
+  expect(findJarvisDisplayLinks('[handle](ptr:rlm)')).toHaveLength(1);
+  expect(findJarvisDisplayLinks('ptr:unexpected')).toHaveLength(1);
+});

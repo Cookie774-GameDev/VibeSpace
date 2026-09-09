@@ -301,6 +301,14 @@ export function findJarvisDisplayLinks(text: string): readonly JarvisDisplayLink
     }
     const end = bareLinkEnd(text, start);
     if (end <= start + prefix.length || overlaps(links, start, end)) continue;
+    // Canonical Context handles are inert identifiers, not navigation targets.
+    // Explicit Markdown links were collected above and still require verification.
+    if (
+      /^(?:ptr:rlm(?::[a-f0-9]{64}:\d+:\d+(?::expand:\d+:\d+)?)?|(?:rlm-source|sha256):[a-f0-9]{64})$/u.test(
+        text.slice(start, end),
+      )
+    )
+      continue;
     // Maven coordinates quoted as code are identifiers, not navigable URLs.
     // Explicit Markdown links still pass through the normal link policy above.
     if (
