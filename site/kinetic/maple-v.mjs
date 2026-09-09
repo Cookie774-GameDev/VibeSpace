@@ -16,8 +16,8 @@ try{
  logoPoints=components.filter(c=>c.length>=largest.length*.1).flat().map(i=>({x:i%c.width,y:Math.floor(i/c.width)})).sort((a,b)=>a.y-b.y||a.x-b.x);
 }catch{/* Controls remain usable if the local logo asset cannot load. */}
 export function createMapleV(canvas,{blue=false,ink="#eee9dd",transparent=false}={}){
- const ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height,step=16,cols=Math.ceil(w/step),rows=Math.ceil(h/step),letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+';
- const atlas=[...letters].map(g=>{const c=document.createElement('canvas');c.width=c.height=24;const a=c.getContext('2d');a.font='11px monospace';a.textAlign='center';a.textBaseline='middle';a.fillStyle=ink;a.fillText(g,12,12);return c});
+ const ctx=canvas.getContext('2d'),w=808,h=1000,step=16,cols=Math.ceil(w/step),rows=Math.ceil(h/step),letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+';
+ const atlas=[...letters].map(g=>{const c=document.createElement('canvas');c.width=16;c.height=18;const a=c.getContext('2d');a.font='11px monospace';a.textAlign='center';a.textBaseline='middle';a.fillStyle=ink;a.fillText(g,8,9);return c});
  function source(t){
   const st=field?(1-Math.cos(t*Math.PI/(field.duration*1.5)))*.5*(field.frames.length-1):0,index=Math.floor(st),fraction=st-index,result=[];
   for(let row=0;row<rows;row++)for(let col=0;col<cols;col++){
@@ -28,7 +28,9 @@ export function createMapleV(canvas,{blue=false,ink="#eee9dd",transparent=false}
    result.push({id:i,x,y,character:(i*13+Math.floor(i/17))%letters.length,alpha:density*(blue?.95:.66+(i%5)*.07)});
   }return result;
  }
- let snapshotCycle=-1,snapshot=[],last=-1,lastHeldCycle=-1;
+ let snapshotCycle=-1,snapshot=[],last=-1,lastActive=[],lastAmount=0,lastTransport=false;
+ // Materialize inspection data only on request, not thousands of objects per frame.
+ Object.defineProperty(canvas,'__letterPositions',{configurable:true,get(){return lastActive.map(p=>({id:p.id,char:letters[p.character],alpha:p.alpha,x:lastTransport?mix(p.x,p.tx,lastAmount)+Math.sin(Math.PI*lastAmount)*p.bend:p.x,y:lastTransport?mix(p.y,p.ty,lastAmount):p.y}))}});
  function assign(cycle){
   snapshot=source(cycle*3+3);
   if(logoPoints.length){
@@ -44,29 +46,28 @@ export function createMapleV(canvas,{blue=false,ink="#eee9dd",transparent=false}
     p.tx=w*(mix(right?.80:.20,right?.525:.475,u)+(col/(columns-1)-.5)*width);
     p.ty=h*(.16+.66*u);
    });
-  }snapshotCycle=cycle;
+  }for(const p of snapshot)p.bend=Math.sin(p.id*1.7)*12;snapshotCycle=cycle;
  }
  return time=>{
   if(time===last)return;last=time;
   const cycle=Math.floor(Math.max(0,time)/71),clock=((time%71)+71)%71;
-  const amount=smooth((clock-3)/30)*(1-smooth((clock-41)/30)),transport=clock>=3;
+  const amount=clock<3?0:Math.sin(Math.PI*(clock-3)/68)**2,transport=clock>=3;
   if(snapshotCycle!==cycle)assign(cycle);
-  if(amount===1&&lastHeldCycle===cycle)return;lastHeldCycle=amount===1?cycle:-1;
   const organicTime=cycle*3+Math.min(clock,3);
   const active=transport?snapshot:source(organicTime);
+  ctx.setTransform(canvas.width/w,0,0,canvas.height/h,0,0);
   ctx.globalAlpha=1;if(transparent)ctx.clearRect(0,0,w,h);else{ctx.fillStyle=blue?'#0846f5':'#000';ctx.fillRect(0,0,w,h);}
-  const positions=[];
+  lastActive=active;lastAmount=amount;lastTransport=transport;
+  const bendAmount=Math.sin(Math.PI*amount);
   for(const p of active){
    // Move the very same glyph. Its identity, size and opacity never change
    // during the entire outward and return journey; no V layer is drawn.
-   const bend=Math.sin(Math.PI*amount)*Math.sin(p.id*1.7)*12;
+   const bend=transport?bendAmount*p.bend:0;
    const x=transport?mix(p.x,p.tx,amount)+bend:p.x,y=transport?mix(p.y,p.ty,amount):p.y;
-   ctx.globalAlpha=p.alpha;ctx.drawImage(atlas[p.character],x-12,y-12);
-   positions.push({id:p.id,char:letters[p.character],alpha:p.alpha,x,y});
+   ctx.globalAlpha=p.alpha;ctx.drawImage(atlas[p.character],x-8,y-9);
   }
   ctx.globalAlpha=1;
-  canvas.__letterPositions=positions;
-  canvas.dataset.phase=amount>.999?'formed':clock<3?'flowing':clock<41?'assembling':'dispersing';
+  canvas.dataset.phase=amount>.999?'formed':clock<3?'flowing':clock<37?'assembling':'dispersing';
   canvas.dataset.formation=amount.toFixed(5);canvas.dataset.cycle='71';canvas.dataset.field=field?'source-measured':'fallback';canvas.dataset.logo=logoPoints.length?'official-website-asset':'fallback';
  };
 }
