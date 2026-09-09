@@ -438,8 +438,7 @@ export async function openOrFocusPetMiniPanel(
     if (!nativeResult.visible || !nativeResult.focused) {
       return restoreDetachedOverlay(nativeResult.reason ?? 'not_visible');
     }
-    // First settle + retries (minimized restore can be slower than 180ms).
-    await waitMs(120);
+    // Check immediately; poll only if the native window has not settled yet.
     let panelVisible = await pollPanelVisible(6, 90);
 
     if (!panelVisible) {
@@ -448,7 +447,6 @@ export async function openOrFocusPetMiniPanel(
       if (!nativeResult.visible || !nativeResult.focused) {
         return restoreDetachedOverlay(nativeResult.reason ?? 'not_visible');
       }
-      await waitMs(150);
       panelVisible = await pollPanelVisible(4, 100);
     }
 

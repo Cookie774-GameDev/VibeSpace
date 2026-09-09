@@ -124,6 +124,7 @@ export class PixiAtlasPlayer {
   private destroyed = false;
   private contextLost = false;
   private tickerFn: ((ticker: { deltaMS: number }) => void) | null = null;
+  private lastTickerTickAt = 0;
   private mountEl: HTMLElement | null = null;
   private contextLostHandler: ((event: Event) => void) | null = null;
   private contextRestoredHandler: ((event: Event) => void) | null = null;
@@ -469,6 +470,7 @@ export class PixiAtlasPlayer {
     app.stage.addChild(sprite);
 
     this.tickerFn = (ticker) => {
+      this.lastTickerTickAt = performance.now();
       this.update(ticker.deltaMS);
       // Dev perf: approximate FPS from deltaMS when available.
       if (ticker.deltaMS > 0) {
@@ -476,6 +478,7 @@ export class PixiAtlasPlayer {
       }
     };
     app.ticker.add(this.tickerFn);
+    this.lastTickerTickAt = performance.now();
     try {
       app.ticker.start();
     } catch {
@@ -566,7 +569,7 @@ export class PixiAtlasPlayer {
     const atlas = (await res.json()) as AtlasJson;
     if (gen !== this.loadGeneration || this.destroyed) return;
 
-    // Load full sheet; prefer non-premultiplied alpha so cream stays bright on dark UI.
+    // Retain Pixi's premultiplied upload so transparent RGB cannot leak into edges.
     const base = (await Assets.load(imageUrl)) as Texture;
     if (gen !== this.loadGeneration || this.destroyed) {
       return;
@@ -615,11 +618,10 @@ export class PixiAtlasPlayer {
     };
     if (source) {
       if ('scaleMode' in source) source.scaleMode = SCALE_MODES.NEAREST;
-      // Keep unpremultiplied so semi-transparent edges don't darken
-      try {
-        (source as { alphaMode?: string }).alphaMode = 'no-premultiply-alpha';
-      } catch {
-        /* ignore */
+      // Repair cached sheets loaded by older players as well as new PNG uploads.
+      if (source.alphaMode !== 'premultiply-alpha-on-upload') {
+        source.alphaMode = 'premultiply-alpha-on-upload';
+        source.update?.();
       }
     }
     this.lastFilter = 'nearest';
@@ -735,9 +737,16 @@ export class PixiAtlasPlayer {
     if (!this.app || !this.sprite || this.frameNames.length === 0) return false;
     try {
       this.forceTransparentBackground(this.app);
-      if (!this.isTickerStarted()) {
+      const stalled =
+        !this.manuallyPaused &&
+        !this.done &&
+        this.frameNames.length > 1 &&
+        performance.now() - this.lastTickerTickAt > 1_000;
+      if (!this.isTickerStarted() || stalled) {
         try {
+          if (stalled) this.app.ticker.stop();
           this.app.ticker.start();
+          this.lastTickerTickAt = performance.now();
         } catch {
           /* ignore */
         }

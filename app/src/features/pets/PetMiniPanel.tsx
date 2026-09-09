@@ -200,11 +200,15 @@ export function PetMiniPanel({
 
   const handleMinimize = () => {
     if (windowMode) {
+      updateLifecycle({ type: 'request_minimize' });
       void dismissNativePanel().then(() => {
         updateLifecycle({ type: 'minimized' });
         onMinimize?.();
         onClose();
-      }).catch(() => updateLifecycle({ type: 'opened' }));
+      }).catch(() => {
+        updateLifecycle({ type: 'request_open' });
+        updateLifecycle({ type: 'opened' });
+      });
       return;
     }
     window.clearTimeout(transitionTimerRef.current);
@@ -225,10 +229,15 @@ export function PetMiniPanel({
 
   const handleCloseRequest = () => {
     if (windowMode) {
+      updateLifecycle({ type: 'request_close' });
+      updateLifecycle({ type: 'confirm_close' });
       void dismissNativePanel().then(() => {
         updateLifecycle({ type: 'closed' });
         onClose();
-      }).catch(() => updateLifecycle({ type: 'opened' }));
+      }).catch(() => {
+        updateLifecycle({ type: 'request_open' });
+        updateLifecycle({ type: 'opened' });
+      });
       return;
     }
     updateLifecycle({ type: 'request_close' });

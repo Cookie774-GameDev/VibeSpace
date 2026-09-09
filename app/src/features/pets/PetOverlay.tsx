@@ -459,7 +459,7 @@ export function PetOverlay({
     };
     const onPageShow = () => softOrHardRecover();
     // Bounded health poll — cheap when healthy; recovers a blank but draggable pet.
-    const interval = window.setInterval(softOrHardRecover, 12_000);
+    const interval = window.setInterval(softOrHardRecover, 2_000);
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pageshow', onPageShow);

@@ -69,6 +69,20 @@ it('closes in one click and immediately restores the pet at the panel position o
   expect(minimizePetPanel).not.toHaveBeenCalled();
 });
 
+it.each(['Close', 'Minimize'])('animates native %s and restores controls if native dismissal fails', async (action) => {
+  vi.useFakeTimers();
+  let rejectHide!: (reason: Error) => void;
+  vi.mocked(hidePetPanel).mockImplementationOnce(() => new Promise((_, reject) => { rejectHide = reject; }));
+  const onClose = vi.fn();
+  render(<PetMiniPanel open windowMode onClose={onClose} />);
+  act(() => { vi.advanceTimersByTime(200); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: `${action} pet panel` })); });
+  expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe(action === 'Close' ? 'closing' : 'minimizing');
+  await act(async () => { rejectHide(new Error('Window busy')); });
+  expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe('open');
+  expect(onClose).not.toHaveBeenCalled();
+});
+
 it('scales all content together as the panel grows and shrinks without scaling resize handles twice', () => {
   vi.useFakeTimers();
   let width = 460, height = 560;
