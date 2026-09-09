@@ -125,12 +125,14 @@ export function Plugins() {
   );
   const [mcpOpen, setMcpOpen] = React.useState(false);
   const [mcpProvider, setMcpProvider] = React.useState<HostedMcpProvider>();
+  const [mcpConnectRequest, setMcpConnectRequest] = React.useState(0);
   const management = usePluginManagementCapability();
 
   React.useEffect(() => {
     if (consumePendingMcpManagerOpenRequest()) setMcpOpen(true);
     const openMcpManager = () => {
       consumePendingMcpManagerOpenRequest();
+      setMcpConnectRequest(0);
       setMcpOpen(true);
     };
     window.addEventListener(OPEN_MCP_MANAGER_EVENT, openMcpManager);
@@ -299,7 +301,10 @@ export function Plugins() {
             aria-label={mcpOpen ? 'Close MCP connections' : 'Add MCP connection'}
             aria-expanded={mcpOpen}
             aria-controls="plugins-mcp-connections"
-            onClick={() => setMcpOpen((open) => !open)}
+            onClick={() => {
+              setMcpConnectRequest(0);
+              setMcpOpen((open) => !open);
+            }}
           >
             <Plus />
           </Button>
@@ -308,7 +313,10 @@ export function Plugins() {
 
       {mcpOpen ? (
         <div id="plugins-mcp-connections">
-          <OpenCodeMcpConnections initialProvider={mcpProvider} />
+          <OpenCodeMcpConnections
+            initialProvider={mcpProvider}
+            connectRequestId={mcpConnectRequest}
+          />
         </div>
       ) : null}
 
@@ -559,6 +567,7 @@ export function Plugins() {
         onOpenHosted={(provider) => {
           setSelected(null);
           setMcpProvider(provider);
+          setMcpConnectRequest((request) => request + 1);
           setMcpOpen(true);
           requestAnimationFrame(() =>
             document.getElementById('plugins-mcp-connections')?.scrollIntoView({ block: 'start' }),

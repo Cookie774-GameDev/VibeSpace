@@ -11,8 +11,16 @@ import { useAuthStore } from '@/stores/auth';
 vi.mock('@/lib/sync', () => ({ enqueueMutation: vi.fn(async () => 'test') }));
 vi.mock('@/lib/tauri', () => ({ openExternal: vi.fn(async () => undefined) }));
 vi.mock('./OpenCodeMcpConnections', () => ({
-  OpenCodeMcpConnections: ({ initialProvider }: { initialProvider?: { url: string } }) => (
-    <div data-testid="selected-mcp">{initialProvider?.url}</div>
+  OpenCodeMcpConnections: ({
+    initialProvider,
+    connectRequestId,
+  }: {
+    initialProvider?: { url: string };
+    connectRequestId?: number;
+  }) => (
+    <div data-testid="selected-mcp" data-request={connectRequestId}>
+      {initialProvider?.url}
+    </div>
   ),
 }));
 
@@ -53,9 +61,18 @@ describe('catalog browser sign-in and credential recovery', () => {
       open(provider.id);
       fireEvent.click(screen.getByRole('button', { name: /with browser sign-in$/i }));
       expect(screen.getByTestId('selected-mcp').textContent).toBe(provider.url);
+      expect(screen.getByTestId('selected-mcp').getAttribute('data-request')).toBe('1');
       expect(management.beginAuthorization).not.toHaveBeenCalled();
     },
   );
+
+  it('does not repeat authorization when manually reopening the manager', () => {
+    open('supabase');
+    fireEvent.click(screen.getByRole('button', { name: /with browser sign-in$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close MCP connections' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add MCP connection' }));
+    expect(screen.getByTestId('selected-mcp').getAttribute('data-request')).toBe('0');
+  });
 
   it('offers Supabase project credentials separately and does not claim OAuth or accept a failed probe', async () => {
     open('supabase');

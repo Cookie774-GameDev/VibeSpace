@@ -25,18 +25,41 @@ function setup(initial: OpenCodeMcpStatus) {
     authenticateMcp: vi.fn(async (): Promise<OpenCodeMcpStatus> => ({ status: 'connected' })),
     removeMcpAuth: vi.fn(async () => true),
   };
-  const mount = () =>
+  const mount = (
+    initialProvider?: (typeof HOSTED_MCP_PROVIDERS)[number],
+    connectRequestId?: number,
+  ) =>
     render(
       <OpenCodeMcpConnections
         runtime={runtime}
         clientFactory={() => client as unknown as OpenCodeHttpClient}
         directory="C:/OAuth/Test"
+        initialProvider={initialProvider}
+        connectRequestId={connectRequestId}
       />,
     );
   return { client, mount };
 }
 
 describe('MCP OAuth recovery', () => {
+  it.each(HOSTED_MCP_PROVIDERS)(
+    'starts $name authorization from the catalog request without another form submission',
+    async (provider) => {
+      const { client, mount } = setup({ status: 'disabled' });
+      client.addMcp.mockResolvedValue({ [provider.id]: { status: 'needs_auth' } });
+      client.mcpStatus
+        .mockResolvedValueOnce({ docs: { status: 'disabled' } })
+        .mockResolvedValue({ [provider.id]: { status: 'connected' } });
+      mount(provider, 1);
+      await waitFor(() =>
+        expect(client.authenticateMcp).toHaveBeenCalledWith(provider.id, 'C:/OAuth/Test'),
+      );
+      await screen.findByText('Connected');
+      expect(client.addMcp).toHaveBeenCalledTimes(1);
+      expect(client.authenticateMcp).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(HOSTED_MCP_PROVIDERS)(
     'starts the real OAuth client operation for the $name preset',
     async (provider) => {

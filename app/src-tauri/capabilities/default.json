@@ -43,6 +43,8 @@
         { "url": "https://dashscope.aliyuncs.com/*" },
         { "url": "https://dashscope-intl.aliyuncs.com/*" },
         { "url": "https://api.github.com/*" },
+        { "url": "https://github.com/login/device/code" },
+        { "url": "https://github.com/login/oauth/access_token" },
         { "url": "https://api.figma.com/*" },
         { "url": "https://*.supabase.co/*" },
         { "url": "https://*.myshopify.com/*" },

@@ -28,6 +28,7 @@ export interface OpenCodeMcpConnectionsProps {
   clientFactory?: (connection: OpenCodeServerConnection) => OpenCodeHttpClient;
   directory?: string;
   initialProvider?: HostedMcpProvider;
+  connectRequestId?: number;
 }
 
 const STATUS_ERROR = 'OpenCode MCP status is unavailable.';
@@ -53,6 +54,7 @@ export function OpenCodeMcpConnections({
   clientFactory = createOpenCodeHttpClient,
   directory: configuredDirectory,
   initialProvider,
+  connectRequestId,
 }: OpenCodeMcpConnectionsProps) {
   const projectId = useAuthStore((state) => state.projectId);
   const directory = configuredDirectory ?? (getStoredProjectRoot(projectId).trim() || undefined);
@@ -86,6 +88,7 @@ export function OpenCodeMcpConnections({
   const [remoteUrl, setRemoteUrl] = React.useState('');
   const [localCommand, setLocalCommand] = React.useState('');
   const generation = React.useRef(0);
+  const handledConnectRequest = React.useRef<number | undefined>(undefined);
 
   React.useEffect(() => {
     if (!initialProvider) return;
@@ -216,6 +219,11 @@ export function OpenCodeMcpConnections({
               .filter(Boolean),
             enabled: true,
           };
+    await addConfiguredServer(normalizedName, config);
+  }
+
+  async function addConfiguredServer(normalizedName: string, config: OpenCodeMcpConfig) {
+    if (!client || !authorityKey) return;
     const current = ++generation.current;
     setProjectionAuthority(authorityKey);
     setBusy('add');
@@ -227,7 +235,7 @@ export function OpenCodeMcpConnections({
       setName('');
       setRemoteUrl('');
       setLocalCommand('');
-      if (kind === 'remote' && needsAuthorization(next[normalizedName])) {
+      if (config.type === 'remote' && needsAuthorization(next[normalizedName])) {
         await authorizeServer(normalizedName, current);
       }
     } catch {
@@ -236,6 +244,25 @@ export function OpenCodeMcpConnections({
       if (current === generation.current) setBusy(undefined);
     }
   }
+
+  React.useEffect(() => {
+    if (
+      !initialProvider ||
+      !connectRequestId ||
+      handledConnectRequest.current === connectRequestId ||
+      !client ||
+      !authorityKey ||
+      projectionAuthority !== authorityKey ||
+      busy
+    )
+      return;
+    handledConnectRequest.current = connectRequestId;
+    void addConfiguredServer(initialProvider.id, {
+      type: 'remote',
+      url: initialProvider.url,
+      enabled: true,
+    });
+  }, [initialProvider, connectRequestId, client, authorityKey, projectionAuthority, busy]);
 
   const projectionCurrent = authorityKey !== undefined && projectionAuthority === authorityKey;
   const visibleBusy = projectionCurrent ? busy : client ? 'authority-change' : undefined;
