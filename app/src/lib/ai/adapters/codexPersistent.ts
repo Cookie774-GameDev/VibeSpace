@@ -104,6 +104,16 @@ function promptText(request: Readonly<ProviderRequest>, newThread = false): stri
   return newThread ? request.historyPrompt?.trim() || request.prompt : request.prompt;
 }
 
+function developerInstructions(request: Readonly<ProviderRequest>): string {
+  return [
+    request.systemPrompt?.trim(),
+    '## Codex native execution',
+    'For coding work, use the available native file and command tools when the current mode permits them. Do not replace those tools with textual files.create, files.edit, or terminal action proposals.',
+    'Native sandbox and approval rules remain authoritative. Ask and Plan remain read-only; never bypass a denied tool or approval through another connector.',
+    'Textual VibeSpace action proposals are only for app operations without an available native tool. Finish the response after such a proposal so the chat can present its approval; do not wait for approval inside the active turn.',
+  ].filter(Boolean).join('\n\n');
+}
+
 function effort(request: Readonly<ProviderRequest>): string | null {
   const value = request.reasoningEffort ?? request.runtimeSettings?.effort;
   if (!value || value === 'auto') return null;
@@ -270,13 +280,13 @@ async function* sendCodexRequest(
           threadId: request.sessionId,
           identity: exactIdentity,
           mode,
-          developerInstructions: request.systemPrompt,
+          developerInstructions: developerInstructions(request),
         })
       : buildCodexThreadStartRequest({
           requestId: threadRequestId,
           identity: exactIdentity,
           mode,
-          developerInstructions: request.systemPrompt,
+          developerInstructions: developerInstructions(request),
         });
     await dependencies.write(generation, threadRequest);
     let threadResponse = await responseFrame(reader, threadRequestId);
@@ -291,7 +301,7 @@ async function* sendCodexRequest(
       threadRequestId = requestId(request.requestId, 'thread');
       await dependencies.write(generation, buildCodexThreadStartRequest({
         requestId: threadRequestId, identity: exactIdentity, mode,
-        developerInstructions: request.systemPrompt,
+        developerInstructions: developerInstructions(request),
       }));
       threadResponse = await responseFrame(reader, threadRequestId);
       resumed = false;

@@ -1292,6 +1292,33 @@ export function normalizePersistentOpenCodeUsage(
   };
 }
 
+/** Aggregate only this turn's completed model steps, not just its final answer. */
+export function completedOpenCodeTurnUsage(
+  messages: readonly OpenCodeMessageRecord[],
+): UsageSnapshot | undefined {
+  const completed = new Map<string, Record<string, unknown>>();
+  for (const message of messages) {
+    const info = message.info;
+    const id = canonicalOpenCodeMessageId(message);
+    if (id && info?.role === 'assistant' && (recordOf(info.time)?.completed || info.finish)) {
+      completed.set(id, info);
+    }
+  }
+  if (completed.size === 0) return undefined;
+  const snapshots = [...completed.values()].map(info =>
+    normalizePersistentOpenCodeUsage({ type: 'message.updated', properties: { info } }),
+  );
+  const result: UsageSnapshot = { capturedAt: Date.now() };
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens',
+    'cacheWriteTokens', 'reasoningTokens', 'costUsd'] as const) {
+    const values = snapshots.map(snapshot => snapshot?.[key]?.value);
+    result[key] = values.every((value): value is number => value !== undefined)
+      ? { value: values.reduce((sum, value) => sum + value, 0), provenance: 'provider-reported' }
+      : { provenance: 'unavailable', reason: 'One or more completed model steps omitted this metric.' };
+  }
+  return result;
+}
+
 export interface OpenCodeObservedIdentity {
   providerId?: string;
   modelId?: string;
@@ -2631,10 +2658,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const delta = canonicalOpenCodeTextSuffix(emittedText, canonical);
       if (delta) yield { type: 'text', delta, streamPartId: latestTextStreamPartId };
     }
-    const finalAssistant = [...currentTurnMessages].reverse().find(message => message.info?.role === 'assistant');
-    const finalInfo = finalAssistant?.info;
-    const completedUsage = finalInfo && (recordOf(finalInfo.time)?.completed || finalInfo.finish)
-      ? normalizePersistentOpenCodeUsage({ type: 'message.updated', properties: { info: finalInfo } }) : undefined;
+    const completedUsage = completedOpenCodeTurnUsage(currentTurnMessages);
     const unavailableMetric = { provenance: 'unavailable' as const };
     yield { type: 'usage', usage: {
       capturedAt: Date.now(),

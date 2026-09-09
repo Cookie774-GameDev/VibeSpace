@@ -119,7 +119,10 @@ it.each([false, true])('keeps application instructions out of user text (resume=
     modelId: 'opencode-go/deepseek-v4-flash-vision-exp', workingDirectory: 'C:\\workspace',
     interactionMode: 'ask', ...(resume ? { sessionId: 'thread_native_1' } : {}),
   })) { /* Consume the real adapter event path. */ }
-  expect(writes[1].params.developerInstructions).toBe('Application policy and selected Ponytail skill.');
+  expect(writes[1].params.developerInstructions).toContain('Application policy and selected Ponytail skill.');
+  expect(writes[1].params.developerInstructions).toContain('Do not replace those tools with textual files.create');
+  expect(writes[1].params.developerInstructions).toContain('Ask and Plan remain read-only');
+  expect(writes[1].params.developerInstructions).toContain('Finish the response after such a proposal');
   expect(writes[2].params.input[0].text).toBe(resume
     ? 'Read the files and make an HTML.'
     : 'Earlier conversation. Read the files and make an HTML.');

@@ -60,6 +60,7 @@ import {
   isActiveOpenCodeChildApproval,
   managedOpenCodeAuthResult,
   normalizePersistentOpenCodeUsage,
+  completedOpenCodeTurnUsage,
   normalizeQuestionEvent,
   normalizeToolEvent,
   openCodeCatalogRevision,
@@ -2702,6 +2703,33 @@ describe('persistent OpenCode live authority', () => {
       reasoningTokens: { value: 11, provenance: 'provider-reported' },
       costUsd: { value: 0.012, provenance: 'provider-reported' },
     });
+  });
+
+  it('totals unique completed current-turn steps, including cached and reasoning tokens', () => {
+    const first = { info: { id: 'step-1', role: 'assistant', finish: 'tool-calls',
+      tokens: { input: 100, output: 10, total: 315, reasoning: 5, cache: { read: 200, write: 0 } }, cost: 0.01 } };
+    const final = { info: { id: 'step-2', role: 'assistant', finish: 'stop',
+      tokens: { input: 50, output: 20, total: 175, reasoning: 5, cache: { read: 100, write: 0 } }, cost: 0.02 } };
+    const usage = completedOpenCodeTurnUsage([
+      { info: { ...first.info, id: 'user', role: 'user' } }, first, first,
+      { info: { id: 'unfinished', role: 'assistant', tokens: { input: 999 } } }, final,
+    ]);
+    expect(usage).toMatchObject({
+      inputTokens: { value: 150, provenance: 'provider-reported' },
+      outputTokens: { value: 30 }, totalTokens: { value: 490 },
+      cacheReadTokens: { value: 300 }, reasoningTokens: { value: 10 }, costUsd: { value: 0.03 },
+    });
+  });
+
+  it('does not present partial step counts as a complete turn total', () => {
+    const usage = completedOpenCodeTurnUsage([
+      { info: { id: 'one', role: 'assistant', finish: 'tool-calls', tokens: { input: 50, output: 2 } } },
+      { info: { id: 'two', role: 'assistant', finish: 'stop', tokens: { output: 3 } } },
+    ]);
+    expect(usage?.inputTokens).toMatchObject({ provenance: 'unavailable' });
+    expect(usage?.inputTokens?.value).toBeUndefined();
+    expect(usage?.outputTokens).toEqual({ value: 5, provenance: 'provider-reported' });
+    expect(completedOpenCodeTurnUsage([])).toBeUndefined();
   });
 
   it('keeps a partial OpenCode usage receipt limited to fields the provider observed', () => {
