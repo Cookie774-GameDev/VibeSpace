@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useUIStore } from '@/stores/ui';
 import { Check, ChevronDown, Plus, Trash2, Volume2, VolumeX, X, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -31,8 +32,20 @@ async function playSelectVoice(signal: AbortSignal): Promise<void> {
   await audio.play();
 }
 
-export function FasterAgentsOverlay({ terminals }: { terminals: FasterAgentsTerminalOption[] }) {
-  const open = useFasterAgentsStore((state) => state.open);
+export function FasterAgentsOverlay({
+  terminals,
+  surface = 'terminal',
+  deliver,
+}: {
+  terminals: FasterAgentsTerminalOption[];
+  surface?: 'terminal' | 'workbench';
+  deliver?: (command: string, refs: readonly TerminalRef[]) => number;
+}) {
+  const route = useUIStore((state) => state.route);
+  const requested = useFasterAgentsStore((state) => state.open);
+  // The terminals page can stay mounted behind Workbench. Only one picker owns input.
+  const open =
+    requested && (surface === 'workbench' ? route === 'workbench' : route !== 'workbench');
   const phase = useFasterAgentsStore((state) => state.phase);
   const selectedRefs = useFasterAgentsStore((state) => state.selectedRefs);
   const phrases = useFasterAgentsStore((state) => state.phrases);
@@ -83,6 +96,7 @@ export function FasterAgentsOverlay({ terminals }: { terminals: FasterAgentsTerm
   React.useEffect(() => {
     if (!open || phase !== 'select') return;
     const selectPane = (event: PointerEvent) => {
+      if (event.button !== 0 && event.button !== undefined) return;
       const target = event.target instanceof Element ? event.target : null;
       const pane = target?.closest<HTMLElement>('[data-terminal-drop-pane-id]');
       if (!pane) return;
@@ -124,7 +138,12 @@ export function FasterAgentsOverlay({ terminals }: { terminals: FasterAgentsTerm
   const crack = () => {
     if (selectedRefs.length === 0) return;
     const phrase = pickFasterAgentsPhrase(phrases);
-    enqueueTerminalCommand({ command: phrase, target: 'refs', refs: selectedRefs });
+    const count = deliver ? deliver(phrase, selectedRefs) : selectedRefs.length;
+    if (!deliver) enqueueTerminalCommand({ command: phrase, target: 'refs', refs: selectedRefs });
+    if (!count) {
+      toast.warning('No live targets', 'Select your Workbench terminals again.');
+      return;
+    }
     if (soundEnabled) {
       void playOpenWhipCrack().then((played) => {
         if (!played) toast.warning('Whip sound unavailable', 'The phrase was still delivered.');
@@ -132,7 +151,7 @@ export function FasterAgentsOverlay({ terminals }: { terminals: FasterAgentsTerm
     }
     toast.success(
       'Whip delivered',
-      `${selectedRefs.length} selected terminal${selectedRefs.length === 1 ? '' : 's'} received one phrase.`,
+      `${count} selected terminal${count === 1 ? '' : 's'} queued one phrase.`,
     );
   };
 

@@ -22,6 +22,15 @@
   pointer-events: none;
 }
 
+.jarvis-edge-aura[data-active='true'] .jarvis-edge-aura__canvas {
+  animation: jarvis-aura-enter 450ms ease-out both;
+}
+
+@keyframes jarvis-aura-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 html[data-vibespace-view='jarvis-ambient-overlay'],
 html[data-vibespace-view='jarvis-ambient-overlay'] body,
 html[data-vibespace-view='jarvis-ambient-overlay'] #root {
@@ -41,15 +50,6 @@ html[data-vibespace-view='jarvis-ambient-overlay'] #root {
   }
 }
 
-/* Open is not listening: show a quiet, motionless presence until capture opens. */
-.jarvis-edge-aura[data-active='true'][data-jarvis-ambient-state='idle']::after {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  border: 2px solid var(--muted-foreground, #94a3b8);
-  opacity: 0.6;
-  pointer-events: none;
-}
 
 @media (forced-colors: active) {
   .jarvis-edge-aura__canvas {

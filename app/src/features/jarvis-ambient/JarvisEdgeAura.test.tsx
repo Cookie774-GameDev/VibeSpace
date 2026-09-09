@@ -13,6 +13,25 @@ const listening: JarvisAmbientSnapshot = {
 };
 
 describe('JarvisEdgeAura', () => {
+  it('paints soft transparent-ended gradients without sharp border strokes', () => {
+    let frame!: FrameRequestCallback;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frame = callback; return 1; });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+    const addColorStop = vi.fn();
+    const context = {
+      clearRect: vi.fn(), setTransform: vi.fn(), save: vi.fn(), restore: vi.fn(),
+      createLinearGradient: vi.fn(() => ({ addColorStop })),
+      createRadialGradient: vi.fn(() => ({ addColorStop })),
+      fillRect: vi.fn(), stroke: vi.fn(),
+    };
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(context as unknown as ReturnType<HTMLCanvasElement['getContext']>);
+    render(<JarvisEdgeAura snapshot={{ ...listening, active: true }} reducedMotion />);
+    frame(0);
+    expect(context.createLinearGradient).toHaveBeenCalledTimes(4);
+    expect(context.createRadialGradient).toHaveBeenCalledTimes(3);
+    expect(addColorStop.mock.calls.filter(([offset, color]) => offset === 1 && String(color).endsWith(',0)'))).toHaveLength(7);
+    expect(context.stroke).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   });
@@ -71,6 +90,7 @@ describe('JarvisEdgeAura', () => {
     );
     frame(0);
     expect(context.strokeRect).not.toHaveBeenCalled();
+    expect(context.stroke).not.toHaveBeenCalled();
     expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false');
   });
 

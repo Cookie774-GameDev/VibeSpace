@@ -85,16 +85,16 @@ describe('Deepgram synthesis request', () => {
 describe('testDeepgramVoiceKey', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('uses the read-only projects endpoint instead of synthesizing billable audio', async () => {
+  it('validates speech keys without project-list permissions or billable synthesis', async () => {
     const fetcher = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response('{"projects":[]}', { status: 200 }),
+        new Response('{"api_key_id":"test-key-id"}', { status: 200 }),
     );
     vi.stubGlobal('fetch', fetcher);
 
     await expect(testDeepgramVoiceKey('private-key')).resolves.toBe(true);
     expect(fetcher).toHaveBeenCalledWith(
-      'https://api.deepgram.com/v1/projects',
+      'https://api.deepgram.com/v1/auth/token',
       expect.objectContaining({
         method: 'GET',
         headers: { Authorization: 'Token private-key' },

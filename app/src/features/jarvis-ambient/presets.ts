@@ -14,12 +14,12 @@ export type JarvisEdgePreset = Readonly<{
 export const JARVIS_EDGE_PRESETS: Readonly<Record<JarvisAmbientState, JarvisEdgePreset>> =
   Object.freeze({
     idle: {
-      color: '#000000',
-      minBand: 0,
-      maxBand: 0,
-      glow: 0,
-      alpha: 0,
-      periodMs: 0,
+      color: '#65beff',
+      minBand: 8,
+      maxBand: 8,
+      glow: 28,
+      alpha: 0.8,
+      periodMs: 7_200,
       energyGain: 0,
       segment: 0,
     },

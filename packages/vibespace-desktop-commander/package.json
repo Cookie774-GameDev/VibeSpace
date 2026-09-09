@@ -25,6 +25,8 @@
     "browser/package-lock.json",
     "browser/UPSTREAM-README.md",
     "gateway.mjs",
+    "setup-runtime.mjs",
+    "setup",
     "mcp.mjs",
     "config.mjs",
     "README.md",

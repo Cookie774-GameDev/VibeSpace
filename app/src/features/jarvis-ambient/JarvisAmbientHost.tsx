@@ -37,8 +37,10 @@ function currentEnergy(): number {
 }
 
 export function JarvisAmbientHost() {
+  const [localSnapshot, setLocalSnapshot] = React.useState<JarvisAmbientSnapshot>(() =>
+    normalizeAmbientSnapshot(null),
+  );
   React.useEffect(() => {
-    if (!isTauriRuntime()) return;
     let disposed = false;
     let timer: number | null = null;
     let expiryTimer: number | null = null;
@@ -47,6 +49,11 @@ export function JarvisAmbientHost() {
     let pendingSnapshot: JarvisAmbientSnapshot | null = null;
     let sending = false;
     const drain = async () => {
+      if (!isTauriRuntime()) {
+        if (!disposed && pendingSnapshot) setLocalSnapshot(pendingSnapshot);
+        pendingSnapshot = null;
+        return;
+      }
       if (sending) return;
       sending = true;
       try {
@@ -126,7 +133,7 @@ export function JarvisAmbientHost() {
       void drain();
     };
   }, []);
-  return null;
+  return isTauriRuntime() ? null : <JarvisEdgeAura snapshot={localSnapshot} />;
 }
 
 export function JarvisAmbientOverlayView() {

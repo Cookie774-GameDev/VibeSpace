@@ -143,3 +143,6 @@ tools/pets/tmp_video_cache/
 .codex-evidence/pr31-siyuan-creation-rollback-20260829/cargo-target/
 .codex-evidence/pr31-siyuan-creation-rollback-20260829/webview-profile/
 .codex-evidence/PR31-CHAT-NATIVE-PART-BOUNDARIES/isolated-worktree/
+# Generated, verified desktop connector runtime (rebuilt before packaging).
+/app/src-tauri/resources/desktop-connector/runtime.zip
+/app/src-tauri/resources/desktop-connector/manifest.json

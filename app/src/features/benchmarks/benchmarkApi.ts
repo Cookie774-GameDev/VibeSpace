@@ -1,4 +1,5 @@
 import { DEFAULT_NEWS_API_URL } from '@/features/news/newsApi';
+import { nativeFetch } from '@/lib/nativeFetch';
 
 export type BenchmarkFreshnessState = 'fresh' | 'degraded' | 'stale' | 'failed' | 'never';
 
@@ -430,7 +431,7 @@ export function configuredBenchmarkApiUrl(): string {
 export async function fetchBenchmarkLeaderboard(
   origin = configuredBenchmarkApiUrl(),
   {
-    fetcher = fetch,
+    fetcher = nativeFetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   }: { fetcher?: FetchLike; timeoutMs?: number } = {},
 ): Promise<BenchmarkFetchResult> {

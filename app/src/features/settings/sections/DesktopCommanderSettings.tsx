@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { requestOpenMcpManager } from '@/features/plugins/openMcpManager';
+import { DesktopConnectorSetup } from './DesktopConnectorSetup';
 import {
   connectDesktopCommander,
   type DesktopCommanderClient,
@@ -113,9 +114,10 @@ export function DesktopCommanderSettings({
         Configure the VibeSpace copy. Changes are saved to its running MCP and checked by reading
         them back.
       </p>
+      <DesktopConnectorSetup />
       <details className="my-3 rounded-lg border border-border p-3">
         <summary className="cursor-pointer text-secondary text-foreground">
-          Setup Desktop Commander and browser tools
+          Advanced: manual local connection
         </summary>
         <a
           className="mt-3 inline-block text-sm underline"
@@ -148,7 +150,7 @@ export function DesktopCommanderSettings({
         </ol>
         <p className="my-3 text-sm text-muted-foreground">
           Local tools need no tunnel or OpenAI key. An OpenAI key is only needed if you select
-          OpenAI as your model provider. Remote access requires a separately secured tunnel; keep
+          OpenAI as your model provider. For remote ChatGPT access, use the tunnel Setup above; keep
           the gateway’s bearer authentication enabled.
         </p>
         <Button variant="secondary" onClick={requestOpenMcpManager}>

@@ -119,10 +119,29 @@ export const PLUGIN_SIMPLE_ICON_SLUG: Record<string, string> = {
   plaid: 'plaid',
 };
 
-/** Official mapped logo URL. Unmapped providers use the component's deterministic initials. */
+const LOCAL_LOGO_EXTENSIONS: Record<string, string> = {
+  chargebee: 'ico',
+  cohere: 'ico',
+  'google-contacts': 'png',
+  groq: 'ico',
+  klaviyo: 'png',
+  launchdarkly: 'ico',
+  'microsoft-planner': 'ico',
+  'mistral-ai': 'ico',
+  pinecone: 'ico',
+  pipedrive: 'ico',
+  plaid: 'png',
+  postmark: 'ico',
+  segment: 'ico',
+  sendgrid: 'ico',
+  'together-ai': 'png',
+  weaviate: 'ico',
+};
+
+/** Bundled verified brand marks. Unmapped providers retain local initials. */
 export function getPluginLogoSources(
   plugin: Pick<PluginManifest, 'id' | 'credentialUrl' | 'docsUrl'>,
 ): string[] {
   const slug = PLUGIN_SIMPLE_ICON_SLUG[plugin.id];
-  return slug ? [`https://cdn.simpleicons.org/${slug}`] : [];
+  return slug ? [`/plugin-logos/${plugin.id}.${LOCAL_LOGO_EXTENSIONS[plugin.id] ?? 'svg'}`] : [];
 }

@@ -73,6 +73,7 @@ export function PluginLogo({ plugin, size = 'md', className }: PluginLogoProps) 
         className={cn(
           'absolute inset-0 flex items-center justify-center font-bold tracking-[-0.04em] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14)]',
           dims.text,
+          loaded && !exhausted ? 'invisible' : 'visible',
         )}
         style={{
           background: `linear-gradient(145deg, hsl(${hue} 58% 44%), hsl(${(hue + 28) % 360} 58% 28%))`,
@@ -90,7 +91,7 @@ export function PluginLogo({ plugin, size = 'md', className }: PluginLogoProps) 
           referrerPolicy="no-referrer"
           data-loaded={loaded ? 'true' : 'false'}
           className={cn(
-            'relative object-contain transition-opacity duration-150 motion-reduce:transition-none',
+            'relative rounded-sm bg-white object-contain transition-opacity duration-150 motion-reduce:transition-none',
             dims.img,
             loaded ? 'opacity-100' : 'opacity-0',
           )}

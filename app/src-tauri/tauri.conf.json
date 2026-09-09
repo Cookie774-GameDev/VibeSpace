@@ -5,7 +5,7 @@
   "identifier": "ai.jarvis.desktop",
   "build": {
     "beforeDevCommand": "npm run jarvis",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "node ../scripts/prepare-desktop-connector.mjs && npm run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },
@@ -99,6 +99,7 @@
     "shortDescription": "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant.",
     "longDescription": "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant.",
     "resources": [
+      "resources/desktop-connector/*",
       "resources/intro/*",
       "../../docs/oss/dependency-lock.json",
       "../../docs/oss/grammar-license-inventory.md",

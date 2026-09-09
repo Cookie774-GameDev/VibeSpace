@@ -1,0 +1,789 @@
+{
+  "notice": "Brand marks identify their respective products. Trademarks belong to their owners. Simple Icons graphics are provided under CC0; official site icons retain their owners rights.",
+  "logos": [
+    {
+      "id": "airtable",
+      "file": "airtable.svg",
+      "url": "https://cdn.simpleicons.org/airtable",
+      "sha256": "752f03ea13cc75d90de50fc09abf60b6144d1382da4c8881f51abdbde599572a",
+      "bytes": 667
+    },
+    {
+      "id": "algolia",
+      "file": "algolia.svg",
+      "url": "https://cdn.simpleicons.org/algolia",
+      "sha256": "8f062b6fa7222dd00655af33af38eee65bd2e52695c4f8f0c22a7daf40e74551",
+      "bytes": 819
+    },
+    {
+      "id": "anthropic",
+      "file": "anthropic.svg",
+      "url": "https://cdn.simpleicons.org/anthropic",
+      "sha256": "1c10881e4729127e1a86e569613d786240acae13eacfa01860be065b66260e36",
+      "bytes": 296
+    },
+    {
+      "id": "asana",
+      "file": "asana.svg",
+      "url": "https://cdn.simpleicons.org/asana",
+      "sha256": "3e0d3155a2c1c80521dc1cbe15bcba12e707ebef65863b80e43cfca25946fd6a",
+      "bytes": 456
+    },
+    {
+      "id": "bigcommerce",
+      "file": "bigcommerce.svg",
+      "url": "https://cdn.simpleicons.org/bigcommerce",
+      "sha256": "4e78f2ef37b3f314fea86a201e4eb88a5ea727d1ea2bb330c36885204219ae4d",
+      "bytes": 715
+    },
+    {
+      "id": "bitbucket",
+      "file": "bitbucket.svg",
+      "url": "https://cdn.simpleicons.org/bitbucket",
+      "sha256": "cbefef6f884299fdded5aedcde3c6fa3164702a24ecdfe11549374b03eaaddb0",
+      "bytes": 299
+    },
+    {
+      "id": "box",
+      "file": "box.svg",
+      "url": "https://cdn.simpleicons.org/box",
+      "sha256": "08fe0dd20e7dbd142f81da93939b9b248c7a1034bf3a8478d0bbf10f977abc17",
+      "bytes": 1050
+    },
+    {
+      "id": "chargebee",
+      "file": "chargebee.ico",
+      "url": "https://www.chargebee.com/favicon.ico",
+      "sha256": "86402c8bfdf0e47557073cb6740a2f64676f9ce6598b45c40421902cba71c189",
+      "bytes": 4286
+    },
+    {
+      "id": "clickup",
+      "file": "clickup.svg",
+      "url": "https://cdn.simpleicons.org/clickup",
+      "sha256": "35c7c2c13ece5c57f823929aeb6924da276500be0e5aa1897574952b7831b5f1",
+      "bytes": 355
+    },
+    {
+      "id": "cloudflare",
+      "file": "cloudflare.svg",
+      "url": "https://cdn.simpleicons.org/cloudflare",
+      "sha256": "32876bda81542203316d67b9623818ac60986897cac79f70e03e8f31f7b7f160",
+      "bytes": 1193
+    },
+    {
+      "id": "coda",
+      "file": "coda.svg",
+      "url": "https://cdn.simpleicons.org/coda",
+      "sha256": "d41804331ec9821165a2aa0c0bcc349ca6cd836e517dcf70927a3b4b76090b66",
+      "bytes": 581
+    },
+    {
+      "id": "cohere",
+      "file": "cohere.ico",
+      "url": "https://cohere.com/favicon.ico",
+      "sha256": "4f0032eaa7383e82643cdc2828a30ae945148bcd0130c95af3f81e93e9500e90",
+      "bytes": 15406
+    },
+    {
+      "id": "contentful",
+      "file": "contentful.svg",
+      "url": "https://cdn.simpleicons.org/contentful",
+      "sha256": "ae81eb40f26a336e40fc8be1ae4b048ab32f256f673973f2282eaeff6d680ab2",
+      "bytes": 1930
+    },
+    {
+      "id": "datadog",
+      "file": "datadog.svg",
+      "url": "https://cdn.simpleicons.org/datadog",
+      "sha256": "92caaec8a2091cfb92167d24a90c7f9748beabee3a552dc9077897bfcba3bdc5",
+      "bytes": 3013
+    },
+    {
+      "id": "deepgram",
+      "file": "deepgram.svg",
+      "url": "https://cdn.simpleicons.org/deepgram",
+      "sha256": "391f7d32e87f97489a3f409fc80a38bc8ef592617070e735055bfaa2c6e6f711",
+      "bytes": 438
+    },
+    {
+      "id": "digitalocean",
+      "file": "digitalocean.svg",
+      "url": "https://cdn.simpleicons.org/digitalocean",
+      "sha256": "a381454d22f05a4e7034c3e869c99bcac9a6f915ccc00577ed131b604baed489",
+      "bytes": 446
+    },
+    {
+      "id": "discord",
+      "file": "discord.svg",
+      "url": "https://cdn.simpleicons.org/discord",
+      "sha256": "79a8105c2fc15d8caa6ee7b87b58597432e171386d22a2cc2237f0eb3bbbe7dd",
+      "bytes": 1389
+    },
+    {
+      "id": "docker",
+      "file": "docker.svg",
+      "url": "https://cdn.simpleicons.org/docker",
+      "sha256": "ba1fb157870b2ec02e054aed42154ac7418e25af91ec321fd328d17cad4023cd",
+      "bytes": 1780
+    },
+    {
+      "id": "dropbox",
+      "file": "dropbox.svg",
+      "url": "https://cdn.simpleicons.org/dropbox",
+      "sha256": "7dd6ef19801075e4132c8bee85c914da218248bf2fdc53a1c0ae5899ac9c151e",
+      "bytes": 351
+    },
+    {
+      "id": "dynamics-365",
+      "file": "dynamics-365.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/dynamics365.svg",
+      "sha256": "b62967ae6fafa045c59b4d1db8f42cc63cd084810879c7188b4b1068452f59ca",
+      "bytes": 646
+    },
+    {
+      "id": "elevenlabs",
+      "file": "elevenlabs.svg",
+      "url": "https://cdn.simpleicons.org/elevenlabs",
+      "sha256": "24e2fe318bc1ed54a29ceb867e4ecead952355cda4241b07402d1ff6510dc133",
+      "bytes": 173
+    },
+    {
+      "id": "excel",
+      "file": "excel.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoftexcel.svg",
+      "sha256": "3392b76e2c1791f6622bc6a27bcf332ea6985cf263f8cb7153a37d43d74d2940",
+      "bytes": 563
+    },
+    {
+      "id": "figma",
+      "file": "figma.svg",
+      "url": "https://cdn.simpleicons.org/figma",
+      "sha256": "b9171110637bb953781a04044d9957478ae84f6a7ac597a25c0bfdfb3292a45e",
+      "bytes": 1108
+    },
+    {
+      "id": "github",
+      "file": "github.svg",
+      "url": "https://cdn.simpleicons.org/github",
+      "sha256": "476ba7aa67b86da7d6e7567b08a4bf0eb1a2fd28da5fc243f8ee39a2f1ea6773",
+      "bytes": 837
+    },
+    {
+      "id": "gitlab",
+      "file": "gitlab.svg",
+      "url": "https://cdn.simpleicons.org/gitlab",
+      "sha256": "3bbfcd2707b9cd5bc6d68d561da605c520a707ceaecf3912aede560bb0990e27",
+      "bytes": 588
+    },
+    {
+      "id": "gmail",
+      "file": "gmail.svg",
+      "url": "https://cdn.simpleicons.org/gmail",
+      "sha256": "21b263638deb769267d610a85382792624bdae2fc47c1bc2f8ae6fb6a50413e9",
+      "bytes": 354
+    },
+    {
+      "id": "google-analytics",
+      "file": "google-analytics.svg",
+      "url": "https://cdn.simpleicons.org/googleanalytics",
+      "sha256": "242fb58cb4e361af3e443f4fba463ca872af93e35075782d73d9a65dca303fa4",
+      "bytes": 753
+    },
+    {
+      "id": "google-calendar",
+      "file": "google-calendar.svg",
+      "url": "https://cdn.simpleicons.org/googlecalendar",
+      "sha256": "aaebe4378bc647bccdeef7477e51a15fd634b281546e3def5f4d7596bc72ff83",
+      "bytes": 1225
+    },
+    {
+      "id": "google-chat",
+      "file": "google-chat.svg",
+      "url": "https://cdn.simpleicons.org/googlechat",
+      "sha256": "784f85daec18e10da339d589992be39f9bbe70db577ab166141d453c69172f53",
+      "bytes": 339
+    },
+    {
+      "id": "google-contacts",
+      "file": "google-contacts.png",
+      "url": "https://www.gstatic.com/images/branding/product/1x/contacts_48dp.png",
+      "sha256": "271945dbd53147b4e05aaabb87cb89bea926ee2b4bd4b38097d7d6acc0673699",
+      "bytes": 923
+    },
+    {
+      "id": "google-docs",
+      "file": "google-docs.svg",
+      "url": "https://cdn.simpleicons.org/googledocs",
+      "sha256": "0813258b7d8370832436aee23fcdda458fdb7d311a95c039c3c95934846386e9",
+      "bytes": 393
+    },
+    {
+      "id": "google-drive",
+      "file": "google-drive.svg",
+      "url": "https://cdn.simpleicons.org/googledrive",
+      "sha256": "39d5cc5f524c7e8fa1788d447a0a083a3abe882cbf9b955ac55747fb167c1cc8",
+      "bytes": 614
+    },
+    {
+      "id": "google-forms",
+      "file": "google-forms.svg",
+      "url": "https://cdn.simpleicons.org/googleforms",
+      "sha256": "07614ea7282f982e40dbd969929fcdbe809c1a6a97a8d3e47a7065c13c5ef2b0",
+      "bytes": 559
+    },
+    {
+      "id": "google-gemini",
+      "file": "google-gemini.svg",
+      "url": "https://cdn.simpleicons.org/googlegemini",
+      "sha256": "404eba6940a54e63d40edcce2d2e7cb2b3dbfec765e7a1d523662b6f4e0d6747",
+      "bytes": 416
+    },
+    {
+      "id": "google-search-console",
+      "file": "google-search-console.svg",
+      "url": "https://cdn.simpleicons.org/googlesearchconsole",
+      "sha256": "a5a26ad81a74be748fe6f417b85c79cddaf4d61a88b3bf5d27aaea36315f11c2",
+      "bytes": 1083
+    },
+    {
+      "id": "google-sheets",
+      "file": "google-sheets.svg",
+      "url": "https://cdn.simpleicons.org/googlesheets",
+      "sha256": "2f15c51ea48cac508b16f589a53522fe060c7ed60c6ab483f78ac3b08b663b63",
+      "bytes": 459
+    },
+    {
+      "id": "google-slides",
+      "file": "google-slides.svg",
+      "url": "https://cdn.simpleicons.org/googleslides",
+      "sha256": "82b5542afcab0c704abdcdbca8f2772dd38433a0f9a171294f194d8388ca26f7",
+      "bytes": 379
+    },
+    {
+      "id": "grafana",
+      "file": "grafana.svg",
+      "url": "https://cdn.simpleicons.org/grafana",
+      "sha256": "fd70ea7298d67665cae32bdf1721fa7bd0b6b79b6f7cd8da1e3f77c97bbcdcc9",
+      "bytes": 3832
+    },
+    {
+      "id": "groq",
+      "file": "groq.ico",
+      "url": "https://groq.com/favicon.ico",
+      "sha256": "945268e4ed2640dcad9667a598323e572f50a9065928399f465d43cdd0c6aa57",
+      "bytes": 15406
+    },
+    {
+      "id": "heroku",
+      "file": "heroku.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/heroku.svg",
+      "sha256": "622d358ec7c6b09d8f8d2273ee226b5613e94c75d026651ee3889e44282627c1",
+      "bytes": 674
+    },
+    {
+      "id": "hubspot",
+      "file": "hubspot.svg",
+      "url": "https://cdn.simpleicons.org/hubspot",
+      "sha256": "5e3d32c06f065e541829e34c2d2429b1fee686a49020b1974b3fec228916f55e",
+      "bytes": 678
+    },
+    {
+      "id": "hugging-face",
+      "file": "hugging-face.svg",
+      "url": "https://cdn.simpleicons.org/huggingface",
+      "sha256": "c167703fa2fb404f1de9bbbd38b6ac6c4c01dbeae49e7783521333ba03ab706a",
+      "bytes": 3042
+    },
+    {
+      "id": "intercom",
+      "file": "intercom.svg",
+      "url": "https://cdn.simpleicons.org/intercom",
+      "sha256": "9e08625c57d0ed7592619f9f6f5ef0a8fb17e9a41c8ec2127f3a741febcdaccf",
+      "bytes": 998
+    },
+    {
+      "id": "jira",
+      "file": "jira.svg",
+      "url": "https://cdn.simpleicons.org/jira",
+      "sha256": "f831a691d67e7a187a358ea91f98e5d51ef93345d905651258d0fbd1f4d5f363",
+      "bytes": 493
+    },
+    {
+      "id": "klaviyo",
+      "file": "klaviyo.png",
+      "url": "https://www.klaviyo.com/icons/icon-96x96.png",
+      "sha256": "62d4bf3e2d327050489c167dd0dbfc36fcdc2ea2b1b0624e6832d5164e174b7a",
+      "bytes": 2510
+    },
+    {
+      "id": "launchdarkly",
+      "file": "launchdarkly.ico",
+      "url": "https://launchdarkly.com/favicon.ico",
+      "sha256": "6eab4a6eb68409aa0dd692ae250bcb395d9691fc32637ec8330d735cd8c664ee",
+      "bytes": 38078
+    },
+    {
+      "id": "lemon-squeezy",
+      "file": "lemon-squeezy.svg",
+      "url": "https://cdn.simpleicons.org/lemonsqueezy",
+      "sha256": "a1ca7b623c3dd6f3708aafaccf101315c842abbc7d9e7c2e819d8f74933ed57c",
+      "bytes": 799
+    },
+    {
+      "id": "linear",
+      "file": "linear.svg",
+      "url": "https://cdn.simpleicons.org/linear",
+      "sha256": "3700486fede168b1fbaf0987eda06621d0e54dd30968578b857fd7360cb2029e",
+      "bytes": 468
+    },
+    {
+      "id": "mailchimp",
+      "file": "mailchimp.svg",
+      "url": "https://cdn.simpleicons.org/mailchimp",
+      "sha256": "b32937f1d68b7bd330dbe102f1fc4c3e90520cacd24d69a1c40ad96621ddfda9",
+      "bytes": 4193
+    },
+    {
+      "id": "mailgun",
+      "file": "mailgun.svg",
+      "url": "https://cdn.simpleicons.org/mailgun",
+      "sha256": "e5896975bde421e9f0a9fb7dab8f798489b1234efff4e765363f1e5bde755686",
+      "bytes": 795
+    },
+    {
+      "id": "microsoft-forms",
+      "file": "microsoft-forms.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20230815.002/assets/brand-icons/product/svg/forms_48x1.svg",
+      "sha256": "83ca91c92ee64f6e66ad9c26c25e6738bc962c2c59f9ea0cccaf8ae1e5800037",
+      "bytes": 1437
+    },
+    {
+      "id": "microsoft-graph",
+      "file": "microsoft-graph.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoft.svg",
+      "sha256": "f0fdaef83e59660c4da6e3988ca41fbe907e420cb86b48a94746caefec015bf9",
+      "bytes": 206
+    },
+    {
+      "id": "microsoft-planner",
+      "file": "microsoft-planner.ico",
+      "url": "https://planner.cloud.microsoft/favicon.ico",
+      "sha256": "c7c5b1f0e4f46b24496105f206704edb213526ffb80cdb4b15e6c15d35e317c3",
+      "bytes": 53158
+    },
+    {
+      "id": "miro",
+      "file": "miro.svg",
+      "url": "https://cdn.simpleicons.org/miro",
+      "sha256": "bd0810bca2ba457c9642b9b1580c627820ee623f1989f80feba629994c44fda1",
+      "bytes": 274
+    },
+    {
+      "id": "mistral-ai",
+      "file": "mistral-ai.ico",
+      "url": "https://mistral.ai/favicon.ico",
+      "sha256": "320ccbbf53158067d4c84637dbfe52de7616d3c181c91198fae75eb1bc5f0c71",
+      "bytes": 2107
+    },
+    {
+      "id": "mixpanel",
+      "file": "mixpanel.svg",
+      "url": "https://cdn.simpleicons.org/mixpanel",
+      "sha256": "5aef35486469a54bc36a92544180be6c0ba2c8f537b40808b6742a9b321cea68",
+      "bytes": 907
+    },
+    {
+      "id": "mongodb-atlas",
+      "file": "mongodb-atlas.svg",
+      "url": "https://cdn.simpleicons.org/mongodb",
+      "sha256": "cf259f556e99f2df9056e60f34ef0eed3eeb4d096dec34f251b0f7a3a5c76fdd",
+      "bytes": 542
+    },
+    {
+      "id": "neon",
+      "file": "neon.svg",
+      "url": "https://cdn.simpleicons.org/neon",
+      "sha256": "cdebbfa1fbfe48315cc900cfe1da5f0a497eca3ec87d1feb0987e16376712307",
+      "bytes": 208
+    },
+    {
+      "id": "netlify",
+      "file": "netlify.svg",
+      "url": "https://cdn.simpleicons.org/netlify",
+      "sha256": "f2d591c3a629c6ff7fa122646710526ed711584890dc1aeb9e864c2746f973f1",
+      "bytes": 671
+    },
+    {
+      "id": "new-relic",
+      "file": "new-relic.svg",
+      "url": "https://cdn.simpleicons.org/newrelic",
+      "sha256": "1f97eebcc838eda26067c0db23bc691f8ae9248b2524b026e73cfa254064fe3f",
+      "bytes": 304
+    },
+    {
+      "id": "notion",
+      "file": "notion.svg",
+      "url": "https://cdn.simpleicons.org/notion",
+      "sha256": "fdddc8f06178df169036d3f5fc336eb98b15cad375afa04d0a5cd7aa61b65739",
+      "bytes": 993
+    },
+    {
+      "id": "onedrive",
+      "file": "onedrive.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoftonedrive.svg",
+      "sha256": "43320b9321c3face2313ecfbbd741e9bc17b67acfcef488546fac5e09e729965",
+      "bytes": 1331
+    },
+    {
+      "id": "onenote",
+      "file": "onenote.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoftonenote.svg",
+      "sha256": "4784b0ad16f5bc1a159bedbe95aca9bd4223c4ca15da12ffc0dc0ebc6fd193cf",
+      "bytes": 574
+    },
+    {
+      "id": "openai",
+      "file": "openai.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/openai.svg",
+      "sha256": "2b4a04ddc2395b20d168694d3850ce2050a702c4a0cdeb4d8b31b9a970481a8c",
+      "bytes": 1570
+    },
+    {
+      "id": "openrouter",
+      "file": "openrouter.svg",
+      "url": "https://cdn.simpleicons.org/openrouter",
+      "sha256": "c34ab396f6c4940a7bc2a4a5e3cc64c280cd2ea6c3301ec7659ff95fab4d373a",
+      "bytes": 699
+    },
+    {
+      "id": "outlook",
+      "file": "outlook.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoftoutlook.svg",
+      "sha256": "f2fcdd8cbd3be6855935de2ab3fb7010aef607963fb157c64ac308e693a18f87",
+      "bytes": 1019
+    },
+    {
+      "id": "paddle",
+      "file": "paddle.svg",
+      "url": "https://cdn.simpleicons.org/paddle",
+      "sha256": "f2d8e83e27f3f290f163d76ee2e783df4af389518400d90ade64c4d097ccf60b",
+      "bytes": 564
+    },
+    {
+      "id": "perplexity",
+      "file": "perplexity.svg",
+      "url": "https://cdn.simpleicons.org/perplexity",
+      "sha256": "407ad1254700503eb124ef5650cc267d83c79dc6dea9e9332fbdc92bb2bdf262",
+      "bytes": 633
+    },
+    {
+      "id": "pinecone",
+      "file": "pinecone.ico",
+      "url": "https://www.pinecone.io/favicon.ico",
+      "sha256": "faa9c834fac8e86cd94f446ece9689edd0dd3203ff261453ffda1764879f5c68",
+      "bytes": 15086
+    },
+    {
+      "id": "pipedrive",
+      "file": "pipedrive.ico",
+      "url": "https://www.pipedrive.com/favicon.ico",
+      "sha256": "ea4e3804aa421ce911563db708d99c53b714d38cf92095f7e4404a392a973dd6",
+      "bytes": 5726
+    },
+    {
+      "id": "plaid",
+      "file": "plaid.png",
+      "url": "https://plaid.com/assets/img/favicons/apple-touch-icon.png",
+      "sha256": "f9a98e98c41212eb89e1d92e9f2318349570001e497e1fb1cc32bc39eb2f1016",
+      "bytes": 15186
+    },
+    {
+      "id": "planetscale",
+      "file": "planetscale.svg",
+      "url": "https://cdn.simpleicons.org/planetscale",
+      "sha256": "002bd8972cbfd191595a99ba785791a68ded7ae0b3020361fbc10cc8798ab361",
+      "bytes": 344
+    },
+    {
+      "id": "posthog",
+      "file": "posthog.svg",
+      "url": "https://cdn.simpleicons.org/posthog",
+      "sha256": "85191881b464b9e92ea1c9de7d52217d745bb228029f357f6f4d37621a955c63",
+      "bytes": 1011
+    },
+    {
+      "id": "postman",
+      "file": "postman.svg",
+      "url": "https://cdn.simpleicons.org/postman",
+      "sha256": "8bed37bf5736bff8d359e56af6db5940e50acc218129378b6d372717dd56e805",
+      "bytes": 1383
+    },
+    {
+      "id": "postmark",
+      "file": "postmark.ico",
+      "url": "https://postmarkapp.com/favicon.ico",
+      "sha256": "314882ad94023002572a79211d3eb2222a9b052d1cfd612a7857eeb3a554878d",
+      "bytes": 15406
+    },
+    {
+      "id": "power-bi",
+      "file": "power-bi.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/powerbi.svg",
+      "sha256": "d013902e022208ea00acc45c0ed4377699a2913ce1b26267e85e85001603d554",
+      "bytes": 330
+    },
+    {
+      "id": "powerpoint",
+      "file": "powerpoint.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoftpowerpoint.svg",
+      "sha256": "068333400277f45786efcd042d89cc98f5127ef1d7ec543f30710783ee4377a6",
+      "bytes": 1323
+    },
+    {
+      "id": "pulumi",
+      "file": "pulumi.svg",
+      "url": "https://cdn.simpleicons.org/pulumi",
+      "sha256": "8fc5e07f224c35f6b72f3c7aab52fe5f69b38f62b68d3ac6e7c0360ac035f2bc",
+      "bytes": 1955
+    },
+    {
+      "id": "qdrant",
+      "file": "qdrant.svg",
+      "url": "https://cdn.simpleicons.org/qdrant",
+      "sha256": "50ce41c1354daec47b77f417e589cb0a5f87e7d9d544dca9859a0a827bf42d70",
+      "bytes": 275
+    },
+    {
+      "id": "railway",
+      "file": "railway.svg",
+      "url": "https://cdn.simpleicons.org/railway",
+      "sha256": "213044bcf6d0d1bbd9077ef5b98ce0a96b0c7c5a6aaccadfe6ffdaca13fe04b7",
+      "bytes": 788
+    },
+    {
+      "id": "render",
+      "file": "render.svg",
+      "url": "https://cdn.simpleicons.org/render",
+      "sha256": "b460719d5abfab2915ea2adb677ed725210207ff877d8765938c4d5a8b7c27f2",
+      "bytes": 396
+    },
+    {
+      "id": "replicate",
+      "file": "replicate.svg",
+      "url": "https://cdn.simpleicons.org/replicate",
+      "sha256": "2b56b6a5c34ab91d2382a769b6d81bbb5b6152df6c474a4f798b73ce45560e33",
+      "bytes": 230
+    },
+    {
+      "id": "resend",
+      "file": "resend.svg",
+      "url": "https://cdn.simpleicons.org/resend",
+      "sha256": "ad78ae8e1b24aebc422ebee263e8b31a7fe457f85f453062e111988b9194140e",
+      "bytes": 359
+    },
+    {
+      "id": "salesforce",
+      "file": "salesforce.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/salesforce.svg",
+      "sha256": "9f8adb4f73acb235b2fe1c721f17d915d3559c905d1de9c7b678d76d0687eb08",
+      "bytes": 544
+    },
+    {
+      "id": "sanity",
+      "file": "sanity.svg",
+      "url": "https://cdn.simpleicons.org/sanity",
+      "sha256": "53afcae826af8f38b8ce3093076aaf5f39692fce621a107c8adf6b471fa93472",
+      "bytes": 607
+    },
+    {
+      "id": "segment",
+      "file": "segment.ico",
+      "url": "https://segment.com/favicon.ico",
+      "sha256": "0578334b7c6d987fe419725a2bae930e7e7d19123536485208968c178dde8633",
+      "bytes": 15086
+    },
+    {
+      "id": "sendgrid",
+      "file": "sendgrid.ico",
+      "url": "https://sendgrid.com/favicon.ico",
+      "sha256": "0578334b7c6d987fe419725a2bae930e7e7d19123536485208968c178dde8633",
+      "bytes": 15086
+    },
+    {
+      "id": "sentry",
+      "file": "sentry.svg",
+      "url": "https://cdn.simpleicons.org/sentry",
+      "sha256": "24ac56868a3b5dd440c4de2a3cf8f6864591ba81067eedd8d6be0b0690b136eb",
+      "bytes": 701
+    },
+    {
+      "id": "sharepoint",
+      "file": "sharepoint.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoftsharepoint.svg",
+      "sha256": "bb24f734b05e9a6461ab8cd627a9e88a9cdd50ee7abc7063d54772bb19547e0c",
+      "bytes": 2261
+    },
+    {
+      "id": "shopify",
+      "file": "shopify.svg",
+      "url": "https://cdn.simpleicons.org/shopify",
+      "sha256": "73b7faee1aa8969eba999c3d6622ece507a6415039592185e85ce7bb6244ddc2",
+      "bytes": 1249
+    },
+    {
+      "id": "shortcut",
+      "file": "shortcut.svg",
+      "url": "https://cdn.simpleicons.org/shortcut",
+      "sha256": "2609f665a308f8757b85b9565824cfa873359ec8310b969274e59ecaea81829c",
+      "bytes": 871
+    },
+    {
+      "id": "slack",
+      "file": "slack.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/slack.svg",
+      "sha256": "f23c317b279f53dcd2260a6cd2e279f7a696f87dcb3da259d6201f05bbc45b0d",
+      "bytes": 1123
+    },
+    {
+      "id": "sourcegraph",
+      "file": "sourcegraph.svg",
+      "url": "https://sourcegraph.com/favicon.ico",
+      "sha256": "2d336b83e95c31ac9e726c97eed4cb65b6adb39664127e6114c1c150981f4c02",
+      "bytes": 532
+    },
+    {
+      "id": "square",
+      "file": "square.svg",
+      "url": "https://cdn.simpleicons.org/square",
+      "sha256": "11540a58a9441cc2e4cd9456fa0d8fd9741a4bcdb8c0cbc3baece02f270bf6c1",
+      "bytes": 474
+    },
+    {
+      "id": "strapi",
+      "file": "strapi.svg",
+      "url": "https://cdn.simpleicons.org/strapi",
+      "sha256": "af143e64b0ed4ae5e176af6f51e23818ae348e59b7e825e22028a3b2f6725c5b",
+      "bytes": 628
+    },
+    {
+      "id": "stripe",
+      "file": "stripe.svg",
+      "url": "https://cdn.simpleicons.org/stripe",
+      "sha256": "7576775bf9915b696bbb9162268f5c56147d2b4221a76ac6a9ca92835239b7e9",
+      "bytes": 603
+    },
+    {
+      "id": "supabase",
+      "file": "supabase.svg",
+      "url": "https://cdn.simpleicons.org/supabase",
+      "sha256": "75f9566421d97d4f1d8d7f34526189fd6e727ca83987432fc2477c2fc8388086",
+      "bytes": 318
+    },
+    {
+      "id": "telegram",
+      "file": "telegram.svg",
+      "url": "https://cdn.simpleicons.org/telegram",
+      "sha256": "4435c9a57e165a1c3b7f27e0b5b11b82b10d674ea4fff7f6748cb67b7fcb994e",
+      "bytes": 757
+    },
+    {
+      "id": "terraform-cloud",
+      "file": "terraform-cloud.svg",
+      "url": "https://cdn.simpleicons.org/terraform",
+      "sha256": "894a34063749ee52f945fd24ec5983b79e0da9cafa16d99e2f0b6506a8908ae5",
+      "bytes": 268
+    },
+    {
+      "id": "together-ai",
+      "file": "together-ai.png",
+      "url": "https://cdn.prod.website-files.com/69654e88dce9154b5f1206dd/699e382b218f39bfa0a115d9_favicon.png",
+      "sha256": "2c02a5d635eae4f63153e9eacb24e001e21f84a4b667a5925f120c1492c58f30",
+      "bytes": 890
+    },
+    {
+      "id": "trello",
+      "file": "trello.svg",
+      "url": "https://cdn.simpleicons.org/trello",
+      "sha256": "d3708a515bdc47ce7d65c26e79f95b57545bb3bf16cbeae65bb471e6a326da0b",
+      "bytes": 484
+    },
+    {
+      "id": "turso",
+      "file": "turso.svg",
+      "url": "https://cdn.simpleicons.org/turso",
+      "sha256": "4483eb92918cf629a54395721a2e90fe25bde89e6aaa297f8892c46793f4c487",
+      "bytes": 937
+    },
+    {
+      "id": "twilio",
+      "file": "twilio.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/twilio.svg",
+      "sha256": "52dcf3b6cea65fdc9b5b525aa2bb9517f405a58c68d464f207f0ddf60c0114ea",
+      "bytes": 923
+    },
+    {
+      "id": "upstash",
+      "file": "upstash.svg",
+      "url": "https://cdn.simpleicons.org/upstash",
+      "sha256": "675ff511f908374f623152033b9e0d4f70edf0b5839a43c7832dc66a15fa53a7",
+      "bytes": 829
+    },
+    {
+      "id": "vercel",
+      "file": "vercel.svg",
+      "url": "https://cdn.simpleicons.org/vercel",
+      "sha256": "075b9d221ef5a7ea63d85f140bd2d63007f31d3ed8ceec011abc3ffd529827e3",
+      "bytes": 147
+    },
+    {
+      "id": "weaviate",
+      "file": "weaviate.ico",
+      "url": "https://weaviate.io/favicon.ico",
+      "sha256": "7fe04972af989076e8a12da18a3f2699b65b2b14ee96a455580e53448b1b2231",
+      "bytes": 1406
+    },
+    {
+      "id": "wise",
+      "file": "wise.svg",
+      "url": "https://cdn.simpleicons.org/wise",
+      "sha256": "882842c0a729e633e84fff24bf9edecec8216b8bf0b47f866e32f82d41fb6c18",
+      "bytes": 252
+    },
+    {
+      "id": "woocommerce",
+      "file": "woocommerce.svg",
+      "url": "https://cdn.simpleicons.org/woocommerce",
+      "sha256": "256d6b27889c336961acc64b106e75e739877bce01613f251a87822002fe9c9c",
+      "bytes": 3589
+    },
+    {
+      "id": "word",
+      "file": "word.svg",
+      "url": "https://cdn.jsdelivr.net/npm/simple-icons@11.15.0/icons/microsoftword.svg",
+      "sha256": "92bbd002d1bb151aa918e51b680586af256ff2b7ccc5314e41a893e3c4a30d5c",
+      "bytes": 510
+    },
+    {
+      "id": "wordpress",
+      "file": "wordpress.svg",
+      "url": "https://cdn.simpleicons.org/wordpress",
+      "sha256": "0d45778b7cb89372dd4710f38874c5b87045a8bbc8aba5bb7f40fbaf5fcb8808",
+      "bytes": 1074
+    },
+    {
+      "id": "youtube",
+      "file": "youtube.svg",
+      "url": "https://cdn.simpleicons.org/youtube",
+      "sha256": "7f5156448b9c1b65156e34e4443f0eff8b85f5afa783fc8a8d09f49380fed424",
+      "bytes": 474
+    },
+    {
+      "id": "zendesk",
+      "file": "zendesk.svg",
+      "url": "https://cdn.simpleicons.org/zendesk",
+      "sha256": "5072798861272c61023c21edf62529efec5d84425865d363e8a9e239f389dda0",
+      "bytes": 339
+    }
+  ]
+}

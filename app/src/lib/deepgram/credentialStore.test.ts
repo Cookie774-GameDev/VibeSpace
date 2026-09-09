@@ -50,9 +50,9 @@ describe('central Deepgram credential service', () => {
     expect(JSON.stringify(publish.mock.calls)).not.toContain('legacy-key');
   });
 
-  it('validates with the read-only projects endpoint before saving and publishes no secret', async () => {
+  it('authenticates before loading optional project metadata and publishes no secret', async () => {
     const { adapter, values } = memoryAdapter();
-    const fetcher = vi.fn(async () => validProjectsResponse());
+    const fetcher = vi.fn(async (_url: string) => validProjectsResponse());
     const publish = vi.fn();
     const service = createDeepgramCredentialService({
       adapter,
@@ -62,6 +62,8 @@ describe('central Deepgram credential service', () => {
     });
 
     const snapshot = await service.save('  dg-secret-value  ');
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe('https://api.deepgram.com/v1/auth/token');
 
     expect(fetcher).toHaveBeenCalledWith(
       'https://api.deepgram.com/v1/projects',
@@ -80,6 +82,16 @@ describe('central Deepgram credential service', () => {
       }),
     );
     expect(JSON.stringify(publish.mock.calls)).not.toContain('dg-secret-value');
+  });
+
+  it('reports a valid speech key connected when project listing is forbidden', async () => {
+    const { adapter, values } = memoryAdapter();
+    const fetcher = vi.fn(async (url: string) => url.endsWith('/auth/token')
+      ? new Response('{}', { status: 200 })
+      : new Response('', { status: 403 }));
+    const service = createDeepgramCredentialService({ adapter, fetcher, publish: vi.fn() });
+    expect(await service.save('speech-only')).toMatchObject({ configured: true, health: 'connected' });
+    expect(values.get('deepgram')).toBe('speech-only');
   });
 
   it('does not persist an invalid key and returns a recoverable invalid state', async () => {

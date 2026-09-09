@@ -18,6 +18,16 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 
 describe('JarvisAmbientHost', () => {
+  it('renders a local aura when Jarvis opens in localhost without native IPC', async () => {
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+    useUIStore.setState({ voiceModalOpen: true });
+    const view = render(<JarvisAmbientHost />);
+    await waitFor(() => expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('true'));
+    expect(invoke).not.toHaveBeenCalled();
+    act(() => useUIStore.setState({ voiceModalOpen: false }));
+    await waitFor(() => expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false'));
+    view.unmount();
+  });
   beforeEach(() => {
     invoke.mockClear();
     useVoiceStore.getState().reset();

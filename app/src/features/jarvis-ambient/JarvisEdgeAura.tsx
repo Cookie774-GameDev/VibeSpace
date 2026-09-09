@@ -25,40 +25,37 @@ export function normalizeAmbientSnapshot(value: unknown): JarvisAmbientSnapshot 
 function perimeterPoint(distance: number, width: number, height: number, inset: number) {
   const w = Math.max(1, width - inset * 2);
   const h = Math.max(1, height - inset * 2);
-  const perimeter = 2 * (w + h);
+  const radius = Math.min(22, w / 2, h / 2);
+  const horizontal = w - radius * 2;
+  const vertical = h - radius * 2;
+  const arc = (Math.PI * radius) / 2;
+  const perimeter = 2 * (horizontal + vertical) + arc * 4;
   let cursor = ((distance % perimeter) + perimeter) % perimeter;
-  if (cursor <= w) return { x: inset + cursor, y: inset };
-  cursor -= w;
-  if (cursor <= h) return { x: inset + w, y: inset + cursor };
-  cursor -= h;
-  if (cursor <= w) return { x: inset + w - cursor, y: inset + h };
-  cursor -= w;
-  return { x: inset, y: inset + h - cursor };
-}
-
-function strokeSegment(
-  context: CanvasRenderingContext2D,
-  progress: number,
-  segment: number,
-  width: number,
-  height: number,
-  inset: number,
-) {
-  const perimeter = 2 * (Math.max(1, width - inset * 2) + Math.max(1, height - inset * 2));
-  const start = progress * perimeter;
-  const steps = Math.max(16, Math.ceil(segment * 160));
-  context.beginPath();
-  for (let index = 0; index <= steps; index += 1) {
-    const point = perimeterPoint(
-      start + (index / steps) * segment * perimeter,
-      width,
-      height,
-      inset,
-    );
-    if (index === 0) context.moveTo(point.x, point.y);
-    else context.lineTo(point.x, point.y);
+  const centers = [
+    [inset + w - radius, inset + radius],
+    [inset + w - radius, inset + h - radius],
+    [inset + radius, inset + h - radius],
+    [inset + radius, inset + radius],
+  ];
+  for (let side = 0; side < 4; side++) {
+    const length = side % 2 === 0 ? horizontal : vertical;
+    if (cursor <= length) {
+      if (side === 0) return { x: inset + radius + cursor, y: inset };
+      if (side === 1) return { x: inset + w, y: inset + radius + cursor };
+      if (side === 2) return { x: inset + w - radius - cursor, y: inset + h };
+      return { x: inset, y: inset + h - radius - cursor };
+    }
+    cursor -= length;
+    if (cursor <= arc) {
+      const angle = -Math.PI / 2 + (side * Math.PI) / 2 + cursor / radius;
+      return {
+        x: centers[side][0] + Math.cos(angle) * radius,
+        y: centers[side][1] + Math.sin(angle) * radius,
+      };
+    }
+    cursor -= arc;
   }
-  context.stroke();
+  return { x: inset + radius, y: inset };
 }
 
 function drawAura(
@@ -70,7 +67,7 @@ function drawAura(
   reducedMotion: boolean,
 ) {
   context.clearRect(0, 0, width, height);
-  if (snapshot.active === false || snapshot.state === 'idle') return;
+  if (snapshot.active === false || (snapshot.state === 'idle' && snapshot.active !== true)) return;
   const preset = JARVIS_EDGE_PRESETS[snapshot.state];
   const energy =
     snapshot.state === 'listening' || snapshot.state === 'speaking'
@@ -84,37 +81,45 @@ function drawAura(
         ? 0.9
         : 0.08 + 0.92 * (0.5 - 0.5 * Math.cos(phase * Math.PI * 2))
       : 1;
-  const band = preset.minBand + (preset.maxBand - preset.minBand) * energy;
-  const inset = Math.max(3, band / 2 + 2);
-
+  const depth = Math.min(width, height) * 0.09 + preset.glow + energy * 48;
+  const rgba = (hex: string, alpha: number) => {
+    const value = Number.parseInt(hex.slice(1), 16);
+    return 'rgba(' + (value >> 16) + ',' + ((value >> 8) & 255) + ',' + (value & 255) + ',' + alpha + ')';
+  };
   context.save();
-  context.globalCompositeOperation = 'lighter';
-  context.strokeStyle = preset.color;
-  context.lineJoin = 'round';
-  context.lineCap = 'round';
-  context.shadowColor = preset.color;
-  context.shadowBlur = preset.glow + energy * 24;
-  context.globalAlpha = preset.alpha * flash * (0.38 + energy * 0.62);
-  context.lineWidth = Math.max(4, band);
-  context.strokeRect(inset, inset, Math.max(1, width - inset * 2), Math.max(1, height - inset * 2));
-
-  if (
-    snapshot.state === 'working' ||
-    snapshot.state === 'listening' ||
-    snapshot.state === 'speaking'
-  ) {
-    context.globalAlpha = Math.min(1, (preset.alpha + energy * 0.22) * flash);
-    context.lineWidth = Math.max(7, band * (snapshot.state === 'working' ? 1.45 : 1.18));
-    context.shadowBlur = preset.glow + 12 + energy * 32;
-    const speedBoost = 1 + energy * 1.5;
-    strokeSegment(
-      context,
-      reducedMotion ? 0.08 : (phase * speedBoost) % 1,
-      preset.segment + energy * 0.08,
-      width,
-      height,
-      inset,
-    );
+  context.globalCompositeOperation = 'source-over';
+  // Continuous inward falloff: no outlined rectangle or sharp travelling core.
+  const edges = [
+    [0, 0, 0, depth, 0, 0, width, depth],
+    [width, 0, width - depth, 0, width - depth, 0, depth, height],
+    [0, height, 0, height - depth, 0, height - depth, width, depth],
+    [0, 0, depth, 0, 0, 0, depth, height],
+  ];
+  const breathe = reducedMotion ? 1 : 0.84 + 0.16 * Math.sin(phase * Math.PI * 2);
+  for (const [x0, y0, x1, y1, x, y, w, h] of edges) {
+    const gradient = context.createLinearGradient(x0, y0, x1, y1);
+    const opacity = preset.alpha * flash * breathe * (0.30 + energy * 0.15);
+    gradient.addColorStop(0, rgba(preset.color, opacity));
+    gradient.addColorStop(0.25, rgba(preset.color, opacity * 0.52));
+    gradient.addColorStop(0.6, rgba(preset.color, opacity * 0.12));
+    gradient.addColorStop(1, rgba(preset.color, 0));
+    context.fillStyle = gradient;
+    context.fillRect(x, y, w, h);
+  }
+  if (['idle', 'working', 'listening', 'speaking'].includes(snapshot.state)) {
+    const colors = [preset.color, '#9b7bff', '#65ffe0'];
+    const perimeter = 2 * (width + height);
+    for (let index = 0; index < colors.length; index++) {
+      const point = perimeterPoint((phase + index / 3) * perimeter, width, height, 0);
+      const radius = depth * 2.6;
+      const gradient = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
+      gradient.addColorStop(0, rgba(colors[index], 0.48 + energy * 0.16));
+      gradient.addColorStop(0.3, rgba(colors[index], 0.24));
+      gradient.addColorStop(0.65, rgba(colors[index], 0.06));
+      gradient.addColorStop(1, rgba(colors[index], 0));
+      context.fillStyle = gradient;
+      context.fillRect(point.x - radius, point.y - radius, radius * 2, radius * 2);
+    }
   }
   context.restore();
 }
@@ -153,7 +158,11 @@ export function JarvisEdgeAura({
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       const reduce = reducedMotion ?? motionQuery?.matches === true;
       drawAura(context, snapshotRef.current, window.innerWidth, window.innerHeight, now, reduce);
-      if (!reduce && snapshotRef.current.active !== false && snapshotRef.current.state !== 'idle')
+      if (
+        !reduce &&
+        snapshotRef.current.active !== false &&
+        (snapshotRef.current.active === true || snapshotRef.current.state !== 'idle')
+      )
         frame = window.requestAnimationFrame(paint);
     };
 

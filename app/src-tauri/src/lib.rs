@@ -52,6 +52,7 @@ mod cli_bridge;
 mod command_center_tool;
 mod context_search;
 mod credentials;
+mod desktop_connector;
 mod dictation;
 mod faster_whisper;
 mod fsread;
@@ -465,6 +466,7 @@ fn run_ordinary(
         .manage(terminal::TerminalState::default())
         .manage(terminal_cli::TerminalCliState::default())
         .manage(terminal_peer_fabric::TerminalPeerFabricState::default())
+        .manage(desktop_connector::DesktopConnectorState::default())
         .manage(pets::PetWindowState::default())
         .manage(jarvis_ambient_overlay::JarvisAmbientOverlayState::default())
         .manage(terminal_snapshot::PersistenceFlushState::default())
@@ -655,6 +657,8 @@ fn run_ordinary(
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            desktop_connector::desktop_connector_status,
+            desktop_connector::desktop_connector_setup,
             jarvis_ambient_overlay::set_jarvis_ambient_snapshot,
             jarvis_ambient_overlay::jarvis_ambient_renderer_ready,
             app_version,

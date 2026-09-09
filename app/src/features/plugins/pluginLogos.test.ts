@@ -3,19 +3,21 @@ import { PLUGIN_CATALOG } from './catalog';
 import { getPluginLogoSources } from './pluginLogos';
 
 describe('plugin logos', () => {
-  it('uses only official Simple Icons sources for known catalog mappings', () => {
+  it('uses bundled logo assets for known catalog mappings', () => {
     expect(
       getPluginLogoSources({
         id: 'github',
         credentialUrl: 'https://github.com/settings/tokens',
         docsUrl: 'https://docs.github.com/',
       }),
-    ).toEqual(['https://cdn.simpleicons.org/github']);
+    ).toEqual(['/plugin-logos/github.svg']);
 
     const sources = PLUGIN_CATALOG.flatMap((plugin) => getPluginLogoSources(plugin));
-    expect(sources.every((source) => source.startsWith('https://cdn.simpleicons.org/'))).toBe(true);
+    expect(sources.every((source) => source.startsWith('/plugin-logos/'))).toBe(true);
     expect(
-      sources.some((source) => /(^|\.)(google|gstatic)\./i.test(new URL(source).hostname)),
+      sources.some((source) =>
+        /(^|\.)(google|gstatic)\./i.test(new URL(source, 'http://localhost').hostname),
+      ),
     ).toBe(false);
   });
 

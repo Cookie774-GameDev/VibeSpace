@@ -185,7 +185,11 @@ export function BenchmarkIntelligencePage() {
       if (Date.now() - lastFetchRef.current >= 10 * 60 * 1000) void load();
     };
     window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
+    const timer = window.setInterval(() => void load(), 60 * 60 * 1000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(timer);
+    };
   }, [load]);
 
   const providers = React.useMemo(

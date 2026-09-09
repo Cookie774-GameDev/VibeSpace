@@ -14,6 +14,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { editableConfig, validateSetting } from './config.mjs';
 import { browserTool, runBrowserTool } from './browser/tool.mjs';
+import { createSetupRuntime } from './setup-runtime.mjs';
 
 const base = path.dirname(fileURLToPath(import.meta.url));
 // Tauri appends the window origin to native HTTP requests. No browser CORS
@@ -32,7 +33,21 @@ export async function startGateway({
 } = {}) {
   await mkdir(stateDir, { recursive: true });
   const lockFile = path.join(stateDir, 'gateway.lock');
-  const lock = await open(lockFile, 'wx', 0o600).catch(() => {
+  const lock = await open(lockFile, 'wx', 0o600).catch(async (cause) => {
+    if (cause.code === 'EEXIST') {
+      const raw = await readFile(lockFile, 'utf8');
+      const prior = JSON.parse(raw);
+      if (Number.isSafeInteger(prior.pid) && prior.pid > 0) {
+        try {
+          process.kill(prior.pid, 0);
+        } catch (error) {
+          if (error.code === 'ESRCH' && (await readFile(lockFile, 'utf8')) === raw) {
+            await unlink(lockFile);
+            return open(lockFile, 'wx', 0o600);
+          }
+        }
+      }
+    }
     throw Error(
       'This package is already running, or its interrupted gateway.lock needs inspection. Do not start a second copy.',
     );
@@ -49,10 +64,18 @@ export async function startGateway({
       command: process.execPath,
       args: [path.join(base, 'upstream/dist/index.js'), '--no-onboarding'],
       cwd: base,
-      stderr: 'ignore',
+      // The SDK's minimal environment omits Windows runtime variables required by this package.
+      // Preserve these OS settings without forwarding unrelated provider credentials.
+      env: Object.fromEntries(
+        ['ComSpec', 'PATHEXT', 'TMP', 'windir']
+          .filter((key) => process.env[key])
+          .map((key) => [key, process.env[key]]),
+      ),
+      stderr: 'pipe',
     });
     try {
-      await client.connect(transport, { timeout: 30000 });
+      transport.stderr?.resume(); // Drain privately; a real pipe also supports Windows startup diagnostics.
+      await client.connect(transport, { timeout: 60000 });
     } catch (error) {
       await transport.close().catch(() => {});
       await unlock();
@@ -60,6 +83,7 @@ export async function startGateway({
     }
   }
   const token = randomBytes(32).toString('hex');
+  let setup;
   const sessions = new Map();
   let active = 0,
     changing = false;
@@ -76,9 +100,33 @@ export async function startGateway({
     const expected = Buffer.from(`Bearer ${token}`);
     // Never accept cross-site browser requests, DNS rebinding, or unauthenticated tunnel traffic.
     const host = req.headers.host ?? '';
+    const setupAssets = {
+      '/setup': ['index.html', 'text/html'],
+      '/setup/app.js': ['app.js', 'text/javascript'],
+      '/setup/style.css': ['style.css', 'text/css'],
+    };
+    if (req.method === 'GET' && setupAssets[req.url] && /^127\.0\.0\.1:\d+$/.test(host)) {
+      const [name, type] = setupAssets[req.url];
+      let asset;
+      try {
+        asset = await readFile(path.join(base, 'setup', name));
+      } catch {
+        return json(res, 404, { error: 'Setup resource unavailable' });
+      }
+      res.writeHead(200, {
+        'content-type': type + '; charset=utf-8',
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+        'x-frame-options': 'DENY',
+        'content-security-policy':
+          "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+      });
+      return res.end(asset);
+    }
     if (
       (req.headers.origin &&
-        !(req.url === '/config' && nativeConfigOrigins.has(req.headers.origin))) ||
+        !(req.url === '/config' && nativeConfigOrigins.has(req.headers.origin)) &&
+        !(req.url.startsWith('/setup/') && req.headers.origin === `http://${host}`)) ||
       !/^127\.0\.0\.1:\d+$/.test(host) ||
       auth.length !== expected.length ||
       !timingSafeEqual(auth, expected)
@@ -104,6 +152,20 @@ export async function startGateway({
         } catch {
           return json(res, 400, { error: 'Invalid JSON' });
         }
+      }
+      if (req.url.startsWith('/setup/')) {
+        if (!setup) return json(res, 503, { error: 'Connector is starting.' });
+        if (req.url === '/setup/state' && req.method === 'GET')
+          return json(res, 200, await setup.snapshot());
+        if (req.url === '/setup/draft' && req.method === 'POST')
+          return json(res, 200, await setup.save(body ?? {}));
+        if (req.url === '/setup/connect' && req.method === 'POST')
+          return json(res, 200, await setup.connect());
+        if (req.url === '/setup/disconnect' && req.method === 'POST') {
+          await setup.close();
+          return json(res, 200, await setup.snapshot());
+        }
+        return json(res, 404, { error: 'Not found' });
       }
       if (req.url === '/config' && req.method === 'GET')
         return json(res, 200, editableConfig(await call('get_config', { origin: 'ui' })));
@@ -141,7 +203,7 @@ export async function startGateway({
       ) {
         if (sessions.size >= 8) return json(res, 429, { error: 'Too many sessions' });
         const mcp = new Server(
-          { name: 'vibespace-desktop-commander', version: '0.1.0' },
+          { name: 'vibespace-desktop-link', version: '0.1.0' },
           { capabilities: { tools: {} } },
         );
         mcp.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -195,6 +257,16 @@ export async function startGateway({
     throw error;
   }
   const endpoint = `http://127.0.0.1:${server.address().port}`;
+  setup = await createSetupRuntime({
+    stateDir,
+    base,
+    endpoint,
+    token,
+    getTools: async () => {
+      const listed = await client.listTools();
+      return { tools: [...listed.tools, browserTool] };
+    },
+  });
   await mkdir(stateDir, { recursive: true });
   const connectionFile = path.join(stateDir, 'connection.json');
   await writeFile(
@@ -203,6 +275,7 @@ export async function startGateway({
     { mode: 0o600 },
   );
   const close = async () => {
+    await setup.close();
     for (const entry of sessions.values()) await entry.mcp.close().catch(() => {});
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -216,7 +289,10 @@ export async function startGateway({
   return { endpoint, token, connectionFile, close };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const instance = await startGateway();
+  const instance = await startGateway({
+    port: Number(process.env.VIBESPACE_CONNECTOR_PORT ?? 52643),
+    stateDir: process.env.VIBESPACE_CONNECTOR_STATE_DIR || path.join(base, 'state'),
+  });
   console.log(
     `Desktop Commander ready. In VibeSpace Browser Agent setup, select: ${instance.connectionFile}`,
   );

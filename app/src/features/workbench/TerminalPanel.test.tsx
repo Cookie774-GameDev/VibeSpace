@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { TerminalViewProps } from '@/features/terminals';
 import { TerminalPanel } from './TerminalPanel';
 import type { WorkbenchPanel } from './types';
+import { deliverWorkbenchTerminalCommand } from './workbenchTerminalCommands';
 
 const terminalView = vi.fn((props: TerminalViewProps) => (
   <output data-testid="terminal-scope">
@@ -47,6 +48,27 @@ function panel(overrides: Partial<WorkbenchPanel> = {}): WorkbenchPanel {
 }
 
 describe('Workbench TerminalPanel scope', () => {
+  it('uses the existing pending-command handler and never replays onto a replacement session', () => {
+    const { rerender } = render(
+      <TerminalPanel panel={panel({ settings: { resourceId: 'live' } })} onUpdate={vi.fn()} />,
+    );
+    act(() => {
+      expect(
+        deliverWorkbenchTerminalCommand('FASTER', [
+          { paneId: 'terminal-panel-9', sessionId: 'live', projectId: 'project-9' },
+        ]),
+      ).toBe(1);
+    });
+    expect(terminalView.mock.lastCall?.[0].pendingCommand).toBe('FASTER');
+    expect(terminalView.mock.lastCall?.[0].pendingCommandId).toEqual(expect.any(Number));
+    rerender(
+      <TerminalPanel
+        panel={panel({ settings: { resourceId: 'replacement' } })}
+        onUpdate={vi.fn()}
+      />,
+    );
+    expect(terminalView.mock.lastCall?.[0].pendingCommand).toBeUndefined();
+  });
   it('binds the stable panel and active project identity into TerminalView', () => {
     render(<TerminalPanel panel={panel()} onUpdate={vi.fn()} />);
 

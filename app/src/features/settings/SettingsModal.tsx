@@ -388,7 +388,7 @@ export function SettingsModal({
           className:
             '[html[data-theme=monochrome]_&]:backdrop-blur-none [html[data-theme=monochrome]_&]:data-[state=open]:!animate-none [html[data-theme=monochrome]_&]:data-[state=closed]:!animate-none',
         }}
-        className="mc7f-settings-modal w-[min(1180px,94vw)] max-w-6xl h-[min(760px,90vh)] p-0 flex flex-col overflow-hidden motion-reduce:!left-0 motion-reduce:!right-0 motion-reduce:!top-[round(nearest,calc(50vh-min(380px,45vh)),1px)] motion-reduce:!bottom-auto motion-reduce:!mx-auto motion-reduce:!my-0 motion-reduce:!transform-none [html[data-theme=monochrome]_&]:rounded-none [html[data-theme=monochrome]_&]:border-foreground/40 [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:shadow-none"
+        className="mc7f-settings-modal w-[min(1180px,94vw)] max-w-6xl h-[min(760px,90vh)] p-0 sm:p-0 flex flex-col overflow-hidden motion-reduce:!left-0 motion-reduce:!right-0 motion-reduce:!top-[round(nearest,calc(50vh-min(380px,45vh)),1px)] motion-reduce:!bottom-auto motion-reduce:!mx-auto motion-reduce:!my-0 motion-reduce:!transform-none [html[data-theme=monochrome]_&]:rounded-none [html[data-theme=monochrome]_&]:border-foreground/40 [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:shadow-none"
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">

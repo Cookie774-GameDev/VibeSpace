@@ -29,6 +29,8 @@
         { "url": "http://127.0.0.1:11434/*" },
         { "url": "http://127.0.0.1:52643/config" },
         { "url": "https://api.openai.com/*" },
+        { "url": "https://api.deepgram.com/*" },
+        { "url": "https://vibespace-ai-news.vibespace-viper.workers.dev/*" },
         { "url": "https://api.anthropic.com/*" },
         { "url": "https://generativelanguage.googleapis.com/*" },
         { "url": "https://api.groq.com/*" },

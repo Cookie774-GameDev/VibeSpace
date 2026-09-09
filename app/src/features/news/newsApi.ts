@@ -1,4 +1,5 @@
 import type { NewsItem, NewsKind } from './newsCatalog';
+import { nativeFetch } from '@/lib/nativeFetch';
 
 export type LiveMediaType = 'image' | 'video' | 'none';
 
@@ -358,7 +359,7 @@ export function parseNewsResponse(payload: unknown): LiveNewsResponse {
 
 export async function fetchLiveNews(
   origin: string,
-  { fetcher = fetch, timeoutMs = 8_000 }: { fetcher?: FetchLike; timeoutMs?: number } = {},
+  { fetcher = nativeFetch, timeoutMs = 8_000 }: { fetcher?: FetchLike; timeoutMs?: number } = {},
 ): Promise<LiveNewsResponse> {
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);

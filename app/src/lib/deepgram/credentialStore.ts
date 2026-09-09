@@ -1,4 +1,5 @@
 import { isTauri } from '@/lib/utils';
+import { nativeFetch } from '@/lib/nativeFetch';
 
 export const DEEPGRAM_CREDENTIAL_EVENT = 'vibespace:deepgram-credential-changed';
 export const DEEPGRAM_CREDENTIAL_ID = 'deepgram';
@@ -30,7 +31,7 @@ export interface DeepgramCredentialAdapter {
 
 type SafeFetcher = (
   input: string,
-  init?: { method?: string; headers?: Record<string, string> },
+  init?: { method?: string; headers?: Record<string, string>; signal?: AbortSignal },
 ) => Promise<Response>;
 
 interface DeepgramCredentialServiceOptions {
@@ -97,7 +98,7 @@ function safeProject(value: unknown): { projectId?: string; projectName?: string
 }
 
 export function createDeepgramCredentialService(options: DeepgramCredentialServiceOptions) {
-  const fetcher = options.fetcher ?? ((input, init) => fetch(input, init));
+  const fetcher = options.fetcher ?? ((input, init) => nativeFetch(input, init));
   const publish = options.publish ?? defaultPublish;
   const now = options.now ?? (() => new Date());
   let current: DeepgramCredentialSnapshot = { configured: false, health: 'missing' };
@@ -113,10 +114,13 @@ export function createDeepgramCredentialService(options: DeepgramCredentialServi
     configured: boolean,
     source: DeepgramCredentialSnapshot['source'],
   ): Promise<DeepgramCredentialSnapshot> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
     try {
-      const response = await fetcher('https://api.deepgram.com/v1/projects', {
+      const response = await fetcher('https://api.deepgram.com/v1/auth/token', {
         method: 'GET',
         headers: { Authorization: `Token ${key}` },
+        signal: controller.signal,
       });
       const checkedAt = now().toISOString();
       if (response.status === 401) {
@@ -146,7 +150,16 @@ export function createDeepgramCredentialService(options: DeepgramCredentialServi
           errorCode: 'provider_error',
         });
       }
-      const project = safeProject(await response.json().catch(() => null));
+      // Project listing is optional metadata, never the credential health gate.
+      let project: { projectId?: string; projectName?: string } = {};
+      try {
+        const metadata = await fetcher('https://api.deepgram.com/v1/projects', {
+          method: 'GET',
+          headers: { Authorization: `Token ${key}` },
+          signal: controller.signal,
+        });
+        if (metadata.ok) project = safeProject(await metadata.json().catch(() => null));
+      } catch { /* An authenticated speech key does not require management access. */ }
       return emit({
         configured,
         health: 'connected',
@@ -162,6 +175,8 @@ export function createDeepgramCredentialService(options: DeepgramCredentialServi
         checkedAt: now().toISOString(),
         errorCode: 'network',
       });
+    } finally {
+      clearTimeout(timer);
     }
   };
 

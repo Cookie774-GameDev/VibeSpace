@@ -39,6 +39,7 @@ import { TemplatePicker } from './TemplatePicker';
 import { WallpaperHost } from './WallpaperHost';
 import { WallpaperPicker } from './WallpaperPicker';
 import { WorkbenchCanvas } from './WorkbenchCanvas';
+import { WorkbenchFasterAgents } from './WorkbenchFasterAgents';
 import { WorkbenchContextMenu } from './WorkbenchContextMenu';
 import { ArtifactReferenceResolverProvider } from './ReferencePanel';
 import { useWorkbenchStore } from './store';
@@ -534,6 +535,7 @@ export function WorkbenchPage() {
           </div>
         </DialogContent>
       </Dialog>
+      <WorkbenchFasterAgents />
     </main>
   );
 }

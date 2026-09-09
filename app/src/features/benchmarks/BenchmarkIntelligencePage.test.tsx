@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({ fetchBenchmarkLeaderboard: vi.fn() }));
@@ -51,6 +51,19 @@ const rows = [
 ];
 
 describe('BenchmarkIntelligencePage', () => {
+  it('refreshes an open page hourly and removes its timer on unmount', async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<BenchmarkIntelligencePage />);
+      await act(async () => { await Promise.resolve(); });
+      const initial = api.fetchBenchmarkLeaderboard.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1000); });
+      expect(api.fetchBenchmarkLeaderboard.mock.calls.length).toBe(initial + 1);
+      view.unmount();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1000); });
+      expect(api.fetchBenchmarkLeaderboard.mock.calls.length).toBe(initial + 1);
+    } finally { vi.useRealTimers(); }
+  });
   beforeEach(() => {
     api.fetchBenchmarkLeaderboard.mockResolvedValue({
       generatedAt: '2026-08-14T23:08:00.000Z',

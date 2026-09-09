@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFasterAgentsStore } from './fasterAgentsStore';
+import { useUIStore } from '@/stores/ui';
 
 const { enqueueTerminalCommand } = vi.hoisted(() => ({
   enqueueTerminalCommand: vi.fn(),
@@ -33,6 +34,7 @@ const terminals = [1, 2, 3].map((index) => ({
 
 describe('FasterAgentsOverlay', () => {
   beforeEach(() => {
+    useUIStore.setState({ route: 'terminal' });
     enqueueTerminalCommand.mockReset();
     vi.stubGlobal(
       'Audio',
@@ -108,6 +110,18 @@ describe('FasterAgentsOverlay', () => {
     render(<FasterAgentsOverlay terminals={terminals} />);
     fireEvent.click(screen.getByRole('button', { name: 'Close Faster Agents' }));
     expect(useFasterAgentsStore.getState().open).toBe(false);
+    expect(enqueueTerminalCommand).not.toHaveBeenCalled();
+  });
+  it('uses only the Workbench picker when the terminals page is still mounted', () => {
+    useUIStore.setState({ route: 'workbench' });
+    render(
+      <>
+        <FasterAgentsOverlay terminals={terminals} />
+        <FasterAgentsOverlay surface="workbench" terminals={terminals} />
+      </>,
+    );
+    expect(screen.getAllByLabelText('Select terminals for Faster Agents')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Faster Agents' }));
     expect(enqueueTerminalCommand).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,8 @@ import { useFasterAgentsStore } from '@/features/terminals/faster-agents/fasterA
 export function FasterAgentsToolCard() {
   const run = () => {
     useFasterAgentsStore.getState().launch();
-    useUIStore.getState().setRoute('terminal');
+    const ui = useUIStore.getState();
+    if (ui.route !== 'workbench') ui.setRoute('terminal');
   };
   return (
     <article className="flex min-h-36 items-center gap-4 rounded-lg border border-accent-copper/35 bg-gradient-to-br from-paper to-accent-copper/10 px-4 py-4 shadow-soft">

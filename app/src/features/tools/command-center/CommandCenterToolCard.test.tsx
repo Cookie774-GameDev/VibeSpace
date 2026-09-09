@@ -23,14 +23,25 @@ vi.mock('./commandCenterTool', () => ({
 }));
 
 import { CommandCenterToolCard } from './CommandCenterToolCard';
+import {
+  inspectCommandCenterTool,
+  downloadCommandCenterTool,
+  launchCommandCenterTool,
+} from './commandCenterTool';
 
 describe('Codex Command Center preloaded tool card', () => {
   afterEach(cleanup);
 
-  it('presents the exact product name and an explicit download action', async () => {
+  it('is preloaded and coming soon without inspecting, downloading or launching', () => {
     render(<CommandCenterToolCard />);
     expect(screen.getByRole('heading', { name: 'Codex Command Center' })).toBeTruthy();
-    expect(await screen.findByRole('button', { name: 'Download' })).toBeTruthy();
+    expect(screen.getByText('Preloaded')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Coming soon' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(inspectCommandCenterTool).not.toHaveBeenCalled();
+    expect(downloadCommandCenterTool).not.toHaveBeenCalled();
+    expect(launchCommandCenterTool).not.toHaveBeenCalled();
     expect(screen.getByText(/progress, daily goals, and milestones/i)).toBeTruthy();
   });
 });

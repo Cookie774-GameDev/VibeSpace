@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>VibeSpace Desktop Link · Connect MCP</title>
+    <link rel="stylesheet" href="/setup/style.css" />
+  </head>
+  <body>
+    <aside>
+      <a class="brand" href="/setup"><span class="brandmark">V</span> VibeSpace</a
+      ><small>YOUR WORKSPACE</small>
+      <p>Browser & desktop</p>
+      <small>CONNECTION</small>
+      <div class="nav active">↗ &nbsp; MCP setup</div>
+      <div class="nav" id="rail-status">○ &nbsp; Not connected</div>
+      <footer>Your progress is saved<br />on this computer.</footer>
+    </aside>
+    <main>
+      <header>
+        <span class="eyebrow">MAKE YOUR WORKSPACE AVAILABLE</span>
+        <h1>Connect VibeSpace Desktop Link</h1>
+        <p>Your desktop tools, connected through an OpenAI tunnel.</p>
+      </header>
+      <ol class="steps" aria-label="Setup progress">
+        <li data-step="1"><span>1</span>Create a tunnel</li>
+        <li data-step="2"><span>2</span>Connect VibeSpace</li>
+        <li data-step="3"><span>3</span>Add to ChatGPT</li>
+      </ol>
+      <section id="step-1" class="step">
+        <div class="film">
+          <div class="flow">
+            <span class="flow-brand">V</span><i></i><span class="flow-orbit">↗</span><i></i
+            ><span class="flow-brand openai">◎</span>
+          </div>
+          <h2>A small connection.<br />A bigger workspace.</h2>
+          <p>Files, terminals and browser tools<br />stay on your computer.</p>
+          <small>Setup video coming here next</small>
+        </div>
+        <h2>First, create your tunnel.</h2>
+        <p>
+          Open OpenAI, create a tunnel for your workspace, then create a restricted runtime key with
+          Tunnels Read and Use.
+        </p>
+        <div class="links">
+          <a
+            target="_blank"
+            rel="noopener noreferrer"
+            href="https://platform.openai.com/settings/organization/tunnels"
+            >Open OpenAI tunnels ↗</a
+          ><a
+            target="_blank"
+            rel="noopener noreferrer"
+            href="https://platform.openai.com/settings/organization/api-keys"
+            >Create runtime key ↗</a
+          >
+        </div>
+      </section>
+      <section id="step-2" class="step" hidden>
+        <div class="connection-card">
+          <span class="connector-symbol">↗</span>
+          <div>
+            <h2>VibeSpace Desktop Connector</h2>
+            <p id="tools">Detecting the bundled tools…</p>
+          </div>
+          <span class="pill">Preloaded</span>
+        </div>
+        <h2>Bring your tunnel details.</h2>
+        <p>
+          Paste the two values from OpenAI. Your key is protected by Windows and never saved in
+          browser storage.
+        </p>
+        <label
+          >Tunnel ID<input
+            id="tunnel"
+            placeholder="tunnel_…"
+            autocomplete="off"
+            spellcheck="false" /></label
+        ><label
+          >Runtime API key <span>(not an admin key)</span
+          ><input
+            id="key"
+            type="password"
+            placeholder="Paste your runtime key"
+            autocomplete="off"
+            spellcheck="false"
+        /></label>
+        <p id="saved" class="save-status" role="status">Changes save automatically.</p>
+        <button id="connect" class="primary" type="button">Connect tunnel <span>↗</span></button>
+      </section>
+      <section id="step-3" class="step" hidden>
+        <div class="connection-card">
+          <span class="connector-symbol">✓</span>
+          <div>
+            <h2 id="ready-title">Checking your tunnel</h2>
+            <p id="ready-detail">Waiting for verified readiness.</p>
+          </div>
+        </div>
+        <h2>One last step in ChatGPT.</h2>
+        <p>
+          Open Apps settings, create an app, choose your tunnel, and review its tools. Keep
+          VibeSpace’s connector running while you use it.
+        </p>
+        <a
+          class="primary"
+          target="_blank"
+          rel="noopener noreferrer"
+          href="https://chatgpt.com/#settings/Connectors"
+          >Open ChatGPT settings ↗</a
+        >
+        <p class="muted">
+          Adding the ChatGPT app requires your action there. VibeSpace verifies tunnel readiness
+          here.
+        </p>
+        <button id="disconnect" class="quiet" type="button">Disconnect tunnel</button>
+      </section>
+      <p id="error" role="alert" hidden></p>
+      <div class="bottom">
+        <button id="back" class="quiet" type="button">← Back</button
+        ><span id="status" role="status">Checking connection…</span
+        ><button id="next" class="primary" type="button">Continue →</button>
+      </div>
+    </main>
+    <script src="/setup/app.js"></script>
+  </body>
+</html>

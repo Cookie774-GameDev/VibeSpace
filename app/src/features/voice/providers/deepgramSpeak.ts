@@ -1,5 +1,6 @@
 import type { VoiceTtsPreset } from '../voicePlans';
 import { playBase64Audio } from '../audioPlayback';
+import { nativeFetch } from '@/lib/nativeFetch';
 
 const PRESET_MODEL: Record<VoiceTtsPreset, string> = {
   jarvis: 'aura-orion-en',
@@ -29,7 +30,7 @@ export async function speakDeepgramWithKey(
   let audio: ArrayBuffer;
   let mime: string;
   try {
-    const res = await fetch(
+    const res = await nativeFetch(
       `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}`,
       {
         method: 'POST',
@@ -59,7 +60,8 @@ export async function testDeepgramVoiceKey(apiKey: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 12_000);
   try {
-    const response = await fetch('https://api.deepgram.com/v1/projects', {
+    // Validate the key itself without requiring project-management permissions.
+    const response = await nativeFetch('https://api.deepgram.com/v1/auth/token', {
       method: 'GET',
       headers: { Authorization: `Token ${apiKey.trim()}` },
       signal: controller.signal,
