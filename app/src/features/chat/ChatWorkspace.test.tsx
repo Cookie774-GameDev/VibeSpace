@@ -18,7 +18,7 @@ vi.mock('./ChatThread', () => ({
 
 vi.mock('./Composer', () => ({
   Composer: ({ chatId }: { chatId: string }) => (
-    <div data-testid={`composer-${chatId}`} data-chat-id={chatId} />
+    <div data-testid={`composer-${chatId}`} data-chat-id={chatId} data-tour="chat-composer" />
   ),
 }));
 
@@ -38,7 +38,9 @@ vi.mock('@/features/browser-chat', () => ({
 }));
 
 vi.mock('./TokenBossCinematic', () => ({ TokenBossCinematic: () => null }));
-vi.mock('./WarmChatWelcome', () => ({ WarmChatWelcome: () => null }));
+vi.mock('./WarmChatWelcome', () => ({
+  WarmChatWelcome: () => <div data-testid="welcome">Welcome</div>,
+}));
 vi.mock('./ChatOutputPanel', () => ({ ChatOutputPanel: () => null }));
 
 const titles: Readonly<Record<string, string>> = {
@@ -97,6 +99,14 @@ function layout(...chatIds: string[]): ChatWorkspaceLayoutV1 {
 }
 
 describe('ChatWorkspace', () => {
+  it('leaves composer chat-context drops to the existing composer system', () => {
+    render(<WorkspaceHarness initial={layout('chat-1')} />);
+    const composer = screen.getByTestId('composer-chat-1');
+    fireEvent.dragOver(composer, { dataTransfer: typedTransfer('chat-2') });
+    fireEvent.drop(composer, { dataTransfer: typedTransfer('chat-2') });
+    expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull();
+    expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(1);
+  });
   it('keeps one native chat as a full-size surface with explicit IDs', () => {
     render(<WorkspaceHarness initial={layout('chat-1')} />);
 
@@ -120,16 +130,15 @@ describe('ChatWorkspace', () => {
     expect(screen.queryByTestId('composer-browser-chat')).toBeNull();
   });
 
-  it('renders three panes in a two-by-two grid with an inaccessible empty fourth cell', () => {
+  it('uses the full workspace for three panes with the first pane spanning both rows', () => {
     render(<WorkspaceHarness initial={layout('chat-1', 'chat-2', 'chat-3')} />);
 
     const workspace = screen.getByTestId('chat-workspace');
     expect(workspace.className).toContain('grid-cols-2');
     expect(workspace.className).toContain('grid-rows-2');
     expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(3);
-    expect(screen.getByTestId('chat-workspace-empty-cell').getAttribute('aria-hidden')).toBe(
-      'true',
-    );
+    expect(screen.queryByTestId('chat-workspace-empty-cell')).toBeNull();
+    expect(screen.getByTestId('chat-pane-chat-1').className).toContain('row-span-2');
   });
 
   it('fills the two-by-two grid with four independent chat surfaces', () => {
@@ -226,5 +235,60 @@ describe('ChatWorkspace', () => {
       ),
     );
     expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(4);
+  });
+
+  it.each([1, 2, 3])(
+    'previews the actual next layout from %i panes without mounting extra chats',
+    async (count) => {
+      render(
+        <WorkspaceHarness initial={layout(...['chat-1', 'chat-2', 'chat-3'].slice(0, count))} />,
+      );
+      const incoming = `chat-${count + 1}`;
+      const region = screen.getByTestId('chat-conversation-region-chat-1');
+      fireEvent.dragOver(region, { dataTransfer: typedTransfer(incoming) });
+      const preview = screen.getByTestId('chat-layout-drop-preview');
+      expect(preview.getAttribute('data-preview-pane-count')).toBe(String(count + 1));
+      expect(within(preview).getByText(titles[incoming])).toBeTruthy();
+      expect(screen.getAllByTestId(/^thread-/)).toHaveLength(count);
+      fireEvent.drop(region, { dataTransfer: typedTransfer(incoming) });
+      await waitFor(() => expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(count + 1));
+      expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull();
+    },
+  );
+
+  it('includes the welcome area and clears the preview when dragging is cancelled', () => {
+    render(<WorkspaceHarness initial={layout('chat-1')} />);
+    expect(
+      screen.getByTestId('welcome').closest('[data-testid="chat-conversation-region-chat-1"]'),
+    ).toBeTruthy();
+    fireEvent.dragOver(screen.getByTestId('welcome'), { dataTransfer: typedTransfer('chat-2') });
+    expect(screen.getByTestId('chat-layout-drop-preview')).toBeTruthy();
+    fireEvent.dragEnd(window);
+    expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull();
+    expect(screen.getByTestId('chat-pane-chat-1').getAttribute('data-chat-drag-over')).toBe(
+      'false',
+    );
+  });
+
+  it('remembers same-window drag metadata while the browser protects dragover data', () => {
+    render(<WorkspaceHarness initial={layout('chat-1', 'chat-2', 'chat-3', 'chat-4')} />);
+    fireEvent.dragStart(window, { dataTransfer: typedTransfer('chat-2') });
+    fireEvent.dragOver(screen.getByTestId('chat-conversation-region-chat-1'), {
+      dataTransfer: { types: [VIBESPACE_CHAT_MIME], getData: () => '' },
+    });
+    expect(screen.getByTestId('chat-layout-drop-preview').textContent).toContain(
+      'Focus existing chat',
+    );
+    expect(screen.queryByText('Four chats already open')).toBeNull();
+  });
+
+  it('shows a visible limit before dropping a fifth chat and ignores file drags', () => {
+    render(<WorkspaceHarness initial={layout('chat-1', 'chat-2', 'chat-3', 'chat-4')} />);
+    const region = screen.getByTestId('chat-conversation-region-chat-1');
+    fireEvent.dragOver(region, { dataTransfer: typedTransfer('chat-5') });
+    expect(screen.getByText('Four chats already open')).toBeTruthy();
+    fireEvent.dragEnd(window);
+    fireEvent.dragOver(region, { dataTransfer: { types: ['Files'], getData: () => '' } });
+    expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull();
   });
 });

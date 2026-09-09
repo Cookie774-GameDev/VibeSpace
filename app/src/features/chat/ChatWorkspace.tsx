@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type DragEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserGoalStatus } from '@/features/browser/BrowserGoalStatus';
@@ -78,7 +78,6 @@ function NativeChatSurface({
 
   return (
     <>
-      <WarmChatWelcome chatId={chatId} />
       <div
         data-testid={`chat-conversation-region-${chatId}`}
         className="relative flex min-h-0 flex-1 flex-col"
@@ -99,6 +98,7 @@ function NativeChatSurface({
           onOpenBeside(event);
         }}
       >
+        <WarmChatWelcome chatId={chatId} />
         <ChatThread chatId={chatId} fixtureMessages={fixtureMessages} />
         <BrowserGoalStatus chatId={chatId} />
       </div>
@@ -118,6 +118,7 @@ function ChatPane({
   onFocus,
   onClose,
   onDropChat,
+  tall,
 }: {
   chatId: string;
   title: string;
@@ -127,9 +128,26 @@ function ChatPane({
   onFocus: () => void;
   onClose: () => void;
   onDropChat: (event: DragEvent<HTMLDivElement>) => void;
+  tall: boolean;
 }) {
   const engine = useBrowserChatStore((state) => resolveChatEngine(state, chatId));
   const [dragOver, setDragOver] = useState(false);
+  useEffect(() => {
+    const clear = () => setDragOver(false);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clear();
+    };
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    window.addEventListener('blur', clear);
+    window.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+      window.removeEventListener('blur', clear);
+      window.removeEventListener('keydown', escape);
+    };
+  }, []);
   let surface: ReactNode;
   if (engine === 'browser') {
     surface = (
@@ -182,6 +200,7 @@ function ChatPane({
       }}
       className={cn(
         'relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background transition-[box-shadow,border-color] duration-150 motion-reduce:transition-none',
+        tall && 'row-span-2',
         multiPane && 'border border-border/70',
         multiPane &&
           focused &&
@@ -238,6 +257,39 @@ export function ChatWorkspace({
   const focusedPaneOrdinal = layout.chatIds.indexOf(layout.focusedChatId) + 1;
   const focusAnnouncement = `Focused ${focusedTitle}, pane ${focusedPaneOrdinal} of ${layout.chatIds.length}.`;
   const [announcement, setAnnouncement] = useState(focusAnnouncement);
+  const draggedChat = useRef<ReturnType<typeof readChatDragPayload>>(null);
+  const [preview, setPreview] = useState<{ chatId: string | null; title: string } | null>(null);
+
+  useEffect(() => {
+    const start = (event: globalThis.DragEvent) => {
+      // dragover deliberately hides getData in browsers; capture metadata while
+      // the source's dragstart still permits reading it. Never persist it.
+      draggedChat.current = event.dataTransfer ? readChatDragPayload(event.dataTransfer) : null;
+    };
+    const clear = () => {
+      draggedChat.current = null;
+      setPreview(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clear();
+    };
+    window.addEventListener('dragstart', start);
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    window.addEventListener('blur', clear);
+    window.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('dragstart', start);
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+      window.removeEventListener('blur', clear);
+      window.removeEventListener('keydown', escape);
+    };
+  }, []);
+
+  const existing = preview?.chatId ? layout.chatIds.includes(preview.chatId) : false;
+  const atLimit = !!preview && !existing && layout.chatIds.length >= 4;
+  const previewIds = existing || atLimit ? layout.chatIds : [...layout.chatIds, '__incoming__'];
 
   useEffect(() => {
     setAnnouncement(focusAnnouncement);
@@ -285,18 +337,53 @@ export function ChatWorkspace({
     <div
       data-testid="chat-workspace"
       data-pane-count={layout.chatIds.length}
+      onDragOverCapture={(event) => {
+        if (
+          !Array.from(event.dataTransfer.types).includes(VIBESPACE_CHAT_MIME) ||
+          (event.target instanceof Element && event.target.closest('[data-tour="chat-composer"]'))
+        ) {
+          setPreview(null);
+          return;
+        }
+        event.preventDefault();
+        const payload = draggedChat.current ?? readChatDragPayload(event.dataTransfer);
+        const next = { chatId: payload?.chatId ?? null, title: payload?.title ?? 'Dragged chat' };
+        setPreview((current) =>
+          current?.chatId === next.chatId && current?.title === next.title ? current : next,
+        );
+        event.dataTransfer.dropEffect = 'link';
+      }}
+      onDragLeave={(event) => {
+        if (
+          !(event.relatedTarget instanceof Node) ||
+          !event.currentTarget.contains(event.relatedTarget)
+        )
+          setPreview(null);
+      }}
+      onDropCapture={() => setPreview(null)}
+      onDrop={(event) => {
+        // Also accept the thin gaps between panes; composers retain their own
+        // chat-context and attachment drop behavior.
+        if (event.target instanceof Element && event.target.closest('[data-tour="chat-composer"]'))
+          return;
+        const payload = readChatDragPayload(event.dataTransfer);
+        if (!payload) return;
+        event.preventDefault();
+        void openBeside(payload);
+      }}
       className={cn(
-        'grid h-full min-h-0 w-full gap-px overflow-hidden bg-border/70 transition-[grid-template-columns,grid-template-rows] duration-150 motion-reduce:transition-none',
+        'relative isolate grid h-full min-h-0 w-full gap-px overflow-hidden bg-border/70 transition-[grid-template-columns,grid-template-rows] duration-150 motion-reduce:transition-none',
         layoutClassForPaneCount(layout.chatIds.length),
       )}
     >
-      {layout.chatIds.map((chatId) => (
+      {layout.chatIds.map((chatId, index) => (
         <ChatPane
           key={chatId}
           chatId={chatId}
           title={paneTitle(chatTitles, chatId)}
           focused={layout.focusedChatId === chatId}
           multiPane={layout.chatIds.length > 1}
+          tall={layout.chatIds.length === 3 && index === 0}
           fixtureMessages={fixtureMessagesByChat?.[chatId]}
           onFocus={() => onFocus(chatId)}
           onClose={() => onClose(chatId)}
@@ -309,12 +396,50 @@ export function ChatWorkspace({
           }}
         />
       ))}
-      {layout.chatIds.length === 3 ? (
+      {preview ? (
         <div
-          data-testid="chat-workspace-empty-cell"
+          data-testid="chat-layout-drop-preview"
+          data-preview-pane-count={previewIds.length}
           aria-hidden="true"
-          className="min-h-0 min-w-0 bg-background/55"
-        />
+          className={cn(
+            'pointer-events-none absolute inset-0 z-40 grid gap-2 bg-background/55 p-2',
+            layoutClassForPaneCount(previewIds.length),
+          )}
+        >
+          {atLimit ? (
+            <div className="col-span-full row-span-full m-auto rounded-xl border border-accent-copper/50 bg-panel p-4 text-center shadow-lg">
+              <p className="font-medium text-foreground">Four chats already open</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Close a pane to add another chat.
+              </p>
+            </div>
+          ) : (
+            previewIds.map((id, index) => {
+              const incoming = id === '__incoming__' || (existing && id === preview.chatId);
+              return (
+                <div
+                  key={id}
+                  className={cn(
+                    'flex min-h-0 min-w-0 flex-col justify-center rounded-xl border bg-panel/90 p-4 text-center',
+                    previewIds.length === 3 && index === 0 && 'row-span-2',
+                    incoming
+                      ? 'border-2 border-dashed border-accent-copper text-foreground shadow-[inset_0_0_24px_hsl(var(--accent-copper)/0.12)]'
+                      : 'border-border text-muted-foreground',
+                  )}
+                >
+                  <span className="truncate text-sm font-medium">
+                    {id === '__incoming__' ? preview.title : paneTitle(chatTitles, id)}
+                  </span>
+                  {incoming ? (
+                    <span className="mt-2 text-xs text-accent-copper">
+                      {existing ? 'Focus existing chat' : 'Release to open here'}
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
       ) : null}
       <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {announcement}
