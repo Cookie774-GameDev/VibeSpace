@@ -57,7 +57,7 @@ pub enum CodexAppServerStreamMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CodexLaunchRequest {
     executable: PathBuf,
-    arguments: [String; 2],
+    arguments: [String; 4],
 }
 
 fn valid_identifier(value: &str, maximum_bytes: usize) -> bool {
@@ -118,7 +118,7 @@ where
     }
     Ok(CodexLaunchRequest {
         executable,
-        arguments: ["app-server".to_string(), "--stdio".to_string()],
+        arguments: ["--enable".to_string(), "default_mode_request_user_input".to_string(), "app-server".to_string(), "--stdio".to_string()],
     })
 }
 
@@ -1321,7 +1321,7 @@ mod tests {
         .expect("trusted launch");
 
         assert_eq!(launch.executable, trusted);
-        assert_eq!(launch.arguments, ["app-server", "--stdio"]);
+        assert_eq!(launch.arguments, ["--enable", "default_mode_request_user_input", "app-server", "--stdio"]);
         assert!(resolve_launch_request("cli-executable-missing", |_| {
             Err("executableId is not registered".to_string())
         })

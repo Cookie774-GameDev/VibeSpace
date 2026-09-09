@@ -137,6 +137,15 @@ function isAbsolutePath(value: string): boolean {
   return !normalized.split('/').some((part) => part === '..');
 }
 
+function comparablePath(value: unknown): unknown {
+  if (typeof value !== 'string' || !isAbsolutePath(value)) return undefined;
+  // Windows callers and Codex use different separators for the same directory.
+  // Preserve component case and reject traversal; never equate different roots.
+  if (!/^[A-Za-z]:[\\/]/u.test(value)) return value;
+  const path = value.replaceAll('\\', '/');
+  return path[0]!.toUpperCase() + (path.length === 3 ? path.slice(1) : path.slice(1).replace(/\/+$/u, ''));
+}
+
 function requireAbsolutePath(value: string, label: string): string {
   if (!isAbsolutePath(value)) throw new Error(`Codex ${label} must be an absolute safe path.`);
   return value;
@@ -438,8 +447,8 @@ function sandboxMatches(
     observed.excludeSlashTmp === true &&
     Array.isArray(roots) &&
     // Codex makes cwd writable implicitly and can omit it from writableRoots.
-    roots.every((root) => typeof root === 'string' && expected.writableRoots.includes(root)) &&
-    expected.writableRoots.every((root) => root === cwd || roots.includes(root))
+    roots.every((root) => typeof root === 'string' && expected.writableRoots.some((expectedRoot) => comparablePath(root) === comparablePath(expectedRoot))) &&
+    expected.writableRoots.every((root) => comparablePath(root) === comparablePath(cwd) || roots.some((observedRoot) => comparablePath(root) === comparablePath(observedRoot)))
   );
 }
 
@@ -475,7 +484,7 @@ export function validateCodexThreadStartResponse(
       result.serviceTier === 'default' ? null : (result.serviceTier ?? null),
       identity.serviceTier === 'default' ? null : identity.serviceTier,
     ],
-    ['cwd', result.cwd, identity.cwd],
+    ['cwd', comparablePath(result.cwd), comparablePath(identity.cwd)],
     ['approvalPolicy', result.approvalPolicy, policy.approvalPolicy],
     ['approvalsReviewer', result.approvalsReviewer, 'user'],
     // Auto lets Codex select its model default. Explicit effort still must match.

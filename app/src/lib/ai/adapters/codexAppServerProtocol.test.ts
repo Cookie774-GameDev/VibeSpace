@@ -349,6 +349,24 @@ describe('Codex app-server request protocol', () => {
       validateCodexThreadStartResponse(response, 'start_1', IDENTITY, { kind: 'ask' }),
     ).toEqual({ ok: true, threadId: 'thread_1' });
 
+    for (const cwd of ['C:/workspace/game', 'C:/workspace/game/']) {
+      expect(validateCodexThreadStartResponse(
+        { ...response, result: { ...response.result, cwd } },
+        'start_1', IDENTITY, { kind: 'ask' },
+      )).toEqual({ ok: true, threadId: 'thread_1' });
+    }
+    for (const cwd of ['D:/workspace/game', 'C:/workspace/game-other', 'C:/workspace/game/../other']) {
+      expect(validateCodexThreadStartResponse(
+        { ...response, result: { ...response.result, cwd } },
+        'start_1', IDENTITY, { kind: 'ask' },
+      )).toEqual({ ok: false, reason: 'identity_mismatch', field: 'cwd' });
+    }
+
+    expect(validateCodexThreadStartResponse(
+      { ...response, result: { ...response.result, cwd: 'C:' } },
+      'start_1', { ...IDENTITY, cwd: 'C:/' }, { kind: 'ask' },
+    )).toEqual({ ok: false, reason: 'identity_mismatch', field: 'cwd' });
+
     const mismatch = validateCodexThreadStartResponse(
       { ...response, result: { ...response.result, model: 'wrong-secret-model' } },
       'start_1',

@@ -226,7 +226,7 @@ pub fn managed_codex_app_server_launch(
 
     Ok(ManagedCodexAppServerLaunch {
         executable,
-        arguments: vec!["app-server".to_string(), "--stdio".to_string()],
+        arguments: vec!["--enable".to_string(), "default_mode_request_user_input".to_string(), "app-server".to_string(), "--stdio".to_string()],
         stdin: AppServerStdio::Piped,
         stdout: AppServerStdio::Piped,
         stderr: AppServerStdio::Piped,
@@ -271,7 +271,7 @@ mod tests {
 
         assert!(plan.executable.is_absolute());
         assert!(plan.executable.ends_with(&release.entrypoint));
-        assert_eq!(plan.arguments, ["app-server", "--stdio"]);
+        assert_eq!(plan.arguments, ["--enable", "default_mode_request_user_input", "app-server", "--stdio"]);
         assert_eq!(plan.stdin, AppServerStdio::Piped);
         assert_eq!(plan.stdout, AppServerStdio::Piped);
         assert_eq!(plan.stderr, AppServerStdio::Piped);
