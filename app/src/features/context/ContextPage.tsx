@@ -925,6 +925,16 @@ export function ContextPage() {
   const tree =
     structuralPreview ?? (SIYUAN_CONTEXT_VAULT_ENABLED ? siyuanTree : (selectedMap?.tree ?? null));
   const treeCoverageBounded = tree ? isContextTreeCoverageBounded(tree) : false;
+  // The SiYuan root document can be a metadata-only projection. Its empty
+  // preview must not hide the completed source tree's persisted coverage.
+  const statisticsTree =
+    !structuralPreview && tree?.fileCount === 0 && selectedMap?.tree.fileCount
+      ? selectedMap.tree
+      : tree;
+  const statisticsNodeCount = React.useMemo(
+    () => (statisticsTree ? flattenContextNodes(statisticsTree.nodes).length + 1 : null),
+    [statisticsTree],
+  );
   const indexSummaryScope = React.useMemo(() => {
     if (!projectId || !selectedMap) return 'No summaries';
     const policy = readSiyuanMapManifest(projectId, selectedMap.id)?.summaryPolicy;
@@ -2874,10 +2884,17 @@ export function ContextPage() {
             <Stat
               label="Files"
               value={
-                tree ? (treeCoverageBounded ? `${tree.fileCount}+` : String(tree.fileCount)) : '-'
+                statisticsTree
+                  ? isContextTreeCoverageBounded(statisticsTree)
+                    ? `${statisticsTree.fileCount}+`
+                    : String(statisticsTree.fileCount)
+                  : '-'
               }
             />
-            <Stat label="Nodes" value={tree ? String(flatNodes.length + 1) : '-'} />
+            <Stat
+              label="Nodes"
+              value={statisticsNodeCount === null ? '-' : String(statisticsNodeCount)}
+            />
             <Stat label="Model" value={tree ? shortModel(tree.model) : 'SiYuan local'} />
           </div>
           {tree && treeCoverageBounded ? (

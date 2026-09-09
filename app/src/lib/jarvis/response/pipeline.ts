@@ -165,17 +165,16 @@ function deterministicFallback(prose: string, facts: Readonly<JarvisVerifiedFact
   });
 
   let apologyUsed = false;
-  formatted = (formatted.match(/[^.!?]+[.!?]*/g) ?? [formatted])
+  formatted = (formatted.match(/[\s\S]+?(?:[.!?]+(?=\s|$)|$)/g) ?? [formatted])
     .filter((sentence) => {
       if (!/\b(?:sorry|apologi[sz]e|apologies)\b/i.test(sentence)) return true;
       if (apologyUsed) return false;
       apologyUsed = true;
       return true;
     })
-    .join(' ');
+    .join('');
   formatted = formatted
     .replace(/\s+([,.!?])/g, '$1')
-    .replace(/\.{2,}/g, '.')
     .replace(/\s{2,}/g, ' ')
     .trim();
   return formatted || 'The response is ready, Sir.';
@@ -312,7 +311,8 @@ function validatedParts(
   if (request.outputContract.allowPlanBlocks) {
     parts = convertTextParts(parts, (text) => {
       const parsed = parseJarvisPlanBlocks(text, {
-        force: request.interactionMode === 'plan' &&
+        force:
+          request.interactionMode === 'plan' &&
           (isExplicitPlanRequest(request.userText) || hasPlanReviewIntent(text)),
       });
       const normalized = parsed.parts.map((part): Part => {

@@ -207,11 +207,13 @@ async function documentFor(
     before.kind !== 'file' ||
     !Number.isSafeInteger(before.size) ||
     (before.size ?? -1) < 0 ||
-    (before.size ?? 0) > MAX_FILE_BYTES ||
     !rawHash(before)
   ) {
     return failSource(candidate, !before.ok ? before.error.code : 'metadata');
   }
+  // Large discovered files remain graph metadata, like binary/media files.
+  // One bounded-out body must not erase the index for every readable sibling.
+  if (before.size! > MAX_FILE_BYTES) return null;
   const read = await dependencies.read(candidate.absolutePath, MAX_FILE_BYTES + 1, access);
   abortIfNeeded(signal);
   if (!read.ok) return failSource(candidate, read.error.code);

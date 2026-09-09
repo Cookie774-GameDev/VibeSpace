@@ -301,6 +301,16 @@ export function findJarvisDisplayLinks(text: string): readonly JarvisDisplayLink
     }
     const end = bareLinkEnd(text, start);
     if (end <= start + prefix.length || overlaps(links, start, end)) continue;
+    // Maven coordinates quoted as code are identifiers, not navigable URLs.
+    // Explicit Markdown links still pass through the normal link policy above.
+    if (
+      text[start - 1] === '`' &&
+      text[end] === '`' &&
+      /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+:[A-Za-z0-9_.-]+:(?:jar|pom|war|ear)(?::[A-Za-z0-9_.-]+)?:[A-Za-z0-9_.+-]+$/u.test(
+        text.slice(start, end),
+      )
+    )
+      continue;
     links.push(
       Object.freeze({
         start,

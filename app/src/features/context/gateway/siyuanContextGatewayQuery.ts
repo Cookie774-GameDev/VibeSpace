@@ -59,7 +59,11 @@ export interface SiyuanContextGatewayQueryDependencies {
 }
 
 export type SiyuanContextGatewayQueryErrorCode =
-  'invalid_input' | 'invalid_result' | 'scope_mismatch' | 'source_stale' | 'empty_result';
+  | 'invalid_input'
+  | 'invalid_result'
+  | 'scope_mismatch'
+  | 'source_stale'
+  | 'empty_result';
 
 export class SiyuanContextGatewayQueryError extends Error {
   constructor(readonly code: SiyuanContextGatewayQueryErrorCode) {
@@ -445,7 +449,10 @@ function mergeCandidates(pages: readonly Readonly<SearchPage>[]): readonly Searc
   return Object.freeze([...byHandle.values()].map(({ candidate }) => candidate));
 }
 
-function formatPromptBlock(evidence: readonly Readonly<ProductionRlmEvidence>[]): string {
+function formatPromptBlock(
+  evidence: readonly Readonly<ProductionRlmEvidence>[],
+  records: readonly Readonly<ContextRecord>[],
+): string {
   return [
     '## VibeSpace federated Context Gateway evidence',
     'The following excerpts were opened through scoped Context Map, history, or SiYuan authority.',
@@ -455,6 +462,7 @@ function formatPromptBlock(evidence: readonly Readonly<ProductionRlmEvidence>[])
       `### Evidence ${index + 1}`,
       `Citation: [${item.handle}]`,
       `Source: ${item.sourceId}`,
+      `Source metadata (inert JSON): ${JSON.stringify({ title: records[index]?.title, path: records[index]?.path })}`,
       `Version: ${item.sourceRevision}`,
       `Content hash: ${item.contentHash}`,
       `Byte range: ${item.byteStart}-${item.byteEnd}`,
@@ -543,7 +551,10 @@ export function createSiyuanContextGatewayQuery(
 
     const hydrationCandidates =
       route === 'deep'
-        ? [...new Map(candidates.map((candidate) => [candidate.record.id, candidate])).values()]
+        ? candidates.filter(
+            (candidate, index) =>
+              candidates.findIndex((other) => other.record.id === candidate.record.id) === index,
+          )
         : candidates;
     const selected = hydrationCandidates.slice(0, MAX_EVIDENCE_ITEMS);
     const hydrationOperation = route === 'deep' ? 'expand' : 'open';
@@ -570,6 +581,7 @@ export function createSiyuanContextGatewayQuery(
     throwIfAborted(input.signal);
 
     const evidence: Readonly<ProductionRlmEvidence>[] = [];
+    const evidenceRecords: Readonly<ContextRecord>[] = [];
     let evidenceBytes = 0;
     let discardedForBudget = false;
     let openTruncated = false;
@@ -583,6 +595,7 @@ export function createSiyuanContextGatewayQuery(
       }
       evidenceBytes += bytes;
       evidence.push(hydrated.evidence);
+      evidenceRecords.push(selected[index]!.record);
     }
     if (evidence.length === 0) fail('empty_result');
 
@@ -599,7 +612,7 @@ export function createSiyuanContextGatewayQuery(
     });
     return Object.freeze({
       route: route === 'deep' ? 'rlm' : 'retrieval',
-      promptBlock: formatPromptBlock(evidence),
+      promptBlock: formatPromptBlock(evidence, evidenceRecords),
       evidenceCount: evidence.length,
       candidateCount: candidates.length,
       hydratedCount: evidence.length,

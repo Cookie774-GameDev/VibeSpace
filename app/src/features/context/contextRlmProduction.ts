@@ -491,6 +491,15 @@ function buildMeaningfulQueryPlan(query: string): {
   return { terms, phrases, properNames };
 }
 
+function mentionsMappedPath(query: string, path: string): boolean {
+  const normalizedQuery = query.replaceAll('\\', '/').toLocaleLowerCase('en-US');
+  const normalizedPath = path.replaceAll('\\', '/').toLocaleLowerCase('en-US');
+  return new RegExp(
+    `(?<![\\p{L}\\p{N}_./-])${escapeRegExp(normalizedPath)}(?=$|[^\\p{L}\\p{N}_./-]|[.!?](?:\\s|$))`,
+    'u',
+  ).test(normalizedQuery);
+}
+
 function lexicalQueriesForPlan(plan: ReturnType<typeof buildMeaningfulQueryPlan>): string[] {
   const maximalProperNames = plan.properNames.filter((candidate, index, names) => {
     const folded = candidate.toLocaleLowerCase('en-US');
@@ -1722,6 +1731,12 @@ export function createContextMapRlmRepository(
       );
       const exactQuery = query.startsWith('"') && query.endsWith('"') ? query.slice(1, -1) : query;
       const meaningfulPlan = buildMeaningfulQueryPlan(exactQuery);
+      // Scoped file references remain candidates even when their contents do not repeat the filename.
+      const namedCandidates = admittedCandidates.filter(
+        (candidate) =>
+          mentionsMappedPath(exactQuery, candidate.node.path!) ||
+          mentionsMappedPath(exactQuery, candidate.path),
+      );
       const candidatesByMap = new Map<string, SearchAuthorityCandidate[]>();
       for (const candidate of admittedCandidates) {
         const grouped = candidatesByMap.get(candidate.map.id) ?? [];
@@ -1742,18 +1757,17 @@ export function createContextMapRlmRepository(
               root: candidate.map.rootDir,
               strictProjectBoundary: true,
             });
-            return stat.ok &&
-              stat.kind === 'file' &&
-              stat.size !== undefined &&
-              stat.size >= 0 &&
-              stat.size <= MAX_SOURCE_SHARD_BYTES
+            return stat.ok && stat.kind === 'file' && stat.size !== undefined && stat.size >= 0
               ? stat.size
               : undefined;
           },
         );
         useSmallFallback =
           preflight.every((size) => size !== undefined) &&
-          preflight.reduce((total, size) => total + (size ?? 0), 0) <= MAX_SEARCH_SOURCE_BYTES;
+          preflight.reduce(
+            (total, size) => total + (size! <= MAX_SOURCE_SHARD_BYTES ? size! : 0),
+            0,
+          ) <= MAX_SEARCH_SOURCE_BYTES;
       }
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
       const searchableMaps =
@@ -1849,7 +1863,16 @@ export function createContextMapRlmRepository(
         seenCandidates.add(key);
         lexicalCandidates.push(candidate);
       }
-      const selectedCandidates = (useSmallFallback ? admittedCandidates : lexicalCandidates).slice(
+      const namedKeys = new Set(
+        namedCandidates.map((candidate) => `${candidate.map.id}\0${candidate.node.id}`),
+      );
+      const indexedCandidates = [
+        ...namedCandidates,
+        ...lexicalCandidates.filter(
+          (candidate) => !namedKeys.has(`${candidate.map.id}\0${candidate.node.id}`),
+        ),
+      ];
+      const selectedCandidates = (useSmallFallback ? admittedCandidates : indexedCandidates).slice(
         0,
         useSmallFallback ? MAX_SMALL_MAP_FALLBACK_FILES : MAX_PHYSICAL_SEARCH_CANDIDATES,
       );
@@ -1883,10 +1906,34 @@ export function createContextMapRlmRepository(
           continue;
         }
         const { authority, source } = resolved;
+        const named = namedKeys.has(`${authority.mapId}\0${authority.nodeId}`);
+        const namedCandidate = namedCandidates.find(
+          (candidate) =>
+            candidate.map.id === authority.mapId && candidate.node.id === authority.nodeId,
+        );
+        const fileQuestion = namedCandidate
+          ? (exactQuery
+              .split(';')
+              .find(
+                (clause) =>
+                  mentionsMappedPath(clause, namedCandidate.node.path!) ||
+                  mentionsMappedPath(clause, namedCandidate.path),
+              ) ?? exactQuery)
+          : exactQuery;
+        // Keep explicit head/tail requests local to their named file clause.
+        const positionOffset = !named
+          ? undefined
+          : /\b(?:last|tail|end)\b/iu.test(fileQuestion)
+            ? Math.max(0, source.content.length - 512)
+            : /\b(?:first|head|header|start|beginning|root)\b/iu.test(fileQuestion)
+              ? 0
+              : undefined;
         const exactOffset = flexibleWhitespaceOffset(source.content, exactQuery);
         const meaningful =
           exactOffset < 0 ? meaningfulQueryMatches(source.content, meaningfulPlan) : undefined;
-        const offset = exactOffset >= 0 ? exactOffset : meaningful?.offset;
+        const offset =
+          positionOffset ??
+          (exactOffset >= 0 ? exactOffset : (meaningful?.offset ?? (named ? 0 : undefined)));
         if (offset === undefined) continue;
         const selected = source.content.slice(
           offset,
@@ -1914,8 +1961,9 @@ export function createContextMapRlmRepository(
             }),
             preview: `[SOURCE FILE: ${authority.record.title}]\n${selected}`.slice(0, 320),
             score:
+              (named ? 1_000_000_000_000 : 0) +
               mappedSourceIntentScore(authority, meaningfulPlan) +
-              (exactOffset >= 0 ? 1_000_000_000 : meaningful!.score * 1_000),
+              (exactOffset >= 0 ? 1_000_000_000 : (meaningful?.score ?? 0) * 1_000),
           },
         });
       }

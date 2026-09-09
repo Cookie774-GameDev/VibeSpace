@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { findJarvisDisplayLinks } from './referenceParser';
 
 describe('bare links in formatted factual answers', () => {
+  it('preserves inline Maven coordinates while checking explicit links to the same text', () => {
+    const coordinate = 'com.example.log4j:log4j-examples:jar:1.0-SNAPSHOT';
+    expect(findJarvisDisplayLinks(`Root artifact: \`${coordinate}\``)).toEqual([]);
+    expect(findJarvisDisplayLinks(`[artifact](${coordinate})`)).toHaveLength(1);
+    expect(findJarvisDisplayLinks('`javascript:alert(1)`')).toHaveLength(1);
+  });
   it.each([
     '**Release date:** 2026-10-14',
     '**Current region:** eu-west-2',
@@ -12,10 +18,10 @@ describe('bare links in formatted factual answers', () => {
   });
 
   it('still detects real links and unsafe scheme payloads next to bold labels', () => {
-    expect(findJarvisDisplayLinks(
-      '**Source:** https://example.com/reference javascript:alert(1) custom:**payload',
-    ).map(({ target }) => target)).toEqual([
-      'https://example.com/reference', 'javascript:alert(1)', 'custom:**payload',
-    ]);
+    expect(
+      findJarvisDisplayLinks(
+        '**Source:** https://example.com/reference javascript:alert(1) custom:**payload',
+      ).map(({ target }) => target),
+    ).toEqual(['https://example.com/reference', 'javascript:alert(1)', 'custom:**payload']);
   });
 });

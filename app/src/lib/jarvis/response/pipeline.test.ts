@@ -78,6 +78,24 @@ function contextForUris(...uris: readonly string[]): JarvisRequestEnvelope['cont
   };
 }
 
+it('preserves dotted identifiers and version numbers during deterministic style repair', async () => {
+  const answer =
+    'Absolutely! **Root:** `com.example.log4j:log4j-examples:jar:1.0-SNAPSHOT`. Version `2.8.3` in `requirements.txt`.';
+  const result = await processJarvisResponse(
+    raw(answer),
+    request({ userText: 'Report the root artifact and version.' }),
+    {
+      repair: vi.fn(async () => {
+        throw new Error('repair unavailable');
+      }),
+    },
+  );
+  expect(result.displayText).toContain('com.example.log4j:log4j-examples:jar:1.0-SNAPSHOT');
+  expect(result.displayText).toContain('2.8.3');
+  expect(result.displayText).toContain('requirements.txt');
+  expect(result.displayText).not.toContain('unverified link');
+});
+
 function raw(
   text: string,
   status?: 'awaiting_approval' | 'running' | 'completed' | 'failed',
@@ -1046,8 +1064,11 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
     expect(result.displayText).toContain('Structured output could not be validated');
   });
 
-  it.each(['Approved to proceed?', 'Awaiting your go-ahead before I write anything.', 'The plan is ready for your approval.'])(
-    'projects requested plans into review actions with provider wording: %s', async (closing) => {
+  it.each([
+    'Approved to proceed?',
+    'Awaiting your go-ahead before I write anything.',
+    'The plan is ready for your approval.',
+  ])('projects requested plans into review actions with provider wording: %s', async (closing) => {
     const userText = 'Plan how to create mode-plan-0d10c62b.md without writing it yet.';
     const providerText = [
       'Plan:',

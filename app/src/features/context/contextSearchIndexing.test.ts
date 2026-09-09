@@ -63,11 +63,13 @@ function dependencies(contents: Record<string, string>, port = nativePort()) {
       sha256: `sha256:${path.endsWith('a.txt') ? HASH_A : HASH_B}`,
     };
   });
-  const read = vi.fn(async (path: string): Promise<FsReadResult> => ({
-    ok: true,
-    path,
-    content: contents[path]!,
-  }));
+  const read = vi.fn(
+    async (path: string): Promise<FsReadResult> => ({
+      ok: true,
+      path,
+      content: contents[path]!,
+    }),
+  );
   const hash = vi.fn(async (content: string) =>
     content === contents['C:\\repo\\a.txt']
       ? (`sha256:${HASH_A}` as const)
@@ -194,6 +196,23 @@ describe('bounded Context search index population', () => {
       expect.anything(),
     );
     expect(vi.mocked(deps.port.replaceDocuments).mock.calls[0]?.[2]).toHaveLength(1);
+  });
+
+  it('keeps oversized discovered bodies as metadata while indexing readable files', async () => {
+    const deps = dependencies({
+      'C:\\repo\\a.txt': 'alpha',
+      'C:\\repo\\b.txt': 'x'.repeat(1024 * 1024 + 1),
+    });
+    const receipt = await createContextSearchIndexPopulationPort(deps).populateCreatedMap(
+      'account-1',
+      map(),
+    );
+    expect(receipt.documentCount).toBe(1);
+    expect(receipt.bodyBytes).toBe(5);
+    expect(deps.read.mock.calls.map(([path]) => path)).toEqual(['C:\\repo\\a.txt']);
+    expect(vi.mocked(deps.port.replaceDocuments).mock.calls[0]?.[2]).toEqual([
+      expect.objectContaining({ documentId: 'node-a', body: 'alpha' }),
+    ]);
   });
 
   it('keeps an undecodable discovered file as graph metadata without aborting text indexing', async () => {

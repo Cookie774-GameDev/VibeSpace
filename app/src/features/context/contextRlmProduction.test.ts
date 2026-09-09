@@ -2303,6 +2303,128 @@ describe('production Context Map RLM repository', () => {
     expect(stat.mock.calls.filter(([, includeSha]) => includeSha === false)).toHaveLength(96);
   });
 
+  it('retrieves bounded files in a small mixed-size map without reading oversized bodies', async () => {
+    const content = 'The release owner is Mara Chen.';
+    const hash = await contentSha(content);
+    const fixtureMaps = maps();
+    fixtureMaps[0]!.tree.nodes = ['small.txt', 'large.txt'].map((name) => ({
+      id: name,
+      kind: 'file' as const,
+      title: name,
+      summary: '',
+      path: 'C:\\repo\\' + name,
+    }));
+    const read = vi.fn(async (path: string) => ({ ok: true as const, path, content }));
+    const repository = createContextMapRlmRepository({
+      loadMaps: async () => fixtureMaps,
+      stat: async (path: string) => ({
+        ok: true as const,
+        path,
+        kind: 'file' as const,
+        size: path.endsWith('large.txt') ? 2 * 1024 * 1024 : content.length,
+        modifiedMs: 20,
+        sha256: hash,
+      }),
+      read,
+      lexicalSearch: async () => [],
+      indexStatus: async () => ({
+        documentCount: 0,
+        indexId: 'empty',
+        engine: 'tantivy-0.22.1',
+        schemaVersion: 1,
+        recoveredCorruption: false,
+        needsRebuild: false,
+      }),
+    });
+    const hits = await repository.search(
+      { accountId: 'account-1', projectId: 'project-1' },
+      'Mara Chen',
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.preview).toContain('Mara Chen');
+    expect(read.mock.calls.map(([path]) => path)).toEqual(['C:\\repo\\small.txt']);
+  });
+
+  it('opens an explicitly named mapped file when broad lexical queries miss it', async () => {
+    const content = 'package33332 == 2.8.3';
+    const hash = await contentSha(content);
+    const fixtureMaps = maps();
+    fixtureMaps[0]!.tree.nodes = Array.from({ length: 129 }, (_, i) => ({
+      id: 'file-' + i,
+      kind: 'file' as const,
+      title: 'part-' + i + '.txt',
+      summary: '',
+      path: 'part-' + i + '.txt',
+    }));
+    const read = vi.fn(async (path: string) => ({ ok: true as const, path, content }));
+    const lexicalSearch = vi.fn(async () => []);
+    const repository = createContextMapRlmRepository({
+      loadMaps: async () => fixtureMaps,
+      stat: async (path: string) => ({
+        ok: true as const,
+        path,
+        kind: 'file' as const,
+        size: content.length,
+        modifiedMs: 20,
+        sha256: hash,
+      }),
+      read,
+      lexicalSearch,
+      indexStatus: async () => ({
+        documentCount: 129,
+        indexId: 'ready',
+        engine: 'tantivy-0.22.1',
+        schemaVersion: 1,
+        recoveredCorruption: false,
+        needsRebuild: false,
+      }),
+    });
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+    const hits = await repository.search(scope, 'Audit the contents of part-128.txt.');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.preview).toContain('package33332');
+    expect(read.mock.calls.map(([path]) => path)).toEqual(['C:\\repo\\part-128.txt']);
+    read.mockClear();
+    await expect(repository.search(scope, 'Audit not-part-128.txt.bak')).resolves.toEqual([]);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('keeps head and tail requests attached to their own named file clauses', async () => {
+    const content = 'HEAD verified field\n' + 'filler '.repeat(4000) + '\nTAIL final entry';
+    const hash = await contentSha(content);
+    const fixtureMaps = maps();
+    fixtureMaps[0]!.tree.nodes = ['header.txt', 'tail.txt'].map((name) => ({
+      id: name,
+      kind: 'file' as const,
+      title: name,
+      path: name,
+      summary: '',
+    }));
+    const repository = createContextMapRlmRepository({
+      loadMaps: async () => fixtureMaps,
+      stat: async (path: string) => ({
+        ok: true as const,
+        path,
+        kind: 'file' as const,
+        size: content.length,
+        modifiedMs: 20,
+        sha256: hash,
+      }),
+      read: async (path: string) => ({ ok: true as const, path, content }),
+      lexicalSearch: async () => [],
+    });
+    const hits = await repository.search(
+      { accountId: 'account-1', projectId: 'project-1' },
+      'Read header.txt (root field); tail.txt (last entry).',
+    );
+    expect(hits).toHaveLength(2);
+    const head = hits.find((hit) => hit.preview.includes('SOURCE FILE: header.txt'));
+    const tail = hits.find((hit) => hit.preview.includes('SOURCE FILE: tail.txt'));
+    expect(head?.pointer.byteStart).toBe(0);
+    expect(head?.preview).toContain('HEAD verified');
+    expect(tail?.pointer.byteStart).toBeGreaterThan(content.length - 1024);
+  });
+
   it('rejects traversing relative node paths before native filesystem access', async () => {
     const fixtureMaps = maps();
     fixtureMaps[0]!.tree.nodes[0]!.path = '../outside.txt';
