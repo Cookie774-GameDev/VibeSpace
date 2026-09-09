@@ -123,3 +123,26 @@ it('preserves normal clicks and pin buttons and cancels on Escape', () => {
   fireEvent.pointerUp(window, { pointerId: 1 });
   expect(drop).not.toHaveBeenCalled();
 });
+
+it('does not activate the control underneath the drop when the browser sends its follow-up click', () => {
+  const activate = vi.fn();
+  const drop = vi.fn();
+  render(
+    <>
+      <Source click={vi.fn()} />
+      <button data-testid="target" onClick={activate} onDrop={drop}>
+        Destination
+      </button>
+    </>,
+  );
+  vi.spyOn(document, 'elementFromPoint').mockReturnValue(screen.getByTestId('target'));
+  fireEvent.pointerDown(screen.getByText('Source'), { button: 0, pointerId: 1 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 100, clientY: 100 });
+  fireEvent.pointerUp(window, { pointerId: 1, clientX: 100, clientY: 100 });
+  fireEvent.click(screen.getByTestId('target'));
+  expect(drop).toHaveBeenCalledTimes(1);
+  expect(activate).not.toHaveBeenCalled();
+  fireEvent.pointerDown(screen.getByTestId('target'), { button: 0, pointerId: 1 });
+  fireEvent.click(screen.getByTestId('target'));
+  expect(activate).toHaveBeenCalledTimes(1);
+});
