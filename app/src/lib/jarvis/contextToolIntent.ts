@@ -1,6 +1,8 @@
 const EXPLICIT_CONTEXT_TOOL = /\b(?:vibespace_context|context map)\b/i;
 const MUTATING_REQUEST =
   /\b(?:write|create|make|build|generate|save|delete|remove|rename|move|edit|modify|change|run|execute|launch|start|command|terminal)\b/i;
+const EXPLICIT_CONTEXT_MUTATION =
+  /\b(?:write|create|build|generate|save|delete|remove|rename|move|edit|modify|change)\b|\bmake\b[^.\r\n;]{0,80}\b(?:files?|pages?|html|audits?|reports?|artifacts?)\b/i;
 const NEGATED_MUTATING_SEGMENT =
   /\b(?:do\s+not|don't|never|avoid|without)\b(?:(?![.;\r\n]|\b(?:but|however|instead|then)\b).){0,512}/giu;
 const READ_OR_EVIDENCE_REQUEST =
@@ -493,8 +495,10 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
     /\b(?:no|do\s+not|don['’]t|never|avoid|without)\b(?:(?![.;\r\n]|\b(?:but|however|instead|then)\b).){0,512}/giu,
     ' ',
   );
-  if (EXPLICIT_CONTEXT_TOOL.test(contextIntent)) return true;
   const affirmativeText = userText.replace(NEGATED_MUTATING_SEGMENT, ' ');
+  if (EXPLICIT_CONTEXT_TOOL.test(contextIntent)) {
+    return !EXPLICIT_CONTEXT_MUTATION.test(affirmativeText);
+  }
   if (MUTATING_REQUEST.test(affirmativeText)) return false;
   // Registered disk reads must stay on files.read, not Context-map search.
   if (/\bfiles\.read\b/i.test(userText) && /[A-Za-z]:[\\/]/.test(userText)) return false;

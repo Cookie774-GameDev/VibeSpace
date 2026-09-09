@@ -28,3 +28,15 @@ describe('ordinary file and HTML work', () => {
     )).toBe(true);
   });
 });
+
+it.each([
+  'Use vibespace_context to read readme.txt, then create recovery-audit.json in the project folder.',
+  'Search the Context Map and write an audit file from the cited evidence.',
+  'Use the Context Map to read the references and make an HTML page.',
+])('preserves execution tools for explicit Context research plus file work: %s', (prompt) => {
+  expect(requestsReadOnlyContextTool(prompt)).toBe(false);
+});
+
+it('keeps explicit Context retrieval read-only when file writes are forbidden', () => {
+  expect(requestsReadOnlyContextTool('Search the Context Map and summarize the evidence. Do not create or write files.')).toBe(true);
+});
