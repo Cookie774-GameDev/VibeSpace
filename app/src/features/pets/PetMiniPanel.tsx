@@ -18,6 +18,7 @@ import {
 } from './petPanelLifecycle';
 import { PetChatSurface } from './PetChatSurface';
 import { PetTerminalSurface } from './PetTerminalSurface';
+import { PetJarvisButton } from './PetJarvisButton';
 import { usePetPresentationStore } from './petPresentationStore';
 import { hidePetPanel, minimizePetPanel, setPetOverlayPosition, setPetPanelOpenFlag, showPetOverlay } from './petTauriBridge';
 import { setLivePanelUiScale } from '@/lib/ui/panelScale';
@@ -437,7 +438,7 @@ export function PetMiniPanel({
             )}
             {windowMode && (
               <span className="pet-panel-brand">
-                <span className="pet-panel-brand-mark" aria-hidden>✦</span>
+                <PetJarvisButton detached={windowMode} />
                 <span>Jarvis</span>
               </span>
             )}

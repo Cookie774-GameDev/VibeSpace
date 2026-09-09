@@ -32,6 +32,7 @@ import { installPetSettingsStorageSync, usePetSettingsStore } from './petSetting
 import { getLivePixiApplicationCount } from './pixiAtlasPlayer';
 import { installPetDevPerfGlobal } from './petDevPerf';
 import { createSingleFlightRunner } from '@/stability/singleFlight';
+import { installPetVoiceHost } from './petVoiceBridge';
 
 // WebView2 can reject the first detached-window show while its host is still
 // attaching. Retrying a few times recovers that startup race without turning
@@ -72,6 +73,10 @@ export function PetHost({
   /** App is exiting / hiding — never respawn pet-overlay. */
   const [shuttingDown, setShuttingDown] = React.useState(false);
   const shuttingDownRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (runtimeEffectsEnabled && tauri && claimed) return installPetVoiceHost();
+  }, [runtimeEffectsEnabled, tauri, claimed]);
 
   React.useEffect(() => {
     if (!runtimeEffectsEnabled) return;
