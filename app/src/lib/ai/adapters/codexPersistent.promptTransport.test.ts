@@ -29,7 +29,7 @@ const connection: ProviderConnection = {
   },
 };
 
-async function* frames() {
+async function* frames(usageUpdates: Array<Record<string, unknown>> = []) {
   yield {
     id: 'request_1_model_1',
     result: {
@@ -87,6 +87,11 @@ async function* frames() {
       },
     },
   };
+  for (const tokenUsage of usageUpdates) {
+    yield { method: 'thread/tokenUsage/updated', params: {
+      threadId: 'thread_native_1', turnId: 'turn_native_1', tokenUsage,
+    } };
+  }
   yield {
     method: 'turn/completed',
     params: {
@@ -127,4 +132,35 @@ it.each([false, true])('keeps application instructions out of user text (resume=
     ? 'Read the files and make an HTML.'
     : 'Earlier conversation. Read the files and make an HTML.');
   expect(writes[2].params.input[0].text).not.toContain('Application policy');
+});
+
+it('reports the entire Codex turn without prior-turn counts or duplicate snapshots', async () => {
+  const updates = [
+    { last: { inputTokens: 90, outputTokens: 10, totalTokens: 100 },
+      total: { inputTokens: 990, outputTokens: 110, totalTokens: 1100 } },
+    { last: { inputTokens: 180, outputTokens: 20, totalTokens: 200 },
+      total: { inputTokens: 1170, outputTokens: 130, totalTokens: 1300 } },
+  ];
+  const adapter = createCodexPersistentAdapter({
+    findExecutable: async () => ({ executableId: 'trusted-codex' }),
+    start: async () => ({ generation: 'generation' }),
+    frames: () => ({ ready: Promise.resolve(), stream: frames([...updates, updates[1]!]) }),
+    write: async () => {}, stop: async () => true,
+  });
+  const usage: unknown[] = [];
+  for await (const event of adapter.send!({
+    requestId: 'request_1', connection, chatId: 'chat', prompt: 'Read the reference.',
+    modelId: 'opencode-go/deepseek-v4-flash-vision-exp', workingDirectory: 'C:\\workspace',
+    interactionMode: 'ask',
+  })) {
+    if (event.type === 'usage') usage.push(event.usage);
+  }
+  expect(usage).toHaveLength(3);
+  expect(usage[0]).toMatchObject({ totalTokens: { value: 100 } });
+  expect(usage[1]).toMatchObject({
+    inputTokens: { value: 270 }, outputTokens: { value: 30 },
+    totalTokens: { value: 300, provenance: 'provider-reported' },
+    cacheReadTokens: { provenance: 'unavailable' },
+  });
+  expect(usage[2]).toMatchObject({ totalTokens: { value: 300 } });
 });

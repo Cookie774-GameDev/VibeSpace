@@ -24,7 +24,7 @@ import {
 } from './codexAppServer';
 import { findCliExecutable } from './cliBridge';
 import type { DetectedExecutable } from './cliBridge';
-import type { ProviderAdapter, ProviderEvent, ProviderRequest } from './types';
+import type { ProviderAdapter, ProviderEvent, ProviderRequest, UsageSnapshot } from './types';
 import { codexRuntimeManager, type CodexRuntimeManager } from '@/lib/harness/codexRuntimeManager';
 
 type NativeFrame = Record<string, unknown>;
@@ -119,6 +119,31 @@ function effort(request: Readonly<ProviderRequest>): string | null {
   if (!value || value === 'auto') return null;
   if (value === 'ultra') return 'xhigh';
   return value;
+}
+
+function createTurnUsageAccumulator() {
+  const baseline = new Map<string, number | null>();
+  return (usage: UsageSnapshot, frame: NativeFrame): UsageSnapshot => {
+    const totals = recordOf(recordOf(recordOf(frame.params)?.tokenUsage)?.total);
+    const result = { ...usage };
+    for (const [key, source] of [
+      ['inputTokens', 'inputTokens'], ['outputTokens', 'outputTokens'],
+      ['totalTokens', 'totalTokens'], ['cacheReadTokens', 'cachedInputTokens'],
+      ['cacheWriteTokens', 'cacheWriteInputTokens'], ['reasoningTokens', 'reasoningOutputTokens'],
+    ] as const) {
+      const total = totals?.[source];
+      const last = usage[key]?.value;
+      const valid = typeof total === 'number' && Number.isFinite(total) && total >= 0;
+      if (!baseline.has(key)) {
+        baseline.set(key, valid && last !== undefined && total >= last ? total - last : null);
+      }
+      const before = baseline.get(key);
+      result[key] = valid && before !== null && before !== undefined && total >= before
+        ? { value: total - before, provenance: 'provider-reported' }
+        : { provenance: 'unavailable', reason: 'Codex did not report a complete turn counter.' };
+    }
+    return result;
+  };
 }
 
 function executionMode(request: Readonly<ProviderRequest>): CodexExecutionMode {
@@ -340,6 +365,7 @@ async function* sendCodexRequest(
       }),
     );
 
+    const turnUsage = createTurnUsageAccumulator();
     for (let count = 0; count < 65_536; count += 1) {
       if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
       const frame = await nextFrame(reader, 'Codex app-server ended before terminal state.');
@@ -377,7 +403,7 @@ async function* sendCodexRequest(
       }
       for (const event of projection.events) {
         if (event.type === 'done' || event.type === 'error') terminal = true;
-        yield event;
+        yield event.type === 'usage' ? { ...event, usage: turnUsage(event.usage, frame) } : event;
       }
       if (terminal) return;
     }
