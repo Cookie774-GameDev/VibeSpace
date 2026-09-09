@@ -1,5 +1,6 @@
 import { createCodexControlBridge } from './codexControlBridge';
 import { codexTurnLease } from './codexTurnLease';
+import { CODEX_CONTEXT_TOOL, createCodexContextTool, type CodexContextToolBridge } from './codexContextTool';
 import { resolveCodexWorkingDirectory } from './codexWorkingDirectory';
 import {
   nativeCodexFrames,
@@ -30,6 +31,7 @@ import { codexRuntimeManager, type CodexRuntimeManager } from '@/lib/harness/cod
 type NativeFrame = Record<string, unknown>;
 
 export interface CodexPersistentDependencies {
+  contextTool?(request: ProviderRequest): Promise<CodexContextToolBridge | null>;
   workingDirectory?(selected: string | undefined): Promise<string>;
   findExecutable(): Promise<Readonly<{ executableId: string }> | undefined>;
   start(
@@ -77,6 +79,7 @@ export async function resolveCodexExecutable(
 }
 
 const defaultDependencies: CodexPersistentDependencies = {
+  contextTool: createCodexContextTool,
   workingDirectory: resolveCodexWorkingDirectory,
   findExecutable: () => resolveCodexExecutable(),
   start: startNativeCodexAppServer,
@@ -232,6 +235,7 @@ async function* sendCodexRequest(
   request: ProviderRequest,
   dependencies: CodexPersistentDependencies,
   recoverImplicitThread = false,
+  contextTool: CodexContextToolBridge | null = null,
 ): AsyncGenerator<ProviderEvent> {
   if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   if (request.connection.id !== 'openai-codex') {
@@ -312,6 +316,7 @@ async function* sendCodexRequest(
           identity: exactIdentity,
           mode,
           developerInstructions: developerInstructions(request),
+          ...(contextTool ? { dynamicTools: [CODEX_CONTEXT_TOOL] } : {}),
         });
     await dependencies.write(generation, threadRequest);
     let threadResponse = await responseFrame(reader, threadRequestId);
@@ -327,6 +332,7 @@ async function* sendCodexRequest(
       await dependencies.write(generation, buildCodexThreadStartRequest({
         requestId: threadRequestId, identity: exactIdentity, mode,
         developerInstructions: developerInstructions(request),
+        ...(contextTool ? { dynamicTools: [CODEX_CONTEXT_TOOL] } : {}),
       }));
       threadResponse = await responseFrame(reader, threadRequestId);
       resumed = false;
@@ -350,6 +356,11 @@ async function* sendCodexRequest(
       threadId = validation.threadId;
     }
     if (!threadId) throw new Error('Codex thread binding is unavailable.');
+    if (contextTool) {
+      const validated = validateCodexThreadStartResponse(threadResponse, threadRequestId, exactIdentity, mode);
+      if (!validated.ok) throw new Error('Codex Context thread identity mismatch: ' + validated.field + '.');
+      contextTool.bind(threadId, exactIdentity, generation);
+    }
     yield { type: 'session', sessionId: threadId };
     await request.onSessionBound?.({ sessionId: threadId });
 
@@ -373,6 +384,25 @@ async function* sendCodexRequest(
       if (frame.id === requestId(request.requestId, 'turn') && recordOf(frame.error)) {
         const code = recordOf(frame.error)?.code;
         throw new Error(`Codex rejected turn/start (${Number.isInteger(code) ? code : 'unknown'}).`);
+      }
+      if (frame.method === 'item/tool/call') {
+        const params = recordOf(frame.params);
+        if (!contextTool || !turnId || params?.threadId !== threadId || params.turnId !== turnId ||
+            params.tool !== CODEX_CONTEXT_TOOL.name || params.namespace != null ||
+            typeof params.callId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/.test(params.callId) ||
+            (typeof frame.id !== 'string' && typeof frame.id !== 'number')) {
+          throw new Error('Codex Context tool call has an invalid turn or tool binding.');
+        }
+        yield { type: 'tool', name: CODEX_CONTEXT_TOOL.name, status: 'started', callId: params.callId };
+        let result;
+        try { result = await contextTool.execute(params.arguments, params.callId); }
+        catch {
+          result = { success: false, contentItems: [{ type: 'inputText' as const, text: 'The scoped VibeSpace Context request could not be completed.' }] };
+        }
+        if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+        await dependencies.write(generation, { id: frame.id, result });
+        yield { type: 'tool', name: CODEX_CONTEXT_TOOL.name, status: result.success ? 'completed' : 'failed', callId: params.callId };
+        continue;
       }
       const projection = normalizeCodexAppServerMessage(frame, {
         scope: {
@@ -423,8 +453,10 @@ export function createCodexPersistentAdapter(
     id: 'codex-app-server',
     send: async function* (request: ProviderRequest) {
       const release = await codexTurnLease.acquire(request.signal);
+      let contextTool: CodexContextToolBridge | null = null;
       try {
       await codexTurnLease.recover(dependencies.stop);
+      contextTool = await dependencies.contextTool?.(request) ?? null;
       const ownedDependencies = {
         ...dependencies,
         async start(...args: Parameters<CodexPersistentDependencies['start']>) {
@@ -440,7 +472,7 @@ export function createCodexPersistentAdapter(
         },
       };
       const key = request.accountId && request.chatId && request.workingDirectory
-        ? 'vibespace.codex-thread.v1:' + JSON.stringify([request.accountId, request.workspaceId,
+        ? (contextTool ? 'vibespace.codex-context-thread.v1:' : 'vibespace.codex-thread.v1:') + JSON.stringify([request.accountId, request.workspaceId,
             request.projectId, request.chatId, request.workingDirectory]) : undefined;
       let sessionId = request.sessionId;
       if (!sessionId && key) {
@@ -450,14 +482,14 @@ export function createCodexPersistentAdapter(
         } catch { /* Native startup still works when local persistence is unavailable. */ }
       }
       for await (const event of sendCodexRequest(
-        { ...request, sessionId }, ownedDependencies, !request.sessionId && !request.expectedSessionId,
+        { ...request, sessionId }, ownedDependencies, !request.sessionId && !request.expectedSessionId, contextTool,
       )) {
         if (key && event.type === 'session') {
           try { localStorage.setItem(key, event.sessionId); } catch { /* Current turn remains usable. */ }
         }
         yield event;
       }
-      } finally { release(); }
+      } finally { contextTool?.dispose(); release(); }
     },
     cancel: async () => undefined,
   });

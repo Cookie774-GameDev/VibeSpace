@@ -25,6 +25,7 @@ export interface CodexThreadRequestInput {
   identity: Readonly<CodexBackendIdentity>;
   mode: CodexExecutionMode;
   developerInstructions?: string;
+  dynamicTools?: readonly { type: 'function'; name: string; description: string; inputSchema: Record<string, unknown> }[];
 }
 
 export interface CodexThreadResumeRequestInput extends CodexThreadRequestInput {
@@ -251,6 +252,7 @@ export function buildCodexThreadStartRequest(input: Readonly<CodexThreadRequestI
         : {}),
       ephemeral: false,
       threadSource: 'vibespace',
+      ...(input.dynamicTools?.length ? { dynamicTools: input.dynamicTools } : {}),
       ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
     },
   };
