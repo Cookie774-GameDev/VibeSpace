@@ -59,14 +59,16 @@ export function TerminalPeerFabricToolCard({
   }, [eligibleTerminalCount, port, revision]);
 
   const count = eligibleTerminalCount ?? discoveredCount;
-  const canRun = capability === 'available' && count >= 2;
+  // This opens selection; only Confirm performs the native connection.
+  // A cached count must not prevent users from reaching their terminal panes.
+  const canRun = capability === 'available';
   const status =
     capability === 'checking'
       ? 'Checking native capability…'
       : capability === 'unavailable'
         ? 'Not available in this build.'
         : count < 2
-          ? 'Needs at least two eligible terminals.'
+          ? 'Open terminals to choose at least two live panes.'
           : `${count} eligible terminals ready.`;
 
   return (

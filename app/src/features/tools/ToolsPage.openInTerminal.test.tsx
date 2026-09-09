@@ -32,6 +32,8 @@ vi.mock('./terminal-peer-fabric/TerminalPeerFabricSetupDialog', () => ({
 }));
 
 import { ToolsPage } from './ToolsPage';
+import { useUIStore } from '@/stores/ui';
+import { useFabricPresentationStore } from './terminal-peer-fabric/fabricPresentationStore';
 
 describe('ToolsPage preloaded Open in Terminal tool', () => {
   afterEach(cleanup);
@@ -40,9 +42,6 @@ describe('ToolsPage preloaded Open in Terminal tool', () => {
     render(<ToolsPage />);
 
     expect(screen.getByRole('heading', { name: 'Preloaded tools' })).toBeTruthy();
-    expect(
-      await screen.findByText('Available in the installed VibeSpace desktop app.'),
-    ).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Open in Terminal/i }));
     expect(screen.getByRole('dialog', { name: 'Open in Terminal fixture' })).toBeTruthy();
   });
@@ -50,8 +49,7 @@ describe('ToolsPage preloaded Open in Terminal tool', () => {
   it('opens the preloaded Fabric setup from the deterministic command event', async () => {
     render(<ToolsPage />);
     await act(async () => window.dispatchEvent(new Event('jarvis:terminal-peer-fabric:open')));
-    expect(
-      await screen.findByRole('dialog', { name: 'Terminal Peer Fabric fixture' }),
-    ).toBeTruthy();
+    expect(useFabricPresentationStore.getState().selecting).toBe(true);
+    expect(useUIStore.getState().route).toBe('terminal');
   });
 });

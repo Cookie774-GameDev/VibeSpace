@@ -34,17 +34,19 @@ describe('TerminalPeerFabricToolCard', () => {
     expect(await screen.findByText(/not available in this build/i)).toBeTruthy();
   });
 
-  it('requires at least two eligible terminals', async () => {
+  it('opens pane selection even when the cached terminal count is below two', async () => {
+    const onOpen = vi.fn();
     await act(async () => {
-      render(<TerminalPeerFabricToolCard port={port(true)} eligibleTerminalCount={1} />);
+      render(<TerminalPeerFabricToolCard port={port(true)} eligibleTerminalCount={1} onOpen={onOpen} />);
     });
 
     await waitFor(() =>
       expect(
         screen.getByRole('button', { name: /run terminal peer fabric/i }).hasAttribute('disabled'),
-      ).toBe(true),
+      ).toBe(false),
     );
-    expect(screen.getByText(/needs at least two eligible terminals/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /run terminal peer fabric/i }));
+    expect(onOpen).toHaveBeenCalledOnce();
   });
 
   it('stays disabled when the native endpoint cannot connect teams', async () => {

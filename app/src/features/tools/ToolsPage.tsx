@@ -57,7 +57,8 @@ import { CommandCenterToolCard } from './command-center/CommandCenterToolCard';
 import { EmpireFreezerToolCard } from '@/features/wellness';
 import { FasterAgentsToolCard } from './faster-agents/FasterAgentsToolCard';
 import { TerminalPeerFabricToolCard } from './terminal-peer-fabric/TerminalPeerFabricToolCard';
-import { TerminalPeerFabricSetupDialog } from './terminal-peer-fabric/TerminalPeerFabricSetupDialog';
+import { useFabricPresentationStore } from './terminal-peer-fabric/fabricPresentationStore';
+import { useUIStore } from '@/stores/ui';
 
 /* --------------------------------------------------------------------------
  * Quick-start templates
@@ -598,12 +599,18 @@ export function ToolsPage() {
 
   const [editorOpen, setEditorOpen] = React.useState(false);
   const [openInTerminalOpen, setOpenInTerminalOpen] = React.useState(false);
-  const [terminalPeerFabricOpen, setTerminalPeerFabricOpen] = React.useState(false);
+  const openTerminalFabric = () => {
+    useFabricPresentationStore.getState().launch();
+    useUIStore.getState().setRoute('terminal');
+  };
   const [editing, setEditing] = React.useState<CustomTool | null>(null);
   const [templateSeed, setTemplateSeed] = React.useState<QuickTemplate | null>(null);
 
   React.useEffect(() => {
-    const openFabric = () => setTerminalPeerFabricOpen(true);
+    const openFabric = () => {
+      useFabricPresentationStore.getState().launch();
+      useUIStore.getState().setRoute('terminal');
+    };
     window.addEventListener('jarvis:terminal-peer-fabric:open', openFabric);
     return () => window.removeEventListener('jarvis:terminal-peer-fabric:open', openFabric);
   }, []);
@@ -768,7 +775,7 @@ export function ToolsPage() {
             <CommandCenterToolCard />
             <EmpireFreezerToolCard />
             <FasterAgentsToolCard />
-            <TerminalPeerFabricToolCard onOpen={() => setTerminalPeerFabricOpen(true)} />
+            <TerminalPeerFabricToolCard onOpen={openTerminalFabric} />
           </div>
         </section>
 
@@ -848,10 +855,6 @@ export function ToolsPage() {
         templateSeed={templateSeed}
       />
       <OpenInTerminalDialog open={openInTerminalOpen} onOpenChange={setOpenInTerminalOpen} />
-      <TerminalPeerFabricSetupDialog
-        open={terminalPeerFabricOpen}
-        onOpenChange={setTerminalPeerFabricOpen}
-      />
     </div>
   );
 }

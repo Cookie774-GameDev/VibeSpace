@@ -1,4 +1,5 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { recordFabricDelivery } from './fabricPresentationStore';
 
 export const TERMINAL_PEER_FABRIC_TOOL = Object.freeze({
   id: 'terminal-peer-fabric',
@@ -148,7 +149,22 @@ export function createTerminalPeerFabricCommandPort(
   const port: TerminalPeerFabricCommandPort = {
     capability,
     connect: (request) => operate({ action: 'connect', ...request }),
-    command: (request) => operate({ action: 'command', ...request }),
+    command: async (request) => {
+      const receipt = await operate({ action: 'command', ...request });
+      // Never animate status checks, queued requests, or rejected sends.
+      if (
+        request.commandId === 'message.send' &&
+        receipt.status === 'completed' &&
+        receipt.correlationId === request.correlationId
+      ) {
+        recordFabricDelivery(
+          receipt.correlationId,
+          request.arguments?.sourceSessionId,
+          receipt.targetIds,
+        );
+      }
+      return receipt;
+    },
   };
   return Object.freeze(port);
 }

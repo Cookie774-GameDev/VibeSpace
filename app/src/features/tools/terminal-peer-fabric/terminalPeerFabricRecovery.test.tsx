@@ -15,7 +15,7 @@ describe('Terminal Peer Fabric recovery', () => {
       command: vi.fn(),
     };
     render(<TerminalPeerFabricToolCard port={port} />);
-    await screen.findByText('Needs at least two eligible terminals.');
+    await screen.findByText('Open terminals to choose at least two live panes.');
     fireEvent.click(
       screen.getByRole('button', { name: 'Refresh Terminal Peer Fabric availability' }),
     );
