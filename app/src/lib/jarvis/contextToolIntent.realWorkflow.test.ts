@@ -13,4 +13,18 @@ describe('ordinary file and HTML work', () => {
   it('retains Context research for a read-only question', () => {
     expect(requestsReadOnlyContextTool('Read the documents and quote the opening sentence.')).toBe(true);
   });
+
+  it.each([
+    'Read C:\\references\\notes.txt as reference data and give three facts.',
+    'Please read "/home/user/notes.txt" and summarize the file.',
+    'Read this exact file directly with the native read tool: C:\\references\\notes.txt. It is outside the Context Map; do not substitute that map.',
+  ])('preserves a direct filesystem read: %s', (prompt) => {
+    expect(requestsReadOnlyContextTool(prompt)).toBe(false);
+  });
+
+  it('retains explicit mapped-file research even when it mentions a disk path', () => {
+    expect(requestsReadOnlyContextTool(
+      'Search the Context Map for documents about C:\\references\\notes.txt.',
+    )).toBe(true);
+  });
 });

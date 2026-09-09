@@ -482,6 +482,13 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
   // Do not replace a conversational setup/acknowledgement with a forced tool call.
   if (/\b(?:do\s+not|don['’]t|never)\s+(?:use|run|call|invoke|execute)\s+(?:any\s+)?tools?\b/iu.test(userText))
     return false;
+  // Explicit disk reads retain native tools and their normal permission checks.
+  // Mentioning an unavailable Context Map must not redirect the requested file.
+  if (
+    /(?:[A-Za-z]:[\\/]|(?:^|[\s"'`])\/[A-Za-z0-9._~-]+\/)/u.test(userText) &&
+    (/\b(?:native read tool|files\.read)\b/iu.test(userText) ||
+      /^\s*(?:please\s+)?read\s+["'`]?(?:[A-Za-z]:[\\/]|\/)/iu.test(userText))
+  ) return false;
   const contextIntent = userText.replace(
     /\b(?:no|do\s+not|don['’]t|never|avoid|without)\b(?:(?![.;\r\n]|\b(?:but|however|instead|then)\b).){0,512}/giu,
     ' ',
