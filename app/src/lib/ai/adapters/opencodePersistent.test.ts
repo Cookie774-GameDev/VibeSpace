@@ -380,6 +380,22 @@ describe('persistent OpenCode question transport authority', () => {
     invalidateOpenCodePersistentCaches();
   });
 
+  it.each([false, true])('restores local history only for an empty provider session: existing=%s', async (existing) => {
+    const prior = { info: { id: 'old-user', role: 'user' }, parts: [{ type: 'text', text: 'Original task' }] };
+    configureManagedQuestionTransport([{ type: 'session.idle' }], {
+      persistedMessagePolls: [existing ? [prior] : [], [
+        ...(existing ? [prior] : []),
+        { info: { id: 'reply', role: 'assistant', providerID: 'openai', modelID: 'gpt-question-test', time: { completed: 1 } }, parts: [{ type: 'text', text: 'Done.' }] },
+      ]],
+    });
+    const historyPrompt = 'user: Build the inventory tool.\n\nuser: Add duplicate SKUs.';
+    const request = { ...questionProviderRequest('history-repair'), prompt: 'Add duplicate SKUs.', historyPrompt };
+    await drain(openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]());
+    const sent = nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.includes('/prompt_async'));
+    const body = JSON.parse(String(sent?.[2]?.body));
+    expect(body.parts.filter((part: { type: string }) => part.type === 'text').map((part: { text: string }) => part.text).join('\n')).toBe(existing ? request.prompt : historyPrompt);
+  });
+
   it('binds exact question authority and sends the official reply through the same managed transport', async () => {
     const { iterator, projection } = await startWaitingQuestion('request-question-reply');
     bindPersistentOpenCodeQuestionRoute(projection.route);
@@ -754,6 +770,33 @@ describe('persistent OpenCode question transport authority', () => {
       }),
     ).rejects.toThrow(/no longer waiting|no longer active/i);
     await drain(iterator);
+  });
+
+  it('does not reproject a settled question from a replayed event', async () => {
+    configureManagedQuestionTransport([questionAskedEvent(), questionAskedEvent(), { type: 'session.idle' }]);
+    const { iterator, projection } = await startWaitingQuestion('request-question-settled-replay');
+    try {
+      bindPersistentOpenCodeQuestionRoute(projection.route);
+      const request = buildOpenCodeQuestionRejectRequest({
+        route: projection.route,
+        expectedSessionId: projection.route.sessionId,
+        blockId: projection.route.blockId,
+      });
+      await respondToPersistentOpenCodeQuestion({
+        request: request!,
+        expectedSessionId: projection.route.sessionId,
+        expectedBlockId: projection.route.blockId,
+      });
+      const remaining: ProviderEvent[] = [];
+      for await (const event of { [Symbol.asyncIterator]: () => iterator }) {
+        expect(event.type).not.toBe('question');
+        remaining.push(event);
+      }
+      expect(remaining.some((event) => event.type === 'question')).toBe(false);
+      expect(remaining).toContainEqual(expect.objectContaining({ type: 'done' }));
+    } finally {
+      await iterator.return?.();
+    }
   });
 
   it('fails closed for malformed, cross-session, or cross-tool bindings without transport I/O', async () => {

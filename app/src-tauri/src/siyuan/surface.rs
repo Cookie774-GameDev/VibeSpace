@@ -81,6 +81,8 @@ const SIYUAN_GRAPH_FIRST_INITIALIZATION_SCRIPT_TEMPLATE: &str = r#"
   if (window.__vibespaceGraphBootstrapNonce === reportNonce) return;
   window.__vibespaceGraphBootstrapNonce = reportNonce;
 
+  __MANAGED_PRESENTATION__
+
   const reportPhase = (phase) => {
     if (!finished && [
       "bootstrapped",
@@ -430,6 +432,7 @@ fn graph_initialization_script(
     let expected_origin = serde_json::to_string(&expected_origin.origin().ascii_serialization())
         .map_err(|_| public_error("siyuan_surface_origin_invalid"))?;
     Ok(SIYUAN_GRAPH_FIRST_INITIALIZATION_SCRIPT_TEMPLATE
+        .replace("__MANAGED_PRESENTATION__", include_str!("native_presentation.js"))
         .replace("__TARGET_DOCUMENT_ID__", &target)
         .replace("__TARGET_NOTEBOOK_ID__", &notebook)
         .replace("__GRAPH_MODE__", &mode)
@@ -1190,7 +1193,9 @@ pub async fn siyuan_surface_close(app: AppHandle, operation_id: String) -> Resul
 }
 
 #[tauri::command]
-pub fn siyuan_surface_status(app: AppHandle) -> SiyuanSurfaceStatus {
+pub async fn siyuan_surface_status(app: AppHandle) -> SiyuanSurfaceStatus {
+    // Child creation acquires the webview manager while dispatching work to the
+    // UI thread. Never block that thread acquiring the same manager for polling.
     status(&app)
 }
 
@@ -1537,7 +1542,10 @@ mod tests {
         assert_eq!(script.matches("fetch(").count(), 1);
         assert_eq!(script.matches("/api/").count(), 1);
         assert_eq!(script.matches(".click()").count(), 6);
-        assert!(!script.contains("pagehide"));
+        // Presentation observers may clean up on navigation; graph readiness
+        // must still be governed by the nonce and bounded bootstrap deadline.
+        assert!(script.contains("() => observer.disconnect()"));
+        assert_eq!(script.matches("pagehide").count(), 1);
     }
 
     #[test]

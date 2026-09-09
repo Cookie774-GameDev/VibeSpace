@@ -1070,155 +1070,147 @@ describe('signal-bound approval context cores', () => {
     expect(await rows(safeDb)).toEqual(beforeSafe);
   });
 
-  it('serializes every approval core against cancellation and every terminal transition in both commit orders', async () => {
-    const operations = ['create', 'decide', 'claim', 'safe'] as const;
-    const blockers = [
-      'cancellation',
-      'partial',
-      'completed',
-      'failed',
-      'cancelled',
-      'timed_out',
-    ] as const;
+  const operations = ['create', 'decide', 'claim', 'safe'] as const;
+  const blockers = [
+    'cancellation',
+    'partial',
+    'completed',
+    'failed',
+    'cancelled',
+    'timed_out',
+  ] as const;
 
-    async function prepare(
-      db: JarvisDexie,
-      operation: (typeof operations)[number],
-      suffix: string,
-    ) {
-      const run = runFixture({ id: `jrun-race-${operation}-${suffix}` });
-      const approval = approvalFixture({
-        id: `jappr-race-${operation}-${suffix}`,
-        runId: run.id,
-        createdAt: operation === 'create' ? NOW + 20 : NOW,
-        expiresAt: NOW + 60_000,
-        ...(operation === 'safe' ? { risk: 'safe' as const } : {}),
-      });
-      await db.jarvis_runs.add(toJarvisRunRow(run));
-      const mutations = createJarvisApprovalMutationRepository(db);
-      if (operation === 'decide' || operation === 'claim') {
-        await mutations.createPending({
-          accountId: run.accountId,
-          approval,
-          expectedEventTailSeq: 0,
-        });
-      }
-      if (operation === 'claim') {
-        await mutations.decide({
-          accountId: run.accountId,
+  it.each(operations.flatMap((operation) => blockers.map((blocker) => ({ operation, blocker }))))(
+    'serializes $operation against $blocker in both commit orders',
+    async ({ operation, blocker }) => {
+      async function prepare(
+        db: JarvisDexie,
+        operation: (typeof operations)[number],
+        suffix: string,
+      ) {
+        const run = runFixture({ id: `jrun-race-${operation}-${suffix}` });
+        const approval = approvalFixture({
+          id: `jappr-race-${operation}-${suffix}`,
           runId: run.id,
-          requestId: approval.requestId,
-          attemptNumber: 1,
-          approvalId: approval.id,
-          decision: 'approve',
-          decidedAt: NOW + 1,
-          expectedEventTailSeq: 2,
+          createdAt: operation === 'create' ? NOW + 20 : NOW,
+          expiresAt: NOW + 60_000,
+          ...(operation === 'safe' ? { risk: 'safe' as const } : {}),
         });
-      }
-      const baseTail = operation === 'claim' ? 3 : operation === 'decide' ? 2 : 0;
-      const execute = (expectedEventTailSeq: number): Promise<unknown> => {
-        if (operation === 'create') {
-          return mutations.createPending({
+        await db.jarvis_runs.add(toJarvisRunRow(run));
+        const mutations = createJarvisApprovalMutationRepository(db);
+        if (operation === 'decide' || operation === 'claim') {
+          await mutations.createPending({
             accountId: run.accountId,
             approval,
-            expectedEventTailSeq,
+            expectedEventTailSeq: 0,
           });
         }
-        if (operation === 'decide') {
-          return mutations.decide({
+        if (operation === 'claim') {
+          await mutations.decide({
             accountId: run.accountId,
             runId: run.id,
             requestId: approval.requestId,
             attemptNumber: 1,
             approvalId: approval.id,
             decision: 'approve',
-            decidedAt: NOW + 20,
-            expectedEventTailSeq,
+            decidedAt: NOW + 1,
+            expectedEventTailSeq: 2,
           });
         }
-        if (operation === 'claim') {
-          return mutations.claimApprovedExecution({
+        const baseTail = operation === 'claim' ? 3 : operation === 'decide' ? 2 : 0;
+        const execute = (expectedEventTailSeq: number): Promise<unknown> => {
+          if (operation === 'create') {
+            return mutations.createPending({
+              accountId: run.accountId,
+              approval,
+              expectedEventTailSeq,
+            });
+          }
+          if (operation === 'decide') {
+            return mutations.decide({
+              accountId: run.accountId,
+              runId: run.id,
+              requestId: approval.requestId,
+              attemptNumber: 1,
+              approvalId: approval.id,
+              decision: 'approve',
+              decidedAt: NOW + 20,
+              expectedEventTailSeq,
+            });
+          }
+          if (operation === 'claim') {
+            return mutations.claimApprovedExecution({
+              accountId: run.accountId,
+              runId: run.id,
+              requestId: approval.requestId,
+              attemptNumber: 1,
+              approvalId: approval.id,
+              producerKind: 'action',
+              ownerId: `jexec-race-${suffix}`,
+              evidenceRef: `evidence-race-${suffix}`,
+              startedAt: NOW + 20,
+              expectedEventTailSeq,
+            });
+          }
+          return mutations.claimSafeAutoExecution({
             accountId: run.accountId,
-            runId: run.id,
-            requestId: approval.requestId,
-            attemptNumber: 1,
-            approvalId: approval.id,
+            approval,
             producerKind: 'action',
             ownerId: `jexec-race-${suffix}`,
             evidenceRef: `evidence-race-${suffix}`,
             startedAt: NOW + 20,
             expectedEventTailSeq,
           });
-        }
-        return mutations.claimSafeAutoExecution({
-          accountId: run.accountId,
-          approval,
-          producerKind: 'action',
-          ownerId: `jexec-race-${suffix}`,
-          evidenceRef: `evidence-race-${suffix}`,
-          startedAt: NOW + 20,
-          expectedEventTailSeq,
-        });
-      };
-      return { approval, baseTail, execute, run };
-    }
-
-    for (const operation of operations) {
-      for (const blocker of blockers) {
-        const operationFirstDb = await openDb(`approval-context-race-${operation}-${blocker}-op`);
-        const operationFirst = await prepare(operationFirstDb, operation, `${blocker}-op`);
-        await operationFirst.execute(operationFirst.baseTail);
-        const afterOperation = await rows(operationFirstDb);
-        expect(afterOperation.approvals).toHaveLength(1);
-        if (blocker === 'cancellation') {
-          await appendCancellation(
-            operationFirstDb,
-            operationFirst.run.id,
-            operationFirst.baseTail + (operation === 'create' ? 3 : 2),
-            NOW + 30,
-          );
-        } else {
-          await appendTerminalTransition(
-            operationFirstDb,
-            operationFirst.run.id,
-            blocker,
-            NOW + 30,
-          );
-        }
-        const afterBlocker = await rows(operationFirstDb);
-        expect(afterBlocker.approvals).toEqual(afterOperation.approvals);
-        expect(afterBlocker.events.slice(0, afterOperation.events.length)).toEqual(
-          afterOperation.events,
-        );
-        expect(afterBlocker.events).toHaveLength(afterOperation.events.length + 1);
-        if (blocker === 'cancellation') {
-          expect(afterBlocker.runs).toEqual(afterOperation.runs);
-        } else {
-          expect(fromJarvisRunRow(afterBlocker.runs[0]!).status).toBe(blocker);
-        }
-
-        const blockerFirstDb = await openDb(
-          `approval-context-race-${operation}-${blocker}-blocker`,
-        );
-        const blockerFirst = await prepare(blockerFirstDb, operation, `${blocker}-blocker`);
-        if (blocker === 'cancellation') {
-          await appendCancellation(
-            blockerFirstDb,
-            blockerFirst.run.id,
-            blockerFirst.baseTail + 1,
-            NOW + 10,
-          );
-        } else {
-          await appendTerminalTransition(blockerFirstDb, blockerFirst.run.id, blocker, NOW + 10);
-        }
-        const afterFirstBlocker = await rows(blockerFirstDb);
-        await expect(blockerFirst.execute(blockerFirst.baseTail + 1)).rejects.toMatchObject({
-          code: 'approval_status_conflict',
-        });
-        expect(await rows(blockerFirstDb)).toEqual(afterFirstBlocker);
+        };
+        return { approval, baseTail, execute, run };
       }
-    }
-  });
+
+      const operationFirstDb = await openDb(`approval-context-race-${operation}-${blocker}-op`);
+      const operationFirst = await prepare(operationFirstDb, operation, `${blocker}-op`);
+      await operationFirst.execute(operationFirst.baseTail);
+      const afterOperation = await rows(operationFirstDb);
+      expect(afterOperation.approvals).toHaveLength(1);
+      if (blocker === 'cancellation') {
+        await appendCancellation(
+          operationFirstDb,
+          operationFirst.run.id,
+          operationFirst.baseTail + (operation === 'create' ? 3 : 2),
+          NOW + 30,
+        );
+      } else {
+        await appendTerminalTransition(operationFirstDb, operationFirst.run.id, blocker, NOW + 30);
+      }
+      const afterBlocker = await rows(operationFirstDb);
+      expect(afterBlocker.approvals).toEqual(afterOperation.approvals);
+      expect(afterBlocker.events.slice(0, afterOperation.events.length)).toEqual(
+        afterOperation.events,
+      );
+      expect(afterBlocker.events).toHaveLength(afterOperation.events.length + 1);
+      if (blocker === 'cancellation') {
+        expect(afterBlocker.runs).toEqual(afterOperation.runs);
+      } else {
+        expect(fromJarvisRunRow(afterBlocker.runs[0]!).status).toBe(blocker);
+      }
+
+      const blockerFirstDb = await openDb(`approval-context-race-${operation}-${blocker}-blocker`);
+      const blockerFirst = await prepare(blockerFirstDb, operation, `${blocker}-blocker`);
+      if (blocker === 'cancellation') {
+        await appendCancellation(
+          blockerFirstDb,
+          blockerFirst.run.id,
+          blockerFirst.baseTail + 1,
+          NOW + 10,
+        );
+      } else {
+        await appendTerminalTransition(blockerFirstDb, blockerFirst.run.id, blocker, NOW + 10);
+      }
+      const afterFirstBlocker = await rows(blockerFirstDb);
+      await expect(blockerFirst.execute(blockerFirst.baseTail + 1)).rejects.toMatchObject({
+        code: 'approval_status_conflict',
+      });
+      expect(await rows(blockerFirstDb)).toEqual(afterFirstBlocker);
+    },
+  );
 
   it('binds scheduled approvals to the latest open attempt and advances only the required barrier versions', async () => {
     async function seedScheduledRun(db: JarvisDexie, run: JarvisRun): Promise<void> {

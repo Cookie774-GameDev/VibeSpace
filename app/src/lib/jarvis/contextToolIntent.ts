@@ -514,11 +514,11 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
     if (relativeLeafNames.size === 1 && everyReferenceIsAStandaloneLeaf) return false;
   }
   return (
-    (READ_OR_EVIDENCE_REQUEST.test(userText) && FILE_LIKE_SOURCE.test(userText)) ||
-    (BOUND_PROJECT_SCOPE.test(userText) && BOUND_PROJECT_FACT_LOOKUP.test(userText)) ||
+    (READ_OR_EVIDENCE_REQUEST.test(contextIntent) && FILE_LIKE_SOURCE.test(contextIntent)) ||
+    (BOUND_PROJECT_SCOPE.test(contextIntent) && BOUND_PROJECT_FACT_LOOKUP.test(contextIntent)) ||
     (boundedDirectContextText(userText) &&
-      STRUCTURED_PROJECT_CONTEXT_ID.test(userText) &&
-      AUTHORITATIVE_RELATIONSHIP_LOOKUP.test(userText))
+      STRUCTURED_PROJECT_CONTEXT_ID.test(contextIntent) &&
+      AUTHORITATIVE_RELATIONSHIP_LOOKUP.test(contextIntent))
   );
 }
 

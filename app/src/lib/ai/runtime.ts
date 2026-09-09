@@ -4647,7 +4647,7 @@ export function startRuntimeListener(
   const cancelEventName = options.cancelEventName ?? 'jarvis:cancel';
   const resumeEventName = options.resumeEventName ?? 'jarvis:resume';
   const steerEventName = options.steerEventName ?? 'jarvis:steer';
-  const flushIntervalMs = options.flushIntervalMs ?? 120;
+  const flushIntervalMs = options.flushIntervalMs ?? 32;
   const stopPromptForgeContextBridge = installPromptForgeContextRetrievalBridge(window);
 
   const inFlight = new Map<MessageId, AbortController>();
@@ -4867,7 +4867,16 @@ export function startRuntimeListener(
     // Preparation is already cancellable work; expose Stop before any native/context wait.
     dispatchCurrentRunState('running');
     dispatchKernelSmokeRuntimeStage('accepted');
+    let preparationActivity: { id: string; agentSlug: string } | undefined;
     const failEarlySetup = (stage: 'agent' | 'context' | 'model', error: unknown): void => {
+      if (preparationActivity) {
+        useChatActivityStore.getState().update(chatId, preparationActivity.id, {
+          status: 'error',
+          title: `@${preparationActivity.agentSlug} could not start`,
+          subtitle: `Could not prepare ${stage}. Retry the request.`,
+          ts: Date.now(),
+        });
+      }
       devConsole.log({
         channel: 'ai',
         level: 'error',
@@ -5123,6 +5132,7 @@ export function startRuntimeListener(
     );
     const activity = useChatActivityStore.getState();
     const agentActivityId = createChatActivityId('agent');
+    preparationActivity = { id: agentActivityId, agentSlug: agent.slug };
     const hasAttachedFiles =
       (detail.filePaths?.length ?? 0) > 0 || (detail.imageAttachments?.length ?? 0) > 0;
     const initialActivityPhase = {

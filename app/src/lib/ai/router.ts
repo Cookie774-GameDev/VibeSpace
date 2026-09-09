@@ -832,6 +832,10 @@ async function executePersistentOpenCode(
       worktreeId: req.worktreeId,
       prompt: promptForOpenCode(req.messages),
       modelId: qualifiedModel,
+      historyPrompt: req.messages.filter((message) => message.role !== 'system').length > 1
+        ? req.messages.filter((message) => message.role !== 'system')
+          .map((message) => `${message.role}: ${llmContentToText(message.content)}`).join('\n\n')
+        : undefined,
       reasoningEffort: variant,
       systemPrompt: req.compiledPrompt?.systemText ?? req.agent.system_prompt,
       workingDirectory: req.workingDirectory,

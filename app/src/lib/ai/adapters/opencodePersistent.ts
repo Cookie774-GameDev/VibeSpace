@@ -588,6 +588,7 @@ type ActivePersistentQuestionSession = {
   readonly requestId: string;
   readonly http: OpenCodeHttpSdk;
   readonly pending: Map<string, Readonly<ProviderQuestionRequest>>;
+  readonly settled: Set<string>;
   readonly authorities: Map<string, Readonly<OpenCodeQuestionRequestAuthority>>;
 };
 const activeQuestionSessions = new Map<string, ActivePersistentQuestionSession>();
@@ -813,6 +814,7 @@ export async function respondToPersistentOpenCodeQuestion(input: {
       ...(input.signal ? { signal: input.signal } : {}),
     },
   );
+  active.settled.add(`${receipt.sessionId}\u0000${receipt.requestId}`);
   active.pending.delete(receipt.requestId);
   active.authorities.delete(receipt.requestId);
   return receipt;
@@ -2026,7 +2028,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     const dispatch = await coordinator.dispatch({
       scope,
       chatId,
-      text: request.prompt,
+      // A preflight failure can leave a bound session with no accepted prompt.
+      // Restore the bounded local history once; established sessions already own it.
+      text: baselineMessages.length === 0 ? request.historyPrompt?.trim() || request.prompt : request.prompt,
       settings,
       selection: {
         connectionId: request.connection.id,
@@ -2135,6 +2139,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       requestId: request.requestId,
       http: client.http,
       pending: new Map(),
+      settled: new Set(),
       authorities: new Map(),
     });
     await request.onSessionBound?.({ sessionId: dispatch.sessionId });
@@ -2226,6 +2231,8 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         await client.abort(dispatch.sessionId).catch(() => undefined);
         throw new Error('OpenCode question arrived outside the active request binding.');
       }
+      // A successful reply may race a stale event or recovery snapshot.
+      if (active.settled.has(`${question.request.sessionId}\u0000${question.request.id}`)) return false;
       const existing = active.pending.get(question.request.id);
       if (
         existing &&

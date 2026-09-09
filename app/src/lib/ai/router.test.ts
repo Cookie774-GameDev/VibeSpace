@@ -154,6 +154,22 @@ describe('canonical OpenCode AI routing', () => {
     );
   });
 
+  it('carries the local conversation separately so an empty upstream session can recover', async () => {
+    await runAgent({
+      agent: openaiAgent,
+      messages: [
+        { role: 'system', content: 'Keep this in system instructions.' },
+        { role: 'user', content: 'Build an inventory tool.' },
+        { role: 'assistant', content: 'The first attempt could not start.' },
+        { role: 'user', content: 'Also combine duplicate SKUs.' },
+      ],
+    });
+    expect(openCodeSend).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'Also combine duplicate SKUs.',
+      historyPrompt: 'user: Build an inventory tool.\n\nassistant: The first attempt could not start.\n\nuser: Also combine duplicate SKUs.',
+    }));
+  });
+
   it('reports only completed built-in filesystem tools as grounding evidence', async () => {
     openCodeSend.mockImplementationOnce(() =>
       (async function* () {

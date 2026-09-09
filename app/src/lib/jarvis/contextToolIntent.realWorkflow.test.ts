@@ -3,6 +3,14 @@ import { requestsReadOnlyContextTool } from './contextToolIntent';
 
 describe('ordinary file and HTML work', () => {
   it.each([
+    'Use request_user_input to ask Short or Detailed. Wait for my selection; do not read more files or run commands.',
+    'Ask me to choose Blue or Green. Never search the documents.',
+    'Please wait for my answer without reading files.',
+  ])('does not turn a forbidden file read into Context research: %s', (prompt) => {
+    expect(requestsReadOnlyContextTool(prompt)).toBe(false);
+  });
+
+  it.each([
     'Read these files and make me another HTML quickly.',
     'Read the documents and build a page from them.',
     'Read these files and generate an HTML preview.',

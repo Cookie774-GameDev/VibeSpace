@@ -14,8 +14,14 @@ vi.mock('./PetTerminalSurface', () => ({
 const bridge = vi.hoisted(() => ({
   hidePetPanel: vi.fn(async () => undefined),
   minimizePetPanel: vi.fn(async () => undefined),
+  setPetOverlayPosition: vi.fn(async () => undefined),
+  showPetOverlay: vi.fn(async () => undefined),
+  setPetPanelOpenFlag: vi.fn((open: boolean) => {
+    if (!open) localStorage.removeItem('vibespace-pet-panel-open');
+  }),
 }));
 const currentWindow = vi.hoisted(() => ({
+  outerPosition: vi.fn(async () => ({ x: 120, y: 240 })),
   hide: vi.fn(async () => undefined),
   minimize: vi.fn(async () => undefined),
 }));
@@ -26,6 +32,9 @@ vi.mock('@tauri-apps/api/window', () => ({
 vi.mock('./petTauriBridge', () => ({
   hidePetPanel: bridge.hidePetPanel,
   minimizePetPanel: bridge.minimizePetPanel,
+  setPetOverlayPosition: bridge.setPetOverlayPosition,
+  showPetOverlay: bridge.showPetOverlay,
+  setPetPanelOpenFlag: bridge.setPetPanelOpenFlag,
 }));
 
 describe('PetMiniPanel responsive shell', () => {
@@ -99,7 +108,7 @@ describe('PetMiniPanel responsive shell', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('uses the detached panel window directly for minimize instead of a restore-capable command', () => {
+  it('dismisses the native panel and restores the positioned pet on minimize', async () => {
     vi.useFakeTimers();
     localStorage.setItem('vibespace-pet-panel-open', '1');
     render(<PetMiniPanel open onClose={vi.fn()} windowMode />);
@@ -107,23 +116,28 @@ describe('PetMiniPanel responsive shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Minimize pet panel' }));
     act(() => vi.advanceTimersByTime(160));
 
-    expect(currentWindow.minimize).toHaveBeenCalledTimes(1);
-    expect(currentWindow.hide).toHaveBeenCalledTimes(1);
+    await act(async () => { await Promise.resolve(); });
+    expect(currentWindow.minimize).not.toHaveBeenCalled();
+    expect(bridge.hidePetPanel).toHaveBeenCalledTimes(1);
+    expect(bridge.setPetOverlayPosition).toHaveBeenCalledWith(120, 240);
+    expect(bridge.showPetOverlay).toHaveBeenCalledTimes(1);
     expect(bridge.minimizePetPanel).not.toHaveBeenCalled();
     expect(localStorage.getItem('vibespace-pet-panel-open')).toBeNull();
   });
 
-  it('uses the detached panel window directly after confirmed close', () => {
+  it('dismisses the native panel and restores the pet without a redundant confirmation', async () => {
     vi.useFakeTimers();
     localStorage.setItem('vibespace-pet-panel-open', '1');
     render(<PetMiniPanel open onClose={vi.fn()} windowMode />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' }));
-    fireEvent.click(screen.getByTestId('pet-close-confirm-btn'));
+    expect(screen.queryByTestId('pet-close-confirm-btn')).toBeNull();
+    await act(async () => { await Promise.resolve(); });
     act(() => vi.advanceTimersByTime(160));
 
-    expect(currentWindow.hide).toHaveBeenCalledTimes(1);
-    expect(bridge.hidePetPanel).not.toHaveBeenCalled();
+    expect(currentWindow.hide).not.toHaveBeenCalled();
+    expect(bridge.hidePetPanel).toHaveBeenCalledTimes(1);
+    expect(bridge.showPetOverlay).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem('vibespace-pet-panel-open')).toBeNull();
   });
 

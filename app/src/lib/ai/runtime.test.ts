@@ -9026,6 +9026,44 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     );
   });
 
+  it('publishes a queued text chunk within the interactive UI budget by default', async () => {
+    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
+    const gate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+    let input!: Parameters<typeof mocks.runAgent>[0];
+    mocks.runAgent.mockImplementationOnce((value) => {
+      input = value;
+      return gate.promise;
+    });
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            text: 'Stream the next sentence.',
+            cancellationKey: 'msg_kernel_user' as MessageId,
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      vi.useFakeTimers({ now: 1_000 });
+      input.onChunk({ delta: 'FIRST', done: false });
+      input.onChunk({ delta: '_SECOND_VISIBLE', done: false });
+      await vi.advanceTimersByTimeAsync(80);
+      expect(JSON.stringify(harness.updateMessage.mock.calls)).toContain('SECOND_VISIBLE');
+    } finally {
+      stop();
+      gate.resolve({
+        text: 'FIRST_SECOND_VISIBLE',
+        usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
+        provider: 'mock',
+        model: 'mock-default',
+      });
+      await stop.whenIdle();
+      vi.useRealTimers();
+    }
+  });
+
   it('cancels text and speech effects scheduled by a pre-abort chunk while the provider hangs', async () => {
     const selectedAgent = agent('agent_apple', 'apple', 'Always answer with APPLE.');
     const harness = kernelRuntimeBindings(selectedAgent);
@@ -9535,6 +9573,26 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(mocks.devLog).not.toHaveBeenCalledWith(
       expect.objectContaining({ level: 'info', message: expect.stringContaining('AI done') }),
     );
+  });
+
+  it('settles the visible preparation activity when the selected model catalog is unavailable', async () => {
+    const connection = PROVIDER_CONNECTIONS.find((item) => item.id === 'opencode-cli')!;
+    useAuthStore.setState({ chatModelSelection: selectionFromOption(
+      connection.providerId as ProviderId, 'opencode-go/deepseek-v4-flash-vision-exp', connection,
+    ) });
+    mocks.listOpenCodeModels.mockResolvedValue([]);
+    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
+    trackListener(startRuntimeListener(harness.bindings));
+    window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+      chatId: harness.chatId, text: 'Build a CSV tool.', cancellationKey: 'catalog-failure',
+      reasoningPreference: { mode: 'token-saver', effortOverride: null },
+    } }));
+    await vi.waitFor(() => expect(mocks.devLog).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'AI setup failed before dispatch', detail: expect.objectContaining({ stage: 'model' }),
+    })));
+    expect(mocks.runAgent).not.toHaveBeenCalled();
+    expect(getChatActivityEvents(harness.chatId).filter((event) => event.status === 'running')).toEqual([]);
+    expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error');
   });
 
   it('releases early cancellation ownership when agent resolution rejects', async () => {
