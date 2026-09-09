@@ -116,7 +116,7 @@ describe('HarnessReadinessGate', () => {
     expect(source).not.toContain('disabled={backendRuntimeBlocked}');
 
     const slashDispatch = source.indexOf(
-      "const slashResult = afterInline.startsWith('/') ? await handleSlashCommand(afterInline) : false;",
+      "const slashResult = await handleSlashCommand(afterInline);",
     );
     const providerReadinessGate = source.indexOf('if (backendRuntimeBlocked) return false;');
     expect(slashDispatch).toBeGreaterThan(-1);
