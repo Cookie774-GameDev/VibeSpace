@@ -872,6 +872,28 @@ describe('persistent OpenCode approval recovery', () => {
     await expect(respondToPersistentOpenCodeApproval({ sessionId: 'ses_child', approvalId: 'different', response: 'once' })).rejects.toThrow(/no longer active/i);
   });
 
+  it('does not reproject an answered reviewer approval from a stale recovery snapshot', async () => {
+    const onApprovalRequested = vi.fn<NonNullable<ProviderRequest['onApprovalRequested']>>(async () => {
+      if (onApprovalRequested.mock.calls.length > 1) throw new Error('kernel_provider_question_duplicate');
+    });
+    configureManagedQuestionTransport([], { pendingPermissions: [{ ...pendingPermission(), sessionID: 'ses_child' }], sessionStatuses: ['busy', 'idle'] });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/session/ses_child?')) return new Response(JSON.stringify({ id: 'ses_child', parentID: 'ses_question_exact' }));
+      if (path.startsWith('/session/ses_child/permissions/')) return new Response('true');
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!({ ...questionProviderRequest('settled-child-permission'), onApprovalRequested })[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.next();
+    expect(onApprovalRequested).toHaveBeenCalledOnce();
+    await respondToPersistentOpenCodeApproval({ sessionId: 'ses_child', approvalId: 'perm_external_write', response: 'once' });
+    const remaining = [];
+    for await (const event of { [Symbol.asyncIterator]: () => iterator }) remaining.push(event);
+    expect(onApprovalRequested).toHaveBeenCalledOnce();
+    expect(remaining).toContainEqual(expect.objectContaining({ type: 'done' }));
+  });
+
   it('does not surface a permission belonging to another chat', async () => {
     const onApprovalRequested = vi.fn(async () => undefined);
     configureManagedQuestionTransport([], { pendingPermissions: [{ ...pendingPermission(), sessionID: 'ses_foreign' }], sessionStatuses: ['busy'] });

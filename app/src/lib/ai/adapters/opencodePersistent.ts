@@ -2245,6 +2245,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         await client.abort(dispatch.sessionId).catch(() => undefined);
         throw new Error('OpenCode approval arrived outside the active request binding.');
       }
+      // Recovery snapshots may predate a successful reply. Never project that
+      // already-settled control again or keep the turn waiting on it.
+      if (settledApprovalResponses.has(`${approval.sessionId}\u0000${approval.id}`)) return false;
       const existing = active.approvals.get(approval.id);
       if (existing) {
         if (

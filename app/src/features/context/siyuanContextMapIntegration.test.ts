@@ -194,6 +194,30 @@ describe('SiYuan Context Map integration', () => {
     );
   });
 
+  it('reopens the durable root when child hits crowd it out of bounded search', async () => {
+    const nativePort = port();
+    const record = map();
+    const initial = await createSiyuanContextMapIntegration(nativePort).sync('project-1', record);
+    vi.mocked(nativePort.readManagedDocument).mockResolvedValue(null);
+    const reopened = await createSiyuanContextMapIntegration(nativePort).read('project-1', record);
+    expect(reopened?.document.id).toBe(initial.document.id);
+    expect(reopened?.tree.fileCount).toBe(1);
+  });
+
+  it('rejects a durable root that moved to another notebook', async () => {
+    const nativePort = port();
+    const record = map();
+    const initial = await createSiyuanContextMapIntegration(nativePort).sync('project-1', record);
+    vi.mocked(nativePort.getBlock).mockResolvedValue({
+      ...initial.document,
+      notebookId: 'foreign',
+    });
+    vi.mocked(nativePort.readManagedDocument).mockResolvedValue(null);
+    expect(
+      await createSiyuanContextMapIntegration(nativePort).read('project-1', record),
+    ).toBeNull();
+  });
+
   it('persists a durable pause before aborting a possibly hung active sync', () => {
     const source = readFileSync(
       resolve('src/features/context/siyuanContextMapIntegration.ts'),
@@ -713,7 +737,8 @@ describe('SiYuan Context Map integration', () => {
     nativePort.appendManagedBlocks = vi.fn(async () => ['volatile-root-file-block']);
     const originalGetBlock = nativePort.getBlock;
     let rootFileDocument:
-      { id: string; notebookId: string; path: string; markdown: string } | undefined;
+      | { id: string; notebookId: string; path: string; markdown: string }
+      | undefined;
     nativePort.getBlock = vi.fn(async (projectId, id) => {
       if (rootFileDocument && id === rootFileDocument.id) return rootFileDocument;
       return originalGetBlock(projectId, id);
@@ -789,7 +814,13 @@ describe('SiYuan Context Map integration', () => {
           summaryPolicy: { mode: 'none', selectedExtensions: [], selectedPaths: [] },
           list,
         }),
-      ).resolves.toMatchObject({ manifest: { status: 'ready' } });
+      ).resolves.toMatchObject({
+        manifest: { status: 'ready' },
+        tree: { fileCount: 1, totalBytes: 43 },
+      });
+      expect((await nativePort.getBlock('project-1', 'created-1')).markdown).toContain(
+        'Files: 1 · Bytes: 43',
+      );
 
       expect(nativePort.appendManagedBlocks).not.toHaveBeenCalled();
       expect(await readSiyuanNodeBindings('project-1', seedRecord.id)).toEqual({
@@ -1174,8 +1205,8 @@ describe('SiYuan Context Map integration', () => {
     vi.mocked(nativePort.searchBlocks).mockResolvedValue(
       documents.map((document) => ({ id: document.id })) as never,
     );
-    vi.mocked(nativePort.getBlock).mockImplementation(async (_projectId, id) =>
-      documents.find((document) => document.id === id)!,
+    vi.mocked(nativePort.getBlock).mockImplementation(
+      async (_projectId, id) => documents.find((document) => document.id === id)!,
     );
     vi.mocked(nativePort.deleteManagedDocument).mockImplementation(async (_projectId, id) => {
       documents = documents.filter((document) => document.id !== id);

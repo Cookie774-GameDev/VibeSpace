@@ -693,7 +693,9 @@ impl HttpSiyuanTransport {
         let root = self.map_root_info(map_root_id)?;
         if target_id != map_root_id {
             let target = self.block_info(target_id)?;
-            Self::require_append_parent(&root, target_id, &target)?;
+            // A mutation may target a block inside a descendant document.
+            // Its authoritative document root, not the block ID, defines membership.
+            Self::require_append_parent(&root, &target.root_id, &target)?;
         }
         Ok(())
     }
@@ -2849,6 +2851,37 @@ mod tests {
 
         assert_eq!(
             client.update_block("map-root", "child", "# Before", "# After"),
+            Ok(())
+        );
+
+        let captured = (0..5).map(|_| requests.recv().unwrap()).collect::<Vec<_>>();
+        assert!(captured[1].starts_with("POST /api/block/getBlockInfo HTTP/1.1"));
+        assert!(captured[2].starts_with("POST /api/block/getBlockInfo HTTP/1.1"));
+        assert!(captured[3].starts_with("POST /api/block/getBlockKramdown HTTP/1.1"));
+        assert!(captured[4].starts_with("POST /api/block/updateBlock HTTP/1.1"));
+        server.join().unwrap();
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_update_accepts_a_file_block_inside_a_managed_child_document() {
+        let (port, requests, server) = mock_http_server(vec![
+            r#"{"code":0,"msg":"","data":null}"#.to_owned(),
+            r#"{"code":0,"msg":"","data":{"box":"20260820-notebook","path":"/map-root.sy","rootID":"map-root"}}"#
+                .to_owned(),
+            r#"{"code":0,"msg":"","data":{"box":"20260820-notebook","path":"/map-root/child.sy","rootID":"child"}}"#
+                .to_owned(),
+            r##"{"code":0,"msg":"","data":{"id":"child-file","kramdown":"# Before"}}"##
+                .to_owned(),
+            r#"{"code":0,"msg":"","data":null}"#.to_owned(),
+        ]);
+        let client = SiyuanClient::new(
+            true,
+            HttpSiyuanTransport::new(port, "n".repeat(48)).unwrap(),
+        );
+
+        assert_eq!(
+            client.update_block("map-root", "child-file", "# Before", "# After"),
             Ok(())
         );
 

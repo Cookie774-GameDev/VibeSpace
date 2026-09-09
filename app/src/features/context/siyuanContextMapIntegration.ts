@@ -28,6 +28,7 @@ import {
 } from './siyuan/siyuanBindingStore';
 import {
   buildSiyuanSafeIndex,
+  buildProjectContextTreeFromSiyuanIndex,
   scanSiyuanFilesystemIndex,
   type SiyuanIndexJobControl,
   type SiyuanDirectoryLister,
@@ -552,7 +553,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     rootDocument: SiyuanManagedDocument,
     manifest: SiyuanMapManifest,
     options: SiyuanContextMapSyncOptions,
-  ): Promise<SiyuanMapManifest> => {
+  ): Promise<{ manifest: SiyuanMapManifest; tree: ProjectContextTree }> => {
     const nativeFilesystemAvailable =
       typeof window !== 'undefined' &&
       '__TAURI_INTERNALS__' in window &&
@@ -1547,7 +1548,12 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         throw new Error('siyuan_index_paused');
       }
     }
-    return readyManifest;
+    return {
+      manifest: readyManifest,
+      tree: nativeFilesystemAvailable
+        ? buildProjectContextTreeFromSiyuanIndex(record.tree, index.entries)
+        : record.tree,
+    };
   };
 
   const readKnownDocument = async (
@@ -1555,11 +1561,17 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     record: ContextMapRecord,
   ): Promise<SiyuanManagedDocument | null> => {
     const key = documentKey(projectId, record.id);
-    const knownId = managedDocumentIds.get(key);
+    const manifest = readSiyuanMapManifest(projectId, record.id);
+    const knownId = managedDocumentIds.get(key) ?? manifest?.rootDocumentId;
     if (!knownId) return null;
     try {
       const document = await port.getBlock(projectId, knownId);
-      if (document.markdown.includes(marker(record.id))) return document;
+      if (
+        document.id === knownId &&
+        (!manifest?.notebookId || document.notebookId === manifest.notebookId) &&
+        document.markdown.includes(marker(record.id))
+      )
+        return document;
     } catch {
       // The document may have been removed or replaced in SiYuan. Fall back
       // to marker lookup so user/Jarvis edits remain authoritative.
@@ -1685,7 +1697,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           recoveredDocument ??
           knownDocument ??
           (await readManagedDocumentWithDuplicateRecovery(port, exactProjectId, record));
-        const document = existing
+        let document = existing
           ? existing.markdown === markdown
             ? existing
             : await port.updateManagedDocument(
@@ -1708,13 +1720,24 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         });
         writeSiyuanMapManifest(manifest);
         try {
-          manifest = await syncNativeNodeDocuments(
+          const completed = await syncNativeNodeDocuments(
             exactProjectId,
             record,
             document,
             manifest,
             effectiveOptions,
           );
+          manifest = completed.manifest;
+          const completedMarkdown = contextMapMarkdown({ ...record, tree: completed.tree });
+          if (document.markdown !== completedMarkdown) {
+            document = await port.updateManagedDocument(
+              exactProjectId,
+              document.id,
+              document.markdown,
+              completedMarkdown,
+              document.id,
+            );
+          }
           writeSiyuanMapManifest(manifest);
         } catch (error) {
           const userCancelled = effectiveOptions.control?.state === 'cancelled';
