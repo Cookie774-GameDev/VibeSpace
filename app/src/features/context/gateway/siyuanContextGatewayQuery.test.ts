@@ -230,8 +230,8 @@ describe('SiYuan Context Gateway query', () => {
         .map(({ query }) => query),
     ).toEqual([
       'What decision did the project make about frozen corpus hydration in `frozen-corpus.md`?',
-      'frozen-corpus.md\nExact source names and paths; application process, exact worktree binary, executable path, descendant ownership, msedgewebview2.exe, user-data profile, WebView, CDP, renderer, ports, addresses, and stable identifiers.',
-      'frozen-corpus.md\nInvariants, revisions, canaries, acceptance criteria, safety constraints, Ollama, listeners, and conflicting or superseded evidence.',
+      'What decision did the project make',
+      'about frozen corpus hydration in `frozen-corpus.md`?',
     ]);
     expect(operations).not.toContain('query');
     expect(operations).not.toContain('investigate');
@@ -250,7 +250,7 @@ describe('SiYuan Context Gateway query', () => {
     ]);
   });
 
-  it('bounds source-less deep facet anchors to the request topic instead of repeating instructions', async () => {
+  it('derives business retrieval facets without injecting native-testing vocabulary', async () => {
     const execute = vi.fn(async (args: Record<string, unknown>) => {
       if (args.operation === 'describe') return describeResult();
       if (args.operation === 'search') {
@@ -264,7 +264,7 @@ describe('SiYuan Context Gateway query', () => {
       createLeaseId: () => 'gateway-lease-source-less',
     });
     const topic =
-      'What exact native process, WebView profile, CDP port, and zero-Ollama safety conditions are required?';
+      'Audit the Harbor Sensor Release: release date, current region, retention days, archive capacity, and acceptance owners.';
     const instructions =
       'Return citations. Do not write, edit, delete, run, start, or attach files.';
 
@@ -272,16 +272,14 @@ describe('SiYuan Context Gateway query', () => {
       query({ ...queryInput('deep'), question: `${topic}\n\n${instructions}` }),
     ).rejects.toThrow('CONTEXT_GATEWAY_SIYUAN_EMPTY_RESULT');
 
-    expect(
-      execute.mock.calls
-        .map(([args]) => args)
-        .filter(({ operation }) => operation === 'search')
-        .map(({ query: searchQuery }) => searchQuery),
-    ).toEqual([
-      `${topic}\n\n${instructions}`,
-      `${topic}\nExact source names and paths; application process, exact worktree binary, executable path, descendant ownership, msedgewebview2.exe, user-data profile, WebView, CDP, renderer, ports, addresses, and stable identifiers.`,
-      `${topic}\nInvariants, revisions, canaries, acceptance criteria, safety constraints, Ollama, listeners, and conflicting or superseded evidence.`,
-    ]);
+    const queries = execute.mock.calls.map(([args]) => args)
+      .filter(({ operation }) => operation === 'search')
+      .map(({ query: searchQuery }) => String(searchQuery));
+    expect(queries).toHaveLength(3);
+    expect(queries[0]).toBe(topic + '\n\n' + instructions);
+    expect(queries.slice(1).join(' ')).toBe((topic + ' ' + instructions));
+    expect(queries.join(' ')).not.toMatch(/WebView|Ollama|msedgewebview|canaries/u);
+    expect(queries.slice(1).join(' ')).toContain('current region, retention days, archive capacity');
   });
 
   it('executes through the real tool protocol without invoking its RLM runtime', async () => {

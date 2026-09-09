@@ -398,21 +398,14 @@ function question(input: Readonly<ProductionRlmContextInput>): string {
 }
 
 function deepQueries(value: string): readonly string[] {
-  const sourceHint = [
-    ...new Set(value.match(/\b[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.[A-Za-z0-9]{1,16}\b/gu) ?? []),
-  ]
-    .slice(0, 3)
-    .join(' ');
-  const topicHint = value
-    .split(/\r?\n/u)
-    .find((line) => line.trim().length > 0)!
-    .trim()
-    .slice(0, 512);
-  const facetAnchor = sourceHint || topicHint;
+  // Search the whole request and both halves so long queries retain their middle
+  // topics. Never inject domain-specific terms unrelated to the user's question.
+  const words = value.split(/\s+/u);
+  const middle = Math.ceil(words.length / 2);
   return Object.freeze([
     value,
-    `${facetAnchor}\nExact source names and paths; application process, exact worktree binary, executable path, descendant ownership, msedgewebview2.exe, user-data profile, WebView, CDP, renderer, ports, addresses, and stable identifiers.`,
-    `${facetAnchor}\nInvariants, revisions, canaries, acceptance criteria, safety constraints, Ollama, listeners, and conflicting or superseded evidence.`,
+    words.slice(0, middle).join(' '),
+    words.slice(middle).join(' ') || value,
   ]);
 }
 

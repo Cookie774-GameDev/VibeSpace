@@ -289,6 +289,9 @@ export function findJarvisDisplayLinks(text: string): readonly JarvisDisplayLink
     if (!isLinkBoundary(text[start - 1])) continue;
     const prefix = match[0];
     const firstPayload = text[start + prefix.length];
+    // A field label followed only by closing Markdown emphasis is not a URI.
+    // Keep real scheme payloads (including unsafe ones) subject to link policy.
+    if (/^(?:\*{1,2}|_{1,2})(?=\s|$)/u.test(text.slice(start + prefix.length))) continue;
     if (
       !prefix.toLowerCase().endsWith('//') &&
       prefix.toLowerCase() !== 'www.' &&
