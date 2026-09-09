@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::ShellExt;
@@ -76,7 +76,7 @@ fn read_status(app: &AppHandle) -> Result<Value, String> {
     let data: Value = response.json().map_err(|_| "Invalid connector status.")?;
     // Return only public status fields. Never forward arbitrary gateway data or credentials.
     Ok(
-        json!({ "packaged": true, "connectionDetected": true, "status": data["status"], "step": data["step"], "toolCount": data["toolCount"], "hasKey": data["hasKey"], "tunnelId": data["tunnelId"] }),
+        json!({ "packaged": true, "connectionDetected": true, "connectionFile": state_dir(app)?.join("connection.json").to_string_lossy(), "status": data["status"], "step": data["step"], "toolCount": data["toolCount"], "hasKey": data["hasKey"], "tunnelId": data["tunnelId"], "setupComplete": data["setupComplete"], "enabled": data["enabled"], "watchdog": data["watchdog"], "startOnComputer": data["startOnComputer"] }),
     )
 }
 fn resources(app: &AppHandle) -> Result<PathBuf, String> {
@@ -163,6 +163,10 @@ fn unpack(app: &AppHandle) -> Result<PathBuf, String> {
         "runtime/tunnel-client.exe",
         "runtime/cloudflared.exe",
         "gateway.mjs",
+        "supervisor.mjs",
+        "startup.mjs",
+        "startup.ps1",
+        "startup.vbs",
         "setup/index.html",
     ] {
         if !root.join(required).is_file() {
@@ -173,14 +177,15 @@ fn unpack(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Cannot finalize connector installation.")?;
     Ok(root)
 }
-fn start_and_open(app: &AppHandle) -> Result<(), String> {
+fn start_connector(app: &AppHandle, open_setup: bool) -> Result<(), String> {
     let state = app.state::<DesktopConnectorState>();
     let _guard = state.0.lock().map_err(|_| "Connector setup is busy.")?;
     if read_status(app).is_err() {
         let root = unpack(app)?;
         let mut command = Command::new(root.join("runtime/node.exe"));
         command
-            .arg(root.join("gateway.mjs"))
+            .arg(root.join("supervisor.mjs"))
+            .arg(state_dir(app)?)
             .current_dir(&root)
             .env("VIBESPACE_CONNECTOR_PORT", "0")
             .env("VIBESPACE_CONNECTOR_STATE_DIR", state_dir(app)?)
@@ -196,11 +201,12 @@ fn start_and_open(app: &AppHandle) -> Result<(), String> {
             .spawn()
             .map_err(|_| "Cannot start the packaged connector.")?;
         let mut ready = false;
-        for _ in 0..240 {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while Instant::now() < deadline {
             if child
                 .try_wait()
                 .map_err(|_| "Cannot check connector startup.")?
-                .is_some()
+                .is_some_and(|status| !status.success())
             {
                 return Err(
                     "Connector could not start. Its saved connection may need attention.".into(),
@@ -216,11 +222,51 @@ fn start_and_open(app: &AppHandle) -> Result<(), String> {
             return Err("Connector is still starting. Try Setup again shortly.".into());
         }
     }
+    if !open_setup {
+        return Ok(());
+    }
     let (endpoint, token) = connection(app)?;
     #[allow(deprecated)]
     app.shell()
         .open(format!("{endpoint}/setup#token={token}"), None)
         .map_err(|_| "Could not open the setup page.".to_owned())
+}
+fn saved_setup(app: &AppHandle) -> Option<Value> {
+    let file = state_dir(app).ok()?.join("setup.json");
+    if fs::metadata(&file).ok()?.len() > 65536 {
+        return None;
+    }
+    serde_json::from_slice(&fs::read(file).ok()?).ok()
+}
+fn disconnected_status(is_packaged: bool, saved: Value) -> Value {
+    json!({ "packaged": is_packaged, "connectionDetected": false,
+        "status": if saved["enabled"] == false { "off" } else { "disconnected" },
+        "toolCount": 0, "hasKey": saved["protectedKey"].as_str().is_some_and(|key| !key.is_empty()),
+        "setupComplete": saved["setupComplete"] == true,
+        "enabled": saved["enabled"] != false, "watchdog": false, "startOnComputer": null })
+}
+pub fn start_on_app_launch(app: &AppHandle) {
+    if !cfg!(windows)
+        || crate::runtime_profile::ensure_privileged_effect_allowed(
+            crate::runtime_profile::DENIED_EFFECT_SHELL_OPEN,
+            "desktop-connector-startup",
+        )
+        .is_err()
+    {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let configured = saved_setup(&app).is_some_and(|data| {
+            data["enabled"] != false
+                && data["protectedKey"]
+                    .as_str()
+                    .is_some_and(|key| !key.is_empty())
+        });
+        if configured {
+            let _ = start_connector(&app, false);
+        }
+    });
 }
 fn guard(window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
@@ -239,25 +285,78 @@ pub async fn desktop_connector_status(
     guard(&window)?;
     tauri::async_runtime::spawn_blocking(move || match read_status(&app) {
         Ok(status) => status,
-        Err(_) => json!({ "packaged": packaged(&app), "connectionDetected": state_dir(&app).map(|p| p.join("connection.json").is_file()).unwrap_or(false), "status": "disconnected", "step": 1, "toolCount": 0, "hasKey": false }),
-    }).await.map_err(|_| "Connector status unavailable.".into())
+        Err(_) => disconnected_status(packaged(&app), saved_setup(&app).unwrap_or(Value::Null)),
+    })
+    .await
+    .map_err(|_| "Connector status unavailable.".into())
 }
 #[tauri::command]
 pub async fn desktop_connector_setup(
     app: AppHandle,
     window: tauri::WebviewWindow,
+    action: Option<String>,
 ) -> Result<(), String> {
     guard(&window)?;
     if !cfg!(windows) {
         return Err("The bundled desktop connector currently requires Windows.".into());
     }
-    tauri::async_runtime::spawn_blocking(move || start_and_open(&app))
-        .await
-        .map_err(|_| "Connector setup unavailable.".to_owned())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let action = action.as_deref().unwrap_or("setup");
+        if ![
+            "setup",
+            "connect",
+            "disconnect",
+            "startup-on",
+            "startup-off",
+        ]
+        .contains(&action)
+        {
+            return Err("Unknown connector action.".into());
+        }
+        start_connector(&app, action == "setup")?;
+        if action == "setup" {
+            return Ok(());
+        }
+        let (endpoint, token) = connection(&app)?;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "Connector client unavailable.")?;
+        let route = if action.starts_with("startup-") {
+            "startup"
+        } else {
+            action
+        };
+        let response = client
+            .post(format!("{endpoint}/setup/{route}"))
+            .bearer_auth(token)
+            .json(&json!({"enabled": action == "startup-on"}))
+            .send()
+            .map_err(|_| "Connector action could not be confirmed.")?;
+        if !response.status().is_success() {
+            return Err("Connector rejected the change. Check its setup and retry.".into());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "Connector setup unavailable.".to_owned())?
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_status_preserves_completed_setup_and_off_without_credentials() {
+        let status = disconnected_status(
+            true,
+            json!({"setupComplete":true,"enabled":false,"protectedKey":"fixture-secret"}),
+        );
+        assert_eq!(status["status"], "off");
+        assert_eq!(status["setupComplete"], true);
+        assert_eq!(status["watchdog"], false);
+        assert_eq!(status["hasKey"], true);
+        assert!(!status.to_string().contains("fixture-secret"));
+    }
     #[test]
     fn accepts_only_bounded_loopback_connections() {
         let token = "a".repeat(64);

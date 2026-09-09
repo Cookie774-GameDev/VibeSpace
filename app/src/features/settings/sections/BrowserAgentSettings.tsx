@@ -58,7 +58,7 @@ export function BrowserAgentSettings() {
             Browser Agent
           </h3>
           <p className="text-metadata text-muted-foreground">
-            Uses the current chat mode and model. Site-changing actions still require approval.
+            Uses the current chat mode and model. Manage the desktop connection below.
           </p>
         </div>
         <span className="rounded-full border border-border px-2 py-1 text-[11px] text-muted-foreground">
@@ -116,28 +116,6 @@ export function BrowserAgentSettings() {
           checked={preferences.autoReconnectApprovedMcps}
           onChange={(autoReconnectApprovedMcps) =>
             browserAgentPreferences.update({ autoReconnectApprovedMcps })
-          }
-        />
-        <ToggleRow
-          label="Ask before website submission"
-          description="Require approval before submitting forms or messages."
-          checked={preferences.askBeforeWebsiteSubmission}
-          onChange={(askBeforeWebsiteSubmission) =>
-            browserAgentPreferences.update({ askBeforeWebsiteSubmission })
-          }
-        />
-        <ToggleRow
-          label="Ask before uploads or downloads"
-          description="Require approval before transferring local or remote files."
-          checked={preferences.askBeforeTransfers}
-          onChange={(askBeforeTransfers) => browserAgentPreferences.update({ askBeforeTransfers })}
-        />
-        <ToggleRow
-          label="Ask before sending, publishing, or purchasing"
-          description="Require approval before any external commitment."
-          checked={preferences.askBeforeExternalCommitment}
-          onChange={(askBeforeExternalCommitment) =>
-            browserAgentPreferences.update({ askBeforeExternalCommitment })
           }
         />
         <ToggleRow

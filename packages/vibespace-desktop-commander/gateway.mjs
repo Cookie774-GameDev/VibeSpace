@@ -15,6 +15,7 @@ import {
 import { editableConfig, validateSetting } from './config.mjs';
 import { browserTool, runBrowserTool } from './browser/tool.mjs';
 import { createSetupRuntime } from './setup-runtime.mjs';
+import { computerStartup } from './startup.mjs';
 
 const base = path.dirname(fileURLToPath(import.meta.url));
 // Tauri appends the window origin to native HTTP requests. No browser CORS
@@ -84,6 +85,8 @@ export async function startGateway({
   }
   const token = randomBytes(32).toString('hex');
   let setup;
+  let startOnComputer = await computerStartup(base, stateDir).catch(() => null);
+  const snapshot = async () => ({ ...(await setup.snapshot()), startOnComputer });
   const sessions = new Map();
   let active = 0,
     changing = false;
@@ -156,14 +159,20 @@ export async function startGateway({
       if (req.url.startsWith('/setup/')) {
         if (!setup) return json(res, 503, { error: 'Connector is starting.' });
         if (req.url === '/setup/state' && req.method === 'GET')
-          return json(res, 200, await setup.snapshot());
+          return json(res, 200, await snapshot());
+        if (req.url === '/setup/startup' && req.method === 'POST') {
+          if (typeof body?.enabled !== 'boolean')
+            return json(res, 400, { error: 'Enabled must be a boolean.' });
+          startOnComputer = await computerStartup(base, stateDir, body.enabled);
+          return json(res, 200, await snapshot());
+        }
         if (req.url === '/setup/draft' && req.method === 'POST')
           return json(res, 200, await setup.save(body ?? {}));
         if (req.url === '/setup/connect' && req.method === 'POST')
           return json(res, 200, await setup.connect());
         if (req.url === '/setup/disconnect' && req.method === 'POST') {
-          await setup.close();
-          return json(res, 200, await setup.snapshot());
+          await setup.setEnabled(false);
+          return json(res, 200, await snapshot());
         }
         return json(res, 404, { error: 'Not found' });
       }
@@ -194,6 +203,7 @@ export async function startGateway({
         }
       }
       if (req.url !== '/mcp') return json(res, 404, { error: 'Not found' });
+      if (!setup?.isEnabled()) return json(res, 503, { error: 'Desktop Link is off.' });
       let entry = sessions.get(req.headers['mcp-session-id']);
       if (
         !entry &&
@@ -211,6 +221,7 @@ export async function startGateway({
           return { ...list, tools: [...list.tools, browserTool] };
         });
         mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
+          if (!setup?.isEnabled()) throw Error('Desktop Link is off.');
           if (request.params.name !== 'set_config_value')
             return call(request.params.name, request.params.arguments ?? {});
           if (changing) throw Error('Configuration is being edited. Reload before retrying.');
@@ -305,4 +316,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  if (process.connected) {
+    process.once('disconnect', stop);
+    process.on('message', (message) => {
+      if (message === 'shutdown') void stop();
+    });
+  }
 }

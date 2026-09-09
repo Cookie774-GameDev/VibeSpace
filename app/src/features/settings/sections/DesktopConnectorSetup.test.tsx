@@ -16,13 +16,55 @@ it('opens external setup only on explicit action and displays verified tool stat
   render(<DesktopConnectorSetup />);
   await screen.findByText('Tunnel ready · 45 tools detected');
   expect(invoke).not.toHaveBeenCalledWith('desktop_connector_setup');
-  fireEvent.click(screen.getByRole('button', { name: 'Resume setup' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Connection settings' }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('desktop_connector_setup'));
-  expect(screen.getByText(/Finish adding the connector in ChatGPT/)).toBeTruthy();
+  expect(screen.getByText(/Setup complete/)).toBeTruthy();
 });
 it('does not claim missing resources are preloaded', async () => {
   invoke.mockResolvedValue({ packaged: false, status: 'disconnected', connectionDetected: false });
   render(<DesktopConnectorSetup />);
   await screen.findByText('Connector package is not included in this build.');
   expect((screen.getByRole('button', { name: 'Setup' }) as HTMLButtonElement).disabled).toBe(true);
+});
+it('retains setup progress without claiming a saved key is a verified connection', async () => {
+  invoke.mockResolvedValue({ packaged: true, hasKey: true, status: 'connecting', toolCount: 45 });
+  render(<DesktopConnectorSetup />);
+  await screen.findByRole('button', { name: 'Resume setup' });
+  expect(screen.queryByText(/Setup complete/)).toBeNull();
+});
+it('applies Off through the native controller and displays its readback', async () => {
+  let enabled = true;
+  invoke.mockImplementation(async (command, args) => {
+    if (command === 'desktop_connector_setup') {
+      enabled = args.action !== 'disconnect';
+      return;
+    }
+    return {
+      packaged: true,
+      hasKey: true,
+      setupComplete: true,
+      status: enabled ? 'ready' : 'off',
+      toolCount: 45,
+      enabled,
+      watchdog: true,
+      startOnComputer: false,
+    };
+  });
+  render(<DesktopConnectorSetup />);
+  fireEvent.click(await screen.findByRole('switch', { name: 'Enable Desktop Link MCP' }));
+  await screen.findByText('MCP is off · automatic recovery paused');
+  expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', { action: 'disconnect' });
+  expect(screen.getByRole('button', { name: 'Connection settings' })).toBeTruthy();
+});
+it('does not claim a failed change succeeded', async () => {
+  invoke.mockImplementation(async (command) => {
+    if (command === 'desktop_connector_setup') throw Error('fixture failure');
+    return { packaged: true, setupComplete: true, status: 'ready', toolCount: 45, enabled: true };
+  });
+  render(<DesktopConnectorSetup />);
+  fireEvent.click(await screen.findByRole('switch', { name: 'Enable Desktop Link MCP' }));
+  await screen.findByRole('alert');
+  expect(
+    screen.getByRole('switch', { name: 'Enable Desktop Link MCP' }).getAttribute('aria-checked'),
+  ).toBe('true');
 });

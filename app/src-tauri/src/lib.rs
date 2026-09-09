@@ -539,6 +539,7 @@ fn run_ordinary(
 
             branding::apply_app_branding(&app.handle());
             branding::start_windows_icon_watchdog(&app.handle());
+            desktop_connector::start_on_app_launch(&app.handle());
 
             let tray_icon = branding::build_tray_icon();
 

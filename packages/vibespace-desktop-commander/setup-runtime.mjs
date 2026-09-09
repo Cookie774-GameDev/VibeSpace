@@ -49,9 +49,19 @@ export async function createSetupRuntime({
   protect = protectKey,
   spawnProcess = spawn,
   fetchRequest = fetch,
+  schedule = setInterval,
+  unschedule = clearInterval,
+  now = Date.now,
 }) {
   const file = path.join(stateDir, 'setup.json');
-  let saved = { version: 1, step: 1, tunnelId: '', protectedKey: '' };
+  let saved = {
+    version: 1,
+    step: 1,
+    tunnelId: '',
+    protectedKey: '',
+    enabled: true,
+    setupComplete: false,
+  };
   try {
     const prior = JSON.parse(await readFile(file, 'utf8'));
     if (prior.version === 1) saved = { ...saved, ...prior };
@@ -62,8 +72,22 @@ export async function createSetupRuntime({
     error = '',
     healthURL = '',
     writing = Promise.resolve();
+  let closed = false,
+    failures = 0,
+    retryAt = 0;
+  const persist = (update) => {
+    const operation = writing.then(async () => {
+      const next = { ...saved, ...(typeof update === 'function' ? update(saved) : update) };
+      await writeFile(file + '.tmp', JSON.stringify(next), { mode: 0o600 });
+      await rename(file + '.tmp', file);
+      saved = next;
+    });
+    writing = operation.catch(() => {});
+    return operation;
+  };
   const healthFile = path.join(stateDir, 'tunnel-health.url');
   const snapshot = async () => {
+    const identity = { tunnelId: saved.tunnelId, protectedKey: saved.protectedKey, child };
     if (child && !child.killed && child.exitCode == null) {
       try {
         healthURL = (await readFile(healthFile, 'utf8')).trim().replace(/\/$/, '');
@@ -81,12 +105,25 @@ export async function createSetupRuntime({
     try {
       toolCount = (await getTools()).tools.length;
     } catch {}
+    if (status === 'ready' && toolCount > 0 && !saved.setupComplete) {
+      await persist((current) =>
+        current.tunnelId === identity.tunnelId &&
+        current.protectedKey === identity.protectedKey &&
+        child === identity.child
+          ? { setupComplete: true, step: 3 }
+          : {},
+      );
+    }
+    if (status === 'ready') failures = 0;
     return {
+      enabled: saved.enabled !== false,
+      setupComplete: saved.setupComplete === true,
+      watchdog: !closed,
       version: 1,
       step: status === 'ready' ? 3 : saved.step,
       tunnelId: saved.tunnelId,
       hasKey: Boolean(saved.protectedKey),
-      status,
+      status: saved.enabled === false ? 'off' : status,
       error,
       toolCount,
       connectionDetected: true,
@@ -108,19 +145,20 @@ export async function createSetupRuntime({
       const next = {
         ...saved,
         tunnelId,
+        setupComplete: key || tunnelId !== saved.tunnelId ? false : saved.setupComplete,
         step: [1, 2, 3].includes(input.step) ? input.step : saved.step,
         protectedKey: key ? await protect(key) : saved.protectedKey,
       };
       await writeFile(file + '.tmp', JSON.stringify(next), { mode: 0o600 });
       await rename(file + '.tmp', file);
       saved = next;
-      return snapshot();
     });
     writing = operation.catch(() => {});
-    return operation;
+    return operation.then(snapshot);
   };
   const launch = async () => {
     await writing;
+    if (closed || saved.enabled === false) return snapshot();
     if (child) return snapshot();
     if (!saved.tunnelId || !saved.protectedKey)
       throw Error('Save your tunnel ID and runtime API key first.');
@@ -157,6 +195,7 @@ export async function createSetupRuntime({
     const failed = () => {
       if (child === launched) {
         child = undefined;
+        retryAt = now() + Math.min(30000, 1000 * 2 ** Math.min(failures++, 5));
         status = 'error';
         error = 'The tunnel stopped. Check the runtime key and tunnel permissions, then retry.';
       }
@@ -165,14 +204,14 @@ export async function createSetupRuntime({
     child.once('exit', failed);
     return snapshot();
   };
-  const connect = () => {
+  const reconnect = () => {
     if (!connecting)
       connecting = launch().finally(() => {
         connecting = undefined;
       });
     return connecting;
   };
-  const close = async () => {
+  const stop = async () => {
     await connecting?.catch(() => {});
     const old = child;
     child = undefined;
@@ -196,5 +235,47 @@ export async function createSetupRuntime({
     status = 'disconnected';
     error = '';
   };
-  return { snapshot, save, connect, close };
+  let controlling = Promise.resolve();
+  const setEnabled = (enabled) => {
+    if (typeof enabled !== 'boolean') return Promise.reject(Error('Enabled must be a boolean.'));
+    const operation = controlling.then(async () => {
+      await persist({ enabled });
+      if (enabled) {
+        closed = false;
+        retryAt = 0;
+        await reconnect();
+      } else await stop();
+      return snapshot();
+    });
+    controlling = operation.catch(() => {});
+    return operation;
+  };
+  const connect = () => setEnabled(true);
+  const tick = () => {
+    if (
+      closed ||
+      saved.enabled === false ||
+      !saved.protectedKey ||
+      !saved.tunnelId ||
+      child ||
+      connecting ||
+      now() < retryAt
+    )
+      return;
+    void reconnect().catch(() => {
+      retryAt = now() + Math.min(30000, 1000 * 2 ** Math.min(failures++, 5));
+      status = 'error';
+      error = 'Reconnect failed. Check the saved tunnel and runtime key.';
+    });
+  };
+  const timer = schedule(tick, 1000);
+  timer?.unref?.();
+  const close = async () => {
+    closed = true;
+    unschedule(timer);
+    await controlling;
+    closed = true;
+    await stop();
+  };
+  return { snapshot, save, connect, setEnabled, isEnabled: () => saved.enabled !== false, close };
 }

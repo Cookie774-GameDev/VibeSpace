@@ -11,7 +11,7 @@
   "scripts": {
     "browser:install": "npm --prefix browser ci --ignore-scripts",
     "test": "node --test test/*.test.mjs",
-    "start": "node gateway.mjs"
+    "start": "node supervisor.mjs"
   },
   "files": [
     ".gitignore",
@@ -26,6 +26,10 @@
     "browser/UPSTREAM-README.md",
     "gateway.mjs",
     "setup-runtime.mjs",
+    "supervisor.mjs",
+    "startup.mjs",
+    "startup.ps1",
+    "startup.vbs",
     "setup",
     "mcp.mjs",
     "config.mjs",

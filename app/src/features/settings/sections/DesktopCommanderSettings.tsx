@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { requestOpenMcpManager } from '@/features/plugins/openMcpManager';
@@ -62,6 +62,7 @@ export function DesktopCommanderSettings({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const attemptedAutoConnection = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -98,6 +99,20 @@ export function DesktopCommanderSettings({
       if (!signal.aborted) setBusy(false);
     }
   }
+  const onConnectionReady = useCallback(
+    (file: string) => {
+      if (attemptedAutoConnection.current || client || path || busy) return;
+      attemptedAutoConnection.current = true;
+      setPath(file);
+      void run(async (signal) => {
+        const next = await connect(file);
+        const loaded = await next.load(signal);
+        if (!signal.aborted) setClient(next);
+        return loaded;
+      }, 'Connected to the VibeSpace Desktop Commander copy.');
+    },
+    [client, path, busy, connect],
+  );
   function update<K extends keyof DesktopCommanderConfig>(
     key: K,
     value: DesktopCommanderConfig[K],
@@ -114,7 +129,7 @@ export function DesktopCommanderSettings({
         Configure the VibeSpace copy. Changes are saved to its running MCP and checked by reading
         them back.
       </p>
-      <DesktopConnectorSetup />
+      <DesktopConnectorSetup onConnectionReady={onConnectionReady} />
       <details className="my-3 rounded-lg border border-border p-3">
         <summary className="cursor-pointer text-secondary text-foreground">
           Advanced: manual local connection
