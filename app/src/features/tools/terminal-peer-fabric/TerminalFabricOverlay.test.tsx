@@ -100,3 +100,15 @@ describe('native Fabric pane selection', () => {
     expect(document.querySelector('.vs-fabric-bridges')).toBeNull();
   });
 });
+
+it('retains a Fabric launch while the terminal route is still hidden', async () => {
+  useFabricPresentationStore.setState({ selecting: false });
+  const view = render(<TerminalFabricOverlay visible={false} projectId="project" />);
+  act(() => useFabricPresentationStore.getState().launch());
+  expect(useFabricPresentationStore.getState().selecting).toBe(true);
+  view.rerender(<TerminalFabricOverlay visible projectId="project" />);
+  await screen.findByRole('button', { name: 'Confirm connection' });
+  expect(mocks.connect).not.toHaveBeenCalled();
+  view.rerender(<TerminalFabricOverlay visible={false} projectId="project" />);
+  expect(useFabricPresentationStore.getState().selecting).toBe(false);
+});

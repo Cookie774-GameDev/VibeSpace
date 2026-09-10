@@ -24,6 +24,7 @@ export function TerminalFabricOverlay({
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [verified, setVerified] = React.useState<string[]>([]);
+  const wasVisible = React.useRef(visible);
   const epoch = React.useRef(0);
   const submitting = React.useRef(false);
   const picker = React.useRef<HTMLElement>(null);
@@ -46,7 +47,10 @@ export function TerminalFabricOverlay({
     setBusy(false);
     submitting.current = false;
     if (selecting && visible) picker.current?.focus();
-    if (!visible) useFabricPresentationStore.getState().close();
+    // Run can request selection before navigation reveals this mounted route.
+    // Cancel only when leaving terminals, not while waiting to enter them.
+    if (wasVisible.current && !visible) useFabricPresentationStore.getState().close();
+    wasVisible.current = visible;
     return () => {
       epoch.current++;
     };
