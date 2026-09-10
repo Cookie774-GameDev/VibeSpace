@@ -137,7 +137,14 @@ function sameHarnessRoute(
 export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCardProps) {
   const { block } = part;
   const draftKey = draftKeyFor(chatId, block.id);
-  const initialDraft = useMemo(() => readDraft(draftKey), [draftKey]);
+  const initialDraft = useMemo(() => {
+    if (block.status !== 'answered' || !block.answers?.length) return readDraft(draftKey);
+    return {
+      selected: Object.fromEntries(block.answers.map(answer => [answer.questionId, answer.selectedOptionIds ?? []])),
+      text: Object.fromEntries(block.answers.map(answer => [answer.questionId, answer.text ?? ''])),
+      activeIndex: 0,
+    };
+  }, [draftKey, block.status, block.answers]);
   const [selectedByQuestion, setSelectedByQuestion] = useState<Record<string, string[]>>(
     initialDraft.selected,
   );
@@ -570,7 +577,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
         </p>
       )}
 
-      <div className="question-card__footer flex flex-wrap items-center gap-2">
+      {isPending && <div className="question-card__footer flex flex-wrap items-center gap-2">
         {isWizard && activeIndex > 0 && (
           <Button
             type="button"
@@ -628,7 +635,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
             Cancel
           </Button>
         )}
-      </div>
+      </div>}
     </section>
   );
 }

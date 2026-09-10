@@ -155,6 +155,21 @@ describe('QuestionBlockCard', () => {
     expect(screen.queryByRole('button', { name: /Back/i })).toBeNull();
   });
 
+  it('restores submitted choices and custom text without a session draft', () => {
+    render(<QuestionBlockCard part={{ ...blockPart, block: {
+      ...blockPart.block, status: 'answered', answers: [
+        { questionId: 'q1', selectedOptionIds: ['runtime'] },
+        { questionId: 'q2', text: 'Keep the existing files.' },
+      ],
+    } }} messageId={'msg_1' as never} chatId="chat_1" />);
+    expect(screen.getByRole('button', { name: 'Runtime' }).getAttribute('aria-pressed')).toBe('true');
+    expect((screen.getByRole('textbox', { name: 'Custom response for Anything else?' }) as HTMLTextAreaElement).value)
+      .toBe('Keep the existing files.');
+    expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(openCodeQuestion.respond).not.toHaveBeenCalled();
+  });
+
   it('does not auto-advance multi-select choices before Next', async () => {
     render(<QuestionBlockCard part={blockPart} messageId={'msg_1' as never} chatId="chat_1" />);
 

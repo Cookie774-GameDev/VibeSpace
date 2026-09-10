@@ -3679,6 +3679,38 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(useAuthStore.getState().chatModelSelection).toEqual(originalSelection);
   });
 
+  it.each(['answered', 'pending', 'cancelled'] as const)(
+    'restores only submitted native question answers into user history (%s)', async (status) => {
+      const jarvis = agent('agent_answer_history', 'jarvis', 'You are Jarvis.');
+      const chatId = 'chat_answer_history' as ChatId;
+      const history: Message = {
+        id: 'msg_answer_history' as MessageId, chat_id: chatId, role: 'assistant',
+        created_at: 1, updated_at: 1, parts: [{ kind: 'question_block',
+          block: { id: 'qb_history', status,
+            questions: [{ id: 'color', prompt: 'Which audit color?', type: 'single',
+              options: [{ id: 'blue', label: 'Blue' }] }],
+            answers: [{ questionId: 'color', selectedOptionIds: ['blue'] }],
+          },
+          harness: { protocol: 'opencode-question-v1', blockId: 'qb_history',
+            requestId: 'que_history', sessionId: 'ses_history', questions: [] },
+        }],
+      };
+      trackListener(startRuntimeListener({
+        getAgentById: () => jarvis, getAgentBySlug: () => jarvis,
+        getAgentForChat: vi.fn(async () => jarvis), getMessages: vi.fn(async () => [history]),
+        appendMessage: vi.fn(async message => ({ ...message, id: 'msg_recall' as MessageId,
+          created_at: 2, updated_at: 2 })), updateMessage: vi.fn(async () => undefined),
+      }));
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId, text: 'What audit color did I choose?',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      expect(mocks.runAgent.mock.calls[0]![0].messages.some((message: { role: string; content: unknown }) =>
+        message.role === 'user' && String(message.content).includes('Which audit color?: Blue'),
+      )).toBe(status === 'answered');
+    },
+  );
+
   it('keeps a cost-unverified current model when no safe larger-context route exists', async () => {
     const jarvis = agent('agent_jarvis_context_route', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_context_route' as ChatId;

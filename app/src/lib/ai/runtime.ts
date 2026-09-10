@@ -3664,11 +3664,26 @@ function toLLMMessages(
     if (excludeId && m.id === excludeId) continue;
     if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'agent') continue;
     const contentParts: LLMContentPart[] = [];
+    const submittedAnswers: string[] = [];
     for (const p of m.parts) {
       if (p.kind === 'text' && p.text.trim()) {
         contentParts.push({ type: 'text', text: p.text });
       } else if (p.kind === 'action_proposal') {
         contentParts.push({ type: 'text', text: actionPartToLlmText(p) });
+      } else if (p.kind === 'question_block' && p.harness && p.block.status === 'answered') {
+        // Native replies are stored on the question, without a duplicate user bubble.
+        for (const answer of p.block.answers ?? []) {
+          const question = p.block.questions.find(item => item.id === answer.questionId);
+          if (!question || answer.skipped) continue;
+          const values = [
+            ...(answer.selectedOptionIds ?? []).flatMap(id => {
+              const option = question.options?.find(item => item.id === id);
+              return option ? [option.label] : [];
+            }),
+            answer.text?.trim(),
+          ].filter(Boolean);
+          if (values.length) submittedAnswers.push(`${question.prompt}: ${values.join(', ')}`);
+        }
       } else if (p.kind === 'image') {
         const image = imagePartToLlm(p);
         if (image && includeImages && index === lastUserIndex) {
@@ -3678,14 +3693,17 @@ function toLLMMessages(
         }
       }
     }
-    if (contentParts.length === 0) continue;
+    if (contentParts.length === 0 && submittedAnswers.length === 0) continue;
     const content =
       contentParts.length === 1 && contentParts[0]?.type === 'text'
         ? contentParts[0].text.trim()
         : contentParts;
-    out.push({
+    if (contentParts.length) out.push({
       role: m.role === 'user' ? 'user' : 'assistant',
       content,
+    });
+    if (submittedAnswers.length) out.push({
+      role: 'user', content: `Submitted question answers:\n${submittedAnswers.join('\n')}`,
     });
     lastIncludedMessage = m;
   }
