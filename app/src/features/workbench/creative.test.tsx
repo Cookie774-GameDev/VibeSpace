@@ -1,4 +1,4 @@
-import * as React from 'react';
+﻿import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CREATIVE_KINDS, creativeStyle } from './creative';
@@ -128,14 +128,14 @@ describe('Workbench Creative', () => {
         onClose={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Edit text' }));
+    fireEvent.doubleClick(screen.getByText('Initial'));
     fireEvent.change(screen.getByRole('textbox'), {
       target: { value: '<img src=x onerror=alert(1)>' },
     });
     fireEvent.blur(screen.getByRole('textbox'));
     expect(onUpdate).toHaveBeenCalledWith({ settings: { note: '<img src=x onerror=alert(1)>' } });
     expect(document.querySelector('img')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit text' }));
+    fireEvent.doubleClick(screen.getByText('<img src=x onerror=alert(1)>'));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Discard' } });
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
     expect(screen.getByText('Initial')).toBeTruthy();

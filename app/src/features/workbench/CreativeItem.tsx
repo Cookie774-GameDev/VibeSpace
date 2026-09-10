@@ -1,5 +1,5 @@
-import * as React from 'react';
-import { Copy, Trash2, Grip, ArrowDownToLine } from 'lucide-react';
+﻿import * as React from 'react';
+import { Copy, Trash2, RotateCw, ArrowDownToLine } from 'lucide-react';
 import type { WorkbenchPanel } from './types';
 import { creativeStyle, type CreativeStyle } from './creative';
 import { useWorkbenchStore } from './store';
@@ -36,7 +36,7 @@ export function CreativeItem({
   const gesture = React.useRef<{
     x: number;
     y: number;
-    mode: 'move' | 'resize';
+    mode: 'move' | 'resize' | 'rotate';
     start: typeof draft;
   } | null>(null);
   React.useEffect(
@@ -46,6 +46,44 @@ export function CreativeItem({
   React.useEffect(() => setText(panel.settings.note ?? ''), [panel.settings.note]);
   const change = (patch: Partial<CreativeStyle>) =>
     onUpdate({ settings: { creative: creativeStyle({ ...style, ...patch }) } });
+  const [rot, setRot] = React.useState<number | null>(null);
+  const rotState = React.useRef<{ cx: number; cy: number; start: number; startAngle: number } | null>(null);
+  const beginRotate = (e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    onSelect(e.shiftKey);
+    const el = (e.currentTarget as HTMLElement).closest('.wb-creative-item');
+    const r = el ? el.getBoundingClientRect() : null;
+    const cx = r ? r.left + r.width / 2 : e.clientX;
+    const cy = r ? r.top + r.height / 2 : e.clientY;
+    const startAngle = (Math.atan2(e.clientY - cy, e.clientX - cx) * 180) / Math.PI + 90;
+    rotState.current = { cx, cy, start: style.rotate, startAngle };
+    setRot(style.rotate);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const rotateProps = {
+    onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+      const s = rotState.current;
+      if (!s) return;
+      // Angle of pointer relative to item centre; +90 so the handle (top) reads 0 deg.
+      const ang = (Math.atan2(e.clientY - s.cy, e.clientX - s.cx) * 180) / Math.PI + 90;
+      const base = (Math.atan2(s.cy - s.cy, 1) * 180) / Math.PI; // 0 reference (unused, kept for clarity)
+      void base;
+      let deg = Math.round(s.start + ang - s.startAngle);
+      deg = ((deg % 360) + 360) % 360;
+      setRot(deg);
+    },
+    onPointerUp: () => {
+      if (rotState.current && rot !== null) change({ rotate: rot });
+      rotState.current = null;
+      setRot(null);
+    },
+    onPointerCancel: () => {
+      rotState.current = null;
+      setRot(null);
+    },
+  };
   const begin = (e: React.PointerEvent<HTMLElement>, mode: 'move' | 'resize') => {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -113,6 +151,8 @@ export function CreativeItem({
         width: draft.width,
         height: draft.height,
         zIndex: panel.z,
+        transform: `rotate(${rot ?? style.rotate}deg)`,
+        transformOrigin: '50% 50%',
       }}
     >
       <div
@@ -225,119 +265,59 @@ export function CreativeItem({
       {selected && (
         <>
           <div
-            className="wb-creative-controls"
+            className="wb-creative-frame"
             onPointerDown={(e) => e.stopPropagation()}
             onWheel={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
           >
-            <div className="wb-creative-control-head">
-              <button
-                aria-label="Move creative item"
-                title="Drag to move"
-                onPointerDown={(e) => begin(e, 'move')}
-                {...gestureProps}
-              >
-                <Grip size={16} />
-              </button>
-              <strong>{style.kind === 'draw' ? 'Freehand · drag to draw' : style.kind}</strong>
-              <button aria-label="Duplicate creative item" onClick={onDuplicate}>
-                <Copy size={15} />
+            <button
+              className="wb-creative-rotate"
+              aria-label="Rotate creative item"
+              title="Drag to rotate"
+              onPointerDown={beginRotate}
+              {...rotateProps}
+            >
+              <RotateCw size={13} />
+            </button>
+            <div className="wb-creative-swatches" role="group" aria-label="Creative color">
+              {['#e8c99b', '#e8855b', '#8fb87e', '#7fb3d5', '#c39bd3', '#f2f2f2', '#1a1a1a'].map(
+                (c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className="wb-creative-swatch"
+                    data-active={style.color === c}
+                    style={{ background: c }}
+                    aria-label={`Set color ${c}`}
+                    onClick={() => change({ color: c })}
+                  />
+                ),
+              )}
+              <input
+                type="color"
+                className="wb-creative-picker"
+                aria-label="Creative custom color"
+                value={style.color}
+                onChange={(e) => change({ color: e.target.value })}
+              />
+            </div>
+            <div className="wb-creative-actions">
+              <button aria-label="Duplicate creative item" title="Duplicate" onClick={onDuplicate}>
+                <Copy size={13} />
               </button>
               <button
                 aria-label="Send creative item to back"
+                title="Send to back"
                 onClick={() =>
                   onUpdate({
                     z: Math.min(0, ...useWorkbenchStore.getState().panels.map((p) => p.z)) - 1,
                   })
                 }
               >
-                <ArrowDownToLine size={15} />
+                <ArrowDownToLine size={13} />
               </button>
-              <button aria-label="Delete creative item" onClick={onClose}>
-                <Trash2 size={15} />
+              <button aria-label="Delete creative item" title="Delete" onClick={onClose}>
+                <Trash2 size={13} />
               </button>
-            </div>
-            <div className="wb-creative-style-row">
-              <label>
-                Color
-                <input
-                  type="color"
-                  aria-label="Creative color"
-                  value={style.color}
-                  onChange={(e) => change({ color: e.target.value })}
-                />
-              </label>
-              {!isText && (
-                <>
-                  <label>
-                    Fill
-                    <input
-                      type="color"
-                      aria-label="Creative fill"
-                      value={style.fill === 'none' ? '#e8c99b' : style.fill}
-                      onChange={(e) => change({ fill: e.target.value })}
-                    />
-                  </label>
-                  <button onClick={() => change({ fill: 'none' })}>No fill</button>
-                  <label>
-                    Stroke
-                    <input
-                      type="number"
-                      aria-label="Creative stroke"
-                      min={1}
-                      max={12}
-                      value={style.stroke}
-                      onChange={(e) => change({ stroke: Number(e.target.value) })}
-                    />
-                  </label>
-                  <select
-                    aria-label="Creative line style"
-                    value={style.dash}
-                    onChange={(e) => change({ dash: e.target.value as CreativeStyle['dash'] })}
-                  >
-                    <option value="solid">Solid</option>
-                    <option value="dashed">Dashed</option>
-                    <option value="dotted">Dotted</option>
-                  </select>
-                </>
-              )}
-              {isText && (
-                <>
-                  <button onClick={() => setEditing(true)}>Edit text</button>
-                  <label>
-                    Size
-                    <input
-                      type="number"
-                      aria-label="Creative font size"
-                      min={12}
-                      max={160}
-                      value={style.fontSize}
-                      onChange={(e) => change({ fontSize: Number(e.target.value) })}
-                    />
-                  </label>
-                  <select
-                    aria-label="Creative font"
-                    value={style.font}
-                    onChange={(e) => change({ font: e.target.value as CreativeStyle['font'] })}
-                  >
-                    <option value="sans">Sans</option>
-                    <option value="serif">Serif</option>
-                    <option value="hand">Handwritten</option>
-                  </select>
-                </>
-              )}
-              <label>
-                Opacity
-                <input
-                  type="range"
-                  aria-label="Creative opacity"
-                  min={0.1}
-                  max={1}
-                  step={0.05}
-                  value={style.opacity}
-                  onChange={(e) => change({ opacity: Number(e.target.value) })}
-                />
-              </label>
             </div>
           </div>
           <button

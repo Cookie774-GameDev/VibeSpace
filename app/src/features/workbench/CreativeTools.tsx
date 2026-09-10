@@ -1,4 +1,4 @@
-import * as React from 'react';
+﻿import * as React from 'react';
 import {
   Paintbrush,
   Type,
@@ -101,12 +101,16 @@ export function CreativeTools() {
               top: Math.min(anchor.top, window.innerHeight - 390),
             }}
           >
-            <p>CREATIVE STUDIO</p>
-            <small>Make space for your ideas</small>
-            <div>
+            <header className="wb-creative-head">
+              <p>CREATIVE STUDIO</p>
+              <small>Make space for your ideas</small>
+            </header>
+            <div className="wb-creative-grid">
               {tools.map(([kind, label, Icon]) => (
                 <button key={kind} type="button" role="menuitem" onClick={() => add(kind)}>
-                  <Icon size={17} />
+                  <span className="wb-creative-ico">
+                    <Icon size={18} />
+                  </span>
                   <span>{label}</span>
                 </button>
               ))}

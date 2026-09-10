@@ -1,4 +1,4 @@
-export const CREATIVE_KINDS = [
+﻿export const CREATIVE_KINDS = [
   'text',
   'title',
   'frame',
@@ -19,6 +19,7 @@ export interface CreativeStyle {
   opacity: number;
   fontSize: number;
   font: 'sans' | 'serif' | 'hand';
+  rotate: number;
   points: number[][];
 }
 export function creativeStyle(value: unknown): CreativeStyle {
@@ -36,6 +37,7 @@ export function creativeStyle(value: unknown): CreativeStyle {
     stroke: number('stroke', 2, 1, 12),
     opacity: number('opacity', 1, 0.1, 1),
     fontSize: number('fontSize', v.kind === 'title' ? 48 : 24, 12, 160),
+    rotate: number('rotate', 0, -360, 360),
     dash: v.dash === 'dashed' || v.dash === 'dotted' ? v.dash : 'solid',
     font: v.font === 'serif' || v.font === 'hand' ? v.font : 'sans',
     points: Array.isArray(v.points)
