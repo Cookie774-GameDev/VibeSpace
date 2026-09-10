@@ -499,6 +499,11 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
   if (EXPLICIT_CONTEXT_TOOL.test(contextIntent)) {
     return !EXPLICIT_CONTEXT_MUTATION.test(affirmativeText);
   }
+  // Working-file follow-ups need the native reader, even without a repeated path.
+  if (
+    !/\b(?:indexed|mapped)\b/iu.test(contextIntent) &&
+    /\b(?:source|configuration|config|cli|test)\s+files?\b|\bfiles?\s+(?:you|we)\s+(?:created|edited|wrote)\b/iu.test(contextIntent)
+  ) return false;
   if (MUTATING_REQUEST.test(affirmativeText)) return false;
   // Registered disk reads must stay on files.read, not Context-map search.
   if (/\bfiles\.read\b/i.test(userText) && /[A-Za-z]:[\\/]/.test(userText)) return false;

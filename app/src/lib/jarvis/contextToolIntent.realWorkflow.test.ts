@@ -3,6 +3,17 @@ import { requestsReadOnlyContextTool } from './contextToolIntent';
 
 describe('ordinary file and HTML work', () => {
   it.each([
+    'Read only the CLI source file you created for this inventory tool. State the exact exit code for invalid input and name the exported parser. Do not edit any files.',
+    'Read the configuration file and explain the timeout.',
+    'Read the file you wrote and report its exported functions.',
+  ])('retains native tools for working source files: %s', (prompt) => {
+    expect(requestsReadOnlyContextTool(prompt)).toBe(false);
+  });
+
+  it('keeps explicitly requested source-file Context research', () => {
+    expect(requestsReadOnlyContextTool('Search the Context Map for the CLI source file.')).toBe(true);
+  });
+  it.each([
     'Use request_user_input to ask Short or Detailed. Wait for my selection; do not read more files or run commands.',
     'Ask me to choose Blue or Green. Never search the documents.',
     'Please wait for my answer without reading files.',

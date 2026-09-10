@@ -2637,30 +2637,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       });
       yield { type: 'public_timeline', snapshot: publicTimeline };
     }
-    const failedContextCalls = new Set(
-      publicTimeline.timeline.flatMap((part) =>
-        part.kind === 'tool_call' && part.tool === 'vibespace_context' ? [part.call_id] : [],
-      ),
-    );
-    const contextGatewayFailed = publicTimeline.timeline.some(
-      (part) =>
-        part.kind === 'tool_result' &&
-        part.error === 'Tool failed' &&
-        failedContextCalls.has(part.call_id),
-    );
-    const contextGatewayRecovered = publicTimeline.timeline.some(
-      (part) =>
-        part.kind === 'tool_result' &&
-        !part.error &&
-        recordOf(part.result)?.status === 'completed' &&
-        failedContextCalls.has(part.call_id),
-    );
-    // Keep rejected calls visible, but do not discard a canonical final answer
-    // merely because an earlier bounded Context operation failed.
-    if (contextGatewayFailed && !contextGatewayRecovered) {
-      failureStage = 'context_gateway';
-      throw new Error('OpenCode Context Gateway failed safely.');
-    }
+    // Failed tools remain failed in the public timeline. They do not invalidate
+    // the provider's completed answer explaining that failure. Still require
+    // canonical text and observed model identity below.
     const canonical = publicTextFromTurnMessages(currentTurnMessages);
     const messageIdentity = observedAssistantIdentity(currentTurnMessages);
     if (messageIdentity) {

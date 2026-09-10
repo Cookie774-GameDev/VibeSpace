@@ -1957,7 +1957,7 @@ describe('persistent OpenCode live authority', () => {
     expect(events.at(-1)).toMatchObject({ type: 'done' });
   });
 
-  it('fails the protected turn after projecting a failed Context Gateway envelope truthfully', async () => {
+  it('preserves a completed response while projecting a failed Context Gateway envelope truthfully', async () => {
     configureManagedQuestionTransport([], {
       sessionStatuses: [null],
       persistedMessages: [
@@ -2012,7 +2012,7 @@ describe('persistent OpenCode live authority', () => {
           events.push(next.value);
         }
       })(),
-    ).rejects.toThrow('OpenCode Context Gateway failed safely.');
+    ).resolves.toBeUndefined();
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -2037,7 +2037,7 @@ describe('persistent OpenCode live authority', () => {
         },
       ]),
     );
-    expect(events.some((event) => event.type === 'done')).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: 'done' });
     expect(JSON.stringify(events)).not.toMatch(/private-request|private project question/iu);
   });
 
