@@ -1383,6 +1383,30 @@ describe('runJarvisKernelTurn explicit kernel integration', () => {
     expect(harness.cleanupCalls).toEqual(['registration', 'abort', 'resolved', 'prepared']);
   });
 
+  it('observes early provider failures while start evidence is still being persisted', async () => {
+    const input = turnInput();
+    const failure = new Error('early_provider_failure');
+    let rejectResponse!: (reason: unknown) => void;
+    const response = new Promise<Readonly<RawProviderResponse>>((_resolve, reject) => {
+      rejectResponse = reject;
+    });
+    const responseCatch = vi.spyOn(response, 'catch');
+    const harness = createKernelHarness(input, { response });
+    vi.mocked(harness.lifecycle.recordProviderStarted).mockImplementationOnce(async () => {
+      expect(responseCatch).toHaveBeenCalledOnce();
+      rejectResponse(failure);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { kind: 'committed', value: harness.providerRegistration };
+    });
+
+    await expect(runJarvisKernelTurn(input, harness.deps)).rejects.toBe(failure);
+    expect(harness.lifecycle.transition).toHaveBeenLastCalledWith(
+      expect.objectContaining({ nextStatus: 'failed' }),
+    );
+    expect(harness.deps.processResponse).not.toHaveBeenCalled();
+    expect(harness.cleanupCalls).toEqual(['registration', 'abort', 'resolved', 'prepared']);
+  });
+
   it('terminalizes and tears down a started provider when start evidence registration fails', async () => {
     const input = turnInput();
     let rejectResponse!: (reason: unknown) => void;

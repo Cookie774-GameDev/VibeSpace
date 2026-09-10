@@ -42,4 +42,20 @@ describe('Context navigation intents', () => {
     expect(received).toEqual([]);
     unsubscribe();
   });
+
+  it('keeps the latest navigation while the lazy Context page mounts and consumes it once', () => {
+    vi.useFakeTimers();
+    requestContextNavigation({ target: 'map', mapId: 'older-map' });
+    requestContextNavigation({ target: 'map', mapId: 'selected-map' });
+    vi.runAllTimers();
+
+    const received: ContextNavigationIntent[] = [];
+    const unsubscribe = subscribeContextNavigation((intent) => received.push(intent));
+    expect(received).toEqual([{ target: 'map', mapId: 'selected-map' }]);
+    unsubscribe();
+
+    const replay = vi.fn();
+    subscribeContextNavigation(replay)();
+    expect(replay).not.toHaveBeenCalled();
+  });
 });

@@ -692,6 +692,9 @@ async function runJarvisKernelExecution(
     throwIfCancellationDelivered();
     if (controller.signal.aborted) return retainRevokedOutcome();
     started = resolved.start(controller.signal);
+    // The provider can fail while its start receipt is still being persisted.
+    // Observe immediately; awaiting the original promise below still propagates the failure.
+    void started.response.catch(() => undefined);
 
     const startedResult = await waitForProviderStage(
       () => lifecycle.recordProviderStarted(started!.receipt),
@@ -1148,7 +1151,6 @@ async function runJarvisKernelExecution(
       });
       if (failed.kind === 'account_authority_revoked') {
         if (started) {
-          void started.response.catch(() => undefined);
           try {
             started.abortAfterStart('authority_revoked');
           } catch {
@@ -1161,7 +1163,6 @@ async function runJarvisKernelExecution(
       providerFailureTerminalized = true;
     }
     if (started && (!terminalCommitted || providerFailureTerminalized)) {
-      void started.response.catch(() => undefined);
       try {
         controller.abort('kernel_provider_evidence_failed');
         started.abortAfterStart('evidence_commit_failed');

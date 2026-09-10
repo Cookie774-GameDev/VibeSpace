@@ -3,8 +3,12 @@ export const CONTEXT_NAVIGATION_EVENT = 'jarvis:context:navigate';
 export type ContextNavigationIntent =
   Readonly<{ target: 'overview' }> | Readonly<{ target: 'map'; mapId: string }>;
 
+let pendingNavigation: ContextNavigationIntent | null = null;
+const subscriptions = new Set<(event: Event) => void>();
+
 export function requestContextNavigation(intent: ContextNavigationIntent): void {
   window.setTimeout(() => {
+    if (subscriptions.size === 0) pendingNavigation = intent;
     window.dispatchEvent(
       new CustomEvent<ContextNavigationIntent>(CONTEXT_NAVIGATION_EVENT, {
         detail: intent,
@@ -36,5 +40,14 @@ export function subscribeContextNavigation(
   };
 
   window.addEventListener(CONTEXT_NAVIGATION_EVENT, onNavigate);
-  return () => window.removeEventListener(CONTEXT_NAVIGATION_EVENT, onNavigate);
+  subscriptions.add(onNavigate);
+  if (pendingNavigation) {
+    const intent = pendingNavigation;
+    pendingNavigation = null;
+    onNavigate(new CustomEvent(CONTEXT_NAVIGATION_EVENT, { detail: intent }));
+  }
+  return () => {
+    subscriptions.delete(onNavigate);
+    window.removeEventListener(CONTEXT_NAVIGATION_EVENT, onNavigate);
+  };
 }
