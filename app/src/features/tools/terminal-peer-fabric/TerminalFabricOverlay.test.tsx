@@ -6,7 +6,7 @@ vi.mock('@/features/instant-command/targetSnapshot', () => ({
   readLiveTargetSnapshot: mocks.read,
 }));
 vi.mock('./terminalPeerFabricTool', () => ({ terminalPeerFabricCommandPort: mocks }));
-import { TerminalFabricOverlay } from './TerminalFabricOverlay';
+import { fabricBridge, TerminalFabricOverlay } from './TerminalFabricOverlay';
 import { recordFabricDelivery, useFabricPresentationStore } from './fabricPresentationStore';
 const targets = [1, 2, 3].map((n) => ({
   sessionId: `tty-${n}`,
@@ -111,4 +111,22 @@ it('retains a Fabric launch while the terminal route is still hidden', async () 
   expect(mocks.connect).not.toHaveBeenCalled();
   view.rerender(<TerminalFabricOverlay visible={false} projectId="project" />);
   expect(useFabricPresentationStore.getState().selecting).toBe(false);
+});
+
+describe('divider bridge geometry', () => {
+  const left = { id: 'left', x: 300, y: 150, width: 790, height: 850 };
+  const right = { id: 'right', x: 1104, y: 150, width: 790, height: 850 };
+  it('stays in the narrow gap, including when the right pane is selected first', () => {
+    expect(fabricBridge(left, right)?.path).toBe('M 1090 575 L 1104 575');
+    expect(fabricBridge(right, left)?.path).toBe('M 1104 575 L 1090 575');
+  });
+  it('uses the horizontal divider for vertically stacked panes', () => {
+    const lower = { ...left, id: 'lower', y: 1014 };
+    expect(fabricBridge(left, lower)?.path).toBe('M 695 1000 L 695 1014');
+    expect(fabricBridge(lower, left)?.path).toBe('M 695 1014 L 695 1000');
+  });
+  it('does not draw across overlapping or diagonally separated terminal content', () => {
+    expect(fabricBridge(left, left)).toBeNull();
+    expect(fabricBridge(left, { ...right, y: 1100 })).toBeNull();
+  });
 });

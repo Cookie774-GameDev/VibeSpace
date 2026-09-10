@@ -76,15 +76,16 @@
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5;
-  opacity: 0.65;
-  filter: drop-shadow(0 0 3px currentColor);
+  stroke-linecap: round;
+  opacity: 0.8;
+  filter: drop-shadow(0 0 1.5px currentColor);
 }
 .vs-fabric-bridges circle {
   fill: currentColor;
   opacity: 0.8;
 }
 .vs-fabric-bridges .vs-fabric-spark {
-  filter: drop-shadow(0 0 5px currentColor);
+  filter: drop-shadow(0 0 3px currentColor);
   animation: vs-fabric-delivery 650ms both;
 }
 @keyframes vs-fabric-delivery {

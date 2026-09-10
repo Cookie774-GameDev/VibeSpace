@@ -8,6 +8,27 @@ import { sameFabricMembers, useFabricPresentationStore } from './fabricPresentat
 import './terminal-fabric.css';
 
 type Box = { id: string; x: number; y: number; width: number; height: number };
+// Use facing edges so selection order cannot route a bridge across terminal content.
+export function fabricBridge(from: Box, to: Box) {
+  const top = Math.max(from.y, to.y);
+  const bottom = Math.min(from.y + from.height, to.y + to.height);
+  const left = Math.max(from.x, to.x);
+  const right = Math.min(from.x + from.width, to.x + to.width);
+  let x1: number, y1: number, x2: number, y2: number;
+  if (bottom > top && (from.x + from.width <= to.x || to.x + to.width <= from.x)) {
+    const forward = from.x < to.x;
+    x1 = forward ? from.x + from.width : from.x;
+    x2 = forward ? to.x : to.x + to.width;
+    y1 = y2 = (top + bottom) / 2;
+  } else if (right > left && (from.y + from.height <= to.y || to.y + to.height <= from.y)) {
+    const forward = from.y < to.y;
+    y1 = forward ? from.y + from.height : from.y;
+    y2 = forward ? to.y : to.y + to.height;
+    x1 = x2 = (left + right) / 2;
+  } else return null;
+  return { x1, y1, x2, y2, path: `M ${x1} ${y1} L ${x2} ${y2}` };
+}
+
 export function TerminalFabricOverlay({
   visible,
   projectId,
@@ -193,17 +214,13 @@ export function TerminalFabricOverlay({
         <svg className="vs-fabric-bridges" aria-label={`${connected.length} connected terminals`}>
           {connected.slice(1).map((box, i) => {
             const from = connected[i];
-            const x1 = from.x + from.width - 7,
-              y1 = from.y + 24;
-            const x2 = box.x + 7,
-              y2 = box.y + 24;
+            const bridge = fabricBridge(from, box);
+            if (!bridge) return null;
             return (
               <g key={`${from.id}:${box.id}`}>
-                <path
-                  d={`M ${x1} ${y1} C ${x1 + 24} ${y1 - 18}, ${x2 - 24} ${y2 - 18}, ${x2} ${y2}`}
-                />
-                <circle cx={x1} cy={y1} r="3" />
-                <circle cx={x2} cy={y2} r="3" />
+                <path d={bridge.path} />
+                <circle cx={bridge.x1} cy={bridge.y1} r="1.75" />
+                <circle cx={bridge.x2} cy={bridge.y2} r="1.75" />
               </g>
             );
           })}
@@ -214,21 +231,19 @@ export function TerminalFabricOverlay({
               const from = connected.find((b) => b.id === source?.paneId);
               const to = connected.find((b) => b.id === target?.paneId);
               if (!from || !to) return null;
+              const bridge = fabricBridge(from, to);
+              if (!bridge) return null;
               return (
                 <circle
                   className="vs-fabric-spark"
                   key={`${delivery.id}:${id}`}
-                  r="3"
+                  r="2"
                   onAnimationEnd={() => {
                     if (useFabricPresentationStore.getState().delivery?.id === delivery.id)
                       useFabricPresentationStore.setState({ delivery: null });
                   }}
                 >
-                  <animateMotion
-                    dur="650ms"
-                    repeatCount="1"
-                    path={`M ${from.x + from.width - 7} ${from.y + 24} Q ${(from.x + to.x) / 2} ${Math.min(from.y, to.y) - 8} ${to.x + 7} ${to.y + 24}`}
-                  />
+                  <animateMotion dur="650ms" repeatCount="1" path={bridge.path} />
                 </circle>
               );
             })}
@@ -245,7 +260,11 @@ export function TerminalFabricOverlay({
             <Link2 aria-hidden size={21} />
             <div>
               <h2>Connect your terminals</h2>
-              <p>{targets.length < 2 ? 'Add at least two terminal panes, then select them here.' : 'Choose 2–8 panes. Selected terminals light up.'}</p>
+              <p>
+                {targets.length < 2
+                  ? 'Add at least two terminal panes, then select them here.'
+                  : 'Choose 2–8 panes. Selected terminals light up.'}
+              </p>
               {error && <p role="alert">{error}</p>}
             </div>
             <span aria-live="polite">{selected.length} / 8</span>
