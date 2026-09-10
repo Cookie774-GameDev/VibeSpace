@@ -145,6 +145,7 @@ class RepositoryContextQueryService implements ContextQueryService {
   private readonly hydratedPointers = new Set<string>();
   private pointerSequence = 0;
   private candidateCount = 0;
+  private readonly oversizedPaths = new Set<string>();
   private searchIssuanceTail = Promise.resolve();
 
   constructor(
@@ -155,10 +156,15 @@ class RepositoryContextQueryService implements ContextQueryService {
     private readonly route: 'retrieval' | 'rlm',
   ) {}
 
-  telemetry(): Readonly<{ candidateCount: number; hydratedCount: number }> {
+  telemetry(): Readonly<{
+    candidateCount: number;
+    hydratedCount: number;
+    oversizedFileCount: number;
+  }> {
     return Object.freeze({
       candidateCount: this.candidateCount,
       hydratedCount: this.hydratedPointers.size,
+      oversizedFileCount: this.oversizedPaths.size,
     });
   }
 
@@ -248,6 +254,9 @@ class RepositoryContextQueryService implements ContextQueryService {
       if (retrievalError) throw retrievalError;
       throwIfCancelled(input.signal ?? this.input.signal);
       this.candidateCount += result!.items.length;
+      for (const exclusion of result!.exclusions) {
+        if (exclusion.reason === 'file_too_large') this.oversizedPaths.add(exclusion.path);
+      }
       const hits: ContextSearchHit[] = [];
       for (const item of result!.items.slice(0, Math.min(MAX_VISIBLE_HITS, input.limit))) {
         const stored = this.issue(item, result!);
@@ -462,15 +471,24 @@ export async function prepareProductionRlmContext(
   });
   throwIfCancelled(input.signal);
   const telemetry = service.telemetry();
+  const unresolved = [...result.unresolved];
+  if (telemetry.oversizedFileCount > 0) {
+    const count = telemetry.oversizedFileCount;
+    unresolved.push(
+      `${count} candidate file${count === 1 ? '' : 's'} exceeded the bounded read limit. ` +
+        'Repository evidence is partial. Use permitted native file tools with bounded range reads ' +
+        'if those files are needed; do not claim their contents were reviewed.',
+    );
+  }
   return Object.freeze({
     route: result.route,
-    promptBlock: formatPromptBlock(result.route, result.answerSupport, result.unresolved),
+    promptBlock: formatPromptBlock(result.route, result.answerSupport, unresolved),
     candidateCount: telemetry.candidateCount,
     hydratedCount: telemetry.hydratedCount,
     evidenceCount: result.answerSupport.length,
     childCalls: result.childCalls,
     maxDepth: result.maxDepth,
-    truncated: result.truncated,
+    truncated: result.truncated || telemetry.oversizedFileCount > 0,
     trace: Object.freeze(trace),
     evidence: Object.freeze(
       result.answerSupport.map((span) =>

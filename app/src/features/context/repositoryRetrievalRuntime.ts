@@ -154,7 +154,8 @@ export async function retrieveLiveRepositoryContext(
                 source?.status === 'ready' &&
                 source.sourceRevision === repositoryRevision &&
                 repositorySourceIds.includes(source.id);
-              const result = await readTextFileSample(path, MAX_FILE_BYTES + 1, {
+              const absolutePath = `${rootId.replace(/[\\/]+$/u, '')}/${path}`;
+              const result = await readTextFileSample(absolutePath, MAX_FILE_BYTES + 1, {
                 root: rootId,
                 strictProjectBoundary: true,
               });

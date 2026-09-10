@@ -47,6 +47,34 @@ const dependencies = (retrieveRepository = vi.fn(async () => result())) => ({
 });
 
 describe('production Context/RLM adapter', () => {
+  it.each(['focused', 'deep'] as const)(
+    'reports partial coverage for oversized files on the %s route',
+    async (requestedRoute) => {
+      const retrieved = result();
+      retrieved.exclusions = [
+        { path: 'large-corpus.txt', reason: 'file_too_large' },
+        { path: 'private-name.txt', reason: 'secret_risk' },
+      ];
+      const value = await prepareProductionRlmContext(
+        {
+          accountId: 'account-1',
+          projectId: 'project-1',
+          question: 'Review the entire project including the large corpus.',
+          requestedRoute,
+          settings: DEFAULT_CHAT_RUNTIME_SETTINGS,
+        },
+        dependencies(vi.fn(async () => retrieved)),
+      );
+
+      expect(value.truncated).toBe(true);
+      expect(value.promptBlock).toContain('1 candidate file exceeded the bounded read limit');
+      expect(value.promptBlock).toContain('bounded range reads');
+      expect(value.promptBlock).not.toContain('private-name');
+      expect(value.evidenceCount).toBeGreaterThan(0);
+      expect(value.evidence[0]?.text).toContain('export const answer = 42;');
+    },
+  );
+
   it('keeps ordinary current-turn work direct with no repository read', async () => {
     const retrieveRepository = vi.fn(async () => result());
     const value = await prepareProductionRlmContext(

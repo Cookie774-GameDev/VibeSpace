@@ -173,6 +173,11 @@ function validPath(path: unknown): path is string {
   return typeof path === 'string' && PORTABLE_PATH.test(path);
 }
 
+function validTaskText(value: unknown): value is string {
+  // User prose and deep RLM subqueries may contain ordinary line breaks/tabs.
+  return typeof value === 'string' && stableText(value.replace(/[\t\r\n]/gu, ' '), 32_768);
+}
+
 async function hashContent(content: string): Promise<`sha256:${string}`> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
   return `sha256:${[...new Uint8Array(digest)]
@@ -334,7 +339,7 @@ export function createRepositoryRetrievalService(
         !stableText(request.accountId, 200) ||
         !stableText(request.projectId, 200) ||
         (request.mapId !== undefined && !stableText(request.mapId, 200)) ||
-        !stableText(request.taskText, 32_768) ||
+        !validTaskText(request.taskText) ||
         !Number.isSafeInteger(request.tokenBudget) ||
         request.tokenBudget < 1 ||
         request.tokenBudget > MAX_TOKEN_BUDGET ||

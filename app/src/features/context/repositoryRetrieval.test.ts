@@ -191,6 +191,26 @@ async function fixture() {
 }
 
 describe('repository retrieval seam', () => {
+  it('accepts multiline task prose used by deep RLM follow-up queries', async () => {
+    const { dependencies } = await fixture();
+    const service = createRepositoryRetrievalService(dependencies);
+    const result = await service.retrieve({
+      accountId: 'account-1',
+      projectId: 'project-1',
+      taskText: 'Investigate auth across the whole project.\nFocus on current implementation and exact source evidence.\r\n\tCheck user behavior.',
+      tokenBudget: 100,
+    });
+    expect(result.items.map((item) => item.path)).toEqual(
+      expect.arrayContaining(['src/auth.ts', 'src/user.ts']),
+    );
+    await expect(service.retrieve({
+      accountId: 'account-1\nother', projectId: 'project-1', taskText: 'auth', tokenBudget: 100,
+    })).rejects.toThrow('Invalid repository retrieval request.');
+    await expect(service.retrieve({
+      accountId: 'account-1', projectId: 'project-1', taskText: 'auth\u0000hidden', tokenBudget: 100,
+    })).rejects.toThrow('Invalid repository retrieval request.');
+  });
+
   it('returns bounded source-backed context and never reads secret-risk files', async () => {
     const { dependencies, parse, inspectFiles, readFile } = await fixture();
     const service = createRepositoryRetrievalService(dependencies);

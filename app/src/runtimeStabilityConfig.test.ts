@@ -11,6 +11,21 @@ type WindowConfig = {
 };
 
 describe('production runtime stability configuration', () => {
+  it('allows bundled WebAssembly parsers while keeping JavaScript eval blocked', () => {
+    const config = JSON.parse(
+      readFileSync(resolve(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'),
+    ) as { app: { security: { csp: string } } };
+    const scripts = config.app.security.csp
+      .split(';')
+      .map((directive) => directive.trim().split(/\s+/u))
+      .find(([directive]) => directive === 'script-src');
+
+    expect(scripts).toContain("'self'");
+    expect(scripts).toContain("'wasm-unsafe-eval'");
+    expect(scripts).not.toContain("'unsafe-eval'");
+    expect(scripts).not.toContain("'unsafe-inline'");
+  });
+
   it('keeps emergency heap headroom while allowing hidden renderers to throttle', () => {
     const config = JSON.parse(
       readFileSync(resolve(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'),
