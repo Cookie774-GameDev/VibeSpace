@@ -152,6 +152,8 @@ const MUTATING_INTENT_KINDS: readonly JarvisIntentKind[] = [
  */
 const EXPLICIT_DISK_FILE_READ_RE =
   /\bfiles\.read\b[\s\S]{0,800}[A-Za-z]:[\\/]|[A-Za-z]:[\\/][\s\S]{0,800}\bfiles\.read\b/i;
+const EXPLICIT_NO_TOOLS_RE =
+  /\b(?:do\s+not|don't|never)\s+(?:use|call|invoke)\s+(?:any\s+)?tools?\b|\bwithout\s+(?:using\s+)?(?:any\s+)?tools?\b|\bno\s+tools\b/i;
 
 /** Short conversational turns that must not wait on corpus/RLM work. */
 export function isLightweightChatTurn(intent: JarvisIntent, text: string): boolean {
@@ -174,6 +176,8 @@ export function shouldAutoRetrieveProjectKnowledge(input: {
   intent: JarvisIntent;
   hasExplicitAttachments?: boolean;
 }): boolean {
+  // Explicit attachments are resolved separately; do not silently search beyond them.
+  if (EXPLICIT_NO_TOOLS_RE.test(input.text)) return false;
   // Exact registered disk reads must not be rewritten into Context-map retrieval,
   // even when a project already has approved maps selected.
   if (EXPLICIT_DISK_FILE_READ_RE.test(input.text.trim())) return false;

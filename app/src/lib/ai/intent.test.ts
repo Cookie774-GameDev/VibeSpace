@@ -66,6 +66,16 @@ describe('classifyJarvisIntent', () => {
 });
 
 describe('shouldAutoRetrieveProjectKnowledge', () => {
+  it.each([
+    'Review the submitted answers to your earlier audit questions and tell me which color and detail level I chose. One sentence, without tools or subagents.',
+    'Answer from our conversation. Do not use tools to search the project files.',
+    'Explain this source excerpt without using any tools.',
+  ])('honors an explicit no-tool request before automatic retrieval: %s', text => {
+    expect(shouldAutoRetrieveProjectKnowledge({
+      text, intent: classifyJarvisIntent({ text }), hasExplicitAttachments: true,
+    })).toBe(false);
+  });
+
   it('skips automatic map/repository scans for short conversational turns', () => {
     const greeting = classifyJarvisIntent({ text: 'Hi' });
     const tiny = classifyJarvisIntent({
