@@ -2,6 +2,9 @@
   if (window.__vibespaceNativePresentation) return;
   window.__vibespaceNativePresentation = true;
   const metadata = /^<!-- vibespace-context-map:v1 map=[A-Za-z0-9_-]+ payload=[A-Za-z0-9_-]+ -->$/u;
+  const implementation =
+    'VibeSpace-managed SiYuan map root. Native child documents are the searchable graph nodes.';
+  const generated = /^Files: [\d,]+ · Bytes: [\d,]+ · Generated: \d+$/u;
   let scheduled = false;
   const refresh = () => {
     scheduled = false;
@@ -11,9 +14,12 @@
       if (title.dataset.nodeId !== targetDocumentId) continue;
       for (const block of title
         .closest('.protyle')
-        ?.querySelectorAll('[data-type="NodeParagraph"][data-node-index="0"]') ?? []) {
+        ?.querySelectorAll('[data-type="NodeParagraph"]') ?? []) {
         const text = block.querySelector('[contenteditable="true"]')?.textContent?.trim() ?? '';
-        block.classList.toggle('vibespace-managed-metadata', metadata.test(text));
+        block.classList.toggle(
+          'vibespace-managed-metadata',
+          metadata.test(text) || text === implementation || generated.test(text),
+        );
       }
     }
     const notifications = window.siyuan?.config?.appearance?.notifications;

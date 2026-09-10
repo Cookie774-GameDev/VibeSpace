@@ -44,6 +44,39 @@ function bridge(overrides: Partial<SiyuanSurfaceBridge> = {}): SiyuanSurfaceBrid
 }
 
 describe('SiYuan Context Vault surface', () => {
+  it('keeps loading through a slow native document navigation and accepts the ready graph', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const ready = await bridge().status();
+      const loading = {
+        ...ready,
+        graphState: 'loading' as const,
+        graphPhase: 'origin-navigation-pending' as const,
+      };
+      const native = bridge({
+        open: vi.fn(async () => loading),
+        status: vi.fn(async () => (Date.now() - started >= 15_000 ? ready : loading)),
+      });
+      render(
+        <SiyuanVaultSurface
+          projectId="project-1"
+          {...targetProps}
+          bridge={native}
+          onClose={vi.fn()}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16_000);
+      });
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Reload' }).hasAttribute('disabled')).toBe(false);
+      expect(native.close).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   beforeEach(() => {
     ResizeObserverMock.callback = null;
     vi.stubGlobal('ResizeObserver', ResizeObserverMock);

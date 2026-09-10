@@ -43,3 +43,19 @@ it('hides only exact managed metadata and dismisses only the upstream compatibil
     expect(document.querySelectorAll('.vibespace-managed-metadata')).toHaveLength(0),
   );
 });
+
+it('hides generated implementation paragraphs only in the managed map root', () => {
+  const implementation =
+    'VibeSpace-managed SiYuan map root. Native child documents are the searchable graph nodes.';
+  const generated = 'Files: 58 · Bytes: 27135481 · Generated: 1788932815202';
+  const root = (id: string) =>
+    `<div class="protyle"><div class="protyle-title" data-node-id="${id}"></div>${[implementation, generated, 'SiYuan indexed 58 files across 61 allowed source items.'].map((text, index) => `<div data-type="NodeParagraph" data-node-index="${index + 1}"><div contenteditable="true">${text}</div></div>`).join('')}</div>`;
+  document.body.innerHTML = root('root') + root('other');
+  new Function('targetDocumentId', script)('root');
+  expect(document.querySelectorAll('.vibespace-managed-metadata')).toHaveLength(2);
+  expect(
+    document.querySelectorAll('.protyle')[1]?.querySelector('.vibespace-managed-metadata'),
+  ).toBeNull();
+  expect(document.body.textContent).toContain(implementation);
+  expect(document.querySelectorAll('.vibespace-managed-metadata')[1]?.textContent).toBe(generated);
+});

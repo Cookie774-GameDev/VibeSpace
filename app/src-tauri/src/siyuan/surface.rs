@@ -21,8 +21,9 @@ const SURFACE_LABEL: &str = "siyuan-context-vault";
 const MAIN_WEBVIEW_ADDITIONAL_BROWSER_ARGS: &str = "--js-flags=--max-old-space-size=1536";
 const SIYUAN_CHILD_CDP_PORT_ENV: &str = "VIBESPACE_SIYUAN_CHILD_CDP_PORT";
 const GRAPH_REPORT_PREFIX: &str = "__VIBESPACE_SIYUAN_GRAPH__";
-const GRAPH_BOOTSTRAP_RETRY_DELAYS_MS: [u64; 12] = [
+const GRAPH_BOOTSTRAP_RETRY_DELAYS_MS: [u64; 22] = [
     50, 100, 150, 250, 400, 600, 800, 1_000, 1_200, 1_500, 1_750, 2_000,
+    2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000,
 ];
 const NAVIGATION_PENDING: u8 = 0;
 const NAVIGATION_ABOUT_BLANK: u8 = 1;
@@ -31,7 +32,7 @@ const NAVIGATION_UNEXPECTED: u8 = 3;
 const SIYUAN_GRAPH_FIRST_INITIALIZATION_SCRIPT_TEMPLATE: &str = r#"
 ((targetDocumentId, targetNotebookId, graphMode, reportNonce, expectedOrigin) => {
   if (window.location.pathname === "/check-auth") return;
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + 30000;
   const local = graphMode === "local";
   const dockSelector = local
     ? '.dock__item[data-type="graph"]'
@@ -1510,7 +1511,7 @@ mod tests {
             "window.location.origin !== expectedOrigin",
             r#"window.location.pathname === "/check-auth""#,
             r#"http://127.0.0.1:61342"#,
-            "Date.now() + 10000",
+            "Date.now() + 30000",
             "window.setInterval(tick, 200)",
             "window.clearInterval(timer)",
             r#"reportPhase("bootstrapped")"#,
@@ -1610,8 +1611,8 @@ mod tests {
     #[test]
     fn graph_bootstrap_retries_are_bounded_inside_the_existing_deadline() {
         assert!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS[0] <= 100);
-        assert!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.iter().sum::<u64>() < 10_000);
-        assert_eq!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.len(), 12);
+        assert!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.iter().sum::<u64>() < 30_000);
+        assert_eq!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.len(), 22);
     }
 
     #[test]
