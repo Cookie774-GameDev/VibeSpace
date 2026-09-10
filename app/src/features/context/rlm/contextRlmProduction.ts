@@ -142,6 +142,7 @@ class RepositoryContextQueryService implements ContextQueryService {
   private authority: ContextPointerAuthority | undefined;
   private repositoryGeneration: string | undefined;
   private readonly evidenceByPointer = new Map<string, StoredEvidence>();
+  private readonly evidenceByContent = new Map<string, StoredEvidence>();
   private readonly hydratedPointers = new Set<string>();
   private pointerSequence = 0;
   private candidateCount = 0;
@@ -189,6 +190,9 @@ class RepositoryContextQueryService implements ContextQueryService {
     const sourceLength = utf8Bytes(item.content);
     if (sourceLength <= 0) return null;
     const authority = this.ensureAuthority(result.repositoryRevision);
+    const evidenceKey = JSON.stringify([item.path, item.representation, item.content, item.evidence]);
+    const existing = this.evidenceByContent.get(evidenceKey);
+    if (existing) return existing;
     const pointer = authority.issueVisiblePointer({
       pointerId: `${this.leaseId}-p${++this.pointerSequence}`,
       leaseId: this.leaseId,
@@ -212,6 +216,7 @@ class RepositoryContextQueryService implements ContextQueryService {
       sourceLengthBytes: String(sourceLength),
     });
     this.evidenceByPointer.set(pointer.pointerId, stored);
+    this.evidenceByContent.set(evidenceKey, stored);
     return stored;
   }
 

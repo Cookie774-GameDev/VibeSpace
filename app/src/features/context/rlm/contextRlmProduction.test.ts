@@ -166,6 +166,9 @@ describe('production Context/RLM adapter', () => {
     expect(value.childCalls).toBeGreaterThan(0);
     expect(value.maxDepth).toBe(1);
     expect(retrieveRepository).toHaveBeenCalled();
+    expect(value.evidenceCount).toBe(1);
+    expect(value.hydratedCount).toBe(1);
+    expect(value.promptBlock.match(/### Evidence /gu)).toHaveLength(1);
   });
 
   it('bounds concurrent deep subquery searches with the existing performance policy', async () => {
