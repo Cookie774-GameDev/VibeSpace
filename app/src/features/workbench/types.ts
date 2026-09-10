@@ -1,4 +1,5 @@
 export const WORKBENCH_PANEL_KINDS = [
+  'creative',
   'terminal',
   'browser',
   'jarvis',
@@ -25,6 +26,7 @@ export type WorkbenchPanelKind = (typeof WORKBENCH_PANEL_KINDS)[number];
 export type WorkbenchPanelStatus = 'idle' | 'ready' | 'busy' | 'attention' | 'error';
 
 export interface WorkbenchPanelSettings {
+  creative?: import('./creative').CreativeStyle;
   url?: string;
   cwd?: string;
   command?: string;
@@ -166,6 +168,7 @@ export interface WorkbenchDocument {
 }
 
 export const DEFAULT_PANEL_SIZE: Record<WorkbenchPanelKind, { width: number; height: number }> = {
+  creative: { width: 360, height: 180 },
   terminal: { width: 520, height: 300 },
   browser: { width: 680, height: 440 },
   jarvis: { width: 420, height: 520 },
@@ -189,6 +192,7 @@ export const DEFAULT_PANEL_SIZE: Record<WorkbenchPanelKind, { width: number; hei
 };
 
 export const PANEL_TITLES: Record<WorkbenchPanelKind, string> = {
+  creative: 'Creative',
   terminal: 'Terminal',
   browser: 'Browser',
   jarvis: 'Jarvis',

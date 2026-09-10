@@ -3,6 +3,7 @@ import { useWorkbenchStore } from './store';
 import { WORKBENCH_PANEL_KINDS, type WorkbenchPanelKind, type WorkbenchView } from './types';
 import { WORKBENCH_DRAG_MIME } from './PanelPalette';
 import { WorkbenchPanel } from './WorkbenchPanel';
+import { CreativeItem } from './CreativeItem';
 import {
   buildMinimapModel,
   panCameraToWorldPoint,
@@ -350,6 +351,16 @@ export function WorkbenchCanvas() {
       >
         {panels.map((panel) => {
           const handlers = getHandlers(panel.id);
+          if (panel.kind === 'creative')
+            return (
+              <CreativeItem
+                key={panel.id}
+                panel={panel}
+                selected={selectedIds.includes(panel.id)}
+                zoom={view.zoom}
+                {...handlers}
+              />
+            );
           return (
             <WorkbenchPanel
               key={panel.id}

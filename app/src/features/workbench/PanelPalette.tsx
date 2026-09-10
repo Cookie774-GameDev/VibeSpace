@@ -22,6 +22,7 @@ import type { WorkbenchPanelKind } from './types';
 import type { NativeAppDescriptor } from './nativeApps';
 import type { PluginManifest } from '@/features/plugins';
 import { PluginLogo } from '@/features/plugins';
+import { CreativeTools } from './CreativeTools';
 
 const palette: Array<{
   kind: WorkbenchPanelKind;
@@ -89,6 +90,7 @@ export function PanelPalette({
         <p>Panels</p>
       </div>
       <div className="workbench-palette-items">
+        <CreativeTools />
         {detectedApps
           .filter((app) => app.pinned)
           .map((app) => (

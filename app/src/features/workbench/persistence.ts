@@ -13,6 +13,7 @@ import {
 } from './types';
 import { BUILT_IN_WALLPAPERS, isSafeWallpaperAssetUrl } from './wallpapers';
 import { DEFAULT_WORKBENCH_NAME, resolveWorkbenchName } from './workbenchName';
+import { creativeStyle } from './creative';
 
 export const WORKBENCH_STORAGE_KEY = 'vibespace-workbench:v1';
 export const LAST_KNOWN_GOOD_KEY = 'vibespace-workbench:v1:last-known-good';
@@ -53,6 +54,7 @@ function safeSettings(value: unknown, forTemplate = false): WorkbenchPanelSettin
   if (!value || typeof value !== 'object') return {};
   const input = value as Record<string, unknown>;
   const settings: WorkbenchPanelSettings = {};
+  if (input.creative) settings.creative = creativeStyle(input.creative);
   for (const key of [
     'url',
     'cwd',
@@ -114,9 +116,9 @@ function safePanel(value: unknown, index: number, forTemplate = false): Workbenc
         : PANEL_TITLES[kind],
     x: finite(input.x, 80 + index * 30, -20_000, 20_000),
     y: finite(input.y, 80 + index * 30, -20_000, 20_000),
-    width: finite(input.width, defaults.width, 240, 2000),
-    height: finite(input.height, defaults.height, 160, 1400),
-    z: finite(input.z, index + 1, 1, 100_000),
+    width: finite(input.width, defaults.width, kind === 'creative' ? 40 : 240, 2000),
+    height: finite(input.height, defaults.height, kind === 'creative' ? 40 : 160, 1400),
+    z: finite(input.z, index + 1, kind === 'creative' ? -100_000 : 1, 100_000),
     minimized: input.minimized === true,
     status:
       input.status === 'ready' ||
