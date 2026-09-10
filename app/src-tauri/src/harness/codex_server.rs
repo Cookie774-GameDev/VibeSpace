@@ -774,6 +774,7 @@ fn start_owned_opencodex(
     app: &AppHandle,
     model_id: &str,
     owner_id: &str,
+    codex_executable: &Path,
 ) -> Result<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime), String> {
     let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .map_err(|_| "Could not reserve a private OpenCodex endpoint.")?;
@@ -807,6 +808,10 @@ fn start_owned_opencodex(
     let runtime = &sealed_runtime.runtime;
 
     let configure = |command: &mut Command| {
+        crate::harness::managed_codex_child_environment::bind_codex_executable(
+            command,
+            codex_executable,
+        );
         command
             .env("OPENCODEX_HOME", &paths.opencodex_home)
             .env("CODEX_HOME", &paths.codex_home)
@@ -900,7 +905,7 @@ fn start_internal(
             cli_state.resolve_trusted_executable(executable_id)
         })?;
         let proxy = if request.model_id.contains('/') {
-            Some(start_owned_opencodex(app, &request.model_id, &request.owner_id)?)
+            Some(start_owned_opencodex(app, &request.model_id, &request.owner_id, &launch.executable)?)
         } else {
             None
         };

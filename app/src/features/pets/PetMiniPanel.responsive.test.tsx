@@ -121,6 +121,7 @@ describe('PetMiniPanel responsive shell', () => {
     expect(bridge.hidePetPanel).toHaveBeenCalledTimes(1);
     expect(bridge.setPetOverlayPosition).toHaveBeenCalledWith(120, 240);
     expect(bridge.showPetOverlay).toHaveBeenCalledTimes(1);
+    expect(currentWindow.hide).not.toHaveBeenCalled();
     expect(bridge.minimizePetPanel).not.toHaveBeenCalled();
     expect(localStorage.getItem('vibespace-pet-panel-open')).toBeNull();
   });

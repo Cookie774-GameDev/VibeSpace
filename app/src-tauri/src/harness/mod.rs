@@ -6,6 +6,7 @@ pub mod managed_cli_lock;
 pub mod managed_cli_manifest;
 pub mod managed_cli_runtime;
 pub mod managed_codex_app_server;
+pub mod managed_codex_child_environment;
 pub mod managed_codex_config_snapshot;
 pub mod managed_codex_install;
 pub mod managed_codex_storage;

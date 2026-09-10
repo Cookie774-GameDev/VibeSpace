@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO journal lease payload and uniqueness integrity
-branch=integration/UnifiedChungus-final
-base=c243f26198459c8291928c95e8508ec23809365e
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Reject malformed present lease payloads and duplicate durable lease identities across same-page and paginated recovery scans.
-commit=398ec52502974353e14633655278ea8252905610
-released=2026-08-31T04:03:00-05:00

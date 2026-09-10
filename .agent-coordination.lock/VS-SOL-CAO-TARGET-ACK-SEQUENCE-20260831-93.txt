@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO append acknowledgement durable sequence integrity
-branch=integration/UnifiedChungus-final
-base=16799ac54a410f8596c7af56dc67fcb1f2b2e85f
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Require a successful append acknowledgement sequence to equal the unique durable lease event sequence before returning exact target authority.
-commit=31048e9ed94c5a2e1c70943f86ef1e0c1c53f11e
-released_at=2026-08-31T04:24:00-05:00

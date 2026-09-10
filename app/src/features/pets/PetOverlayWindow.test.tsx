@@ -22,7 +22,12 @@ vi.mock('@tauri-apps/api/window', () => ({
 }));
 
 vi.mock('./PetOverlay', () => ({
-  PetOverlay: () => <canvas data-pet-pixi-canvas="true" />,
+  PetOverlay: ({ onRequestClose }: { onRequestClose: () => void }) => (
+    <>
+      <canvas data-pet-pixi-canvas="true" />
+      <button onClick={onRequestClose}>Close Pet</button>
+    </>
+  ),
 }));
 
 vi.mock('./petTauriBridge', () => ({

@@ -18,14 +18,18 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 
 describe('JarvisAmbientHost', () => {
-  it('renders a local aura when Jarvis opens in localhost without native IPC', async () => {
+  it('keeps idle hidden in the browser fallback without native IPC', async () => {
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
     useUIStore.setState({ voiceModalOpen: true });
     const view = render(<JarvisAmbientHost />);
-    await waitFor(() => expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('true'));
+    await waitFor(() =>
+      expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false'),
+    );
     expect(invoke).not.toHaveBeenCalled();
     act(() => useUIStore.setState({ voiceModalOpen: false }));
-    await waitFor(() => expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false'));
+    await waitFor(() =>
+      expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false'),
+    );
     view.unmount();
   });
   beforeEach(() => {
@@ -77,18 +81,21 @@ describe('JarvisAmbientHost', () => {
     view.unmount();
   });
 
-  it('publishes a visible physical-screen aura as soon as Jarvis is opened', async () => {
+  it('wakes the physical-screen aura only when listening starts', async () => {
     render(<JarvisAmbientHost />);
     await waitFor(() => expect(invoke).toHaveBeenCalled());
     invoke.mockClear();
 
-    act(() => useUIStore.getState().setVoiceModalOpen(true));
+    act(() => {
+      useUIStore.getState().setVoiceModalOpen(true);
+      useVoiceStore.getState().setState('listening');
+    });
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith(
         'set_jarvis_ambient_snapshot',
         expect.objectContaining({
-          snapshot: expect.objectContaining({ state: 'idle', source: 'voice', active: true }),
+          snapshot: expect.objectContaining({ state: 'listening', source: 'voice', active: true }),
         }),
       ),
     );

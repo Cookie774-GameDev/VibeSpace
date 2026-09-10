@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO ambiguous append journal recovery truth
-branch=integration/UnifiedChungus-final
-base=47a5f9d3290aae7d9029259f8c671c0151c04037
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Preserve exact journal unavailable/corrupt truth during ambiguous append reconciliation while authoritatively cleaning provisional ownership.
-commit=b0498db9215e4e6971f9436a7950222bf6f6ef7d
-released=2026-08-31T03:05:00-05:00

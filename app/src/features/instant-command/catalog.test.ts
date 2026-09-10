@@ -1,9 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { INSTANT_COMMAND_CATALOG, INSTANT_COMMAND_INDEX } from './catalog';
-import { NAVIGATION_COMMAND_INPUTS } from './catalog/navigation';
+import { NAVIGATION_COMMAND_INPUTS, PAGE_TARGET_ALIASES } from './catalog/navigation';
 import { TERMINAL_AGENT_COMMAND_INPUTS } from './catalog/terminals';
 
 describe('INSTANT_COMMAND_CATALOG', () => {
+  it('preserves every page phrase within the fixed alias budget and rejects extra arguments', () => {
+    const page = INSTANT_COMMAND_CATALOG.find((entry) => entry.id === 'page.open')!;
+    expect(page.aliases.length).toBeLessThanOrEqual(64);
+    for (const [route, aliases] of Object.entries(PAGE_TARGET_ALIASES)) {
+      for (const phrase of aliases) {
+        const match = INSTANT_COMMAND_INDEX.matchWithOffsets(phrase)[0]!;
+        expect(match.definition.id, phrase).toBe('page.open');
+        expect(match.definition.parseSlots(match, phrase), phrase).toEqual({
+          status: 'parsed', slots: { route },
+        });
+      }
+    }
+    for (const phrase of ['open files page garbage', '/files page', 'open notes delete all']) {
+      const match = INSTANT_COMMAND_INDEX.matchWithOffsets(phrase)[0]!;
+      expect(match.definition.parseSlots(match, phrase).status).toBe('rejected');
+    }
+    expect(INSTANT_COMMAND_INDEX.match('/notes')).toEqual([]);
+  });
   it('covers every canonical route with a locally indexed navigation command', () => {
     const terminal = INSTANT_COMMAND_INDEX.matchWithOffsets('open terminal page')[0];
     expect(terminal?.definition.id).toBe('page.open');

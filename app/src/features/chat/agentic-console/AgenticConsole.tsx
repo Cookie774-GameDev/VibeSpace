@@ -1,4 +1,5 @@
 import { StreamingChatPreview } from '../StreamingChatPreview';
+import { AxoMotion } from '@/components/ui/AxoMotion';
 import * as React from 'react';
 import { ThemedSelect } from '@/components/ui/themed-select';
 import { NotesSessionReferences } from '../../notes/NotesSessionReferences';
@@ -244,7 +245,10 @@ function SessionHeader({
       data-has-progress={hasHeaderProgress ? 'true' : undefined}
     >
       <div className="agentic-session__identity">
-        <span className={cn('agentic-status-dot', `is-${summary.status}`)} aria-hidden="true" />
+        <AxoMotion key={chatId} activity={
+          ['queued', 'planning', 'running', 'recovering'].includes(summary.status) ? 'working'
+            : summary.status === 'done' ? 'success' : 'error'
+        } />
         <div className="agentic-session__title">
           <strong role="status" aria-label="Session status">{statusLabel(summary.status)}</strong>
           <span title={summary.currentOperation}>{summary.currentOperation}</span>

@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO registry claim result schema integrity
-branch=integration/UnifiedChungus-final
-base=3aca73e9403231db4ffa006351896c4d65a406b2
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Require exact applied/rejected claim result discriminants and known rejection reasons, with authoritative cleanup for malformed ambiguous outcomes.
-commit=2c1d904b009f091b9bbd636abe24c5eaa4badfda
-released=2026-08-31T03:33:00-05:00

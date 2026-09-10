@@ -113,7 +113,6 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
   const handleChooseFiles = async () => {
     const picked = await chooseProjectFiles(true);
     if (picked.length === 0) {
-      setError('Use the path field, or run the desktop app for native picking.');
       return;
     }
     addCandidates(picked);

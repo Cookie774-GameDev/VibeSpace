@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO post-acknowledgement recovery cleanup
-branch=integration/UnifiedChungus-final
-base=76f8fbaaccb46c4ed2a34bc5dc30289e1af4a524
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Release exact provisional ownership when final durable verification is missing, unavailable, or corrupt, and report cleanup failure truthfully.
-commit=160a99f59d8aab3a2540de6ece881165a4a076a0
-released=2026-08-31T02:48:00-05:00

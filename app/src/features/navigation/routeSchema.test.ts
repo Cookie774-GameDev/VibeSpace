@@ -3,7 +3,8 @@ import { APP_ROUTES, createRouteHref, parseRouteLocation, type Route } from './r
 
 describe('routeSchema', () => {
   it('round-trips every application route through the canonical query', () => {
-    expect(APP_ROUTES).toHaveLength(20);
+    expect(APP_ROUTES).toHaveLength(21);
+    expect(APP_ROUTES).toContain('notes');
 
     for (const route of APP_ROUTES) {
       const href = createRouteHref(

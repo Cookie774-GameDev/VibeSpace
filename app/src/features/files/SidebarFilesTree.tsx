@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { ChevronRight, FileText, Folder, FolderOpen, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { listDirectory, type FsEntry } from '@/lib/fs';
+import { describeFsError, type FsEntry } from '@/lib/fs';
+import { listExplorerDirectory as listDirectory } from './fileExplorerDirectory';
 import { useAuthStore } from '@/stores/auth';
 import {
   basename,
@@ -24,20 +25,35 @@ export function SidebarFilesTree({ navOpen, active, onOpenFiles }: SidebarFilesT
   const [rootDir, setRootDir] = React.useState(() => getStoredProjectRoot(projectId));
   const [entries, setEntries] = React.useState<FsEntry[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const [visibleEntries, setVisibleEntries] = React.useState(MAX_CHILDREN);
+  const requestRef = React.useRef(0);
 
   const loadRoot = React.useCallback(async (path: string) => {
-    if (!path) return;
+    const request = ++requestRef.current;
+    setEntries([]);
+    setError('');
+    setVisibleEntries(MAX_CHILDREN);
+    if (!path) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const result = await listDirectory(path, { root: path });
+    if (request !== requestRef.current) return;
     setLoading(false);
-    if (result.ok) setEntries(result.entries.slice(0, MAX_CHILDREN));
+    if (result.ok) setEntries(result.entries);
+    else setError(describeFsError(result.error));
   }, []);
 
   React.useEffect(() => {
     const next = getStoredProjectRoot(projectId);
     setRootDir(next);
     setEntries([]);
-    if (next) void loadRoot(next);
+    void loadRoot(next);
+    return () => {
+      requestRef.current += 1;
+    };
   }, [loadRoot, projectId]);
 
   React.useEffect(() => {
@@ -47,10 +63,11 @@ export function SidebarFilesTree({ navOpen, active, onOpenFiles }: SidebarFilesT
       const next = detail?.path ?? getStoredProjectRoot(projectId);
       setRootDir(next);
       setEntries([]);
-      if (next) void loadRoot(next);
+      void loadRoot(next);
     };
     window.addEventListener('jarvis:files:root-changed', onRootChanged as EventListener);
-    return () => window.removeEventListener('jarvis:files:root-changed', onRootChanged as EventListener);
+    return () =>
+      window.removeEventListener('jarvis:files:root-changed', onRootChanged as EventListener);
   }, [loadRoot, projectId]);
 
   if (!navOpen) return null;
@@ -78,7 +95,9 @@ export function SidebarFilesTree({ navOpen, active, onOpenFiles }: SidebarFilesT
         onClick={onOpenFiles}
         className={cn(
           'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-metadata transition-colors hover:bg-muted',
-          active ? 'bg-muted text-foreground ring-inset ring-1 ring-accent-copper/40' : 'text-muted-foreground',
+          active
+            ? 'bg-muted text-foreground ring-inset ring-1 ring-accent-copper/40'
+            : 'text-muted-foreground',
         )}
         title={rootDir}
       >
@@ -86,7 +105,15 @@ export function SidebarFilesTree({ navOpen, active, onOpenFiles }: SidebarFilesT
         <span className="min-w-0 flex-1 truncate font-mono">{basename(rootDir)}</span>
         {loading && <RefreshCw className="h-3 w-3 animate-spin" />}
       </button>
-      {entries.map((entry) => (
+      {error ? (
+        <div role="alert">
+          {error}
+          <button type="button" onClick={() => void loadRoot(rootDir)}>
+            Retry folder
+          </button>
+        </div>
+      ) : null}
+      {entries.slice(0, visibleEntries).map((entry) => (
         <SidebarFileNode
           key={entry.path}
           entry={entry}
@@ -96,6 +123,11 @@ export function SidebarFilesTree({ navOpen, active, onOpenFiles }: SidebarFilesT
           onOpenFiles={onOpenFiles}
         />
       ))}
+      {entries.length > visibleEntries ? (
+        <button type="button" onClick={() => setVisibleEntries((n) => n + MAX_CHILDREN)}>
+          Show more files ({entries.length - visibleEntries})
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -115,6 +147,8 @@ function SidebarFileNode({
 }) {
   const [open, setOpen] = React.useState(false);
   const [children, setChildren] = React.useState<FsEntry[]>([]);
+  const [visibleChildren, setVisibleChildren] = React.useState(MAX_CHILDREN);
+  const [error, setError] = React.useState('');
   const [loading, setLoading] = React.useState(false);
 
   const loadChildren = async () => {
@@ -122,7 +156,10 @@ function SidebarFileNode({
     setLoading(true);
     const result = await listDirectory(entry.path, { root: rootDir });
     setLoading(false);
-    if (result.ok) setChildren(result.entries.slice(0, MAX_CHILDREN));
+    if (result.ok) {
+      setChildren(result.entries);
+      setError('');
+    } else setError(describeFsError(result.error));
   };
 
   const toggleFolder = async () => {
@@ -184,24 +221,49 @@ function SidebarFileNode({
           title={entry.path}
         >
           {entry.isDir ? (
-            open ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-accent-honey" /> : <Folder className="h-3.5 w-3.5 shrink-0 text-accent-honey" />
+            open ? (
+              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-accent-honey" />
+            ) : (
+              <Folder className="h-3.5 w-3.5 shrink-0 text-accent-honey" />
+            )
           ) : (
-            <FileText className={cn('h-3.5 w-3.5 shrink-0', isPopularTextFile(entry.path) ? 'text-accent-copper' : 'text-muted-foreground')} />
+            <FileText
+              className={cn(
+                'h-3.5 w-3.5 shrink-0',
+                isPopularTextFile(entry.path) ? 'text-accent-copper' : 'text-muted-foreground',
+              )}
+            />
           )}
           <span className="min-w-0 flex-1 truncate">{entry.name}</span>
         </button>
         {loading && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />}
       </div>
-      {open && children.map((child) => (
-        <SidebarFileNode
-          key={child.path}
-          entry={child}
-          depth={depth + 1}
-            rootDir={rootDir}
-          projectId={projectId}
-          onOpenFiles={onOpenFiles}
-        />
-      ))}
+      {open && error ? (
+        <div role="alert">
+          {error}
+          <button type="button" onClick={() => void loadChildren()}>
+            Retry folder
+          </button>
+        </div>
+      ) : null}
+      {open &&
+        children
+          .slice(0, visibleChildren)
+          .map((child) => (
+            <SidebarFileNode
+              key={child.path}
+              entry={child}
+              depth={depth + 1}
+              rootDir={rootDir}
+              projectId={projectId}
+              onOpenFiles={onOpenFiles}
+            />
+          ))}
+      {open && children.length > visibleChildren ? (
+        <button type="button" onClick={() => setVisibleChildren((n) => n + MAX_CHILDREN)}>
+          Show more files ({children.length - visibleChildren})
+        </button>
+      ) : null}
     </div>
   );
 }

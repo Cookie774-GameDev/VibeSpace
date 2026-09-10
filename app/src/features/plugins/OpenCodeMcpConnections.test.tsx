@@ -214,3 +214,80 @@ describe('OpenCodeMcpConnections', () => {
     expect(screen.queryByText('alpha')).toBeNull();
   });
 });
+
+
+describe('MCP browser authorization', () => {
+  it('opens provider authorization when Connect encounters needs_auth, then requires status readback', async () => {
+    const client = clientHarness();
+    const authenticateMcp = vi.fn(async () => ({ status: 'connected' as const }));
+    Object.assign(client, { authenticateMcp, removeMcpAuth: vi.fn(async () => true) });
+    vi.mocked(client.mcpStatus)
+      .mockResolvedValueOnce({ supabase: { status: 'needs_auth' } })
+      .mockResolvedValue({ supabase: { status: 'connected' } });
+    render(<OpenCodeMcpConnections runtime={runtimeHarness()} clientFactory={() => client} directory="C:/Work/One" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect supabase' }));
+    await waitFor(() => expect(authenticateMcp).toHaveBeenCalledWith('supabase', 'C:/Work/One'));
+    expect(client.connectMcp).not.toHaveBeenCalled();
+    await waitFor(() => expect(within(screen.getByRole('article', { name: 'supabase MCP server' })).getByText('Connected')).toBeTruthy());
+  });
+
+  it('starts OAuth after adding a remote server that requires authorization', async () => {
+    const client = clientHarness();
+    const authenticateMcp = vi.fn(async () => ({ status: 'connected' as const }));
+    Object.assign(client, { authenticateMcp, removeMcpAuth: vi.fn(async () => true) });
+    vi.mocked(client.mcpStatus).mockResolvedValueOnce({}).mockResolvedValue({ supabase: { status: 'connected' } });
+    vi.mocked(client.addMcp).mockResolvedValue({ supabase: { status: 'needs_auth' } });
+    render(<OpenCodeMcpConnections runtime={runtimeHarness()} clientFactory={() => client} directory="C:/Work/One" />);
+    await screen.findByText('No OpenCode MCP servers are configured for this project.');
+    fireEvent.change(screen.getByLabelText('Server name'), { target: { value: 'supabase' } });
+    fireEvent.change(screen.getByLabelText('Remote URL'), { target: { value: 'https://mcp.supabase.com/mcp?read_only=true' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add OpenCode MCP server' }));
+    await waitFor(() => expect(authenticateMcp).toHaveBeenCalledWith('supabase', 'C:/Work/One'));
+    expect(await screen.findByText('Connected')).toBeTruthy();
+  });
+
+  it('cancels pending authorization and ignores its late success', async () => {
+    const client = clientHarness();
+    let finish!: (status: OpenCodeMcpStatus) => void;
+    const authenticateMcp = vi.fn(() => new Promise<OpenCodeMcpStatus>(resolve => { finish = resolve; }));
+    const removeMcpAuth = vi.fn(async () => true);
+    Object.assign(client, { authenticateMcp, removeMcpAuth });
+    vi.mocked(client.mcpStatus).mockResolvedValue({ supabase: { status: 'needs_auth' } });
+    render(<OpenCodeMcpConnections runtime={runtimeHarness()} clientFactory={() => client} directory="C:/Work/One" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect supabase' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel authorization' }));
+    await waitFor(() => expect(removeMcpAuth).toHaveBeenCalledWith('supabase', 'C:/Work/One'));
+    await act(async () => finish({ status: 'connected' }));
+    expect(screen.queryByText('Connected')).toBeNull();
+    expect(screen.getByText('Authorization needed')).toBeTruthy();
+  });
+
+  it('never reports a failed or incomplete authorization as connected', async () => {
+    const client = clientHarness();
+    const authenticateMcp = vi.fn(async () => ({ status: 'failed' as const, error: 'Bearer hidden-secret' }));
+    Object.assign(client, { authenticateMcp, removeMcpAuth: vi.fn(async () => true) });
+    vi.mocked(client.mcpStatus).mockResolvedValue({ supabase: { status: 'needs_auth' } });
+    render(<OpenCodeMcpConnections runtime={runtimeHarness()} clientFactory={() => client} directory="C:/Work/One" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect supabase' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).not.toContain('hidden-secret');
+    expect(screen.queryByText('Connected')).toBeNull();
+  });
+
+  it('does not start authorization after an add completes in an unmounted project', async () => {
+    const client = clientHarness();
+    let finish!: (status: Readonly<Record<string, OpenCodeMcpStatus>>) => void;
+    vi.mocked(client.mcpStatus).mockResolvedValue({});
+    vi.mocked(client.addMcp).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const authenticateMcp = vi.fn();
+    Object.assign(client, { authenticateMcp, removeMcpAuth: vi.fn(async () => true) });
+    const view = render(<OpenCodeMcpConnections runtime={runtimeHarness()} clientFactory={() => client} directory="C:/Work/One" />);
+    await screen.findByText('No OpenCode MCP servers are configured for this project.');
+    fireEvent.change(screen.getByLabelText('Server name'), { target: { value: 'supabase' } });
+    fireEvent.change(screen.getByLabelText('Remote URL'), { target: { value: 'https://mcp.supabase.com/mcp' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add OpenCode MCP server' }));
+    view.unmount();
+    await act(async () => finish({ supabase: { status: 'needs_auth' } }));
+    expect(authenticateMcp).not.toHaveBeenCalled();
+  });
+});

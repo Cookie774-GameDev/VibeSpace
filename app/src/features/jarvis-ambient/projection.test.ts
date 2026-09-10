@@ -23,7 +23,7 @@ function run(
 }
 
 describe('projectJarvisAmbientSnapshot', () => {
-  it('shows an open idle Aura without inventing listening before capture opens', () => {
+  it('keeps idle asleep even while the voice control is open', () => {
     expect(
       projectJarvisAmbientSnapshot({
         revision: 7,
@@ -33,7 +33,7 @@ describe('projectJarvisAmbientSnapshot', () => {
         runs: [],
         energy: 0,
       }),
-    ).toMatchObject({ state: 'idle', source: 'voice', energy: 0, active: true });
+    ).toMatchObject({ state: 'idle', source: 'voice', energy: 0, active: false });
   });
 
   it('cannot reopen a closed Aura from late voice or task events', () => {

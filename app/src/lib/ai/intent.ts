@@ -155,6 +155,11 @@ const EXPLICIT_DISK_FILE_READ_RE =
 const EXPLICIT_NO_TOOLS_RE =
   /\b(?:do\s+not|don't|never)\s+(?:use|call|invoke)\s+(?:any\s+)?tools?\b|\bwithout\s+(?:using\s+)?(?:any\s+)?tools?\b|\bno\s+tools\b/i;
 
+/** Reuses the current-turn restriction for retrieval and prompt admission. */
+export function requestsNoTools(text: string): boolean {
+  return EXPLICIT_NO_TOOLS_RE.test(text);
+}
+
 /** Short conversational turns that must not wait on corpus/RLM work. */
 export function isLightweightChatTurn(intent: JarvisIntent, text: string): boolean {
   const trimmed = text.trim();
@@ -177,7 +182,7 @@ export function shouldAutoRetrieveProjectKnowledge(input: {
   hasExplicitAttachments?: boolean;
 }): boolean {
   // Explicit attachments are resolved separately; do not silently search beyond them.
-  if (EXPLICIT_NO_TOOLS_RE.test(input.text)) return false;
+  if (requestsNoTools(input.text)) return false;
   // Exact registered disk reads must not be rewritten into Context-map retrieval,
   // even when a project already has approved maps selected.
   if (EXPLICIT_DISK_FILE_READ_RE.test(input.text.trim())) return false;

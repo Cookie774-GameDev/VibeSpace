@@ -176,3 +176,33 @@ describe('GitHub device authorization authority', () => {
     expect(onFailed).not.toHaveBeenCalled();
   });
 });
+
+
+it('does not save a late GitHub token after cancellation while the network response is pending', async () => {
+  let finishToken!: (response: Response) => void;
+  const request = vi.fn()
+    .mockResolvedValueOnce(jsonResponse({ device_code: 'opaque-device-code', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 }))
+    .mockReturnValueOnce(new Promise<Response>(resolve => { finishToken = resolve; }));
+  const onConnected = vi.fn(async () => undefined);
+  const onFailed = vi.fn(async () => undefined);
+  const authority = createGitHubDeviceAuthorizationAuthority({ clientId: 'Iv1.publicvibespace', request, wait: async () => undefined, onConnected, onFailed });
+  await authority.begin({ accountId: 'account-a', pluginId: 'github', path: 'device_authorization', scopes: ['read:user'] });
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await authority.cancel({ accountId: 'account-a', pluginId: 'github' });
+  finishToken(jsonResponse({ access_token: 'synthetic-late-token', token_type: 'bearer' }));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(onConnected).not.toHaveBeenCalled();
+  expect(onFailed).not.toHaveBeenCalled();
+});
+
+it('does not return a browser handoff when cancelled before the device-code response arrives', async () => {
+  let finish!: (response: Response) => void;
+  const request = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+  const wait = vi.fn(async () => undefined);
+  const authority = createGitHubDeviceAuthorizationAuthority({ clientId: 'Iv1.publicvibespace', request, wait, onConnected: vi.fn(async () => undefined), onFailed: vi.fn(async () => undefined) });
+  const result = authority.begin({ accountId: 'account-a', pluginId: 'github', path: 'device_authorization', scopes: ['read:user'] });
+  await authority.cancel({ accountId: 'account-a', pluginId: 'github' });
+  finish(jsonResponse({ device_code: 'opaque-device-code', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 }));
+  expect((await result).ok).toBe(false);
+  expect(wait).not.toHaveBeenCalled();
+});

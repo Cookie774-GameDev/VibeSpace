@@ -98,25 +98,169 @@ async function* frames() {
 }
 
 describe('persistent Codex app-server adapter', () => {
-  it('rejects a completion frame delivered after cancellation while awaiting native output', async () => {
+  it('cancels while subscription acknowledgement is pending', async () => {
     const controller = new AbortController();
-    async function* cancelledFrames() {
-      for await (const frame of frames()) {
-        if ('method' in frame && frame.method === 'turn/completed') controller.abort();
-        yield frame;
-      }
-    }
-    const stop = vi.fn(async () => true);
+    const active = new Set<string>();
+    let finish!: (value: IteratorResult<Record<string, unknown>>) => void;
     const adapter = createCodexPersistentAdapter({
       findExecutable: async () => ({ executableId: 'trusted-codex' }),
-      start: async () => ({ generation: 'cancelled-generation' }),
-      frames: () => ({ stream: cancelledFrames(), ready: Promise.resolve() }),
-      write: vi.fn(async () => undefined),
-      stop,
+      start: async () => {
+        active.add('pending-subscription');
+        return { generation: 'pending-subscription' };
+      },
+      frames: () => ({
+        ready: new Promise<void>(() => {}),
+        stream: {
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              queueMicrotask(() => controller.abort());
+              return new Promise<IteratorResult<Record<string, unknown>>>((resolve) => {
+                finish = resolve;
+              });
+            },
+          }),
+        },
+      }),
+      write: async () => {
+        throw new Error('must not dispatch');
+      },
+      stop: async (generation) => {
+        finish?.({ done: true, value: undefined });
+        return active.delete(generation);
+      },
     });
-    const events: ProviderEvent[] = [];
     const consume = async () => {
-      for await (const event of adapter.send!({
+      for await (const _event of adapter.send!({
+        requestId: 'request_1',
+        connection,
+        prompt: 'Read the marker',
+        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        workingDirectory: 'C:\\workspace',
+        interactionMode: 'ask',
+        signal: controller.signal,
+      })) {
+        /* Cancellation must win over stream-close fallout. */
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({ name: 'AbortError' });
+    expect([...active]).toEqual([]);
+  });
+
+  it.each(['rejected', 'closed'] as const)(
+    'fails and reaps when the native stream is %s before subscription',
+    async (stage) => {
+      const active = new Set<string>();
+      const failure = Promise.reject(new Error('native bridge unavailable'));
+      void failure.catch(() => undefined);
+      const adapter = createCodexPersistentAdapter({
+        findExecutable: async () => ({ executableId: 'trusted-codex' }),
+        start: async () => {
+          active.add('early-end');
+          return { generation: 'early-end' };
+        },
+        frames: () => ({
+          ready: new Promise<void>(() => {}),
+          stream: {
+            [Symbol.asyncIterator]: () => ({
+              next: () =>
+                stage === 'rejected'
+                  ? failure
+                  : Promise.resolve({ done: true as const, value: undefined }),
+            }),
+          },
+        }),
+        write: async () => {
+          throw new Error('must not dispatch');
+        },
+        stop: async (generation) => active.delete(generation),
+      });
+      const consume = async () => {
+        for await (const _event of adapter.send!({
+          requestId: 'request_1',
+          connection,
+          prompt: 'Read the marker',
+          modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+          workingDirectory: 'C:\\workspace',
+          interactionMode: 'ask',
+        })) {
+          /* A terminated stream cannot ever acknowledge subscription. */
+        }
+      };
+      const result = await Promise.race([
+        consume().then(
+          () => 'completed',
+          (error: Error) => error.message,
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve('still pending'), 100)),
+      ]);
+      expect(result).toBe(
+        stage === 'rejected'
+          ? 'native bridge unavailable'
+          : 'Codex app-server ended before subscription.',
+      );
+      expect([...active]).toEqual([]);
+    },
+  );
+
+  it.each(['subscription', 'iterator'] as const)(
+    'reaps a child when %s setup throws',
+    async (stage) => {
+      const active = new Set<string>();
+      const adapter = createCodexPersistentAdapter({
+        findExecutable: async () => ({ executableId: 'trusted-codex' }),
+        start: async () => {
+          active.add('setup-failure');
+          return { generation: 'setup-failure' };
+        },
+        frames: () => {
+          if (stage === 'subscription') throw new Error('native setup failed');
+          return {
+            ready: Promise.resolve(),
+            stream: {
+              [Symbol.asyncIterator]() {
+                throw new Error('native setup failed');
+              },
+            },
+          };
+        },
+        write: async () => {
+          throw new Error('must not dispatch');
+        },
+        stop: async (generation) => active.delete(generation),
+      });
+      const consume = async () => {
+        for await (const _event of adapter.send!({
+          requestId: 'request_1',
+          connection,
+          prompt: 'Read the marker',
+          modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+          workingDirectory: 'C:\\workspace',
+          interactionMode: 'ask',
+        })) {
+          /* Setup must retain ownership of the started child. */
+        }
+      };
+      await expect(consume()).rejects.toThrow('native setup failed');
+      expect([...active]).toEqual([]);
+    },
+  );
+
+  it('reaps the started child when native subscription readiness fails', async () => {
+    const active = new Set<string>();
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex' }),
+      start: async () => {
+        active.add('failed-subscription');
+        return { generation: 'failed-subscription' };
+      },
+      frames: () => ({ stream: frames(), ready: Promise.reject(new Error('subscription failed')) }),
+      write: async () => {
+        throw new Error('must not dispatch before subscription');
+      },
+      stop: async (generation) => active.delete(generation),
+    });
+    const consume = async () => {
+      for await (const _event of adapter.send!({
         requestId: 'request_1',
         connection,
         chatId: 'chat_1',
@@ -124,14 +268,101 @@ describe('persistent Codex app-server adapter', () => {
         modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
         workingDirectory: 'C:\\workspace',
         interactionMode: 'ask',
-        signal: controller.signal,
-      }))
-        events.push(event);
+      })) {
+        /* Exercise native lifecycle failure. */
+      }
     };
-    await expect(consume()).rejects.toMatchObject({ name: 'AbortError' });
-    expect(events.some((event) => event.type === 'done')).toBe(false);
-    expect(stop).toHaveBeenCalledWith('cancelled-generation');
+    await expect(consume()).rejects.toThrow('subscription failed');
+    expect([...active]).toEqual([]);
   });
+
+  it.each(['discovery', 'startup', 'subscription'] as const)(
+    'does not send a turn after cancellation during %s',
+    async (stage) => {
+      const controller = new AbortController();
+      const active = new Set<string>();
+      const writes: unknown[] = [];
+      const adapter = createCodexPersistentAdapter({
+        findExecutable: async () => {
+          if (stage === 'discovery') controller.abort();
+          return { executableId: 'trusted-codex' };
+        },
+        start: async () => {
+          active.add('late-generation');
+          if (stage === 'startup') controller.abort();
+          return { generation: 'late-generation' };
+        },
+        frames: () => ({
+          stream: frames(),
+          ready: Promise.resolve().then(() => {
+            if (stage === 'subscription') controller.abort();
+          }),
+        }),
+        write: async (_generation, message) => {
+          writes.push(message);
+        },
+        stop: async (generation) => active.delete(generation),
+      });
+      const consume = async () => {
+        for await (const _event of adapter.send!({
+          requestId: 'request_1',
+          connection,
+          chatId: 'chat_1',
+          prompt: 'Read the marker',
+          modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+          workingDirectory: 'C:\\workspace',
+          interactionMode: 'ask',
+          signal: controller.signal,
+        })) {
+          /* Consume the real adapter lifecycle. */
+        }
+      };
+      await expect(consume()).rejects.toMatchObject({ name: 'AbortError' });
+      expect(writes).toEqual([]);
+      expect([...active]).toEqual([]);
+    },
+  );
+
+  it.each(['completion', 'stream end'] as const)(
+    'preserves cancellation when %s arrives while awaiting native output',
+    async (ending) => {
+      const controller = new AbortController();
+      async function* cancelledFrames() {
+        for await (const frame of frames()) {
+          if ('method' in frame && frame.method === 'turn/completed') {
+            controller.abort();
+            if (ending === 'stream end') return;
+          }
+          yield frame;
+        }
+      }
+      const stop = vi.fn(async () => true);
+      const adapter = createCodexPersistentAdapter({
+        findExecutable: async () => ({ executableId: 'trusted-codex' }),
+        start: async () => ({ generation: 'cancelled-generation' }),
+        frames: () => ({ stream: cancelledFrames(), ready: Promise.resolve() }),
+        write: vi.fn(async () => undefined),
+        stop,
+      });
+      const events: ProviderEvent[] = [];
+      const consume = async () => {
+        for await (const event of adapter.send!({
+          requestId: 'request_1',
+          connection,
+          chatId: 'chat_1',
+          prompt: 'Read the marker',
+          modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+          workingDirectory: 'C:\\workspace',
+          interactionMode: 'ask',
+          signal: controller.signal,
+        }))
+          events.push(event);
+      };
+      await expect(consume()).rejects.toMatchObject({ name: 'AbortError' });
+      expect(events.some((event) => event.type === 'done')).toBe(false);
+      expect(stop).toHaveBeenCalledWith('cancelled-generation');
+    },
+  );
 
   it('reuses the ready managed identity and observes a later explicit refresh', async () => {
     let executableId = 'cli-executable-managed-1';

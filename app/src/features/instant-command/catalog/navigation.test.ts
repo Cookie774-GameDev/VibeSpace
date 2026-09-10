@@ -25,7 +25,7 @@ describe('navigation command catalog', () => {
   it('gives every targetless top-level route one exact slash alias within the fixed bound', () => {
     const pageOpen = NAVIGATION_COMMAND_INPUTS.find((command) => command.id === 'page.open')!;
     const topLevelRoutes = APP_ROUTES.filter(
-      (route) => route !== 'agent-detail' && route !== 'project-detail',
+      (route) => route !== 'agent-detail' && route !== 'project-detail' && route !== 'notes',
     );
     for (const route of topLevelRoutes) {
       const alias = `/${route}`;
@@ -43,7 +43,9 @@ describe('navigation command catalog', () => {
         ),
       ).toEqual({ status: 'parsed', slots: { route } });
     }
-    expect(pageOpen.aliases).toHaveLength(64);
+    expect(pageOpen.aliases.length).toBeLessThanOrEqual(64);
+    // /notes belongs to the Chat attachment flow, not page navigation.
+    expect(PAGE_TARGET_ALIASES.notes).not.toContain('/notes');
     expect(PAGE_TARGET_ALIASES['agent-detail']).not.toContain('/agent-detail');
     expect(PAGE_TARGET_ALIASES['project-detail']).not.toContain('/project-detail');
   });

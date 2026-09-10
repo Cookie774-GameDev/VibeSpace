@@ -396,6 +396,50 @@ describe('persistent OpenCode question transport authority', () => {
     expect(body.parts.filter((part: { type: string }) => part.type === 'text').map((part: { text: string }) => part.text).join('\n')).toBe(existing ? request.prompt : historyPrompt);
   });
 
+  it.each(['baseline', 'dispatch'] as const)(
+    'does not leave a prompt active after cancellation during %s',
+    async (boundary) => {
+      const controller = new AbortController();
+      const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+      let reached!: () => void;
+      let release!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const lifecycle: string[] = [];
+      nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+        const path = args[1];
+        if (
+          (boundary === 'baseline' && path.includes('/message?')) ||
+          (boundary === 'dispatch' && path.includes('/prompt_async'))
+        ) {
+          reached();
+          await gate;
+        }
+        if (path.includes('/prompt_async')) lifecycle.push('accepted');
+        if (path.includes('/abort')) lifecycle.push('abort');
+        return transport(...args);
+      });
+      const iterator = openCodePersistentAdapter
+        .send!(questionProviderRequest(`request-cancel-${boundary}`, controller.signal))
+        [Symbol.asyncIterator]();
+      const outcome = drain(iterator).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await blocked;
+      controller.abort();
+      await vi.waitFor(() => expect(lifecycle).toContain('abort'));
+      release();
+      await expect(outcome).resolves.toMatchObject({ name: 'AbortError' });
+      if (boundary === 'baseline') expect(lifecycle).not.toContain('accepted');
+      else expect(lifecycle.lastIndexOf('abort')).toBeGreaterThan(lifecycle.indexOf('accepted'));
+    },
+  );
+
   it('binds exact question authority and sends the official reply through the same managed transport', async () => {
     const { iterator, projection } = await startWaitingQuestion('request-question-reply');
     bindPersistentOpenCodeQuestionRoute(projection.route);

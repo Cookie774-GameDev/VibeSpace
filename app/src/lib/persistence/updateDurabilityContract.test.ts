@@ -27,8 +27,8 @@ describe('normal application update durability contract', () => {
       productName: 'VibeSpace',
     });
     expect(DB_NAME).toBe('jarvis-v1');
-    expect(DB_VERSION).toBe(12);
-    expect(Object.keys(STORES)).toHaveLength(51);
+    expect(DB_VERSION).toBe(15);
+    expect(Object.keys(STORES)).toHaveLength(55);
   });
 
   it('reopens the same current database without changing rows or local preferences', async () => {
@@ -62,7 +62,7 @@ describe('normal application update durability contract', () => {
 
   it('keeps the current schema additive and free of destructive upgrade hooks', () => {
     const databaseSource = readFileSync(
-      join(process.cwd(), 'src', 'lib', 'db', 'index.ts'),
+      join(process.cwd(), 'src', 'lib', 'db', 'database.ts'),
       'utf8',
     );
     for (let version = 1; version <= DB_VERSION; version++) {

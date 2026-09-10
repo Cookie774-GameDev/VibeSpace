@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO live target row schema integrity
-branch=integration/UnifiedChungus-final
-base=fcd80c2196a6eb434d899aaaecff32ac84c31131
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Require exact typed live-target row schemas across claim, verification, pre-persistence, and release-state reads with safe cleanup semantics.
-commit=f84509993f473398f9e49d046f594316f0777386
-released=2026-08-31T03:49:00-05:00

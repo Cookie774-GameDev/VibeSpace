@@ -11,6 +11,7 @@ import {
 import {
   buildCodexModelListRequest,
   buildCodexThreadResumeRequest,
+  buildCodexThreadPolicyUpdateRequest,
   buildCodexThreadStartRequest,
   buildCodexTurnInterruptRequest,
   buildCodexTurnStartRequest,
@@ -39,7 +40,10 @@ export interface CodexPersistentDependencies {
     ownerId: string,
     modelId: string,
   ): Promise<Readonly<{ generation: string }>>;
-  frames(generation: string): Readonly<{
+  frames(
+    generation: string,
+    signal?: AbortSignal,
+  ): Readonly<{
     stream: AsyncIterable<NativeFrame>;
     ready: Promise<void>;
   }>;
@@ -83,13 +87,13 @@ const defaultDependencies: CodexPersistentDependencies = {
   workingDirectory: resolveCodexWorkingDirectory,
   findExecutable: () => resolveCodexExecutable(),
   start: startNativeCodexAppServer,
-  frames: (generation) => {
+  frames: (generation, signal) => {
     let subscribed!: () => void;
     const ready = new Promise<void>((resolve) => {
       subscribed = resolve;
     });
     return {
-      stream: nativeCodexFrames(generation, undefined, undefined, subscribed),
+      stream: nativeCodexFrames(generation, signal, undefined, subscribed),
       ready,
     };
   },
@@ -250,6 +254,7 @@ async function* sendCodexRequest(
   if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   const mode = executionMode(request);
   const executable = await dependencies.findExecutable();
+  if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   if (!executable) throw new Error('Codex CLI is not installed.');
   const ownerId = request.chatId ?? request.requestId;
   if (!request.modelId) throw new Error('Codex requires an exact selected model.');
@@ -258,22 +263,11 @@ async function* sendCodexRequest(
     ownerId,
     request.modelId,
   );
-  const subscription = dependencies.frames(generation);
-  const iterator = subscription.stream[Symbol.asyncIterator]();
-  let prefetched: Promise<IteratorResult<NativeFrame>> | undefined = iterator.next();
-  await subscription.ready;
-  const reader: AsyncIterator<NativeFrame> = {
-    next: () => {
-      if (prefetched) {
-        const next = prefetched;
-        prefetched = undefined;
-        return next;
-      }
-      return iterator.next();
-    },
-    return: (value) => iterator.return?.(value) ?? Promise.resolve({ done: true, value }),
-  };
-  const exactIdentity = identity(request);
+  if (request.signal?.aborted) {
+    await dependencies.stop(generation).catch(() => false);
+    throw new DOMException('The request was aborted.', 'AbortError');
+  }
+  let iterator: AsyncIterator<NativeFrame> | undefined;
   let threadId: string | undefined;
   let turnId: string | undefined;
   let terminal = false;
@@ -295,6 +289,32 @@ async function* sendCodexRequest(
   };
   request.signal?.addEventListener('abort', abort, { once: true });
   try {
+    const subscription = dependencies.frames(generation, request.signal);
+    const activeIterator = subscription.stream[Symbol.asyncIterator]();
+    iterator = activeIterator;
+    let prefetched: Promise<IteratorResult<NativeFrame>> | undefined = activeIterator.next();
+    const reader: AsyncIterator<NativeFrame> = {
+      next: () => {
+        if (prefetched) {
+          const next = prefetched;
+          prefetched = undefined;
+          return next;
+        }
+        return activeIterator.next();
+      },
+      return: (value) => activeIterator.return?.(value) ?? Promise.resolve({ done: true, value }),
+    };
+    // Opening the bridge can fail before nativeCodexFrames acknowledges subscription.
+    // Observe that failure immediately instead of leaving readiness pending forever.
+    await Promise.race([
+      subscription.ready,
+      prefetched.then((first) => {
+        if (first.done) throw new Error('Codex app-server ended before subscription.');
+        return new Promise<never>(() => {});
+      }),
+    ]);
+    if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+    const exactIdentity = identity(request);
     await validateModelCapability(
       generation,
       reader,
@@ -360,6 +380,18 @@ async function* sendCodexRequest(
       const validated = validateCodexThreadStartResponse(threadResponse, threadRequestId, exactIdentity, mode);
       if (!validated.ok) throw new Error('Codex Context thread identity mismatch: ' + validated.field + '.');
       contextTool.bind(threadId, exactIdentity, generation);
+    }
+    if (resumed && request.systemPrompt?.trim()) {
+      // Resume restores the old developer message. Publish this turn's compiled
+      // policy explicitly while retaining Codex's built-in Ask/Plan instructions.
+      const policyRequestId = requestId(request.requestId, 'policy');
+      await dependencies.write(generation, buildCodexThreadPolicyUpdateRequest({
+        requestId: policyRequestId, threadId, developerInstructions: developerInstructions(request),
+      }));
+      const policyResponse = await responseFrame(reader, policyRequestId);
+      if (recordOf(policyResponse.error) || !recordOf(policyResponse.result)) {
+        throw new Error('Codex current-turn policy update failed.');
+      }
     }
     yield { type: 'session', sessionId: threadId };
     await request.onSessionBound?.({ sessionId: threadId });
@@ -438,11 +470,14 @@ async function* sendCodexRequest(
       if (terminal) return;
     }
     throw new Error('Codex turn exceeded its safe event bound.');
+  } catch (error) {
+    if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+    throw error;
   } finally {
     controls.dispose();
     request.signal?.removeEventListener('abort', abort);
-    await iterator.return?.();
     await dependencies.stop(generation).catch(() => false);
+    await iterator?.return?.();
   }
 }
 

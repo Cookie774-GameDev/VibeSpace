@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO append acknowledgement envelope integrity
-branch=integration/UnifiedChungus-final
-base=398ec52502974353e14633655278ea8252905610
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Require direct append acknowledgements to retain exact context type and lease acquisition persistence timestamp before durable verification.
-commit=421f4e0d7f7028010b3ceadfe595e1974e02a8df
-released_at=2026-08-31T04:12:00-05:00

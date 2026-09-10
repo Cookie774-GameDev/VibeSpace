@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO scheduled-learning recovery integration
-branch=integration/UnifiedChungus-final
-base=23fd2f068dc394e6f736d30d55a55077df707c14
-files=app/src/features/jarvis-memory/caoScheduledLearningRuntime.ts;app/src/features/jarvis-memory/caoScheduledLearningRuntime.test.ts;app/src/features/schedule/jarvisScheduleRunner.ts;app/src/features/schedule/jarvisScheduleRunner.test.ts;app/src/features/jarvis-memory/JarvisLearningControls.tsx;app/src/features/jarvis-memory/JarvisLearningControls.test.tsx
-intent=Bind scheduled-learning scope to persisted event authority, recover pending manual work before force runs, preserve recovered trigger truth, and project canonical account-scoped runtime status after reload.
-commit=7b0ab1488d6fbf6cd7c67d853e0176d012494c33
-released_at=2026-08-31T04:45:00-05:00

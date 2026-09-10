@@ -44,6 +44,7 @@ use std::sync::Mutex;
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
 const MAX_DIR_ENTRIES: usize = 500;
+const MAX_PICKER_DIR_ENTRIES: usize = 10_000;
 const MAX_STRICT_DIR_BATCH: usize = 64;
 const MAX_STRICT_BATCH_ENTRIES: usize = 500_000;
 const MAX_SAMPLE_BYTES: u64 = 1024 * 1024;
@@ -671,12 +672,27 @@ fn fs_list_dir_blocking(
 
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&p).map_err(|e| format!("io: {}", e))? {
-        if out.len() >= MAX_DIR_ENTRIES {
-            break;
-        }
         let entry = entry.map_err(|e| format!("io: {}", e))?;
         let path = entry.path();
-        let meta = entry.metadata().ok();
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("io: {error}")),
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & (0x2 | 0x4) != 0 {
+                continue;
+            }
+        }
+        if out.len() >= MAX_PICKER_DIR_ENTRIES {
+            return Err("This folder has more than 10,000 visible items. Open a subfolder to narrow the listing.".to_string());
+        }
+        let meta = Some(metadata);
         let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
         let created_ms = meta
             .as_ref()
@@ -1398,6 +1414,37 @@ pub fn fs_delete_file(path: String, root: Option<String>) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picker_lists_all_thousand_files_and_hides_dot_entries() {
+        let root = test_root("picker-thousand");
+        std::fs::create_dir_all(&root).unwrap();
+        for index in 0..1000 {
+            std::fs::write(root.join(format!("file-{index:04}.txt")), b"fixture").unwrap();
+        }
+        std::fs::write(root.join(".hidden"), b"private").unwrap();
+        let listed = fs_list_dir_blocking(root.to_string_lossy().into_owned(), None, None).unwrap();
+        assert_eq!(listed.len(), 1000);
+        assert_eq!(listed.first().unwrap().name, "file-0000.txt");
+        assert_eq!(listed.last().unwrap().name, "file-0999.txt");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn picker_hides_windows_hidden_and_system_attributes() {
+        let root = test_root("picker-attributes");
+        std::fs::create_dir_all(&root).unwrap();
+        for name in ["ordinary.txt", "hidden.txt", "system.txt"] {
+            std::fs::write(root.join(name), b"fixture").unwrap();
+        }
+        for (flag, name) in [("+h", "hidden.txt"), ("+s", "system.txt")] {
+            assert!(std::process::Command::new("attrib.exe").arg(flag).arg(root.join(name)).status().unwrap().success());
+        }
+        let listed = fs_list_dir_blocking(root.to_string_lossy().into_owned(), None, None).unwrap();
+        assert_eq!(listed.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec!["ordinary.txt"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

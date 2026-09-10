@@ -1,0 +1,73 @@
+.axo-motion {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  pointer-events: none;
+  color: hsl(var(--accent-copper));
+  overflow: visible;
+}
+.axo-motion__character {
+  image-rendering: pixelated;
+  transform-origin: center;
+}
+.axo-motion__signal,
+.axo-motion__check {
+  opacity: 0;
+}
+.axo-motion[data-axo-motion='working'] .axo-motion__character {
+  animation: axo-working 2.4s ease-in-out infinite;
+}
+.axo-motion[data-axo-motion='working'] .axo-motion__signal {
+  opacity: 0.45;
+}
+.axo-motion[data-axo-motion='focus'] .axo-motion__character {
+  animation: axo-focus 1.4s ease-out both;
+}
+.axo-motion[data-axo-motion='focus'] .axo-motion__signal {
+  animation: axo-signal 1.4s ease-out both;
+}
+.axo-motion[data-axo-motion='success'] .axo-motion__check {
+  opacity: 1;
+}
+.axo-motion[data-axo-motion='success'] .axo-motion__character {
+  animation: axo-focus 1.4s ease-out both;
+}
+.axo-motion[data-paused='true'] * {
+  animation-play-state: paused !important;
+}
+@keyframes axo-working {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+@keyframes axo-focus {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.08) translateY(-3px);
+  }
+}
+@keyframes axo-signal {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  25%,
+  65% {
+    opacity: 0.7;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .axo-motion * {
+    animation: none !important;
+  }
+  .axo-motion[data-axo-motion='focus'] .axo-motion__signal {
+    opacity: 0.5;
+  }
+}

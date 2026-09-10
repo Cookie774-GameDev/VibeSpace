@@ -27,7 +27,6 @@ import {
   createTextFile,
   deleteProjectFile,
   describeFsError,
-  listDirectory,
   readTextFile,
   renameProjectFile,
   writeTextFile,
@@ -69,6 +68,7 @@ import {
   useAssistantPersonaName,
 } from '@/lib/assistantPersona';
 import './sakura-files.css';
+import { listExplorerDirectory as listDirectory } from './fileExplorerDirectory';
 
 function filesMiniSystemPrompt(assistantName: string): string {
   return [
@@ -123,6 +123,7 @@ function FileTreeNode({
 }: TreeNodeProps) {
   const [open, setOpen] = React.useState(false);
   const [children, setChildren] = React.useState<FsEntry[]>([]);
+  const [visibleChildren, setVisibleChildren] = React.useState(MAX_TREE_CHILDREN);
   const [loading, setLoading] = React.useState(false);
 
   const loadChildren = async () => {
@@ -135,7 +136,7 @@ function FileTreeNode({
       toast.error('Could not open folder', describeFsError(result.error));
       return;
     }
-    setChildren(result.entries.slice(0, MAX_TREE_CHILDREN));
+    setChildren(result.entries);
   };
 
   const toggle = async () => {
@@ -210,17 +211,24 @@ function FileTreeNode({
       </button>
       {open &&
         children.length > 0 &&
-        children.map((child) => (
-          <FileTreeNode
-            key={child.path}
-            entry={child}
-            depth={depth + 1}
-            rootDir={rootDir}
-            selectedPath={selectedPath}
-            onOpenFile={onOpenFile}
-            onOpenDir={onOpenDir}
-          />
-        ))}
+        children
+          .slice(0, visibleChildren)
+          .map((child) => (
+            <FileTreeNode
+              key={child.path}
+              entry={child}
+              depth={depth + 1}
+              rootDir={rootDir}
+              selectedPath={selectedPath}
+              onOpenFile={onOpenFile}
+              onOpenDir={onOpenDir}
+            />
+          ))}
+      {open && children.length > visibleChildren ? (
+        <button type="button" onClick={() => setVisibleChildren((n) => n + MAX_TREE_CHILDREN)}>
+          Show more files ({children.length - visibleChildren})
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -252,6 +260,7 @@ export function FilesPage() {
     left: number;
   } | null>(null);
   const editorRef = React.useRef<HTMLTextAreaElement>(null);
+  const rootRequestRef = React.useRef(0);
   const miniScrollRef = React.useRef<HTMLDivElement>(null);
   const jarvisAgent = useAgentStore(
     (s) => findProtectedJarvisAgent(Object.values(s.agents)) ?? null,
@@ -271,9 +280,12 @@ export function FilesPage() {
   const loadRoot = React.useCallback(
     async (path: string) => {
       if (!path.trim()) return;
+      const request = ++rootRequestRef.current;
       setLoading(true);
+      setEntries([]);
       const clean = path.trim();
       const result = await listDirectory(clean, { root: clean });
+      if (request !== rootRequestRef.current) return;
       setLoading(false);
       if (!result.ok) {
         toast.error('Could not open project folder', describeFsError(result.error));
@@ -288,6 +300,7 @@ export function FilesPage() {
       await Promise.all(
         currentWorkspace.tabs.map(async (tab) => {
           const refreshed = await readTextFile(tab.path, { root: clean });
+          if (request !== rootRequestRef.current) return;
           const outcome = reconcileWorkspaceFile(
             projectId,
             tab.path,
@@ -306,6 +319,7 @@ export function FilesPage() {
   );
 
   React.useEffect(() => {
+    rootRequestRef.current += 1;
     const nextRoot = getStoredProjectRoot(projectId);
     const nextFile = getStoredOpenFile(projectId);
     setRootDraft(nextRoot);
@@ -316,6 +330,9 @@ export function FilesPage() {
     const persistedActive = getFileWorkspaceState(projectId).activePath;
     if (persistedActive) void openFile(persistedActive);
     else if (nextFile) void openFile(nextFile);
+    return () => {
+      rootRequestRef.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 

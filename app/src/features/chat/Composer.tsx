@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { AxoMotion } from '@/components/ui/AxoMotion';
 import { useChatBackendAffinity } from './useChatBackendAffinity';
 import { NotesPicker, type NotesPickerHandle } from '../notes/NotesPicker';
 import {
@@ -6227,6 +6228,7 @@ function ModelPicker({
   groups,
   flatOptions,
 }: ModelPickerProps) {
+  const [axoFocusToken, setAxoFocusToken] = useState(0);
   const automaticRoutingEnabled = useAuthStore((s) => s.automaticModelRoutingEnabled);
   const setAutomaticModelRoutingEnabled = useAuthStore((s) => s.setAutomaticModelRoutingEnabled);
   const hiveEnabled = isHiveProductEnabled();
@@ -6307,6 +6309,11 @@ function ModelPicker({
     effort: EffortLabel = 'auto',
   ) => {
     onSelect(selectionFromOption(nextProvider, nextModel, connection), effort);
+    if (['high', 'xhigh', 'max', 'ultra'].includes(effort)) {
+      setAxoFocusToken((token) => token + 1);
+    } else {
+      setAxoFocusToken(0);
+    }
     onOpenChange(false);
   };
 
@@ -6345,18 +6352,17 @@ function ModelPicker({
           <span className={cn('truncate text-metadata leading-none', compact && 'text-[10px]')}>
             {displayLabel}
           </span>
-          {initialEffort !== 'auto' ? (
             <span
               data-composer-effort={initialEffort}
+              style={initialEffort !== 'auto' ? undefined : { display: 'none' }}
               className={cn(
                 'vibespace-composer-effort inline-flex shrink-0 items-center gap-1 rounded-full border border-accent-copper/35 bg-accent-copper/[0.08] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-accent-copper',
                 initialEffort === 'ultra' && 'vibespace-composer-effort-ultra',
               )}
             >
-              <Sparkles aria-hidden="true" className="h-2.5 w-2.5" />
+              <span className="[&>svg]:size-5"><AxoMotion focusToken={axoFocusToken} /></span>
               {effortLabel}
             </span>
-          ) : null}
           <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 opacity-70', compact && 'h-3 w-3')} />
         </Button>
       </PopoverTrigger>

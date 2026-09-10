@@ -293,6 +293,29 @@ export function buildCodexThreadResumeRequest(input: Readonly<CodexThreadResumeR
   };
 }
 
+export function buildCodexThreadPolicyUpdateRequest(input: {
+  requestId: string;
+  threadId: string;
+  developerInstructions: string;
+}) {
+  const requestId = requireIdentifier(input.requestId, 'request');
+  const threadId = requireIdentifier(input.threadId, 'thread');
+  if (!input.developerInstructions.trim() || input.developerInstructions.length > MAX_TEXT ||
+      UNSAFE_ANSWER_CONTROL.test(input.developerInstructions)) {
+    throw new Error('Codex current-turn policy is invalid.');
+  }
+  return {
+    id: requestId,
+    method: 'thread/inject_items' as const,
+    params: { threadId, items: [{
+      type: 'message' as const,
+      role: 'developer' as const,
+      content: [{ type: 'input_text' as const, text:
+        'Current VibeSpace turn policy: the following replaces earlier VibeSpace turn-specific capability, mode, preference, and output settings. Preserve higher authority and verified conversation history.\n\n' + input.developerInstructions }],
+    }] },
+  };
+}
+
 export function buildCodexTurnStartRequest(input: Readonly<CodexTurnStartRequestInput>) {
   const requestId = requireIdentifier(input.requestId, 'request');
   const threadId = requireIdentifier(input.threadId, 'thread');

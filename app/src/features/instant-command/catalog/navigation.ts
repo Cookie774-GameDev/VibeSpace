@@ -48,7 +48,8 @@ const ROUTE_ALIASES = {
 export const PAGE_TARGET_ALIASES: Readonly<Record<Route, readonly string[]>> = Object.freeze(
   Object.fromEntries(
     APP_ROUTES.map((route) => {
-      const supportsTargetlessSlash = route !== 'agent-detail' && route !== 'project-detail' && route !== 'notes';
+      const supportsTargetlessSlash =
+        route !== 'agent-detail' && route !== 'project-detail' && route !== 'notes';
       return [
         route,
         Object.freeze([...ROUTE_ALIASES[route], ...(supportsTargetlessSlash ? [`/${route}`] : [])]),
@@ -97,6 +98,19 @@ const routeByAlias = new Map(
   ),
 );
 
+// Keep the catalog bounded without dropping established phrases. A redundant
+// "open … page" phrase can use its existing shorter alias plus an exact suffix.
+// Keep phrases such as "open terminal page" whose shorter form has another owner.
+const pageCommandAliases = Object.freeze(
+  Object.entries(PAGE_TARGET_ALIASES).flatMap(([route, aliases]) =>
+    aliases.filter(
+      (alias) =>
+        !alias.endsWith(' page') ||
+        routeByAlias.get(alias.slice(0, -5).toLocaleLowerCase()) !== route,
+    ),
+  ),
+);
+
 const sectionByAlias = new Map(
   Object.entries(SETTINGS_SECTION_ALIASES).flatMap(([section, aliases]) =>
     (aliases ?? []).map((alias) => [alias.toLocaleLowerCase(), section] as const),
@@ -132,13 +146,17 @@ export const NAVIGATION_COMMAND_INPUTS: readonly NavigationCommandInput[] = Obje
   [
     Object.freeze({
       id: 'page.open',
-      aliases: Object.freeze(Object.values(PAGE_TARGET_ALIASES).flat()),
+      aliases: pageCommandAliases,
       authority: 'ui.route',
       safety: 'read',
       availability: 'available',
-      slotGrammar: 'none',
+      slotGrammar: 'remainder',
       parseSlots: (match: CatalogMatch) => {
-        const route = routeByAlias.get(match.alias);
+        const phrase = `${match.alias} ${match.remainder}`
+          .trim()
+          .toLocaleLowerCase()
+          .replace(/\s+/gu, ' ');
+        const route = routeByAlias.get(phrase);
         return route
           ? Object.freeze({ status: 'parsed' as const, slots: Object.freeze({ route }) })
           : Object.freeze({ status: 'rejected' as const, reason: 'Unknown page target.' });

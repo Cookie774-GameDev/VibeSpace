@@ -108,7 +108,11 @@ describe('Call Anyone approval flow', () => {
     expect(screen.getByText('Call queued')).not.toBeNull();
   });
 
-  it('approves a future call without dialing and restores exact schedule truth after reload', async () => {
+  it('approves a future call without dialing and restores exact schedule truth after reload', async ({
+    onTestFinished,
+  }) => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-31T00:00:00Z'));
+    onTestFinished(() => clock.mockRestore());
     const scheduledFor = '2026-09-01T15:00:00.000Z';
     const schedule = {
       id: 'schedule-1',

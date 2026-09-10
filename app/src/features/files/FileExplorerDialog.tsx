@@ -37,6 +37,7 @@ import {
   listDirectory,
   readImageFileBase64,
   readTextFileSample,
+  statProjectPath,
   type FsEntry,
 } from '@/lib/fs';
 import { useAgentStore } from '@/stores/agents';
@@ -126,6 +127,12 @@ function parentPath(path: string): string | null {
     return parent;
   }
   return parent;
+}
+
+function pickerStatPath(path: string): string {
+  // fs_list_dir returns canonical Windows drive paths; strict stat accepts drive syntax.
+  // Do not rewrite UNC/device paths or the identity returned to the picker caller.
+  return path.startsWith('\\\\?\\') && /^[A-Za-z]:[\\/]/.test(path.slice(4)) ? path.slice(4) : path;
 }
 
 /** Alphabetical fallback only used when date metadata is entirely missing after grouping. */
@@ -226,6 +233,8 @@ function FileExplorerDialog({
   const [loading, setLoading] = React.useState(runtimeEffectsEnabled);
   const [error, setError] = React.useState<string | null>(null);
   const [selected, setSelected] = React.useState<string[]>([]);
+  const [confirming, setConfirming] = React.useState(false);
+  const [selectionError, setSelectionError] = React.useState<string | null>(null);
   const [statusLine, setStatusLine] = React.useState('');
   const [places, setPlaces] = React.useState<ExplorerPlace[]>([]);
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
@@ -235,20 +244,27 @@ function FileExplorerDialog({
   >('none');
   const [viewMode, setViewMode] = React.useState<'list' | 'grid'>('grid');
   const loadRequestRef = React.useRef(0);
+  const pathDraftRef = React.useRef('');
+  const pathEditedRef = React.useRef(false);
 
   // Mini Jarvis search — module store (survives close/reopen; does not touch main Chat)
-  const [searchState, setSearchState] = React.useState(() => getExplorerSearchState());
+  const [searchState, setSearchState] = React.useState(() =>
+    getExplorerSearchState(constrainedRoot),
+  );
   React.useEffect(() => {
     if (!runtimeEffectsEnabled) return;
     return subscribeExplorerSearch(() => {
-      setSearchState(getExplorerSearchState());
+      setSearchState(getExplorerSearchState(constrainedRoot));
     });
-  }, [runtimeEffectsEnabled]);
+  }, [runtimeEffectsEnabled, constrainedRoot]);
 
   const searchQuery = searchState.query;
   const searchBusy = searchState.busy;
   const searchStatus = searchState.status;
-  const searchHits = searchState.hits;
+  const searchHits = React.useMemo(
+    () => searchState.hits.filter((hit) => matchesExtension(hit, session.extensions)),
+    [searchState.hits, session.extensions],
+  );
   const searchProvider = searchState.provider;
   const searchModel = searchState.model;
 
@@ -294,9 +310,9 @@ function FileExplorerDialog({
       setExplorerSearchPanelOpen(true);
     }
     if (searchHits.length === 0) return;
-    const hitPaths = searchHits.map((h) => h.path);
+    const hitPaths = searchHits.filter((h) => mode === 'folder' || !h.isDir).map((h) => h.path);
     setSelected((prev) => seedSelectionFromHits(prev, hitPaths));
-  }, [runtimeEffectsEnabled, searchHits, searchBusy]);
+  }, [runtimeEffectsEnabled, searchHits, searchBusy, mode]);
 
   const title =
     session.title ??
@@ -307,6 +323,13 @@ function FileExplorerDialog({
       if (!runtimeEffectsEnabled) return;
       const requestId = ++loadRequestRef.current;
       const clean = path.trim();
+      setSelected([]);
+      setSelectionError(null);
+      setEntries([]);
+      setCurrentPath(clean);
+      pathDraftRef.current = clean;
+      setPathDraft(clean);
+      setStatusLine('');
       if (!clean) {
         setError('Enter an absolute folder path.');
         setEntries([]);
@@ -340,7 +363,10 @@ function FileExplorerDialog({
       // normal browsing (Downloads-style), score order for search hits.
       const next = listed.entries.filter((e) => matchesExtension(e, session.extensions));
       setCurrentPath(listed.path);
-      setPathDraft(listed.path);
+      if (pathDraftRef.current === clean) {
+        pathDraftRef.current = listed.path;
+        setPathDraft(listed.path);
+      }
       setEntries(next);
       const dirs = next.filter((e) => e.isDir).length;
       const files = next.length - dirs;
@@ -364,9 +390,18 @@ function FileExplorerDialog({
   React.useEffect(() => {
     if (!runtimeEffectsEnabled) return;
     let cancelled = false;
+    const startupRequestId = loadRequestRef.current;
     const explicitStart =
       (session.initialPath && session.initialPath.trim()) || constrainedRoot || '';
-    const placesPromise = resolveWithin(resolveExplorerPlaces(), EXPLORER_PLACES_START_TIMEOUT_MS);
+    const resolvedPlaces = resolveExplorerPlaces();
+    // The deadline bounds startup, not the lifetime of optional Places discovery.
+    void resolvedPlaces.then(
+      (nextPlaces) => {
+        if (!cancelled) setPlaces(nextPlaces);
+      },
+      () => undefined,
+    );
+    const placesPromise = resolveWithin(resolvedPlaces, EXPLORER_PLACES_START_TIMEOUT_MS);
 
     // A known initial/root path is the useful content: start it immediately instead of
     // serially waiting on every optional OS quick-access path first.
@@ -375,8 +410,11 @@ function FileExplorerDialog({
     void (async () => {
       const nextPlaces = (await placesPromise) ?? [];
       if (cancelled) return;
-      setPlaces(nextPlaces);
-      if (explicitStart) return;
+      if (explicitStart || loadRequestRef.current !== startupRequestId) return;
+      if (pathEditedRef.current) {
+        setLoading(false);
+        return;
+      }
 
       const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent);
       const fallbackHome = isWindows ? 'C:\\Users' : isTauri ? '/' : '/home';
@@ -481,14 +519,16 @@ function FileExplorerDialog({
 
   /** Select entry for highlight + side preview. Files work in all modes (incl. folder pick). */
   const selectEntry = (entry: { path: string; isDir: boolean }, multiToggle: boolean) => {
+    setSelectionError(null);
     setSelected((prev) => {
       const next = nextExplorerSelection(mode, entry, prev, multiToggle);
       return next ?? prev;
     });
   };
 
-  const confirm = () => {
-    if (!runtimeEffectsEnabled) return;
+  const confirm = async (explicitPaths?: string[]) => {
+    if (!runtimeEffectsEnabled || loading || error || confirming) return;
+    let paths = explicitPaths ?? selected;
     if (mode === 'folder') {
       const selectedFolder = selected.find((p) => {
         const hit = entries.find((e) => e.path === p) ?? searchHits.find((h) => h.path === p);
@@ -496,14 +536,54 @@ function FileExplorerDialog({
       });
       const path = selectedFolder || currentPath;
       if (!path) return;
-      resolveFileExplorer({ ok: true, paths: [path] });
+      paths = [path];
+    }
+    if (paths.length === 0) return;
+    const requestId = loadRequestRef.current;
+    setConfirming(true);
+    setSelectionError(null);
+    const checks = await resolveWithin(
+      Promise.all(
+        paths.map((path) => {
+          const statPath = pickerStatPath(path);
+          return statProjectPath(statPath, false, {
+            // Native stat requires a capability root even for an unconstrained picker.
+            // Keep an existing constraint; otherwise validate only the chosen item's folder.
+            root: constrainedRoot
+              ? pickerStatPath(constrainedRoot)
+              : mode === 'folder'
+                ? statPath
+                : parentPath(statPath),
+          });
+        }),
+      ),
+      EXPLORER_DIRECTORY_LOAD_TIMEOUT_MS,
+    );
+    if (getActiveFileExplorer()?.id !== session.id) return;
+    setConfirming(false);
+    if (requestId !== loadRequestRef.current) return;
+    const failed = checks?.find(
+      (check) => !check.ok || check.kind !== (mode === 'folder' ? 'directory' : 'file'),
+    );
+    if (!checks || failed) {
+      setSelected([]);
+      setSelectionError(
+        !checks
+          ? 'Selection check timed out. Try again.'
+          : failed && !failed.ok
+            ? describeFsError(failed.error)
+            : 'The selected item is no longer the expected file type.',
+      );
       return;
     }
-    if (selected.length === 0) return;
-    resolveFileExplorer({ ok: true, paths: selected });
+    resolveFileExplorer({ ok: true, paths: [...paths] });
   };
 
-  const canConfirm = mode === 'folder' ? Boolean(currentPath) : selected.length > 0;
+  const canConfirm =
+    !loading &&
+    !error &&
+    !confirming &&
+    (mode === 'folder' ? Boolean(currentPath) : selected.length > 0);
 
   // Hits stay listed in the explorer itself until the user clears them
   const showSearchResults = searchHits.length > 0 || searchBusy;
@@ -522,10 +602,8 @@ function FileExplorerDialog({
       provider: searchProvider,
       model: searchModel,
     }).then(() => {
-      const latest = getExplorerSearchState();
-      if (latest.hits[0]) {
-        setSelected([latest.hits[0].path]);
-      }
+      // Selection is reconciled by the scoped subscription; a closed session must
+      // never publish into a replacement picker after this search completes.
     });
   };
 
@@ -650,7 +728,11 @@ function FileExplorerDialog({
               >
                 <Input
                   value={pathDraft}
-                  onChange={(e) => setPathDraft(e.target.value)}
+                  onChange={(e) => {
+                    pathEditedRef.current = true;
+                    pathDraftRef.current = e.target.value;
+                    setPathDraft(e.target.value);
+                  }}
                   className="h-8 min-w-0 flex-1 font-mono text-metadata"
                   spellCheck={false}
                   aria-label="Current path"
@@ -713,13 +795,18 @@ function FileExplorerDialog({
                 className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-background/40 px-1.5 py-1.5 [html[data-theme=monochrome]_&]:bg-background"
               >
                 {loading ? (
-                  <div className="flex h-full min-h-[200px] items-center justify-center gap-2 text-muted-foreground">
+                  <div
+                    role="status"
+                    className="flex h-full min-h-[200px] items-center justify-center gap-2 text-muted-foreground"
+                  >
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading…
                   </div>
                 ) : error ? (
                   <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 px-4 text-center">
                     <HardDrive className="h-8 w-8 text-muted-foreground/60 [html[data-theme=monochrome]_&]:text-muted-foreground" />
-                    <p className="text-secondary text-destructive">{error}</p>
+                    <p role="alert" className="text-secondary text-destructive">
+                      {error}
+                    </p>
                   </div>
                 ) : listSource.length === 0 ? (
                   <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-secondary text-muted-foreground">
@@ -794,7 +881,7 @@ function FileExplorerDialog({
                                       // Preview only — do not confirm a file as the project folder
                                       return;
                                     }
-                                    resolveFileExplorer({ ok: true, paths: [entry.path] });
+                                    void confirm([entry.path]);
                                   }}
                                 />
                               );
@@ -805,7 +892,12 @@ function FileExplorerDialog({
                     })}
                   </div>
                 ) : (
-                  <div className="space-y-2" role="listbox" aria-label="Folder contents">
+                  <div
+                    className="space-y-2"
+                    role="listbox"
+                    aria-label="Folder contents"
+                    aria-multiselectable={mode === 'files'}
+                  >
                     {(
                       dateSections ?? [
                         { id: 'all', label: '', entries: alphaFallback ?? listSource },
@@ -822,12 +914,12 @@ function FileExplorerDialog({
                             {section.label}
                           </div>
                         ) : null}
-                        <ul className="space-y-0.5">
+                        <ul role="presentation" className="space-y-0.5">
                           {section.entries.map((entry) => {
                             const isSelected = selected.includes(entry.path);
                             const hit = searchHits.find((h) => h.path === entry.path);
                             return (
-                              <li key={entry.path}>
+                              <li key={entry.path} role="presentation">
                                 <button
                                   type="button"
                                   role="option"
@@ -851,7 +943,7 @@ function FileExplorerDialog({
                                       selectEntry(entry, false);
                                       return;
                                     }
-                                    resolveFileExplorer({ ok: true, paths: [entry.path] });
+                                    void confirm([entry.path]);
                                   }}
                                   className={cn(
                                     'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors',
@@ -1022,8 +1114,8 @@ function FileExplorerDialog({
                 />
                 <Button
                   size="sm"
-                  variant="accent"
-                  className="gap-1"
+                  variant="secondary"
+                  className="gap-1 bg-foreground text-background hover:bg-foreground/90"
                   disabled={searchBusy || !searchQuery.trim()}
                   onClick={() => runJarvisSearch()}
                 >
@@ -1082,7 +1174,18 @@ function FileExplorerDialog({
           >
             Cancel
           </Button>
-          <Button type="button" variant="accent" disabled={!canConfirm} onClick={confirm}>
+          {selectionError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {selectionError}
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            className="bg-foreground text-background hover:bg-foreground/90"
+            disabled={!canConfirm}
+            onClick={() => void confirm()}
+          >
             {mode === 'folder'
               ? 'Select folder'
               : mode === 'files'
@@ -1166,6 +1269,7 @@ function EntryTile({
       type="button"
       onClick={onOpen}
       onDoubleClick={onActivate}
+      aria-pressed={selected}
       className={cn(
         'flex flex-col items-center gap-1 rounded-lg border border-transparent p-1.5 text-center transition-colors',
         'hover:border-accent-copper/30 hover:bg-accent-copper/10',

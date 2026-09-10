@@ -68,13 +68,17 @@ export async function startNativeCodexAppServer(
 ): Promise<Readonly<{ generation: string }>> {
   const bridge = await bridgeFactory();
   const value = recordOf(
-    await bridge.invoke('codex_app_server_start', {
-      request: {
-        executableId: requireIdentifier(executableId, 'executable identity'),
-        ownerId: requireIdentifier(ownerId, 'owner identity'),
-        modelId: requireIdentifier(modelId, 'model identity'),
-      },
-    }),
+    await bridge
+      .invoke('codex_app_server_start', {
+        request: {
+          executableId: requireIdentifier(executableId, 'executable identity'),
+          ownerId: requireIdentifier(ownerId, 'owner identity'),
+          modelId: requireIdentifier(modelId, 'model identity'),
+        },
+      })
+      .catch((error: unknown) => {
+        throw safeError(error, 'Codex native startup failed.');
+      }),
   );
   const generation = typeof value?.generation === 'string' ? value.generation : '';
   return { generation: requireIdentifier(generation, 'generation') };
@@ -141,6 +145,7 @@ export async function* nativeCodexFrames(
   if (signal?.aborted) return;
   const exactGeneration = requireIdentifier(generation, 'generation');
   const bridge = await bridgeFactory();
+  if (signal?.aborted) return;
   const id = streamId();
   const queued: Array<{ message: NativeCodexStreamMessage; bytes: number }> = [];
   let queuedBytes = 0;

@@ -201,17 +201,9 @@ export function TabStrip() {
       return;
     }
 
-    if (!chatChanged) {
-      // Stale cross-project selection (e.g. chats still loading after a project
-      // switch). Stay in the current project — never yank the user back to the
-      // chat's owning project unless they explicitly opened that chat.
-      setActiveChat(tabs[0]?.id ?? null);
-      return;
-    }
-
-    // The active CHAT changed (e.g. "Open in Chat" from History or a command-
-    // palette jump) to a chat in another project — align the workspace to that
-    // chat's project so its tab is in scope.
+    // Live-query refreshes can briefly omit a newly selected chat. Verify the
+    // record even when the selection is unchanged instead of reverting it to
+    // the first stale tab. Only an explicit chat selection may switch projects.
     let cancelled = false;
     void (async () => {
       let chat: Chat | undefined;
@@ -227,7 +219,7 @@ export function TabStrip() {
         return;
       }
       const chatProject = (chat.project_id ?? null) as ProjectId | null;
-      if (chatProject !== projectId) {
+      if (chatProject !== projectId && chatChanged) {
         // Pre-seed per-project memory so the project-switch handler keeps THIS
         // chat active rather than restoring a previously-remembered one.
         projectChatMemory.set(projectMemoryKey(chatProject), activeChatId as ChatId);

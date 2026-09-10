@@ -12,7 +12,8 @@ import {
 } from './fileExplorerSearchRuntime';
 
 vi.mock('./fileExplorerSearch', async () => {
-  const actual = await vi.importActual<typeof import('./fileExplorerSearch')>('./fileExplorerSearch');
+  const actual =
+    await vi.importActual<typeof import('./fileExplorerSearch')>('./fileExplorerSearch');
   return {
     ...actual,
     walkEntries: vi.fn(async () => [
@@ -130,6 +131,17 @@ describe('fileExplorerSearchRuntime', () => {
     setExplorerSearchPanelOpen(true);
     expect(getExplorerSearchState().query).toBe('tax pdf');
     expect(getExplorerSearchState().panelOpen).toBe(true);
+  });
+
+  it('never reuses cached search hits in a different root capability', async () => {
+    await startExplorerSearch({
+      query: 'invoice type:txt here',
+      scopePath: 'C:\\Users\\demo\\Documents',
+      accessRoot: 'C:\\Users\\demo\\Documents',
+    });
+    expect(getExplorerSearchState('C:\\Users\\demo\\Documents').hits.length).toBeGreaterThan(0);
+    expect(getExplorerSearchState('C:\\other').hits).toEqual([]);
+    expect(getExplorerSearchState(null).hits).toEqual([]);
   });
 
   it('notifies subscribers on state changes', () => {

@@ -395,6 +395,37 @@ describe('compileJarvisPrompt', () => {
     expect(capabilityLayer).toContain('verified executor result');
   });
 
+  it.each([
+    'Remember the checkpoint marker is MAPLE_42. Reply exactly MAPLE_42. Do not use tools.',
+    'Explain the attached source excerpt without using any tools.',
+    'Read the supplied Context Map excerpt. No tools or subagents.',
+  ])('omits unrelated capability schemas for an explicit no-tools turn: %s', async userText => {
+    const input = await envelope({
+      interactionMode: 'agent',
+      userText,
+      capabilities: createJarvisCapabilitySnapshot({
+        ...capabilitySnapshot(),
+        actionSchemas: createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed(),
+      }),
+      context: context([contextItem('attached', 'Supplied invoice total: 374.')]),
+    });
+    const compiled = compileJarvisPrompt(input);
+    const regular = compileJarvisPrompt(await envelope({
+      ...input,
+      userText: 'Create the requested invoice file.',
+    }));
+    const capabilities = compiled.layers[2]!.content;
+    expect(capabilities).toContain('The user explicitly requested no tools for this turn.');
+    expect(capabilities).not.toContain('Model-visible action schemas:');
+    expect(capabilities).not.toContain('"inputSchema"');
+    expect(capabilities.length).toBeLessThan(1_000);
+    expect(compiled.systemText.length).toBeLessThan(regular.systemText.length - 10_000);
+    expect(compiled.layers[0]!.content).toBe(regular.layers[0]!.content);
+    expect(compiled.layers[1]!.content).toBe(regular.layers[1]!.content);
+    expect(compiled.layers[5]!.content).toContain('Supplied invoice total: 374.');
+    expect(regular.layers[2]!.content).toContain('"id":"files.create"');
+  });
+
   it('fits the complete production action catalog without dropping admitted schemas', async () => {
     const exposed = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed();
     const snapshot = createJarvisCapabilitySnapshot({

@@ -31,6 +31,7 @@ export interface ExplorerSearchState {
   generation: number;
   /** Absolute folder(s) the active/last search used. */
   scopePath: string;
+  accessRoot: string | null;
   /** Parsed clue summary for UI. */
   clueSummary: string;
 }
@@ -59,6 +60,7 @@ let state: ExplorerSearchState = {
   model: '',
   generation: 0,
   scopePath: '',
+  accessRoot: null,
   clueSummary: '',
 };
 
@@ -71,7 +73,10 @@ function patch(partial: Partial<ExplorerSearchState>): void {
   emit();
 }
 
-export function getExplorerSearchState(): ExplorerSearchState {
+export function getExplorerSearchState(accessRoot?: string | null): ExplorerSearchState {
+  if (accessRoot !== undefined && (accessRoot?.trim() || null) !== state.accessRoot) {
+    return { ...state, hits: [], busy: false, status: '', scopePath: '', clueSummary: '' };
+  }
   return state;
 }
 
@@ -198,6 +203,7 @@ export async function startExplorerSearch(options: StartExplorerSearchOptions): 
     status: 'Planning multi-clue search…',
     panelOpen: true,
     scopePath: options.scopePath,
+    accessRoot: options.accessRoot?.trim() || null,
     provider,
     model,
     clueSummary,
@@ -363,6 +369,7 @@ export function __resetExplorerSearchRuntimeForTests(): void {
     model: '',
     generation: 0,
     scopePath: '',
+    accessRoot: null,
     clueSummary: '',
   };
   listeners.clear();

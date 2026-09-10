@@ -1981,15 +1981,23 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   };
   request.signal?.addEventListener('abort', abort, { once: true });
   let failureStage: PersistentTurnFailureStage = 'session_binding';
+  const requireActiveRequest = () => {
+    if (request.signal?.aborted) {
+      throw new DOMException('The OpenCode turn was aborted.', 'AbortError');
+    }
+  };
 
   try {
+    requireActiveRequest();
     const timing = { requestId: request.requestId, chatId, model: modelId };
     const session = await appActivityLog.trace('model.prepare.session', timing, () => sessions.sessionForChat(scope, chatId));
+    requireActiveRequest();
     const client = session.client as PersistentOpenCodeClient;
     const [baselineResult, catalogResult] = await Promise.allSettled([
       appActivityLog.trace('model.prepare.history', timing, () => client.http.messages(session.sessionId)),
       appActivityLog.trace('model.prepare.catalog', timing, () => liveModels(scope)),
     ]);
+    requireActiveRequest();
     if (baselineResult.status === 'rejected') {
       failureStage = 'session_binding';
       throw baselineResult.reason;
@@ -2025,6 +2033,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       request.explicitReadRoot === true,
     );
     failureStage = 'prompt_dispatch';
+    requireActiveRequest();
     const dispatch = await coordinator.dispatch({
       scope,
       chatId,
@@ -2059,6 +2068,12 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     if (dispatch.kind === 'command')
       throw new Error('VibeSpace slash commands must be consumed before provider dispatch.');
     if (dispatch.kind === 'rejected') throw new Error(dispatch.message);
+    if (request.signal?.aborted) {
+      // The first abort may have reached the server before this prompt was accepted.
+      // Retire the late acceptance before releasing the conversation for its next turn.
+      await client.abort(dispatch.sessionId).catch(() => undefined);
+      requireActiveRequest();
+    }
     if (dispatch.sessionId !== session.sessionId) {
       await client.abort(dispatch.sessionId).catch(() => undefined);
       throw new Error('OpenCode session identity changed after the current-turn baseline.');

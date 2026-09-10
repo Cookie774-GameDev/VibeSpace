@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetFileWorkspaceForTests } from './fileWorkspaceStore';
@@ -7,8 +7,8 @@ import { resetFileWorkspaceForTests } from './fileWorkspaceStore';
 const { createTextFileMock, deleteProjectFileMock, renameProjectFileMock, writeTextFileMock } =
   vi.hoisted(() => ({
     createTextFileMock: vi.fn(),
-  deleteProjectFileMock: vi.fn(),
-  renameProjectFileMock: vi.fn(),
+    deleteProjectFileMock: vi.fn(),
+    renameProjectFileMock: vi.fn(),
     writeTextFileMock: vi.fn(),
   }));
 
@@ -69,6 +69,7 @@ vi.mock('@/components/ui/toast', () => ({
 }));
 
 import { FilesPage } from './FilesPage';
+import { listDirectory } from '@/lib/fs';
 
 describe('FilesPage workspace flow', () => {
   beforeEach(() => {
@@ -102,7 +103,63 @@ describe('FilesPage workspace flow', () => {
     });
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it('ends a stuck root load with a recoverable error', async () => {
+    vi.useFakeTimers();
+    vi.mocked(listDirectory).mockImplementationOnce(() => new Promise(() => undefined));
+    render(<FilesPage />);
+    fireEvent.change(screen.getByLabelText('Project folder path'), {
+      target: { value: 'C:\\stuck' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.queryByText('Loading…')).toBeNull();
+    const { toast } = await import('@/components/ui/toast');
+    expect(toast.error).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('keeps the newer root when a previous folder completes late', async () => {
+    let finish!: (value: any) => void;
+    vi.mocked(listDirectory).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    vi.mocked(listDirectory).mockResolvedValueOnce({
+      ok: true,
+      path: 'C:\\new',
+      entries: [{ name: 'new.txt', path: 'C:\\new\\new.txt', isDir: false }],
+    });
+    render(<FilesPage />);
+    fireEvent.change(screen.getByLabelText('Project folder path'), {
+      target: { value: 'C:\\old' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.change(screen.getByLabelText('Project folder path'), {
+      target: { value: 'C:\\new' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    await screen.findByText('new.txt');
+    await act(async () => {
+      finish({
+        ok: true,
+        path: 'C:\\old',
+        entries: [{ name: 'old.txt', path: 'C:\\old\\old.txt', isDir: false }],
+      });
+    });
+    expect(screen.queryByText('old.txt')).toBeNull();
+    expect((screen.getByLabelText('Project folder path') as HTMLInputElement).value).toBe(
+      'C:\\new',
+    );
+  });
 
   it('keeps unsaved edits across file tabs and collapses Ask Jarvis without losing the file', async () => {
     render(<FilesPage />);

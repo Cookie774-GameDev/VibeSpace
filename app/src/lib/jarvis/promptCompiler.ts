@@ -1,3 +1,4 @@
+import { requestsNoTools } from '@/lib/ai/intent';
 import { reasoningModeInstructions } from '@/lib/ai/reasoningControls';
 import type {
   CompiledJarvisPrompt,
@@ -330,6 +331,17 @@ function renderCapabilities(
   const modelCapabilities = Object.entries(envelope.model.capabilities)
     .sort(([left], [right]) => stableCompare(left, right))
     .map(([id, enabled]) => `${inlineText(id)}=${enabled ? 'available' : 'unavailable'}`);
+  if (requestsNoTools(envelope.userText)) {
+    return [
+      'Use only capabilities represented by this verified snapshot. Never infer completion from availability.',
+      `Selected provider: ${inlineText(envelope.model.providerId)}`,
+      `Selected model: ${inlineText(envelope.model.modelId)}`,
+      `Connection mode: ${envelope.model.connectionMode}`,
+      `Model capabilities: ${modelCapabilities.join(', ') || 'none declared'}`,
+      'The user explicitly requested no tools for this turn.',
+      'Answer from the supplied conversation and admitted context. Do not invoke tools, delegate, or propose actions; do not claim unperformed work.',
+    ].join('\n');
+  }
   const groups = [
     ['Tools', envelope.capabilities.tools],
     ['Plugins', envelope.capabilities.plugins],
@@ -615,6 +627,7 @@ export function compileJarvisPrompt(
   const warnings: string[] = [];
   const omittedSourceRefs: JarvisSourceRef[] = [];
   const contextToolOnly =
+    !requestsNoTools(envelope.userText) &&
     envelope.model.capabilities.tools === true && requestsReadOnlyContextTool(envelope.userText);
   const directAddress = contextToolOnly && requestsDirectContextAddress(envelope.userText);
   const allAboutMeItems = envelope.context.items.filter(

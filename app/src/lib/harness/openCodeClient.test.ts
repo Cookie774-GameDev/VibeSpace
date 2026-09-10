@@ -352,3 +352,27 @@ describe('OpenCodeHttpClient', () => {
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('authorization')).toBeNull();
   });
 });
+
+
+it('uses project-scoped MCP browser authentication and removal endpoints, not ordinary connect', async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'connected' })))
+    .mockResolvedValueOnce(new Response('true'));
+  const client = createOpenCodeHttpClient(connection, { fetch });
+  await expect(client.authenticateMcp('supabase:readonly', 'C:/Project One')).resolves.toEqual({ status: 'connected' });
+  await expect(client.removeMcpAuth('supabase:readonly', 'C:/Project One')).resolves.toBe(true);
+  expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+    'http://127.0.0.1/mcp/supabase%3Areadonly/auth/authenticate?directory=C%3A%2FProject+One',
+    'http://127.0.0.1/mcp/supabase%3Areadonly/auth?directory=C%3A%2FProject+One',
+  ]);
+  expect(fetch.mock.calls.map(([, init]) => init?.method)).toEqual(['POST', 'DELETE']);
+});
+
+it('rejects false MCP authorization success and invalid names before contacting the sidecar', async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response('true'));
+  const client = createOpenCodeHttpClient(connection, { fetch });
+  await expect(client.authenticateMcp('supabase')).rejects.toThrow(/invalid MCP status/i);
+  fetch.mockClear();
+  await expect(client.authenticateMcp('unsafe/name')).rejects.toThrow();
+  expect(fetch).not.toHaveBeenCalled();
+});

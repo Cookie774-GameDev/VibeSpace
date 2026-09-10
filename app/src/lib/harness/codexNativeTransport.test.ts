@@ -7,6 +7,39 @@ import {
 } from './codexNativeTransport';
 
 describe('native Codex app-server transport', () => {
+  it('does not subscribe after cancellation while loading the bridge', async () => {
+    const controller = new AbortController();
+    const invoke = vi.fn(async () => undefined);
+    const bridge = async () => {
+      controller.abort();
+      return { invoke, channel: vi.fn() as never };
+    };
+    const stream = nativeCodexFrames('codex-generation-1', controller.signal, bridge);
+    const outcome = await Promise.race([
+      stream.next().then((value) => (value.done ? 'closed' : 'frame')),
+      new Promise<string>((resolve) => setTimeout(() => resolve('still pending'), 100)),
+    ]);
+    expect(outcome).toBe('closed');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('preserves native startup failure guidance as a bounded Error', async () => {
+    const bridge = async () => ({
+      invoke: async () => {
+        throw 'OpenCodex did not prove readiness.\nRetry startup.';
+      },
+      channel: vi.fn() as never,
+    });
+    await expect(
+      startNativeCodexAppServer(
+        'trusted-codex-1',
+        'chat-1',
+        'opencode-go/deepseek-v4-flash-vision-exp',
+        bridge,
+      ),
+    ).rejects.toEqual(new Error('OpenCodex did not prove readiness. Retry startup.'));
+  });
+
   it('starts only an existing trusted executable identity and returns an opaque generation', async () => {
     const invoke = vi.fn(async () => ({ generation: 'codex-generation-1' }));
     const result = await startNativeCodexAppServer(

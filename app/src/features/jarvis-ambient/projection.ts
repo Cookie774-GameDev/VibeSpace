@@ -70,7 +70,7 @@ export function projectJarvisAmbientSnapshot(
     }
   }
 
-  const active = input.voiceOpen ?? state !== 'idle';
+  const active = state !== 'idle' && (input.voiceOpen ?? true);
   // A closed HUD is authoritative even when a delayed task or audio callback arrives.
   if (!active) {
     state = 'idle';

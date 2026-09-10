@@ -1,9 +1,0 @@
-status=released_complete
-agent=/root/cao_chat_resume
-task=CAO live registry array integrity
-branch=integration/UnifiedChungus-final
-base=ed77ea6537f0930458aaa0c5acc4b56a8b1f6842
-files=app/src/lib/jarvis/executionJournal/caoTargetAuthority.ts;app/src/lib/jarvis/executionJournal/caoTargetAuthority.test.ts
-intent=Reject sparse or oversized live registry arrays at claim, verification, and release boundaries with stable redacted errors and exact cleanup.
-commit=adfa6928ed510ea2b281ed82c6903234e4f687bf
-released=2026-08-31T03:22:00-05:00
