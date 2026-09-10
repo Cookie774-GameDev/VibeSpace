@@ -762,6 +762,14 @@ fn run_bounded_ready_probe(mut command: Command, timeout: Duration) -> bool {
     }
 }
 
+fn isolated_codex_instance_root(storage_root: &Path, process_id: u32, owner_id: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    // A changing loopback port must not discard this chat's native caches and
+    // sessions. Keep separate homes for every app process and chat owner.
+    let owner_key = format!("{:x}", Sha256::digest(owner_id.as_bytes()));
+    storage_root.join("instances").join(format!("{process_id}-{owner_key}"))
+}
+
 fn start_owned_opencodex(
     app: &AppHandle,
     model_id: &str,
@@ -787,7 +795,7 @@ fn start_owned_opencodex(
         (provider.profile(port)?, provider.environment)
     };
     let storage_root = crate::harness::managed_codex_storage::storage_root(&app_data)?;
-    let instance_root = storage_root.join("instances").join(format!("{}-{port}", std::process::id()));
+    let instance_root = isolated_codex_instance_root(&storage_root, std::process::id(), owner_id);
     let paths = materialize_isolated_profile(&instance_root, &profile)
         .map_err(|_| "The isolated Codex proxy profile could not be prepared.".to_string())?;
     let managed_base = storage_root.join("managed-runtime");
@@ -1118,6 +1126,18 @@ pub fn shutdown_owned_server(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn isolated_codex_homes_reuse_only_the_exact_process_and_chat() {
+        let root = std::path::Path::new("D:/managed");
+        let first = super::isolated_codex_instance_root(root, 101, "chat-one");
+        assert_eq!(first, super::isolated_codex_instance_root(root, 101, "chat-one"));
+        assert_ne!(first, super::isolated_codex_instance_root(root, 102, "chat-one"));
+        assert_ne!(first, super::isolated_codex_instance_root(root, 101, "chat-two"));
+        let untrusted = super::isolated_codex_instance_root(root, 101, "../../other\\chat");
+        assert_eq!(untrusted.parent(), Some(root.join("instances").as_path()));
+        assert_eq!(untrusted.file_name().unwrap().to_str().unwrap().len(), 4 + 64);
+    }
+
     #[test]
     fn background_control_helpers_preserve_caller_and_generation_validation() {
         let state = super::CodexAppServerState::default();
