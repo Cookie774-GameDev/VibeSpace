@@ -7346,6 +7346,12 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         callId: 'opencode-tool-1',
         fileLabel: 'game.js',
       });
+      expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)).toMatchObject({
+        text: '',
+        segments: expect.arrayContaining([
+          { kind: 'tool', id: 'opencode-tool-1', name: 'read', status: 'started', fileLabel: 'game.js' },
+        ]),
+      });
       expect(
         useChatActivityStore
           .getState()

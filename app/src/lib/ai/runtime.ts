@@ -1660,13 +1660,14 @@ export async function installJarvisKernelRuntimeHost(
                 if (suppressProviderPreview || !scope || scope.requestId !== providerInput.requestId) return;
                 const decision = pushStreamingPreviewChunk(createStreamingPreviewState(),
                   [...previewTextParts.values()].join(''));
-                if (!decision.allowed) return;
+                // Tool lifecycle events do not depend on the model first writing prose.
+                if (!decision.allowed && !previewSegments.some(segment => segment.kind === 'tool')) return;
                 const segments = previewSegments.map(segment => {
                   if (segment.kind !== 'text') return { ...segment };
                   const safe = pushStreamingPreviewChunk(createStreamingPreviewState(), segment.text);
-                  return { ...segment, text: safe.allowed ? safe.visibleText : '' };
+                  return { ...segment, text: decision.allowed && safe.allowed ? safe.visibleText : '' };
                 });
-                setPreview({ ...scope, text: decision.visibleText, segments, updatedAt: now() });
+                setPreview({ ...scope, text: decision.allowed ? decision.visibleText : '', segments, updatedAt: now() });
               };
               const lastUserText = llmContentToText(
                 [...providerInput.messages].reverse().find((message) => message.role === 'user')
