@@ -394,32 +394,36 @@ describe('ChatView handoff workspace integration', () => {
     expect(await screen.findByTestId('chat-pane-chat-2')).toBeTruthy();
   });
 
-  it('accepts the sidebar open-beside event and global navigation fills the next free pane', async () => {
-    render(<ChatView />);
+  it('opens unrelated chats separately and restores each explicit group by any member', async () => {
+    const view = render(<ChatView />);
     window.dispatchEvent(
-      new CustomEvent(CHAT_OPEN_BESIDE_EVENT, {
-        detail: {
-          version: 1,
-          chatId: 'chat-2',
-          workspaceId: 'workspace-a',
-          projectId: 'project-a',
-          title: 'Chat 2',
-        },
-      }),
+      new CustomEvent(CHAT_OPEN_BESIDE_EVENT, { detail: openBesideDetail('chat-2') }),
     );
     await screen.findByTestId('chat-pane-chat-2');
-
     act(() => useUIStore.getState().setActiveChat('chat-3'));
-
-    await waitFor(() => expect(screen.getByTestId('chat-pane-chat-3')).toBeTruthy());
-    expect(screen.getByTestId('chat-pane-chat-1')).toBeTruthy();
-    expect(screen.getByTestId('chat-pane-chat-2')).toBeTruthy();
-    expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(3);
-    act(() => useUIStore.getState().setActiveChat('chat-4'));
+    await waitFor(() => expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(1));
+    expect(screen.getByTestId('chat-pane-chat-3')).toBeTruthy();
+    window.dispatchEvent(
+      new CustomEvent(CHAT_OPEN_BESIDE_EVENT, { detail: openBesideDetail('chat-4') }),
+    );
     await screen.findByTestId('chat-pane-chat-4');
-    expect(
-      screen.getAllByTestId(/^chat-pane-/).map((pane) => pane.getAttribute('data-chat-id')),
-    ).toEqual(['chat-1', 'chat-2', 'chat-3', 'chat-4']);
+    for (const [chatId, expected] of [
+      ['chat-1', ['chat-1', 'chat-2']],
+      ['chat-5', ['chat-5']],
+      ['chat-4', ['chat-3', 'chat-4']],
+      ['chat-2', ['chat-1', 'chat-2']],
+    ] as const) {
+      act(() => useUIStore.getState().setActiveChat(chatId));
+      await waitFor(() =>
+        expect(
+          screen.getAllByTestId(/^chat-pane-/).map((p) => p.getAttribute('data-chat-id')),
+        ).toEqual(expected),
+      );
+    }
+    view.unmount();
+    render(<ChatView />);
+    await screen.findByTestId('chat-pane-chat-1');
+    expect(screen.getByTestId('chat-pane-chat-2')).toBeTruthy();
   });
 
   it('focuses and closes panes without cancelling their independent runs', async () => {

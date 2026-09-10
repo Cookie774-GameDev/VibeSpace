@@ -105,6 +105,13 @@ export function loadChatWorkspaceLayout(
   if (!resolved) return fallback;
   const { target } = resolved;
   const key = chatWorkspaceStorageKey(scope);
+  try {
+    const groups = readGroups(target, key);
+    if (groups)
+      return groups.find((group) => group.chatIds.includes(scope.primaryChatId)) ?? fallback;
+  } catch {
+    return fallback;
+  }
   let stored: string | null;
   try {
     stored = target.getItem(key);
@@ -114,7 +121,7 @@ export function loadChatWorkspaceLayout(
   if (!stored) return fallback;
   try {
     const parsed = parseLayout(JSON.parse(stored));
-    if (parsed) return parsed;
+    if (parsed) return parsed.chatIds.includes(scope.primaryChatId) ? parsed : fallback;
   } catch {
     // Corrupt local state is discarded below and never blocks Chat startup.
   }
@@ -124,6 +131,23 @@ export function loadChatWorkspaceLayout(
     // Disabled storage is equivalent to no storage; the fallback remains usable.
   }
   return fallback;
+}
+
+// The old key remains a backwards-compatible snapshot. The group index owns
+// membership: selecting an unrelated chat must never inherit that snapshot.
+function readGroups(target: WorkspaceStorage, key: string): ChatWorkspaceLayoutV1[] | null {
+  const raw = target.getItem(`${key}.groups`);
+  if (!raw) return null;
+  try {
+    const values: unknown = JSON.parse(raw);
+    if (!Array.isArray(values)) return null;
+    const groups = values.map(parseLayout);
+    if (groups.some((group) => !group)) return null;
+    const ids = groups.flatMap((group) => group!.chatIds);
+    return new Set(ids).size === ids.length ? (groups as ChatWorkspaceLayoutV1[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function saveChatWorkspaceLayout(
@@ -138,6 +162,28 @@ export function saveChatWorkspaceLayout(
   const { target } = resolved;
   const key = chatWorkspaceStorageKey(scope);
   try {
+    let groups = readGroups(target, key);
+    if (!groups) {
+      let legacy: ChatWorkspaceLayoutV1 | null = null;
+      try {
+        legacy = parseLayout(JSON.parse(target.getItem(key) ?? 'null'));
+      } catch {
+        /* No valid old group. */
+      }
+      groups = legacy ? [legacy] : [];
+    }
+    const nextGroups = groups
+      .filter((group) => !group.chatIds.includes(scope.primaryChatId))
+      .map((group) =>
+        pruneChatWorkspaceLayout(
+          group,
+          group.chatIds.filter((id) => !parsed.chatIds.includes(id)),
+          group.focusedChatId,
+        ),
+      )
+      .filter((group): group is ChatWorkspaceLayoutV1 => !!group && group.chatIds.length > 1);
+    if (parsed.chatIds.length > 1) nextGroups.push(parsed);
+    target.setItem(`${key}.groups`, JSON.stringify(nextGroups));
     target.setItem(key, JSON.stringify(parsed));
   } catch {
     return { ok: false, reason: 'storage_unavailable' };
@@ -160,6 +206,7 @@ export function clearChatWorkspaceLayout(
   if (!resolved) return { ok: false, reason: 'storage_unavailable' };
   try {
     resolved.target.removeItem(chatWorkspaceStorageKey(scope));
+    resolved.target.removeItem(`${chatWorkspaceStorageKey(scope)}.groups`);
     return { ok: true };
   } catch {
     return { ok: false, reason: 'storage_unavailable' };
@@ -206,16 +253,7 @@ export function replacePrimaryChatPane(
   chatId: string,
 ): ChatWorkspaceLayoutV1 {
   if (layout.chatIds.includes(chatId)) return focusChatPane(layout, chatId);
-  // Opening a new chat in an existing split fills its next slot. Replacing the
-  // first pane here reordered the group and silently removed its first chat.
-  if (layout.chatIds.length > 1 && layout.chatIds.length < CHAT_WORKSPACE_PANE_LIMIT) {
-    return { ...layout, chatIds: [...layout.chatIds, chatId], focusedChatId: chatId };
-  }
-  return {
-    version: CHAT_WORKSPACE_LAYOUT_VERSION,
-    chatIds: [chatId, ...layout.chatIds.slice(1)],
-    focusedChatId: chatId,
-  };
+  return defaultLayout(chatId);
 }
 
 export function pruneChatWorkspaceLayout(
@@ -249,8 +287,7 @@ export function subscribeChatWorkspaceLayout(
   const onSameDocumentStorage = (event: Event) => {
     const detail = (event as CustomEvent<{ key?: string; layout?: unknown }>).detail;
     if (detail?.key !== key) return;
-    const layout = parseLayout(detail.layout);
-    if (layout) listener(layout);
+    if (parseLayout(detail.layout)) listener(loadChatWorkspaceLayout(scope));
   };
   const onStorage = (event: StorageEvent) => {
     if (event.key !== key) return;

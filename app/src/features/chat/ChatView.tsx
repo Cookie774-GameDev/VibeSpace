@@ -117,7 +117,9 @@ export function ChatView() {
       primaryChatId: String(activeChatId),
     };
   }, [activeChatId, cloudUserId, localUserId, projectId, workspaceId]);
-  const scopeKey = scope ? chatWorkspaceStorageKey(scope) : null;
+  const scopeKey = scope
+    ? `${chatWorkspaceStorageKey(scope)}:view:${encodeURIComponent(scope.primaryChatId)}`
+    : null;
   const [layoutState, setLayoutState] = useState<{
     key: string;
     layout: ChatWorkspaceLayoutV1;
@@ -184,6 +186,7 @@ export function ChatView() {
     if (!scope || !scopeKey) return;
     return subscribeChatWorkspaceLayout(scope, (layout) => {
       if (activeScopeKeyRef.current !== scopeKey) return;
+      if (layoutRef.current && sameLayout(layoutRef.current, layout)) return;
       operationEpochRef.current += 1;
       layoutRef.current = layout;
       setLayoutState({ key: scopeKey, layout });

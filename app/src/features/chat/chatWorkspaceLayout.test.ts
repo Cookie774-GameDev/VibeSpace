@@ -30,12 +30,66 @@ const onePane: ChatWorkspaceLayoutV1 = {
 describe('chatWorkspaceLayout', () => {
   beforeEach(() => localStorage.clear());
 
+  it('keeps separate groups and opens nonmembers alone, including after navigation and detach', () => {
+    const group = {
+      version: 1,
+      chatIds: ['chat-1', 'chat-2', 'chat-3', 'chat-4'],
+      focusedChatId: 'chat-1',
+    } as const;
+    saveChatWorkspaceLayout(scope, group);
+    const fifth = { ...scope, primaryChatId: 'chat-5' };
+    expect(loadChatWorkspaceLayout(fifth).chatIds).toEqual(['chat-5']);
+    saveChatWorkspaceLayout(fifth, {
+      version: 1,
+      chatIds: ['chat-5', 'chat-6'],
+      focusedChatId: 'chat-6',
+    });
+    expect(loadChatWorkspaceLayout(scope).chatIds).toEqual(group.chatIds);
+    expect(loadChatWorkspaceLayout({ ...scope, primaryChatId: 'chat-6' }).chatIds).toEqual([
+      'chat-5',
+      'chat-6',
+    ]);
+    saveChatWorkspaceLayout(scope, closeChatPane(group, 'chat-2'));
+    expect(loadChatWorkspaceLayout({ ...scope, primaryChatId: 'chat-2' }).chatIds).toEqual([
+      'chat-2',
+    ]);
+    expect(loadChatWorkspaceLayout(fifth).chatIds).toEqual(['chat-5', 'chat-6']);
+  });
+
   it('adds a unique pane in order and focuses it', () => {
     expect(addChatPane(onePane, 'chat-2')).toEqual({
       version: 1,
       chatIds: ['chat-1', 'chat-2'],
       focusedChatId: 'chat-2',
     });
+  });
+
+  it('preserves a legacy group and moves only the dragged member between groups', () => {
+    const old = {
+      version: 1,
+      chatIds: ['chat-1', 'chat-2', 'chat-3'],
+      focusedChatId: 'chat-1',
+    } as const;
+    localStorage.setItem(chatWorkspaceStorageKey(scope), JSON.stringify(old));
+    const other = { ...scope, primaryChatId: 'chat-4' };
+    expect(loadChatWorkspaceLayout(other).chatIds).toEqual(['chat-4']);
+    saveChatWorkspaceLayout(other, {
+      version: 1,
+      chatIds: ['chat-4', 'chat-5'],
+      focusedChatId: 'chat-4',
+    });
+    expect(loadChatWorkspaceLayout(scope).chatIds).toEqual(old.chatIds);
+    saveChatWorkspaceLayout(other, {
+      version: 1,
+      chatIds: ['chat-4', 'chat-5', 'chat-2'],
+      focusedChatId: 'chat-2',
+    });
+    expect(loadChatWorkspaceLayout(scope).chatIds).toEqual(['chat-1', 'chat-3']);
+    expect(loadChatWorkspaceLayout({ ...scope, primaryChatId: 'chat-2' }).chatIds).toEqual([
+      'chat-4',
+      'chat-5',
+      'chat-2',
+    ]);
   });
 
   it('focuses an existing pane without duplicating it', () => {
@@ -194,7 +248,7 @@ describe('chatWorkspaceLayout', () => {
     }
   });
 
-  it('fills the next free pane for global navigation without disturbing existing bindings', () => {
+  it('keeps global navigation outside a group separate', () => {
     expect(
       replacePrimaryChatPane(
         { version: 1, chatIds: ['chat-1', 'chat-2', 'chat-3'], focusedChatId: 'chat-2' },
@@ -202,7 +256,7 @@ describe('chatWorkspaceLayout', () => {
       ),
     ).toEqual({
       version: 1,
-      chatIds: ['chat-1', 'chat-2', 'chat-3', 'chat-4'],
+      chatIds: ['chat-4'],
       focusedChatId: 'chat-4',
     });
     expect(
