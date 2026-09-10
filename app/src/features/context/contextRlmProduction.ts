@@ -1807,7 +1807,16 @@ export function createContextMapRlmRepository(
             1,
             Math.floor(MAX_LEXICAL_CANDIDATES_PER_MAP / Math.max(1, lexicalQueries.length)),
           );
-          for (const lexicalQuery of lexicalQueries) {
+          // Literal index queries intersect their words. If all name/phrase
+          // probes miss, try the bounded keyword plan before declaring no evidence.
+          const queries = [...lexicalQueries, ...meaningfulPlan.terms];
+          for (const [queryIndex, lexicalQuery] of queries.entries()) {
+            if (queryIndex === lexicalQueries.length && matchesByDocument.size > 0) break;
+            if (
+              queryIndex >= lexicalQueries.length &&
+              matchesByDocument.size >= MAX_LEXICAL_CANDIDATES_PER_MAP
+            )
+              break;
             try {
               for (const match of parseSearchResults(
                 await dependencies.lexicalSearch(

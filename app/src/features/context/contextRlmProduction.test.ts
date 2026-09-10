@@ -2067,6 +2067,55 @@ describe('production Context Map RLM repository', () => {
     expect(hits.every((hit) => !hit.preview.includes('untrusted derivative excerpt'))).toBe(true);
   });
 
+  it('recovers ordinary questions when capitalized directives and phrase queries have no hits', async () => {
+    const content = 'Base price is 17. Service owner is Keira.';
+    const hash = await contentSha(content);
+    const fixtureMaps = maps();
+    fixtureMaps[0]!.tree.nodes = Array.from({ length: 312 }, (_, index) => ({
+      id: `file-${index}`,
+      kind: 'file' as const,
+      title: `shard-${index}.txt`,
+      summary: '',
+      path: `C:\\repo\\shard-${index}.txt`,
+      sizeBytes: content.length,
+      modifiedAt: 20,
+    }));
+    // The native literal index intersects terms. A natural-language phrase
+    // does not match merely because one useful keyword occurs in the source.
+    const lexicalSearch = vi.fn(async ({ query }: { query: string }) =>
+      query.split(/\s+/u).every((term) => content.toLowerCase().includes(term.toLowerCase()))
+        ? [{ documentId: 'file-2', excerpt: 'untrusted index excerpt', score: 10 }]
+        : [],
+    );
+    const stat = vi.fn(async (path: string) => ({
+      ok: true as const,
+      path,
+      kind: 'file' as const,
+      size: content.length,
+      modifiedMs: 20,
+      sha256: hash,
+    }));
+    const read = vi.fn(async (path: string) => ({ ok: true as const, path, content }));
+    const repository = createContextMapRlmRepository({
+      loadMaps: async () => fixtureMaps,
+      stat,
+      read,
+      lexicalSearch,
+    });
+
+    const hits = await repository.search(
+      { accountId: 'account-1', projectId: 'project-1' },
+      'Report pricing and ownership. Cite the base price and service owner from project files.',
+    );
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.preview).toContain('Keira');
+    expect(hits[0]!.preview).not.toContain('untrusted index excerpt');
+    expect(lexicalSearch.mock.calls.length).toBeLessThanOrEqual(20);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(stat.mock.calls.every(([path]) => path === 'C:\\repo\\shard-2.txt')).toBe(true);
+  });
+
   it('returns no large-map hits when its derivative index is empty', async () => {
     const fixtureMaps = maps();
     fixtureMaps[0]!.tree.nodes = Array.from({ length: 312 }, (_, index) => ({
