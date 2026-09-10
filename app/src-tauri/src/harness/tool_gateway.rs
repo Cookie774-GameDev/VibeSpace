@@ -15,6 +15,7 @@ const MAX_ID_BYTES: usize = 200;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_ACTIVE_CONNECTIONS: usize = 16;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const CONTEXT_INVESTIGATION_TIMEOUT: Duration = Duration::from_secs(120);
 const RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_MCP_CALL_IDS: usize = 4096;
 pub const TOOL_REQUEST_EVENT: &str = "vibespace://tool-gateway/request";
@@ -62,6 +63,16 @@ pub struct ToolGatewayRequest {
     pub directory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+}
+
+fn response_timeout(request: &ToolGatewayRequest) -> Duration {
+    if request.tool == "vibespace_context"
+        && matches!(request.args.get("operation").and_then(Value::as_str), Some("query" | "investigate"))
+    {
+        CONTEXT_INVESTIGATION_TIMEOUT
+    } else {
+        RESPONSE_TIMEOUT
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -840,6 +851,7 @@ fn handle_codex_mcp_connection(
                         directory: directory.map(str::to_string),
                         worktree: directory.map(str::to_string),
                     };
+                    let timeout = response_timeout(&request);
                     let receiver = pending.reserve(&request_id)?;
                     if !authority.dispatch(request, emit_request) {
                         pending.cancel(&request_id);
@@ -849,7 +861,7 @@ fn handle_codex_mcp_connection(
                             mcp_error(id, -32603, "Context routing unavailable")
                         }
                     } else {
-                        let deadline = Instant::now() + RESPONSE_TIMEOUT;
+                        let deadline = Instant::now() + timeout;
                         let tool_response = loop {
                             if authority.is_revoked() {
                                 pending.cancel(&request_id);
@@ -1219,7 +1231,7 @@ fn handle_connection(
         let _ = stream.write_all(&response);
         return Ok(());
     }
-    let response = match receiver.recv_timeout(RESPONSE_TIMEOUT) {
+    let response = match receiver.recv_timeout(response_timeout(&request)) {
         Ok(response) => response,
         Err(_) => {
             pending.cancel(&request.request_id);
@@ -1331,6 +1343,22 @@ mod tests {
             "worktree": "C:\\workspace"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn investigations_use_bounded_retrieval_budget_without_extending_other_tools() {
+        let mut item = parse_tool_request(&request("vibespace_context")).unwrap();
+        for operation in ["query", "investigate"] {
+            item.args = json!({ "operation": operation });
+            assert_eq!(super::response_timeout(&item), Duration::from_secs(120));
+        }
+        for operation in ["search", "open", "unknown"] {
+            item.args = json!({ "operation": operation });
+            assert_eq!(super::response_timeout(&item), Duration::from_secs(30));
+        }
+        item.tool = "command.run".into();
+        item.args = json!({ "operation": "investigate" });
+        assert_eq!(super::response_timeout(&item), Duration::from_secs(30));
     }
 
     fn codex_context_call(

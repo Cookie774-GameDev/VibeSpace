@@ -219,7 +219,13 @@ describe('provider capability catalog', () => {
       usage: false,
     });
     expect(getProviderConnectionDescriptor('qwen-code').capabilities).toEqual(external);
-    expect(getProviderConnectionDescriptor('opencode-cli').capabilities).toEqual(external);
+    expect(getProviderConnectionDescriptor('opencode-cli').capabilities).toEqual({
+      ...external,
+      tools: true,
+    });
+    expect(getProviderConnectionDescriptor('opencode-cli').toolAllowlist).toEqual([
+      'vibespace_context',
+    ]);
     expect(getProviderConnectionDescriptor('zai-coding-plan').capabilities).toEqual(external);
 
     const native = {

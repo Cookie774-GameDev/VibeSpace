@@ -7,6 +7,7 @@ import type {
   JarvisOutputContract,
 } from '@/lib/jarvis/contracts';
 import { JARVIS_IDENTITY_POLICY } from '@/lib/jarvis/identity';
+import { OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
 import { createJarvisRequestEnvelope, type JarvisRequestInput } from '@/lib/jarvis/requestEnvelope';
 
 vi.mock('@/stores/auth', () => ({
@@ -530,6 +531,35 @@ describe('compileJarvisPrompt', () => {
     expect(capabilityLayer).not.toContain(
       'For a single-question file research turn, first call `vibespace_context` with `operation="search"`',
     );
+  });
+
+  it('uses the real OpenCode connection to omit unrelated schemas and duplicated Context', async () => {
+    const compiled = compileJarvisPrompt(
+      await envelope({
+        userText: 'Across project files, report the base price and service owner. Cite each file.',
+        model: {
+          ...model(),
+          providerId: 'opencode',
+          modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+          connectionId: OPENCODE_CLI_CONNECTION.id,
+          connectionMode: OPENCODE_CLI_CONNECTION.mode,
+          capabilities: { ...OPENCODE_CLI_CONNECTION.capabilities },
+        },
+        capabilities: createJarvisCapabilitySnapshot({
+          ...capabilitySnapshot(),
+          actionSchemas: createJarvisActionCatalog(
+            DEFAULT_JARVIS_ACTION_REGISTRATIONS,
+          ).listExposed(),
+        }),
+        context: context([contextItem('duplicated-context', 'Unrelated context '.repeat(200))]),
+      }),
+    );
+
+    expect(compiled.layers[2]!.content).toContain('only provider tool enabled for this turn');
+    expect(compiled.layers[2]!.content).not.toContain('Model-visible action schemas:');
+    expect(compiled.layers[5]!.content).not.toContain('Unrelated context');
+    expect(compiled.systemText).toContain(JARVIS_IDENTITY_POLICY.responseContract);
+    expect(compiled.systemText.length).toBeLessThan(16_000);
   });
 
   it('keeps natural read-and-cite file questions inside the Context Map-only prompt budget', async () => {

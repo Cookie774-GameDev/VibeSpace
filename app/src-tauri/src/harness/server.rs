@@ -775,10 +775,14 @@ async function call(name, args, context) {
     await context.ask({ permission: name.replaceAll(".", "_"), patterns: [name], always: [],
       metadata: { title: `Allow ${name}`, args } })
   }
+  // Match the native bounded investigation budget; allow delivery of its timeout receipt.
+  const timeoutMs = name === "vibespace_context" && ["query", "investigate"].includes(args.operation) ? 125000 : 35000
+  const timeout = AbortSignal.timeout(timeoutMs)
+  const signal = context.abort ? AbortSignal.any([context.abort, timeout]) : timeout
   const response = await fetch(url, {
     method: "POST",
     redirect: "error",
-    signal: AbortSignal.timeout(30000),
+    signal,
     headers: {
       "authorization": `Bearer ${token}`,
       "content-type": "application/json",
@@ -797,7 +801,9 @@ async function call(name, args, context) {
   if (!response.ok) throw new Error(`VibeSpace Tool Gateway failed (${response.status}).`)
   const body = await response.text()
   if (body.length > 131072) throw new Error("VibeSpace tool result exceeded the safe size limit.")
-  const result = JSON.parse(body)
+  let result
+  try { result = JSON.parse(body) } catch { throw new Error("VibeSpace Tool Gateway returned an invalid response.") }
+  if (!result || typeof result !== "object") throw new Error("VibeSpace Tool Gateway returned an invalid response.")
   if (result.ok !== true) throw new Error(`VibeSpace tool did not complete (${result.code || "tool_failed"}).`)
   return body
 }
