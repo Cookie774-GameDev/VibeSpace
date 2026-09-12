@@ -1,11 +1,12 @@
 import * as React from 'react';
-import { AlertTriangle, ExternalLink, RefreshCw } from 'lucide-react';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import {
   blendedTokenPrice,
   fetchBenchmarkLeaderboard,
+  getCachedBenchmarkLeaderboard,
   intelligencePerDollar,
   type BenchmarkFetchResult,
   type BenchmarkModelRow,
@@ -136,18 +137,20 @@ function fullTime(value: string | undefined): string {
 function statusLabel(result: BenchmarkFetchResult | null): string {
   if (!result) return 'Loading';
   if (result.dataset?.completeness?.state === 'unverified' && result.freshness.state === 'fresh') {
-    return 'Degraded';
+    return 'Saved results';
   }
-  if (result.fromCache || result.freshness.state === 'stale') return 'Stale';
-  if (result.freshness.state === 'degraded') return 'Degraded';
+  if (result.fromCache || result.freshness.state === 'stale') return 'Saved results';
+  if (result.freshness.state === 'degraded') return 'Saved results';
   if (['failed', 'never'].includes(result.freshness.state)) return 'Unavailable';
   return 'Fresh';
 }
 
 export function BenchmarkIntelligencePage() {
-  const [result, setResult] = React.useState<BenchmarkFetchResult | null>(null);
+  const [result, setResult] = React.useState<BenchmarkFetchResult | null>(() =>
+    getCachedBenchmarkLeaderboard(),
+  );
   const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const [loading, setLoading] = React.useState(!result);
   const [refreshing, setRefreshing] = React.useState(false);
   const [provider, setProvider] = React.useState('all');
   const [ownership, setOwnership] = React.useState<OwnershipFilter>('all');
@@ -155,29 +158,38 @@ export function BenchmarkIntelligencePage() {
   const [sortKey, setSortKey] = React.useState<SortKey>('intelligence');
   const [sortDirection, setSortDirection] = React.useState<'asc' | 'desc'>('desc');
   const lastFetchRef = React.useRef(0);
+  const mountedRef = React.useRef(false);
+  const pendingRef = React.useRef(false);
+  const [visibleCount, setVisibleCount] = React.useState(50);
 
   const load = React.useCallback(async (manual = false) => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     if (manual) setRefreshing(true);
-    else setLoading(true);
     try {
-      const next = await fetchBenchmarkLeaderboard();
+      const next = await fetchBenchmarkLeaderboard(undefined, { force: manual });
+      if (!mountedRef.current) return;
       setResult(next);
       setError(null);
       lastFetchRef.current = Date.now();
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'The Artificial Analysis benchmark backend is unavailable.',
-      );
+    } catch {
+      if (mountedRef.current)
+        setError('Benchmarks are temporarily unavailable. Please try again shortly.');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      pendingRef.current = false;
+      if (mountedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   React.useEffect(() => {
+    mountedRef.current = true;
     void load();
+    return () => {
+      mountedRef.current = false;
+    };
   }, [load]);
 
   React.useEffect(() => {
@@ -218,6 +230,10 @@ export function BenchmarkIntelligencePage() {
     });
     return sortBenchmarkRows(rows, sortKey, sortDirection);
   }, [effort, ownership, provider, result, sortDirection, sortKey]);
+
+  React.useEffect(() => {
+    setVisibleCount(50);
+  }, [effort, ownership, provider, sortDirection, sortKey]);
 
   const chartRows = React.useMemo(
     () =>
@@ -281,34 +297,13 @@ export function BenchmarkIntelligencePage() {
               Benchmarks
             </h1>
             <p className="max-w-3xl text-secondary text-muted-foreground">
-              Current Artificial Analysis Intelligence Index rankings with exact evaluated variants,
-              price, speed, latency, context, and clearly labeled VibeSpace-derived comparisons.
+              Artificial Analysis Intelligence Index rankings with exact evaluated variants, price,
+              speed, latency, context, and clearly labeled VibeSpace-derived comparisons.
             </p>
             {result?.dataset ? (
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-metadata text-muted-foreground">
                 <span>{result.dataset.metric}</span>
-                <span>Observed: {fullTime(result.dataset.sourceObservedAt)}</span>
-                <span>Ingested: {fullTime(result.dataset.ingestedAt)}</span>
-                {(result.dataset.completeness?.state ?? 'unverified') === 'complete' &&
-                result.dataset.completeness?.pagination ? (
-                  <span data-benchmark-completeness="complete">
-                    Complete pages: {result.dataset.completeness.pagination.receivedPages}/
-                    {result.dataset.completeness.pagination.expectedPages} · source rows:{' '}
-                    {result.dataset.completeness.pagination.receivedSourceRows}
-                  </span>
-                ) : (
-                  <span data-benchmark-completeness="unverified">
-                    Dataset completeness: unverified
-                  </span>
-                )}
-                {result.latestRun ? (
-                  <span>
-                    Latest backend run: {result.latestRun.status}
-                    {result.latestRun.errorCodes.length
-                      ? ` (${result.latestRun.errorCodes.join(', ')})`
-                      : ''}
-                  </span>
-                ) : null}
+                <span>Updated: {fullTime(result.dataset.sourceObservedAt)}</span>
                 {result.dataset.methodologyVersion ? (
                   <span>Methodology: {result.dataset.methodologyVersion}</span>
                 ) : null}
@@ -329,26 +324,17 @@ export function BenchmarkIntelligencePage() {
             disabled={refreshing || loading}
           >
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
-            Refresh backend
+            Refresh
           </Button>
         </header>
 
-        {result?.freshness.warning ? (
+        {error && !result?.rows.length ? (
           <div
-            className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-foreground"
+            role="status"
+            className="rounded-xl border border-border px-4 py-3 text-sm text-muted-foreground"
             data-warm-surface="benchmarks-warning"
           >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-            <span>{result.freshness.warning}</span>
-          </div>
-        ) : null}
-        {error ? (
-          <div
-            className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-foreground"
-            data-warm-surface="benchmarks-warning"
-          >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-            <span>{error} No old Arena/Elo dataset will be relabeled as Intelligence Index.</span>
+            <span>{error}</span>
           </div>
         ) : null}
 
@@ -362,7 +348,7 @@ export function BenchmarkIntelligencePage() {
                 Top intelligence
               </h2>
               <p className="text-metadata text-muted-foreground">
-                Chart and table use the same D1 dataset.
+                Independent evaluations · higher scores indicate stronger performance.
               </p>
             </div>
             <span className="text-metadata text-muted-foreground">
@@ -377,7 +363,10 @@ export function BenchmarkIntelligencePage() {
                   className="grid grid-cols-[minmax(130px,240px)_1fr_3rem] items-center gap-3"
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-foreground">
+                    <div
+                      title={displayNames.get(row.id) ?? row.model}
+                      className="text-sm font-medium leading-snug text-foreground"
+                    >
                       {displayNames.get(row.id) ?? row.model}
                     </div>
                     <div className="truncate text-[11px] text-muted-foreground">{row.provider}</div>
@@ -397,8 +386,10 @@ export function BenchmarkIntelligencePage() {
           ) : (
             <p className="py-10 text-center text-sm text-muted-foreground">
               {loading
-                ? 'Loading the current D1 dataset…'
-                : 'No validated benchmark dataset is available.'}
+                ? 'Loading benchmarks…'
+                : result?.rows.length
+                  ? 'No models match these filters.'
+                  : 'Results will appear here when available.'}
             </p>
           )}
         </section>
@@ -503,7 +494,7 @@ export function BenchmarkIntelligencePage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row) => (
+                {filteredRows.slice(0, visibleCount).map((row) => (
                   <tr
                     key={row.id}
                     className="border-b border-border/60 align-top hover:bg-muted/30"
@@ -554,6 +545,16 @@ export function BenchmarkIntelligencePage() {
               </tbody>
             </table>
           </div>
+          {visibleCount < filteredRows.length ? (
+            <Button
+              variant="outline"
+              className="mt-4"
+              onClick={() => setVisibleCount((count) => count + 50)}
+            >
+              Show more models ({Math.min(visibleCount, filteredRows.length)} of{' '}
+              {filteredRows.length})
+            </Button>
+          ) : null}
         </section>
       </main>
     </div>

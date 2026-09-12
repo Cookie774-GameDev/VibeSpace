@@ -94,6 +94,9 @@ const LEGACY_CACHE_KEYS = [
   'jarvis-benchmark-cache-v5',
 ] as const;
 const DEFAULT_TIMEOUT_MS = 10_000;
+const CACHE_TTL_MS = 5 * 60_000;
+const inFlight = new Map<string, Promise<BenchmarkFetchResult>>();
+const memoryCache = new Map<string, { raw: string; envelope: CacheEnvelope }>();
 const MAX_INTELLIGENCE_INDEX = 199;
 
 interface CacheEnvelope {
@@ -393,20 +396,30 @@ export function clearLegacyBenchmarkCaches(
   for (const key of LEGACY_CACHE_KEYS) target.removeItem(key);
 }
 
-function readCache(): BenchmarkApiResponse | null {
+function cacheKey(origin: string): string {
+  return `${CACHE_KEY}:${new URL('/api/benchmarks', origin).href}`;
+}
+
+function readCache(origin: string): CacheEnvelope | null {
   if (typeof localStorage === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const key = cacheKey(origin);
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
+    const saved = memoryCache.get(key);
+    if (saved?.raw === raw) return saved.envelope;
     const envelope = JSON.parse(raw) as CacheEnvelope;
     if (envelope.version !== CACHE_VERSION) return null;
-    return parseBenchmarkResponse(envelope.payload);
+    if (!Number.isFinite(Date.parse(envelope.cachedAt))) return null;
+    envelope.payload = parseBenchmarkResponse(envelope.payload);
+    memoryCache.set(key, { raw, envelope });
+    return envelope;
   } catch {
     return null;
   }
 }
 
-function writeCache(payload: BenchmarkApiResponse): void {
+function writeCache(payload: BenchmarkApiResponse, origin: string): void {
   if (typeof localStorage === 'undefined' || !payload.dataset || payload.rows.length === 0) return;
   try {
     const envelope: CacheEnvelope = {
@@ -414,10 +427,27 @@ function writeCache(payload: BenchmarkApiResponse): void {
       cachedAt: new Date().toISOString(),
       payload,
     };
-    localStorage.setItem(CACHE_KEY, JSON.stringify(envelope));
+    const raw = JSON.stringify(envelope);
+    const key = cacheKey(origin);
+    localStorage.setItem(key, raw);
+    memoryCache.set(key, { raw, envelope });
   } catch {
     // Cache is a startup optimization only; D1 remains authoritative.
   }
+}
+
+/** Immediate validated data for route remounts; refresh never blocks this read. */
+export function getCachedBenchmarkLeaderboard(
+  origin = configuredBenchmarkApiUrl(),
+): BenchmarkFetchResult | null {
+  const cached = readCache(origin);
+  if (!cached) return null;
+  const expired = Date.now() - Date.parse(cached.cachedAt) >= CACHE_TTL_MS;
+  return {
+    ...cached.payload,
+    fromCache: true,
+    freshness: expired ? { ...cached.payload.freshness, state: 'stale' } : cached.payload.freshness,
+  };
 }
 
 export function configuredBenchmarkApiUrl(): string {
@@ -428,12 +458,32 @@ export function configuredBenchmarkApiUrl(): string {
   return DEFAULT_NEWS_API_URL;
 }
 
-export async function fetchBenchmarkLeaderboard(
+export function fetchBenchmarkLeaderboard(
   origin = configuredBenchmarkApiUrl(),
   {
     fetcher = nativeFetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
-  }: { fetcher?: FetchLike; timeoutMs?: number } = {},
+    force = false,
+  }: { fetcher?: FetchLike; timeoutMs?: number; force?: boolean } = {},
+): Promise<BenchmarkFetchResult> {
+  const key = new URL('/api/benchmarks', origin).href;
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const cached = readCache(origin);
+  if (!force && cached && Date.now() - Date.parse(cached.cachedAt) < CACHE_TTL_MS) {
+    return Promise.resolve({ ...cached.payload, fromCache: true });
+  }
+  const request = requestBenchmarkLeaderboard(origin, fetcher, timeoutMs).finally(() => {
+    if (inFlight.get(key) === request) inFlight.delete(key);
+  });
+  inFlight.set(key, request);
+  return request;
+}
+
+async function requestBenchmarkLeaderboard(
+  origin: string,
+  fetcher: FetchLike,
+  timeoutMs: number,
 ): Promise<BenchmarkFetchResult> {
   clearLegacyBenchmarkCaches();
   const controller = new AbortController();
@@ -446,10 +496,13 @@ export async function fetchBenchmarkLeaderboard(
     });
     if (!response.ok) throw new Error(`Benchmark request failed (${response.status}).`);
     const parsed = parseBenchmarkResponse(await response.json());
-    writeCache(parsed);
+    if (!parsed.dataset || parsed.rows.length === 0) {
+      throw new Error('Benchmarks are temporarily unavailable.');
+    }
+    writeCache(parsed, origin);
     return { ...parsed, fromCache: false };
   } catch (error) {
-    const cached = readCache();
+    const cached = readCache(origin)?.payload;
     if (!cached) throw error;
     return {
       ...cached,

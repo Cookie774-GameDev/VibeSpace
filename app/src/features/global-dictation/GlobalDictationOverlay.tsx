@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Mic, MicOff, RotateCcw, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuthStore } from '@/stores/auth';
 import { Toaster } from '@/components/ui/toast';
 import { VoiceActivityWaveform } from '@/features/voice/VoiceActivityWaveform';
 import { createGlobalDictationSession, type GlobalDictationSession } from './dictationSession';
@@ -49,7 +50,16 @@ export function GlobalDictationOverlay({
   const sessionRef = React.useRef<GlobalDictationSession | null>(null);
   const latestInterimRef = React.useRef('');
   const stateRef = React.useRef<OverlayState>('ready');
-  stateRef.current = state;
+  const generationRef = React.useRef(0);
+  const startingRef = React.useRef(false);
+  const finishWhenReadyRef = React.useRef(false);
+  const finalizeRef = React.useRef<() => Promise<void>>(async () => {});
+  const pasteTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearedTextRef = React.useRef('');
+  const updateState = React.useCallback((next: OverlayState) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
 
   const resetTranscript = React.useCallback(() => {
     setPartial('');
@@ -59,6 +69,10 @@ export function GlobalDictationOverlay({
   }, []);
 
   const teardownSession = React.useCallback(() => {
+    generationRef.current += 1;
+    finishWhenReadyRef.current = false;
+    if (pasteTimerRef.current !== null) clearTimeout(pasteTimerRef.current);
+    pasteTimerRef.current = null;
     const session = sessionRef.current;
     sessionRef.current = null;
     session?.cancel();
@@ -67,126 +81,189 @@ export function GlobalDictationOverlay({
   const failVisible = React.useCallback(
     (message: string) => {
       teardownSession();
-      stateRef.current = 'error';
-      setState('error');
+      updateState('error');
       setErrorMessage(message);
     },
-    [teardownSession],
+    [teardownSession, updateState],
   );
 
   const start = React.useCallback(async () => {
-    if (sessionRef.current) return;
+    if (
+      startingRef.current ||
+      sessionRef.current ||
+      ['starting', 'transcribing', 'pasting'].includes(stateRef.current)
+    )
+      return;
+    startingRef.current = true;
+    const generation = ++generationRef.current;
+    const current = () => generationRef.current === generation;
+    clearedTextRef.current = '';
     resetTranscript();
     setErrorMessage('');
-    setState('starting');
+    updateState('starting');
     try {
+      // The hidden WebView outlives Settings changes in the main window.
+      await useAuthStore.persist.rehydrate();
+      if (!current()) return;
       const session = await createGlobalDictationSession({
-        onOpen: () => setState('listening'),
+        onOpen: () => {
+          if (current()) updateState('listening');
+        },
         onPartial: (text) => {
+          if (!current()) return;
           latestInterimRef.current = text;
           setPartial(text);
         },
         onFinal: (text) => {
+          if (!current()) return;
+          if (clearedTextRef.current && text.startsWith(clearedTextRef.current))
+            text = text.slice(clearedTextRef.current.length).trim();
           latestInterimRef.current = '';
           setFinalText(text);
           setPartial(text);
         },
         onLevel: (level) => {
-          levelRef.current = level;
+          if (current()) levelRef.current = level;
         },
-        onError: (message) => failVisible(formatGlobalDictationSessionFailure(message)),
+        onError: (message) => {
+          if (current()) failVisible(formatGlobalDictationSessionFailure(message));
+        },
         onClose: () => {
-          if (stateRef.current === 'listening') setState('ready');
+          if (current() && stateRef.current === 'listening') updateState('ready');
         },
       });
+      if (!current()) {
+        session.cancel();
+        return;
+      }
       sessionRef.current = session;
       setEngineLabel(session.engineLabel);
+      if (finishWhenReadyRef.current) {
+        finishWhenReadyRef.current = false;
+        void finalizeRef.current();
+      }
     } catch (err) {
-      failVisible(formatGlobalDictationStartupFailure(err));
+      if (current()) failVisible(formatGlobalDictationStartupFailure(err));
+    } finally {
+      startingRef.current = false;
     }
-  }, [failVisible, resetTranscript]);
+  }, [failVisible, resetTranscript, updateState]);
 
   /** Finalize the session and paste the transcript into the focused app. */
   const confirmAndPaste = React.useCallback(async () => {
     const session = sessionRef.current;
-    if (!session) return;
+    if (!session || ['transcribing', 'pasting'].includes(stateRef.current)) return;
+    const generation = generationRef.current;
+    updateState('transcribing');
+    try {
+      await session.stop();
+    } catch {
+      if (generationRef.current === generation)
+        failVisible(formatGlobalDictationSessionFailure(''));
+      return;
+    }
+    if (generationRef.current !== generation) return;
     sessionRef.current = null;
-    setState('transcribing');
-    await session.stop();
 
-    const baseText = (session.getFinalText() || finalText).trim();
+    let baseText = (session.getFinalText() || finalText).trim();
+    if (clearedTextRef.current && baseText.startsWith(clearedTextRef.current))
+      baseText = baseText.slice(clearedTextRef.current.length).trim();
     const interimText = latestInterimRef.current.trim();
     const text =
       baseText && interimText && !baseText.endsWith(interimText)
         ? `${baseText} ${interimText}`
         : baseText || interimText;
-    resetTranscript();
     if (!text) {
       if (stateRef.current !== 'error') {
         failVisible(formatGlobalDictationEmptyFailure());
       }
       return;
     }
-    setState('pasting');
+    updateState('pasting');
     try {
       await getCurrentWindow().hide();
-      window.setTimeout(() => {
+      if (generationRef.current !== generation) return;
+      pasteTimerRef.current = setTimeout(() => {
+        pasteTimerRef.current = null;
+        if (generationRef.current !== generation) return;
         void invoke('dictation_paste_text', { text })
-          .then(() => setState('ready'))
+          .then(() => {
+            if (generationRef.current === generation) {
+              resetTranscript();
+              updateState('ready');
+            }
+          })
           .catch(async (err) => {
+            if (generationRef.current !== generation) return;
             // The overlay is hidden at this point - bring it back so the
             // failure is visible instead of vanishing into a hidden toast.
             await getCurrentWindow()
               .show()
               .catch(() => undefined);
-            failVisible(formatGlobalDictationPasteFailure(err));
+            if (generationRef.current === generation)
+              failVisible(formatGlobalDictationPasteFailure(err));
           });
       }, 120);
     } catch (err) {
       failVisible(formatGlobalDictationPasteFailure(err));
     }
-  }, [failVisible, finalText, resetTranscript]);
+  }, [failVisible, finalText, resetTranscript, updateState]);
+  finalizeRef.current = confirmAndPaste;
 
   const cancelAndHide = React.useCallback(() => {
     teardownSession();
     resetTranscript();
     setErrorMessage('');
-    setState('ready');
+    updateState('ready');
     void getCurrentWindow().hide();
-  }, [resetTranscript, teardownSession]);
+  }, [resetTranscript, teardownSession, updateState]);
 
   /** Clear the transcript but keep dictating. */
   const clearTranscript = React.useCallback(() => {
+    clearedTextRef.current = sessionRef.current?.getFinalText() ?? '';
     resetTranscript();
     const session = sessionRef.current;
     if (session && !session.streaming) {
       // Batch engines buffer raw audio - restart the recorder for a clean take.
       teardownSession();
+      updateState('ready');
       void start();
     }
-  }, [resetTranscript, start, teardownSession]);
+  }, [resetTranscript, start, teardownSession, updateState]);
+
+  const toggleRef = React.useRef(() => {});
+  toggleRef.current = () => {
+    if (startingRef.current) {
+      finishWhenReadyRef.current = true;
+      return;
+    }
+    if (['transcribing', 'pasting'].includes(stateRef.current)) return;
+    if (sessionRef.current) void confirmAndPaste();
+    else {
+      void getCurrentWindow().show();
+      void getCurrentWindow().setFocus();
+      void start();
+    }
+  };
 
   React.useEffect(() => {
     if (!runtimeEffectsEnabled) return;
-    const onToggle = () => {
-      void getCurrentWindow().show();
-      void getCurrentWindow().setFocus();
-      if (sessionRef.current) {
-        void confirmAndPaste();
-      } else {
-        void start();
-      }
-    };
+    const onToggle = () => toggleRef.current();
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen('jarvis:global-dictation-toggle', onToggle).then((off) => {
-      unlisten = off;
+      if (disposed) off();
+      else unlisten = off;
     });
     window.addEventListener('jarvis:global-dictation-toggle', onToggle);
     return () => {
+      disposed = true;
       unlisten?.();
       window.removeEventListener('jarvis:global-dictation-toggle', onToggle);
     };
-  }, [confirmAndPaste, runtimeEffectsEnabled, start]);
+  }, [runtimeEffectsEnabled]);
+
+  React.useEffect(() => () => teardownSession(), [teardownSession]);
 
   React.useEffect(() => {
     if (!runtimeEffectsEnabled) return;
@@ -195,7 +272,7 @@ export function GlobalDictationOverlay({
         event.preventDefault();
         cancelAndHide();
       }
-      if (event.key === 'Enter') {
+      if (event.key === 'Enter' && !event.repeat) {
         event.preventDefault();
         if (sessionRef.current) void confirmAndPaste();
         else if (stateRef.current === 'error') void start();
@@ -209,13 +286,13 @@ export function GlobalDictationOverlay({
   const busy = state === 'transcribing' || state === 'pasting';
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-transparent p-2">
+    <div className="flex min-h-screen items-center justify-center bg-transparent p-1">
       <div
         data-tauri-drag-region
         data-monochrome-surface="global-dictation"
         className={cn(
-          'w-[228px] select-none rounded-2xl border border-accent-copper/45',
-          'bg-background/94 px-3 py-2 text-foreground shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl',
+          'w-full max-w-[228px] max-h-[112px] overflow-y-auto select-none rounded-2xl border border-accent-copper/45',
+          'bg-background/94 px-2.5 py-1.5 text-foreground shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl',
           '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none',
         )}
       >
@@ -226,9 +303,9 @@ export function GlobalDictationOverlay({
               if (sessionRef.current) void confirmAndPaste();
               else void start();
             }}
-            disabled={busy}
+            disabled={busy || state === 'starting'}
             className={cn(
-              'flex h-8 w-8 items-center justify-center rounded-full border transition-colors disabled:opacity-60',
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors disabled:opacity-60',
               listening
                 ? 'border-accent-copper bg-accent-copper/18 text-accent-copper'
                 : 'border-border bg-panel text-muted-foreground hover:text-foreground',
@@ -238,10 +315,12 @@ export function GlobalDictationOverlay({
             {listening ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
           </button>
           <div data-tauri-drag-region className="min-w-0 flex-1">
-            <div className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-accent-copper">
+            <div className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-accent-copper">
               VibeSpace Dictation
             </div>
             <div
+              title={state === 'error' ? errorMessage : partial || STATE_HINT[state]}
+              role="status"
               className={cn(
                 'truncate text-[11px]',
                 state === 'error' ? 'text-destructive' : 'text-muted-foreground',
@@ -282,7 +361,9 @@ export function GlobalDictationOverlay({
           </div>
         ) : (
           <>
-            <VoiceActivityWaveform levelRef={levelRef} active={listening} />
+            <div className="h-5 [&_canvas]:!h-5">
+              <VoiceActivityWaveform levelRef={levelRef} active={listening} />
+            </div>
             <div className="flex items-center justify-between gap-2">
               <button
                 type="button"
@@ -294,7 +375,7 @@ export function GlobalDictationOverlay({
                 Clear
               </button>
               <div className="text-center text-[9px] text-muted-foreground">
-                Enter paste · Esc cancel · drag to move
+                Ctrl+Space paste · Esc cancel
               </div>
             </div>
           </>

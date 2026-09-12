@@ -39,6 +39,7 @@ vi.mock('@/features/voice/VoiceActivityWaveform', () => ({
 }));
 
 import { GlobalDictationOverlay } from './GlobalDictationOverlay';
+import { useAuthStore } from '@/stores/auth';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -55,7 +56,7 @@ function fakeSession(finalText: string, engineLabel = 'Built-in speech recogniti
     engine: 'web-speech' as const,
     engineLabel,
     streaming: true,
-    stop: vi.fn(async () => undefined),
+    stop: vi.fn(async (): Promise<void> => undefined),
     cancel: vi.fn(),
     getFinalText: () => finalText,
   };
@@ -108,6 +109,26 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(screen.getByText('Built-in speech recognition')).toBeTruthy();
     // The OS dictation command is NEVER part of the overlay path.
     expect(tauriMocks.invoke).not.toHaveBeenCalledWith('trigger_os_dictation');
+  });
+
+  it('reads speech settings changed in the main window before opening the hidden-window session', async () => {
+    useAuthStore.setState({ composerSttProvider: 'system' });
+    const saved = JSON.parse(localStorage.getItem('jarvis-auth')!);
+    saved.state.composerSttProvider = 'faster-whisper';
+    localStorage.setItem('jarvis-auth', JSON.stringify(saved));
+    let providerAtStart: string | undefined;
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      providerAtStart = useAuthStore.getState().composerSttProvider;
+      cb.onOpen?.();
+      return fakeSession('', 'Local faster-whisper');
+    });
+    try {
+      render(<GlobalDictationOverlay />);
+      await openOverlay();
+      expect(providerAtStart).toBe('faster-whisper');
+    } finally {
+      useAuthStore.setState({ composerSttProvider: 'system' });
+    }
   });
 
   it('shows a visible error state with Retry and a settings fix path when no engine exists', async () => {
@@ -283,6 +304,67 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(session.cancel).toHaveBeenCalled();
     expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
     expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
+  });
+
+  it('serializes rapid toggles while the microphone is starting', async () => {
+    let resolveSession!: (session: ReturnType<typeof fakeSession>) => void;
+    sessionMocks.createSession.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    await openOverlay();
+    expect(sessionMocks.createSession).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveSession(fakeSession(''));
+    });
+  });
+
+  it('cancels a microphone session that opens after Escape', async () => {
+    let resolveSession!: (session: ReturnType<typeof fakeSession>) => void;
+    const session = fakeSession('late words');
+    sessionMocks.createSession.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await act(async () => {
+      resolveSession(session);
+    });
+    expect(session.cancel).toHaveBeenCalledOnce();
+    expect(tauriMocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it('does not paste a transcription that completes after cancellation', async () => {
+    let finish!: () => void;
+    const session = fakeSession('cancelled words');
+    session.stop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      cb.onOpen?.();
+      return session;
+    });
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    await openOverlay();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    tauriMocks.windowApi.hide.mockClear();
+    await act(async () => {
+      finish();
+    });
+    expect(session.cancel).toHaveBeenCalledOnce();
+    expect(tauriMocks.windowApi.hide).not.toHaveBeenCalled();
   });
 
   it('Clear wipes the transcript while a streaming session keeps running', async () => {

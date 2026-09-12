@@ -1,10 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ fetchBenchmarkLeaderboard: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchBenchmarkLeaderboard: vi.fn(),
+  getCachedBenchmarkLeaderboard: vi.fn(() => null),
+}));
 vi.mock('./benchmarkApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./benchmarkApi')>()),
   fetchBenchmarkLeaderboard: api.fetchBenchmarkLeaderboard,
+  getCachedBenchmarkLeaderboard: api.getCachedBenchmarkLeaderboard,
 }));
 
 import { BenchmarkIntelligencePage } from './BenchmarkIntelligencePage';
@@ -55,16 +59,25 @@ describe('BenchmarkIntelligencePage', () => {
     vi.useFakeTimers();
     try {
       const view = render(<BenchmarkIntelligencePage />);
-      await act(async () => { await Promise.resolve(); });
+      await act(async () => {
+        await Promise.resolve();
+      });
       const initial = api.fetchBenchmarkLeaderboard.mock.calls.length;
-      await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1000); });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      });
       expect(api.fetchBenchmarkLeaderboard.mock.calls.length).toBe(initial + 1);
       view.unmount();
-      await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1000); });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      });
       expect(api.fetchBenchmarkLeaderboard.mock.calls.length).toBe(initial + 1);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
   beforeEach(() => {
+    api.getCachedBenchmarkLeaderboard.mockReturnValue(null);
     api.fetchBenchmarkLeaderboard.mockResolvedValue({
       generatedAt: '2026-08-14T23:08:00.000Z',
       freshness: { state: 'fresh', ageMs: 60000 },
@@ -79,6 +92,35 @@ describe('BenchmarkIntelligencePage', () => {
       rows,
       fromCache: false,
     });
+  });
+
+  it('renders saved models immediately while a refresh is pending', async () => {
+    const saved = await api.fetchBenchmarkLeaderboard();
+    api.getCachedBenchmarkLeaderboard.mockReturnValueOnce(saved);
+    api.fetchBenchmarkLeaderboard.mockReturnValueOnce(new Promise(() => {}));
+    render(<BenchmarkIntelligencePage />);
+    expect(screen.getAllByText('Claude Opus 5 (Max Effort)')).toHaveLength(2);
+    expect(screen.queryByText('Loading benchmarks…')).toBeNull();
+  });
+
+  it('renders a bounded table while keeping every model reachable', async () => {
+    const saved = await api.fetchBenchmarkLeaderboard();
+    api.fetchBenchmarkLeaderboard.mockResolvedValueOnce({
+      ...saved,
+      rows: Array.from({ length: 120 }, (_, index) => ({
+        ...rows[0],
+        id: `model-${index}`,
+        model: `Model ${index}`,
+        rank: index + 1,
+      })),
+    });
+    render(<BenchmarkIntelligencePage />);
+    await screen.findByText('Show more models (50 of 120)');
+    expect(screen.getAllByRole('row')).toHaveLength(51);
+    fireEvent.click(screen.getByRole('button', { name: 'Show more models (50 of 120)' }));
+    expect(screen.getAllByRole('row')).toHaveLength(101);
+    fireEvent.click(screen.getByRole('button', { name: 'Show more models (100 of 120)' }));
+    expect(screen.getAllByRole('row')).toHaveLength(121);
   });
 
   it('renders Artificial Analysis and excludes the removed comparison/valuation UI', async () => {
@@ -127,9 +169,9 @@ describe('BenchmarkIntelligencePage', () => {
       fromCache: false,
     });
     render(<BenchmarkIntelligencePage />);
-    expect(await screen.findByText('Degraded')).toBeTruthy();
+    expect(await screen.findByText('Saved results')).toBeTruthy();
     expect(screen.queryByText(/^Fresh$/u)).toBeNull();
-    expect(screen.getByText('Dataset completeness: unverified')).toBeTruthy();
+    expect(screen.queryByText('Dataset completeness: unverified')).toBeNull();
   });
 
   it('sorts by exact-row input price and output speed', async () => {
@@ -149,6 +191,29 @@ describe('BenchmarkIntelligencePage', () => {
         .filter((cell) => /Claude Opus 5|GPT-5.6 Sol/.test(cell.textContent ?? ''));
       expect(cells[0]?.textContent).toContain('GPT-5.6 Sol');
     });
+  });
+
+  it('keeps backend diagnostics out of the customer page', async () => {
+    const value = await api.fetchBenchmarkLeaderboard();
+    api.fetchBenchmarkLeaderboard.mockResolvedValueOnce({
+      ...value,
+      freshness: { state: 'degraded', warning: 'Internal D1 error AA_DUPLICATE_VARIANT' },
+      latestRun: { status: 'failed', errorCodes: ['AA_DUPLICATE_VARIANT'] },
+    });
+    render(<BenchmarkIntelligencePage />);
+    await screen.findAllByText('Claude Opus 5 (Max Effort)');
+    expect(screen.queryByText(/AA_DUPLICATE_VARIANT|D1|backend|Ingested:/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeTruthy();
+    expect(screen.getByText('Saved results')).toBeTruthy();
+  });
+
+  it('uses a neutral retry message for an unavailable first load', async () => {
+    api.fetchBenchmarkLeaderboard.mockRejectedValueOnce(new Error('private backend /sql/query'));
+    render(<BenchmarkIntelligencePage />);
+    expect(
+      await screen.findByText('Benchmarks are temporarily unavailable. Please try again shortly.'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/private backend|sql\/query|Arena\/Elo/)).toBeNull();
   });
 
   it('disambiguates genuine upstream variants with the same provider and model label', async () => {

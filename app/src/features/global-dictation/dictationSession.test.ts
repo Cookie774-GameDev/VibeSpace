@@ -161,6 +161,31 @@ describe('createGlobalDictationSession engine resolution', () => {
     expect(mocks.voiceService.stopListening).toHaveBeenCalled();
   });
 
+  it('keeps listening through normal browser silence and restart events', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const onError = vi.fn();
+    const session = await createSelectedSttSession({ onError });
+    try {
+      for (const kind of ['no_speech', 'aborted']) {
+        mocks.voiceHandlers.get('voice:error')?.({ kind, message: 'normal restart' } as never);
+      }
+      expect(onError).not.toHaveBeenCalled();
+      expect(mocks.voiceService.stopListening).not.toHaveBeenCalled();
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it('waits for the browser final result after stop before returning the transcript', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const session = await createSelectedSttSession();
+    const stopping = session.stop();
+    mocks.voiceHandlers.get('voice:final')?.({ text: 'last spoken words' } as never);
+    mocks.voiceHandlers.get('voice:end')?.(undefined as never);
+    await stopping;
+    expect(session.getFinalText()).toBe('last spoken words');
+  });
+
   it('preserves the closed browser-recognition startup diagnostic', async () => {
     mocks.voiceService.isSupported.mockReturnValue(true);
     const onError = vi.fn();
@@ -210,12 +235,15 @@ describe('createGlobalDictationSession engine resolution', () => {
     mocks.deepgramKey.value = 'disposable-test-key';
     const onTurnEnd = vi.fn();
     const first = await createSelectedSttSession({ onTurnEnd });
-    const firstEvents = (mocks.deepgramSession.mock.calls.at(-1) as unknown as [
-      { onTurnEnd?: () => void },
-    ])[0];
+    const firstEvents = (
+      mocks.deepgramSession.mock.calls.at(-1) as unknown as [{ onTurnEnd?: () => void }]
+    )[0];
     firstEvents.onTurnEnd?.();
     expect(onTurnEnd).toHaveBeenCalledOnce();
-    const replacement = await createSelectedSttSession({}, { supersedeActive: true, requester: 'jarvis-voice' });
+    const replacement = await createSelectedSttSession(
+      {},
+      { supersedeActive: true, requester: 'jarvis-voice' },
+    );
     try {
       firstEvents.onTurnEnd?.();
       expect(onTurnEnd).toHaveBeenCalledOnce();

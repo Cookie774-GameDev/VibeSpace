@@ -148,6 +148,9 @@ async function createWebSpeechSession(
   let finalText = '';
   let done = false;
   let opened = false;
+  let stopping: Promise<void> | null = null;
+  let finishStop: (() => void) | null = null;
+  let stopTimer: ReturnType<typeof setTimeout> | null = null;
   let meter: FasterWhisperRecorder | null = null;
   const offs = [
     VoiceService.on('voice:start', () => {
@@ -166,22 +169,28 @@ async function createWebSpeechSession(
       events.onFinal?.(finalText);
     }),
     VoiceService.on('voice:error', ({ kind, message }) => {
+      // Chromium emits these when idle or restarting its continuous session.
+      // VoiceService already resumes listening; a normal pause is not a failure.
+      if (kind === 'no_speech' || kind === 'aborted') return;
       events.onError?.(formatGlobalDictationSessionFailure(message));
-      if (kind !== 'no_speech' && kind !== 'aborted') teardown();
+      teardown();
     }),
     VoiceService.on('voice:end', () => {
-      if (!VoiceService.isListening() && !VoiceService.wantsListening()) teardown();
+      if (stopping || (!VoiceService.isListening() && !VoiceService.wantsListening())) teardown();
     }),
   ];
 
   const teardown = () => {
     if (done) return;
     done = true;
+    if (stopTimer !== null) clearTimeout(stopTimer);
+    stopTimer = null;
     offs.forEach((off) => off());
     meter?.stop();
     meter = null;
     VoiceService.stopListening();
     events.onClose?.();
+    finishStop?.();
   };
 
   try {
@@ -208,7 +217,18 @@ async function createWebSpeechSession(
     engine: 'web-speech',
     engineLabel: 'Built-in speech recognition',
     streaming: true,
-    stop: async () => teardown(),
+    stop: () => {
+      if (done) return Promise.resolve();
+      if (stopping) return stopping;
+      // Keep result listeners alive until recognition's final result/end event.
+      // A bounded wait also handles engines that never send an end notification.
+      stopping = new Promise<void>((resolve) => {
+        finishStop = resolve;
+      });
+      stopTimer = setTimeout(teardown, 1_200);
+      VoiceService.stopListening();
+      return stopping;
+    },
     cancel: () => {
       finalText = '';
       teardown();

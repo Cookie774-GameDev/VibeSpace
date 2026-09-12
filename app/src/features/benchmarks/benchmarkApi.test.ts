@@ -3,6 +3,7 @@ import {
   blendedTokenPrice,
   clearLegacyBenchmarkCaches,
   fetchBenchmarkLeaderboard,
+  getCachedBenchmarkLeaderboard,
   intelligencePerDollar,
   parseBenchmarkResponse,
 } from './benchmarkApi';
@@ -148,9 +149,51 @@ describe('benchmark API contract', () => {
     expect(live.fromCache).toBe(false);
 
     const failure = vi.fn(async () => new Response('unavailable', { status: 503 }));
-    const cached = await fetchBenchmarkLeaderboard('https://bench.example', { fetcher: failure });
+    const cached = await fetchBenchmarkLeaderboard('https://bench.example', {
+      fetcher: failure,
+      force: true,
+    });
     expect(cached.fromCache).toBe(true);
     expect(cached.freshness.state).toBe('stale');
     expect(cached.rows[0]?.intelligenceIndex).toBe(61);
+  });
+
+  it('returns saved results synchronously and skips a fresh repeat request', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(payload())));
+    await fetchBenchmarkLeaderboard('https://fast.example', { fetcher });
+    expect(getCachedBenchmarkLeaderboard('https://fast.example')?.rows[0]?.intelligenceIndex).toBe(
+      61,
+    );
+    const repeat = await fetchBenchmarkLeaderboard('https://fast.example', { fetcher });
+    expect(repeat.fromCache).toBe(true);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(getCachedBenchmarkLeaderboard('https://other.example')).toBeNull();
+  });
+
+  it('shares simultaneous requests and preserves saved rows on an empty refresh', async () => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const first = fetchBenchmarkLeaderboard('https://shared.example', { fetcher });
+    const second = fetchBenchmarkLeaderboard('https://shared.example', { fetcher });
+    expect(fetcher).toHaveBeenCalledOnce();
+    finish(new Response(JSON.stringify(payload())));
+    await Promise.all([first, second]);
+    const empty = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify(payload({ dataset: null, rows: [], freshness: { state: 'failed' } })),
+        ),
+    );
+    const saved = await fetchBenchmarkLeaderboard('https://shared.example', {
+      fetcher: empty,
+      force: true,
+    });
+    expect(saved.rows).toHaveLength(1);
+    expect(saved.freshness.state).toBe('stale');
   });
 });
