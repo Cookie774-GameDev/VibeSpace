@@ -5,6 +5,13 @@ html[data-theme='warm'] [data-vibespace-page='chat'] [data-tour='chat-composer']
   padding: 0;
   background: transparent;
   box-shadow: none;
+  width: calc((100% - clamp(32px, 4.4vw, 72px)) * 0.65);
+  margin-inline: auto;
+}
+
+html[data-theme='warm'] [data-vibespace-page='chat'] .chat-workspace-pane[data-multi-pane='true'] [data-composer-frame='layered'] {
+  width: calc((100% - 16px) * 0.65);
+  margin-inline: auto;
 }
 
 html[data-theme='warm'] [data-vibespace-page='chat'] [data-composer-frame='layered'] .composer-frame-body {
