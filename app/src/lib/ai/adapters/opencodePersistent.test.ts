@@ -322,6 +322,94 @@ async function drain(iterator: AsyncIterator<ProviderEvent>): Promise<void> {
 }
 
 describe('persistent OpenCode question transport authority', () => {
+  it.each(['/provider', '/config/providers'])('accepts a cold catalog taking longer than 15 seconds at %s without replaying a prompt', async (route) => {
+    vi.useFakeTimers();
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.split('?')[0] === route) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 16_000);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(init.signal?.reason);
+          }, { once: true });
+        });
+      }
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('cold-catalog'))[Symbol.asyncIterator]();
+    const outcome = iterator.next().then(value => ({ value }), error => ({ error }));
+    try {
+      await vi.advanceTimersByTimeAsync(16_001);
+      expect(await outcome).toMatchObject({ value: { done: false, value: { type: 'session', sessionId: 'ses_question_exact' } } });
+      expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(1);
+      expect(nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.startsWith('/global/health'))?.[3]).toBe(5_000);
+      expect(nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.includes('/prompt_async'))?.[3]).toBe(30_000);
+    } finally {
+      await iterator.return?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it('initializes the catalog alongside session binding but never dispatches before both finish', async () => {
+    vi.useFakeTimers();
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let releaseSession!: () => void;
+    const heldSession = new Promise<void>(resolve => { releaseSession = resolve; });
+    let sessionStarted!: () => void;
+    const started = new Promise<void>(resolve => { sessionStarted = resolve; });
+    let catalogStarted = false;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (/^\/session(?:\?|$)/u.test(path) && init?.method === 'POST') { sessionStarted(); await heldSession; }
+      if (path.startsWith('/config/providers')) catalogStarted = true;
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('parallel-catalog'))[Symbol.asyncIterator]();
+    const outcome = iterator.next();
+    try {
+      await started;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(catalogStarted).toBe(true);
+      expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(0);
+    } finally {
+      releaseSession();
+      await outcome;
+      await iterator.return?.();
+      vi.useRealTimers();
+    }
+    expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(1);
+  });
+
+  it('releases a cancelled turn immediately while shared catalog initialization is still pending', async () => {
+    vi.useFakeTimers();
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let releaseCatalog!: () => void;
+    const heldCatalog = new Promise<void>(resolve => { releaseCatalog = resolve; });
+    let catalogStarted!: () => void;
+    const started = new Promise<void>(resolve => { catalogStarted = resolve; });
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/config/providers')) { catalogStarted(); await heldCatalog; }
+      return original(generation, path, init, timeout);
+    });
+    const controller = new AbortController();
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('cancel-cold-catalog', controller.signal))[Symbol.asyncIterator]();
+    let result: unknown;
+    const outcome = iterator.next().then(value => { result = value; }, error => { result = error; });
+    try {
+      await started;
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toMatchObject({ name: 'AbortError' });
+      expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(0);
+    } finally {
+      releaseCatalog();
+      await outcome;
+      await iterator.return?.();
+      vi.useRealTimers();
+    }
+    expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(0);
+  });
+
   it('continues an exactly accepted prompt after an ambiguous dispatch timeout without resending', async () => {
     configureManagedQuestionTransport([questionAskedEvent()]);
     const original = nativeOpenCodeMocks.request.getMockImplementation()!;

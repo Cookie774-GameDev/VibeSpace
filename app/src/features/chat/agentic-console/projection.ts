@@ -747,9 +747,6 @@ export function summarizeAgenticSession(
       }
     }
   }
-  const startedAt =
-    typeof evidence.startedAt === 'number' ? evidence.startedAt : (earliestStartedAt ?? '—');
-  const endedAt = typeof evidence.endedAt === 'number' ? evidence.endedAt : (latestEndedAt ?? '—');
   const evidenceStatus = String(evidence.status ?? '').toLowerCase();
   const mappedStatus: AgenticSessionSummary['status'] | undefined =
     /awaiting|blocked|approval|permission/.test(evidenceStatus)
@@ -771,9 +768,22 @@ export function summarizeAgenticSession(
                     : /done|complete|success/.test(evidenceStatus)
                       ? 'done'
                       : undefined;
+  // A terminal snapshot can remain selected while the next turn prepares.
+  // It must not own the new turn's status, operation, or elapsed-time fields.
+  const staleTerminalEvidence =
+    mappedStatus !== undefined &&
+    ['done', 'error', 'cancelled', 'partial'].includes(mappedStatus) &&
+    typeof evidence.endedAt === 'number' &&
+    Number.isFinite(evidence.endedAt) &&
+    evidence.endedAt < latestUserAt;
+  if (staleTerminalEvidence) {
+    running = dedupeActivity(activity).find((event) =>
+      (event.startedAt ?? event.ts) >= latestUserAt &&
+      (event.status === 'running' || event.status === 'pending'));
+  }
   const inferredStatus: AgenticSessionSummary['status'] = running
     ? 'running'
-    : hasAssistantAnswer && latestUserAt > latestAnswerAt
+    : (hasAssistantAnswer || staleTerminalEvidence) && latestUserAt > latestAnswerAt
       ? 'recovering'
       : hasError
       ? 'error'
@@ -784,11 +794,17 @@ export function summarizeAgenticSession(
           : hasCompletedActivity || hasAssistantAnswer
             ? 'done'
             : 'idle';
-  const status = mappedStatus ?? inferredStatus;
+  const status = staleTerminalEvidence ? inferredStatus : (mappedStatus ?? inferredStatus);
+  const startedAt = staleTerminalEvidence
+    ? latestUserAt
+    : typeof evidence.startedAt === 'number' ? evidence.startedAt : (earliestStartedAt ?? '—');
+  const endedAt = staleTerminalEvidence
+    ? '—'
+    : typeof evidence.endedAt === 'number' ? evidence.endedAt : (latestEndedAt ?? '—');
   return {
     status,
     currentOperation:
-      (evidence.currentOperation
+      (!staleTerminalEvidence && evidence.currentOperation
         ? sanitizeConsoleText(evidence.currentOperation, 4096)
         : undefined) ??
       (running?.title ? sanitizeConsoleText(running.title, 4096) : undefined) ??

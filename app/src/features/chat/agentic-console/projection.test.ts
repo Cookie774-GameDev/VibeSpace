@@ -39,6 +39,48 @@ describe('projectAgenticTranscript', () => {
     expect(summarizeAgenticSession([...messages, message('new', 'assistant', 3, [{ kind: 'text', text: 'New result' }])], []).status).toBe('done');
   });
 
+  it.each(['completed', 'failed', 'cancelled', 'partial'])('ignores stale %s evidence while a newer request prepares', (status) => {
+    const messages = [
+      message('old', 'assistant', 2, [{ kind: 'text', text: 'Earlier result' }]),
+      message('new', 'user', 20, [{ kind: 'text', text: 'Read the next file' }]),
+    ];
+    const activity: ChatActivityEvent[] = [
+      { id: 'old-work', chatId: 'chat-1', kind: 'tool', status: 'running', title: 'Earlier command', ts: 3 },
+      { id: 'new-work', chatId: 'chat-1', kind: 'agent', status: 'pending', title: 'Preparing current request', ts: 21 },
+    ];
+    expect(summarizeAgenticSession(messages, activity, {
+      status, currentOperation: 'Earlier run result', startedAt: 1, endedAt: 4,
+    })).toMatchObject({
+      status: 'running', currentOperation: 'Preparing current request',
+      startedAt: 20, endedAt: '—', durationMs: '—',
+    });
+  });
+
+  it('does not retain an older completed label or duration while a newer saved request awaits status', () => {
+    const messages = [
+      message('old', 'assistant', 2, [{ kind: 'text', text: 'Earlier result' }]),
+      message('new', 'user', 20, [{ kind: 'text', text: 'A new request' }]),
+    ];
+    expect(summarizeAgenticSession(messages, [], {
+      status: 'completed', currentOperation: 'completed', startedAt: 1, endedAt: 4,
+    })).toMatchObject({
+      status: 'recovering', currentOperation: 'Checking saved request status',
+      startedAt: 20, endedAt: '—', durationMs: '—',
+    });
+  });
+
+  it.each([
+    ['completed', 'done'], ['failed', 'error'], ['cancelled', 'cancelled'], ['partial', 'partial'],
+  ])('retains authoritative %s evidence for the current request', (status, expected) => {
+    const messages = [message('new', 'user', 20, [{ kind: 'text', text: 'A new request' }])];
+    expect(summarizeAgenticSession(messages, [], {
+      status, currentOperation: 'Current outcome', startedAt: 20, endedAt: 25,
+    })).toMatchObject({
+      status: expected, currentOperation: 'Current outcome', startedAt: 20, endedAt: 25, durationMs: 5,
+    });
+    expect(summarizeAgenticSession(messages, [], { status }).status).toBe(expected);
+  });
+
   it('uses the provider total when cached tokens are separately reported', () => {
     expect(summarizeAgenticSession([message('total', 'assistant', 1, [], {input_tokens: 626, output_tokens: 228, total_tokens: 41814, cache_read_tokens: 40960})], []).tokenCount).toBe(41814);
   });

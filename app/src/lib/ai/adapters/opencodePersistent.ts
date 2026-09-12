@@ -273,6 +273,31 @@ function unwrapData(value: unknown): unknown {
   return record && 'data' in record ? record.data : value;
 }
 
+// Cold project-scoped discovery may initialize providers before returning.
+// This grace applies only to read-only catalog routes, never prompt dispatch.
+const PROVIDER_CATALOG_TIMEOUT_MS = 60_000;
+
+function awaitOpenCodePreparation<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      reject(new DOMException('The OpenCode turn was aborted.', 'AbortError'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    // The bounded shared catalog may finish for another caller after this turn
+    // stops. Observe both outcomes without cancelling its generation-safe load.
+    void pending.then((value) => {
+      signal.removeEventListener('abort', abort);
+      resolve(value);
+    }, (error) => {
+      signal.removeEventListener('abort', abort);
+      reject(error);
+    });
+    if (signal.aborted) abort();
+  });
+}
+
 class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
   constructor(readonly handle: OpenCodeServerHandle) {}
 
@@ -283,7 +308,7 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
 
   readonly config = {
     providers: async (): Promise<unknown> =>
-      requestJson(this.handle.generation, this.handle.scope, '/config/providers', {}, 15_000),
+      requestJson(this.handle.generation, this.handle.scope, '/config/providers', {}, PROVIDER_CATALOG_TIMEOUT_MS),
   };
 
   readonly command = {
@@ -419,7 +444,7 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
   }
 
   async providerState(): Promise<unknown> {
-    return requestJson(this.handle.generation, this.handle.scope, '/provider', {}, 15_000);
+    return requestJson(this.handle.generation, this.handle.scope, '/provider', {}, PROVIDER_CATALOG_TIMEOUT_MS);
   }
 }
 
@@ -1990,14 +2015,20 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   try {
     requireActiveRequest();
     const timing = { requestId: request.requestId, chatId, model: modelId };
-    const session = await appActivityLog.trace('model.prepare.session', timing, () => sessions.sessionForChat(scope, chatId));
-    requireActiveRequest();
-    const client = session.client as PersistentOpenCodeClient;
-    const [baselineResult, catalogResult] = await Promise.allSettled([
-      appActivityLog.trace('model.prepare.history', timing, () => client.http.messages(session.sessionId)),
+    const sessionReady = appActivityLog.trace('model.prepare.session', timing, () => sessions.sessionForChat(scope, chatId));
+    const [sessionResult, baselineResult, catalogResult] = await awaitOpenCodePreparation(Promise.allSettled([
+      sessionReady,
+      sessionReady.then((session) => {
+        requireActiveRequest();
+        return appActivityLog.trace('model.prepare.history', timing,
+          () => (session.client as PersistentOpenCodeClient).http.messages(session.sessionId));
+      }),
       appActivityLog.trace('model.prepare.catalog', timing, () => liveModels(scope)),
-    ]);
+    ]), request.signal);
     requireActiveRequest();
+    if (sessionResult.status === 'rejected') throw sessionResult.reason;
+    const session = sessionResult.value;
+    const client = session.client as PersistentOpenCodeClient;
     if (baselineResult.status === 'rejected') {
       failureStage = 'session_binding';
       throw baselineResult.reason;
