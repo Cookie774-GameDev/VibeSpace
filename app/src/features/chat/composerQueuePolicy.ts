@@ -9,6 +9,7 @@ export interface QueuedChatMessage {
   id: string;
   text: string;
   createdAt: number;
+  attachments?: import('./Composer').QueuedComposerAttachments;
   /** When this item should leave the queue and hit the model. */
   flushMode: QueueFlushMode;
 }

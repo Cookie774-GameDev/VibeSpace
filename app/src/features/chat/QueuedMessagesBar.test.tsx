@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildQueuedMultitaskCommand,
   dispatchQueuedMessageAfterAcceptance,
@@ -13,101 +13,68 @@ const queued: QueuedChatMessage[] = [
   { id: 'q_1', text: 'First queued request', createdAt: 1, flushMode: 'after-run' },
 ];
 
-const longQueued: QueuedChatMessage[] = [
-  {
-    id: 'q_long',
-    text: 'Jarvis make me a file here: "C:\\Users\\viper\\Downloads" okay and write a very long 500 word story about dogs and also cats and also birds so the queued text is extremely long and must not cover the multitask button controls',
-    createdAt: 2,
-    flushMode: 'after-tool',
-  },
-];
-
+afterEach(cleanup);
 describe('QueuedMessagesBar', () => {
-  it('shows queued messages with edit, multitask, send now, and delete controls', () => {
-    const onEdit = vi.fn();
-    const onSendNow = vi.fn();
-    const onStartMultitask = vi.fn();
-    const onDelete = vi.fn();
-
+  it('steers and deletes directly, with edit and side chat in options', () => {
+    const onEdit = vi.fn(),
+      onSendNow = vi.fn(),
+      onDelete = vi.fn(),
+      onOpenSideChat = vi.fn();
     render(
       <QueuedMessagesBar
         messages={queued}
         onEdit={onEdit}
         onSendNow={onSendNow}
-        onStartMultitask={onStartMultitask}
         onDelete={onDelete}
+        onStartMultitask={vi.fn()}
+        onOpenSideChat={onOpenSideChat}
       />,
     );
-
-    expect(screen.getByLabelText('Queued messages')).toBeTruthy();
-    expect(screen.getByText('1 queued')).toBeTruthy();
-    expect(screen.getByText(/First queued request/i)).toBeTruthy();
-    expect(screen.getByText(/Enter after tool/i)).toBeTruthy();
-    expect(screen.getByText(/After run/i)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: /Edit queued message/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Start multitask for queued message/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Send queued message now/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Delete queued message/i }));
-
-    expect(onEdit).toHaveBeenCalledWith('q_1');
-    expect(onStartMultitask).toHaveBeenCalledWith('q_1');
+    fireEvent.click(screen.getByRole('button', { name: 'Steer queued message' }));
     expect(onSendNow).toHaveBeenCalledWith('q_1');
+    fireEvent.click(screen.getByRole('button', { name: 'Queued message options' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit queued message' }));
+    expect(onEdit).toHaveBeenCalledWith('q_1');
+    fireEvent.click(screen.getByRole('button', { name: 'Queued message options' }));
+    expect(screen.queryByText('Turn on queuing')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open in side chat' }));
+    expect(onOpenSideChat).toHaveBeenCalledWith('q_1');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete queued message' }));
     expect(onDelete).toHaveBeenCalledWith('q_1');
   });
-
-  it('keeps multitask and action buttons available when the queued text is very long', () => {
-    const onStartMultitask = vi.fn();
+  it('keeps model switches on the existing stop-and-restart action', () => {
+    const restart = vi.fn(),
+      steer = vi.fn();
     render(
       <QueuedMessagesBar
-        messages={longQueued}
+        messages={queued}
+        isModelSwitch={() => true}
+        onStopAndRestart={restart}
         onEdit={vi.fn()}
-        onSendNow={vi.fn()}
-        onStartMultitask={onStartMultitask}
+        onSendNow={steer}
         onDelete={vi.fn()}
-      />,
-    );
-
-    const multitask = screen.getByRole('button', { name: /Start multitask for queued message/i });
-    const edit = screen.getByRole('button', { name: /Edit queued message/i });
-    const send = screen.getByRole('button', { name: /Send queued message now/i });
-    const del = screen.getByRole('button', { name: /Delete queued message/i });
-
-    expect(multitask).toBeTruthy();
-    expect(edit).toBeTruthy();
-    expect(send).toBeTruthy();
-    expect(del).toBeTruthy();
-
-    // Row uses a fixed actions column so long text cannot remove controls from the tree.
-    const row = multitask.closest('.group');
-    expect(row?.className).toMatch(/grid-cols-\[minmax\(0,1fr\)_auto\]/);
-
-    fireEvent.click(multitask);
-    expect(onStartMultitask).toHaveBeenCalledWith('q_long');
-  });
-
-  it('offers a scoped stop/restart action instead of concurrent send for a model switch', () => {
-    const onStopAndRestart = vi.fn();
-    render(
-      <QueuedMessagesBar
-        messages={[
-          { id: 'switch-1', text: 'Use my local model.', createdAt: 3, flushMode: 'after-run' },
-        ]}
-        onEdit={vi.fn()}
-        onSendNow={vi.fn()}
         onStartMultitask={vi.fn()}
-        onDelete={vi.fn()}
-        isModelSwitch={(message) => message.text === 'Use my local model.'}
-        onStopAndRestart={onStopAndRestart}
       />,
     );
-
-    expect(screen.queryByRole('button', { name: /send queued message now/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /start multitask/i })).toBeNull();
     fireEvent.click(
-      screen.getByRole('button', { name: /stop current reply and restart with model switch/i }),
+      screen.getByRole('button', { name: 'Stop current reply and restart with model switch' }),
     );
-    expect(onStopAndRestart).toHaveBeenCalledWith('switch-1');
+    expect(restart).toHaveBeenCalledWith('q_1');
+    expect(steer).not.toHaveBeenCalled();
+  });
+  it('disables actions during delivery', () => {
+    render(
+      <QueuedMessagesBar
+        messages={queued}
+        busyId="q_1"
+        onEdit={vi.fn()}
+        onSendNow={vi.fn()}
+        onDelete={vi.fn()}
+        onStartMultitask={vi.fn()}
+      />,
+    );
+    for (const button of screen.getAllByRole('button'))
+      expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

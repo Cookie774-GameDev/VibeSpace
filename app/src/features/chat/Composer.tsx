@@ -1,3 +1,4 @@
+import { openQueuedSideChat, registerQueueSideSender } from './queueSideChat';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AxoMotion } from '@/components/ui/AxoMotion';
 import './composer-frame.css';
@@ -628,6 +629,17 @@ const KERNEL_SMOKE_HIVE_STEPS: readonly StackStepSpec[] = Object.freeze([
     systemAppend: 'Verify the fixed deterministic Hive smoke draft.',
   }),
 ]);
+
+export interface QueuedComposerAttachments {
+  files: string[];
+  images: ChatImageAttachment[];
+  terminals: TerminalRef[];
+  plugins: string[];
+  contexts: ContextChatAttachment[];
+  commands: ConfirmedCommand[];
+  agents: ConfirmedAgentMention[];
+  catalog: ConfirmedCatalogReference[];
+}
 
 export interface ComposerProps {
   chatId: ChatId | string;
@@ -1512,7 +1524,7 @@ export function Composer({
     setJarvisRunning(retained?.status === 'running');
     setStoppedRequest(retained?.status === 'cancelled');
     activeCancellationKeyRef.current =
-      retained?.status === 'running' ? retained.cancellationKey ?? null : null;
+      retained?.status === 'running' ? (retained.cancellationKey ?? null) : null;
     const onRunState = (event: Event) => {
       const detail = (event as CustomEvent<{ chatId?: string; status?: string }>).detail;
       if (String(detail?.chatId) !== String(chatId)) return;
@@ -1586,15 +1598,27 @@ export function Composer({
         : null,
     });
     if (!queued) return false;
-    const item = queued.message;
+    const item = { ...queued.message, attachments: structuredClone(currentComposerAttachments) };
     if (queued.payload && queued.visibleHandoffKey) {
       queuedHandoffsRef.current.set(item.id, {
         payload: queued.payload,
         visibleHandoffKey: queued.visibleHandoffKey,
       });
     }
-    setQueuedMessages((current) => [...current, item]);
+    setQueuedMessages((current) => {
+      const next = [...current, item];
+      queuedMessagesRef.current = next;
+      return next;
+    });
     setText('');
+    setAttachedFiles([]);
+    setAttachedImages([]);
+    setAttachedTerminals([]);
+    setAttachedPlugins([]);
+    setAttachedContexts([]);
+    setConfirmedCommands([]);
+    setConfirmedAgentMentions([]);
+    setConfirmedCatalogReferences([]);
     const notice = getQueuedMessageNotice(item.text, flushMode);
     toast.info(notice.title, notice.body);
     return true;
@@ -1603,7 +1627,20 @@ export function Composer({
   const editQueuedMessage = (id: string) => {
     setQueuedMessages((current) => {
       const queued = current.find((message) => message.id === id);
-      if (queued) setText(queued.text);
+      if (queued) {
+        setText(queued.text);
+        if (queued.attachments) {
+          const a = queued.attachments;
+          setAttachedFiles(a.files);
+          setAttachedImages(a.images);
+          setAttachedTerminals(a.terminals);
+          setAttachedPlugins(a.plugins);
+          setAttachedContexts(a.contexts);
+          setConfirmedCommands(a.commands);
+          setConfirmedAgentMentions(a.agents);
+          setConfirmedCatalogReferences(a.catalog);
+        }
+      }
       queuedHandoffsRef.current.delete(id);
       return current.filter((message) => message.id !== id);
     });
@@ -2473,12 +2510,20 @@ export function Composer({
         Date.now(),
       );
       if (backend === 'codex' && chatModelSelection.mode !== 'single') {
-        const option = accessibleChatModels.flatOptions.find(option => option.connectionId === 'openai-codex');
-        const selection = selectionFromOption('openai', option?.modelId ?? 'gpt-5.4-mini',
-          getProviderConnectionDescriptor('openai-codex'));
+        const option = accessibleChatModels.flatOptions.find(
+          (option) => option.connectionId === 'openai-codex',
+        );
+        const selection = selectionFromOption(
+          'openai',
+          option?.modelId ?? 'gpt-5.4-mini',
+          getProviderConnectionDescriptor('openai-codex'),
+        );
         if (selection.mode === 'single') {
           await chatRepo.update(chatId as ChatId, {
-            connection: { ...getProviderConnectionDescriptor('openai-codex'), modelId: selection.modelId },
+            connection: {
+              ...getProviderConnectionDescriptor('openai-codex'),
+              modelId: selection.modelId,
+            },
           });
           setRetainedExactChatSelection(selection);
           setChatModelSelection(selection);
@@ -2986,7 +3031,8 @@ export function Composer({
         setRuntimePolicy(next);
         if (result.kind === 'updated' || result.kind === 'status') await addSystem(result.message);
         if (result.kind === 'updated') {
-          const effort = requested === 'auto' ? null : requested ?? parseReasoningEffortArgument(rest);
+          const effort =
+            requested === 'auto' ? null : (requested ?? parseReasoningEffortArgument(rest));
           if (effort !== undefined) {
             writeChatReasoningEffort(String(chatId), effort);
             setReasoningPreference(readChatReasoningPreference(String(chatId)));
@@ -3556,9 +3602,21 @@ export function Composer({
     return true;
   };
 
+  const currentComposerAttachments: QueuedComposerAttachments = {
+    files: attachedFiles,
+    images: attachedImages,
+    terminals: attachedTerminals,
+    plugins: attachedPlugins,
+    contexts: attachedContexts,
+    commands: confirmedCommands,
+    agents: confirmedAgentMentions,
+    catalog: confirmedCatalogReferences,
+  };
+  const currentComposerNotes = attachedNotes;
   const handleSend = async (
     overrideText?: string,
     options: {
+      attachments?: QueuedComposerAttachments;
       bypassQueue?: boolean;
       flushMode?: QueueFlushMode;
       promptForgeApproved?: boolean;
@@ -3566,6 +3624,17 @@ export function Composer({
       submittedVisibleHandoffKey?: string | null;
     } = {},
   ): Promise<boolean> => {
+    const {
+      files: attachedFiles,
+      images: attachedImages,
+      terminals: attachedTerminals,
+      plugins: attachedPlugins,
+      contexts: attachedContexts,
+      commands: confirmedCommands,
+      agents: confirmedAgentMentions,
+      catalog: confirmedCatalogReferences,
+    } = options.attachments ?? currentComposerAttachments;
+    const attachedNotes = options.attachments ? [] : currentComposerNotes;
     if (notesCtx || notesSendingRef.current) return false;
     if (attachedNotes.length && jarvisRunning) {
       toast.warning(
@@ -3946,9 +4015,11 @@ export function Composer({
       }
     }
     const confirmedMentionsForSend = confirmedAgentMentions;
-    setConfirmedCommands([]);
-    setConfirmedAgentMentions([]);
-    setConfirmedCatalogReferences([]);
+    if (!options.attachments) {
+      setConfirmedCommands([]);
+      setConfirmedAgentMentions([]);
+      setConfirmedCatalogReferences([]);
+    }
 
     setSending(true);
     try {
@@ -4158,12 +4229,14 @@ export function Composer({
       }
       voiceReplyRequestedRef.current = false;
       if (!overrideText || options.promptForgeApproved) setText('');
-      setAttachedFiles([]);
-      setAttachedImages([]);
-      setAttachedTerminals([]);
-      setAttachedPlugins([]);
-      setAttachedContexts([]);
-      setAttachedNotes([]);
+      if (!options.attachments) {
+        setAttachedFiles([]);
+        setAttachedImages([]);
+        setAttachedTerminals([]);
+        setAttachedPlugins([]);
+        setAttachedContexts([]);
+        setAttachedNotes([]);
+      }
       const currentVisibleHandoffKey = pendingHandoffRef.current
         ? composerChatHandoffDeliveryKey(
             buildComposerChatHandoffPayload({
@@ -4213,6 +4286,45 @@ export function Composer({
     }
   };
 
+  const queueSideSendRef = useRef(handleSend);
+  queueSideSendRef.current = handleSend;
+  useEffect(() => {
+    if (modelSelectionReadyChatId !== String(chatId)) return;
+    return registerQueueSideSender(String(chatId), (message, projection) =>
+      queueSideSendRef.current(message.text, {
+        bypassQueue: true,
+        attachments: message.attachments,
+        handoffPayload: buildComposerChatHandoffPayload({
+          projection,
+          instruction: 'Use the embedded source conversation as context for this request.',
+          draftText: message.text,
+        }),
+      }),
+    );
+  }, [chatId, modelSelectionReadyChatId]);
+
+  const [sideOpeningId, setSideOpeningId] = useState<string | null>(null);
+  const openQueueInSideChat = async (id: string) => {
+    if (queuedDispatchInFlightRef.current) return;
+    const queued = queuedMessagesRef.current.find((message) => message.id === id);
+    if (!queued) return;
+    queuedDispatchInFlightRef.current = id;
+    setSideOpeningId(id);
+    try {
+      if (await openQueuedSideChat(String(chatId), queued)) deleteQueuedMessage(id);
+      else
+        toast.error('Message remains queued', 'The side chat did not accept it. Retry when ready.');
+    } catch (error) {
+      toast.error(
+        'Side chat not sent',
+        error instanceof Error ? error.message : 'Your message remains queued.',
+      );
+    } finally {
+      queuedDispatchInFlightRef.current = null;
+      setSideOpeningId(null);
+    }
+  };
+
   const dispatchQueuedMessage = (queued: QueuedChatMessage, payload = queued.text) => {
     if (queuedDispatchInFlightRef.current) return;
     queuedDispatchInFlightRef.current = queued.id;
@@ -4223,6 +4335,7 @@ export function Composer({
         const queuedHandoff = queuedHandoffsRef.current.get(queued.id);
         return handleSend(nextPayload, {
           bypassQueue: true,
+          attachments: queued.attachments,
           handoffPayload: queuedHandoff?.payload ?? null,
           submittedVisibleHandoffKey: queuedHandoff?.visibleHandoffKey ?? null,
         });
@@ -4260,6 +4373,20 @@ export function Composer({
     }
     if (!jarvisRunning || !activeCancellationKeyRef.current) {
       if (!jarvisRunning) dispatchQueuedMessage(queued);
+      return;
+    }
+    if (queued.attachments && Object.values(queued.attachments).some((items) => items.length > 0)) {
+      const reordered = [
+        queued,
+        ...queuedMessagesRef.current.filter((message) => message.id !== id),
+      ];
+      queuedMessagesRef.current = reordered;
+      setQueuedMessages(reordered);
+      window.dispatchEvent(
+        new CustomEvent('jarvis:cancel', {
+          detail: { messageId: activeCancellationKeyRef.current },
+        }),
+      );
       return;
     }
     queuedInterruptInFlightRef.current = queued.id;
@@ -5432,10 +5559,27 @@ export function Composer({
       data-tour="chat-composer"
       data-composer-frame={compact ? undefined : 'layered'}
     >
-      <CaoCommandPanel chatId={String(chatId)} request={caoCommandInput} scope={{
-        accountId: resolveAccountIdentity(useAuthStore.getState())?.accountId ?? '',
-        workspaceId: String(workspaceId ?? ''), projectId: String(projectId ?? ''),
-      }} />
+      <QueuedMessagesBar
+        messages={queuedMessages}
+        onEdit={editQueuedMessage}
+        onSendNow={sendQueuedMessageNow}
+        onStartMultitask={startQueuedMultitask}
+        onOpenSideChat={openQueueInSideChat}
+        busyId={sideOpeningId}
+        isModelSwitch={(message) => Boolean(parseJarvisModelSwitchIntent(message.text))}
+        onStopAndRestart={stopAndRestartQueuedModelSwitch}
+        onDelete={deleteQueuedMessage}
+      />
+
+      <CaoCommandPanel
+        chatId={String(chatId)}
+        request={caoCommandInput}
+        scope={{
+          accountId: resolveAccountIdentity(useAuthStore.getState())?.accountId ?? '',
+          workspaceId: String(workspaceId ?? ''),
+          projectId: String(projectId ?? ''),
+        }}
+      />
       {sttView.phase !== 'idle' ? (
         <section aria-label="Composer dictation" className="m-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -5444,13 +5588,45 @@ export function Composer({
               {sttView.engineLabel ? ' ? ' + sttView.engineLabel : ''}
             </span>
             <div className="flex flex-wrap items-center gap-2">
-              {sttView.phase === 'preview' ? <Button size="sm" type="button" onClick={() => void sttController.accept()}>Accept dictation</Button> : null}
-              {sttView.phase === 'error' ? <Button size="sm" type="button" onClick={() => void sttController.start()}>Retry dictation</Button> : null}
-              <Button size="sm" variant="ghost" type="button" onClick={() => { sttController.cancel(); textareaRef.current?.focus(); }}>Cancel dictation</Button>
+              {sttView.phase === 'preview' ? (
+                <Button size="sm" type="button" onClick={() => void sttController.accept()}>
+                  Accept dictation
+                </Button>
+              ) : null}
+              {sttView.phase === 'error' ? (
+                <Button size="sm" type="button" onClick={() => void sttController.start()}>
+                  Retry dictation
+                </Button>
+              ) : null}
+              <Button
+                size="sm"
+                variant="ghost"
+                type="button"
+                onClick={() => {
+                  sttController.cancel();
+                  textareaRef.current?.focus();
+                }}
+              >
+                Cancel dictation
+              </Button>
             </div>
           </div>
-          {sttView.text ? <p aria-label="Dictation preview" className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-foreground">{sttView.text}<span className="ml-2 text-muted-foreground">({sttView.partial ? 'partial' : 'final'})</span></p> : null}
-          {sttView.error ? <p role="alert" className="mt-2 break-words text-destructive">{sttView.error}</p> : null}
+          {sttView.text ? (
+            <p
+              aria-label="Dictation preview"
+              className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-foreground"
+            >
+              {sttView.text}
+              <span className="ml-2 text-muted-foreground">
+                ({sttView.partial ? 'partial' : 'final'})
+              </span>
+            </p>
+          ) : null}
+          {sttView.error ? (
+            <p role="alert" className="mt-2 break-words text-destructive">
+              {sttView.error}
+            </p>
+          ) : null}
         </section>
       ) : null}
       {showFreeKeyNudge && (
@@ -5834,15 +6010,6 @@ export function Composer({
                   })}
                 </div>
               )}
-              <QueuedMessagesBar
-                messages={queuedMessages}
-                onEdit={editQueuedMessage}
-                onSendNow={sendQueuedMessageNow}
-                onStartMultitask={startQueuedMultitask}
-                isModelSwitch={(message) => Boolean(parseJarvisModelSwitchIntent(message.text))}
-                onStopAndRestart={stopAndRestartQueuedModelSwitch}
-                onDelete={deleteQueuedMessage}
-              />
               <div
                 className={cn(
                   'composer-toolbar flex min-w-0 items-center gap-1 px-1.5 pb-1.5 pt-0.5',
@@ -6241,11 +6408,10 @@ function ModelPicker({
   const activeRoute = flatOptions.flatMap((option) => option.alternativeRoutes ?? [option])
     .find((option) => option.id === selectionOptionId(selection));
   const effortOptions = listEffortOptions((activeRoute?.variants ?? []).map((id) => ({ id })));
-  const initialEffort = reasoningMode === 'token-final-boss'
-    ? effortOptions.at(-1)?.label ?? 'auto'
-    : manualEffort;
-  const effortLabel = effortOptions
-    .find((option) => option.label === initialEffort)?.upstreamEffort ?? initialEffort;
+  const initialEffort =
+    reasoningMode === 'token-final-boss' ? (effortOptions.at(-1)?.label ?? 'auto') : manualEffort;
+  const effortLabel =
+    effortOptions.find((option) => option.label === initialEffort)?.upstreamEffort ?? initialEffort;
 
   const flatOptionIds = useMemo(
     () => flatOptions.map((option) => option.id).join('\0'),

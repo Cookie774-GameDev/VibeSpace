@@ -1,3 +1,4 @@
+import { QUEUE_SIDE_CHAT_EVENT, type QueueSideChatRequest } from './queueSideChat';
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -356,6 +357,24 @@ export function ChatWorkspace({
     return () =>
       window.removeEventListener(CHAT_OPEN_BESIDE_EVENT, onSidebarOpenBeside as EventListener);
   }, [openBeside]);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const request = (event as CustomEvent<QueueSideChatRequest>).detail;
+      if (!layout.chatIds.includes(request.sourceId)) return;
+      if (layout.chatIds.length >= 4) {
+        request.resolve(false);
+        return;
+      }
+      void request
+        .create()
+        .then((payload) => onOpenBeside(payload, request.sourceId))
+        .then((result) => request.resolve(result.ok))
+        .catch(() => request.resolve(false));
+    };
+    window.addEventListener(QUEUE_SIDE_CHAT_EVENT, listener);
+    return () => window.removeEventListener(QUEUE_SIDE_CHAT_EVENT, listener);
+  }, [layout.chatIds, onOpenBeside]);
 
   return (
     <div

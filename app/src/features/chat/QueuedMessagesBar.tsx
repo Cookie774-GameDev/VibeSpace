@@ -1,6 +1,16 @@
-import { ArrowUp, Layers, Pencil, RotateCcw, Trash2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { useState } from 'react';
+import {
+  CornerDownRight,
+  ListEnd,
+  Layers,
+  Pencil,
+  Trash2,
+  MoreHorizontal,
+  MessageSquarePlus,
+  Paperclip,
+  Loader2,
+} from 'lucide-react';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import {
   queueFlushModeLabel,
   shouldAutoSendQueuedOnRunStatus,
@@ -8,140 +18,132 @@ import {
   type QueuedChatMessage,
   type QueueFlushMode,
 } from './composerQueuePolicy';
-
+import './queued-message-row.css';
 export type { QueuedChatMessage, QueueFlushMode };
 export { shouldAutoSendQueuedOnRunStatus, takeNextQueuedMessage };
-
-export function QueuedMessagesBar({
-  messages,
-  onEdit,
-  onSendNow,
-  onStartMultitask,
-  isModelSwitch,
-  onStopAndRestart,
-  onDelete,
-}: {
+interface Props {
   messages: QueuedChatMessage[];
   onEdit: (id: string) => void;
   onSendNow: (id: string) => void;
-  /** Launch /multitask for this queued message (parallel agent). */
   onStartMultitask: (id: string) => void;
+  onOpenSideChat?: (id: string) => void;
+  busyId?: string | null;
   isModelSwitch?: (message: QueuedChatMessage) => boolean;
   onStopAndRestart?: (id: string) => void;
   onDelete: (id: string) => void;
-}) {
-  if (messages.length === 0) return null;
+}
+function QueueRow({ message, ...props }: Omit<Props, 'messages'> & { message: QueuedChatMessage }) {
+  const [open, setOpen] = useState(false);
+  const image = message.attachments?.images[0];
+  const attachmentCount = message.attachments
+    ? Object.values(message.attachments).reduce((sum, items) => sum + items.length, 0)
+    : 0;
+  const switching = props.isModelSwitch?.(message);
+  const action = (callback: ((id: string) => void) | undefined) => {
+    setOpen(false);
+    callback?.(message.id);
+  };
   return (
-    <div
-      aria-label="Queued messages"
-      className="mb-1.5 min-w-0 max-w-full rounded-lg border border-accent-copper/20 bg-background/70 px-1.5 py-1 shadow-[0_8px_20px_rgba(0,0,0,0.18)]"
-    >
-      <div className="mb-0.5 flex items-center justify-between gap-2 px-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-        <span className="min-w-0 truncate normal-case tracking-normal">
-          Enter after tool · Tab after full reply · Esc send now · Esc×3 cancel
+    <div className="queued-message-row" data-queued-message-id={message.id}>
+      <ListEnd className="queue-order-icon" aria-hidden="true" />
+      {image ? (
+        <img
+          className="queue-thumbnail"
+          src={`data:${image.mimeType};base64,${image.data}`}
+          alt={image.name}
+        />
+      ) : attachmentCount > 0 ? (
+        <span className="queue-attachment-count" title={`${attachmentCount} attachments`}>
+          <Paperclip size={13} />
+          {attachmentCount}
         </span>
-        <span>{messages.length} queued</span>
-      </div>
-      <div className="flex min-w-0 flex-col gap-0.5">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={cn(
-              // Grid keeps action buttons visible: text shrinks, actions never get covered.
-              'group grid min-w-0 max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5',
-              'rounded-md border border-border/50 bg-panel/80 px-2 py-0.5',
+      ) : null}
+      <span
+        className="queue-message-text"
+        title={message.text + ' · ' + queueFlushModeLabel(message.flushMode)}
+      >
+        {message.text}
+      </span>
+      <div className="queue-row-actions">
+        <button
+          type="button"
+          className="queue-steer"
+          disabled={Boolean(props.busyId) || Boolean(switching && !props.onStopAndRestart)}
+          aria-label={
+            switching ? 'Stop current reply and restart with model switch' : 'Steer queued message'
+          }
+          onClick={() => (switching ? props.onStopAndRestart : props.onSendNow)?.(message.id)}
+        >
+          {props.busyId === message.id ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <CornerDownRight size={14} />
+          )}
+          <span>Steer</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Delete queued message"
+          title="Delete"
+          disabled={Boolean(props.busyId)}
+          onClick={() => props.onDelete(message.id)}
+        >
+          <Trash2 size={14} />
+        </button>
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Queued message options"
+              title="More options"
+              disabled={Boolean(props.busyId)}
+            >
+              <MoreHorizontal size={16} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" side="top" className="queue-options-menu w-56 p-1.5">
+            <button
+              type="button"
+              aria-label="Edit queued message"
+              onClick={() => action(props.onEdit)}
+            >
+              <Pencil size={15} />
+              Edit message
+            </button>
+            <button
+              type="button"
+              disabled={!props.onOpenSideChat}
+              onClick={() => action(props.onOpenSideChat)}
+            >
+              <MessageSquarePlus size={15} />
+              Open in side chat
+            </button>
+            {!switching && (
+              <button
+                type="button"
+                aria-label="Start multitask for queued message"
+                onClick={() => action(props.onStartMultitask)}
+              >
+                <Layers size={15} />
+                Start multitask
+              </button>
             )}
-          >
-            <div className="min-w-0">
-              <span
-                className={cn(
-                  'mr-1.5 inline-flex shrink-0 rounded border px-1 py-px text-[9px] font-medium uppercase tracking-wide',
-                  message.flushMode === 'after-tool'
-                    ? 'border-accent-copper/40 bg-accent-copper/10 text-accent-copper'
-                    : 'border-border bg-muted/60 text-muted-foreground',
-                )}
-                title={
-                  message.flushMode === 'after-tool'
-                    ? 'Sends after the current tool finishes'
-                    : 'Sends when the full reply finishes'
-                }
-              >
-                {queueFlushModeLabel(message.flushMode)}
-              </span>
-              <span
-                className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] leading-5 text-foreground"
-                title={message.text}
-              >
-                {message.text}
-              </span>
-            </div>
-            <div className="flex shrink-0 flex-nowrap items-center justify-end gap-0.5 opacity-90 transition-opacity group-hover:opacity-100">
-              {!isModelSwitch?.(message) ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    'h-7 shrink-0 gap-1 rounded-md border border-accent-copper/30 bg-accent-copper/10 px-1.5 text-[11px] font-medium sm:px-2',
-                    'text-accent-copper hover:bg-accent-copper/20 hover:text-foreground',
-                  )}
-                  aria-label="Start multitask for queued message"
-                  title="Start multitask — runs /multitask for this message"
-                  onClick={() => onStartMultitask(message.id)}
-                >
-                  <Layers className="h-3 w-3 shrink-0" />
-                  <span className="hidden min-[420px]:inline">Multitask</span>
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="shrink-0"
-                aria-label="Edit queued message"
-                onClick={() => onEdit(message.id)}
-              >
-                <Pencil className="h-3 w-3" />
-              </Button>
-              {isModelSwitch?.(message) ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="shrink-0"
-                  aria-label="Stop current reply and restart with model switch"
-                  title="Stop the current reply, then review and apply this model switch"
-                  disabled={!onStopAndRestart}
-                  onClick={() => onStopAndRestart?.(message.id)}
-                >
-                  <RotateCcw className="h-3 w-3" />
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="shrink-0"
-                  aria-label="Send queued message now"
-                  onClick={() => onSendNow(message.id)}
-                >
-                  <ArrowUp className="h-3 w-3" />
-                </Button>
-              )}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="shrink-0"
-                aria-label="Delete queued message"
-                onClick={() => onDelete(message.id)}
-              >
-                <Trash2 className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
-        ))}
+          </PopoverContent>
+        </Popover>
       </div>
+    </div>
+  );
+}
+export function QueuedMessagesBar({ messages, ...props }: Props) {
+  if (!messages.length) return null;
+  return (
+    <div aria-label="Queued messages" className="queued-message-stack">
+      <span className="sr-only">
+        {messages.length} queued. Enter after tool · Tab after full reply.
+      </span>
+      {messages.map((message) => (
+        <QueueRow key={message.id} message={message} {...props} />
+      ))}
     </div>
   );
 }

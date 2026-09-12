@@ -1,3 +1,4 @@
+import { ChatBotanicalBackground } from '@/features/chat/ChatBotanicalBackground';
 /**
  * Real VibeSpace chat surface for the Pet mini-panel.
  * Uses ChatThread + Composer — same Dexie threads and AI runtime.
@@ -312,9 +313,10 @@ export function PetChatSurface({ className }: { className?: string }) {
         {activeId ? (
           <>
             <div
-              className="relative min-h-0 flex-1 overflow-hidden"
+              className="chat-pane-conversation relative min-h-0 flex-1 overflow-hidden"
               data-pet-chat-thread-host="true"
             >
+              <ChatBotanicalBackground chatId={String(activeId)} />
               <WarmChatWelcome chatId={String(activeId)} compact />
               <ChatThread chatId={activeId} compact />
             </div>
