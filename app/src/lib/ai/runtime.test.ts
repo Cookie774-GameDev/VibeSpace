@@ -308,6 +308,37 @@ describe('tool Gateway response citations', () => {
 });
 
 describe('canonical OpenCode public chronology', () => {
+  it('shows native intermediate plans as prose without creating another approval authority', () => {
+    const finalPlan = { kind: 'plan_review' as const, plan: {
+      id: 'validated-final', title: 'Final approved scope', summary: 'Create only plan.txt.',
+      steps: ['Await approval', 'Write three lines', 'Verify the file'], status: 'pending' as const,
+    } };
+    const envelope = {
+      schemaVersion: 1 as const, requestId: 'jreq-native-plan', runId: 'jrun-native-plan',
+      mode: 'direct_answer' as const, displayText: 'Final plan', parts: [finalPlan],
+      artifactIds: [], sourceRefs: [], completedAt: 1,
+      provider: { providerId: 'opencode', modelId: 'openai/gpt-5.6-luna', connectionMode: 'external-cli' as const, capabilities: {}, capturedAt: 1 },
+      enforcement: { linted: true, violations: [], repairAttempted: false, repairSucceeded: false, fallbackUsed: false },
+    } satisfies JarvisResponseEnvelope;
+    const nativePlan = '```jarvis_plan\n' + JSON.stringify({
+      id: 'codex_plan_native', title: 'Review plan', summary: 'Read before writing.',
+      steps: ['Create plan.txt'], risks: ['Await explicit approval'],
+    }) + '\n```';
+    const timeline = [{ kind: 'text' as const, text: nativePlan }];
+    const before = JSON.stringify({ envelope, timeline });
+    const result = prependOpenCodePublicTimeline(envelope, timeline);
+    expect(result.parts).toEqual([
+      { kind: 'text', text: 'Review plan\n\nRead before writing.\n\n1. Create plan.txt\n\nRisks:\n- Await explicit approval' },
+      finalPlan,
+    ]);
+    expect(result.parts.filter(part => part.kind === 'plan_review')).toHaveLength(1);
+    expect(JSON.stringify({ envelope, timeline })).toBe(before);
+    // Without an already-validated final plan, do not reinterpret protocol text.
+    expect(prependOpenCodePublicTimeline({ ...envelope, parts: [] }, timeline).parts).toEqual(timeline);
+    for (const text of ['```jarvis_plan\n{invalid}\n```', '```json\n{"summary":"data, not a native plan"}\n```']) {
+      expect(prependOpenCodePublicTimeline(envelope, [{ kind: 'text', text }]).parts[0]).toEqual({ kind: 'text', text });
+    }
+  });
   it('prepends the authoritative display timeline even when Jarvis policy edits the final text', () => {
     const envelope = {
       schemaVersion: 1,

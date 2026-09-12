@@ -479,7 +479,28 @@ export function prependOpenCodePublicTimeline(
   timeline: readonly import('./openCodePublicTimeline').OpenCodePublicTimelinePart[],
 ): Readonly<JarvisResponseEnvelope> {
   if (timeline.length === 0) return envelope;
-  const projected = timeline.map((part): Part => structuredClone(part));
+  const hasFinalPlan = envelope.parts.some((part) => part.kind === 'plan_review');
+  const projected = timeline.flatMap((part): Part[] => {
+    if (!hasFinalPlan || part.kind !== 'text' || !part.text.includes('```jarvis_plan')) {
+      return [structuredClone(part)];
+    }
+    const parsed = parseJarvisPlanBlocks(part.text);
+    if (!parsed.hasPlanBlocks || parsed.parts.some((item) =>
+      item.kind === 'plan_review' && !item.plan.id.startsWith('codex_plan_'))) {
+      return [structuredClone(part)];
+    }
+    // Native intermediate plans are chronology, not an additional approval.
+    // Keep their readable content; only the validated final envelope owns actions.
+    return parsed.parts.map((item): Part => item.kind === 'plan_review' ? {
+      kind: 'text',
+      text: [
+        item.plan.title,
+        item.plan.summary,
+        item.plan.steps.map((step, index) => `${index + 1}. ${step}`).join('\n'),
+        item.plan.risks?.length ? `Risks:\n${item.plan.risks.map((risk) => `- ${risk}`).join('\n')}` : '',
+      ].filter(Boolean).join('\n\n'),
+    } : structuredClone(item));
+  });
   const preservedEnvelopeParts = envelope.parts.filter(
     (part) => !isSupersededOpenCodeEnvelopePart(part),
   );
