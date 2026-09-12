@@ -45,6 +45,8 @@ import {
   useTerminalCommandQueue,
   type TerminalCommand,
 } from './terminalCommandQueue';
+import { processTerminalFleetRequest } from './terminalFleetRuntime';
+import { useTerminalFleetStore } from './terminalFleetStore';
 import {
   claimTerminalExecution,
   hasCanonicalTerminalExecution,
@@ -61,6 +63,7 @@ import {
 } from './terminalProjectMove';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { projectRepo } from '@/lib/db';
+import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { captureLiveTree, getLiveTree } from './terminalLiveCache';
@@ -109,6 +112,16 @@ export function forgetTerminalLeafSessions(
   }
 }
 
+function terminalRefMatchesLeaf(
+  ref: TerminalRef,
+  leaf: Extract<PaneNode, { kind: 'leaf' }>,
+): boolean {
+  const hasIdentity = Boolean(ref.paneId || ref.sessionId);
+  const paneMatches = !ref.paneId || ref.paneId === leaf.id;
+  const sessionMatches = !ref.sessionId || ref.sessionId === leaf.sessionId;
+  return hasIdentity && paneMatches && sessionMatches;
+}
+
 type InvokeCommand = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
 export async function deleteTerminalProjectSnapshots(
@@ -127,6 +140,13 @@ export function applyTerminalCommandBatch(
   let replaceRootNext = false;
   for (const item of items) {
     if (item.kind === 'shell') {
+      if (item.target === 'refs') {
+        const refs = item.refs ?? [];
+        const hasMatch = flattenLeaves(next).some((leaf) =>
+          refs.some((ref) => terminalRefMatchesLeaf(ref, leaf)),
+        );
+        if (!hasMatch) continue;
+      }
       markExecution(item.id, 'starting');
       if (item.target === 'all') {
         const pendingCommandId = Date.now();
@@ -140,16 +160,10 @@ export function applyTerminalCommandBatch(
       } else if (item.target === 'refs' && item.refs && item.refs.length > 0) {
         const refs = item.refs;
         const pendingCommandId = Date.now();
-        let matched = false;
         next = fromLeaves(
           flattenLeaves(next).map((leaf, index) => {
-            const hit = refs.some(
-              (ref) =>
-                (ref.paneId && ref.paneId === leaf.id) ||
-                (ref.sessionId && ref.sessionId === leaf.sessionId),
-            );
+            const hit = refs.some((ref) => terminalRefMatchesLeaf(ref, leaf));
             if (!hit) return leaf;
-            matched = true;
             return {
               ...leaf,
               pendingCommand: item.command,
@@ -157,18 +171,12 @@ export function applyTerminalCommandBatch(
             };
           }),
         );
-        if (!matched) {
-          const first = refs[0];
-          next = appendLeaf(next, {
-            command: defaultShell(),
-            startupCommand: item.command || undefined,
-            agentSlug: first?.agentSlug ?? item.label,
-          });
-        }
       } else {
         const seed = {
           command: defaultShell(),
           startupCommand: item.command || undefined,
+          startupCommands: item.startupCommands,
+          preserveExisting: item.preserveExisting,
           agentSlug: item.agentSlug ?? item.label,
           name: item.agentSlug ? item.label : undefined,
           cwd: item.cwd,
@@ -195,6 +203,7 @@ export function applyTerminalCommandBatch(
       }
       if (closeCount >= leaves.length) replaceRootNext = true;
     }
+    // Fleet requests are executed asynchronously with live backend evidence.
   }
   return next;
 }
@@ -209,7 +218,33 @@ export function canClaimCanonicalTerminalCommand(
   return countLeaves(projected) < MAX_PANES;
 }
 
-export function TerminalsPage() {
+type TerminalClaimScope = Readonly<{
+  accountId: string;
+  workspaceId: string;
+  projectId: string;
+}>;
+
+function readCurrentTerminalClaimScope(treeProjectId: string | null): TerminalClaimScope | null {
+  const auth = useAuthStore.getState();
+  const accountId = getActiveAccountIdentity()?.accountId.trim() ?? '';
+  const workspaceId = String(auth.workspaceId ?? '').trim();
+  const projectId = String(auth.projectId ?? '').trim();
+  if (!accountId || !workspaceId || !projectId || projectId !== treeProjectId) return null;
+  return Object.freeze({ accountId, workspaceId, projectId });
+}
+
+export async function claimCanonicalTerminalCommandForScope(
+  current: PaneNode,
+  priorClaimedItems: readonly TerminalCommand[],
+  item: Extract<TerminalCommand, { kind: 'shell' }> & { canonical: object },
+  scope: TerminalClaimScope | null,
+  claim: typeof claimTerminalExecution = claimTerminalExecution,
+): Promise<boolean> {
+  if (!scope || !canClaimCanonicalTerminalCommand(current, priorClaimedItems, item)) return false;
+  return claim(item.canonical.executionId, scope);
+}
+
+export function TerminalsPage({ routeVisible = true }: { routeVisible?: boolean }) {
   const projectId = useAuthStore((s) => s.projectId);
   const currentProjectId = projectId ?? null;
   const setProjectId = useAuthStore((s) => s.setProjectId);
@@ -328,14 +363,27 @@ export function TerminalsPage() {
         do {
           rerun = false;
           const items = await claimTerminalCommands(async (item, priorClaimedItems) => {
-            if (!canClaimCanonicalTerminalCommand(projectedTree, priorClaimedItems, item)) {
-              return false;
-            }
-            return claimTerminalExecution(item.canonical.executionId);
+            return claimCanonicalTerminalCommandForScope(
+              projectedTree,
+              priorClaimedItems,
+              item,
+              readCurrentTerminalClaimScope(treeProjectId),
+            );
           });
-          if (items.length > 0) {
-            projectedTree = applyTerminalCommandBatch(projectedTree, items);
+          const ordinary = items.filter((item) => item.kind !== 'fleet');
+          const fleet = items.filter((item) => item.kind === 'fleet');
+          if (ordinary.length > 0) {
+            projectedTree = applyTerminalCommandBatch(projectedTree, ordinary);
             setTree(projectedTree);
+          }
+          for (const request of fleet) {
+            await processTerminalFleetRequest(request, {
+              getTree: () => projectedTree,
+              commitTree: (nextTree) => {
+                projectedTree = nextTree;
+                setTree(nextTree);
+              },
+            });
           }
         } while (rerun);
       } finally {
@@ -348,7 +396,7 @@ export function TerminalsPage() {
       if (state.queue.length > 0) void drainAndProcess();
     });
     return unsub;
-  }, [tree]);
+  }, [tree, treeProjectId]);
 
   const handleChange = React.useCallback(
     (next: PaneTreeChange) => {
@@ -539,6 +587,7 @@ export function TerminalsPage() {
 
   const count = countLeaves(tree);
   const atCap = count >= MAX_PANES;
+  const latestFleetRecord = useTerminalFleetStore((state) => state.records.at(-1));
 
   return (
     <div
@@ -550,10 +599,10 @@ export function TerminalsPage() {
       <div
         data-monochrome-surface="terminal-toolbar"
         data-sakura-surface="terminal-toolbar"
-        className="shrink-0 flex flex-wrap items-center justify-between gap-3 px-3 py-1 border-b border-border bg-paper-soft [html[data-theme=monochrome]_&]:bg-panel"
+        className="flex shrink-0 flex-wrap items-center justify-between gap-1.5 border-b border-border bg-paper-soft px-2 py-0.5 [html[data-theme=monochrome]_&]:bg-panel"
       >
-        <div className="flex items-center gap-3 text-metadata text-muted-foreground">
-          <span className="font-display text-foreground text-secondary tracking-tight">
+        <div className="flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
+          <span className="font-display text-secondary tracking-tight text-foreground">
             Terminals
           </span>
           <span aria-hidden className="text-border-mid">
@@ -562,17 +611,23 @@ export function TerminalsPage() {
           <span>
             {count} / {MAX_PANES} pane{count === 1 ? '' : 's'}
           </span>
+          {latestFleetRecord ? (
+            <span className="text-foreground">
+              · Fleet {latestFleetRecord.status} · reused {latestFleetRecord.reusedCount} · created{' '}
+              {latestFleetRecord.createdCount}
+            </span>
+          ) : null}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
             onClick={handleAddPane}
             disabled={atCap}
-            className="gap-1"
+            className="h-6 gap-0.5 px-1.5 text-[11px] leading-none"
             title={atCap ? `Max ${MAX_PANES} panes` : 'Add a pane'}
           >
-            <Plus className="h-3.5 w-3.5" /> Add pane
+            <Plus className="h-3 w-3" /> Add pane
           </Button>
           <Button
             variant="ghost"
@@ -582,7 +637,7 @@ export function TerminalsPage() {
             onMouseLeave={cancelHold}
             onTouchStart={startHold}
             onTouchEnd={endHold}
-            className="gap-1 relative overflow-hidden select-none active:bg-transparent hover:bg-panel-soft"
+            className="relative h-6 gap-0.5 overflow-hidden px-1.5 text-[11px] leading-none select-none active:bg-transparent hover:bg-panel-soft"
             title="Click to reset sizing, hold 2s to clear all panes"
           >
             <div
@@ -591,8 +646,8 @@ export function TerminalsPage() {
                 isHolding ? 'duration-[2000ms] ease-out w-full' : 'duration-75 w-0',
               )}
             />
-            <span className="relative z-10 flex items-center gap-1">
-              <RotateCcw className="h-3.5 w-3.5" /> Reset
+            <span className="relative z-10 flex items-center gap-0.5">
+              <RotateCcw className="h-3 w-3" /> Reset
             </span>
           </Button>
         </div>
@@ -603,17 +658,19 @@ export function TerminalsPage() {
         data-sakura-surface="terminal-grid"
         className="flex-1 min-h-0 p-2 [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:p-1"
       >
-        <TileGrid
-          tree={tree}
-          onChange={handleChange}
-          defaultCommand={defaultShell()}
-          defaultCommandForAgent={commandForAgent}
-          fullscreenPaneId={fullscreenPaneId}
-          projectId={treeProjectId}
-          projectName={projectName}
-          onFullscreenToggle={handleFullscreenToggle}
-          onMoveTerminal={handleMoveTerminal}
-        />
+        {routeVisible ? (
+          <TileGrid
+            tree={tree}
+            onChange={handleChange}
+            defaultCommand={defaultShell()}
+            defaultCommandForAgent={commandForAgent}
+            fullscreenPaneId={fullscreenPaneId}
+            projectId={treeProjectId}
+            projectName={projectName}
+            onFullscreenToggle={handleFullscreenToggle}
+            onMoveTerminal={handleMoveTerminal}
+          />
+        ) : null}
       </div>
     </div>
   );

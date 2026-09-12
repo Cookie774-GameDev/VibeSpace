@@ -13,6 +13,11 @@
 
 import { validateMindMap, type MindMap } from './mindmaps';
 import { parseCanvasShape, type CanvasShape } from './shapes';
+import {
+  DEFAULT_CANVAS_WALLPAPER,
+  normalizeWallpaperConfig,
+} from '@/features/workbench/wallpaperConfig';
+import type { WorkbenchWallpaperConfig } from '@/features/workbench/types';
 
 // ---------------------------------------------------------------------------
 // Validation errors
@@ -113,7 +118,12 @@ export type CanvasBackgroundKind = (typeof CANVAS_BACKGROUND_KINDS)[number];
 export interface CanvasBackground {
   readonly kind: CanvasBackgroundKind;
   readonly color: string;
+  readonly wallpaper?: WorkbenchWallpaperConfig;
 }
+
+export type ResolvedCanvasBackground = CanvasBackground & {
+  readonly wallpaper: WorkbenchWallpaperConfig;
+};
 
 export const CANVAS_BLOCK_KINDS = ['heading', 'text', 'note', 'code', 'mind-map', 'shape'] as const;
 export type CanvasBlockKind = (typeof CANVAS_BLOCK_KINDS)[number];
@@ -181,7 +191,7 @@ export interface CanvasDocument {
   readonly thumbnail: string | null;
   readonly layoutMode: CanvasLayoutMode;
   readonly camera: CanvasCamera;
-  readonly background: CanvasBackground;
+  readonly background: ResolvedCanvasBackground;
   /** Single canonical content store shared by page and edgeless views. */
   readonly blocks: readonly CanvasBlock[];
   /** Deterministic rendering order for page mode; exact permutation of block ids. */
@@ -335,9 +345,9 @@ function normalizeCamera(input: unknown, path: string): CanvasCamera {
   return { x, y, zoom };
 }
 
-const BACKGROUND_KEYS = new Set(['kind', 'color']);
+const BACKGROUND_KEYS = new Set(['kind', 'color', 'wallpaper']);
 
-function normalizeBackground(input: unknown, path: string): CanvasBackground {
+function normalizeBackground(input: unknown, path: string): ResolvedCanvasBackground {
   if (!isPlainObject(input)) {
     fail('invalid-type', path, 'expected a background object');
   }
@@ -350,7 +360,11 @@ function normalizeBackground(input: unknown, path: string): CanvasBackground {
   if (!COLOR_PATTERN.test(color)) {
     fail('unsupported-value', `${path}.color`, 'expected a #rrggbb hex color');
   }
-  return { kind: kind as CanvasBackgroundKind, color };
+  return {
+    kind: kind as CanvasBackgroundKind,
+    color,
+    wallpaper: normalizeWallpaperConfig(input.wallpaper, DEFAULT_CANVAS_WALLPAPER),
+  };
 }
 
 const CONTENT_KEYS_BY_KIND: Record<CanvasBlockKind, readonly string[]> = {
@@ -843,7 +857,16 @@ export function withBackground(
   background: CanvasBackground,
   now: number,
 ): CanvasDocument {
-  return transition(doc, { background }, now);
+  return transition(
+    doc,
+    {
+      background: {
+        ...background,
+        wallpaper: background.wallpaper ?? doc.background.wallpaper,
+      },
+    },
+    now,
+  );
 }
 
 /**

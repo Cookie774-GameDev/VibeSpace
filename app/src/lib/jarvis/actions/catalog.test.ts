@@ -60,6 +60,9 @@ describe('Jarvis action catalog', () => {
       })),
     ).toEqual([
       { id: 'file.search', risk: 'read-only', approval: 'never' },
+      { id: 'files.read', risk: 'read-only', approval: 'always' },
+      { id: 'files.create', risk: 'safe-write', approval: 'always' },
+      { id: 'files.edit', risk: 'safe-write', approval: 'always' },
       { id: 'github.identity', risk: 'read-only', approval: 'never' },
       { id: 'github.repository.read', risk: 'read-only', approval: 'never' },
       { id: 'github.issue.read', risk: 'read-only', approval: 'never' },
@@ -109,12 +112,457 @@ describe('Jarvis action catalog', () => {
         risk: 'external-side-effect',
         approval: 'always',
       },
+      { id: 'browser.readPage', risk: 'read-only', approval: 'never' },
+      { id: 'browser.navigate', risk: 'external-side-effect', approval: 'always' },
+      { id: 'browser.click', risk: 'external-side-effect', approval: 'always' },
+      { id: 'browser.type', risk: 'external-side-effect', approval: 'always' },
       { id: 'chat.model.switch', risk: 'external-side-effect', approval: 'always' },
       { id: 'mcp.invoke', risk: 'external-side-effect', approval: 'always' },
+      { id: 'creator.start', risk: 'safe-write', approval: 'always' },
+      { id: 'schedule.create', risk: 'safe-write', approval: 'always' },
+      { id: 'agent.run', risk: 'external-side-effect', approval: 'always' },
       { id: 'terminal.create', risk: 'safe-write', approval: 'always' },
       { id: 'terminal.run', risk: 'external-side-effect', approval: 'always' },
+      { id: 'terminal.start_cli', risk: 'external-side-effect', approval: 'always' },
+      { id: 'terminal.send_input', risk: 'external-side-effect', approval: 'always' },
+      { id: 'terminal.wait_for_output', risk: 'read-only', approval: 'never' },
+      { id: 'terminal.collect_output', risk: 'read-only', approval: 'never' },
       { id: 'task.cancel', risk: 'destructive', approval: 'always' },
     ]);
+  });
+
+  it('registers bounded project-file actions behind explicit approval', () => {
+    const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
+    const read = catalog.resolve('files.read');
+    const create = catalog.resolve('files.create');
+    const edit = catalog.resolve('files.edit');
+
+    expect(read).toMatchObject({
+      requiredCapabilities: ['files.read'],
+      risk: 'read-only',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'files.read' },
+    });
+    expect(create).toMatchObject({
+      requiredCapabilities: ['files.write'],
+      risk: 'safe-write',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'files.create' },
+    });
+    expect(edit).toMatchObject({
+      requiredCapabilities: ['files.write'],
+      risk: 'safe-write',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'files.edit' },
+    });
+    expect(read?.validateParameters({ path: 'C:\\safe\\input.txt' })).toEqual({
+      path: 'C:\\safe\\input.txt',
+    });
+    expect(
+      create?.validateParameters({
+        path: 'C:\\safe\\output.txt',
+        content: 'hello',
+        attachToChat: true,
+      }),
+    ).toEqual({
+      path: 'C:\\safe\\output.txt',
+      content: 'hello',
+      attachToChat: true,
+    });
+    expect(() => read?.validateParameters({ path: 'C:\\safe\\input.txt', secret: 'x' })).toThrow(
+      /unknown fields/i,
+    );
+  });
+
+  it('registers the bounded agent and skill creator launcher behind approval', () => {
+    const creator = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'creator.start',
+    );
+
+    expect(creator).toMatchObject({
+      requiredCapabilities: ['creator.open'],
+      risk: 'safe-write',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'creator.start' },
+    });
+    expect(creator?.validateParameters({ kind: 'agent' })).toEqual({ kind: 'agent' });
+    expect(creator?.validateParameters({ kind: 'skill' })).toEqual({ kind: 'skill' });
+    expect(() => creator?.validateParameters({ kind: 'terminal' })).toThrow(/kind/i);
+  });
+
+  it('registers schedule creation behind canonical approval', () => {
+    const schedule = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'schedule.create',
+    );
+
+    expect(schedule).toMatchObject({
+      requiredCapabilities: ['schedule.write'],
+      risk: 'safe-write',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'schedule.create' },
+    });
+    expect(
+      schedule?.validateParameters({
+        title: 'Owner Verify',
+        prompt: 'Provide a local status reminder.',
+        startAtMs: 1_786_626_000_000,
+        recurrence: 'once',
+      }),
+    ).toEqual({
+      title: 'Owner Verify',
+      prompt: 'Provide a local status reminder.',
+      startAtMs: 1_786_626_000_000,
+      recurrence: 'once',
+    });
+  });
+
+  it('registers one bounded child-agent launch behind canonical approval', () => {
+    const runAgent = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'agent.run',
+    );
+
+    expect(runAgent).toMatchObject({
+      requiredCapabilities: ['agent.execute'],
+      risk: 'external-side-effect',
+      approval: 'always',
+      executor: { kind: 'builtin', registryActionId: 'agent.run' },
+    });
+    expect(
+      runAgent?.validateParameters({
+        task: 'Review the approved file without editing it.',
+        agentId: 'agt_local_llama',
+      }),
+    ).toEqual({
+      task: 'Review the approved file without editing it.',
+      agentId: 'agt_local_llama',
+    });
+  });
+
+  it('keeps bounded terminal CLI launch fail-closed until atomic ownership is available', () => {
+    const startCli = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'terminal.start_cli',
+    );
+
+    expect(startCli).toMatchObject({
+      requiredCapabilities: ['terminal.experimental.disabled'],
+      risk: 'external-side-effect',
+      approval: 'always',
+      exposeToAI: false,
+      executor: { kind: 'builtin', registryActionId: 'terminal.start_cli' },
+      credentialBindings: [],
+      inputSchema: {
+        type: 'object',
+        required: ['cli'],
+        additionalProperties: false,
+      },
+    });
+    const params = {
+      cli: 'opencode --model current/free',
+      cwd: 'C:\\safe\\project',
+      label: 'OpenCode',
+      timeoutMs: 120_000,
+    };
+    expect(startCli?.validateParameters(params)).toEqual(params);
+    expect(
+      startCli?.validateParameters({
+        cli: '  opencode --model current/free  ',
+        cwd: '  C:\\safe\\project  ',
+        label: '  OpenCode  ',
+        timeoutMs: 120_000,
+      }),
+    ).toEqual(params);
+    expect(
+      startCli?.deriveTarget({
+        accountId: 'account-terminal',
+        params: {
+          cli: '  opencode --model current/free  ',
+          cwd: '  C:\\safe\\project  ',
+          label: '  OpenCode  ',
+          timeoutMs: 120_000,
+        },
+      }),
+    ).toEqual({
+      kind: 'external_resource',
+      service: 'terminal',
+      resourceId: 'new-cli:OpenCode',
+    });
+    expect(
+      startCli?.deriveTarget({
+        accountId: 'account-terminal',
+        params: { cli: 'opencode --model current/free' },
+      }),
+    ).toEqual({
+      kind: 'external_resource',
+      service: 'terminal',
+      resourceId: 'new-cli:opencode',
+    });
+    expect(() => startCli?.validateParameters({ ...params, secret: 'x' })).toThrow(
+      /unknown fields/i,
+    );
+    expect(() => startCli?.validateParameters({ ...params, cli: ' ' })).toThrow(/cli/i);
+    expect(() => startCli?.validateParameters({ ...params, cli: 'x'.repeat(32_769) })).toThrow(
+      /cli.*long/i,
+    );
+    expect(() => startCli?.validateParameters({ ...params, cwd: 'x'.repeat(32_769) })).toThrow(
+      /cwd.*long/i,
+    );
+    expect(() => startCli?.validateParameters({ ...params, label: 'x'.repeat(241) })).toThrow(
+      /label.*long/i,
+    );
+    expect(() => startCli?.validateParameters({ ...params, timeoutMs: 999 })).toThrow(/timeout/i);
+    expect(startCli?.validateParameters({ ...params, timeoutMs: 1_800_000 })).toEqual({
+      ...params,
+      timeoutMs: 1_800_000,
+    });
+    expect(() => startCli?.validateParameters({ ...params, timeoutMs: 1_800_001 })).toThrow(
+      /timeout/i,
+    );
+    expect(() => startCli?.validateParameters({ ...params, timeoutMs: 3_600_000 })).toThrow(
+      /timeout/i,
+    );
+    expect(() => startCli?.validateParameters({ ...params, timeoutMs: 1_000.5 })).toThrow(
+      /timeout/i,
+    );
+    for (const unsafe of ['\u0000', '\u0085', '\u202e', '\u200b', '\ufeff']) {
+      expect(() =>
+        startCli?.validateParameters({ ...params, cli: `opencode${unsafe} --version` }),
+      ).toThrow(/cli.*control/i);
+      expect(() =>
+        startCli?.validateParameters({ ...params, cwd: `C:\\safe${unsafe}\\project` }),
+      ).toThrow(/cwd.*control/i);
+      expect(() => startCli?.validateParameters({ ...params, label: `Open${unsafe}Code` })).toThrow(
+        /label.*control/i,
+      );
+    }
+  });
+
+  it('keeps targeted terminal actions fail-closed until atomic ownership is available', () => {
+    const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
+    const send = catalog.resolve('terminal.send_input');
+    const wait = catalog.resolve('terminal.wait_for_output');
+    const collect = catalog.resolve('terminal.collect_output');
+
+    expect(send).toMatchObject({
+      requiredCapabilities: ['terminal.experimental.disabled'],
+      risk: 'external-side-effect',
+      approval: 'always',
+      exposeToAI: false,
+      executor: { kind: 'builtin', registryActionId: 'terminal.send_input' },
+      credentialBindings: [],
+    });
+    expect(wait).toMatchObject({
+      requiredCapabilities: ['terminal.experimental.disabled'],
+      risk: 'read-only',
+      approval: 'never',
+      exposeToAI: false,
+      executor: { kind: 'builtin', registryActionId: 'terminal.wait_for_output' },
+      credentialBindings: [],
+    });
+    expect(collect).toMatchObject({
+      requiredCapabilities: ['terminal.experimental.disabled'],
+      risk: 'read-only',
+      approval: 'never',
+      exposeToAI: false,
+      executor: { kind: 'builtin', registryActionId: 'terminal.collect_output' },
+      credentialBindings: [],
+    });
+
+    expect(
+      send?.validateParameters({
+        command: '  status --json  ',
+        refsJson: ' { "sessionId": "session_123" } ',
+      }),
+    ).toEqual({
+      command: 'status --json',
+      refsJson: '{"sessionId":"session_123"}',
+    });
+    expect(
+      send?.deriveTarget({
+        accountId: 'account-terminal',
+        params: { command: 'status --json', refsJson: '{"paneId":"pane_456"}' },
+      }),
+    ).toEqual({
+      kind: 'external_resource',
+      service: 'terminal',
+      resourceId: 'pane:pane_456',
+    });
+    expect(
+      wait?.validateParameters({
+        sessionId: '  session_123  ',
+        contains: '  completed  ',
+        afterBytes: 0,
+        timeoutMs: 60_000,
+      }),
+    ).toEqual({
+      sessionId: 'session_123',
+      contains: 'completed',
+      afterBytes: 0,
+      timeoutMs: 60_000,
+    });
+    expect(
+      collect?.validateParameters({
+        paneId: '  pane_456  ',
+        maxChars: 16_000,
+      }),
+    ).toEqual({
+      paneId: 'pane_456',
+      maxChars: 16_000,
+    });
+    expect(
+      wait?.deriveTarget({
+        accountId: 'account-terminal',
+        params: { sessionId: 'session_123' },
+      }),
+    ).toEqual({
+      kind: 'external_resource',
+      service: 'terminal',
+      resourceId: 'session:session_123',
+    });
+    expect(
+      collect?.deriveTarget({
+        accountId: 'account-terminal',
+        params: { paneId: 'pane_456' },
+      }),
+    ).toEqual({
+      kind: 'external_resource',
+      service: 'terminal',
+      resourceId: 'pane:pane_456',
+    });
+
+    for (const action of [wait, collect]) {
+      expect(() => action?.validateParameters({})).toThrow(/exactly one/i);
+      expect(() =>
+        action?.validateParameters({ sessionId: 'session_123', paneId: 'pane_456' }),
+      ).toThrow(/exactly one/i);
+      expect(() => action?.validateParameters({ agentSlug: 'agent-1' })).toThrow(
+        /unknown fields|selector/i,
+      );
+      expect(() => action?.validateParameters({ all: true })).toThrow(/unknown fields|selector/i);
+      expect(() => action?.validateParameters({ sessionId: { value: 'session_123' } })).toThrow(
+        /sessionId|selector/i,
+      );
+      expect(() => action?.validateParameters({ sessionId: 'session_\u202e123' })).toThrow(
+        /sessionId|selector/i,
+      );
+    }
+    for (const refsJson of [
+      '["session_123"]',
+      '{"sessionId":"session_123","paneId":"pane_456"}',
+      '{"agentSlug":"agent-1"}',
+      '{"all":true}',
+      '{"sessionId":{"value":"session_123"}}',
+      '{"sessionId":"session_123","extra":true}',
+      '{"sessionId":"session_\\u202e123"}',
+    ]) {
+      expect(() => send?.validateParameters({ command: 'status', refsJson })).toThrow(
+        /refsJson|selector/i,
+      );
+    }
+    expect(() =>
+      send?.validateParameters({ command: `status${'\u0000'}`, refsJson: '{"paneId":"pane_456"}' }),
+    ).toThrow(/command.*control/i);
+    expect(() =>
+      send?.validateParameters({
+        command: 'x'.repeat(10_001),
+        refsJson: '{"paneId":"pane_456"}',
+      }),
+    ).toThrow(/command.*long/i);
+    expect(() =>
+      send?.validateParameters({
+        command: 'status',
+        refsJson: '{"paneId":"pane_456"}',
+        extra: true,
+      }),
+    ).toThrow(/unknown fields/i);
+
+    expect(() => wait?.validateParameters({ sessionId: 'session_123', afterBytes: -1 })).toThrow(
+      /afterBytes/i,
+    );
+    expect(() => wait?.validateParameters({ sessionId: 'session_123', afterBytes: 1.5 })).toThrow(
+      /afterBytes/i,
+    );
+    expect(() => wait?.validateParameters({ sessionId: 'session_123', timeoutMs: 249 })).toThrow(
+      /timeoutMs/i,
+    );
+    expect(() => wait?.validateParameters({ sessionId: 'session_123', timeoutMs: 60_001 })).toThrow(
+      /timeoutMs/i,
+    );
+    expect(() => collect?.validateParameters({ paneId: 'pane_456', maxChars: 199 })).toThrow(
+      /maxChars/i,
+    );
+    expect(() => collect?.validateParameters({ paneId: 'pane_456', maxChars: 16_001 })).toThrow(
+      /maxChars/i,
+    );
+  });
+
+  it('publishes only fixed browser operations behind canonical review bindings', () => {
+    const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
+    expect(
+      ['browser.readPage', 'browser.navigate', 'browser.click', 'browser.type'].map((id) => {
+        const action = catalog.resolve(id)!;
+        return {
+          id,
+          capability: action.requiredCapabilities[0],
+          approval: action.approval,
+          exposed: action.exposeToAI,
+          executor: action.executor,
+        };
+      }),
+    ).toEqual([
+      {
+        id: 'browser.readPage',
+        capability: 'browser.operator',
+        approval: 'never',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.readPage' },
+      },
+      {
+        id: 'browser.navigate',
+        capability: 'browser.operator',
+        approval: 'always',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.navigate' },
+      },
+      {
+        id: 'browser.click',
+        capability: 'browser.operator',
+        approval: 'always',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.click' },
+      },
+      {
+        id: 'browser.type',
+        capability: 'browser.operator',
+        approval: 'always',
+        exposed: false,
+        executor: { kind: 'builtin', registryActionId: 'browser.type' },
+      },
+    ]);
+    expect(catalog.resolve('browser.evaluate')).toBeUndefined();
+    expect(catalog.resolve('browser.runJs')).toBeUndefined();
+
+    const navigate = catalog.resolve('browser.navigate')!;
+    const canonical = {
+      schemaVersion: 1,
+      reviewId: 'review-1',
+      origin: 'https://example.test',
+      tabId: 'tab-1',
+      frameId: null,
+      target: { currentUrl: 'https://example.test/start' },
+      parameters: { url: 'https://example.test/next' },
+      parametersHash: 'parameter-hash',
+      reviewedHash: 'reviewed-hash',
+      expectedEffect: 'Navigate the active browser tab.',
+      reviewedRisk: 'confirm',
+      capability: { id: 'browser.operator', operation: 'browser.navigate' },
+    };
+    expect(navigate.validateParameters(canonical)).toEqual(canonical);
+    expect(() =>
+      navigate.validateParameters({
+        ...canonical,
+        parameters: { url: 'https://example.test/next', expression: 'document.cookie' },
+      }),
+    ).toThrow(/unknown fields/i);
   });
 
   it('publishes one closed always-confirmed MCP invocation registration', () => {

@@ -271,6 +271,38 @@ describe('GlobalSttHost', () => {
     );
   });
 
+  it('keeps the free continuous STT target after the first final so later speech still inserts', async () => {
+    render(<GlobalSttHost />);
+    const field = document.createElement('textarea');
+    field.value = '';
+    document.body.appendChild(field);
+    field.focus();
+    rememberSttEditableFromFocus(field);
+
+    try {
+      act(() => requestComposerSttToggle('toolbar'));
+      await waitFor(() => expect(voiceMocks.handlers.has('voice:final')).toBe(true));
+
+      // Continuous free system STT stays armed after the first phrase.
+      voiceMocks.isListening.mockReturnValue(true);
+      voiceMocks.wantsListening.mockReturnValue(true);
+
+      act(() => voiceMocks.handlers.get('voice:final')?.({ text: 'hello' }));
+      expect(field.value).toContain('hello');
+      expect(toastMocks.warning).not.toHaveBeenCalled();
+
+      act(() => voiceMocks.handlers.get('voice:final')?.({ text: 'world' }));
+      expect(field.value).toMatch(/hello/i);
+      expect(field.value).toMatch(/world/i);
+      expect(toastMocks.warning).not.toHaveBeenCalledWith(
+        'Dictation',
+        'The action failed, sir. Action: Dictation insertion. Cause: The spoken text could not be inserted because the target field is no longer available.',
+      );
+    } finally {
+      field.remove();
+    }
+  });
+
   it('distinguishes an available field that rejects dictation insertion', async () => {
     const insertSpy = vi
       .spyOn(await import('./insertText'), 'insertTextIntoEditable')

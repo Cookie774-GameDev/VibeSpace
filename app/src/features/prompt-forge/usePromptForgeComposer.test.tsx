@@ -1,7 +1,9 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatImageAttachment } from '@/lib/ai/vision';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import type { PromptForgeExecutionResult } from './promptForgeExecutor';
+import type { PromptForgeModelOption } from './modelSelection';
 import {
   createPromptForgeJob,
   transitionPromptForgeJob,
@@ -62,7 +64,7 @@ const execution: PromptForgeExecutionResult = Object.freeze({
 });
 
 describe('usePromptForgeComposer', () => {
-  it('runs a reviewable upgrade without changing the composer, then supports replace and undo', async () => {
+  it('previews the upgrade in the composer, then supports accept and undo', async () => {
     const { jobs, repository } = memoryRepository();
     const setDraft = vi.fn();
     let nextId = 0;
@@ -119,10 +121,11 @@ describe('usePromptForgeComposer', () => {
     expect(result.current.status).toBe('ready');
     expect(result.current.reviewOpen).toBe(true);
     expect(result.current.upgradedDraft).toBe(execution.upgradedPrompt);
-    expect(setDraft).not.toHaveBeenCalled();
-
-    act(() => result.current.replace());
     expect(setDraft).toHaveBeenLastCalledWith(execution.upgradedPrompt);
+
+    act(() => result.current.accept());
+    expect(result.current.reviewOpen).toBe(false);
+    expect(result.current.isDraftApproved(execution.upgradedPrompt)).toBe(true);
     expect(result.current.canUndo).toBe(true);
 
     act(() => result.current.undo());
@@ -141,6 +144,110 @@ describe('usePromptForgeComposer', () => {
       await result.current.start();
     });
     expect(result.current.excludedSourceIds).toEqual([]);
+  });
+
+  it('returns the upgraded Send text without opening review and preserves the original on failure', async () => {
+    const modelOptions: readonly PromptForgeModelOption[] = [
+      {
+        id: 'ollama-local:qwen3:8b',
+        providerId: 'ollama',
+        modelId: 'qwen3:8b',
+        label: 'Qwen 3 8B',
+        connectionId: 'ollama-local',
+        connectionMode: 'local',
+        localOnly: true,
+        available: true,
+      },
+    ];
+    const retrieveContext = async () => ({
+      queryId: 'query-send',
+      mapRevisions: {},
+      items: [],
+      relatedEntities: [],
+      omittedCount: 0,
+      staleItems: [],
+      warnings: [],
+      builtAt: 100,
+      sourceLabels: {},
+      evidenceKinds: {},
+    });
+    const setDraft = vi.fn();
+    const successful = renderHook(() =>
+      usePromptForgeComposer({
+        accountId: 'account-1',
+        chatId: 'chat-1',
+        projectId: 'project-1',
+        draft: 'Original composer draft.',
+        setDraft,
+        originalAttachments: [],
+        contextAttachments: [],
+        additionalSources: [],
+        modelSelection: { mode: 'prefer_local' },
+        modelOptions,
+        currentChatSelection: { mode: 'none' },
+        offlineMode: false,
+        defaultLocalModel: 'qwen3:8b',
+        repository: memoryRepository().repository,
+        executor: { execute: vi.fn(async () => execution) },
+        retrieveContext,
+        now: () => 100,
+        createJobId: () => 'forge-job-send-success',
+        recordActivity: vi.fn(),
+      }),
+    );
+
+    await act(async () => {
+      await expect(
+        successful.result.current.upgradeForSend('Ship the runner game.'),
+      ).resolves.toEqual({
+        text: execution.upgradedPrompt,
+        upgraded: true,
+        requiresReview: true,
+      });
+    });
+    expect(successful.result.current.reviewOpen).toBe(true);
+    expect(successful.result.current.status).toBe('ready');
+    expect(successful.result.current.isRunning).toBe(false);
+    expect(setDraft).toHaveBeenLastCalledWith(execution.upgradedPrompt);
+
+    const failing = renderHook(() =>
+      usePromptForgeComposer({
+        accountId: 'account-1',
+        chatId: 'chat-1',
+        projectId: 'project-1',
+        draft: 'Original composer draft.',
+        setDraft: vi.fn(),
+        originalAttachments: [],
+        contextAttachments: [],
+        additionalSources: [],
+        modelSelection: { mode: 'prefer_local' },
+        modelOptions,
+        currentChatSelection: { mode: 'none' },
+        offlineMode: false,
+        defaultLocalModel: 'qwen3:8b',
+        repository: memoryRepository().repository,
+        executor: {
+          execute: vi.fn(async () => {
+            throw new Error('provider secret must not escape');
+          }),
+        },
+        retrieveContext,
+        now: () => 100,
+        createJobId: () => 'forge-job-send-failure',
+        recordActivity: vi.fn(),
+      }),
+    );
+
+    await act(async () => {
+      const outcome = await failing.result.current.upgradeForSend('Keep my original intent.');
+      expect(outcome.text).toBe('Keep my original intent.');
+      expect(outcome.upgraded).toBe(false);
+      expect(outcome.reason).toMatch(/could not complete|original|failed/i);
+      expect(outcome.reason).not.toContain('provider secret');
+    });
+    expect(failing.result.current.reviewOpen).toBe(false);
+    expect(failing.result.current.status).toBe('failed');
+    expect(failing.result.current.isRunning).toBe(false);
   });
 
   it('explains why empty or unauthenticated drafts cannot start', () => {
@@ -525,7 +632,7 @@ describe('usePromptForgeComposer', () => {
 
   it('rejects secrets in drafts or regeneration instructions before persistence', async () => {
     const { jobs, repository } = memoryRepository();
-    const secret = 'ghp_SyntheticCredentialValue1234567890';
+    const secret = syntheticCredentialFixture('ghp_', 'SyntheticCredentialValue1234567890');
     const { result } = renderHook(() =>
       usePromptForgeComposer({
         accountId: 'account-1',

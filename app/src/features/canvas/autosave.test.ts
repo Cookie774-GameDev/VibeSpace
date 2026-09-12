@@ -82,6 +82,25 @@ describe('Canvas autosave controller', () => {
     });
   });
 
+  it('starts the default coalesced durable save in the same turn as the edit', async () => {
+    const persistence = port();
+    const controller = createCanvasAutosaveController({
+      persistence,
+      initialRevision: 0,
+      now: () => 101,
+    });
+
+    controller.schedule(documentAt(1));
+
+    expect(persistence.writeRecovery).toHaveBeenCalledOnce();
+    await controller.flush();
+    expect(persistence.saveDocument).toHaveBeenCalledOnce();
+    expect(controller.getState()).toMatchObject({
+      pending: false,
+      persistedRevision: 1,
+    });
+  });
+
   it('writes recovery data before a transactional save and clears it only after success', async () => {
     const order: string[] = [];
     const persistence: CanvasPersistencePort = {

@@ -855,13 +855,136 @@ describe('createJarvisApprovalEngine', () => {
 
     const currentAttempts = setup.run.transportAttempts;
     setup.run.transportAttempts = undefined;
+    const providerIdentity = {
+      producerKind: 'provider' as const,
+      providerId: setup.run.model.providerId,
+      modelId: setup.run.model.modelId,
+      modelSnapshotRef: `${setup.run.model.providerId}:${setup.run.model.modelId}`,
+    };
+    const responseBackedEvents = [
+      {
+        runId: setup.run.id,
+        seq: 1,
+        idempotencyKey: 'provider-start-request-1',
+        type: 'model' as const,
+        status: 'started',
+        title: 'Provider started',
+        safeSummary: 'The protected provider request started.',
+        sourceRefs: [],
+        artifactIds: [],
+        createdAt: now - 20,
+        producerSourceEvidence: {
+          schemaVersion: 1 as const,
+          accountId: setup.run.accountId,
+          runId: setup.run.id,
+          requestId: approval.requestId,
+          attemptNumber: approval.attemptNumber,
+          producerKind: 'provider' as const,
+          producerIdentity: providerIdentity,
+          resultRef: 'provider-start-result-ref',
+          observedAt: now - 20,
+          phase: 'start' as const,
+          state: 'started' as const,
+        },
+      },
+      {
+        runId: setup.run.id,
+        seq: 2,
+        idempotencyKey: 'provider-result-request-1',
+        type: 'model' as const,
+        status: 'completed',
+        title: 'Provider completed',
+        safeSummary: 'The protected provider request completed.',
+        sourceRefs: [],
+        artifactIds: [],
+        createdAt: now - 10,
+        producerSourceEvidence: {
+          schemaVersion: 1 as const,
+          accountId: setup.run.accountId,
+          runId: setup.run.id,
+          requestId: approval.requestId,
+          attemptNumber: approval.attemptNumber,
+          producerKind: 'provider' as const,
+          producerIdentity: providerIdentity,
+          resultRef: 'provider-completed-result-ref',
+          observedAt: now - 10,
+          phase: 'result' as const,
+          state: 'completed' as const,
+        },
+      },
+      { ...events[0]!, seq: 3 },
+    ];
     await expect(
       setup.engine.recoveryVerifier.verifyPendingApproval({
         accountId: 'account-a',
         run: structuredClone(setup.run),
-        events,
+        events: responseBackedEvents,
       }),
-    ).resolves.toEqual({ valid: false, reason: 'approval_binding_mismatch' });
+    ).resolves.toEqual({ valid: true, approvalId: approval.id });
+    for (const invalidEvents of [
+      responseBackedEvents.filter((event) => event.producerSourceEvidence?.phase !== 'result'),
+      responseBackedEvents.map((event) =>
+        event.producerSourceEvidence?.phase === 'result'
+          ? {
+              ...event,
+              producerSourceEvidence: { ...event.producerSourceEvidence, state: 'degraded' },
+            }
+          : event,
+      ),
+      [...responseBackedEvents, { ...responseBackedEvents[1]!, seq: 4 }],
+      responseBackedEvents.map((event) =>
+        event.producerSourceEvidence?.phase === 'result'
+          ? {
+              ...event,
+              producerSourceEvidence: {
+                ...event.producerSourceEvidence,
+                requestId: 'request-stale',
+              },
+            }
+          : event,
+      ),
+      responseBackedEvents.map((event) =>
+        event.producerSourceEvidence?.phase === 'result'
+          ? {
+              ...event,
+              producerSourceEvidence: {
+                ...event.producerSourceEvidence,
+                attemptNumber: 2,
+              },
+            }
+          : event,
+      ),
+      responseBackedEvents.map((event) =>
+        event.producerSourceEvidence?.phase === 'result'
+          ? {
+              ...event,
+              producerSourceEvidence: {
+                ...event.producerSourceEvidence,
+                accountId: 'account-foreign',
+              },
+            }
+          : event,
+      ),
+      responseBackedEvents.map((event) =>
+        event.producerSourceEvidence?.phase === 'result'
+          ? {
+              ...event,
+              producerSourceEvidence: {
+                ...event.producerSourceEvidence,
+                runId: 'jrun_foreign',
+              },
+            }
+          : event,
+      ),
+    ]) {
+      await expect(
+        setup.engine.recoveryVerifier.verifyPendingApproval({
+          accountId: 'account-a',
+          run: structuredClone(setup.run),
+          events: invalidEvents as never,
+        }),
+      ).resolves.toEqual({ valid: false, reason: 'approval_binding_mismatch' });
+    }
     setup.run.transportAttempts = currentAttempts;
 
     await expect(

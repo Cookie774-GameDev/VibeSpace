@@ -85,7 +85,10 @@ screenshots, fixtures, or Git.
 | `APP_BASE_URL`                | Operator-set          | Exact credential-free HTTPS public origin                        |
 | `APP_VERSION`                 | Operator-set          | Exact signed desktop SemVer used by server Access authorization  |
 | `APP_ACCESS_GRACE_DAYS`       | Optional operator-set | Webhook grace duration; committed default is `3`                 |
-| Feature price variables       | Operator-set          | Existing optional-plan Price IDs listed above                    |
+| `STRIPE_STARTER_PRICE_ID`     | Operator-set          | Orbit feature-plan Price ID                                      |
+| `STRIPE_PRO_PRICE_ID`         | Operator-set          | Nova feature-plan Price ID                                       |
+| `STRIPE_ULTRA_PRICE_ID`       | Operator-set          | Singularity feature-plan Price ID                                |
+| `STRIPE_APEX_PRICE_ID`        | Operator-set          | Supernova feature-plan Price ID                                  |
 
 Use an installed, organization-approved Supabase CLI version; do not let `npx` fetch an unpinned
 release during a deployment. Record `supabase --version` in restricted release evidence.
@@ -126,6 +129,14 @@ The Access schema is additive and must be deployed in this exact order:
 3. `0034_app_access_lease_freshness.sql` — row-locked entitlement revision for signed offline
    leases.
 4. `0035_app_access_checkout_attempts.sql` — service-role-only durable checkout-attempt lifecycle.
+
+After the four Access migrations pass, apply these separately reviewed PR31
+migrations, in order, only to the proven VibeSpace test project:
+
+5. `0036_owner_approved_billing_call_anyone.sql` — canonical shared credits and
+   server-authoritative Call Anyone storage/RPCs.
+6. `0037_profiles_display_name_security.sql` — owner-scoped profile hydration
+   and display-name-only client updates.
 
 These migrations may create or alter only their reviewed `app_access_*` objects and named Access
 RPCs. Existing AccessRevamp `ar_*` objects belong to another system. If the reviewed application
@@ -296,14 +307,31 @@ left on. Do **not** pass `--no-verify-jwt` to any of these commands:
 supabase functions deploy create-access-checkout --project-ref <test-project-ref>
 supabase functions deploy create-access-portal --project-ref <test-project-ref>
 supabase functions deploy access-lease --project-ref <test-project-ref>
+supabase functions deploy create-checkout-session --project-ref <test-project-ref>
+supabase functions deploy create-customer-portal --project-ref <test-project-ref>
 ```
 
-The effective deployment/config contract for all three is `verify_jwt = true`; an absent
-function-specific override retains the authenticated default. Checkout and portal call
+The effective deployment/config contract for all five is `verify_jwt = true`; the lease
+boundary is pinned explicitly in `supabase/config.toml`:
+
+```toml
+[functions.access-lease]
+verify_jwt = true
+```
+
+An absent function-specific override retains the authenticated default. Checkout and portal call
 `auth.getUser(jwt)` server-side, accept `POST` only, ignore the request body for billing authority,
 and return only validated Stripe-hosted HTTPS URLs. `access-lease` also validates the user token
 server-side and reads the authoritative access snapshot; it never accepts client entitlement state.
 Missing or invalid signing configuration fails closed with `500 lease_unconfigured`.
+
+`create-checkout-session` accepts only `starter`, `pro`, `ultra`, or `apex`,
+maps the plan to one server-configured feature Price ID, and never grants Access.
+It returns `{ "url": "https://checkout.stripe.com/..." }` for a new feature
+subscriber. If a non-terminal feature subscription already exists, it returns
+HTTP `409` with `{ "error": "subscription_exists", "action": "open_portal" }`;
+the client must open `create-customer-portal` for upgrades, downgrades, or
+cancellation instead of creating a second subscription.
 
 Stripe cannot send a Supabase user JWT. Deploy the webhook with gateway JWT verification off:
 
@@ -406,8 +434,9 @@ The Stripe test-mode portal must expose:
 - renewal and cancel-at-period-end controls;
 - immediate cancellation only if the product owner explicitly supports and tests it.
 
-`create-access-portal` uses the authenticated user's existing server-owned Stripe customer mapping,
-never creates a customer, and constructs `APP_BASE_URL + /account` server-side.
+`create-access-portal` and `create-customer-portal` use the authenticated user's
+existing server-owned Stripe customer mapping, never create a customer, and
+construct their return URL from the validated `APP_BASE_URL` server-side.
 
 ## 7. Return-route parity is a release gate
 

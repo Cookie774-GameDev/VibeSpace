@@ -990,7 +990,7 @@ function validateActionJsonSchemaShape(
   }
   const record = validateClosedRecord(
     value,
-    ['type', 'description', 'properties', 'required', 'additionalProperties', 'enum'],
+    ['type', 'description', 'properties', 'required', 'additionalProperties', 'enum', 'oneOf'],
     path,
     errors,
   );
@@ -1002,6 +1002,15 @@ function validateActionJsonSchemaShape(
   validateOptionalField(record, 'required', path, errors, validateIdentifierArray);
   validateOptionalField(record, 'additionalProperties', path, errors, validateBoolean);
   validateOptionalField(record, 'enum', path, errors, validateIdentifierArray);
+  validateOptionalField(record, 'oneOf', path, errors, (entry, entryPath, entryErrors) => {
+    if (!Array.isArray(entry) || entry.length < 1 || entry.length > 8) {
+      addError(entryErrors, 'invalid_type', entryPath);
+      return;
+    }
+    validateArray(entry, entryPath, entryErrors, (branch, branchPath, branchErrors) =>
+      validateActionJsonSchemaShape(branch, branchPath, branchErrors, depth + 1),
+    );
+  });
   validateOptionalField(record, 'properties', path, errors, (entry, entryPath, entryErrors) => {
     const properties = validateRecord(entry, entryPath, entryErrors);
     if (!properties) return;

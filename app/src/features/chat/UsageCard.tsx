@@ -1,5 +1,6 @@
 import { BarChart3 } from 'lucide-react';
 import type { UsageSnapshot, UsageValue } from '@/lib/usage/usageTypes';
+import { formatUserDateTime } from '@/lib/timeFormat';
 
 function displayValue(value: UsageValue): string {
   if (value.value === undefined) return 'Unavailable';
@@ -40,7 +41,7 @@ export function UsageCard({ snapshots, scope }: { snapshots: UsageSnapshot[]; sc
               <p className="text-xs text-muted-foreground">{snapshot.mode} · {snapshot.authSource}{snapshot.modelId ? ` · ${snapshot.modelId}` : ''}</p>
             </div>
             <time className="text-[10px] text-muted-foreground" dateTime={new Date(snapshot.capturedAt).toISOString()}>
-              {new Date(snapshot.capturedAt).toLocaleString()}
+              {formatUserDateTime(snapshot.capturedAt)}
             </time>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

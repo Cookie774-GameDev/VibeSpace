@@ -592,9 +592,96 @@ export type CanvasRecoveryRow = {
   recoveredAt: CanvasTimestamp | null;
 };
 
+export type BrowserChatProvider = 'chatgpt' | 'claude' | 'gemini';
+
+export type BrowserChatBindingRow = {
+  id: string;
+  accountId: string;
+  workspaceId: string;
+  projectId?: string;
+  chatId: string;
+  provider: BrowserChatProvider;
+  providerProfileKey: string;
+  providerConversationKey?: string;
+  resumeUrl?: string;
+  providerProjectKey?: string;
+  bindingState: 'new' | 'bound' | 'unavailable' | 'stale';
+  localTitle: string;
+  pinned: boolean;
+  viewMode: 'provider' | 'vibespace';
+  permissionProfileId?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastOpenedAt?: number;
+};
+
+export type ProviderProjectLinkRow = {
+  id: string;
+  accountId: string;
+  workspaceId: string;
+  projectId: string;
+  provider: BrowserChatProvider;
+  providerProjectKey?: string;
+  providerProjectUrl?: string;
+  state: 'linked' | 'stale' | 'unsupported';
+  createdAt: number;
+  updatedAt: number;
+  lastVerifiedAt?: number;
+};
+
+export type BrowserChatSnapshotMessage = {
+  id: string;
+  parentId?: string;
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'unknown';
+  createdAt?: number;
+  text: string;
+};
+
+export type BrowserChatImportRow = {
+  id: string;
+  accountId: string;
+  workspaceId: string;
+  provider: 'chatgpt';
+  fileName: string;
+  fileSize: number;
+  fileHash: string;
+  status: 'complete';
+  conversationCount: number;
+  importedAt: number;
+};
+
+export type BrowserChatSnapshotRow = {
+  id: string;
+  accountId: string;
+  workspaceId: string;
+  provider: 'chatgpt';
+  providerConversationKey: string;
+  importId: string;
+  title: string;
+  providerCreatedAt?: number;
+  providerUpdatedAt?: number;
+  messageCount: number;
+  contentHash: string;
+  revision: number;
+  messages: BrowserChatSnapshotMessage[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type BrowserChatPermissionProfileRow = {
+  id: string;
+  accountId: string;
+  workspaceId: string;
+  projectId: string;
+  plan: 'off' | 'read' | 'project_developer' | 'full_local_developer' | 'custom';
+  serializedProfile: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export const DB_NAME = 'jarvis-v1';
-/** Current schema version — bumped to 9 for durable curated memory evidence. */
-export const DB_VERSION = 9;
+/** Current schema version — bumped to 12 for durable Browser Chat permission profiles. */
+export const DB_VERSION = 12;
 
 /**
  * Dexie store schema strings.
@@ -761,6 +848,34 @@ export const STORES_V9 = {
     'id, evidenceId, ownerId, revision, &[evidenceId+revision], [ownerId+evidenceId], createdAt',
 } as const;
 
-export const STORES = STORES_V9;
+/** V10 adds local-first, account/workspace-scoped Browser Chat records. */
+// prettier-ignore
+export const STORES_V10 = {
+  ...STORES_V9,
+  browser_chat_bindings:
+    'id, accountId, workspaceId, projectId, chatId, provider, bindingState, pinned, updatedAt, &[accountId+workspaceId+chatId], &[accountId+workspaceId+provider+providerProfileKey+providerConversationKey], [accountId+workspaceId], [accountId+workspaceId+projectId], [accountId+workspaceId+pinned], [accountId+workspaceId+updatedAt]',
+  provider_project_links:
+    'id, accountId, workspaceId, projectId, provider, state, updatedAt, &[accountId+workspaceId+projectId+provider], [accountId+workspaceId], [accountId+workspaceId+projectId]',
+} as const;
+
+/** V11 adds provider-owned export snapshots without entering native message authority. */
+// prettier-ignore
+export const STORES_V11 = {
+  ...STORES_V10,
+  browser_chat_imports:
+    'id, accountId, workspaceId, provider, fileHash, status, importedAt, &[accountId+workspaceId+provider+fileHash], [accountId+workspaceId], [accountId+workspaceId+importedAt]',
+  browser_chat_snapshots:
+    'id, accountId, workspaceId, provider, providerConversationKey, importId, updatedAt, &[accountId+workspaceId+provider+providerConversationKey], [accountId+workspaceId], [accountId+workspaceId+updatedAt], [accountId+workspaceId+importId]',
+} as const;
+
+/** V12 adds one durable permission profile per account/workspace/project scope. */
+// prettier-ignore
+export const STORES_V12 = {
+  ...STORES_V11,
+  browser_chat_permission_profiles:
+    'id, accountId, workspaceId, projectId, plan, updatedAt, &[accountId+workspaceId+projectId], [accountId+workspaceId]',
+} as const;
+
+export const STORES = STORES_V12;
 
 export type StoreName = keyof typeof STORES;

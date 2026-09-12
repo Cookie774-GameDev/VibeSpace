@@ -65,6 +65,16 @@ vi.mock('./pixiAtlasPlayer', () => {
 
     resume() {}
 
+    setContextLostHandler(_handler: (() => void) | null) {}
+
+    isContextUnhealthy() {
+      return this.disposed || this.isDestroyed;
+    }
+
+    ensureAliveRendering() {
+      return !this.disposed && !this.isDestroyed && this.initialized;
+    }
+
     setAnimation(meta: { fps: number; playbackKey?: string }) {
       this.setAnimationCalls += 1;
       this.animations.push(meta);
@@ -169,11 +179,27 @@ describe('PetOverlay StrictMode player lifecycle', () => {
     });
 
     expect(overlay.getAttribute('data-pet-reaction')).toBe('success');
-    expect(view.container.querySelector('[data-pet-reaction-indicator="success"]')).toBeTruthy();
+    // Status reactions stay semantic (data attribute + screen-reader copy) —
+    // no floating corner dots on the desktop pet.
+    expect(view.container.querySelector('[data-pet-reaction-indicator]')).toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(2_400);
     });
+    expect(overlay.getAttribute('data-pet-reaction')).toBe('idle');
+    view.unmount();
+  });
+
+  it('does not paint a hover status dot on pointer enter', () => {
+    const view = render(<PetOverlay />);
+    const overlay = view.container.querySelector('[data-pet-overlay="true"]') as HTMLElement;
+    expect(overlay).toBeTruthy();
+
+    fireEvent.pointerEnter(overlay);
+    expect(overlay.getAttribute('data-pet-reaction')).toBe('hover');
+    expect(view.container.querySelector('[data-pet-reaction-indicator]')).toBeNull();
+
+    fireEvent.pointerLeave(overlay);
     expect(overlay.getAttribute('data-pet-reaction')).toBe('idle');
     view.unmount();
   });

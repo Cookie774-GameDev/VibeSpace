@@ -102,6 +102,34 @@ describe('AgentActivityCard', () => {
     expect(screen.queryByTestId('agent-waveform')).toBeNull();
   });
 
+  it('keeps every live-agent row reachable and compact controls scaled in the Pet panel', () => {
+    useJarvisInteractionStore.setState({
+      agentsByChat: {
+        chat_parent: Array.from({ length: 8 }, (_, index) => ({
+          ...agentPart.agent,
+          agentId: `ja_compact_${index}`,
+          childChatId: `chat_child_${index}`,
+          name: `Worker ${index + 1}`,
+          createdAt: `2026-06-24T12:00:${String(index).padStart(2, '0')}.000Z`,
+        })),
+      },
+    });
+
+    render(<ChatAgentActivityPanel chatId="chat_parent" compact />);
+
+    const panel = screen.getByLabelText('Multitask activity');
+    const rows = screen.getAllByTestId('chat-agent-activity-row');
+    const scroller = screen.getByTestId('chat-agent-activity-scroll');
+
+    expect(panel.getAttribute('data-compact')).toBe('true');
+    expect(scroller.className).toContain('overflow-y-auto');
+    expect(scroller.getAttribute('tabindex')).toBe('0');
+    expect(scroller.getAttribute('aria-label')).toBe('Live agent work');
+    expect(rows).toHaveLength(8);
+    expect(rows.every((row) => row.getAttribute('data-compact') === 'true')).toBe(true);
+    expect(screen.getAllByRole('button', { name: /Open chat for/i })).toHaveLength(8);
+  });
+
   it('collapses, expands, dismisses, and opens a child chat', () => {
     useJarvisInteractionStore.setState({
       agentsByChat: {
@@ -180,6 +208,47 @@ describe('AgentActivityCard', () => {
 
     expect(useUIStore.getState().activeChatId).toBe('chat_child');
     expect(useUIStore.getState().route).toBe('chat');
+  });
+
+  it('reconciles a persisted inline card with the matching live child status', () => {
+    useJarvisInteractionStore.setState({
+      agentsByChat: {
+        chat_parent: [
+          {
+            ...agentPart.agent,
+            status: 'failed',
+            currentStep: 'Failed',
+            summary: 'The provider attempt ended before canonical completion.',
+            updatedAt: '2026-06-24T12:00:03.000Z',
+          },
+        ],
+      },
+    });
+
+    render(<AgentActivityCard part={agentPart} />);
+
+    expect(screen.getByText('failed')).toBeTruthy();
+    expect(screen.getByText('Failed')).toBeTruthy();
+    expect(screen.queryByText('thinking')).toBeNull();
+    expect(screen.queryByText('Reading context')).toBeNull();
+  });
+
+  it('keeps files read, files changed, and line evidence collapsed by default', () => {
+    useJarvisInteractionStore.setState({
+      agentsByChat: {
+        chat_parent: [agentPart.agent],
+      },
+    });
+
+    render(<ChatAgentActivityPanel chatId="chat_parent" />);
+
+    const disclosure = screen.getByText('Files and changes').closest('details');
+    expect(disclosure).toBeTruthy();
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.textContent).toContain('Composer.tsx');
+    expect(disclosure?.textContent).toContain('runtime.ts');
+    expect(disclosure?.textContent).toContain('+12');
+    expect(disclosure?.textContent).toContain('-3');
   });
 
   it('dedupes duplicate agents by id in the connected panel', () => {

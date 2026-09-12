@@ -119,6 +119,7 @@ describe('PixiAtlasPlayer', () => {
 
   it('initializes Pixi with a transparent alpha-capable renderer and canvas', async () => {
     const host = document.createElement('div');
+    document.body.appendChild(host);
     const p = new PixiAtlasPlayer();
     await p.init(host, { displaySize: 128, resolution: 2, backgroundAlpha: 0 });
 
@@ -140,8 +141,12 @@ describe('PixiAtlasPlayer', () => {
     expect(canvas.style.background).toBe('transparent');
     expect(canvas.style.backgroundColor).toBe('transparent');
     expect(canvas.dataset.petPixiCanvas).toBe('true');
+    // Healthy init is soft-recoverable without a hard re-init.
+    expect(p.isContextUnhealthy()).toBe(false);
+    expect(p.ensureAliveRendering()).toBe(true);
 
     p.dispose();
+    host.remove();
   });
 
   it('prevents re-init after dispose', async () => {

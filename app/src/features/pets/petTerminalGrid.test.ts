@@ -3,7 +3,6 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  gridClassForCount,
   loadPetTerminalViewMode,
   savePetTerminalViewMode,
   terminalTileReceivesInput,
@@ -17,15 +16,7 @@ import {
 import { PET_PANEL_MAX_TERMINALS, PET_PANEL_TERMINAL_LIMIT_MESSAGE } from './petPanelLifecycle';
 
 describe('pet terminal grid layout helpers', () => {
-  it('maps 1–4 terminals to required grid geometry', () => {
-    expect(gridClassForCount(1)).toBe('grid-cols-1 grid-rows-1');
-    expect(gridClassForCount(2)).toBe('grid-cols-2 grid-rows-1');
-    expect(gridClassForCount(3)).toBe('grid-cols-2 grid-rows-2');
-    expect(gridClassForCount(4)).toBe('grid-cols-2 grid-rows-2');
-    expect(gridClassForCount(0)).toBe('grid-cols-1 grid-rows-1');
-  });
-
-  it('persists Tabs/Grid view mode locally', () => {
+  it('migrates the retired Grid preference to the single-terminal tabs view', () => {
     const mem = new Map<string, string>();
     const storage = {
       getItem: (k: string) => mem.get(k) ?? null,
@@ -34,10 +25,10 @@ describe('pet terminal grid layout helpers', () => {
       },
     };
     expect(loadPetTerminalViewMode(storage)).toBe('tabs');
-    savePetTerminalViewMode('grid', storage);
-    expect(mem.get(PET_TERMINAL_VIEW_MODE_KEY)).toBe('grid');
-    expect(loadPetTerminalViewMode(storage)).toBe('grid');
     savePetTerminalViewMode('tabs', storage);
+    expect(mem.get(PET_TERMINAL_VIEW_MODE_KEY)).toBe('tabs');
+    expect(loadPetTerminalViewMode(storage)).toBe('tabs');
+    mem.set(PET_TERMINAL_VIEW_MODE_KEY, 'grid');
     expect(loadPetTerminalViewMode(storage)).toBe('tabs');
   });
 
@@ -89,15 +80,14 @@ describe('pet terminal grid presentation ownership (no PTY clone)', () => {
     }
   });
 
-  it('tab↔grid switch preserves terminal and pty ids (ownership only)', () => {
+  it('tab selection preserves terminal and pty ids (ownership only)', () => {
     seedMain('pty-live');
     const moved = moveTerminalPresentation(state, 'pty-live', 'pet-mini-panel');
     expect(moved.ok).toBe(true);
     if (!moved.ok) return;
     state = moved.state;
-    // Simulated view mode flip does not touch presentation rows
+    // View preference normalization does not touch presentation rows.
     const before = { ...state.terminals['pty-live'] };
-    savePetTerminalViewMode('grid');
     savePetTerminalViewMode('tabs');
     expect(state.terminals['pty-live']).toEqual(before);
     expect(state.terminals['pty-live'].ptyId).toBe('pty-live');

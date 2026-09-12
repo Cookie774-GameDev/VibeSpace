@@ -2,21 +2,28 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import postcss from 'postcss';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SelectableTheme } from '@/features/appearance/themeContract';
 import { useUIStore } from '@/stores/ui';
 import { OrigamiChatDecor } from './OrigamiChatDecor';
 
 const origamiCssPath = resolve(__dirname, '../../styles/origami-chat.css');
+const hookState = vi.hoisted(() => ({ messages: [] as Array<{ id: string }> }));
+
+vi.mock('./hooks', () => ({
+  useChatMessages: () => hookState.messages,
+}));
 
 describe('OrigamiChatDecor', () => {
   beforeEach(() => {
-    useUIStore.setState({ theme: 'default' });
+    hookState.messages = [];
+    localStorage.clear();
+    useUIStore.setState({ theme: 'default', activeChatId: null });
   });
 
   afterEach(() => {
     cleanup();
-    useUIStore.setState({ theme: 'default' });
+    useUIStore.setState({ theme: 'default', activeChatId: null });
   });
 
   it('renders only inert local decorative image layers', () => {
@@ -43,9 +50,15 @@ describe('OrigamiChatDecor', () => {
     expect(container.querySelector('button, a, input, textarea, [tabindex]')).toBeNull();
   });
 
-  it('mounts only for the exact VibeSpace Origami theme identity', () => {
+  it('mounts the shared Origami layers only for VibeSpace and Origami', () => {
     const { container } = render(<OrigamiChatDecor />);
-    const nonOrigamiThemes = ['default', 'monochrome', 'jarvis', 'vibespace-preview'] as const;
+    const nonOrigamiThemes = [
+      'default',
+      'monochrome',
+      'jarvis',
+      'sakura',
+      'vibespace-preview',
+    ] as const;
 
     for (const theme of nonOrigamiThemes) {
       act(() => {
@@ -58,6 +71,45 @@ describe('OrigamiChatDecor', () => {
       useUIStore.setState({ theme: 'vibespace' });
     });
     expect(container.querySelectorAll('[data-testid="origami-chat-decor"]')).toHaveLength(1);
+
+    act(() => {
+      useUIStore.setState({ theme: 'warm' });
+    });
+    expect(container.querySelectorAll('[data-testid="origami-chat-decor"]')).toHaveLength(0);
+
+    act(() => {
+      useUIStore.setState({ theme: 'origami' });
+    });
+    expect(container.querySelectorAll('[data-testid="origami-chat-decor"]')).toHaveLength(1);
+  });
+
+  it('shows one local stable welcome composition only for an empty Origami chat', () => {
+    useUIStore.setState({ theme: 'origami', activeChatId: 'origami-chat-a' });
+    const { rerender } = render(<OrigamiChatDecor />);
+
+    const welcome = screen.getByTestId('origami-welcome-art');
+    const firstVariant = welcome.getAttribute('data-welcome-variant');
+    const hero = welcome.querySelector('img');
+    expect(firstVariant).toMatch(/^(boat|lotus)$/u);
+    expect(new URL(hero?.src ?? '', window.location.href).pathname).toBe(
+      `/assets/themes/origami/welcome-${firstVariant}.svg`,
+    );
+
+    rerender(<OrigamiChatDecor />);
+    expect(screen.getByTestId('origami-welcome-art').getAttribute('data-welcome-variant')).toBe(
+      firstVariant,
+    );
+
+    hookState.messages = [{ id: 'message-1' }];
+    rerender(<OrigamiChatDecor />);
+    expect(screen.queryByTestId('origami-welcome-art')).toBeNull();
+  });
+
+  it('leaves the interactive Warm welcome to the dedicated chat component', () => {
+    useUIStore.setState({ theme: 'warm', activeChatId: 'warm-chat-a' });
+    const { container } = render(<OrigamiChatDecor />);
+
+    expect(container.innerHTML).toBe('');
   });
 
   it('keeps authored and remote message payload elements outside the decorative CSS contract', () => {

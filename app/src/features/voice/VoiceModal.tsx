@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { AnimatePresence, motion, useMotionValue } from 'motion/react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Shield } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
@@ -27,6 +27,13 @@ import {
 import { PERSONAS } from './personas';
 import { JarvisVoiceHeader } from './JarvisVoiceHeader';
 import { JarvisVoiceTranscript } from './JarvisVoiceTranscript';
+import { ContextGalaxy } from '@/features/context/ContextGalaxy';
+import {
+  contextTreeToGalaxyData,
+  getContextGalaxySnapshot,
+  subscribeContextGalaxySnapshots,
+  type ContextGalaxySnapshot,
+} from '@/features/context/contextGalaxyRegistry';
 import { clampVoicePanelTranslation, shouldStartVoicePanelDrag } from './voicePanelDrag';
 import { handleVoiceModuleClosed, stopCurrentVoiceResponse } from './voiceRouter';
 import { resolveVoiceListenTimeoutMs } from './voiceConversation';
@@ -61,7 +68,10 @@ import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_EVIDENCE } from '@/lib/jarvis/smoke/evidenceIds';
 import { KERNEL_SMOKE_SCENARIOS } from '@/lib/jarvis/smoke/scenarios';
 import { formatJarvisVerifiedNarration } from '@/lib/jarvis/response/templates';
+import { createVoiceSignalController, type VoiceSignalController } from './voiceSignal';
+import { VoiceModelSelector } from './VoiceModelSelector';
 import './voice.sakura.css';
+import './voice-module.css';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
@@ -115,6 +125,26 @@ function smokeSttBlocker(error: unknown): SmokeSttBlocker {
   return 'engine_failed';
 }
 
+class VoiceSurfaceGuard extends React.Component<
+  { children: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(): void {
+    // Isolate voice-module render faults so they cannot blank the host app.
+  }
+
+  render(): React.ReactNode {
+    if (this.state.failed) return null;
+    return this.props.children;
+  }
+}
+
 const STATE_LABEL: Record<VoiceState, string> = {
   idle: 'Ready',
   listening: 'Listening',
@@ -155,12 +185,21 @@ const LEGACY_COMMAND_CENTER_TRANSITION = Object.freeze({
 } as const);
 
 export function VoiceModal() {
+  return (
+    <VoiceSurfaceGuard>
+      <VoiceModalPanel />
+    </VoiceSurfaceGuard>
+  );
+}
+
+function VoiceModalPanel() {
   const open = useUIStore((state) => state.voiceModalOpen);
   const theme = useUIStore((state) => state.theme);
   const setOpen = useUIStore((state) => state.setVoiceModalOpen);
   const localUserId = useAuthStore((state) => state.localUserId);
   const cloudAccountId = useAuthStore((state) => state.cloudSession?.user_id ?? null);
   const workspaceId = useAuthStore((state) => state.workspaceId);
+  const projectId = useAuthStore((state) => state.projectId);
   const agentRoster = useAgentStore((state) => state.agents);
   const voiceAutoListenOnOpen = useAuthStore((state) => state.voiceAutoListenOnOpen);
   const voiceEndTrigger = useAuthStore((state) => state.voiceEndTrigger);
@@ -174,6 +213,15 @@ export function VoiceModal() {
     () => new Set(),
   );
   const session = useVoiceStore((voice) => voice.session);
+  const liveGalaxySnapshot = React.useSyncExternalStore(
+    subscribeContextGalaxySnapshots,
+    () => getContextGalaxySnapshot(session?.accountId ?? null, projectId),
+    () => null,
+  );
+  const [persistedGalaxySnapshot, setPersistedGalaxySnapshot] =
+    React.useState<ContextGalaxySnapshot | null>(null);
+  const galaxySnapshot = liveGalaxySnapshot ?? persistedGalaxySnapshot;
+  const [galaxySelectedId, setGalaxySelectedId] = React.useState<string | null>(null);
   const messages = useChatMessages(open && showCommandCenter ? (session?.chatId ?? null) : null);
   const state = useVoiceStore((voice) => voice.state);
   const partial = useVoiceStore((voice) => voice.partialTranscript);
@@ -184,6 +232,10 @@ export function VoiceModal() {
   const panelLayout = useThemeMotionLayout('size');
   const commandCenterTransition = useThemeLayoutTransition(LEGACY_COMMAND_CENTER_TRANSITION);
   const levelRef = React.useRef(0);
+  const signalControllerRef = React.useRef<VoiceSignalController | null>(null);
+  if (!signalControllerRef.current) {
+    signalControllerRef.current = createVoiceSignalController(levelRef);
+  }
   const pendingUtteranceRef = React.useRef('');
   const utteranceTimerRef = React.useRef<number | null>(null);
   const restartTimerRef = React.useRef<number | null>(null);
@@ -210,6 +262,19 @@ export function VoiceModal() {
       ),
     [chatModelSelection],
   );
+  React.useEffect(() => {
+    const signal = signalControllerRef.current;
+    if (!signal || !open) {
+      signal?.stop();
+      return;
+    }
+    if (state === 'listening') void signal.startListening();
+    else if (state === 'speaking') signal.startSpeaking();
+    else if (state !== 'thinking') signal.stop();
+    return () => {
+      if (!useUIStore.getState().voiceModalOpen) signal.stop();
+    };
+  }, [open, state]);
   const commandCenterHandlers = React.useMemo<JarvisCommandCenterHandlers>(() => {
     const hostPort = commandCenterBinding?.hostPort;
     if (!hostPort) return {};
@@ -237,6 +302,47 @@ export function VoiceModal() {
     session && commandCenterBinding?.hostPort.accountId === session.accountId
       ? commandCenterBinding
       : undefined;
+  React.useEffect(() => {
+    setGalaxySelectedId(galaxySnapshot?.selectedId ?? galaxySnapshot?.nodes[0]?.id ?? null);
+  }, [galaxySnapshot?.mapId, galaxySnapshot?.selectedId, galaxySnapshot?.nodes]);
+  React.useEffect(() => {
+    if (!open || !showCommandCenter || !session || liveGalaxySnapshot) {
+      if (liveGalaxySnapshot) setPersistedGalaxySnapshot(null);
+      return;
+    }
+    let active = true;
+    void import('@/features/context/contextPersistence')
+      .then(({ ensureContextPersistence }) => ensureContextPersistence(projectId))
+      .then((state) => {
+        if (!active || state.accountId !== session.accountId || state.projectId !== projectId)
+          return;
+        const map =
+          state.maps.find(
+            (candidate) => candidate.id === state.selectedMapId && candidate.status === 'active',
+          ) ?? state.maps.find((candidate) => candidate.status === 'active');
+        if (!map) {
+          setPersistedGalaxySnapshot(null);
+          return;
+        }
+        const data = contextTreeToGalaxyData(map.tree);
+        setPersistedGalaxySnapshot({
+          accountId: state.accountId,
+          projectId: state.projectId,
+          mapId: map.id,
+          nodes: data.nodes,
+          edges: data.edges,
+          selectedId: data.nodes[0]?.id ?? null,
+          activityNodeIds: [],
+          updatedAt: Date.now(),
+        });
+      })
+      .catch(() => {
+        if (active) setPersistedGalaxySnapshot(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [liveGalaxySnapshot, open, projectId, session, showCommandCenter]);
   const commandCenterRegionId = React.useId();
   const handleCommandCenterEscape = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
@@ -370,15 +476,27 @@ export function VoiceModal() {
     listeningArmedRef.current = true;
     const auth = useAuthStore.getState();
     VoiceService.setInactivityTimeoutMs(
-      resolveVoiceListenTimeoutMs(auth.voiceAutoListenOnOpen, auth.voiceListenTimeoutMs),
+      resolveVoiceListenTimeoutMs(
+        auth.voiceAutoListenOnOpen,
+        auth.voiceEndTrigger,
+        auth.voiceSilenceDelayMs,
+      ),
     );
     const started = VoiceService.startListening();
     useUIStore.getState().setVoiceListening(started);
     if (started) {
       useVoiceStore.getState().setState('listening');
-    } else {
-      listeningArmedRef.current = false;
+      return true;
     }
+    window.setTimeout(() => {
+      if (!listeningArmedRef.current || VoiceService.isListening() || VoiceService.wantsListening()) {
+        return;
+      }
+      const retried = VoiceService.startListening();
+      useUIStore.getState().setVoiceListening(retried);
+      if (retried) useVoiceStore.getState().setState('listening');
+      else listeningArmedRef.current = false;
+    }, 60);
     return started;
   }, []);
 
@@ -404,6 +522,7 @@ export function VoiceModal() {
       return;
     }
     if (state === 'listening' || useUIStore.getState().voiceListening) {
+      if (voiceAutoListenOnOpen) return;
       stopListening('idle');
       return;
     }
@@ -518,7 +637,7 @@ export function VoiceModal() {
           return;
         if (VoiceService.isListening() || VoiceService.wantsListening()) return;
         startListening();
-      }, 180);
+      }, 50);
     };
 
     const scheduleRestartAfterReply = () => {
@@ -640,7 +759,6 @@ export function VoiceModal() {
 
     const schedulePartial = (text: string) => {
       pendingPartial = text;
-      levelRef.current = Math.min(1, 0.25 + text.length / 48);
       if (partialTimer !== null) return;
       partialTimer = window.setTimeout(() => {
         partialTimer = null;
@@ -792,7 +910,7 @@ export function VoiceModal() {
       window.removeEventListener(STREAMING_VOICE_END_EVENT, onStreamingEnd);
       window.removeEventListener(SPEECH_SYNTHESIS_START_EVENT, onSpeechStart);
       window.removeEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
-      handleVoiceModuleClosed();
+      if (!useUIStore.getState().voiceModalOpen) handleVoiceModuleClosed();
     };
   }, [open, startListening, voiceAutoListenOnOpen, stopListening]);
 
@@ -857,16 +975,10 @@ export function VoiceModal() {
         transition={panelTransition}
         style={{ x: dragX, y: dragY }}
         className={cn(
-          'jarvis-voice-panel fixed right-3 top-3 z-[90] max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-[0.5625rem] border border-border bg-elevated/95 text-foreground backdrop-blur-sm',
-          '[[data-theme=monochrome]_&]:rounded-sm [[data-theme=monochrome]_&]:border-border-mid [[data-theme=monochrome]_&]:bg-background [[data-theme=monochrome]_&]:shadow-none [[data-theme=monochrome]_&]:backdrop-blur-none',
-          '[[data-theme=monochrome]_&]:before:!hidden [[data-theme=monochrome]_&]:after:!hidden',
-          '[[data-theme=monochrome]_&]:[&_.jarvis-voice-drag-row::after]:!hidden',
-          '[[data-theme=monochrome]_&]:[&_.jarvis-voice-mic]:!bg-none [[data-theme=monochrome]_&]:[&_.jarvis-voice-mic]:!shadow-none',
-          '[[data-theme=monochrome]_&]:[&_.jarvis-voice-orb-button]:!bg-none [[data-theme=monochrome]_&]:[&_.jarvis-voice-orb-button]:!shadow-none',
-          '[[data-theme=monochrome]_&]:[&_.jarvis-voice-orb-button_*]:![background-image:none] [[data-theme=monochrome]_&]:[&_.jarvis-voice-orb-button_*]:![filter:none] [[data-theme=monochrome]_&]:[&_.jarvis-voice-orb-button_*]:!shadow-none [[data-theme=monochrome]_&]:[&_.jarvis-voice-orb-button_*]:![transform:none]',
-          '[[data-theme=monochrome]_&]:[&_.jarvis-voice-orb-shell::before]:!hidden',
-          showCommandCenter ? 'w-[26.25rem]' : 'w-[17.875rem]',
+          'jarvis-voice-panel jarvis-glass-panel fixed right-3 top-3 z-[90] max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] overflow-hidden border border-border bg-elevated/95 text-foreground backdrop-blur-sm',
+          showCommandCenter && 'is-expanded',
         )}
+        id="jarvis-panel"
         aria-label="Jarvis voice session"
         data-monochrome-surface="voice"
         data-vibespace-owned-chrome="voice"
@@ -932,29 +1044,35 @@ export function VoiceModal() {
         ) : null}
 
         {/* Command Center disclosure */}
-        <button
-          ref={commandCenterDisclosureRef}
-          type="button"
-          onClick={() => setShowCommandCenter((visible) => !visible)}
-          aria-expanded={showCommandCenter}
-          aria-controls={commandCenterRegionId}
-          className="relative z-[1] flex min-h-8 w-full items-center gap-1 border-t border-border/70 px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent-copper/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [html[data-theme=monochrome]_&]:border-border [html[data-theme=monochrome]_&]:hover:bg-muted"
+        <div
+          className="jarvis-command-disclosure relative z-[1] flex min-h-8 items-center justify-between gap-2 border-t border-border/70 px-2 [html[data-theme=monochrome]_&]:border-border [html[data-theme=monochrome]_&]:hover:bg-muted"
         >
-          <span className="shrink-0 font-medium text-foreground">Command Center</span>
-          {showCommandCenter ? (
-            <span
-              className="ml-auto min-w-0 break-words text-right text-xs leading-tight"
-              title={modelLabel}
-            >
-              {modelLabel}
-            </span>
-          ) : null}
-          {showCommandCenter ? (
-            <ChevronUp className="h-2.5 w-2.5 shrink-0" />
-          ) : (
-            <ChevronDown className="ml-auto h-2.5 w-2.5 shrink-0" />
-          )}
-        </button>
+          <button
+            ref={commandCenterDisclosureRef}
+            type="button"
+            onClick={() => setShowCommandCenter((visible) => !visible)}
+            aria-expanded={showCommandCenter}
+            aria-controls={commandCenterRegionId}
+            aria-label={showCommandCenter ? 'Collapse Command Center' : 'Expand Command Center'}
+            className="flex min-h-10 min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            <span className="shrink-0 font-semibold text-foreground">Command Center</span>
+            {showCommandCenter ? (
+              <span
+                className="sr-only min-w-0 break-words text-right text-xs leading-tight"
+                title={modelLabel}
+              >
+                {modelLabel}
+              </span>
+            ) : null}
+            {showCommandCenter ? (
+              <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+            ) : (
+              <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+            )}
+          </button>
+          {showCommandCenter ? <VoiceModelSelector selection={chatModelSelection} /> : null}
+        </div>
 
         <AnimatePresence>
           {showCommandCenter && (
@@ -984,6 +1102,24 @@ export function VoiceModal() {
                   })
                 }
               />
+              {galaxySnapshot ? (
+                <section aria-label="Voice Context Map">
+                  <h3 className="sr-only">Context Map</h3>
+                  <ContextGalaxy
+                    nodes={galaxySnapshot.nodes}
+                    edges={galaxySnapshot.edges}
+                    selectedId={galaxySelectedId}
+                    activityNodeIds={galaxySnapshot.activityNodeIds}
+                    onSelect={setGalaxySelectedId}
+                    compact
+                    reducedMotion={reducedMotion}
+                  />
+                </section>
+              ) : (
+                <p className="border-t border-border/50 px-2 py-2 text-center text-xs text-muted-foreground">
+                  Context Map is not available for this project yet.
+                </p>
+              )}
               {eligibleCommandCenterBinding && session ? (
                 <JarvisCommandCenter
                   accountId={session.accountId}
@@ -994,7 +1130,8 @@ export function VoiceModal() {
                   embedded
                 />
               ) : (
-                <p className="border-t border-border/70 px-2 py-3 text-center text-xs text-muted-foreground">
+                <p className="flex items-center gap-2 border-t border-border/70 px-2 py-2 text-xs text-muted-foreground">
+                  <Shield className="h-3.5 w-3.5 shrink-0 text-accent-copper" aria-hidden="true" />
                   Command Center is unavailable for this voice session.
                 </p>
               )}

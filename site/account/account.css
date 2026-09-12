@@ -1,0 +1,193 @@
+.account-body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 0%, rgba(201, 149, 108, 0.12), transparent 32rem), #171411;
+  color: #f7efe7;
+}
+
+.account-main {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 56px 0 96px;
+}
+
+.account-intro {
+  max-width: 720px;
+}
+
+.account-intro h1 {
+  margin: 8px 0 12px;
+  font-size: clamp(2.4rem, 6vw, 4.8rem);
+  line-height: 0.96;
+}
+
+.account-intro > p:last-child,
+.account-card p,
+.device-card p {
+  color: #c9beb3;
+  line-height: 1.6;
+}
+
+.account-status {
+  min-height: 24px;
+  margin: 28px 0 16px;
+  color: #e8c7ad;
+}
+
+.account-auth,
+.account-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.account-auth {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 860px;
+}
+
+.account-card,
+.device-card,
+.account-section {
+  border: 1px solid rgba(232, 199, 173, 0.18);
+  border-radius: 20px;
+  background: rgba(46, 40, 35, 0.88);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+}
+
+.account-card {
+  padding: 22px;
+}
+
+.account-card form {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.account-card input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(232, 199, 173, 0.25);
+  border-radius: 10px;
+  background: #1c1916;
+  color: #fff;
+  padding: 0 12px;
+}
+
+.account-link-button {
+  border: 0;
+  background: transparent;
+  color: #f0b98f;
+  cursor: pointer;
+  padding: 10px 0;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.account-toolbar,
+.device-heading,
+.device-title-row,
+.device-footer,
+.account-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-summary-grid strong {
+  display: block;
+  margin: 8px 0;
+  font-size: 1.65rem;
+}
+
+.account-label {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.account-section {
+  margin-top: 20px;
+  padding: 24px;
+}
+
+.device-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.device-card {
+  padding: 20px;
+  background: rgba(30, 26, 23, 0.78);
+}
+
+.device-title-row h3 {
+  margin: 0;
+}
+
+.device-state {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #98dfb0;
+  font-size: 0.75rem;
+}
+
+.device-state.offline {
+  color: #c2b7ad;
+}
+
+.device-runtime {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+  color: #c9beb3;
+}
+
+.device-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.device-columns > div {
+  min-width: 0;
+  border: 1px solid rgba(232, 199, 173, 0.12);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.device-columns h4 {
+  margin: 0 0 8px;
+}
+
+.device-columns ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #c9beb3;
+}
+
+.device-footer {
+  margin-top: 16px;
+  color: #a99e95;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 760px) {
+  .account-auth,
+  .account-summary-grid,
+  .device-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .account-toolbar,
+  .device-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

@@ -6,9 +6,13 @@ import {
   ANTHROPIC_API_CONNECTION,
   DEEPSEEK_API_CONNECTION,
   GEMINI_API_CONNECTION,
+  GROQ_API_CONNECTION,
+  MISTRAL_API_CONNECTION,
   OLLAMA_LOCAL_CONNECTION,
   OPENAI_API_CONNECTION,
+  OPENROUTER_API_CONNECTION,
   QWEN_API_CONNECTION,
+  TOGETHER_API_CONNECTION,
   VERTEX_API_CONNECTION,
   XAI_API_CONNECTION,
   ZAI_API_CONNECTION,
@@ -28,6 +32,10 @@ type BaseProviderFamilyId =
   | 'deepseek'
   | 'zai'
   | 'qwen'
+  | 'groq'
+  | 'openrouter'
+  | 'mistral'
+  | 'together'
   | 'ollama'
   | 'opencode';
 
@@ -80,6 +88,7 @@ function externalConnection(input: {
   authSource: string;
   promptTransport: 'prefixed-preamble' | 'unsupported';
   capabilities?: Partial<ProviderCapabilities>;
+  toolAllowlist?: ProviderConnection['toolAllowlist'];
 }): Readonly<ProviderConnection> {
   return Object.freeze({
     id: input.id,
@@ -89,6 +98,7 @@ function externalConnection(input: {
     mode: 'external-cli' as const,
     authSource: input.authSource,
     capabilities: externalCapabilities(input.capabilities),
+    ...(input.toolAllowlist ? { toolAllowlist: Object.freeze([...input.toolAllowlist]) } : {}),
     promptTransport: input.promptTransport,
     enabled: true,
   });
@@ -101,6 +111,8 @@ export const CODEX_CLI_CONNECTION = externalConnection({
   displayName: 'Codex CLI',
   authSource: 'codex-cli-session',
   promptTransport: CODEX_CLI_DEFINITION.promptTransport,
+  capabilities: { tools: true },
+  toolAllowlist: ['vibespace_context'],
 });
 
 export interface ConnectionModelOption {
@@ -125,9 +137,16 @@ export const CONNECTION_MODEL_OPTIONS: Readonly<
   Partial<Record<string, readonly Readonly<ConnectionModelOption>[]>>
 > = Object.freeze({
   'openai-codex': Object.freeze([
-    frozenModelOption('gpt-5.6-sol', 'GPT-5.6 Sol', 1_000_000),
-    frozenModelOption('gpt-5.6-terra', 'GPT-5.6 Terra', 1_000_000),
+    frozenModelOption('gpt-5.3-codex-spark', 'GPT-5.3 Codex Spark', 128_000),
+    frozenModelOption('gpt-5.3-codex', 'GPT-5.3 Codex', 1_000_000),
+    frozenModelOption('gpt-5.4-mini', 'GPT-5.4 Mini', 1_000_000),
+    frozenModelOption('gpt-5.4', 'GPT-5.4', 1_000_000),
+    frozenModelOption('gpt-5.5-codex', 'GPT-5.5 Codex', 1_000_000),
+    frozenModelOption('gpt-5.5', 'GPT-5.5', 1_000_000),
+    frozenModelOption('gpt-5.5-pro', 'GPT-5.5 Pro', 1_000_000),
     frozenModelOption('gpt-5.6-luna', 'GPT-5.6 Luna', 1_000_000),
+    frozenModelOption('gpt-5.6-terra', 'GPT-5.6 Terra', 1_000_000),
+    frozenModelOption('gpt-5.6-sol', 'GPT-5.6 Sol', 1_000_000),
   ]),
 });
 
@@ -167,6 +186,15 @@ export const QWEN_CLI_CONNECTION = externalConnection({
   displayName: 'Qwen Code CLI',
   authSource: 'qwen-code-session',
   promptTransport: QWEN_CLI_DEFINITION.promptTransport,
+});
+
+export const ZAI_CODING_PLAN_CONNECTION = externalConnection({
+  id: 'zai-coding-plan',
+  adapterId: OPENCODE_CLI_DEFINITION.adapterId,
+  providerId: 'zai',
+  displayName: 'Z.AI Coding Plan',
+  authSource: 'opencode-provider-session',
+  promptTransport: OPENCODE_CLI_DEFINITION.promptTransport,
 });
 
 export const OPENCODE_CLI_CONNECTION = externalConnection({
@@ -223,6 +251,17 @@ const GEMINI_CLI_SURFACE = externalCliDescriptor(GEMINI_CLI_DEFINITION);
 const COPILOT_CLI_SURFACE = externalCliDescriptor(COPILOT_CLI_DEFINITION);
 const QWEN_CLI_SURFACE = externalCliDescriptor(QWEN_CLI_DEFINITION);
 const OPENCODE_CLI_SURFACE = externalCliDescriptor(OPENCODE_CLI_DEFINITION);
+const ZAI_CODING_PLAN_SURFACE: Readonly<ExternalCliCatalogDescriptor> = Object.freeze({
+  adapterId: OPENCODE_CLI_DEFINITION.adapterId,
+  connectionId: ZAI_CODING_PLAN_CONNECTION.id,
+  executableName: OPENCODE_CLI_DEFINITION.executableName,
+  promptTransport: OPENCODE_CLI_DEFINITION.promptTransport,
+  versionArgs: OPENCODE_CLI_DEFINITION.versionArgs,
+  ...(OPENCODE_CLI_DEFINITION.authProbeArgs
+    ? { authProbeArgs: OPENCODE_CLI_DEFINITION.authProbeArgs }
+    : {}),
+  modelListArgs: Object.freeze(['models', 'zai', '--refresh']),
+});
 const KERNEL_SMOKE_CLI_SURFACE = externalCliDescriptor(KERNEL_SMOKE_CLI_DEFINITION);
 
 const KERNEL_SMOKE_CLI_CONNECTION = externalConnection({
@@ -280,8 +319,17 @@ const BASE_PROVIDER_CATALOG: Readonly<
   github: family('github', 'GitHub', [COPILOT_CLI_CONNECTION], COPILOT_CLI_SURFACE),
   xai: family('xai', 'xAI', [XAI_API_CONNECTION]),
   deepseek: family('deepseek', 'DeepSeek', [DEEPSEEK_API_CONNECTION]),
-  zai: family('zai', 'Z.AI / GLM', [ZAI_API_CONNECTION]),
+  zai: family(
+    'zai',
+    'Z.AI / GLM',
+    [ZAI_API_CONNECTION, ZAI_CODING_PLAN_CONNECTION],
+    ZAI_CODING_PLAN_SURFACE,
+  ),
   qwen: family('qwen', 'Qwen', [QWEN_CLI_CONNECTION, QWEN_API_CONNECTION], QWEN_CLI_SURFACE),
+  groq: family('groq', 'Groq', [GROQ_API_CONNECTION]),
+  openrouter: family('openrouter', 'OpenRouter', [OPENROUTER_API_CONNECTION]),
+  mistral: family('mistral', 'Mistral', [MISTRAL_API_CONNECTION]),
+  together: family('together', 'Together AI', [TOGETHER_API_CONNECTION]),
   ollama: family('ollama', 'Ollama', [OLLAMA_LOCAL_CONNECTION]),
   opencode: family('opencode', 'OpenCode', [OPENCODE_CLI_CONNECTION], OPENCODE_CLI_SURFACE),
 });
@@ -298,8 +346,13 @@ const BASE_PROVIDER_CONNECTIONS: readonly Readonly<ProviderConnection>[] = Objec
   XAI_API_CONNECTION,
   DEEPSEEK_API_CONNECTION,
   ZAI_API_CONNECTION,
+  ZAI_CODING_PLAN_CONNECTION,
   QWEN_CLI_CONNECTION,
   QWEN_API_CONNECTION,
+  GROQ_API_CONNECTION,
+  OPENROUTER_API_CONNECTION,
+  MISTRAL_API_CONNECTION,
+  TOGETHER_API_CONNECTION,
   OLLAMA_LOCAL_CONNECTION,
   OPENCODE_CLI_CONNECTION,
 ]);

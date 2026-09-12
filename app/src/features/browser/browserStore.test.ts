@@ -45,7 +45,7 @@ describe('browser reviewed-action store', () => {
     expect(useBrowserStore.getState().agentActions).toEqual([action]);
   });
 
-  it('allows only pending to denied, expired, or unavailable', () => {
+  it('allows only pending records to settle once', () => {
     useBrowserStore.getState().enqueueAgentAction(record(1));
     useBrowserStore.getState().resolveAgentAction('action-1', 'denied', 'Denied by user.');
     expect(useBrowserStore.getState().agentActions[0]).toMatchObject({
@@ -68,6 +68,27 @@ describe('browser reviewed-action store', () => {
     useBrowserStore.getState().enqueueAgentAction(record(3));
     useBrowserStore.getState().resolveAgentAction('action-3', 'unavailable');
     expect(useBrowserStore.getState().agentActions[0]?.status).toBe('unavailable');
+
+    useBrowserStore.getState().enqueueAgentAction(record(4));
+    useBrowserStore.getState().resolveAgentAction('action-4', 'completed');
+    expect(useBrowserStore.getState().agentActions[0]).toMatchObject({
+      status: 'completed',
+      result: 'Approved browser operation completed and was observed.',
+    });
+
+    useBrowserStore.getState().enqueueAgentAction(record(5));
+    useBrowserStore.getState().resolveAgentAction('action-5', 'failed');
+    expect(useBrowserStore.getState().agentActions[0]).toMatchObject({
+      status: 'failed',
+      result: 'Canonical browser operation failed before verified settlement.',
+    });
+
+    useBrowserStore.getState().enqueueAgentAction(record(6));
+    useBrowserStore.getState().resolveAgentAction('action-6', 'cancelled');
+    expect(useBrowserStore.getState().agentActions[0]).toMatchObject({
+      status: 'cancelled',
+      result: 'Browser operation was cancelled before verified settlement.',
+    });
   });
 
   it('does not resurrect a terminal record when its ID is re-enqueued', () => {

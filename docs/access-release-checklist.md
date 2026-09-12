@@ -150,6 +150,11 @@ Follow [the Stripe and Supabase runbook](stripe-setup.md).
 - [ ] Test-mode VibeSpace Access product is $20 USD monthly.
 - [ ] Optional feature products remain distinct subscriptions with their existing prices.
 - [ ] `STRIPE_APP_ACCESS_PRICE_ID` names only the dedicated test-mode Access price.
+- [ ] Feature-plan Price IDs map exactly to starter/Orbit, pro/Nova,
+      ultra/Singularity, and apex/Supernova.
+- [ ] A signed-in user with an existing non-terminal feature subscription receives
+      `subscription_exists` from checkout and manages plan changes through the portal;
+      no duplicate feature subscription is created.
 - [ ] Required platform and operator secrets exist without being copied into evidence.
 - [ ] Server `APP_VERSION` is valid SemVer and exactly matches `VITE_APP_VERSION` plus the signed release.
 - [ ] Read-only preflight confirms the selected target and records that `app_access_*` objects are
@@ -179,6 +184,8 @@ Follow [the Stripe and Supabase runbook](stripe-setup.md).
       mutation.
 - [ ] `create-access-checkout`, `create-access-portal`, and `access-lease` deploy with
       `verify_jwt = true` behavior.
+- [ ] `create-checkout-session` and `create-customer-portal` deploy with
+      `verify_jwt = true` behavior and return only validated Stripe-hosted HTTPS URLs.
 - [ ] `stripe-webhook` deploys with `verify_jwt = false` and raw-body Stripe signature verification.
 - [ ] Boundary probes return webhook health `200`, unsigned webhook `400`, and unauthenticated
       checkout/portal/lease `401`.

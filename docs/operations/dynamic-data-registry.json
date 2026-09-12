@@ -1,0 +1,282 @@
+{
+  "schemaVersion": 1,
+  "document": "docs/operations/DAILY_DYNAMIC_DATA_MAINTENANCE.md",
+  "generatedNote": "Machine-readable inventory for daily dynamic data maintenance. Keep in sync with app/src/lib/dynamic-data/registry.ts.",
+  "surfaces": [
+    {
+      "id": "deepgram-stt-pricing",
+      "title": "Deepgram STT pricing + $10 duration calculator",
+      "uiSurfaces": [
+        "Settings → Composer STT (Deepgram models, mini cost calculator, $10 ≈ hours)"
+      ],
+      "module": "app/src/lib/deepgram/catalog.ts",
+      "sourceOfTruth": "https://deepgram.com/pricing",
+      "sourceKind": "official_docs",
+      "secondarySources": [
+        "https://developers.deepgram.com/docs/models-languages-overview/"
+      ],
+      "refreshCadence": "daily_check_weekly_refresh",
+      "cachePolicy": "embedded_snapshot_only",
+      "staleAfterDays": 90,
+      "lastUpdated": "2026-08-02",
+      "lastUpdatedField": "DEEPGRAM_PRICE_LAST_UPDATED",
+      "failureBehavior": "mark_stale_do_not_label_current",
+      "autoRefresh": false,
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/lib/deepgram/catalog.test.ts"
+    },
+    {
+      "id": "llm-cost-rates",
+      "title": "LLM token cost rates (usage meter estimates)",
+      "uiSurfaces": [
+        "Chat usage meters",
+        "Inspector workspace analytics estimated cost",
+        "Provider usage counters"
+      ],
+      "module": "app/src/lib/ai/types.ts",
+      "sourceOfTruth": "Vendor public pricing pages (Anthropic, OpenAI, Google, DeepSeek, xAI, Mistral, Together, OpenRouter)",
+      "sourceKind": "official_docs",
+      "secondarySources": [
+        "https://openai.com/api/pricing/",
+        "https://www.anthropic.com/pricing",
+        "https://ai.google.dev/pricing",
+        "https://api-docs.deepseek.com/quick_start/pricing"
+      ],
+      "refreshCadence": "daily_check_on_model_change",
+      "cachePolicy": "embedded_snapshot_only",
+      "staleAfterDays": 30,
+      "lastUpdated": "2026-08-02",
+      "lastUpdatedField": "COST_RATES_META.lastUpdated",
+      "failureBehavior": "mark_stale_estimates_only_never_billing",
+      "autoRefresh": false,
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/lib/dynamic-data/freshness.test.ts"
+    },
+    {
+      "id": "chat-model-catalog",
+      "title": "Chat model catalog (names, context, availability labels)",
+      "uiSurfaces": [
+        "Composer model picker",
+        "Agent manager provider/model selects",
+        "Schedule model picker",
+        "Hive custom steps"
+      ],
+      "module": "app/src/lib/ai/models.ts",
+      "sourceOfTruth": "Provider model list APIs + vendor model docs",
+      "sourceKind": "official_api",
+      "secondarySources": [
+        "app/src/lib/ai/providerModelCatalog.ts",
+        "app/src/lib/ai/stacks/frontierModels.ts"
+      ],
+      "refreshCadence": "daily_check",
+      "cachePolicy": "static_plus_dynamic_provider_cache_5m",
+      "staleAfterDays": 14,
+      "lastUpdated": "2026-08-02",
+      "lastUpdatedField": "CHAT_MODEL_CATALOG_META.lastUpdated",
+      "failureBehavior": "keep_last_verified_catalog_mark_stale_hide_unverified_ids",
+      "autoRefresh": true,
+      "autoRefreshNotes": "Dynamic listing only for connected providers; static CHAT_MODEL_OPTIONS requires PR review for id renames/removals.",
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/lib/ai/models.test.ts"
+    },
+    {
+      "id": "provider-model-dynamic-listing",
+      "title": "Live provider model listing cache",
+      "uiSurfaces": [
+        "Provider/model selects when API key connected"
+      ],
+      "module": "app/src/lib/ai/providerModelCatalog.ts",
+      "sourceOfTruth": "Provider list-models HTTP APIs",
+      "sourceKind": "official_api",
+      "refreshCadence": "on_demand",
+      "cachePolicy": "memory_ttl_5m",
+      "staleAfterDays": 0,
+      "staleAfterMs": 300000,
+      "lastUpdatedField": "dynamicModelCache.fetchedAt",
+      "failureBehavior": "return_empty_or_static_fallback_never_invent_ids",
+      "autoRefresh": true,
+      "breakingChangeReviewRequired": false,
+      "test": "app/src/lib/ai/providerModelCatalog.test.ts"
+    },
+    {
+      "id": "local-model-catalog",
+      "title": "Local / Ollama curated model catalog",
+      "uiSurfaces": [
+        "Settings → Local Models",
+        "Offline model picker"
+      ],
+      "module": "app/src/lib/ai/localModelCatalog.ts",
+      "sourceOfTruth": "https://ollama.com/library + installed Ollama tags API",
+      "sourceKind": "official_api",
+      "refreshCadence": "weekly_check",
+      "cachePolicy": "curated_static_plus_live_installed",
+      "staleAfterDays": 30,
+      "lastUpdatedField": "LOCAL_MODEL_CATALOG_META.lastUpdated",
+      "failureBehavior": "show_installed_only_do_not_claim_downloadable_if_unverified",
+      "autoRefresh": true,
+      "autoRefreshNotes": "Installed tags refresh live; curated download list is review-gated.",
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/lib/ai/localModelCatalog.test.ts"
+    },
+    {
+      "id": "benchmark-leaderboard",
+      "title": "Benchmarks / leaderboard scores + estimated prices",
+      "uiSurfaces": [
+        "Benchmarks page"
+      ],
+      "module": "app/src/features/benchmarks/benchmarkData.ts",
+      "sourceOfTruth": "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=text",
+      "sourceKind": "official_api",
+      "secondarySources": [
+        "https://lmarena.ai/",
+        "app/src/features/benchmarks/leaderboardSnapshot20260711.ts"
+      ],
+      "refreshCadence": "daily_live_fetch",
+      "cachePolicy": "live_cache_1h_snapshot_fallback_never_cache_snapshot_as_live",
+      "staleAfterDays": 14,
+      "lastUpdatedField": "row.fetched_at / SNAPSHOT_TS",
+      "failureBehavior": "serve_snapshot_with_source_snapshot_label_not_live",
+      "autoRefresh": true,
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/features/benchmarks/benchmarkData.test.ts"
+    },
+    {
+      "id": "benchmark-list-price-catalog",
+      "title": "Benchmark list-price enrichment catalog",
+      "uiSurfaces": [
+        "Benchmarks detail drawer cost columns (~ estimates)"
+      ],
+      "module": "app/src/features/benchmarks/benchmarkData.ts#PRICING_CATALOG",
+      "sourceOfTruth": "Vendor list prices + Arena $/M columns",
+      "sourceKind": "embedded_snapshot",
+      "refreshCadence": "on_leaderboard_refresh",
+      "cachePolicy": "embedded_only",
+      "staleAfterDays": 30,
+      "lastUpdatedField": "BENCHMARK_PRICING_CATALOG_META.lastUpdated",
+      "failureBehavior": "omit_price_rather_than_show_unverified_as_current",
+      "autoRefresh": false,
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/features/benchmarks/benchmarkData.test.ts"
+    },
+    {
+      "id": "hive-frontier-model-ids",
+      "title": "Hive frontier model id map",
+      "uiSurfaces": [
+        "Hive stack presets",
+        "Model switch candidates"
+      ],
+      "module": "app/src/lib/ai/stacks/frontierModels.ts",
+      "sourceOfTruth": "Provider model docs + Hive product plan",
+      "sourceKind": "embedded_snapshot",
+      "refreshCadence": "on_provider_announce",
+      "cachePolicy": "embedded_only",
+      "staleAfterDays": 30,
+      "lastUpdatedField": "HIVE_FRONTIER_META.lastUpdated",
+      "failureBehavior": "do_not_auto_rename_ids_without_review",
+      "autoRefresh": false,
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/lib/ai/stacks/presets.test.ts"
+    },
+    {
+      "id": "ai-news-catalog",
+      "title": "In-app AI news / model-drop catalog",
+      "uiSurfaces": [
+        "News mini-panel"
+      ],
+      "module": "app/src/features/news/newsCatalog.ts",
+      "sourceOfTruth": "Curated editorial snapshots with real source URLs (no live fetch)",
+      "sourceKind": "embedded_snapshot",
+      "refreshCadence": "weekly_or_on_major_drop",
+      "cachePolicy": "static_offline",
+      "staleAfterDays": 21,
+      "lastUpdatedField": "NEWS_CATALOG_META.lastUpdated",
+      "failureBehavior": "do_not_fabricate_headlines_without_source_url",
+      "autoRefresh": false,
+      "breakingChangeReviewRequired": false,
+      "test": "app/src/lib/dynamic-data/freshness.test.ts"
+    },
+    {
+      "id": "subscription-plan-pricing",
+      "title": "VibeSpace Access / subscription plan prices",
+      "uiSurfaces": [
+        "Settings → Plans",
+        "Account upgrade CTAs",
+        "site pricing ledger"
+      ],
+      "module": "app/src/features/billing/planLimits.ts",
+      "sourceOfTruth": "Stripe Price objects + site pricing ledger (owner-approved)",
+      "sourceKind": "official_api",
+      "secondarySources": [
+        "docs/SUBSCRIPTION_PLANS_REFERENCE.md",
+        "docs/stripe-setup.md"
+      ],
+      "refreshCadence": "on_price_change_only",
+      "cachePolicy": "code_constants_mirror_stripe",
+      "staleAfterDays": 365,
+      "lastUpdatedField": "PLAN_PRICING_META.lastUpdated",
+      "failureBehavior": "never_auto_change_user_facing_prices_without_review",
+      "autoRefresh": false,
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/features/billing/planLimits.test.ts"
+    },
+    {
+      "id": "provider-connectivity-metadata",
+      "title": "Provider connectivity + hosted plan eligibility",
+      "uiSurfaces": [
+        "Settings → Providers",
+        "Model picker availability",
+        "Agent provider options"
+      ],
+      "module": "app/src/lib/ai/providerRegistry.ts",
+      "sourceOfTruth": "User API keys + plan entitlements + Ollama reachability",
+      "sourceKind": "runtime",
+      "refreshCadence": "realtime",
+      "cachePolicy": "derived_from_auth_store",
+      "staleAfterDays": 0,
+      "lastUpdatedField": "connectionState.updatedAt",
+      "failureBehavior": "show_missing_key_or_offline_never_fake_connected",
+      "autoRefresh": true,
+      "breakingChangeReviewRequired": false,
+      "test": "app/src/lib/ai/providerRegistry.test.ts"
+    },
+    {
+      "id": "provider-usage-limits",
+      "title": "Provider usage / limit summaries",
+      "uiSurfaces": [
+        "Taskbar usage window",
+        "Settings provider usage counters",
+        "/usage summaries"
+      ],
+      "module": "app/src/lib/usage/usageService.ts",
+      "sourceOfTruth": "Provider usage APIs (OpenAI org usage, OpenRouter key usage) + local totals",
+      "sourceKind": "official_api",
+      "refreshCadence": "on_demand",
+      "cachePolicy": "short_lived_fetch",
+      "staleAfterDays": 0,
+      "staleAfterMs": 300000,
+      "lastUpdatedField": "usageSummary.fetchedAt",
+      "failureBehavior": "show_unavailable_not_zero_as_current",
+      "autoRefresh": true,
+      "breakingChangeReviewRequired": false,
+      "test": "app/src/lib/usage/usageService.test.ts"
+    },
+    {
+      "id": "composer-stt-catalog",
+      "title": "Composer STT provider catalog (non-Deepgram)",
+      "uiSurfaces": [
+        "Settings → Composer STT"
+      ],
+      "module": "app/src/features/composer-stt/catalog.ts",
+      "sourceOfTruth": "Product capability matrix + vendor STT docs",
+      "sourceKind": "embedded_snapshot",
+      "refreshCadence": "on_capability_change",
+      "cachePolicy": "embedded_only",
+      "staleAfterDays": 60,
+      "lastUpdatedField": "COMPOSER_STT_CATALOG_META.lastUpdated",
+      "failureBehavior": "do_not_advertise_unverified_runtime",
+      "autoRefresh": false,
+      "breakingChangeReviewRequired": true,
+      "test": "app/src/features/composer-stt/catalog.test.ts"
+    }
+  ]
+}

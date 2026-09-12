@@ -65,6 +65,7 @@ describe('createJarvisCapabilitySnapshot', () => {
     const byId = new Map(schemas.map((schema) => [String(schema.id), schema] as const));
 
     expect(schemas.map(({ id }) => id)).toEqual([
+      'agent.run',
       'canva.autofill_job.read',
       'canva.brand_template.dataset.read',
       'canva.brand_templates.search',
@@ -73,7 +74,11 @@ describe('createJarvisCapabilitySnapshot', () => {
       'canva.design.read',
       'canva.designs.search',
       'chat.model.switch',
+      'creator.start',
       'file.search',
+      'files.create',
+      'files.edit',
+      'files.read',
       'github.commits.recent',
       'github.identity',
       'github.issue.read',
@@ -91,6 +96,7 @@ describe('createJarvisCapabilitySnapshot', () => {
       'google-drive.document.read',
       'google-drive.files.search',
       'mcp.invoke',
+      'schedule.create',
       'task.cancel',
       'terminal.create',
       'terminal.run',
@@ -117,6 +123,10 @@ describe('createJarvisCapabilitySnapshot', () => {
       risk: 'external-side-effect',
       approval: 'always',
     });
+    expect(byId.has('terminal.start_cli')).toBe(false);
+    expect(byId.has('terminal.send_input')).toBe(false);
+    expect(byId.has('terminal.wait_for_output')).toBe(false);
+    expect(byId.has('terminal.collect_output')).toBe(false);
     expect(byId.get('github.commits.recent')).toMatchObject({
       id: 'github.commits.recent',
       inputSchema: {

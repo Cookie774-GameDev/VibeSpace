@@ -1,4 +1,5 @@
 import type {
+  ChatActivityCategory,
   ChatActivityEvent,
   ChatActivityKind,
   ChatActivityStatus,
@@ -26,6 +27,28 @@ function activityKind(type: JarvisEvent['type']): ChatActivityKind {
       return 'tool';
     default:
       return 'agent';
+  }
+}
+
+function activityCategory(type: JarvisEvent['type']): ChatActivityCategory {
+  switch (type) {
+    case 'artifact':
+      return 'file';
+    case 'retrieval':
+      return 'file';
+    case 'tool':
+    case 'terminal':
+    case 'approval':
+    case 'warning':
+    case 'error':
+      return 'thinking';
+    case 'message':
+      return 'response';
+    case 'context':
+      return 'context';
+    case 'run_state':
+    case 'model':
+      return 'thinking';
   }
 }
 
@@ -91,6 +114,7 @@ export function projectJarvisEventsForLegacyActivity(input: {
         id: internalKey(input.run, event),
         chatId,
         kind: activityKind(event.type),
+        category: activityCategory(event.type),
         status: activityStatus(event, input.run),
         title: activityTitle(event.type),
         ...(event.safeSummary?.trim() ? { detail: event.safeSummary.trim() } : {}),

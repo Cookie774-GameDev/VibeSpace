@@ -316,6 +316,14 @@ const MC9_ENTRIES = Object.freeze(
     ...MC9_VIEWPORT_IDS.map((id) =>
       mc9Entry(`viewport:${id}`, 'viewport', `${MC9_VISUAL_DIRECTORY}/viewport--${id}.png`),
     ),
+    // Account moved from the Settings modal to its own route after this immutable
+    // corpus was captured. Retain the historical image as evidence instead of
+    // coupling an already-recorded corpus to the live route inventory.
+    mc9Entry(
+      'settings:account',
+      'browser-surface',
+      `${MC9_VISUAL_DIRECTORY}/settings--account.png`,
+    ),
     ...MONOCHROME_ROUTE_COVERAGE_MANIFEST.entries
       .filter(
         (entry): entry is typeof entry & { readonly routeId: string } =>

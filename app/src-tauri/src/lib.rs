@@ -45,21 +45,29 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 mod agent_coordination;
 mod branding;
+mod browser_chat_surface;
 mod browser_process;
+mod chat_temp_attachments;
 mod cli_bridge;
+mod command_center_tool;
 mod context_search;
 mod credentials;
 mod dictation;
 mod faster_whisper;
 mod fsread;
+mod harness;
+mod jarvis_voice;
 mod kernel_host;
-mod kokoro;
 mod launcher;
 mod local_ai;
+mod model_foundry;
+mod model_foundry_download;
+mod model_foundry_training;
 mod monochrome_evidence;
 mod ollama_http;
 mod pets;
 mod preview;
+mod renderer_watchdog;
 pub mod runtime_profile;
 #[cfg(debug_assertions)]
 mod sik_smoke;
@@ -127,7 +135,7 @@ fn global_dictation_shortcut_config() -> GlobalDictationShortcutConfig {
 fn show_main_window(app: &tauri::AppHandle, reason: &'static str) {
     println!("[lifecycle] showing main window ({reason})");
     branding::apply_app_branding(app);
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_window("main") {
         if let Err(err) = window.show() {
             eprintln!("[lifecycle] failed to show main window ({reason}): {err}");
         }
@@ -137,7 +145,9 @@ fn show_main_window(app: &tauri::AppHandle, reason: &'static str) {
         if let Err(err) = window.set_focus() {
             eprintln!("[lifecycle] failed to focus main window ({reason}): {err}");
         }
-        // WebView2 often swaps HWND during show ΓÇö re-apply after the surface is back.
+        // WebView2 can swap HWND while the host is shown. Re-apply the
+        // existing icon through the host Window so multi-webview Browser Chat
+        // layouts keep the same taskbar identity.
         branding::apply_window_icon(&window);
         if let Err(err) = window.emit("jarvis:reopen", ReopenPayload { reason }) {
             eprintln!("[lifecycle] failed to emit reopen event ({reason}): {err}");
@@ -145,6 +155,86 @@ fn show_main_window(app: &tauri::AppHandle, reason: &'static str) {
     } else {
         eprintln!("[lifecycle] main window missing during show request ({reason})");
     }
+}
+
+fn should_force_intro_handoff(main_visible: bool, _intro_visible: bool) -> bool {
+    !main_visible
+}
+
+fn should_fall_open_after_guard_spawn(spawn_succeeded: bool) -> bool {
+    !spawn_succeeded
+}
+
+fn schedule_cold_start_intro_fail_open(app: &tauri::AppHandle) {
+    const NATIVE_INTRO_DEADLINE: std::time::Duration = std::time::Duration::from_secs(9);
+    let app_handle = app.clone();
+    let guard = std::thread::Builder::new()
+        .name("cold-start-intro-fail-open".into())
+        .spawn(move || {
+            std::thread::sleep(NATIVE_INTRO_DEADLINE);
+            let main_visible = app_handle
+                .get_window("main")
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(false);
+            let intro = app_handle.get_webview_window("cold-start-intro");
+            let intro_visible = intro
+                .as_ref()
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(false);
+
+            if should_force_intro_handoff(main_visible, intro_visible) {
+                eprintln!("[cold-start-intro] native deadline reached; revealing main window");
+                show_main_window(&app_handle, "cold-start-intro-native-timeout");
+            }
+            if intro_visible {
+                if let Some(window) = intro {
+                    let _ = window.close();
+                }
+            }
+        });
+    if should_fall_open_after_guard_spawn(guard.is_ok()) {
+        eprintln!("[cold-start-intro] fail-open guard unavailable; revealing main window");
+        show_main_window(app, "cold-start-intro-guard-unavailable");
+        if let Some(intro) = app.get_webview_window("cold-start-intro") {
+            let _ = intro.close();
+        }
+    }
+}
+
+/// Present the 4K cinematic intro on a true cold start (new process only).
+///
+/// The main window stays hidden while the borderless fullscreen intro plays and
+/// the React shell continues loading underneath. Tray restores never reach this
+/// path because they reuse the existing process (single-instance).
+fn start_cold_start_intro(app: &tauri::AppHandle) {
+    // Keep main hidden while the intro owns the screen.
+    if let Some(main) = app.get_window("main") {
+        let _ = main.hide();
+    }
+
+    let Some(intro) = app.get_webview_window("cold-start-intro") else {
+        eprintln!("[cold-start-intro] window missing; falling back to main");
+        show_main_window(app, "cold-start-intro-missing");
+        return;
+    };
+
+    if let Err(err) = intro.set_fullscreen(true) {
+        eprintln!("[cold-start-intro] fullscreen request failed: {err}");
+    }
+    if let Err(err) = intro.set_always_on_top(true) {
+        eprintln!("[cold-start-intro] always-on-top request failed: {err}");
+    }
+    if let Err(err) = intro.show() {
+        eprintln!("[cold-start-intro] show failed: {err}");
+        show_main_window(app, "cold-start-intro-show-failed");
+        return;
+    }
+    if let Err(err) = intro.set_focus() {
+        eprintln!("[cold-start-intro] focus failed: {err}");
+    }
+
+    schedule_cold_start_intro_fail_open(app);
+    println!("[cold-start-intro] playing cinematic intro on cold start");
 }
 
 fn show_dictation_window(app: &tauri::AppHandle) {
@@ -179,12 +269,12 @@ fn dictation_route(main_window_focused: bool) -> DictationRoute {
 
 fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
     let main_focused = app
-        .get_webview_window("main")
+        .get_window("main")
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
     match dictation_route(main_focused) {
         DictationRoute::InApp => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_window("main") {
                 // The frontend routes this to composer STT for the focused
                 // in-app input - same pipeline, no separate overlay UI.
                 let _ = window.emit("jarvis:global-dictation-in-app", ());
@@ -286,6 +376,10 @@ fn run_ordinary(
                 })
                 .build(),
         )
+        .manage(harness::runtime::OpenCodeRuntimeState::default())
+        .manage(harness::download::OpenCodeDownloadState::default())
+        .manage(harness::server::OpenCodeServerState::default())
+        .manage(harness::tool_gateway::ToolGatewayState::default())
         .manage(cli_bridge::CliBridgeState::default())
         .manage(kernel_host::KernelHostState::default())
         .manage(terminal::TerminalState::default())
@@ -294,11 +388,20 @@ fn run_ordinary(
         .manage(terminal_snapshot::PersistenceFlushState::default())
         .manage(runtime_context)
         .setup(|app| {
+            let renderer_recovery_restart =
+                renderer_watchdog::consume_recovery_restart(&app.handle());
+            renderer_watchdog::install(app);
             if let Err(err) = terminal_cli::start_terminal_cli_server(
                 &app.handle(),
                 &app.state::<terminal_cli::TerminalCliState>(),
             ) {
                 eprintln!("[terminal-cli] startup failed: {err}");
+            }
+            if let Err(err) = harness::tool_gateway::start_tool_gateway_server(
+                &app.handle(),
+                &app.state::<harness::tool_gateway::ToolGatewayState>(),
+            ) {
+                eprintln!("[tool-gateway] startup failed: {err}");
             }
             // Restore pet window geometry from disk.
             {
@@ -374,19 +477,43 @@ fn run_ordinary(
                 eprintln!("[dictation] failed to register Ctrl+Space: {err}");
             }
 
+            if renderer_recovery_restart {
+                println!("[renderer-watchdog] recovery restart; skipping cold-start intro");
+                show_main_window(&app.handle(), "renderer-recovery-restart");
+                if let Some(intro) = app.get_webview_window("cold-start-intro") {
+                    let _ = intro.close();
+                }
+            } else {
+                // Cold-start cinematic intro: only on a true new process.
+                // Tray restore and second-instance focus never create a new process,
+                // so they never replay the intro (single-instance plugin handles that).
+                start_cold_start_intro(&app.handle());
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
             match event {
-                tauri::WindowEvent::Focused(true)
+                tauri::WindowEvent::Moved(_)
                 | tauri::WindowEvent::Resized(_)
                 | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                    if window.label() == "main" {
+                        branding::apply_app_branding(&window.app_handle());
+                        pets::schedule_visible_overlay_reconstrain(window.app_handle().clone());
+                    }
+                }
+                tauri::WindowEvent::Focused(true) => {
                     if window.label() == "main" {
                         branding::apply_app_branding(&window.app_handle());
                     }
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     use tauri::Emitter as _;
+                    // Cinematic intro may fully close; always ensure main is shown.
+                    if window.label() == "cold-start-intro" {
+                        show_main_window(&window.app_handle(), "cold-start-intro-closed");
+                        return;
+                    }
                     // Pet windows: hide only; never destroy sessions.
                     if pets::handle_pet_window_close(window) {
                         api.prevent_close();
@@ -410,21 +537,39 @@ fn run_ordinary(
             greet,
             app_version,
             refresh_app_branding,
+            browser_chat_surface::browser_chat_surface_open,
+            browser_chat_surface::browser_chat_surface_hide,
+            browser_chat_surface::browser_chat_surface_hide_all,
+            chat_temp_attachments::chat_temp_attachment_create,
+            chat_temp_attachments::chat_temp_attachment_cleanup,
             runtime_profile_query,
             kernel_host::register_kernel_host,
             kernel_host::kernel_client_request,
             kernel_host::kernel_host_respond,
             kernel_host::release_kernel_host,
             cli_bridge::cli_bridge_scan,
+            cli_bridge::cli_bridge_codex_account_snapshot,
             cli_bridge::cli_bridge_probe,
             cli_bridge::cli_bridge_start,
             cli_bridge::cli_bridge_cancel,
+            harness::runtime::opencode_runtime_detect,
+            harness::download::opencode_runtime_install,
+            harness::download::opencode_runtime_install_cancel,
+            harness::server::opencode_server_ensure,
+            harness::server::opencode_server_status,
+            harness::server::opencode_server_stop,
+            harness::tool_gateway::tool_gateway_respond,
+            command_center_tool::command_center_tool,
             context_search::context_search_replace_documents,
             context_search::context_search_delete_documents,
             context_search::context_search_query,
             context_search::context_search_status,
             context_search::context_search_acknowledge_rebuild,
             fsread::fs_create_dir_all,
+            fsread::fs_create_dir_all_strict,
+            fsread::fs_stat_path,
+            fsread::fs_copy_file,
+            fsread::fs_move_file_with_receipt,
             pets::pet_show_overlay,
             pets::pet_hide_overlay,
             pets::pet_is_overlay_visible,
@@ -441,12 +586,16 @@ fn run_ordinary(
             pets::pet_validate_action,
             fsread::fs_create_text_file,
             fsread::fs_create_text_with_content,
+            fsread::fs_compare_and_swap_text,
             fsread::fs_list_dir,
+            fsread::fs_rename_file,
+            fsread::fs_delete_file,
             fsread::fs_read_image_base64,
             fsread::fs_read_text,
             fsread::fs_read_text_sample,
             fsread::fs_write_text,
             terminal::terminal_spawn,
+            terminal::terminal_validate_directory,
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
@@ -480,6 +629,7 @@ fn run_ordinary(
             faster_whisper::faster_whisper_check_installed,
             faster_whisper::faster_whisper_status,
             faster_whisper::faster_whisper_download,
+            faster_whisper::faster_whisper_remove,
             faster_whisper::faster_whisper_transcribe,
             #[cfg(debug_assertions)]
             sik_smoke::sik_smoke_binding,
@@ -489,23 +639,53 @@ fn run_ordinary(
             local_ai::ollama_installation_status,
             local_ai::ollama_start,
             local_ai::ensure_ollama_ready,
+            local_ai::install_ollama_with_consent,
             local_ai::is_ollama_running,
             local_ai::open_ollama_troubleshooting,
             local_ai::open_system_speech_settings,
-            kokoro::kokoro_model_path,
-            kokoro::kokoro_check_installed,
-            kokoro::kokoro_verify_checksums,
-            kokoro::kokoro_status,
-            kokoro::kokoro_warmup,
-            kokoro::kokoro_download,
-            kokoro::kokoro_resume_download,
-            kokoro::kokoro_repair,
-            kokoro::kokoro_delete_corrupt,
-            kokoro::kokoro_speak,
-            kokoro::kokoro_stop,
+            model_foundry::model_foundry_start_training,
+            model_foundry::model_foundry_list_jobs,
+            model_foundry::model_foundry_retrieve,
+            model_foundry::model_foundry_prepare_chat,
+            model_foundry::model_foundry_chat,
+            model_foundry::model_foundry_cancel_chat,
+            model_foundry::model_foundry_detect_hardware,
+            model_foundry::model_foundry_cancel_job,
+            model_foundry::model_foundry_retry_job,
+            model_foundry::model_foundry_resume_job,
+            model_foundry::model_foundry_retrain_artifact,
+            model_foundry::model_foundry_delete_job,
+            model_foundry::model_foundry_rename_artifact,
+            model_foundry::model_foundry_duplicate_artifact,
+            model_foundry::model_foundry_export_artifact,
+            model_foundry_training::model_foundry_training_worker_status,
+            model_foundry_training::model_foundry_training_catalog,
+            model_foundry_training::model_foundry_download_training_model,
+            model_foundry_training::model_foundry_repair_training_model,
+            model_foundry_training::model_foundry_cancel_training_model_download,
+            model_foundry_training::model_foundry_remove_training_model,
+            model_foundry_training::model_foundry_install_training_worker,
+            model_foundry_download::model_foundry_download_model,
+            model_foundry_download::model_foundry_cancel_download,
+            model_foundry_download::model_foundry_cleanup_partial_download,
+            jarvis_voice::jarvis_voice_model_path,
+            jarvis_voice::jarvis_voice_check_installed,
+            jarvis_voice::jarvis_voice_verify_checksums,
+            jarvis_voice::jarvis_voice_status,
+            jarvis_voice::jarvis_voice_warmup,
+            jarvis_voice::jarvis_voice_download,
+            jarvis_voice::jarvis_voice_resume_download,
+            jarvis_voice::jarvis_voice_repair,
+            jarvis_voice::jarvis_voice_delete_corrupt,
+            jarvis_voice::jarvis_voice_cancel_download,
+            jarvis_voice::jarvis_voice_speak,
+            jarvis_voice::jarvis_voice_stop,
             ollama_http::ollama_ping,
             ollama_http::ollama_list_models,
+            ollama_http::ollama_show_model,
+            ollama_http::ollama_probe_tools,
             ollama_http::ollama_pull_model,
+            ollama_http::ollama_chat,
             ollama_http::ollama_chat_stream,
             // Preview Studio + Vibe Browser + wallpaper master
             static_server::preview_start_static_server,
@@ -535,6 +715,7 @@ fn run_ordinary(
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                harness::server::shutdown_owned_server(app_handle);
                 kernel_host::release_on_process_exit(app_handle);
                 return;
             }
@@ -579,25 +760,56 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
+    #[test]
+    fn cold_start_intro_fail_open_reveals_any_hidden_main_at_the_native_deadline() {
+        assert!(should_force_intro_handoff(false, true));
+        assert!(!should_force_intro_handoff(true, true));
+        assert!(should_force_intro_handoff(false, false));
+    }
+
+    #[test]
+    fn cold_start_intro_falls_open_when_the_native_guard_cannot_be_scheduled() {
+        assert!(should_fall_open_after_guard_spawn(false));
+        assert!(!should_fall_open_after_guard_spawn(true));
+    }
+
     const ORDINARY_HANDLER_AUTHORITY: &str = "\
 greet
 app_version
 refresh_app_branding
+browser_chat_surface::browser_chat_surface_open
+browser_chat_surface::browser_chat_surface_hide
+browser_chat_surface::browser_chat_surface_hide_all
+chat_temp_attachments::chat_temp_attachment_create
+chat_temp_attachments::chat_temp_attachment_cleanup
 runtime_profile_query
 kernel_host::register_kernel_host
 kernel_host::kernel_client_request
 kernel_host::kernel_host_respond
 kernel_host::release_kernel_host
 cli_bridge::cli_bridge_scan
+cli_bridge::cli_bridge_codex_account_snapshot
 cli_bridge::cli_bridge_probe
 cli_bridge::cli_bridge_start
 cli_bridge::cli_bridge_cancel
+harness::runtime::opencode_runtime_detect
+harness::download::opencode_runtime_install
+harness::download::opencode_runtime_install_cancel
+harness::server::opencode_server_ensure
+harness::server::opencode_server_status
+harness::server::opencode_server_stop
+harness::tool_gateway::tool_gateway_respond
+command_center_tool::command_center_tool
 context_search::context_search_replace_documents
 context_search::context_search_delete_documents
 context_search::context_search_query
 context_search::context_search_status
 context_search::context_search_acknowledge_rebuild
 fsread::fs_create_dir_all
+fsread::fs_create_dir_all_strict
+fsread::fs_stat_path
+fsread::fs_copy_file
+fsread::fs_move_file_with_receipt
 pets::pet_show_overlay
 pets::pet_hide_overlay
 pets::pet_is_overlay_visible
@@ -614,12 +826,16 @@ pets::pet_save_panel_geometry
 pets::pet_validate_action
 fsread::fs_create_text_file
 fsread::fs_create_text_with_content
+fsread::fs_compare_and_swap_text
 fsread::fs_list_dir
+fsread::fs_rename_file
+fsread::fs_delete_file
 fsread::fs_read_image_base64
 fsread::fs_read_text
 fsread::fs_read_text_sample
 fsread::fs_write_text
 terminal::terminal_spawn
+terminal::terminal_validate_directory
 terminal::terminal_write
 terminal::terminal_resize
 terminal::terminal_kill
@@ -653,6 +869,7 @@ faster_whisper::faster_whisper_model_path
 faster_whisper::faster_whisper_check_installed
 faster_whisper::faster_whisper_status
 faster_whisper::faster_whisper_download
+faster_whisper::faster_whisper_remove
 faster_whisper::faster_whisper_transcribe
 sik_smoke::sik_smoke_binding
 sik_smoke::sik_smoke_voice_fixture
@@ -660,23 +877,53 @@ launcher::install_terminal_launcher
 local_ai::ollama_installation_status
 local_ai::ollama_start
 local_ai::ensure_ollama_ready
+local_ai::install_ollama_with_consent
 local_ai::is_ollama_running
 local_ai::open_ollama_troubleshooting
 local_ai::open_system_speech_settings
-kokoro::kokoro_model_path
-kokoro::kokoro_check_installed
-kokoro::kokoro_verify_checksums
-kokoro::kokoro_status
-kokoro::kokoro_warmup
-kokoro::kokoro_download
-kokoro::kokoro_resume_download
-kokoro::kokoro_repair
-kokoro::kokoro_delete_corrupt
-kokoro::kokoro_speak
-kokoro::kokoro_stop
+model_foundry::model_foundry_start_training
+model_foundry::model_foundry_list_jobs
+model_foundry::model_foundry_retrieve
+model_foundry::model_foundry_prepare_chat
+model_foundry::model_foundry_chat
+model_foundry::model_foundry_cancel_chat
+model_foundry::model_foundry_detect_hardware
+model_foundry::model_foundry_cancel_job
+model_foundry::model_foundry_retry_job
+model_foundry::model_foundry_resume_job
+model_foundry::model_foundry_retrain_artifact
+model_foundry::model_foundry_delete_job
+model_foundry::model_foundry_rename_artifact
+model_foundry::model_foundry_duplicate_artifact
+model_foundry::model_foundry_export_artifact
+model_foundry_training::model_foundry_training_worker_status
+model_foundry_training::model_foundry_training_catalog
+model_foundry_training::model_foundry_download_training_model
+model_foundry_training::model_foundry_repair_training_model
+model_foundry_training::model_foundry_cancel_training_model_download
+model_foundry_training::model_foundry_remove_training_model
+model_foundry_training::model_foundry_install_training_worker
+model_foundry_download::model_foundry_download_model
+model_foundry_download::model_foundry_cancel_download
+model_foundry_download::model_foundry_cleanup_partial_download
+jarvis_voice::jarvis_voice_model_path
+jarvis_voice::jarvis_voice_check_installed
+jarvis_voice::jarvis_voice_verify_checksums
+jarvis_voice::jarvis_voice_status
+jarvis_voice::jarvis_voice_warmup
+jarvis_voice::jarvis_voice_download
+jarvis_voice::jarvis_voice_resume_download
+jarvis_voice::jarvis_voice_repair
+jarvis_voice::jarvis_voice_delete_corrupt
+jarvis_voice::jarvis_voice_cancel_download
+jarvis_voice::jarvis_voice_speak
+jarvis_voice::jarvis_voice_stop
 ollama_http::ollama_ping
 ollama_http::ollama_list_models
+ollama_http::ollama_show_model
+ollama_http::ollama_probe_tools
 ollama_http::ollama_pull_model
+ollama_http::ollama_chat
 ollama_http::ollama_chat_stream
 static_server::preview_start_static_server
 static_server::preview_stop_static_server
@@ -701,9 +948,9 @@ wallpaper_master::wallpaper_find_local_master
 wallpaper_master::wallpaper_cache_full_master
 wallpaper_master::wallpaper_full_cache_path";
     const ORDINARY_HANDLER_AUTHORITY_SHA256: &str =
-        "11903b8b0ae5be9582bdae4664c2e5a3865654d8f581ccfe647eb73fb30e3aa7";
+        "5488a7e5f7b91f5f4a43097cedea0b1a7314d5d0ae3a403b0c869264a22439b6";
     const ORDINARY_HANDLER_NORMALIZED_SHA256: &str =
-        "731d89a6417a96e53a5d4785d924dd228d67e14da7894525c9ad9b15108ae685";
+        "0a3093942b091116933a95c19e016b0c94c321f831e951853502b64756094287";
 
     #[derive(Debug, PartialEq, Eq)]
     struct NativeBuilderManifest<'a> {
@@ -831,6 +1078,35 @@ wallpaper_master::wallpaper_full_cache_path";
     }
 
     #[test]
+    fn opencode_runtime_commands_are_registered_only_on_the_ordinary_builder() {
+        let source = include_str!("lib.rs");
+        let visual_test =
+            function_source(source, "fn run_monochrome_visual_test(", "fn run_ordinary(");
+        let ordinary = function_source(source, "fn run_ordinary(", "#[cfg(test)]");
+
+        assert!(!visual_test.contains("OpenCodeRuntimeState"));
+        assert!(!visual_test.contains("OpenCodeDownloadState"));
+        assert!(!visual_test.contains("OpenCodeServerState"));
+        assert!(!visual_test.contains("ToolGatewayState"));
+        assert!(!visual_test.contains("opencode_runtime_detect"));
+        assert!(!visual_test.contains("opencode_runtime_install"));
+        assert!(!visual_test.contains("opencode_server_ensure"));
+        assert!(ordinary.contains(".manage(harness::runtime::OpenCodeRuntimeState::default())"));
+        assert!(ordinary.contains(".manage(harness::download::OpenCodeDownloadState::default())"));
+        assert!(ordinary.contains(".manage(harness::server::OpenCodeServerState::default())"));
+        assert!(ordinary.contains(".manage(harness::tool_gateway::ToolGatewayState::default())"));
+        assert!(ordinary.contains("harness::runtime::opencode_runtime_detect,"));
+        assert!(ordinary.contains("harness::download::opencode_runtime_install,"));
+        assert!(ordinary.contains("harness::download::opencode_runtime_install_cancel,"));
+        assert!(ordinary.contains("harness::server::opencode_server_ensure,"));
+        assert!(ordinary.contains("harness::server::opencode_server_status,"));
+        assert!(ordinary.contains("harness::server::opencode_server_stop,"));
+        assert!(ordinary.contains("harness::tool_gateway::tool_gateway_respond,"));
+        assert!(ordinary.contains("harness::tool_gateway::start_tool_gateway_server("));
+        assert!(ordinary.contains("harness::server::shutdown_owned_server(app_handle);"));
+    }
+
+    #[test]
     fn ordinary_builder_manifest_matches_frozen_command_and_lifecycle_authority() {
         let source = include_str!("lib.rs");
         let ordinary = function_source(source, "fn run_ordinary(", "#[cfg(test)]");
@@ -851,7 +1127,7 @@ wallpaper_master::wallpaper_full_cache_path";
         let joined = manifest.commands.join("\n");
         assert_eq!(
             joined, ORDINARY_HANDLER_AUTHORITY,
-            "the ordered handler must remain the frozen 119 production commands plus runtime_profile_query"
+            "the ordered handler must remain the frozen production command authority"
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(joined.as_bytes())),

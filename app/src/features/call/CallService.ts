@@ -2,7 +2,7 @@
  * CallService — LiveKit client wrapper for Path C in-app voice calls.
  *
  * Flow:
- *   1. user clicks "Call Sage" -> CallService.start(persona)
+ *   1. user clicks "Call Jarvis/Friday" -> CallService.start(persona)
  *   2. fetch Supabase JWT
  *   3. POST {cloudUrl}/livekit/token with Authorization: Bearer <jwt>
  *      cloud responds: { url, token, room, call_id }
@@ -226,7 +226,13 @@ export class CallService {
 
     room.on(RoomEvent.ParticipantDisconnected, (p) => {
       // If the AI agent left, end the call
-      if (p.identity.startsWith('sage_') || p.identity.startsWith('agent_')) {
+      // Accept legacy sage_ identities plus jarvis_/friday_/agent_ for the AI participant.
+      if (
+        p.identity.startsWith('sage_') ||
+        p.identity.startsWith('jarvis_') ||
+        p.identity.startsWith('friday_') ||
+        p.identity.startsWith('agent_')
+      ) {
         void this.stop();
       }
     });

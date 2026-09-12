@@ -4,9 +4,7 @@ import {
   Bot,
   Boxes,
   Code2,
-  Database,
   FileText,
-  Github,
   Globe2,
   KanbanSquare,
   Network,
@@ -15,9 +13,12 @@ import {
   PlugZap,
   Sparkles,
   Terminal,
+  Wrench,
   X,
 } from 'lucide-react';
 import type { WorkbenchPanelKind } from './types';
+import type { PluginManifest } from '@/features/plugins';
+import { PluginLogo } from '@/features/plugins';
 
 const palette: Array<{
   kind: WorkbenchPanelKind;
@@ -35,21 +36,27 @@ const palette: Array<{
   { kind: 'notes', label: 'Notes', icon: NotebookPen },
   { kind: 'diagram', label: 'Diagram', icon: Network },
   { kind: 'plugins', label: 'Plugins', icon: PlugZap },
-  { kind: 'github', label: 'GitHub', icon: Github },
-  { kind: 'supabase', label: 'Supabase', icon: Database },
+  { kind: 'tools', label: 'Tools', icon: Wrench },
   { kind: 'activity', label: 'Activity', icon: Activity },
 ];
 
 export const WORKBENCH_DRAG_MIME = 'application/x-vibespace-workbench-panel';
 
 interface PanelPaletteProps {
-  onAdd: (kind: WorkbenchPanelKind) => void;
+  onAdd: (kind: WorkbenchPanelKind, pluginId?: string) => void;
+  pinnedPlugins?: readonly PluginManifest[];
   open?: boolean;
   onClose?: () => void;
   onOpen?: () => void;
 }
 
-export function PanelPalette({ onAdd, open = true, onClose, onOpen }: PanelPaletteProps) {
+export function PanelPalette({
+  onAdd,
+  pinnedPlugins = [],
+  open = true,
+  onClose,
+  onOpen,
+}: PanelPaletteProps) {
   if (!open) {
     return (
       <div className="workbench-palette-collapsed" aria-label="Workbench panels collapsed">
@@ -87,6 +94,18 @@ export function PanelPalette({ onAdd, open = true, onClose, onOpen }: PanelPalet
           >
             <Icon aria-hidden="true" />
             <span>{label}</span>
+          </button>
+        ))}
+        {pinnedPlugins.map((plugin) => (
+          <button
+            key={`plugin:${plugin.id}`}
+            type="button"
+            aria-label={`Add ${plugin.name}`}
+            title={plugin.name}
+            onClick={() => onAdd('plugin', plugin.id)}
+          >
+            <PluginLogo plugin={plugin} />
+            <span>{plugin.name}</span>
           </button>
         ))}
       </div>

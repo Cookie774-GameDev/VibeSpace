@@ -12,12 +12,12 @@ const mocks = vi.hoisted(() => ({
     voiceEngine: 'system',
     voicePreset: 'jarvis-prime',
   },
-  kokoroStream: {
+  jarvisStream: {
     enqueue: vi.fn(),
     complete: vi.fn(async () => undefined),
     stop: vi.fn(),
   },
-  createKokoroStreamingPlayer: vi.fn(),
+  createJarvisStreamingPlayer: vi.fn(),
   stopAllVoiceOutput: vi.fn(),
   canSpeak: true,
   sessionId: 1,
@@ -36,7 +36,7 @@ vi.mock('@/stores/ui', () => ({
 }));
 
 vi.mock('./voiceRouter', () => ({
-  createKokoroStreamingPlayer: mocks.createKokoroStreamingPlayer,
+  createJarvisStreamingPlayer: mocks.createJarvisStreamingPlayer,
   registerActiveStreamingVoiceSession: vi.fn(),
   speakWithSettings: mocks.speakWithSettings,
   stopAllVoiceOutput: mocks.stopAllVoiceOutput,
@@ -66,11 +66,11 @@ describe('StreamingVoiceSession lifecycle', () => {
     mocks.authState.voicePreset = 'jarvis-prime';
     mocks.canSpeak = true;
     mocks.sessionId = 1;
-    mocks.kokoroStream.enqueue.mockClear();
-    mocks.kokoroStream.complete.mockClear();
-    mocks.kokoroStream.stop.mockClear();
-    mocks.createKokoroStreamingPlayer.mockReset();
-    mocks.createKokoroStreamingPlayer.mockReturnValue(mocks.kokoroStream);
+    mocks.jarvisStream.enqueue.mockClear();
+    mocks.jarvisStream.complete.mockClear();
+    mocks.jarvisStream.stop.mockClear();
+    mocks.createJarvisStreamingPlayer.mockReset();
+    mocks.createJarvisStreamingPlayer.mockReturnValue(mocks.jarvisStream);
     mocks.stopAllVoiceOutput.mockClear();
   });
 
@@ -140,8 +140,17 @@ describe('StreamingVoiceSession lifecycle', () => {
     expect(mocks.speakWithSettings).not.toHaveBeenCalled();
   });
 
-  it('uses the Kokoro streaming player instead of serial speak calls', async () => {
-    mocks.authState.voiceEngine = 'kokoro';
+  it('keeps speak-replies live when the voice panel session id is unset', async () => {
+    mocks.sessionId = 0;
+    mocks.canSpeak = true;
+    const session = new StreamingVoiceSession();
+    session.onDelta('Hello there.');
+    await session.onComplete('Hello there.');
+    expect(mocks.speakWithSettings).toHaveBeenCalled();
+  });
+
+  it('uses the Jarvis streaming player instead of serial speak calls', async () => {
+    mocks.authState.voiceEngine = 'jarvis';
     const events: string[] = [];
     const onStart = () => events.push('start');
     const onEnd = () => events.push('end');
@@ -156,9 +165,9 @@ describe('StreamingVoiceSession lifecycle', () => {
     window.removeEventListener(STREAMING_VOICE_START_EVENT, onStart);
     window.removeEventListener(STREAMING_VOICE_END_EVENT, onEnd);
 
-    expect(mocks.createKokoroStreamingPlayer).toHaveBeenCalledWith('jarvis-prime');
-    expect(mocks.kokoroStream.enqueue).toHaveBeenCalledTimes(2);
-    expect(mocks.kokoroStream.complete).toHaveBeenCalledTimes(1);
+    expect(mocks.createJarvisStreamingPlayer).toHaveBeenCalledWith('jarvis-prime');
+    expect(mocks.jarvisStream.enqueue).toHaveBeenCalledTimes(2);
+    expect(mocks.jarvisStream.complete).toHaveBeenCalledTimes(1);
     expect(mocks.speakWithSettings).not.toHaveBeenCalled();
     expect(events).toEqual(['start', 'end']);
   });

@@ -2,6 +2,8 @@ import * as React from 'react';
 import {
   LayoutTemplate,
   LocateFixed,
+  Maximize2,
+  Minimize2,
   Pause,
   Play,
   Redo2,
@@ -13,6 +15,15 @@ import {
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
+import { useFullscreenStore } from '@/features/fullscreen';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
+import { useAuthStore } from '@/stores/auth';
+import {
+  PLUGIN_CATALOG,
+  selectPinnedPluginIdsForAccount,
+  selectPluginConnectionsForAccount,
+  usePluginStore,
+} from '@/features/plugins';
 import { HoldExitButton } from './HoldExitButton';
 import { PanelPalette } from './PanelPalette';
 import { TemplatePicker } from './TemplatePicker';
@@ -23,11 +34,37 @@ import { WorkbenchContextMenu } from './WorkbenchContextMenu';
 import { useWorkbenchStore } from './store';
 import { setWorkbenchNativeWindowTitle } from './window';
 import type { WorkbenchPanelKind } from './types';
+import type { PluginManifest } from '@/features/plugins';
 import { DEFAULT_WORKBENCH_NAME } from './workbenchName';
 import './workbench.css';
 
+const WORKBENCH_PALETTE_REVEAL_PX = 72;
+
 export function WorkbenchPage() {
   const setRoute = useUIStore((state) => state.setRoute);
+  const accountId = useAuthStore((state) => resolveAccountIdentity(state)?.accountId ?? '');
+  const pinnedPluginIds = usePluginStore((state) =>
+    selectPinnedPluginIdsForAccount(state, accountId),
+  );
+  const pluginConnections = usePluginStore((state) =>
+    selectPluginConnectionsForAccount(state, accountId),
+  );
+  const pinnedPlugins = React.useMemo(
+    () =>
+      pinnedPluginIds
+        .map((id) => PLUGIN_CATALOG.find((plugin) => plugin.id === id))
+        .filter(
+          (plugin): plugin is PluginManifest =>
+            plugin !== undefined &&
+            pluginConnections[plugin.id]?.state === 'connected' &&
+            pluginConnections[plugin.id]?.enabled,
+        ),
+    [pinnedPluginIds, pluginConnections],
+  );
+  const systemActive = useFullscreenStore((state) => state.systemActive);
+  const nativePending = useFullscreenStore((state) => state.nativePending);
+  const nativeAvailability = useFullscreenStore((state) => state.nativeAvailability);
+  const toggleSystem = useFullscreenStore((state) => state.toggleSystem);
   const wallpaper = useWorkbenchStore((state) => state.wallpaper);
   const configureWallpaper = useWorkbenchStore((state) => state.configureWallpaper);
   const addPanel = useWorkbenchStore((state) => state.addPanel);
@@ -45,6 +82,7 @@ export function WorkbenchPage() {
   const [saveFocus, setSaveFocus] = React.useState(false);
   const [wallpapersOpen, setWallpapersOpen] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(true);
+  const [paletteReveal, setPaletteReveal] = React.useState(false);
   const [nameDraft, setNameDraft] = React.useState(name);
 
   React.useEffect(() => {
@@ -90,9 +128,18 @@ export function WorkbenchPage() {
     flushPersistence();
   };
 
-  const add = (kind: WorkbenchPanelKind) => {
-    const id = addPanel(kind);
+  const add = (kind: WorkbenchPanelKind, pluginId?: string) => {
+    const id = addPanel(kind, undefined, pluginId ? { pluginId } : undefined);
     if (!id) toast.warning('Could not add panel', 'Panel limit reached.');
+  };
+
+  const toggleSystemFullscreen = async () => {
+    const previous = systemActive;
+    const observed = await toggleSystem();
+    if (observed === previous) {
+      const message = useFullscreenStore.getState().error;
+      if (message) toast.warning('Fullscreen unavailable', message);
+    }
   };
 
   const exitWorkbench = () => {
@@ -116,6 +163,7 @@ export function WorkbenchPage() {
       data-sakura-route="workbench"
       data-sakura-intensity="standard"
       data-jarvis-suppress-context-menu
+      data-system-fullscreen={systemActive ? 'true' : 'false'}
     >
       <WallpaperHost config={wallpaper} />
       <WorkbenchContextMenu />
@@ -219,6 +267,17 @@ export function WorkbenchPage() {
             {wallpaper.paused ? <Play /> : <Pause />}
           </Button>
           <span className="workbench-toolbar-divider" />
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Toggle system fullscreen"
+            title={systemActive ? 'Exit system fullscreen' : 'Enter system fullscreen'}
+            disabled={nativePending || nativeAvailability !== 'available'}
+            onClick={() => void toggleSystemFullscreen()}
+          >
+            {systemActive ? <Minimize2 /> : <Maximize2 />}
+          </Button>
           <HoldExitButton onConfirmExit={exitWorkbench} />
         </div>
       </header>
@@ -226,15 +285,35 @@ export function WorkbenchPage() {
         data-monochrome-surface="workbench-canvas"
         data-sakura-content="workbench-canvas"
         className="workbench-content [html[data-theme=monochrome]_&]:bg-background"
+        data-palette-revealed={paletteReveal ? 'true' : 'false'}
+        onPointerMove={(event) => {
+          if (!systemActive) return;
+          setPaletteReveal(event.clientX <= WORKBENCH_PALETTE_REVEAL_PX);
+        }}
+        onPointerLeave={() => setPaletteReveal(false)}
       >
         <PanelPalette
           onAdd={add}
+          pinnedPlugins={pinnedPlugins}
           open={paletteOpen}
           onClose={() => setPaletteOpen(false)}
           onOpen={() => setPaletteOpen(true)}
         />
         <WorkbenchCanvas />
       </div>
+      {systemActive && (
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="outline"
+          className="workbench-system-fullscreen-exit"
+          aria-label="Toggle system fullscreen"
+          title="Exit system fullscreen"
+          onClick={() => void toggleSystemFullscreen()}
+        >
+          <Minimize2 />
+        </Button>
+      )}
       <TemplatePicker open={templatesOpen} focusSave={saveFocus} onClose={closeTemplates} />
       <WallpaperPicker open={wallpapersOpen} onClose={() => setWallpapersOpen(false)} />
     </main>

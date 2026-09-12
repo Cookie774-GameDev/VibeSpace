@@ -35,7 +35,9 @@ describe('pet panel lifecycle', () => {
   });
 
   it('close requires confirmation with approved copy', () => {
-    expect(PET_PANEL_CLOSE_CONFIRM_MESSAGE).toContain('chats and terminal sessions will keep running');
+    expect(PET_PANEL_CLOSE_CONFIRM_MESSAGE).toContain(
+      'chats and terminal sessions will keep running',
+    );
     expect(PET_PANEL_CLOSE_CONFIRM_BUTTONS.cancel).toBe('Cancel');
     expect(PET_PANEL_CLOSE_CONFIRM_BUTTONS.confirm).toBe('Close Mini Panel');
 
@@ -85,12 +87,12 @@ describe('shouldShowStandalonePet (Axo + Glitch shared rule)', () => {
     expect(shouldShowStandalonePet(base)).toBe(true);
   });
 
-  it('hides overlay when panel open flag is set (Axo click path)', () => {
-    expect(shouldShowStandalonePet({ ...base, panelOpenFlag: true })).toBe(false);
+  it('keeps the pet visible when the panel open flag is set (Axo click path)', () => {
+    expect(shouldShowStandalonePet({ ...base, panelOpenFlag: true })).toBe(true);
   });
 
-  it('hides overlay when Tauri panel is visible (Glitch click path)', () => {
-    expect(shouldShowStandalonePet({ ...base, panelVisible: true })).toBe(false);
+  it('keeps the pet visible when the Tauri panel is visible (Glitch click path)', () => {
+    expect(shouldShowStandalonePet({ ...base, panelVisible: true })).toBe(true);
   });
 
   it('restores overlay after minimize/close (flags cleared)', () => {

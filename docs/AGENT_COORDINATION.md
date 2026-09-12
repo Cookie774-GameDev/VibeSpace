@@ -2168,6 +2168,57 @@ _Maintained by all four agents. Last seeded: 2026-06-16 â€” v0.1.43 (`36fdb
 | **Task 20A overlap**              | The separate Codex desktop coordinator has a live exact Task 20A lock and dirty changes only in its fifteen authorized artifact/contract/persistence paths. This coordinator will not edit, stage, or commit those files while that overlap remains active; review and reconciliation may proceed only after a stable Task 20A handoff/commit.                                                                                                                                                                                                                                          |
 | **Protected state**               | The unrelated `install/install.ps1` deletion, `grok-workbench-pr25-v2`, existing VibeSpace localhost/profile, separate Codex desktop coordinator, unrelated worktrees/processes, and all production state remain untouched.                                                                                                                                                                                                                                                                                                                                                             |
 
+## 2026-08-05 - PR31 shard 7 Skill Editor reliability
+
+- Controller: `/root`
+- Task: `VS-ROOT-20260805T184900Z-SHARD7-RELIABILITY`
+- Starting HEAD: `6bc87ae`
+- Owned paths: `app/src/features/skills/SkillEditor.emojiPicker.test.tsx` and coordination records only.
+- Scope: preserve every shared emoji-picker assertion while giving the single load-sensitive render/interaction test a bounded shard budget.
+- Exclusions: production behavior, active Warm-theme work, `install/install.ps1`, external systems, dependencies, processes, subagents, and unrelated dirty work.
+- Verification: focused test, shard 7/8, TypeScript, formatting, diff hygiene, and added-line secret scan.
+- Status: `LOCALLY_COMPLETE_RELEASED`. Focused verification passes 1/1, shard 7/8 passes 122 files and 1,241 tests, and TypeScript passes; every behavior assertion remains unchanged.
+
+## 2026-08-05 - PR31 Warm V2 handoff integration
+
+- Controller: `/root`
+- Task: `VS-ROOT-20260805T185700Z-WARM-HANDOFF-INTEGRATION`
+- Starting HEAD: `0340b72`
+- Owned paths: the released eight-file Warm account/settings/benchmarks handoff plus coordination records.
+- Scope: independently verify exact changes, asset integrity, theme isolation, focused behavior, TypeScript, and production build before an exact-manifest commit.
+- Exclusions: every unrelated product/native/backend/cloud path, `install/install.ps1`, dependencies, processes, subagents, and unrelated dirty work.
+- Status: `LOCALLY_COMPLETE_RELEASED`. The focused Warm gate passes 3 files and 29 tests; all eight frontend shards, exact formatting, TypeScript, and the production build pass. Both selected WebP assets were hash-, size-, dimension-, and visually verified.
+
+## 2026-08-05 - PR31 final visual-authority synchronization
+
+- Controller: `/root`
+- Task: `VS-ROOT-20260805T191000Z-VISUAL-AUTHORITY-SYNC`
+- Starting HEAD: `f842393`
+- Owned paths: bounded MonoChrome native/schema/migration contracts, the MC9 baseline manifest/test, generated Sakura route/window manifests, and coordination records.
+- Scope: reconcile the seven stale final-gate assertions with current committed production capability, theme, and route authority; preserve every runtime/UI behavior and strict partition/least-privilege invariant.
+- Exclusions: product code, visual images/tolerances, `install/install.ps1`, external systems, dependencies, processes, subagents, and unrelated work. The MC9 manifest/test extension may only preserve the already-captured `settings--account.png` as immutable historical evidence after its current route-authority removal.
+- Status: `LOCALLY_COMPLETE_RELEASED`. The 111-image MC9 corpus remains complete; native authority is pinned to the exact introducing commit and current six-capability production closure while excluding the least-privilege test capability; all seven selectable themes are documented; and regenerated Sakura route/window manifests match current authority. Fresh MonoChrome verification passes 39/39, Sakura partition verification passes 3/3, and the combined release/security/visual gate passes 107/107. Formatting, diff hygiene, and added-line secret scanning are clean.
+
+## 2026-08-05 - PR31 Sakura evidence reconciliation
+
+- Controller: `/root`
+- Task: `VS-ROOT-20260805T194800Z-SAKURA-EVIDENCE-RECONCILIATION`
+- Starting HEAD: `28b6755`
+- Owned paths: bounded Sakura scene/reference/motion evidence tests and manifests plus coordination records.
+- Scope: update six stale evidence assertions to the already committed, focused-test-proven full-bleed shell, approved 1600x1000 scene, bounded twelve-row petal authority, and current exact raw-spring locations while retaining strict safety and closure checks.
+- Exclusions: every production path, visual baselines/tolerances, `install/install.ps1`, external systems, dependencies, processes, subagents, and unrelated work.
+- Status: `LOCALLY_COMPLETE_RELEASED`. The evidence now binds exact full-bleed geometry, the owner-authorized 1600x1000 index scene extract and canonical SHA-256, twelve deterministic petals with bounded density profiles, and current raw-spring locations. Product Sakura verification passes 5 files / 22 tests and all eight script contracts pass 50/50 while local-only, CSP, bounded-size, reduced-motion, no-timer/random/fetch, and complete motion-closure assertions remain strict.
+
+## 2026-08-05 - PR31 Jarvis learning write threshold
+
+- Controller: `/root`
+- Task: `VS-ROOT-20260805T200500Z-LEARNING-WRITE-THRESHOLD`
+- Starting HEAD: `b8aada6`
+- Owned paths: Jarvis learning listener plus its focused listener/file tests and coordination records.
+- Scope: keep automatic learning memory-only through nineteen qualifying user messages, write `learning.md` once when message twenty triggers evaluation, preserve explicit/manual persistence, and prove private Markdown remains under the existing VibeSpace Tauri app-data/account-isolation root.
+- Exclusions: changed inference semantics, evidence/AllAboutMe behavior, unrelated product/native/backend/cloud paths, `install/install.ps1`, dependencies, processes, subagents, and unrelated work.
+- Status: `LOCALLY_COMPLETE_RELEASED`. RED proved counter-only writes occurred after nineteen messages and during a one-message account switch. Automatic message/inference mutations now bypass generic profile persistence; messages 1–19 remain memory-only, message 20 performs one evaluated durable write, and pre-threshold account switches create no file. Explicit/manual persistence remains intact. The path contract proves `learning.md` stays inside the Tauri VibeSpace app-data root under a SHA-256-isolated account directory. Focused verification passes 3 files / 30 tests.
+
 ## 2026-07-19 - Task 20A accepted, Sol high override restored, and Task 20B exact lock acquired
 
 | Field                              | Coordination record                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |

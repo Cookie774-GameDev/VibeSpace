@@ -6,7 +6,7 @@
  */
 import { useAuthStore } from '@/stores/auth';
 import { isTauri } from '@/lib/utils';
-import { syncDiscoveredOllamaModels } from './models';
+import { getDiscoveredOllamaModels, syncDiscoveredOllamaModels } from './models';
 import {
   ensureOllamaReadySilent,
   invalidateOllamaReadyCache,
@@ -15,6 +15,7 @@ import {
   normalizeStoredOllamaEndpoint,
   type OllamaEnsureStatus,
 } from './providers/ollama';
+import { refreshOpenCodeLocalModelRuntime } from '@/lib/harness/localModelRuntimeRefresh';
 
 export interface OllamaBootstrapResult {
   ready: boolean;
@@ -23,16 +24,65 @@ export interface OllamaBootstrapResult {
 }
 
 export interface OllamaBootstrapOptions {
-  /** Re-run even if a prior bootstrap is in flight. */
+  /** Bypass the recent-ready cache; an active bootstrap remains shared. */
   force?: boolean;
   /** Shorter wait when probing on web dev builds. */
   waitTimeoutMs?: number;
   signal?: AbortSignal;
 }
 
-let inFlightBootstrap: Promise<OllamaBootstrapResult> | null = null;
+interface OllamaBootstrapFlight {
+  promise: Promise<OllamaBootstrapResult>;
+  controller: AbortController;
+  subscribers: number;
+  settled: boolean;
+}
+
+let inFlightBootstrap: OllamaBootstrapFlight | null = null;
 let lastReadyAt = 0;
 const READY_RECENT_MS = 8_000;
+
+function abortError(): DOMException {
+  return new DOMException('Ollama bootstrap cancelled.', 'AbortError');
+}
+
+function subscribeToBootstrap(
+  flight: OllamaBootstrapFlight,
+  signal?: AbortSignal,
+): Promise<OllamaBootstrapResult> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  flight.subscribers += 1;
+
+  return new Promise<OllamaBootstrapResult>((resolve, reject) => {
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      flight.subscribers = Math.max(0, flight.subscribers - 1);
+      if (flight.subscribers === 0 && !flight.settled) flight.controller.abort();
+    };
+    const onAbort = () => {
+      signal?.removeEventListener('abort', onAbort);
+      release();
+      reject(abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    flight.promise.then(
+      (result) => {
+        if (released) return;
+        signal?.removeEventListener('abort', onAbort);
+        release();
+        resolve(result);
+      },
+      (error) => {
+        if (released) return;
+        signal?.removeEventListener('abort', onAbort);
+        release();
+        reject(error);
+      },
+    );
+  });
+}
 
 function modelNamesMatch(installed: string, preferred: string): boolean {
   const a = installed.trim().toLowerCase();
@@ -62,6 +112,7 @@ export function sanitizeOllamaEndpointFromStore(): void {
 }
 
 export function invalidateOllamaBootstrap(): void {
+  inFlightBootstrap?.controller.abort();
   inFlightBootstrap = null;
   lastReadyAt = 0;
   invalidateOllamaReadyCache();
@@ -92,8 +143,13 @@ async function runBootstrap(options: OllamaBootstrapOptions = {}): Promise<Ollam
   }
 
   if (!status.ready) {
-    syncDiscoveredOllamaModels([]);
-    return { ready: false, status, modelCount: 0 };
+    // Keep the last verified catalog. A brief probe failure must not wipe
+    // discovered models and block chat sends while Ollama is still connected.
+    return {
+      ready: false,
+      status,
+      modelCount: getDiscoveredOllamaModels().length,
+    };
   }
 
   let models = await listOllamaModelInfo(options.signal);
@@ -105,8 +161,15 @@ async function runBootstrap(options: OllamaBootstrapOptions = {}): Promise<Ollam
   }
 
   const names = models.map((model) => model.name);
+  const previousNames = getDiscoveredOllamaModels();
+  const modelSetChanged =
+    names.length !== previousNames.length ||
+    names.some((name, index) => name !== previousNames[index]);
   syncDiscoveredOllamaModels(names);
   reconcileDefaultLocalModel(names);
+  if (names.length > 0 && modelSetChanged) {
+    await refreshOpenCodeLocalModelRuntime();
+  }
 
   if (names.length > 0) {
     lastReadyAt = Date.now();
@@ -126,13 +189,24 @@ async function runBootstrap(options: OllamaBootstrapOptions = {}): Promise<Ollam
 export async function bootstrapOllamaConnection(
   options: OllamaBootstrapOptions = {},
 ): Promise<OllamaBootstrapResult> {
+  if (options.signal?.aborted) throw abortError();
+
   if (
     !options.force &&
     !inFlightBootstrap &&
     lastReadyAt > 0 &&
     Date.now() - lastReadyAt < READY_RECENT_MS
   ) {
-    const names = await listOllamaModelInfo(options.signal).catch(() => []);
+    let names: Awaited<ReturnType<typeof listOllamaModelInfo>>;
+    try {
+      names = await listOllamaModelInfo(options.signal);
+    } catch (error) {
+      if (options.signal?.aborted || (error as Error)?.name === 'AbortError') {
+        throw (error as Error)?.name === 'AbortError' ? error : abortError();
+      }
+      names = [];
+    }
+    if (options.signal?.aborted) throw abortError();
     if (names.length > 0) {
       return {
         ready: true,
@@ -150,16 +224,27 @@ export async function bootstrapOllamaConnection(
   }
 
   if (options.force) {
-    invalidateOllamaBootstrap();
+    lastReadyAt = 0;
+    invalidateOllamaReadyCache();
   }
 
   if (inFlightBootstrap) {
-    return inFlightBootstrap;
+    return subscribeToBootstrap(inFlightBootstrap, options.signal);
   }
 
-  inFlightBootstrap = runBootstrap(options).finally(() => {
-    inFlightBootstrap = null;
+  const controller = new AbortController();
+  let flight!: OllamaBootstrapFlight;
+  const promise = runBootstrap({ ...options, signal: controller.signal }).finally(() => {
+    flight.settled = true;
+    if (inFlightBootstrap === flight) inFlightBootstrap = null;
   });
+  flight = {
+    controller,
+    subscribers: 0,
+    settled: false,
+    promise,
+  };
+  inFlightBootstrap = flight;
 
-  return inFlightBootstrap;
+  return subscribeToBootstrap(flight, options.signal);
 }

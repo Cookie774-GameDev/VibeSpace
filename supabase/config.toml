@@ -102,7 +102,7 @@ openai_api_key = "env(OPENAI_API_KEY)"
 
 # Email testing server. Emails sent with the local dev setup are not actually sent - rather, they
 # are monitored, and you can view the emails that would have been sent from the web interface.
-[inbucket]
+[local_smtp]
 enabled = true
 # Port to use for the email testing server web interface.
 port = 54324
@@ -246,11 +246,19 @@ otp_expiry = 3600
 # Uncomment to customize email template
 [auth.email.template.confirmation]
 subject = "Your VibeSpace verification code"
-content_path = "./templates/confirmation.html"
+content_path = "./supabase/templates/confirmation.html"
 
 [auth.email.template.magic_link]
 subject = "Your VibeSpace sign-in code"
-content_path = "./templates/magic_link.html"
+content_path = "./supabase/templates/magic_link.html"
+
+[auth.email.template.recovery]
+subject = "Your VibeSpace password recovery code"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.email.template.email_change]
+subject = "Confirm your VibeSpace email change"
+content_path = "./supabase/templates/email_change.html"
 
 # [auth.email.template.invite]
 # subject = "You have been invited"
@@ -398,6 +406,9 @@ deno_version = 2
 [functions.stripe-webhook]
 verify_jwt = false
 
+[functions.telnyx-call-webhook]
+verify_jwt = false
+
 [functions.call-status]
 verify_jwt = false
 
@@ -423,6 +434,9 @@ verify_jwt = true
 [functions.create-checkout-session]
 verify_jwt = true
 
+[functions.telemetry-consent]
+verify_jwt = true
+
 [functions.create-customer-portal]
 verify_jwt = true
 
@@ -436,6 +450,9 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.call-start]
+verify_jwt = true
+
+[functions.third-party-call]
 verify_jwt = true
 
 [functions.sms-send]
@@ -454,6 +471,18 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.github-context]
+verify_jwt = true
+
+[functions.jarvis-proxy]
+verify_jwt = true
+
+[functions.wallpaper-catalog]
+verify_jwt = true
+
+[functions.wallpaper-download-url]
+verify_jwt = true
+
+[functions.wallpaper-redeem-orbit]
 verify_jwt = true
 
 # [edge_runtime.secrets]

@@ -5,11 +5,13 @@ import { ActivityRow, ChatActivityTimeline, summarizeChatActivity } from './Chat
 import { useChatActivityStore } from './activityStore';
 import type { ChatActivityEvent } from './types';
 import { useJarvisTaskRunStore } from '@/features/jarvis-runs/taskRunStore';
+import { chatActivityPreferences } from './chatActivityPreferences';
 
 describe('ChatActivityTimeline always-visible session panel', () => {
   beforeEach(() => {
     useChatActivityStore.setState({ eventsByChat: {} });
     useJarvisTaskRunStore.getState().clearForTests();
+    chatActivityPreferences.setShowSessionPanel(true);
   });
 
   it('renders the Jarvis session dashboard even with no activity events', () => {

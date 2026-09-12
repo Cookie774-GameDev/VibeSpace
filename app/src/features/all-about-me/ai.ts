@@ -111,15 +111,14 @@ export async function generateAllAboutMeMarkdown(
   complete: AllAboutMeCompletion,
   existingMarkdown?: string,
 ): Promise<string> {
-  try {
-    const prompt = existingMarkdown?.trim()
-      ? buildAllAboutMeRetakeUpdatePrompt({ existingMarkdown, answers })
-      : buildAllAboutMeGenerationPrompt(answers);
-    const markdown = cleanModelMarkdown(await complete(prompt));
-    return validAllAboutMeMarkdown(markdown) ? markdown : buildAllAboutMeMarkdown(answers);
-  } catch {
-    return buildAllAboutMeMarkdown(answers);
-  }
+  // Network / runtime failures propagate so the UI can show actionable errors.
+  // Only fall back to the deterministic template when the model responds with
+  // unusable markdown (not when the local/cloud runtime is down).
+  const prompt = existingMarkdown?.trim()
+    ? buildAllAboutMeRetakeUpdatePrompt({ existingMarkdown, answers })
+    : buildAllAboutMeGenerationPrompt(answers);
+  const markdown = cleanModelMarkdown(await complete(prompt));
+  return validAllAboutMeMarkdown(markdown) ? markdown : buildAllAboutMeMarkdown(answers);
 }
 
 export async function reviseAllAboutMeMarkdown(

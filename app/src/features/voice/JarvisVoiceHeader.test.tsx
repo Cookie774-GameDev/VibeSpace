@@ -32,9 +32,10 @@ describe('JarvisVoiceHeader accessibility', () => {
     const status = screen.getByRole('status');
     expect(status.getAttribute('aria-live')).toBe('polite');
     expect(status.getAttribute('aria-atomic')).toBe('true');
-    expect(status.textContent).toContain('Listening - say "send it" to send');
-    expect(status.classList.contains('text-xs')).toBe(true);
-    expect(screen.getByText('Jarvis').classList.contains('text-xs')).toBe(true);
+    expect(status.textContent).toContain('Listening');
+    expect(status.getAttribute('title')).toContain('Listening - say "send it" to send');
+    expect(status.classList.contains('jarvis-voice-status')).toBe(true);
+    expect(screen.getByText('Jarvis').classList.contains('jarvis-voice-title')).toBe(true);
     expect(screen.getByTestId('voice-waveform').getAttribute('aria-hidden')).toBe('true');
   });
 

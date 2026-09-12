@@ -8,8 +8,8 @@
  * is a near-clone of `providers/openai.ts` with three differences:
  *   - the API URL points at api.groq.com,
  *   - the API key is read from `apiKeys.groq`,
- *   - the default model is Llama-3.3-70B-Versatile, which Groq serves on
- *     its free tier at sub-second TTFT.
+ *   - the default model is Groq's current GPT-OSS 20B chat ID. Live
+ *     `/openai/v1/models` remains the catalog authority.
  *
  * Why this matters for Jarvis: the user can sign up at
  * `https://console.groq.com/keys` for free (no card), paste the
@@ -27,16 +27,44 @@ import {
   systemPromptForRequest,
 } from '../types';
 import { useAuthStore } from '@/stores/auth';
+import { nativeFetch } from '@/lib/nativeFetch';
 import { parseSSE } from './sse';
+import { sanitizeReasoningProviderOptions } from '../reasoningControls';
 
 const API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 /**
- * Default Groq model. Llama-3.3-70B-Versatile is the highest-quality
- * model on Groq's free tier today; if it's deprecated upstream, callers
- * pin a different value via `agent.model.model`.
+ * Default Groq model when discovery has not returned yet. Retired Llama
+ * and Mixtral IDs are not advertised.
  */
-export const GROQ_DEFAULT_MODEL = 'llama-3.3-70b-versatile';
+export const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-20b';
+
+export function buildGroqRequestBody(req: LLMRequest) {
+  const model = req.agent.model.model || GROQ_DEFAULT_MODEL;
+  const systemPrompt = systemPromptForRequest(req);
+  const messages = [
+    { role: 'system' as const, content: systemPrompt },
+    ...req.messages
+      .filter((message) => message.role !== 'system')
+      .map((message) => ({
+        role: message.role,
+        content: llmContentToText(message.content),
+      })),
+  ];
+  const reasoning = sanitizeReasoningProviderOptions(
+    { providerId: 'groq', modelId: model },
+    req.provider_options,
+  );
+  return {
+    model,
+    messages,
+    stream: true,
+    stream_options: { include_usage: true },
+    temperature: req.temperature ?? req.agent.temperature ?? 0.7,
+    max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
+    ...reasoning,
+  };
+}
 
 export const groqProvider: LLMProvider = {
   id: 'groq',
@@ -52,32 +80,9 @@ export const groqProvider: LLMProvider = {
     if (!apiKey) throw new Error('Groq API key not set');
 
     const model = req.agent.model.model || GROQ_DEFAULT_MODEL;
-    const systemPrompt = systemPromptForRequest(req);
+    const body = buildGroqRequestBody(req);
 
-    // Same shape as OpenAI: system prompt as a leading system message,
-    // user/assistant messages follow. Strip any pre-existing system
-    // entries from the user list so we don't end up with duplicates.
-    const messages = [
-      { role: 'system' as const, content: systemPrompt },
-      ...req.messages
-        .filter((m) => m.role !== 'system')
-        .map((m) => ({
-          role: m.role,
-          content: llmContentToText(m.content),
-        })),
-    ];
-
-    const body = {
-      model,
-      messages,
-      stream: true,
-      // Groq honours stream_options.include_usage just like OpenAI.
-      stream_options: { include_usage: true },
-      temperature: req.temperature ?? req.agent.temperature ?? 0.7,
-      max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
-    };
-
-    const res = await fetch(API_URL, {
+    const res = await nativeFetch(API_URL, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -149,7 +154,7 @@ export const groqProvider: LLMProvider = {
     }
 
     if (inputTokens === 0) {
-      const inputText = messages.map((m) => m.content).join('\n');
+      const inputText = body.messages.map((message) => message.content).join('\n');
       inputTokens = estimateInputTokens(inputText);
     }
     if (outputTokens === 0) outputTokens = estimateInputTokens(acc);

@@ -1,0 +1,19 @@
+{
+  "name": "@vibespace/ai-news-worker",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled --config wrangler.jsonc",
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "setup:free": "node scripts/setup-free.mjs",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.jsonc",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.45.0"
+  }
+}

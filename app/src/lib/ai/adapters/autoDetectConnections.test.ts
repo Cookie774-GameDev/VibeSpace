@@ -291,20 +291,27 @@ describe('automatic external CLI connection detection', () => {
     expect(JSON.stringify(write.mock.calls)).not.toContain(secret);
   });
 
-  it('runs at most once per app session and shares the in-flight scan', async () => {
+  it('shares an in-flight scan, caches briefly, and supports post-login invalidation', async () => {
     let release: (() => void) | undefined;
-    const detect = vi.fn(
-      () =>
-        new Promise<{ status: 'unavailable' }>((resolve) => {
+    let calls = 0;
+    const detect = vi.fn(() => {
+      calls += 1;
+      if (calls > 1) return Promise.resolve({ status: 'unavailable' as const });
+      return new Promise<{ status: 'unavailable' }>((resolve) => {
           release = () => resolve({ status: 'unavailable' });
-        }),
-    );
+        });
+    });
+    let now = 1_000;
     const detector = createExternalConnectionAutoDetector(
-      dependencies({
+      {
+        ...dependencies({
         adapters: {
           'openai-codex-adapter': { id: 'openai-codex-adapter', detect },
         },
-      }),
+        }),
+        now: () => now,
+      },
+      60_000,
     );
 
     const first = detector.ensure();
@@ -315,5 +322,13 @@ describe('automatic external CLI connection detection', () => {
     await first;
     await detector.ensure();
     expect(detect).toHaveBeenCalledOnce();
+
+    detector.invalidate();
+    await detector.ensure();
+    expect(detect).toHaveBeenCalledTimes(2);
+
+    now += 60_001;
+    await detector.ensure();
+    expect(detect).toHaveBeenCalledTimes(3);
   });
 });

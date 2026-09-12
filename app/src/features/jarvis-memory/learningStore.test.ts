@@ -96,20 +96,21 @@ describe('Jarvis learning memory', () => {
     );
   });
 
-  it('evaluates after ten meaningful messages and excludes progress/system noise', () => {
+  it('evaluates after twenty meaningful messages and excludes progress/system noise', () => {
     const store = useJarvisLearningStore.getState();
     expect(store.recordUserMessage({ text: '2/5 steps completed' }).qualifies).toBe(false);
     expect(store.recordUserMessage({ text: '[system retry] provider failed' }).qualifies).toBe(
       false,
     );
-    for (let index = 1; index <= 9; index += 1) {
+    for (let index = 1; index <= 19; index += 1) {
       expect(
         store.recordUserMessage({ text: `Meaningful preference statement number ${index}` })
           .evaluateNow,
       ).toBe(false);
     }
     expect(
-      store.recordUserMessage({ text: 'The tenth meaningful preference statement' }).evaluateNow,
+      store.recordUserMessage({ text: 'The twentieth meaningful preference statement' })
+        .evaluateNow,
     ).toBe(true);
   });
 

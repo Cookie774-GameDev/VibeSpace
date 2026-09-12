@@ -1,7 +1,7 @@
 // Shared budget/plan/Twilio helpers for messaging + calling + SMS Edge Functions.
 // Deno runtime. Server-side only. Never bundled into the desktop app.
 
-import { json } from './voice.ts';
+import { json } from './voice';
 
 export { json };
 

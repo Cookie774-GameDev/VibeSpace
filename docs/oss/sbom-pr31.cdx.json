@@ -1,0 +1,254 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:npm/jarvis@1.5.0",
+      "name": "VibeSpace",
+      "version": "1.5.0"
+    },
+    "properties": [
+      {
+        "name": "vibespace:scope",
+        "value": "PR31 additive dependencies and grammar assets only"
+      },
+      {
+        "name": "vibespace:installer-measurement",
+        "value": "not-claimed"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/gpt-tokenizer@3.4.0",
+      "name": "gpt-tokenizer",
+      "version": "3.4.0",
+      "scope": "required",
+      "purl": "pkg:npm/gpt-tokenizer@3.4.0",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-wxFLnhIXTDjYebd9A9pGl3e31ZpSypbpIJSOswbgop5jLte/AsZVDvjlbEuVFlsqZixVKqbcoNmRlFDf6pz/UQ==" },
+        { "name": "vcs:commit", "value": "7f880f46bb34a644ec8f9b3069060b2d2f99e11c" },
+        { "name": "vcs:repository", "value": "https://github.com/niieani/gpt-tokenizer" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40huggingface/tokenizers@0.1.3",
+      "name": "@huggingface/tokenizers",
+      "version": "0.1.3",
+      "scope": "required",
+      "purl": "pkg:npm/%40huggingface/tokenizers@0.1.3",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-8rF/RRT10u+kn7YuUbUg0OF30K8rjTc78aHpxT+qJ1uWSqxT1MHi8+9ltwYfkFYJzT/oS+qw3JVfHtNMGAdqyA==" },
+        { "name": "vcs:commit", "value": "d6fc380d3d4efec25eb1a132bb0cf4f32d618b6c" },
+        { "name": "vcs:repository", "value": "https://github.com/huggingface/tokenizers.js" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/web-tree-sitter@0.26.11",
+      "name": "web-tree-sitter",
+      "version": "0.26.11",
+      "scope": "required",
+      "purl": "pkg:npm/web-tree-sitter@0.26.11",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-Q5Dm3YTIXSXuH6FxX6RuzX2Qwpc4DPGiYMU87Wg5Z8OIStiQFiUex4zMDc0vBTw78EphaYJacncJghCHzbZptg==" },
+        { "name": "vcs:commit", "value": "64402de2857cc197ecc4ca3bc144ea91fda7e72e" },
+        { "name": "vcs:repository", "value": "https://github.com/tree-sitter/tree-sitter" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40repomix/tree-sitter-wasms@0.1.17",
+      "name": "@repomix/tree-sitter-wasms",
+      "version": "0.1.17",
+      "scope": "required",
+      "purl": "pkg:npm/%40repomix/tree-sitter-wasms@0.1.17",
+      "licenses": [{ "license": { "id": "Unlicense" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-tc3HnFqdMF1pXhIMzG3aTaBDpIiHK2tPfn3fwqA6P3WTbHa+1EuuTubbKshvmN7xCHP5Ojz0/VW4R+XvR88KOw==" },
+        { "name": "vcs:commit", "value": "1876d74fb86d4e45efade2176b71d776f430e7e6" },
+        { "name": "vcs:repository", "value": "https://github.com/repomix/tree-sitter-wasms" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/tree-sitter-json@0.24.8",
+      "name": "tree-sitter-json",
+      "version": "0.24.8",
+      "scope": "required",
+      "purl": "pkg:npm/tree-sitter-json@0.24.8",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-Tc9ZZYwHyWZ3Tt1VEw7Pa2scu1YO7/d2BCBbKTx5hXwig3UfdQjsOPkPyLpDJOn/m1UBEWYAtSdGAwCSyagBqQ==" },
+        { "name": "vcs:commit", "value": "ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24" },
+        { "name": "vcs:repository", "value": "https://github.com/tree-sitter/tree-sitter-json" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40opentelemetry/api@1.9.1",
+      "name": "@opentelemetry/api",
+      "version": "1.9.1",
+      "scope": "required",
+      "purl": "pkg:npm/%40opentelemetry/api@1.9.1",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==" },
+        { "name": "vcs:commit", "value": "7e74509a4d848e94b2970bb5262dd3e8efeed0a2" },
+        { "name": "vcs:repository", "value": "https://github.com/open-telemetry/opentelemetry-js" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40opentelemetry/sdk-trace-base@2.10.0",
+      "name": "@opentelemetry/sdk-trace-base",
+      "version": "2.10.0",
+      "scope": "required",
+      "purl": "pkg:npm/%40opentelemetry/sdk-trace-base@2.10.0",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-GuYQQT7QD2EeO8lcZLRQzcbOyhqAzL+6WWTKTU9mSUBYBazkEDl+VrQcXQhbB08OWM9anD1aHleVadzulpOaUQ==" },
+        { "name": "vcs:commit", "value": "76fa6b509e2b48d9cbee31cb37a2efc61dc4d384" },
+        { "name": "vcs:repository", "value": "https://github.com/open-telemetry/opentelemetry-js" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40modelcontextprotocol/sdk@1.30.0",
+      "name": "@modelcontextprotocol/sdk",
+      "version": "1.30.0",
+      "scope": "required",
+      "purl": "pkg:npm/%40modelcontextprotocol/sdk@1.30.0",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==" },
+        { "name": "vcs:commit", "value": "2d889f2b329e46680ec9bdd565de4616c497825a" },
+        { "name": "vcs:repository", "value": "https://github.com/modelcontextprotocol/typescript-sdk" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/playwright-core@1.61.1",
+      "name": "playwright-core",
+      "version": "1.61.1",
+      "scope": "optional",
+      "purl": "pkg:npm/playwright-core@1.61.1",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg==" },
+        { "name": "vcs:commit", "value": "39e3553a4f283a41134d75d7e404484bd9e6865a" },
+        { "name": "vcs:repository", "value": "https://github.com/microsoft/playwright" },
+        { "name": "vibespace:distribution", "value": "development-and-optional-feature-pack" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40playwright/test@1.61.1",
+      "name": "@playwright/test",
+      "version": "1.61.1",
+      "scope": "excluded",
+      "purl": "pkg:npm/%40playwright/test@1.61.1",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-8nKv6+0RJSL9FE4jYOEGXnPeM/Hg12qZpmqzZjRh3qM0Y7c3z1mrOTfFLids72RDQYVh9WpLEfR5WdpNX4fkig==" },
+        { "name": "vcs:commit", "value": "39e3553a4f283a41134d75d7e404484bd9e6865a" },
+        { "name": "vcs:repository", "value": "https://github.com/microsoft/playwright" },
+        { "name": "vibespace:distribution", "value": "development-only" }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:npm/promptfoo@0.121.20",
+      "name": "promptfoo",
+      "version": "0.121.20",
+      "scope": "excluded",
+      "purl": "pkg:npm/promptfoo@0.121.20",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "npm:integrity", "value": "sha512-EgUwvF+mc7JGkCrf2eeBOjDD7XcX4rFuY5VMk53G9cEz398BcWH0RkYiov/iGZJEuILv7wzPqxxXPvxzUBgsXQ==" },
+        { "name": "vcs:commit", "value": "82ca3c24ec445cf1734face46042c187b659b954" },
+        { "name": "vcs:repository", "value": "https://github.com/promptfoo/promptfoo" },
+        { "name": "vibespace:distribution", "value": "development-only-not-installed" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "grammar:typescript@0.23.2",
+      "name": "tree-sitter-typescript grammar",
+      "version": "0.23.2",
+      "scope": "required",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "vcs:commit", "value": "f975a621f4e7f532fe322e13c4f79495e0a7b2e7" },
+        { "name": "vibespace:grammar-artifact", "value": "tree-sitter-typescript.wasm" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "grammar:tsx@0.23.2",
+      "name": "tree-sitter-tsx grammar",
+      "version": "0.23.2",
+      "scope": "required",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "vcs:commit", "value": "f975a621f4e7f532fe322e13c4f79495e0a7b2e7" },
+        { "name": "vibespace:grammar-artifact", "value": "tree-sitter-tsx.wasm" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "grammar:javascript@0.25.0",
+      "name": "tree-sitter-javascript grammar",
+      "version": "0.25.0",
+      "scope": "required",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "vcs:commit", "value": "44c892e0be055ac465d5eeddae6d3e194424e7de" },
+        { "name": "vibespace:grammar-artifact", "value": "tree-sitter-javascript.wasm" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "grammar:rust@0.24.0",
+      "name": "tree-sitter-rust grammar",
+      "version": "0.24.0",
+      "scope": "required",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "vcs:commit", "value": "18b0515fca567f5a10aee9978c6d2640e878671a" },
+        { "name": "vibespace:grammar-artifact", "value": "tree-sitter-rust.wasm" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "grammar:python@0.25.0",
+      "name": "tree-sitter-python grammar",
+      "version": "0.25.0",
+      "scope": "required",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "vcs:commit", "value": "293fdc02038ee2bf0e2e206711b69c90ac0d413f" },
+        { "name": "vibespace:grammar-artifact", "value": "tree-sitter-python.wasm" }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "grammar:json@0.24.8",
+      "name": "tree-sitter-json grammar",
+      "version": "0.24.8",
+      "scope": "required",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [
+        { "name": "vcs:commit", "value": "ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24" },
+        { "name": "vibespace:grammar-artifact", "value": "tree-sitter-json.wasm" }
+      ]
+    }
+  ]
+}

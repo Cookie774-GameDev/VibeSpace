@@ -1,0 +1,9 @@
+# Default review ownership
+* @Cookie774-GameDev
+
+# High-risk backend and release surfaces
+/supabase/ @Cookie774-GameDev
+/.github/workflows/ @Cookie774-GameDev
+/app/src-tauri/ @Cookie774-GameDev
+/releases/ @Cookie774-GameDev
+/install/ @Cookie774-GameDev

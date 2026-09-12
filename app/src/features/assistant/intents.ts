@@ -12,6 +12,7 @@
  *   4. Add a preview line in `AssistantBar.previewIntent`.
  */
 import type { WallpaperId, WorkbenchPanelKind } from '@/features/workbench/types';
+import type { Route } from '@/features/navigation/routeSchema';
 
 export type AssistantIntent =
   /** "create project tiger" */
@@ -84,7 +85,8 @@ export type AssistantIntent =
    */
   | {
       kind: 'navigate';
-      route: 'chat' | 'workbench' | 'terminal' | 'kanban' | 'schedule' | 'agents' | 'context' | 'skills' | 'benchmarks' | 'history' | 'tools' | 'files';
+      route: Route;
+      selector?: string;
     }
   /** "create project tiger then open 4 terminals" */
   | { kind: 'multi_step'; steps: AssistantIntent[] }

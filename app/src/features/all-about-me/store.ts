@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   ALL_ABOUT_ME_UPDATE_INTERVAL,
   buildAllAboutMeMarkdown,
+  shouldUpdateAllAboutMe,
   type AllAboutMeAnswers,
 } from './profile';
 import { sanitizeAllAboutMeMarkdown } from './allAboutMeSecurity';
@@ -90,13 +91,20 @@ export const useAllAboutMeStore = create<AllAboutMeState>()((set, get) => ({
 
   recordUserMessage: () => set((state) => ({ totalUserMessages: state.totalUserMessages + 1 })),
 
-  // All About Me is an intentional stable profile. Automatic interaction
-  // preferences belong exclusively to the account-scoped learning.md
-  // store, so the legacy runtime cadence is declined at its existing gate.
-  needsLearningUpdate: () => false,
+  needsLearningUpdate: () => {
+    const state = get();
+    return (
+      state.learningEnabled &&
+      Boolean(state.markdown.trim()) &&
+      shouldUpdateAllAboutMe({
+        totalUserMessages: state.totalUserMessages,
+        lastUpdatedAtMessageCount: state.lastUpdatedAtMessageCount,
+      })
+    );
+  },
 
-  // The runtime may still call this for an explicit user-requested profile
-  // refresh. Automatic calls are prevented by needsLearningUpdate().
+  // Revisions remain sanitized and update the durable cadence marker whether
+  // triggered automatically or by an explicit user request.
   applyLearningRevision: (markdown) => {
     const next = sanitizeAllAboutMeMarkdown(markdown);
     if (!next) return;

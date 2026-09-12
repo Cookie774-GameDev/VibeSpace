@@ -1,33 +1,100 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { canonicalRemoteMcpEndpoint } from '@/lib/mcp/remoteAuthorization';
-import { remoteMcpSetupRuntime, type RemoteMcpSetupRuntime } from '@/lib/mcp/remoteSetupRuntime';
+import { getVibeSpaceMcpGateway, type VibeSpaceMcpGateway } from '@/lib/mcp/vibeSpaceGateway';
+import { useAuthStore } from '@/stores/auth';
 
 const SAFE_SERVER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const SAFE_CONNECTION_ERROR = 'Unable to connect to this MCP server.';
 
 export interface McpConnectionsProps {
-  readonly runtime?: RemoteMcpSetupRuntime;
+  readonly runtime?: VibeSpaceMcpGateway;
 }
 
 interface ReviewedConnection {
+  readonly name: string;
+  readonly description: string;
   readonly id: string;
   readonly endpoint: string;
+  readonly transport: 'streamable_http';
+  readonly authentication: 'none';
 }
 
-export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectionsProps) {
+interface McpOperationScope {
+  readonly accountId: string;
+  readonly projectId: string;
+  readonly runtime: VibeSpaceMcpGateway;
+  readonly generation: number;
+  readonly controller: AbortController;
+}
+
+export function McpConnections({ runtime: configuredRuntime }: McpConnectionsProps) {
+  const accountId = useAuthStore(
+    (state) => state.cloudSession?.user_id ?? state.localUserId ?? 'local_account',
+  );
+  const projectId = useAuthStore(
+    (state) => state.projectId ?? state.workspaceId ?? 'default_project',
+  );
+  const runtime = useMemo(
+    () =>
+      configuredRuntime ??
+      getVibeSpaceMcpGateway({
+        accountId,
+        projectId,
+      }),
+    [accountId, configuredRuntime, projectId],
+  );
+  const operationScopeRef = useRef<McpOperationScope | undefined>(undefined);
+  const previousScope = operationScopeRef.current;
+  if (
+    !previousScope ||
+    previousScope.accountId !== accountId ||
+    previousScope.projectId !== projectId ||
+    previousScope.runtime !== runtime
+  ) {
+    previousScope?.controller.abort();
+    operationScopeRef.current = {
+      accountId,
+      projectId,
+      runtime,
+      generation: (previousScope?.generation ?? 0) + 1,
+      controller: new AbortController(),
+    };
+  }
+  const operationScope = operationScopeRef.current!;
   const connections = useSyncExternalStore(
     runtime.subscribe,
     runtime.getSnapshot,
     runtime.getSnapshot,
   );
   const [id, setId] = useState('');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [endpoint, setEndpoint] = useState('');
   const [reviewed, setReviewed] = useState<ReviewedConnection>();
   const [authorized, setAuthorized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+
+  const operationIsCurrent = (candidate: McpOperationScope) =>
+    operationScopeRef.current === candidate && !candidate.controller.signal.aborted;
+
+  useEffect(() => {
+    setId('');
+    setName('');
+    setDescription('');
+    setEndpoint('');
+    setReviewed(undefined);
+    setAuthorized(false);
+    setBusy(false);
+    setError(undefined);
+    return () => {
+      if (operationScopeRef.current === operationScope) {
+        operationScope.controller.abort();
+      }
+    };
+  }, [operationScope]);
 
   const invalidateReview = () => {
     setReviewed(undefined);
@@ -40,8 +107,12 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
       const reviewedId = id.trim();
       if (!SAFE_SERVER_ID.test(reviewedId)) throw new Error('Invalid MCP server id.');
       setReviewed({
+        name: name.trim() || reviewedId,
+        description: description.trim(),
         id: reviewedId,
         endpoint: canonicalRemoteMcpEndpoint(endpoint),
+        transport: 'streamable_http',
+        authentication: 'none',
       });
       setAuthorized(false);
       setError(undefined);
@@ -54,22 +125,47 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
 
   const connect = async () => {
     if (!reviewed || !authorized || busy) return;
+    const scope = operationScope;
     setBusy(true);
     setError(undefined);
     try {
-      await runtime.connect({
+      await scope.runtime.connect({
         id: reviewed.id,
         endpoint: reviewed.endpoint,
         confirmedByUser: true,
       });
+      if (!operationIsCurrent(scope)) return;
       setId('');
+      setName('');
+      setDescription('');
       setEndpoint('');
       setReviewed(undefined);
       setAuthorized(false);
     } catch {
+      if (!operationIsCurrent(scope)) return;
       setError(SAFE_CONNECTION_ERROR);
     } finally {
-      setBusy(false);
+      if (operationIsCurrent(scope)) setBusy(false);
+    }
+  };
+
+  const runGatewayAction = async (action: () => Promise<void>) => {
+    const scope = operationScope;
+    setError(undefined);
+    try {
+      await action();
+    } catch {
+      if (!operationIsCurrent(scope)) return;
+      setError(SAFE_CONNECTION_ERROR);
+    }
+  };
+
+  const approveProfile = (connectionId: string) => {
+    setError(undefined);
+    try {
+      runtime.approve(connectionId, { confirmedByUser: true });
+    } catch {
+      setError(SAFE_CONNECTION_ERROR);
     }
   };
 
@@ -80,19 +176,44 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
     >
       <div>
         <h2 id="mcp-connections-title" className="text-lg font-semibold text-foreground">
-          MCP Connections
+          VibeSpace MCP Gateway
         </h2>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Connect through credentialless Streamable HTTP. Every discovered tool stays off until you
-          allow it explicitly.
+          One trusted gateway for approved capabilities. Connect through credentialless Streamable
+          HTTP; every discovered tool stays off until you allow it explicitly.
         </p>
         <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
-          This flow does not launch local processes or accept commands, executables, API keys,
-          tokens, or passwords.
+          This flow does not launch local processes or accept commands, credentials, or raw secrets.
         </p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-sm text-foreground">
+          Name
+          <input
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value);
+              invalidateReview();
+            }}
+            maxLength={80}
+            autoComplete="off"
+          />
+        </label>
+        <label className="grid gap-1 text-sm text-foreground">
+          Description
+          <input
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+            value={description}
+            onChange={(event) => {
+              setDescription(event.target.value);
+              invalidateReview();
+            }}
+            maxLength={240}
+            autoComplete="off"
+          />
+        </label>
         <label className="grid gap-1 text-sm text-foreground">
           Server identifier
           <input
@@ -120,6 +241,28 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
           />
         </label>
       </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-sm text-foreground">
+          Transport
+          <select
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+            value="streamable_http"
+            disabled
+          >
+            <option value="streamable_http">Streamable HTTP</option>
+          </select>
+        </label>
+        <label className="grid gap-1 text-sm text-foreground">
+          Authentication
+          <select
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+            value="none"
+            disabled
+          >
+            <option value="none">None (credentialless endpoint)</option>
+          </select>
+        </label>
+      </div>
       <Button type="button" size="sm" variant="outline" onClick={review}>
         Review MCP connection
       </Button>
@@ -131,12 +274,20 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
           className="space-y-3 rounded-lg border border-border bg-panel/60 p-3 [html[data-theme=monochrome]_&]:bg-panel"
         >
           <dl className="grid grid-cols-[7rem_1fr] gap-x-2 gap-y-1 text-xs">
+            <dt className="text-muted-foreground">Name</dt>
+            <dd>{reviewed.name}</dd>
+            <dt className="text-muted-foreground">Description</dt>
+            <dd>{reviewed.description || 'No description'}</dd>
             <dt className="text-muted-foreground">Identifier</dt>
             <dd className="font-mono">{reviewed.id}</dd>
             <dt className="text-muted-foreground">Exact endpoint</dt>
             <dd className="break-all font-mono">{reviewed.endpoint}</dd>
             <dt className="text-muted-foreground">Initial access</dt>
             <dd>No tools allowed</dd>
+            <dt className="text-muted-foreground">Transport</dt>
+            <dd>Streamable HTTP</dd>
+            <dt className="text-muted-foreground">Authentication</dt>
+            <dd>None (credentialless endpoint)</dd>
           </dl>
           <label className="flex items-start gap-2 text-sm text-foreground">
             <input
@@ -176,9 +327,23 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
                   {connection.endpoint}
                 </p>
               </div>
-              <span className="text-xs capitalize text-muted-foreground">{connection.state}</span>
+              <div className="text-right text-xs text-muted-foreground">
+                <span className="block capitalize">{connection.state}</span>
+                <span className="block capitalize">{connection.trust.replace('_', ' ')}</span>
+              </div>
             </div>
-            {connection.state === 'connected' ? (
+            {connection.trust === 'approval_required' || connection.trust === 'changed' ? (
+              <div className="space-y-2 rounded-md border border-border bg-background/60 p-2">
+                <p className="text-xs text-muted-foreground">
+                  Review the exact endpoint and discovered tool names. Approval stores only bounded
+                  non-secret identity, schema, integrity, and exposure metadata.
+                </p>
+                <Button type="button" size="sm" onClick={() => approveProfile(connection.id)}>
+                  Approve this exact profile
+                </Button>
+              </div>
+            ) : null}
+            {connection.state === 'connected' && connection.trust === 'approved' ? (
               <fieldset className="space-y-2">
                 <legend className="text-xs font-medium text-foreground">Allowed tools</legend>
                 {connection.tools.length === 0 ? (
@@ -194,12 +359,17 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
                           const next = event.target.checked
                             ? [...connection.exposedTools, tool.name]
                             : connection.exposedTools.filter((name) => name !== tool.name);
-                          runtime.setToolExposure(
-                            connection.id,
-                            [...new Set(next)].sort((left, right) =>
-                              left.localeCompare(right, 'en'),
-                            ),
-                          );
+                          try {
+                            runtime.setToolExposure(
+                              connection.id,
+                              [...new Set(next)].sort((left, right) =>
+                                left.localeCompare(right, 'en'),
+                              ),
+                              { confirmedByUser: true },
+                            );
+                          } catch {
+                            setError(SAFE_CONNECTION_ERROR);
+                          }
                         }}
                       />
                       <span>
@@ -223,10 +393,48 @@ export function McpConnections({ runtime = remoteMcpSetupRuntime }: McpConnectio
               size="sm"
               variant="outline"
               aria-label={`Disconnect ${connection.id}`}
-              onClick={() => void runtime.disconnect(connection.id)}
+              onClick={() => void runGatewayAction(() => runtime.disconnect(connection.id))}
             >
               Disconnect
             </Button>
+            {connection.durableApproval && connection.state !== 'connected' ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                aria-label={`Reconnect ${connection.id}`}
+                onClick={() => void runGatewayAction(() => runtime.reconnect(connection.id))}
+              >
+                Reconnect approved profile
+              </Button>
+            ) : null}
+            {connection.durableApproval ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                aria-label={`Forget approval ${connection.id}`}
+                onClick={() => void runGatewayAction(() => runtime.revoke(connection.id))}
+              >
+                Forget approval
+              </Button>
+            ) : null}
+            {connection.state === 'connected' && connection.exposedTools.length > 0 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  try {
+                    runtime.setToolExposure(connection.id, [], { confirmedByUser: true });
+                  } catch {
+                    setError(SAFE_CONNECTION_ERROR);
+                  }
+                }}
+              >
+                Disable all tools
+              </Button>
+            ) : null}
           </article>
         ))}
       </div>

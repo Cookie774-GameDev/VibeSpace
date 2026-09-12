@@ -5,7 +5,12 @@ import { normalizeCodexJsonl } from './codex';
 import { CODEX_CLI_DEFINITION } from './codex';
 import { normalizeCopilotJsonl } from './copilot';
 import { COPILOT_CLI_DEFINITION } from './copilot';
-import { DEFAULT_JSONL_LIMITS, responseUsageSnapshot, type JsonlParserLimits } from './cliBridge';
+import {
+  DEFAULT_JSONL_LIMITS,
+  preferNativeCliExecutable,
+  responseUsageSnapshot,
+  type JsonlParserLimits,
+} from './cliBridge';
 import { normalizeGeminiJsonl } from './gemini';
 import { GEMINI_CLI_DEFINITION } from './gemini';
 import { normalizeOpenCodeJsonl } from './opencode';
@@ -23,6 +28,23 @@ function joined(events: ProviderEvent[]): string {
 }
 
 describe('protected prompt declarations', () => {
+  it('prefers a native Windows CLI binary over an extensionless npm shim', () => {
+    expect(
+      preferNativeCliExecutable('codex', [
+        {
+          executableId: 'shim',
+          requestedName: 'codex',
+          executablePath: String.raw`C:\Users\viper\AppData\Roaming\npm\codex`,
+        },
+        {
+          executableId: 'native',
+          requestedName: 'codex',
+          executablePath: String.raw`C:\Users\viper\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.exe`,
+        },
+      ])?.executableId,
+    ).toBe('native');
+  });
+
   it('pins all six parser-backed CLI definitions to one preamble strategy', () => {
     expect(
       [

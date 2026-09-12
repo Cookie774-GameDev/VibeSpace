@@ -52,7 +52,7 @@ export const JARVIS_COMMAND_CATALOG = [
   'open local models',
   'open phone voice settings',
   'switch voice to deepgram',
-  'open voice settings and use kokoro',
+  'open voice settings and use Jarvis High',
   'set voice engine to system',
   'turn on ambient mode',
   'turn off ambient mode',

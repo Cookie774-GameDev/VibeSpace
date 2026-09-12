@@ -1,4 +1,4 @@
-import type { RegisteredActionExecutionContext } from '@/lib/actions/types';
+import type { ActionResult, RegisteredActionExecutionContext } from '@/lib/actions/types';
 import type { JarvisRepositories } from '@/lib/db/jarvisRepositories';
 import type { JarvisEntitlementSnapshotProvider } from '@/lib/admin';
 import { createExistingPluginCredentialAdapter } from '@/features/plugins/credentials';
@@ -37,8 +37,20 @@ export type JarvisSecurityRuntime = Readonly<{
   readonly recoveryVerifier: JarvisRecoveryApprovalVerifier;
   bindKernelActions: JarvisApprovalActionBinder;
   pluginManagement: PluginManagementCapability;
+  runReadOnlyPlugin(input: JarvisReadOnlyPluginRequest): Promise<ActionResult>;
   invalidateAccount(accountId: string): void;
   invalidateAll(): void;
+}>;
+
+export type JarvisReadOnlyPluginRequest = Readonly<{
+  pluginId: string;
+  operation: string;
+  params: Readonly<Record<string, unknown>>;
+  context: Readonly<{
+    requestId: string;
+    sessionId: string;
+    messageId: string;
+  }>;
 }>;
 
 export type CreateJarvisSecurityRuntimeInput = {
@@ -294,6 +306,42 @@ export function createJarvisSecurityRuntime(
       }
     },
     pluginManagement: pluginRuntime.management,
+    async runReadOnlyPlugin({ pluginId, operation, params, context }) {
+      const accountId = input.activeAccountId();
+      if (invalidatedAll || !accountId) authorityRevoked();
+      const matches = input.catalog
+        .listExposed()
+        .filter(
+          (registration) =>
+            registration.executor.kind === 'plugin_tool' &&
+            registration.executor.pluginId === pluginId &&
+            registration.executor.toolName === operation,
+        );
+      if (matches.length !== 1) throw new Error('plugin_operation_unavailable');
+      const registration = matches[0];
+      if (registration.risk !== 'read-only' || registration.approval !== 'never') {
+        throw new Error('plugin_operation_unavailable');
+      }
+      const executor = registration.executor;
+      if (executor.kind !== 'plugin_tool') throw new Error('plugin_operation_unavailable');
+      const validated = registration.validateParameters(params);
+      return await pluginRuntime.registeredTools.execute({
+        accountId,
+        registration: executor,
+        params: validated,
+        context: Object.freeze({
+          source: 'ai',
+          accountId,
+          chatId: context.sessionId,
+          messageId: context.messageId,
+          callId: context.requestId,
+          runId: context.sessionId,
+          approvalId: context.requestId,
+          requestId: context.requestId,
+          attemptNumber: 1,
+        }),
+      });
+    },
     invalidateAccount(accountId) {
       if (!accountId.trim()) return;
       for (const revocation of boundRevocations.get(accountId) ?? []) revocation.abort();

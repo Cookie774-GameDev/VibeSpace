@@ -102,6 +102,34 @@ export const QWEN_API_CONNECTION = nativeConnection({
   displayName: 'Qwen API',
 });
 
+export const GROQ_API_CONNECTION = nativeConnection({
+  id: 'groq-api',
+  adapterId: 'groq-native',
+  providerId: 'groq',
+  displayName: 'Groq API',
+});
+
+export const OPENROUTER_API_CONNECTION = nativeConnection({
+  id: 'openrouter-api',
+  adapterId: 'openrouter-native',
+  providerId: 'openrouter',
+  displayName: 'OpenRouter API',
+});
+
+export const MISTRAL_API_CONNECTION = nativeConnection({
+  id: 'mistral-api',
+  adapterId: 'mistral-native',
+  providerId: 'mistral',
+  displayName: 'Mistral API',
+});
+
+export const TOGETHER_API_CONNECTION = nativeConnection({
+  id: 'together-api',
+  adapterId: 'together-native',
+  providerId: 'together',
+  displayName: 'Together AI API',
+});
+
 export const OLLAMA_LOCAL_CONNECTION: Readonly<ProviderConnection> = Object.freeze({
   id: 'ollama-local',
   adapterId: 'ollama-local',
@@ -109,7 +137,13 @@ export const OLLAMA_LOCAL_CONNECTION: Readonly<ProviderConnection> = Object.free
   displayName: 'Ollama Local',
   mode: 'local' as const,
   authSource: 'local-runtime',
+  // Images: vision-capable tags receive real multimodal payloads; text-only
+  // tags are still gated by modelSupportsVision / selectionSupportsVision.
+  // Files: paths are injected as local context (never cloud-uploaded).
   capabilities: capabilities({
+    images: true,
+    files: true,
+    tools: true,
     localOnly: true,
     subscriptionQuota: false,
   }),
@@ -126,5 +160,9 @@ export const NATIVE_AND_LOCAL_CONNECTIONS = Object.freeze([
   DEEPSEEK_API_CONNECTION,
   ZAI_API_CONNECTION,
   QWEN_API_CONNECTION,
+  GROQ_API_CONNECTION,
+  OPENROUTER_API_CONNECTION,
+  MISTRAL_API_CONNECTION,
+  TOGETHER_API_CONNECTION,
   OLLAMA_LOCAL_CONNECTION,
 ]);

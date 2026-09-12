@@ -5,17 +5,31 @@ import { toast } from '@/components/ui/toast';
 import { WallpaperLibrary } from '@/features/wallpaper-library/WallpaperLibrary';
 import { useWorkbenchStore } from './store';
 import { BUILT_IN_WALLPAPERS } from './wallpapers';
-import type { WallpaperId } from './types';
+import type { WallpaperId, WorkbenchWallpaperConfig } from './types';
 
 interface WallpaperPickerProps {
   open: boolean;
   onClose: () => void;
+  config?: WorkbenchWallpaperConfig;
+  onSetWallpaper?: (id: WallpaperId, assetUrl?: string) => void;
+  onConfigureWallpaper?: (patch: Partial<WorkbenchWallpaperConfig>) => void;
+  persistCustomVideo?: boolean;
 }
 
-export function WallpaperPicker({ open, onClose }: WallpaperPickerProps) {
-  const config = useWorkbenchStore((state) => state.wallpaper);
-  const setWallpaper = useWorkbenchStore((state) => state.setWallpaper);
-  const configure = useWorkbenchStore((state) => state.configureWallpaper);
+export function WallpaperPicker({
+  open,
+  onClose,
+  config: controlledConfig,
+  onSetWallpaper,
+  onConfigureWallpaper,
+  persistCustomVideo = false,
+}: WallpaperPickerProps) {
+  const workbenchConfig = useWorkbenchStore((state) => state.wallpaper);
+  const setWorkbenchWallpaper = useWorkbenchStore((state) => state.setWallpaper);
+  const configureWorkbenchWallpaper = useWorkbenchStore((state) => state.configureWallpaper);
+  const config = controlledConfig ?? workbenchConfig;
+  const setWallpaper = onSetWallpaper ?? setWorkbenchWallpaper;
+  const configure = onConfigureWallpaper ?? configureWorkbenchWallpaper;
   const fileRef = React.useRef<HTMLInputElement>(null);
   const requestedMedia = React.useRef<'image' | 'video'>('image');
 
@@ -62,14 +76,16 @@ export function WallpaperPicker({ open, onClose }: WallpaperPickerProps) {
       );
       return;
     }
-    if (expected === 'video') {
+    if (expected === 'video' && !persistCustomVideo) {
       setWallpaper('custom-video', URL.createObjectURL(file));
       toast.info('Video wallpaper loaded', 'Local videos remain available for this app session.');
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === 'string') setWallpaper('custom-image', reader.result);
+      if (typeof reader.result === 'string') {
+        setWallpaper(expected === 'video' ? 'custom-video' : 'custom-image', reader.result);
+      }
     };
     reader.onerror = () =>
       toast.error('Could not read wallpaper', 'The selected file was not changed.');
@@ -149,6 +165,17 @@ export function WallpaperPicker({ open, onClose }: WallpaperPickerProps) {
             />
           </label>
           <label>
+            Wallpaper brightness
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={Math.round(config.brightness * 100)}
+              onChange={(event) => configure({ brightness: Number(event.target.value) / 100 })}
+            />
+          </label>
+          <label>
             Quality
             <select
               value={config.quality}
@@ -170,7 +197,7 @@ export function WallpaperPicker({ open, onClose }: WallpaperPickerProps) {
             Pointer response
           </label>
         </div>
-        <WallpaperLibrary />
+        <WallpaperLibrary onApplyWallpaper={setWallpaper} />
         <input
           ref={fileRef}
           className="sr-only"

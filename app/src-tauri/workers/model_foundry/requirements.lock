@@ -1,0 +1,3 @@
+﻿# VibeModel Foundry worker bootstrap dependencies.
+# Protocol verification intentionally uses only Python 3.11+ standard library.
+# Real training dependencies are added as pinned hashes in Phase 6; never install globally.

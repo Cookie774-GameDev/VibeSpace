@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { Account } from './Account';
 
-// The sign-in dialog and Pet panel are owned by other features and must not
-// perform auth, network, or pet side effects inside this visual contract test
-// (MC-034). Account's own gated surface renders independently of both.
+// Sign-in dialog is owned by auth and must not perform network side effects
+// inside this visual contract test (MC-034 / Account Center profile surface).
 vi.mock('@/features/auth/SignInDialog', () => ({ SignInDialog: () => null }));
-vi.mock('@/features/pets/PetAccountPanel', () => ({ PetAccountPanel: () => null }));
+vi.mock('@/lib/supabase', () => ({
+  getSupabaseClient: () => null,
+}));
 
-describe('Account MonoChrome appearance', () => {
+describe('Account profile MonoChrome appearance', () => {
   beforeEach(() => {
     useAuthStore.setState({
       displayName: 'Ada Lovelace',
@@ -21,9 +22,9 @@ describe('Account MonoChrome appearance', () => {
   afterEach(cleanup);
 
   it('gates radius, background-image, and shadow under exact monochrome only', () => {
-    render(<Account />);
+    render(<Account profileOnly />);
 
-    const root = document.querySelector<HTMLElement>('.mc7f-settings-account');
+    const root = document.querySelector<HTMLElement>('.mc7f-account-profile');
     expect(root).not.toBeNull();
     const className = root?.className ?? '';
 
@@ -36,10 +37,10 @@ describe('Account MonoChrome appearance', () => {
     expect(className).toContain('[html[data-theme=monochrome]_&]:border-l-foreground/20');
     expect(className).not.toMatch(/gradient|blur/);
 
-    // Meaningful product surface and copy are preserved.
-    expect(screen.getByRole('heading', { name: 'Account' })).toBeTruthy();
+    // Meaningful product surface and copy are preserved on Account Center.
     expect(screen.getByText('Display name')).toBeTruthy();
     expect(screen.getByText('Local user ID')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Profile/ })).toBeTruthy();
+    expect(screen.getByTestId('account-profile-save')).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: /Pet/i })).toBeNull();
   });
 });

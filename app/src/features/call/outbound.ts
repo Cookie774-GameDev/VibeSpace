@@ -14,14 +14,14 @@
  *  - Looks up phone_settings.user_phone_number
  *  - Initiates a Twilio outbound call (Path A)
  *  - When the user answers, Twilio joins them to the same Pipecat pipeline
- *    and Sage greets with the reason ("Hey, your build just failed; want
+ *    and the assistant greets with the reason ("Hey, your build just failed; want
  *    me to walk you through it?")
  *
  * If outbound is disabled in settings or no user_phone_number is set, the
  * cloud returns 403 / 400 and we surface a quiet toast — no exception thrown.
  *
  * Reasons that trigger by default (per Settings):
- *   - "manual"       — Sage at user request
+ *   - "manual"       — assistant at user request
  *   - "error"        — runtime error in agent loop / build / shell
  *   - "schedule"     — daily check-in (off by default)
  *   - "todo_due"     — upcoming high-priority todo (off by default)
@@ -63,7 +63,7 @@ interface OutboundDetail {
 const EVENT = 'jarvis:outbound-call';
 
 /**
- * Fire-and-forget helper. Use this from anywhere in the app to ask Sage
+ * Fire-and-forget helper. Use this from anywhere in the app to ask the assistant
  * to call the user.
  */
 export function fireOutboundCall(reason: OutboundReason, context?: OutboundContext): void {

@@ -17,18 +17,25 @@ import {
   getAmbientTrackDef,
   planAllowsAmbientTrack,
 } from '@/features/ambient/tracks';
+import { AMBIENT_IDLE_PRESETS_MIN, type ClockFormat } from '@/lib/timeFormat';
 
 /**
  * Ambient settings — controls the V2 idle takeover (breathing orb, clock,
  * rotating quote, glance cards) and the hosted ambient music playlist.
  */
-const PRESETS_MIN: { label: string; value: number }[] = [
-  { label: '1 min', value: 1 },
-  { label: '3 min', value: 3 },
-  { label: '5 min', value: 5 },
-  { label: '10 min', value: 10 },
-  { label: '15 min', value: 15 },
-  { label: '30 min', value: 30 },
+const PRESETS_MIN = AMBIENT_IDLE_PRESETS_MIN;
+
+const CLOCK_FORMAT_OPTIONS: { id: ClockFormat; label: string; hint: string }[] = [
+  {
+    id: 'local',
+    label: 'Local time',
+    hint: '12-hour where your locale uses it (AM/PM).',
+  },
+  {
+    id: 'military',
+    label: 'Military time',
+    hint: '24-hour format (00:00–23:59).',
+  },
 ];
 
 export function Ambient() {
@@ -45,6 +52,8 @@ export function Ambient() {
   const setAmbientVolume = useUIStore((s) => s.setAmbientVolume);
   const ambientAlwaysPlay = useUIStore((s) => s.ambientAlwaysPlay);
   const setAmbientAlwaysPlay = useUIStore((s) => s.setAmbientAlwaysPlay);
+  const clockFormat = useUIStore((s) => s.clockFormat);
+  const setClockFormat = useUIStore((s) => s.setClockFormat);
   const setAmbientActive = useUIStore((s) => s.setAmbientActive);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const plan = useAuthStore((s) => s.plan);
@@ -179,6 +188,44 @@ export function Ambient() {
         </div>
         <div className={`text-metadata text-muted-foreground ${!ambient ? 'opacity-50' : ''}`}>
           Currently: {thresholdMin} minute{thresholdMin === 1 ? '' : 's'} of inactivity.
+        </div>
+      </section>
+
+      <Separator />
+
+      <section className="flex flex-col gap-3">
+        <div>
+          <Label>Time format</Label>
+          <p className="text-metadata text-muted-foreground mt-1">
+            Applies to clocks, schedules, notifications, history, tasks, calls, and activity.
+            Stored times are unchanged; only how they appear.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {CLOCK_FORMAT_OPTIONS.map((opt) => {
+            const active = clockFormat === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setClockFormat(opt.id)}
+                aria-pressed={active}
+                className={
+                  'px-3 py-1.5 rounded-md text-secondary border transition-colors ' +
+                  (active
+                    ? 'border-accent-cyan/60 bg-accent-cyan/10 text-foreground'
+                    : 'border-border bg-panel text-muted-foreground hover:border-border-mid')
+                }
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="text-metadata text-muted-foreground">
+          {CLOCK_FORMAT_OPTIONS.find((o) => o.id === clockFormat)?.hint}
+          {' · '}
+          Uses your system timezone.
         </div>
       </section>
 

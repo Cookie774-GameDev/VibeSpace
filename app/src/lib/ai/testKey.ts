@@ -25,11 +25,9 @@
  * The runner stays out of the chat path entirely, so a paused-network
  * laptop never blocks the chat UI on a validation timeout.
  *
- * Ollama is special-cased: we route its probe through `nativeFetch` so
- * a packaged Tauri build (which can't speak to `http://localhost:11434`
- * because of CORS on `tauri://localhost`) gets the same green check the
- * dev build does. Cloud providers ship with permissive CORS already so
- * we keep using browser fetch for them.
+ * Every probe routes through `nativeFetch`. In a packaged Tauri build this
+ * uses the exact-host HTTP capability, avoiding browser-origin CORS failures.
+ * In the web preview it delegates to the normal browser fetch implementation.
  */
 
 import type { ProviderId } from '@/types/common';
@@ -53,14 +51,13 @@ async function timedFetch(
   url: string,
   init: RequestInit & { signal?: AbortSignal },
 ): Promise<Response> {
-  return timedFetchVia(globalThis.fetch.bind(globalThis), url, init);
+  return timedFetchVia(nativeFetch, url, init);
 }
 
 /**
  * Same as `timedFetch` but parameterised on the underlying fetch
- * implementation. Used by the Ollama check so it can hop through the
- * Tauri HTTP plugin while every other provider keeps using browser
- * fetch (cloud APIs ship with proper CORS).
+ * implementation. This remains useful for focused tests and explicit
+ * loopback behavior.
  */
 async function timedFetchVia(
   fetchImpl: typeof globalThis.fetch,
@@ -69,9 +66,7 @@ async function timedFetchVia(
 ): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error('timeout')), TIMEOUT_MS);
-  const composite = init.signal
-    ? mergeSignals(controller.signal, init.signal)
-    : controller.signal;
+  const composite = init.signal ? mergeSignals(controller.signal, init.signal) : controller.signal;
   try {
     return await fetchImpl(url, { ...init, signal: composite });
   } finally {
@@ -126,10 +121,7 @@ function summariseError(text: string): string {
 /*  Per-provider checks                                                       */
 /* -------------------------------------------------------------------------- */
 
-async function testOpenAI(
-  key: string,
-  signal?: AbortSignal,
-): Promise<ProviderTestResult> {
+async function testOpenAI(key: string, signal?: AbortSignal): Promise<ProviderTestResult> {
   try {
     const res = await timedFetch('https://api.openai.com/v1/models', {
       method: 'GET',
@@ -153,10 +145,7 @@ async function testOpenAI(
   }
 }
 
-async function testAnthropic(
-  key: string,
-  signal?: AbortSignal,
-): Promise<ProviderTestResult> {
+async function testAnthropic(key: string, signal?: AbortSignal): Promise<ProviderTestResult> {
   try {
     const res = await timedFetch('https://api.anthropic.com/v1/models', {
       method: 'GET',
@@ -190,10 +179,7 @@ async function testAnthropic(
   }
 }
 
-async function testGoogle(
-  key: string,
-  signal?: AbortSignal,
-): Promise<ProviderTestResult> {
+async function testGoogle(key: string, signal?: AbortSignal): Promise<ProviderTestResult> {
   // Hitting `/v1beta/models` validates the key without spending tokens.
   // The list is small (a few KB) and Google routes 401 / 403 there
   // consistently with the streamGenerateContent endpoint we use for chat.
@@ -222,10 +208,7 @@ async function testGoogle(
   }
 }
 
-async function testGroq(
-  key: string,
-  signal?: AbortSignal,
-): Promise<ProviderTestResult> {
+async function testGroq(key: string, signal?: AbortSignal): Promise<ProviderTestResult> {
   try {
     const res = await timedFetch('https://api.groq.com/openai/v1/models', {
       method: 'GET',
@@ -249,10 +232,7 @@ async function testGroq(
   }
 }
 
-async function testOllama(
-  rawBaseUrl: string,
-  signal?: AbortSignal,
-): Promise<ProviderTestResult> {
+async function testOllama(rawBaseUrl: string, signal?: AbortSignal): Promise<ProviderTestResult> {
   const { normalizeStoredOllamaEndpoint } = await import('./providers/ollama');
   const base = normalizeStoredOllamaEndpoint(rawBaseUrl.trim() || undefined);
 
@@ -306,9 +286,7 @@ async function testOllama(
     }
     // Verify the body parses and exposes a `models` array. A non-Ollama
     // service on the same port (rare but possible) might 200 on the URL.
-    const json = (await res.json().catch(() => null)) as
-      | { models?: unknown[] }
-      | null;
+    const json = (await res.json().catch(() => null)) as { models?: unknown[] } | null;
     if (!json || !Array.isArray(json.models)) {
       return {
         kind: 'invalid',
@@ -353,10 +331,11 @@ async function testOpenAICompatible(
   baseUrl: string,
   key: string,
   signal?: AbortSignal,
+  fetchImpl: typeof globalThis.fetch = nativeFetch,
 ): Promise<ProviderTestResult> {
   const url = `${baseUrl.replace(/\/+$/, '')}/models`;
   try {
-    const res = await timedFetch(url, {
+    const res = await timedFetchVia(fetchImpl, url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${key}` },
       signal,
@@ -413,6 +392,22 @@ export async function testProviderKey(
       return testOpenAICompatible('mistral', 'https://api.mistral.ai/v1', trimmed, signal);
     case 'together':
       return testOpenAICompatible('together', 'https://api.together.xyz/v1', trimmed, signal);
+    case 'qwen':
+      return testOpenAICompatible(
+        'qwen',
+        'https://dashscope-us.aliyuncs.com/compatible-mode/v1',
+        trimmed,
+        signal,
+        nativeFetch,
+      );
+    case 'zai':
+      return testOpenAICompatible(
+        'zai',
+        'https://api.z.ai/api/paas/v4',
+        trimmed,
+        signal,
+        nativeFetch,
+      );
     case 'cohere':
     case 'perplexity':
     case 'fireworks':
@@ -426,6 +421,7 @@ export async function testProviderKey(
     case 'bedrock':
     case 'mock':
     case 'local':
+    case 'foundry':
       return { kind: 'unsupported', provider };
   }
 }

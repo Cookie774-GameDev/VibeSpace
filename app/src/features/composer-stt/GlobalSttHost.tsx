@@ -14,6 +14,7 @@ import {
   insertTextIntoEditable,
   isGlobalSttEditable,
   mountSttFocusTracking,
+  rememberSttEditableFromFocus,
   resolveGlobalSttEditable,
 } from './insertText';
 import {
@@ -26,7 +27,8 @@ import {
 import { startSttVolumeMeter, stopSttVolumeMeter } from './sttVolume';
 
 const FINALIZE_GRACE_MS = 2_500;
-const DEFAULT_INACTIVITY_MS = 15_000;
+/** Free/default system STT: 3 minutes of no speech before timeout. */
+const DEFAULT_INACTIVITY_MS = 180_000;
 const GLOBAL_STT_UNSUPPORTED_FAILURE = formatJarvisVerifiedNarration({
   kind: 'failure',
   actionLabel: 'Global speech recognition availability',
@@ -136,7 +138,7 @@ export function GlobalSttHost() {
       }
       try {
         snapshotRef.current = isTextInputField(focused) ? captureSttFieldSnapshot(focused) : null;
-        VoiceService.setInactivityTimeoutMs(null);
+        VoiceService.setInactivityTimeoutMs(DEFAULT_INACTIVITY_MS);
         const started = VoiceService.startListening();
         if (!started) {
           snapshotRef.current = null;
@@ -172,31 +174,55 @@ export function GlobalSttHost() {
   React.useEffect(() => {
     if (!listening && !awaitingFinalRef.current) return;
 
+    /** Prefer the locked session field; recover from focus memory if it remounted. */
+    const resolveSessionTarget = (): HTMLElement | null => {
+      const current = targetRef.current;
+      if (current && document.contains(current) && isGlobalSttEditable(current)) {
+        return current;
+      }
+      const recovered = resolveGlobalSttEditable(current);
+      if (recovered && document.contains(recovered) && isGlobalSttEditable(recovered)) {
+        targetRef.current = recovered;
+        if (isTextInputField(recovered)) {
+          snapshotRef.current = captureSttFieldSnapshot(recovered);
+        } else {
+          snapshotRef.current = null;
+        }
+        rememberSttEditableFromFocus(recovered);
+        return recovered;
+      }
+      return null;
+    };
+
     const insertAtTarget = (spoken: string) => {
       const trimmed = spoken.trim();
       if (!trimmed) return;
-      const target = targetRef.current;
-      if (!target || !document.contains(target) || !isGlobalSttEditable(target)) {
+      const target = resolveSessionTarget();
+      if (!target) {
         toast.warning('Dictation', GLOBAL_STT_TARGET_UNAVAILABLE_FAILURE);
         return;
       }
-      if (isTextInputField(target) && snapshotRef.current) {
-        if (!commitSttInField(target, snapshotRef.current, trimmed)) return;
+      if (isTextInputField(target)) {
+        const snapshot = snapshotRef.current ?? captureSttFieldSnapshot(target);
+        if (!commitSttInField(target, snapshot, trimmed)) return;
+        // Continuous free STT: keep the same field and refresh caret snapshot
+        // so the next utterance inserts after this one (do not drop target).
+        snapshotRef.current = captureSttFieldSnapshot(target);
       } else if (!insertTextIntoEditable(target, trimmed)) {
         toast.warning('Dictation', GLOBAL_STT_INSERTION_REJECTED_FAILURE);
         return;
       }
-      snapshotRef.current = null;
       awaitingFinalRef.current = false;
       clearFinalizeTimer();
-      targetRef.current = null;
+      targetRef.current = target;
+      rememberSttEditableFromFocus(target);
     };
 
     const offPartial = VoiceService.on('voice:partial', ({ text: partial }) => {
-      const target = targetRef.current;
-      const snapshot = snapshotRef.current;
-      if (!target || !snapshot || !isTextInputField(target)) return;
-      if (!document.contains(target)) return;
+      const target = resolveSessionTarget();
+      if (!target || !isTextInputField(target)) return;
+      const snapshot = snapshotRef.current ?? captureSttFieldSnapshot(target);
+      snapshotRef.current = snapshot;
       previewSttInField(target, snapshot, partial);
     });
 
@@ -206,6 +232,9 @@ export function GlobalSttHost() {
         setListening(false);
         setComposerSttListening(false);
         stopSttVolumeMeter();
+        // Session truly over — release the field lock.
+        targetRef.current = null;
+        snapshotRef.current = null;
       }
     });
 

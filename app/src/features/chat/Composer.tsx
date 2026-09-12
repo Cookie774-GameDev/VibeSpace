@@ -28,7 +28,8 @@ import { chatRepo, messageRepo, projectRepo, taskRepo, terminalSessionRepo } fro
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { getCurrentSyncQueueAuthorityScope } from '@/lib/cloudSyncQueueOwner';
 import { cn, isTauri, renderHotkey } from '@/lib/utils';
-import { HOTKEYS, matchesHotkey } from '@/lib/hotkeys';
+import { formatUserDateTime } from '@/lib/timeFormat';
+import { HOTKEYS, matchesHotkey, resolveHotkey } from '@/lib/hotkeys';
 import {
   getAllUsage,
   getUsage,
@@ -37,17 +38,35 @@ import {
 } from '@/lib/usage/usageService';
 import { useAgentStore } from '@/stores/agents';
 import { findProtectedJarvisAgent } from '@/lib/jarvis/identity';
+import { requestsReadOnlyContextTool } from '@/lib/jarvis/contextToolIntent';
 import { parseJarvisModelSwitchIntent } from '@/lib/jarvis/modelSwitchDecision';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { parseThemeCommandArgument, SELECTABLE_THEMES } from '@/features/appearance/themes';
+import {
+  CHAT_ENGINE_OPTIONS,
+  storedChatEngine,
+  transitionChatEngine,
+} from '@/features/browser-chat/chatEngineTransition';
+import {
+  CONSOLE_PROFILES,
+  loadConsolePreferences,
+  parseChatPresentationCommand,
+  updateConsolePreferences,
+} from './agentic-console/preferences';
 import { VoiceService } from '@/features/voice/VoiceService';
+import { createDeepgramDictationSession } from '@/features/global-dictation/deepgramDictation';
 import { MicWaveform } from './MicWaveform';
 import { formatComposerVoiceFailure } from './composerVoiceFailures';
 import { formatComposerSendFailure } from './composerSendFailures';
+import { HarnessReadinessGate, useHarnessRuntimeState } from './HarnessReadinessGate';
 
 export function getThemeCommandHelp(): string {
-  return `Available themes: ${SELECTABLE_THEMES.map((theme) => theme.label).join(', ')}. Use /theme <name>.`;
+  return `Chat console themes: ${CONSOLE_PROFILES.map((theme) => theme.label).join(', ')}. Use /theme <name>.`;
+}
+
+export function getAppearanceCommandHelp(): string {
+  return `Available appearances: ${SELECTABLE_THEMES.map((theme) => theme.label).join(', ')}. Use /appearance to choose.`;
 }
 import {
   cleanupAudioRecorder,
@@ -90,7 +109,7 @@ import type {
   TerminalSessionId,
   WorkspaceId,
 } from '@/types';
-import { getChatActivityEvents } from './activity/activityStore';
+import { getChatActivityEvents, useChatActivityStore } from './activity/activityStore';
 import {
   parseTerminalRef,
   terminalRefKey,
@@ -124,7 +143,7 @@ import {
 import { MentionTypeahead } from './MentionTypeahead';
 import {
   SlashCommandTypeahead,
-  SLASH_COMMANDS,
+  getVisibleSlashCommands,
   orderSlashCommandsForDisplay,
   findSlashCommandDef,
   isChatAttachSlashCmd,
@@ -133,23 +152,42 @@ import {
   type SlashCommandDef,
   type SlashCommandTypeaheadRef,
 } from './SlashCommandTypeahead';
+import { isHiveProductEnabled } from '@/lib/features/hiveProductGate';
 import {
   SlashCommandOptionPicker,
   type SlashCommandOption,
   type SlashCommandOptionPickerRef,
 } from './SlashCommandOptionPicker';
 import {
+  ConsoleThemeSlashPicker,
+  ThemeSlashPicker,
+  isGlobalThemePickerCommand,
+  type ThemeSlashPickerRef,
+} from './themeSlashPicker';
+import {
   ModelPickerTypeahead,
   HIVE_OPTION_ID,
   type ModelPickerTypeaheadRef,
 } from './ModelPickerTypeahead';
 import { ConnectionInfoPopover } from './ConnectionInfoPopover';
+import { browserTokenOptimizationPreferences } from '@/features/token-optimizer';
 import { InputToken, TokenList } from './InputToken';
+
 import {
   extractInlineUtilitySlashCommands,
   getInlineSlashContext,
+  isSafeAbsoluteAttachmentPath,
   listProjectFileOptions,
 } from './slashProjectFiles';
+import { buildVibeSpaceReferenceRequest, classifySlashCommand } from './slashCommandRouting';
+import {
+  formatRlmStatus,
+  markRlmIndexRefreshed,
+  parseRlmSlashArgument,
+  resolveRlmEnabled,
+  RLM_SLASH_OPTIONS,
+  setChatRlmEnabled,
+} from '@/features/context/rlmPreferenceStore';
 import {
   clearRedoStack,
   NOTHING_TO_REDO_TEXT,
@@ -163,12 +201,45 @@ import {
   UNDO_BLOCKED_RUNNING_TEXT,
   UNDO_STATUS_TEXT,
 } from './chatUndoRedo';
-import { getChatDragKind, getChatDropPayload } from './dropPayload';
+import {
+  MEDIA_ATTACH_EVENT,
+  getChatDragKind,
+  getChatDropPayload,
+  hasOsFileDrag,
+  type MediaAttachDetail,
+} from './dropPayload';
+import { ComposerMediaStrip } from './ComposerMediaStrip';
+import {
+  MediaPreviewPanel,
+  mediaTargetFromAttachment,
+  type MediaPreviewTarget,
+} from './MediaPreviewPanel';
 import { getStoredProjectRoot } from '@/features/files/projectFiles';
 import {
+  MARKDOWN_DOCUMENT_OPTIONS,
+  buildMarkdownCreationInstruction,
+  isMarkdownDocumentKind,
+  parseMarkdownSlashArgument,
+} from './markdownCommand';
+import {
+  cleanupExpiredOversizedMessageAttachments,
+  createChatTextFileAttachment,
+  createOversizedMessageAttachment,
+  oversizedMessageSummary,
+} from './oversizedMessageAttachment';
+import {
+  MAX_IMAGES_PER_BATCH,
+  MAX_VIDEOS_PER_BATCH,
+  appendComposerMedia,
+  appendComposerMediaResult,
+  classifyBrowserFilesForAttach,
   imageAttachmentFromBrowserFile,
   imageAttachmentFromPath,
+  readBrowserFileAsText,
   splitImageFiles,
+  splitVideoFiles,
+  videoAttachmentFromBrowserFile,
+  visionAttachmentsForSend,
 } from './imageAttachments';
 import { getSkillPickerOptions, getAllCatalogSkills } from '@/features/skills/skillCatalog';
 import { isSupportedImagePath, type ChatImageAttachment } from '@/lib/ai/vision';
@@ -203,14 +274,46 @@ import {
   type ChatModelSelection,
   type ModelSelectionContext,
 } from '@/lib/ai/modelSelection';
+import type { ReasoningMode, ReasoningSelection } from '@/lib/ai/reasoningControls';
 import { ModeIndicator } from '@/features/jarvis-interaction/ModeIndicator';
-import {
-  cycleInteractionMode,
-  parsePermissionModeArg,
-  PERMISSION_MODE_OPTIONS,
-} from '@/features/jarvis-interaction/modes';
+import { cycleInteractionMode, PERMISSION_MODE_OPTIONS } from '@/features/jarvis-interaction/modes';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
+import {
+  formatPermissionPolicy,
+  parsePermissionSlashArg,
+  PERMISSION_ACCESS_OPTIONS,
+  PERMISSION_APPROVE_OPTIONS,
+  readPermissionAccess,
+  setApproveAllForRun,
+  setPermissionAccess,
+} from '@/features/jarvis-interaction/permissionAccessStore';
+import type { JarvisInteractionMode } from '@/features/jarvis-interaction/types';
 import { launchJarvisChatAgent } from '@/features/jarvis-interaction/agentRunner';
+import { shouldCancelForLiveModeRestriction } from './modeTransitionSafety';
+import {
+  buildReasoningSlashPickerState,
+  parseReasoningEffortArgument,
+  parseReasoningModeArgument,
+  readChatReasoningPreference,
+  writeChatReasoningEffort,
+  writeChatReasoningMode,
+} from './reasoningSlashStore';
+import {
+  applyChatRuntimeCommand,
+  parseChatRuntimeCommand,
+} from './runtime/chatRuntimeCommandController';
+import {
+  clearApproveAllForRun,
+  readChatRuntimePolicyState,
+  writeChatRuntimePolicyState,
+  type ChatRuntimePolicyState,
+} from './runtime/chatRuntimeSettingsStore';
+import { requestTokenBoss } from './token-boss/events';
+import {
+  resolveTokenBossProvider,
+  type CurrentModelContext,
+  type TokenBossProvider,
+} from './token-boss/providers';
 import {
   buildQueuedMultitaskCommand,
   dispatchQueuedMessageAfterAcceptance,
@@ -218,7 +321,21 @@ import {
   shouldAutoSendQueuedOnRunStatus,
   takeNextQueuedMessage,
   type QueuedChatMessage,
+  type QueueFlushMode,
 } from './QueuedMessagesBar';
+import {
+  createQueuedMessage,
+  describeQueueToast,
+  shouldFlushOnToolTerminal,
+} from './composerQueuePolicy';
+import {
+  CANCELLED_BY_USER_TOAST,
+  createEscapeCancelState,
+  recordEscapePress,
+  type EscapeCancelState,
+} from './composerEscapeCancel';
+import { agentSelectorOptions } from './listLiveChatAgents';
+import { openNativeChildChat } from '@/features/jarvis-interaction/openNativeChildChat';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_CONTROL } from '@/lib/jarvis/smoke/evidenceIds';
 import { KERNEL_SMOKE_SCENARIOS } from '@/lib/jarvis/smoke/scenarios';
@@ -251,6 +368,68 @@ import {
   type ActiveCanvasSnapshot,
   type CanvasChatAttachmentMode,
 } from '@/features/canvas/aiContextRegistry';
+
+export function reasoningSelectionFromChatModel<T extends { mode: string }>(
+  selection: T,
+): ReasoningSelection | null {
+  if (selection.mode !== 'single') return null;
+  const single = selection as T & {
+    providerId?: unknown;
+    modelId?: unknown;
+    connectionId?: unknown;
+  };
+  if (typeof single.providerId !== 'string' || typeof single.modelId !== 'string') return null;
+  return {
+    providerId: single.providerId,
+    modelId: single.modelId,
+    ...(typeof single.connectionId === 'string' ? { connectionId: single.connectionId } : {}),
+  };
+}
+
+export function tokenBossContextFromChatModel<T extends { mode: string }>(
+  selection: T,
+): CurrentModelContext | null {
+  if (selection.mode !== 'single') return null;
+  const single = selection as T & {
+    providerId?: unknown;
+    modelId?: unknown;
+    connectionId?: unknown;
+  };
+  if (typeof single.providerId !== 'string' || typeof single.modelId !== 'string') return null;
+  return {
+    providerId: single.providerId,
+    modelId: single.modelId,
+    ...(typeof single.connectionId === 'string' ? { connectionId: single.connectionId } : {}),
+    ...(single.providerId === 'ollama' || single.providerId === 'local'
+      ? { runtimeId: 'ollama' }
+      : {}),
+  };
+}
+
+export function tokenBossProviderForMode<T extends { mode: string }>(
+  mode: ReasoningMode,
+  selection: T,
+): TokenBossProvider | null {
+  if (mode !== 'token-final-boss') return null;
+  const context = tokenBossContextFromChatModel(selection);
+  return context ? resolveTokenBossProvider(context) : null;
+}
+
+const TOKEN_OPTIMIZATION_MODE_FOR_REASONING: Readonly<
+  Record<ReasoningMode, 'saver' | 'normal' | 'final_boss'>
+> = {
+  'token-saver': 'saver',
+  normal: 'normal',
+  'token-final-boss': 'final_boss',
+};
+
+export function applyChatReasoningMode(chatId: string, mode: ReasoningMode): void {
+  writeChatReasoningMode(chatId, mode);
+  browserTokenOptimizationPreferences.setChatOverride(
+    chatId,
+    TOKEN_OPTIMIZATION_MODE_FOR_REASONING[mode],
+  );
+}
 
 export function mergeActiveCanvasSourcesForPromptForge(
   sources: readonly PromptForgeSourceCandidate[],
@@ -318,6 +497,8 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   deepseek: 'DeepSeek',
   mistral: 'Mistral',
   together: 'Together',
+  qwen: 'Qwen / Alibaba Cloud',
+  zai: 'Z.AI / GLM',
   ollama: 'Ollama (local)',
   cohere: 'Cohere',
   perplexity: 'Perplexity',
@@ -330,6 +511,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   cerebras: 'Cerebras',
   huggingface: 'Hugging Face',
   bedrock: 'AWS Bedrock',
+  foundry: 'Model Foundry (local)',
   mock: 'Mock',
   local: 'Local',
 };
@@ -453,17 +635,49 @@ export function extractAbsoluteFilePaths(text: string): string[] {
   return Array.from(new Set(text.match(WINDOWS_FILE_PATH_RE) ?? [])).slice(0, 8);
 }
 
-export function getQueuedMessageNotice(draft: string): Readonly<{ title: string; body: string }> {
+export function connectionSupportsFileAttachments(selection: {
+  mode?: string;
+  connectionId?: string;
+  capabilities?: { files?: boolean };
+}): boolean {
+  if (selection.mode === 'single' && selection.connectionId) {
+    try {
+      const connection = getProviderConnectionDescriptor(selection.connectionId);
+      if (connection.capabilities?.files === true) return true;
+      if (connection.capabilities?.files === false) return false;
+    } catch {
+      // Fall through to the selection's own capability snapshot.
+    }
+  }
+  return selection.capabilities?.files === true;
+}
+
+export function resolveSendFilePaths(input: {
+  attachedFiles: readonly string[];
+  sendText: string;
+  oversizedPath?: string;
+  supportsFiles: boolean;
+}): string[] {
+  return Array.from(
+    new Set([
+      ...(input.oversizedPath ? [input.oversizedPath] : []),
+      ...input.attachedFiles,
+      ...(input.supportsFiles ? extractAbsoluteFilePaths(input.sendText) : []),
+    ]),
+  ).slice(0, 8);
+}
+
+export function getQueuedMessageNotice(
+  draft: string,
+  flushMode: QueueFlushMode = 'after-run',
+): Readonly<{ title: string; body: string }> {
   if (parseJarvisModelSwitchIntent(draft)) {
     return {
       title: 'Model switch queued',
       body: 'The current reply keeps its captured model. Leave this queued to review and apply on the next turn, or stop the current reply and resend to restart sooner.',
     };
   }
-  return {
-    title: 'Message queued',
-    body: 'It will send automatically when Jarvis finishes the current reply (or use Send / Multitask).',
-  };
+  return describeQueueToast(flushMode);
 }
 
 /**
@@ -596,18 +810,29 @@ export function Composer({
   const [selectedSlashCmd, setSelectedSlashCmd] = useState<string>('');
   const [optionPickerCtx, setOptionPickerCtx] = useState<OptionPickerContext | null>(null);
   const [selectedOptionId, setSelectedOptionId] = useState<string>('');
+  const [permissionPickerStep, setPermissionPickerStep] = useState<'mode' | 'access'>('mode');
   const interactionMode = useJarvisInteractionStore((s) => s.modeForChat(chatId));
   const setInteractionMode = useJarvisInteractionStore((s) => s.setChatMode);
+  const [reasoningPreference, setReasoningPreference] = useState(() =>
+    readChatReasoningPreference(String(chatId)),
+  );
+  const [runtimePolicy, setRuntimePolicy] = useState<ChatRuntimePolicyState>(() =>
+    readChatRuntimePolicyState(String(chatId)),
+  );
   const [confirmedCommands, setConfirmedCommands] = useState<ConfirmedCommand[]>([]);
   const [confirmedAgentMentions, setConfirmedAgentMentions] = useState<ConfirmedAgentMention[]>([]);
   const [sending, setSending] = useState(false);
+  const harnessRuntimeState = useHarnessRuntimeState();
+  const harnessBlocked = harnessRuntimeState.kind !== 'ready';
   const [jarvisRunning, setJarvisRunning] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
+  const escapeCancelRef = useRef<EscapeCancelState>(createEscapeCancelState());
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [attachedImages, setAttachedImages] = useState<ChatImageAttachment[]>([]);
   const [attachedTerminals, setAttachedTerminals] = useState<TerminalRef[]>([]);
   const [attachedPlugins, setAttachedPlugins] = useState<string[]>([]);
   const [attachedContexts, setAttachedContexts] = useState<ContextChatAttachment[]>([]);
+  const [mediaPreview, setMediaPreview] = useState<MediaPreviewTarget | null>(null);
   const [dragOver, setDragOver] = useState(false);
   // V2 — speech-to-text in the composer.
   const [sttListening, setSttListening] = useState(false);
@@ -619,7 +844,16 @@ export function Composer({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const slashTypeaheadRef = useRef<SlashCommandTypeaheadRef>(null);
+
+  useEffect(() => {
+    setRuntimePolicy(readChatRuntimePolicyState(String(chatId)));
+  }, [chatId]);
+
+  useEffect(() => {
+    cleanupExpiredOversizedMessageAttachments();
+  }, []);
   const optionPickerRef = useRef<SlashCommandOptionPickerRef>(null);
+  const themePickerRef = useRef<ThemeSlashPickerRef>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -655,6 +889,9 @@ export function Composer({
   const volumeRef = sttVolumeRef;
   const voiceReplyRequestedRef = useRef(false);
   const batchRecorderRef = useRef<FasterWhisperRecorder | null>(null);
+  const deepgramSessionRef = useRef<Awaited<
+    ReturnType<typeof createDeepgramDictationSession>
+  > | null>(null);
   const sttSnapshotRef = useRef<SttFieldSnapshot | null>(null);
   const transcribeGenRef = useRef(0);
   const sttFinalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -665,8 +902,53 @@ export function Composer({
   sendingRef.current = sending;
   const activeCancellationKeyRef = useRef<string | null>(null);
   const queuedDispatchInFlightRef = useRef<string | null>(null);
+  const queuedInterruptInFlightRef = useRef<string | null>(null);
+  /** When true, a user Esc×3 cancel must not auto-drain the queue. */
+  const suppressQueueFlushOnUserCancelRef = useRef(false);
+  const interruptQueuedRef = useRef<(id: string) => void>(() => {});
   /** Latest auto-flush implementation (set after handleSend exists). */
   const flushNextQueuedRef = useRef<() => void>(() => {});
+  /**
+   * Prompt Forge upgrade-for-send (wired after the hook mounts). Used so
+   * handleSend can await upgrades without reordering the huge send path.
+   */
+  const promptForgeUpgradeForSendRef = useRef<
+    | ((draft: string) => Promise<
+        Readonly<{
+          text: string;
+          upgraded: boolean;
+          requiresReview?: boolean;
+          reason?: string;
+        }>
+      >)
+    | null
+  >(null);
+  const promptForgeAutoUpgradeRef = useRef(false);
+
+  const applyInteractionMode = useCallback(
+    (nextMode: JarvisInteractionMode) => {
+      const previousMode = useJarvisInteractionStore.getState().modeForChat(chatId);
+      setInteractionMode(chatId, nextMode);
+      const cancellationKey = activeCancellationKeyRef.current;
+      if (
+        shouldCancelForLiveModeRestriction({
+          previousMode,
+          nextMode,
+          running: jarvisRunning,
+          cancellationKey,
+        })
+      ) {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:cancel', { detail: { messageId: cancellationKey } }),
+        );
+        toast.info(
+          'Current reply stopped',
+          `${nextMode === 'ask' ? 'Ask' : 'Plan'} Mode is active. The restricted turn was cancelled before more actions could run.`,
+        );
+      }
+    },
+    [chatId, jarvisRunning, setInteractionMode],
+  );
 
   useEffect(() => {
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -680,6 +962,12 @@ export function Composer({
       }
       setJarvisRunning(false);
       activeCancellationKeyRef.current = null;
+      queuedInterruptInFlightRef.current = null;
+      // Esc×3 cancel: keep the queue for resume/resend (do not auto-drain).
+      if (status === 'cancelled' && suppressQueueFlushOnUserCancelRef.current) {
+        suppressQueueFlushOnUserCancelRef.current = false;
+        return;
+      }
       // When the previous full reply finishes (or fails/cancels), send the next
       // queued message automatically — FIFO order.
       if (!shouldAutoSendQueuedOnRunStatus(status)) return;
@@ -696,19 +984,34 @@ export function Composer({
     };
   }, [chatId]);
 
-  const enqueueCurrentMessage = (draft: string) => {
-    const trimmedDraft = draft.trim();
-    if (!trimmedDraft) return;
-    setQueuedMessages((current) => [
-      ...current,
-      {
-        id: `queued_${Date.now().toString(36)}_${current.length}`,
-        text: trimmedDraft,
-        createdAt: Date.now(),
-      },
-    ]);
+  // After-tool: flush when a tool finishes (not when a new tool starts).
+  useEffect(
+    () =>
+      useChatActivityStore.subscribe((state, previous) => {
+        if (!jarvisRunning || queuedInterruptInFlightRef.current) return;
+        const queued = queuedMessagesRef.current[0];
+        if (!queued || queued.flushMode !== 'after-tool') return;
+        const current = state.eventsByChat[String(chatId)] ?? [];
+        const before = previous.eventsByChat[String(chatId)] ?? [];
+        const beforeById = new Map(before.map((event) => [event.id, event]));
+        const toolFinished = current.find((event) => {
+          if (event.kind !== 'tool' || event.ts < queued.createdAt) return false;
+          if (!shouldFlushOnToolTerminal(queued, event.status)) return false;
+          const prev = beforeById.get(event.id);
+          // New terminal event, or status transitioned into terminal.
+          return !prev || prev.status !== event.status;
+        });
+        if (toolFinished) interruptQueuedRef.current(queued.id);
+      }),
+    [chatId, jarvisRunning],
+  );
+
+  const enqueueCurrentMessage = (draft: string, flushMode: QueueFlushMode = 'after-run') => {
+    const item = createQueuedMessage(draft, flushMode);
+    if (!item) return;
+    setQueuedMessages((current) => [...current, item]);
     setText('');
-    const notice = getQueuedMessageNotice(trimmedDraft);
+    const notice = getQueuedMessageNotice(item.text, flushMode);
     toast.info(notice.title, notice.body);
   };
 
@@ -732,6 +1035,9 @@ export function Composer({
   const setChatModelSelection = useAuthStore((s) => s.setChatModelSelection);
   const promptForgeModelSelection = useAuthStore((s) => s.promptForgeModelSelection);
   const setPromptForgeModelSelection = useAuthStore((s) => s.setPromptForgeModelSelection);
+  const promptForgeAutoUpgradeOnSend = useAuthStore((s) => s.promptForgeAutoUpgradeOnSend);
+  promptForgeAutoUpgradeRef.current = promptForgeAutoUpgradeOnSend;
+  const setPromptForgeAutoUpgradeOnSend = useAuthStore((s) => s.setPromptForgeAutoUpgradeOnSend);
   const stackCustomSteps = useAuthStore((s) => s.stackCustomSteps);
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const setSelectedModel = useAuthStore((s) => s.setSelectedModel);
@@ -745,6 +1051,9 @@ export function Composer({
   const pluginAccountId = useAuthStore((s) => resolveAccountIdentity(s)?.accountId ?? '');
   const terminalPickerActive = normalizeSlashCmd(optionPickerCtx?.cmd.cmd ?? '') === 'terminals';
   const pluginPickerActive = optionPickerCtx?.cmd.cmd === 'plug';
+  const themePickerActive = isGlobalThemePickerCommand(optionPickerCtx?.cmd.cmd ?? '');
+  const consoleThemePickerActive = optionPickerCtx?.cmd.cmd === 'theme';
+  const anyThemePickerActive = themePickerActive || consoleThemePickerActive;
   const pluginConnections = usePluginStore((s) =>
     pluginPickerActive
       ? selectPluginConnectionsForAccount(s, pluginAccountId)
@@ -761,6 +1070,23 @@ export function Composer({
   const [projectFileOptions, setProjectFileOptions] = useState<SlashCommandOption[]>([]);
   const [projectFilesLoading, setProjectFilesLoading] = useState(false);
   const [projectFilesError, setProjectFilesError] = useState<string | undefined>(undefined);
+  const reasoningSelection = useMemo(
+    () => reasoningSelectionFromChatModel(chatModelSelection),
+    [chatModelSelection],
+  );
+  const reasoningPickerState = useMemo(() => {
+    const command = normalizeSlashCmd(optionPickerCtx?.cmd.cmd ?? '');
+    if (command !== 'effort' && command !== 'mode') return null;
+    return buildReasoningSlashPickerState({
+      command,
+      selection: reasoningSelection,
+      preference: reasoningPreference,
+    });
+  }, [optionPickerCtx, reasoningPreference, reasoningSelection]);
+
+  useEffect(() => {
+    setReasoningPreference(readChatReasoningPreference(String(chatId)));
+  }, [chatId]);
 
   useEffect(() => {
     if (!pluginAccountId) {
@@ -823,6 +1149,21 @@ export function Composer({
   const optionPickerOptions = useMemo<SlashCommandOption[]>(() => {
     if (!optionPickerCtx) return [];
     const cmd = optionPickerCtx.cmd.cmd;
+    if (isGlobalThemePickerCommand(cmd) || cmd === 'theme') return [];
+
+    if (normalizeSlashCmd(cmd) === 'chat') {
+      return CHAT_ENGINE_OPTIONS.map((option) => ({ ...option }));
+    }
+
+    if (normalizeSlashCmd(cmd) === 'agent') {
+      const live = useJarvisInteractionStore.getState().agentsByChat[String(chatId)] ?? [];
+      return agentSelectorOptions(live).map((row) => ({
+        id: row.childChatId,
+        label: row.label,
+        description: row.description,
+        metadata: row.id,
+      }));
+    }
 
     if (normalizeSlashCmd(cmd) === 'terminals') {
       const sessions = Object.values(terminalSessions)
@@ -841,6 +1182,10 @@ export function Composer({
         ? (getActiveContextPersistenceState(projectId)?.maps ?? contextMaps)
         : [];
       return contextMapSlashOptions(maps);
+    }
+
+    if (normalizeSlashCmd(cmd) === 'md') {
+      return [...MARKDOWN_DOCUMENT_OPTIONS];
     }
 
     if (normalizeSlashCmd(cmd) === 'canvas') {
@@ -933,13 +1278,72 @@ export function Composer({
       return projectFileOptions;
     }
 
-    if (normalizeSlashCmd(cmd) === 'permissions') {
-      return PERMISSION_MODE_OPTIONS.map((option) => ({
+    if (cmd === 'rlm') {
+      const resolved = resolveRlmEnabled({
+        chatId: String(chatId),
+        workspaceId: workspaceId ?? undefined,
+      });
+      return RLM_SLASH_OPTIONS.map((option) => ({
         id: option.id,
-        label: option.title,
+        label: option.label,
         description: option.description,
-        metadata: option.id === interactionMode ? 'active' : undefined,
+        metadata:
+          (option.id === 'on' && resolved.enabled) || (option.id === 'off' && !resolved.enabled)
+            ? 'active'
+            : undefined,
       }));
+    }
+
+    if ((cmd === 'effort' || cmd === 'mode') && reasoningPickerState) {
+      return reasoningPickerState.options.map((option) => ({
+        ...option,
+        metadata: option.id === reasoningPickerState.selectedId ? 'active' : undefined,
+      }));
+    }
+
+    if (normalizeSlashCmd(cmd) === 'permissions') {
+      const accessState = readPermissionAccess(String(chatId));
+      if (permissionPickerStep === 'mode') {
+        return PERMISSION_MODE_OPTIONS.map((option) => ({
+          id: option.id,
+          label: option.title,
+          description: option.description,
+          metadata: option.id === interactionMode ? 'active' : undefined,
+        }));
+      }
+      return [
+        ...PERMISSION_ACCESS_OPTIONS.map((option) => ({
+          id: option.id,
+          label: option.label,
+          description: option.description,
+          metadata: option.id === accessState.access ? 'active' : undefined,
+        })),
+        ...PERMISSION_APPROVE_OPTIONS.map((option) => ({
+          id: option.id,
+          label: option.label,
+          description: option.description,
+          metadata:
+            option.id === 'approve-all' && accessState.approveAll
+              ? 'active'
+              : option.id === 'approve-all-off' && !accessState.approveAll
+                ? 'active'
+                : undefined,
+        })),
+        {
+          id: 'status',
+          label: 'Effective policy',
+          description: formatPermissionPolicy({
+            mode: interactionMode,
+            access: accessState.access,
+            approveAll: accessState.approveAll,
+          }),
+        },
+        {
+          id: 'done',
+          label: 'Done',
+          description: 'Close the permissions control',
+        },
+      ];
     }
 
     return [];
@@ -951,6 +1355,10 @@ export function Composer({
     pluginConnections,
     projectFileOptions,
     interactionMode,
+    reasoningPickerState,
+    chatId,
+    workspaceId,
+    permissionPickerStep,
   ]);
 
   // Load project files when /file picker opens
@@ -1053,10 +1461,23 @@ export function Composer({
   // (`AIza...`), the router silently falls back to mock and replies look
   // fake. Surface a one-line CTA on the composer so they know it's a
   // 30-second fix at aistudio.google.com/apikey (no card needed).
+  // Hide entirely when the user already chose a local/Ollama (or any
+  // non-Google) chat model — the Gemini key bar is noise while typing
+  // to Local Models.
   const googleKey = useAuthStore((s) => s.apiKeys.google);
   const jarvisAgent = useMemo(() => findProtectedJarvisAgent(Object.values(agents)), [agents]);
+  const usingNonGoogleChatModel =
+    chatModelSelection.mode === 'single' && chatModelSelection.providerId !== 'google';
+  const usingLocalChatModel =
+    chatModelSelection.mode === 'single' &&
+    (chatModelSelection.providerId === 'ollama' || chatModelSelection.providerId === 'local');
   const showFreeKeyNudge =
-    !compact && !!jarvisAgent && jarvisAgent.model.provider === 'google' && !googleKey;
+    !compact &&
+    !!jarvisAgent &&
+    jarvisAgent.model.provider === 'google' &&
+    !googleKey &&
+    !usingNonGoogleChatModel &&
+    !usingLocalChatModel;
 
   // Filtered agent list for the mention typeahead (case-insensitive prefix match,
   // falling back to substring match for forgiving search).
@@ -1096,10 +1517,11 @@ export function Composer({
   const filteredSlashCommands = useMemo<SlashCommandDef[]>(() => {
     const q = (slashCtx?.query ?? '').toLowerCase();
     if (!slashCtx) return [];
-    const scored = SLASH_COMMANDS.map((c) => ({
-      cmd: c,
-      score: slashCmdMatchScore(q, c),
-    }))
+    const scored = getVisibleSlashCommands()
+      .map((c) => ({
+        cmd: c,
+        score: slashCmdMatchScore(q, c),
+      }))
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score || a.cmd.cmd.localeCompare(b.cmd.cmd))
       .map((s) => s.cmd);
@@ -1147,6 +1569,28 @@ export function Composer({
     setSlashCtx(getSlashContext(ta.value, ta.selectionStart));
   };
 
+  const activateTokenBoss = (mode: ReasoningMode, remainingText = '') => {
+    const currentSelection = useAuthStore.getState().chatModelSelection;
+    const tokenProvider = tokenBossProviderForMode(mode, currentSelection);
+    setText(remainingText);
+    setSlashCtx(null);
+    setOptionPickerCtx(null);
+    if (!tokenProvider) {
+      toast.warning(
+        'Token Boss unavailable',
+        'Select a supported single model, then choose Token Final Boss from /mode.',
+      );
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+    requestTokenBoss({
+      chatId: String(chatId),
+      providerId: tokenProvider.id,
+      restoreFocus: textareaRef.current,
+      allowAudio: navigator.userActivation?.isActive === true,
+    });
+  };
+
   const insertSlashCommand = (cmd: SlashCommandDef) => {
     if (!slashCtx || !textareaRef.current) return;
     const ta = textareaRef.current;
@@ -1155,16 +1599,17 @@ export function Composer({
 
     const canonicalCmd = normalizeSlashCmd(cmd.cmd);
 
-    // `/hive` is no longer a reference token — it switches the chat model to the
-    // Hive ensemble (no attachment), then clears the typed command.
+    // `/hive` switches to the Hive ensemble when the product surface is enabled.
     if (canonicalCmd === 'hive') {
       setText(before + after);
-      setChatModelSelection(selectionFromHive('balanced'));
-      setConfirmedCommands((cur) => {
-        const entry = buildSlashReferenceCommand(cmd);
-        return [...cur.filter((c) => c.value !== entry.value), entry];
-      });
       setSlashCtx(null);
+      if (isHiveProductEnabled()) {
+        setChatModelSelection(selectionFromHive('balanced'));
+        setConfirmedCommands((cur) => {
+          const entry = buildSlashReferenceCommand(cmd);
+          return [...cur.filter((c) => c.value !== entry.value), entry];
+        });
+      }
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
@@ -1205,14 +1650,45 @@ export function Composer({
       return;
     }
 
-    // If command has options (context, plug, skills, file, permissions…), show option picker.
+    // Commands with structured choices open the same keyboard-first option-picker flow.
     if (
       cmd.hasOptions &&
-      (isChatAttachSlashCmd(cmd.cmd) || normalizeSlashCmd(cmd.cmd) === 'permissions')
+      (isChatAttachSlashCmd(cmd.cmd) ||
+        normalizeSlashCmd(cmd.cmd) === 'permissions' ||
+        normalizeSlashCmd(cmd.cmd) === 'agent' ||
+        canonicalCmd === 'chat' ||
+        cmd.cmd === 'effort' ||
+        cmd.cmd === 'mode' ||
+        cmd.cmd === 'rlm' ||
+        cmd.cmd === 'permissions' ||
+        canonicalCmd === 'md' ||
+        cmd.cmd === 'theme' ||
+        isGlobalThemePickerCommand(cmd.cmd))
     ) {
       setText(before + after);
       setSlashCtx(null);
-      setSelectedOptionId('');
+      setSelectedOptionId(
+        isGlobalThemePickerCommand(cmd.cmd)
+          ? useUIStore.getState().theme
+          : cmd.cmd === 'theme'
+            ? loadConsolePreferences().profile
+            : canonicalCmd === 'chat'
+              ? storedChatEngine(String(chatId))
+              : cmd.cmd === 'rlm'
+                ? resolveRlmEnabled({
+                    chatId: String(chatId),
+                    workspaceId: workspaceId ?? undefined,
+                  }).enabled
+                  ? 'on'
+                  : 'off'
+                : cmd.cmd === 'effort' || cmd.cmd === 'mode'
+                  ? (buildReasoningSlashPickerState({
+                      command: cmd.cmd,
+                      selection: reasoningSelectionFromChatModel(chatModelSelection),
+                      preference: reasoningPreference,
+                    }).selectedId ?? '')
+                  : '',
+      );
       setOptionPickerCtx({ cmd, query: '' });
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
@@ -1263,6 +1739,35 @@ export function Composer({
     const cmd = optionPickerCtx.cmd;
     const canonical = normalizeSlashCmd(cmd.cmd);
 
+    if (canonical === 'chat') {
+      const targetEngine = option.id === 'browser' ? 'browser' : 'native';
+      setOptionPickerCtx(null);
+      setSelectedOptionId('');
+      setText('');
+      void transitionChatEngine({
+        chatId: String(chatId),
+        targetEngine,
+      }).then((result) => {
+        if (result.status === 'failed') {
+          toast.error('Could not switch chat mode', 'The current chat was left unchanged.');
+        } else {
+          useUIStore.getState().setActiveChat(result.chatId);
+          useUIStore.getState().setRoute('chat');
+        }
+      });
+      return;
+    }
+
+    // /agent: open the selected live subagent/multitask child thread (native).
+    if (canonical === 'agent') {
+      openNativeChildChat(option.id);
+      setOptionPickerCtx(null);
+      setSelectedOptionId('');
+      setText('');
+      toast.info('Opened agent thread', `${option.label} — parent chat stays in your tabs.`);
+      return;
+    }
+
     if (cmd.cmd === 'allaboutme' && option.id === 'retake') {
       setOptionPickerCtx(null);
       setSelectedOptionId('');
@@ -1277,17 +1782,140 @@ export function Composer({
       return;
     }
 
-    // /permissions picker: set Agent / Plan / Ask mode only — never attach a chip.
-    if (canonical === 'permissions') {
-      const nextMode = parsePermissionModeArg(option.id) ?? (option.id as 'ask' | 'plan' | 'agent');
-      if (nextMode === 'ask' || nextMode === 'plan' || nextMode === 'agent') {
-        setInteractionMode(chatId, nextMode);
-        // Drop any stale permissions chip from older builds.
-        setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== 'permissions'));
-        // Quiet: mode chip already shows the active mode — no toast spam.
+    if (canonical === 'effort') {
+      const effort = option.id === 'auto' ? null : parseReasoningEffortArgument(option.id);
+      if (effort !== undefined) {
+        writeChatReasoningEffort(String(chatId), effort);
+        setReasoningPreference(readChatReasoningPreference(String(chatId)));
       }
       setOptionPickerCtx(null);
       setSelectedOptionId('');
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+
+    if (canonical === 'mode') {
+      const mode = parseReasoningModeArgument(option.id);
+      if (mode) {
+        applyChatReasoningMode(String(chatId), mode);
+        setReasoningPreference(readChatReasoningPreference(String(chatId)));
+        if (mode === 'token-final-boss') activateTokenBoss(mode);
+      }
+      setOptionPickerCtx(null);
+      setSelectedOptionId('');
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+
+    if (canonical === 'rlm') {
+      const action = parseRlmSlashArgument(option.id);
+      if (action === 'on' || action === 'off') {
+        const resolved = setChatRlmEnabled(String(chatId), action === 'on');
+        void messageRepo.create({
+          chat_id: chatId as ChatId,
+          role: 'system',
+          parts: [{ kind: 'text', text: formatRlmStatus(resolved, { projectId, workspaceId }) }],
+        });
+      } else if (action === 'status') {
+        void messageRepo.create({
+          chat_id: chatId as ChatId,
+          role: 'system',
+          parts: [
+            {
+              kind: 'text',
+              text: formatRlmStatus(
+                resolveRlmEnabled({
+                  chatId: String(chatId),
+                  workspaceId: workspaceId ?? undefined,
+                }),
+                { projectId, workspaceId },
+              ),
+            },
+          ],
+        });
+      } else if (action === 'refresh') {
+        markRlmIndexRefreshed();
+        window.dispatchEvent(new CustomEvent('jarvis:context-tree-updated'));
+        void messageRepo.create({
+          chat_id: chatId as ChatId,
+          role: 'system',
+          parts: [
+            {
+              kind: 'text',
+              text: formatRlmStatus(
+                resolveRlmEnabled({
+                  chatId: String(chatId),
+                  workspaceId: workspaceId ?? undefined,
+                }),
+                { projectId, workspaceId },
+              ),
+            },
+          ],
+        });
+      } else if (action === 'trace') {
+        useUIStore.getState().setRoute('context');
+      }
+      setOptionPickerCtx(null);
+      setSelectedOptionId('');
+      setText('');
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+
+    if (canonical === 'md' && isMarkdownDocumentKind(option.id)) {
+      setConfirmedCommands((current) => [
+        ...current.filter((command) => command.cmd !== 'md'),
+        { cmd: 'md', value: option.id, label: `/md: ${option.label}` },
+      ]);
+      setOptionPickerCtx(null);
+      setSelectedOptionId('');
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+
+    // /permissions picker: set Agent / Plan / Ask mode only — never attach a chip.
+    if (canonical === 'permissions') {
+      const parsed = parsePermissionSlashArg(option.id);
+      if (parsed?.kind === 'mode') {
+        applyInteractionMode(parsed.value);
+        setPermissionPickerStep('access');
+        setSelectedOptionId(readPermissionAccess(String(chatId)).access);
+        requestAnimationFrame(() => textareaRef.current?.focus());
+        return;
+      }
+      if (parsed?.kind === 'access') {
+        setPermissionAccess(String(chatId), parsed.value);
+        setSelectedOptionId(parsed.value);
+        requestAnimationFrame(() => textareaRef.current?.focus());
+        return;
+      }
+      if (parsed?.kind === 'approve-all') {
+        setApproveAllForRun(String(chatId), parsed.value);
+        requestAnimationFrame(() => textareaRef.current?.focus());
+        return;
+      }
+      if (parsed?.kind === 'status') {
+        const accessState = readPermissionAccess(String(chatId));
+        void messageRepo.create({
+          chat_id: chatId as ChatId,
+          role: 'system',
+          parts: [
+            {
+              kind: 'text',
+              text: formatPermissionPolicy({
+                mode: interactionMode,
+                access: accessState.access,
+                approveAll: accessState.approveAll,
+              }),
+            },
+          ],
+        });
+      }
+      setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== 'permissions'));
+      setPermissionPickerStep('mode');
+      setOptionPickerCtx(null);
+      setSelectedOptionId('');
+      setText('');
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
@@ -1305,9 +1933,7 @@ export function Composer({
         );
       } else {
         const image = canvasSnapshotToImageAttachment(snapshot);
-        setAttachedImages((current) =>
-          current.some(({ id }) => id === image.id) ? current : [...current, image].slice(0, 6),
-        );
+        setAttachedImages((current) => appendComposerMedia(current, [image]));
       }
       setOptionPickerCtx(null);
       setSelectedOptionId('');
@@ -1321,9 +1947,7 @@ export function Composer({
       if (isSupportedImagePath(path)) {
         void imageAttachmentFromPath(path)
           .then((image) => {
-            setAttachedImages((cur) =>
-              cur.some((item) => item.sourcePath === path) ? cur : [...cur, image].slice(0, 6),
-            );
+            setAttachedImages((cur) => appendComposerMedia(cur, [image]));
           })
           .catch((err) => {
             toast.error(
@@ -1332,7 +1956,7 @@ export function Composer({
             );
           });
       } else {
-        setAttachedFiles((cur) => (cur.includes(path) ? cur : [...cur, path]).slice(0, 8));
+        setAttachedFiles((cur) => [...cur, path].slice(0, 24));
       }
       setConfirmedCommands((cur) => [
         ...cur.filter((c) => !(c.cmd === 'file' && c.value === path)),
@@ -1395,7 +2019,8 @@ export function Composer({
   const handleSlashCommand = async (trimmed: string): Promise<boolean | string> => {
     if (!trimmed.startsWith('/')) return false;
     const [cmdRaw, ...restParts] = trimmed.slice(1).split(/\s+/);
-    const cmd = normalizeSlashCmd(cmdRaw ?? '');
+    const classification = classifySlashCommand(cmdRaw ?? '');
+    const cmd = classification?.command ?? normalizeSlashCmd(cmdRaw ?? '');
     const rest = restParts.join(' ').trim();
     const addSystem = async (msg: string) => {
       await messageRepo.create({
@@ -1405,49 +2030,238 @@ export function Composer({
       });
       setText('');
     };
+    if (!classification) {
+      await addSystem(`Unknown slash command: /${cmd}. Try /help.`);
+      return true;
+    }
     const openAttachPicker = (canonicalCmd: string) => {
       const def = findSlashCommandDef(canonicalCmd);
       if (!def) return false;
+      const reasoningState =
+        def.cmd === 'effort' || def.cmd === 'mode'
+          ? buildReasoningSlashPickerState({
+              command: def.cmd,
+              selection: reasoningSelectionFromChatModel(chatModelSelection),
+              preference: reasoningPreference,
+            })
+          : null;
       setText('');
       setSlashCtx(null);
-      setSelectedOptionId('');
+      setSelectedOptionId(
+        isGlobalThemePickerCommand(def.cmd)
+          ? useUIStore.getState().theme
+          : def.cmd === 'theme'
+            ? loadConsolePreferences().profile
+            : normalizeSlashCmd(def.cmd) === 'chat'
+              ? storedChatEngine(String(chatId))
+              : (reasoningState?.selectedId ?? ''),
+      );
       setOptionPickerCtx({ cmd: def, query: '' });
       requestAnimationFrame(() => textareaRef.current?.focus());
       return true;
     };
-    if (cmd === 'permissions' || cmd === 'permission' || cmd === 'perms' || cmd === 'access') {
-      const parsed = rest ? parsePermissionModeArg(rest) : null;
+    if (cmd === 'fast' || cmd === 'performance' || cmd === 'rlm') {
+      const parsed = parseChatRuntimeCommand(`/${cmd}${rest ? ` ${rest}` : ''}`);
+      if (!parsed) {
+        await addSystem(`Invalid /${cmd} value. Use /${cmd} status for the current setting.`);
+        return true;
+      }
+      const result = applyChatRuntimeCommand(runtimePolicy.settings, parsed);
+      const next = writeChatRuntimePolicyState(String(chatId), {
+        ...runtimePolicy,
+        settings: result.settings,
+      });
+      setRuntimePolicy(next);
+      if (result.kind === 'action') {
+        await addSystem(
+          result.action === 'refresh-rlm'
+            ? 'RLM refresh requested for the next turn.'
+            : 'RLM trace is available in the Context diagnostics surface.',
+        );
+      } else if (result.kind === 'picker') {
+        await addSystem(
+          `Use /${cmd} ${cmd === 'fast' ? 'on | off | status' : cmd === 'performance' ? 'responsive | balanced | quality | status' : 'on | off | status | refresh | trace'}.`,
+        );
+      } else {
+        await addSystem(result.message);
+      }
+      return true;
+    }
+    if (cmd === 'access') {
+      const value = rest.toLowerCase();
+      if (!value || value === 'status') {
+        await addSystem(`Access: ${runtimePolicy.access}`);
+        return true;
+      }
+      const access =
+        value === 'read' || value === 'readonly' || value === 'read-only'
+          ? 'read-only'
+          : value === 'write' || value === 'write-access'
+            ? 'write'
+            : value === 'full' || value === 'full-access'
+              ? 'full'
+              : null;
+      if (!access) {
+        await addSystem('Use /access read-only | write | full | status.');
+        return true;
+      }
+      const next = writeChatRuntimePolicyState(String(chatId), { ...runtimePolicy, access });
+      setRuntimePolicy(next);
+      await addSystem(`Access set to ${access}. Interaction mode remains ${interactionMode}.`);
+      return true;
+    }
+    if (cmd === 'approveall' || cmd === 'approve-all') {
+      const value = rest.toLowerCase();
+      if (!value || value === 'status') {
+        await addSystem(
+          `Approve All for next run: ${runtimePolicy.approveAllForRun ? 'on' : 'off'}`,
+        );
+        return true;
+      }
+      if (value !== 'on' && value !== 'off') {
+        await addSystem('Use /approveall on | off | status.');
+        return true;
+      }
+      const next = writeChatRuntimePolicyState(String(chatId), {
+        ...runtimePolicy,
+        approveAllForRun: value === 'on',
+      });
+      setRuntimePolicy(next);
+      await addSystem(
+        value === 'on'
+          ? 'Approve All enabled for the next scoped run only; hard denies remain enforced.'
+          : 'Approve All disabled.',
+      );
+      return true;
+    }
+    if (cmd === 'effort' && rest) {
+      const parsed = parseChatRuntimeCommand(`/effort ${rest}`);
       if (parsed) {
-        setInteractionMode(chatId, parsed);
+        const result = applyChatRuntimeCommand(runtimePolicy.settings, parsed);
+        const next = writeChatRuntimePolicyState(String(chatId), {
+          ...runtimePolicy,
+          settings: result.settings,
+        });
+        setRuntimePolicy(next);
+        if (result.kind === 'updated' || result.kind === 'status') await addSystem(result.message);
+        if (result.kind === 'updated') {
+          const effort = parseReasoningEffortArgument(rest);
+          if (effort !== undefined) {
+            writeChatReasoningEffort(String(chatId), effort);
+            setReasoningPreference(readChatReasoningPreference(String(chatId)));
+          }
+        }
+        return true;
+      }
+    }
+    if (cmd === 'effort') {
+      if (rest) {
+        const effort = parseReasoningEffortArgument(rest);
+        if (effort !== undefined) {
+          writeChatReasoningEffort(String(chatId), effort);
+          setReasoningPreference(readChatReasoningPreference(String(chatId)));
+          setText('');
+          return true;
+        }
+      }
+      openAttachPicker('effort');
+      return true;
+    }
+    if (cmd === 'mode') {
+      if (rest) {
+        const mode = parseReasoningModeArgument(rest);
+        if (mode) {
+          applyChatReasoningMode(String(chatId), mode);
+          setReasoningPreference(readChatReasoningPreference(String(chatId)));
+          setText('');
+          if (mode === 'token-final-boss') activateTokenBoss(mode);
+          return true;
+        }
+      }
+      openAttachPicker('mode');
+      return true;
+    }
+    if (cmd === 'chat') {
+      openAttachPicker('chat');
+      return true;
+    }
+    if (cmd === 'permissions' || cmd === 'permission' || cmd === 'perms') {
+      const parsed = rest ? parsePermissionSlashArg(rest) : undefined;
+      if (parsed?.kind === 'mode') {
+        applyInteractionMode(parsed.value);
         // Mode change only — do not attach /permissions as a confirmed chip.
         setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== 'permissions'));
         setText('');
         return true;
       }
-      // Open the permissions option picker (still not an attachment).
+      if (parsed?.kind === 'access') {
+        setPermissionAccess(String(chatId), parsed.value);
+        setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== 'permissions'));
+        setText('');
+        return true;
+      }
+      if (parsed?.kind === 'approve-all') {
+        setApproveAllForRun(String(chatId), parsed.value);
+        setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== 'permissions'));
+        setText('');
+        return true;
+      }
+      if (parsed?.kind === 'status') {
+        const accessState = readPermissionAccess(String(chatId));
+        await addSystem(
+          formatPermissionPolicy({
+            mode: interactionMode,
+            access: accessState.access,
+            approveAll: accessState.approveAll,
+          }),
+        );
+        return true;
+      }
+      if (rest && !parsed) {
+        await addSystem(
+          'Usage: /permissions agent | plan | ask | read | write | full | approve-all | status',
+        );
+        return true;
+      }
+      setPermissionPickerStep('mode');
       openAttachPicker('permissions');
       return true;
     }
     if (cmd === 'ask') {
-      setInteractionMode(chatId, 'ask');
+      applyInteractionMode('ask');
       if (rest) return rest;
       setText('');
       return true;
     }
     if (cmd === 'plan') {
-      setInteractionMode(chatId, 'plan');
+      applyInteractionMode('plan');
       if (rest) return rest;
       setText('');
       return true;
     }
     if (cmd === 'schedule' && rest) {
-      return `/${cmd} ${rest}`;
+      return buildVibeSpaceReferenceRequest('schedule', rest);
+    }
+    // /agent — live subagent selector (does not spawn; use /multitask or /subagents).
+    if (cmd === 'agent') {
+      const live = useJarvisInteractionStore.getState().agentsByChat[String(chatId)] ?? [];
+      const options = agentSelectorOptions(live);
+      if (options.length === 0) {
+        await addSystem(
+          'No live subagents for this chat. Spawn with /multitask <task> or /subagents <task>, then use /agent to open a thread.',
+        );
+        setText('');
+        return true;
+      }
+      openAttachPicker('agent');
+      setText('');
+      return true;
     }
     if (cmd === 'multitask' || cmd === 'subagents') {
-      setInteractionMode(chatId, 'agent');
+      applyInteractionMode('agent');
       if (!rest) {
         await addSystem(
-          `Use /${cmd} <task> to launch chat-native Jarvis ${cmd === 'subagents' ? 'subagents' : 'agent'}.`,
+          `Use /${cmd} <task> to launch chat-native Jarvis ${cmd === 'subagents' ? 'subagents' : 'agent'}. Open a spawned thread with /agent.`,
         );
         return true;
       }
@@ -1462,6 +2276,10 @@ export function Composer({
         commandName: cmd,
         repos: { chatRepo, messageRepo },
       });
+      toast.info(
+        cmd === 'subagents' ? 'Subagents spawned' : 'Agent spawned',
+        'Stay on this chat. Open a worker thread with /agent.',
+      );
       setText('');
       return true;
     }
@@ -1512,15 +2330,39 @@ export function Composer({
       setText('');
       return true;
     }
-    if (cmd === 'theme') {
+    if (cmd === 'appearance') {
+      if (!rest) return openAttachPicker(cmd);
       const nextTheme = parseThemeCommandArgument(rest);
       if (!nextTheme) {
-        await addSystem(getThemeCommandHelp());
+        await addSystem(getAppearanceCommandHelp());
         return true;
       }
       useUIStore.getState().setTheme(nextTheme);
       const label = SELECTABLE_THEMES.find((theme) => theme.id === nextTheme)?.label ?? nextTheme;
-      await addSystem(`Theme changed to ${label}.`);
+      await addSystem(`Appearance changed to ${label}.`);
+      return true;
+    }
+    if (cmd === 'theme') {
+      if (!rest) return openAttachPicker('theme');
+      const presentation = parseChatPresentationCommand(`/${cmd}${rest ? ` ${rest}` : ''}`);
+      if (!presentation) return false;
+      if (presentation.kind === 'console-theme-help') {
+        await addSystem(presentation.notice);
+        return true;
+      }
+      if (presentation.kind === 'console-theme') {
+        updateConsolePreferences({ profile: presentation.profile, view: 'agentic' });
+        await addSystem(presentation.notice);
+        return true;
+      }
+      const nextTheme = parseThemeCommandArgument(presentation.argument);
+      if (!nextTheme) {
+        await addSystem(getAppearanceCommandHelp());
+        return true;
+      }
+      useUIStore.getState().setTheme(nextTheme);
+      const label = SELECTABLE_THEMES.find((theme) => theme.id === nextTheme)?.label ?? nextTheme;
+      await addSystem(presentation.notice ?? `Appearance changed to ${label}.`);
       return true;
     }
     if (cmd === 'model') {
@@ -1545,11 +2387,32 @@ export function Composer({
       return true;
     }
     if (cmd === 'hive') {
-      setChatModelSelection(selectionFromHive('balanced'));
       setText('');
+      if (!isHiveProductEnabled()) {
+        await addSystem('Hive is not available in this build.');
+        return true;
+      }
+      setChatModelSelection(selectionFromHive('balanced'));
       if (rest) return rest;
       await addSystem('Switched chat model to Hive — the 5-model balanced ensemble.');
       return true;
+    }
+    if (cmd === 'md') {
+      if (!rest) return openAttachPicker('md');
+      const parsed = parseMarkdownSlashArgument(rest);
+      if (!parsed) {
+        await addSystem(
+          `Markdown document types: ${MARKDOWN_DOCUMENT_OPTIONS.map(({ id }) => id).join(', ')}. Use /md <type> <brief>.`,
+        );
+        return true;
+      }
+      const option = MARKDOWN_DOCUMENT_OPTIONS.find(({ id }) => id === parsed.kind);
+      setConfirmedCommands((current) => [
+        ...current.filter((command) => command.cmd !== 'md'),
+        { cmd: 'md', value: parsed.kind, label: `/md: ${option?.label ?? parsed.kind}` },
+      ]);
+      setText('');
+      return parsed.brief || true;
     }
     const routes: Record<string, string> = {
       kanban: 'kanban',
@@ -1558,7 +2421,6 @@ export function Composer({
       tools: 'tools',
       agents: 'agents',
       schedule: 'schedule',
-      chat: 'chat',
     };
     if (cmd in routes) {
       const def = findSlashCommandDef(cmd);
@@ -1614,7 +2476,32 @@ export function Composer({
       );
       return true;
     }
+    if (cmd === 'plug') {
+      openAttachPicker('plug');
+      return true;
+    }
     if (cmd === 'skills') {
+      if (rest) {
+        const target = rest.toLowerCase();
+        const matched = getAllCatalogSkills().find(
+          (skill) =>
+            skill.id.toLowerCase() === target ||
+            skill.name.toLowerCase() === target ||
+            skill.name.toLowerCase().includes(target),
+        );
+        if (!matched) {
+          await addSystem(`No skill matching '${rest}'. Use /skills to inspect the catalog.`);
+          return true;
+        }
+        setConfirmedCommands((current) => [
+          ...current.filter(
+            (command) => !(command.cmd === 'skills' && command.value === matched.id),
+          ),
+          { cmd: 'skills', value: matched.id, label: `/skills: ${matched.name}` },
+        ]);
+        setText('');
+        return true;
+      }
       const available = getAllCatalogSkills()
         .map((skill) => `- ${skill.name} (${skill.id}) - ${skill.description}`)
         .join('\n');
@@ -1643,7 +2530,11 @@ export function Composer({
       if (openAttachPicker('allaboutme')) return true;
       return true;
     }
-    if (cmd === 'attach' && rest) {
+    if (cmd === 'attach') {
+      if (!rest || !isSafeAbsoluteAttachmentPath(rest)) {
+        await addSystem('Use /attach <absolute path>. Relative paths and traversal are rejected.');
+        return true;
+      }
       setAttachedFiles((cur) => (cur.includes(rest) ? cur : [...cur, rest]).slice(0, 8));
       setText('');
       return true;
@@ -1653,6 +2544,15 @@ export function Composer({
       setAttachedImages([]);
       setText('');
       toast.info('Attachments cleared', 'All files and images removed from this message.');
+      return true;
+    }
+    if (cmd === 'output') {
+      setText('');
+      window.dispatchEvent(
+        new CustomEvent('jarvis:chat:output', {
+          detail: { chatId: String(chatId) },
+        }),
+      );
       return true;
     }
     if (cmd === 'undo') {
@@ -1716,13 +2616,14 @@ export function Composer({
       return true;
     }
     if (cmd === 'help') {
+      const hiveHelp = isHiveProductEnabled() ? '/hive, ' : '';
       await addSystem(
         'Chat slash commands work at the start, middle, or end of a message. ' +
-          '/agents, /terminals, /hive, /kanban, /history, /tools, /schedule become confirmed reference chips. ' +
+          `/agents, /terminals, ${hiveHelp}/kanban, /history, /tools, /schedule become confirmed reference chips. ` +
           '/context, /plug, /skills, /file open pickers. /file lists files in your open project. ' +
           '/attach <path>, /clearfiles (or /clearfile) clears attachments. ' +
           '/undo removes the last full turn; /redo restores it. ' +
-          '/usage, /model, /theme, /commands, /multitask, /ask, /plan.',
+          '/usage, /model, /rlm, /permissions, /theme, /appearance, /commands, /multitask, /ask, /plan.',
       );
       return true;
     }
@@ -1746,9 +2647,7 @@ export function Composer({
         if (isSupportedImagePath(path)) {
           try {
             const image = await imageAttachmentFromPath(path);
-            setAttachedImages((cur) =>
-              (cur.some((item) => item.sourcePath === path) ? cur : [...cur, image]).slice(0, 6),
-            );
+            setAttachedImages((cur) => appendComposerMedia(cur, [image]));
             setText('');
             return true;
           } catch (err) {
@@ -1759,7 +2658,7 @@ export function Composer({
             return true;
           }
         }
-        setAttachedFiles((cur) => (cur.includes(path) ? cur : [...cur, path]).slice(0, 8));
+        setAttachedFiles((cur) => [...cur, path].slice(0, 24));
         setText('');
         return true;
       }
@@ -1773,14 +2672,19 @@ export function Composer({
       openAttachPicker('file');
       return true;
     }
-    await addSystem(`Unknown slash command: /${cmd}. Try /help.`);
+    await addSystem(`Command /${cmd} is registered but has no executable VibeSpace route.`);
     return true;
   };
 
   const handleSend = async (
     overrideText?: string,
-    options: { bypassQueue?: boolean } = {},
+    options: {
+      bypassQueue?: boolean;
+      flushMode?: QueueFlushMode;
+      promptForgeApproved?: boolean;
+    } = {},
   ): Promise<boolean> => {
+    if (harnessBlocked) return false;
     const draftText = overrideText ?? text;
     const trimmed = draftText.trim();
     const hasConfirmedCommands = confirmedCommands.length > 0;
@@ -1797,8 +2701,9 @@ export function Composer({
       sending
     )
       return false;
-    if (jarvisRunning && !options.bypassQueue && !overrideText) {
-      enqueueCurrentMessage(trimmed);
+    if (jarvisRunning && !options.bypassQueue && (!overrideText || options.promptForgeApproved)) {
+      // Send button defaults to after-run; Enter passes after-tool explicitly.
+      enqueueCurrentMessage(trimmed, options.flushMode ?? 'after-run');
       return true;
     }
 
@@ -1825,7 +2730,39 @@ export function Composer({
     if (slashResult === true) return true;
     // When a route slash command has a remainder (e.g. "/terminals close 5 terminals"),
     // handleSlashCommand returns the remainder text so we send it as the message.
-    const rawSendText = typeof slashResult === 'string' ? slashResult.trim() : afterInline;
+    let rawSendText = typeof slashResult === 'string' ? slashResult.trim() : afterInline;
+
+    // Shared Prompt Upgrade Engine: optional auto-upgrade before Send.
+    // Manual Upgrade button still opens preview/edit. On failure, fall back to original.
+    // Skip when caller already provided overrideText (queued flush / smoke helpers).
+    if (
+      promptForgeAutoUpgradeRef.current &&
+      !overrideText &&
+      !options.promptForgeApproved &&
+      !promptForge.isDraftApproved(rawSendText) &&
+      !requestsReadOnlyContextTool(rawSendText) &&
+      rawSendText.trim().length > 0 &&
+      promptForgeUpgradeForSendRef.current
+    ) {
+      try {
+        const upgraded = await promptForgeUpgradeForSendRef.current(rawSendText);
+        if (upgraded.requiresReview) return true;
+        if (upgraded.upgraded && upgraded.text.trim()) {
+          rawSendText = upgraded.text.trim();
+        } else if (
+          upgraded.reason &&
+          upgraded.reason !== 'empty' &&
+          upgraded.reason !== 'cancelled'
+        ) {
+          toast.info('Sent original prompt', upgraded.reason);
+        }
+      } catch {
+        toast.info(
+          'Sent original prompt',
+          'Prompt upgrade failed. Your original text was sent instead.',
+        );
+      }
+    }
 
     // Message was only utility slash tokens (e.g. just /clearfiles) — done.
     if (
@@ -1871,12 +2808,44 @@ export function Composer({
         messageCount,
       );
     }
-    const sendText = [mentionPrefix, referenceText, allAboutMeText, rawSendText]
+    const markdownCommand = confirmedCommands.find(
+      (command) => command.cmd === 'md' && command.value && isMarkdownDocumentKind(command.value),
+    );
+    const markdownInstruction =
+      markdownCommand?.value && isMarkdownDocumentKind(markdownCommand.value)
+        ? buildMarkdownCreationInstruction({
+            kind: markdownCommand.value,
+            brief: rawSendText,
+            projectRoot: getStoredProjectRoot(projectId),
+            fullyLocal: offlineMode,
+          })
+        : '';
+    const sendText = [
+      mentionPrefix,
+      referenceText,
+      allAboutMeText,
+      markdownInstruction || rawSendText,
+    ]
       .filter(Boolean)
       .join(' ')
       .trim();
 
-    const auth = useAuthStore.getState();
+    let auth = useAuthStore.getState();
+    // Refresh Ollama discovery before gating local sends so a connected
+    // daemon is not blocked by a stale empty catalog.
+    if (
+      auth.chatModelSelection.mode === 'single' &&
+      (auth.chatModelSelection.providerId === 'ollama' ||
+        auth.chatModelSelection.providerId === 'local')
+    ) {
+      try {
+        const { bootstrapOllamaConnection } = await import('@/lib/ai/ollamaBootstrap');
+        await bootstrapOllamaConnection({ waitTimeoutMs: 8_000 });
+      } catch {
+        // Validation / provider still report a clear local-model error.
+      }
+      auth = useAuthStore.getState();
+    }
     const sendCheck = validateSendModelAccess(
       sendText,
       auth.chatModelSelection,
@@ -2000,14 +2969,14 @@ export function Composer({
             parts: [
               {
                 kind: 'text',
-                text: `Scheduled terminal message for ${new Date(scheduled.runAt).toLocaleString()}: ${scheduled.command}`,
+                text: `Scheduled terminal message for ${formatUserDateTime(scheduled.runAt)}: ${scheduled.command}`,
               },
             ],
           });
           setText('');
           setAttachedTerminals([]);
           setMentionCtx(null);
-          toast.success('Terminal message scheduled', new Date(scheduled.runAt).toLocaleString());
+          toast.success('Terminal message scheduled', formatUserDateTime(scheduled.runAt));
           return true;
         }
       }
@@ -2020,16 +2989,40 @@ export function Composer({
       // AI-router audit.)
       // New real user turns invalidate redo history for this chat.
       clearRedoStack(String(chatId));
+      let oversizedAttachment: Awaited<ReturnType<typeof createOversizedMessageAttachment>> = null;
+      try {
+        oversizedAttachment = await createOversizedMessageAttachment(sendText);
+      } catch {
+        toast.warning(
+          'Long-message attachment unavailable',
+          'The message will remain inline so none of your text is lost.',
+        );
+      }
+      const persistedText = oversizedAttachment
+        ? oversizedMessageSummary(oversizedAttachment)
+        : sendText || 'Attached context.';
       const userMessage = await messageRepo.create({
         chat_id: chatId as ChatId,
         role: 'user',
         parts: [
-          { kind: 'text', text: sendText || 'Attached context.' },
+          { kind: 'text', text: persistedText },
           ...attachedImages.map((image) => ({
             kind: 'image' as const,
             url: `data:${image.mimeType};base64,${image.data}`,
             alt: image.name,
           })),
+          ...(oversizedAttachment
+            ? [
+                {
+                  kind: 'file_ref' as const,
+                  ref: {
+                    kind: 'file' as const,
+                    id: oversizedAttachment.path,
+                    excerpt: 'Temporary long-message attachment · expires after 24 hours',
+                  },
+                },
+              ]
+            : []),
           ...nextAttachedFiles.map((path) => ({
             kind: 'file_ref' as const,
             ref: { kind: 'file' as const, id: path },
@@ -2063,19 +3056,26 @@ export function Composer({
         0,
         8,
       );
-      const messageFilePaths = Array.from(
-        new Set([...nextAttachedFiles, ...extractAbsoluteFilePaths(sendText)]),
-      ).slice(0, 8);
+      const messageFilePaths = resolveSendFilePaths({
+        attachedFiles: nextAttachedFiles,
+        sendText,
+        ...(oversizedAttachment ? { oversizedPath: oversizedAttachment.path } : {}),
+        supportsFiles: connectionSupportsFileAttachments(auth.chatModelSelection),
+      });
       activeCancellationKeyRef.current = String(userMessage.id);
+      const tokenOptimizationPreferences = browserTokenOptimizationPreferences.getSnapshot();
+      const tokenOptimizationMode = browserTokenOptimizationPreferences.resolveMode(String(chatId));
+      // UI keeps full videos; vision path only receives image/* (+ sampled frames).
+      const visionAttachments = await visionAttachmentsForSend(attachedImages);
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
           detail: {
             chatId,
             cancellationKey: userMessage.id,
-            text: sendText || 'Attached context.',
+            text: persistedText,
             mentionedAgentIds,
             filePaths: messageFilePaths,
-            imageAttachments: attachedImages,
+            imageAttachments: visionAttachments,
             terminalRefs: nextAttachedTerminals,
             contextNodes: nextAttachedContexts,
             pluginIds,
@@ -2085,12 +3085,27 @@ export function Composer({
             speakReply: voiceReplyRequestedRef.current || useAuthStore.getState().speakReplies,
             autoApproveActions: useAuthStore.getState().jarvisAutoApprove,
             modelSelectionOverride: useAuthStore.getState().chatModelSelection,
-            automaticModelRoutingEligible: true,
+            reasoningPreference: readChatReasoningPreference(String(chatId)),
+            runtimeSettings: runtimePolicy.settings,
+            accessLevel: runtimePolicy.access,
+            approveAllForRun: runtimePolicy.approveAllForRun,
+            tokenOptimizationMode,
+            tokenOptimizationOutputLimit: tokenOptimizationPreferences.defaultMaxOutputTokens,
+            showTokenOptimizationReport:
+              tokenOptimizationPreferences.showOptimizationReportAutomatically,
+            allowStructuralCodeCompression:
+              tokenOptimizationPreferences.allowStructuralCodeCompression,
+            // The model chosen in Composer is an explicit user override.
+            automaticModelRoutingEligible: false,
           },
         }),
       );
+      if (runtimePolicy.approveAllForRun) {
+        const cleared = clearApproveAllForRun(String(chatId));
+        setRuntimePolicy(cleared);
+      }
       voiceReplyRequestedRef.current = false;
-      if (!overrideText) setText('');
+      if (!overrideText || options.promptForgeApproved) setText('');
       setAttachedFiles([]);
       setAttachedImages([]);
       setAttachedTerminals([]);
@@ -2142,17 +3157,15 @@ export function Composer({
       });
   };
 
-  const stopAndRestartQueuedModelSwitch = (id: string) => {
+  const interruptAndSendQueued = (id: string) => {
     const queued = queuedMessagesRef.current.find((message) => message.id === id);
-    if (!queued || !parseJarvisModelSwitchIntent(queued.text)) return;
+    if (!queued) return;
     const cancellationKey = activeCancellationKeyRef.current;
     if (!jarvisRunning || !cancellationKey) {
-      toast.info(
-        'Model switch stays queued',
-        'The current reply cannot be scoped for cancellation yet. The switch will be reviewed and applied on the next turn.',
-      );
+      if (!jarvisRunning) dispatchQueuedMessage(queued);
       return;
     }
+    queuedInterruptInFlightRef.current = queued.id;
     const reordered = [
       queued,
       ...queuedMessagesRef.current.filter((message) => message.id !== queued.id),
@@ -2164,15 +3177,22 @@ export function Composer({
     );
     toast.info(
       'Stopping current reply',
-      'The queued model switch will be reviewed and resent after cancellation completes.',
+      'Your queued message will send as soon as cancellation completes.',
     );
+  };
+  interruptQueuedRef.current = interruptAndSendQueued;
+
+  const stopAndRestartQueuedModelSwitch = (id: string) => {
+    const queued = queuedMessagesRef.current.find((message) => message.id === id);
+    if (!queued || !parseJarvisModelSwitchIntent(queued.text)) return;
+    interruptAndSendQueued(id);
   };
 
   const sendQueuedMessageNow = (id: string) => {
     const queued = queuedMessages.find((message) => message.id === id);
     if (!queued) return;
-    if (jarvisRunning && parseJarvisModelSwitchIntent(queued.text)) {
-      stopAndRestartQueuedModelSwitch(id);
+    if (jarvisRunning) {
+      interruptAndSendQueued(id);
       return;
     }
     dispatchQueuedMessage(queued);
@@ -2206,7 +3226,7 @@ export function Composer({
       const nextMode = cycleInteractionMode(
         useJarvisInteractionStore.getState().modeForChat(chatId),
       );
-      setInteractionMode(chatId, nextMode);
+      applyInteractionMode(nextMode);
       // Mode chip updates in place — no toast for routine mode cycles.
       return;
     }
@@ -2237,6 +3257,28 @@ export function Composer({
 
     // Option picker navigation (highest priority when showing)
     if (optionPickerCtx) {
+      if (anyThemePickerActive) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          themePickerRef.current?.cancel();
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          themePickerRef.current?.moveDown();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          themePickerRef.current?.moveUp();
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          themePickerRef.current?.selectCurrent();
+          return;
+        }
+      }
       if (e.key === 'Escape') {
         e.preventDefault();
         setOptionPickerCtx(null);
@@ -2317,6 +3359,65 @@ export function Composer({
           if (agent) insertMention(agent);
           return;
         }
+      }
+    }
+
+    // Match the advertised Mod+Enter shortcut without changing the bare
+    // Enter queue contract. Running turns keep their existing queue controls.
+    if (e.key === 'Enter' && !e.shiftKey && (e.metaKey || e.ctrlKey) && !jarvisRunning) {
+      e.preventDefault();
+      void handleSend(undefined, { flushMode: 'after-run' });
+      return;
+    }
+
+    // Bare Tab while running: queue until the full reply finishes.
+    if (
+      e.key === 'Tab' &&
+      !e.shiftKey &&
+      jarvisRunning &&
+      text.trim() &&
+      !modelPickerOpen &&
+      !optionPickerCtx &&
+      !slashCtx &&
+      !mentionCtx
+    ) {
+      e.preventDefault();
+      enqueueCurrentMessage(text, 'after-run');
+      return;
+    }
+
+    // Bare Enter: send when idle; queue after-tool when Jarvis is running.
+    if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      if (jarvisRunning && text.trim()) {
+        enqueueCurrentMessage(text, 'after-tool');
+      } else {
+        void handleSend(undefined, { flushMode: 'after-run' });
+      }
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      // Triple-Esc cancels the entire run (queue kept for resume/resend).
+      if (jarvisRunning && !modelPickerOpen && !optionPickerCtx && !slashCtx && !mentionCtx) {
+        const result = recordEscapePress(escapeCancelRef.current, Date.now());
+        escapeCancelRef.current = result.state;
+        if (result.shouldCancelRun) {
+          e.preventDefault();
+          suppressQueueFlushOnUserCancelRef.current = true;
+          const cancellationKey = activeCancellationKeyRef.current;
+          if (cancellationKey) {
+            window.dispatchEvent(
+              new CustomEvent('jarvis:cancel', { detail: { messageId: cancellationKey } }),
+            );
+          }
+          toast.info(CANCELLED_BY_USER_TOAST.title, CANCELLED_BY_USER_TOAST.body);
+          return;
+        }
+      }
+      if (jarvisRunning && queuedMessagesRef.current[0]) {
+        e.preventDefault();
+        interruptAndSendQueued(queuedMessagesRef.current[0].id);
       }
     }
   };
@@ -2721,6 +3822,7 @@ export function Composer({
     defaultLocalModel,
     workingDirectory: getStoredProjectRoot(projectId) || undefined,
   });
+  promptForgeUpgradeForSendRef.current = promptForge.upgradeForSend;
   const returnPromptForgeFocus = useCallback(() => {
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, []);
@@ -2730,7 +3832,7 @@ export function Composer({
       if (
         event.repeat ||
         document.activeElement !== textareaRef.current ||
-        !matchesHotkey(event, HOTKEYS.PROMPT_FORGE) ||
+        !matchesHotkey(event, resolveHotkey('PROMPT_FORGE')) ||
         promptForge.disabledReason
       ) {
         return;
@@ -2751,7 +3853,8 @@ export function Composer({
       attachedContexts.length > 0 ||
       confirmedCommands.length > 0 ||
       confirmedAgentMentions.length > 0) &&
-    !sending;
+    !sending &&
+    !harnessBlocked;
   const kernelSmokeHiveBound = KERNEL_SMOKE_ENABLED && isKernelSmokeBindingActive();
   const kernelSmokeHivePrepared =
     kernelSmokeHiveBound &&
@@ -2780,9 +3883,7 @@ export function Composer({
     if (isSupportedImagePath(clean)) {
       try {
         const image = await imageAttachmentFromPath(clean);
-        setAttachedImages((cur) =>
-          (cur.some((item) => item.sourcePath === clean) ? cur : [...cur, image]).slice(0, 6),
-        );
+        setAttachedImages((cur) => appendComposerMedia(cur, [image]));
         return;
       } catch (err) {
         toast.error(
@@ -2792,7 +3893,7 @@ export function Composer({
         return;
       }
     }
-    setAttachedFiles((cur) => (cur.includes(clean) ? cur : [...cur, clean]).slice(0, 8));
+    setAttachedFiles((cur) => [...cur, clean].slice(0, 24));
     setText((cur) => {
       const separator = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
       return `${cur}${separator}${clean}`;
@@ -2810,31 +3911,179 @@ export function Composer({
     return () => window.removeEventListener('jarvis:file:attach', onAttachFile as EventListener);
   }, [addDroppedPath, chatId]);
 
-  const addBrowserImages = useCallback(async (files: File[] | FileList) => {
-    const images = splitImageFiles(files);
-    if (images.length === 0) return false;
-    try {
-      const next = await Promise.all(images.slice(0, 6).map(imageAttachmentFromBrowserFile));
-      setAttachedImages((cur) => {
-        const seen = new Set(cur.map((image) => `${image.name}:${image.size ?? 0}`));
-        const merged = [...cur];
-        for (const image of next) {
-          const key = `${image.name}:${image.size ?? 0}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          merged.push(image);
-        }
-        return merged.slice(0, 6);
-      });
-      return true;
-    } catch (err) {
-      toast.error(
-        'Image attach failed',
-        err instanceof Error ? err.message : 'Could not attach image.',
-      );
-      return true;
-    }
+  const mergeAttachedImages = useCallback((next: ChatImageAttachment[]) => {
+    // No name/size dedupe — multi drag/drop/paste of the same file is allowed.
+    setAttachedImages((cur) => {
+      const result = appendComposerMediaResult(cur, next);
+      if (result.truncated > 0) {
+        toast.info(
+          'Attachment limit reached',
+          `${result.truncated} item(s) not added (max 24 media on this draft).`,
+        );
+      }
+      return result.items;
+    });
   }, []);
+
+  const addBrowserImages = useCallback(
+    async (files: File[] | FileList) => {
+      const images = splitImageFiles(files);
+      if (images.length === 0) return false;
+      const batch = images.slice(0, MAX_IMAGES_PER_BATCH);
+      const next: ChatImageAttachment[] = [];
+      let failed = 0;
+      for (const file of batch) {
+        try {
+          next.push(await imageAttachmentFromBrowserFile(file));
+        } catch {
+          failed += 1;
+        }
+      }
+      if (next.length > 0) mergeAttachedImages(next);
+      if (images.length > MAX_IMAGES_PER_BATCH) {
+        toast.info(
+          'Some images skipped',
+          `Attached ${MAX_IMAGES_PER_BATCH} of ${images.length} images this drop.`,
+        );
+      } else if (failed > 0) {
+        toast.warning(
+          'Some images failed',
+          `${failed} image(s) could not be attached; the rest were kept.`,
+        );
+      }
+      return true;
+    },
+    [mergeAttachedImages],
+  );
+
+  const addBrowserVideos = useCallback(
+    async (files: File[] | FileList) => {
+      const videos = splitVideoFiles(files);
+      if (videos.length === 0) return false;
+      const batch = videos.slice(0, MAX_VIDEOS_PER_BATCH);
+      // Full videos for UI; vision models get sampled frames only at send time.
+      const next: ChatImageAttachment[] = [];
+      let failed = 0;
+      for (const file of batch) {
+        try {
+          next.push(await videoAttachmentFromBrowserFile(file));
+        } catch {
+          failed += 1;
+        }
+      }
+      if (next.length > 0) mergeAttachedImages(next);
+      if (videos.length > MAX_VIDEOS_PER_BATCH) {
+        toast.info(
+          'Some videos skipped',
+          `Attached ${MAX_VIDEOS_PER_BATCH} of ${videos.length} videos this drop.`,
+        );
+      } else if (failed > 0) {
+        toast.warning(
+          'Some videos failed',
+          `${failed} video(s) could not be attached; the rest were kept.`,
+        );
+      }
+      return true;
+    },
+    [mergeAttachedImages],
+  );
+
+  /** OS FileList general files: path-based attach, or temp text for pathless text files. */
+  const addBrowserGeneralFiles = useCallback(async (files: File[] | FileList) => {
+    const classified = classifyBrowserFilesForAttach(files);
+    let attachedAny = false;
+
+    if (classified.pathFiles.length > 0) {
+      setAttachedFiles((cur) => {
+        // Allow multi-drop of the same path (duplicates OK).
+        return [...cur, ...classified.pathFiles.map((entry) => entry.path)].slice(0, 24);
+      });
+      attachedAny = true;
+    }
+
+    for (const file of classified.textWithoutPath.slice(0, 4)) {
+      try {
+        const text = await readBrowserFileAsText(file);
+        if (!text.trim()) continue;
+        // Prefer managed temp file so send uses the real file-path context path.
+        const temp = await createChatTextFileAttachment(
+          `// Attached file: ${file.name || 'file'}\n\n${text}`,
+        );
+        if (temp?.path) {
+          setAttachedFiles((cur) =>
+            (cur.includes(temp.path) ? cur : [...cur, temp.path]).slice(0, 8),
+          );
+          attachedAny = true;
+        } else {
+          // Browser preview: keep a synthetic path token so previews still list the name.
+          const synthetic = `clipboard:${file.name || 'file.txt'}`;
+          setAttachedFiles((cur) =>
+            (cur.includes(synthetic) ? cur : [...cur, synthetic]).slice(0, 8),
+          );
+          setText((cur) => {
+            const block = `\n\n--- ${file.name || 'file'} ---\n${text.slice(0, 12_000)}`;
+            return cur.includes(block.trim()) ? cur : `${cur}${block}`.trimStart();
+          });
+          attachedAny = true;
+        }
+      } catch (err) {
+        toast.error(
+          'File attach failed',
+          err instanceof Error ? err.message : `Could not attach ${file.name || 'file'}.`,
+        );
+        attachedAny = true;
+      }
+    }
+
+    if (classified.unsupportedWithoutPath.length > 0) {
+      const names = classified.unsupportedWithoutPath
+        .map((file) => file.name || 'file')
+        .slice(0, 3)
+        .join(', ');
+      toast.warning(
+        'Could not attach binary file',
+        `${names}: drop from disk in the desktop app (path required), or use /file from the project.`,
+      );
+      attachedAny = true;
+    }
+
+    return attachedAny;
+  }, []);
+
+  /** Shared paste/drop entry: images + videos + general files in one DataTransfer. */
+  const attachBrowserFileList = useCallback(
+    async (files: FileList | File[]) => {
+      if (!files || files.length === 0) return false;
+      const classified = classifyBrowserFilesForAttach(files);
+      let handled = false;
+      if (classified.images.length > 0) {
+        handled = (await addBrowserImages(classified.images)) || handled;
+      }
+      if (classified.videos.length > 0) {
+        handled = (await addBrowserVideos(classified.videos)) || handled;
+      }
+      if (
+        classified.pathFiles.length > 0 ||
+        classified.textWithoutPath.length > 0 ||
+        classified.unsupportedWithoutPath.length > 0
+      ) {
+        handled = (await addBrowserGeneralFiles(files)) || handled;
+      }
+      return handled;
+    },
+    [addBrowserGeneralFiles, addBrowserImages, addBrowserVideos],
+  );
+
+  // Full-chat OS file drops land on ChatView and re-dispatch here with FileList.
+  useEffect(() => {
+    const onMedia = (event: Event) => {
+      const detail = (event as CustomEvent<MediaAttachDetail>).detail;
+      if (detail?.chatId && String(detail.chatId) !== String(chatId)) return;
+      if (detail?.files?.length) void attachBrowserFileList(detail.files);
+    };
+    window.addEventListener(MEDIA_ATTACH_EVENT, onMedia as EventListener);
+    return () => window.removeEventListener(MEDIA_ATTACH_EVENT, onMedia as EventListener);
+  }, [attachBrowserFileList, chatId]);
 
   const addDroppedTerminal = useCallback((raw: string | TerminalRef) => {
     const ref = typeof raw === 'string' ? parseTerminalRef(raw) : raw;
@@ -2904,13 +4153,36 @@ export function Composer({
 
   useEffect(() => {
     const onInsertText = (e: Event) => {
-      const detail = (e as CustomEvent<{ text: string; chatId?: string }>).detail;
+      const detail = (e as CustomEvent<{ text: string; chatId?: string; skillId?: string }>).detail;
       if (detail?.chatId && String(detail.chatId) !== String(chatId)) return;
       if (detail?.text) {
         setText((cur) => {
           const separator = cur.length === 0 || /\s$/.test(cur) ? '' : ' ';
           return cur + separator + detail.text;
         });
+        if (detail.skillId) {
+          const skill = getAllCatalogSkills().find((entry) => entry.id === detail.skillId);
+          setConfirmedCommands((current) => {
+            if (
+              current.some(
+                (command) => command.cmd === 'skills' && command.value === detail.skillId,
+              )
+            ) {
+              return current;
+            }
+            const withoutOverflow = current
+              .filter((command) => command.cmd !== 'skills')
+              .concat(current.filter((command) => command.cmd === 'skills').slice(-5));
+            return [
+              ...withoutOverflow,
+              {
+                cmd: 'skills',
+                value: detail.skillId,
+                label: `/skills: ${skill?.name ?? detail.skillId}`,
+              },
+            ];
+          });
+        }
         requestAnimationFrame(() => textareaRef.current?.focus());
       }
     };
@@ -2938,7 +4210,8 @@ export function Composer({
       clearSttFinalizeTimer();
       setSttAwaitingFinal(false);
       setSttInterim('');
-      VoiceService.setInactivityTimeoutMs(15_000);
+      // Free/default system STT: 3 minutes (180s) of no speech before timeout.
+      VoiceService.setInactivityTimeoutMs(180_000);
       const snap = sttSnapshotRef.current;
       sttSnapshotRef.current = null;
       voiceReplyRequestedRef.current = true;
@@ -3003,12 +4276,73 @@ export function Composer({
   const startStt = () => {
     transcribeGenRef.current += 1;
     setSttTranscribing(false);
-    if (getComposerSttProvider() === 'faster-whisper') {
+    const provider = getComposerSttProvider();
+    if (provider === 'faster-whisper') {
       void startFasterWhisperStt();
+      return;
+    }
+    if (provider === 'deepgram') {
+      void startDeepgramStt();
       return;
     }
     void startSystemStt();
   };
+
+  async function startDeepgramStt() {
+    const generation = transcribeGenRef.current;
+    captureComposerSttSnapshot();
+    setSttInterim('Connecting to Deepgram…');
+    setSttAwaitingFinal(false);
+    try {
+      const session = await createDeepgramDictationSession({
+        onOpen: () => {
+          if (generation !== transcribeGenRef.current) return;
+          setSttListening(true);
+          setSttInterim('Listening with Deepgram…');
+        },
+        onPartial: (partial) => {
+          if (generation !== transcribeGenRef.current) return;
+          const committed = deepgramSessionRef.current?.getFinalText() ?? '';
+          const preview = `${committed} ${partial}`.trim();
+          setSttInterim(preview);
+          const snap = sttSnapshotRef.current;
+          if (snap) setText(buildSttPreviewValue(snap, preview));
+        },
+        onFinal: (finalText) => {
+          if (generation !== transcribeGenRef.current) return;
+          setSttInterim(finalText);
+          const snap = sttSnapshotRef.current;
+          if (snap) setText(buildSttPreviewValue(snap, finalText));
+        },
+        onLevel: setSttVolumeLevel,
+        onError: (message) => {
+          if (generation !== transcribeGenRef.current) return;
+          deepgramSessionRef.current = null;
+          setSttListening(false);
+          setSttInterim('');
+          revertComposerSttPreview();
+          toast.error('Deepgram dictation failed', message);
+        },
+        onClose: () => {
+          if (generation === transcribeGenRef.current) setSttListening(false);
+        },
+      });
+      if (generation !== transcribeGenRef.current) {
+        session.stop();
+        return;
+      }
+      deepgramSessionRef.current = session;
+    } catch {
+      if (generation !== transcribeGenRef.current) return;
+      setSttListening(false);
+      setSttInterim('');
+      sttSnapshotRef.current = null;
+      toast.error(
+        'Deepgram dictation unavailable',
+        'Could not start Deepgram dictation. Check the connection and try again.',
+      );
+    }
+  }
 
   const startSystemStt = async () => {
     if (isSystemSttAvailable()) {
@@ -3017,14 +4351,14 @@ export function Composer({
           VoiceService.interruptListening();
         }
         captureComposerSttSnapshot();
-        VoiceService.setInactivityTimeoutMs(null);
+        VoiceService.setInactivityTimeoutMs(180_000);
         setSttInterim('');
         const started = VoiceService.startListening();
         if (!started) {
           setSttListening(false);
           setSttAwaitingFinal(false);
           sttSnapshotRef.current = null;
-          VoiceService.setInactivityTimeoutMs(15_000);
+          VoiceService.setInactivityTimeoutMs(180_000);
           await trySystemSttFallbacks();
           return;
         }
@@ -3037,7 +4371,7 @@ export function Composer({
         setSttAwaitingFinal(false);
         setSttInterim('');
         sttSnapshotRef.current = null;
-        VoiceService.setInactivityTimeoutMs(15_000);
+        VoiceService.setInactivityTimeoutMs(180_000);
       }
       return;
     }
@@ -3238,6 +4572,26 @@ export function Composer({
 
   const stopStt = () => {
     transcribeGenRef.current += 1;
+    if (deepgramSessionRef.current) {
+      const session = deepgramSessionRef.current;
+      deepgramSessionRef.current = null;
+      const finalText = session.getFinalText();
+      session.stop();
+      setSttListening(false);
+      setSttAwaitingFinal(false);
+      setSttInterim('');
+      resetSttVolume();
+      const snap = sttSnapshotRef.current;
+      sttSnapshotRef.current = null;
+      if (snap) {
+        setText(
+          (finalText ? buildSttCommittedValue(snap, finalText) : null) ?? snap.before + snap.after,
+        );
+      }
+      if (finalText) voiceReplyRequestedRef.current = true;
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
     if (batchRecorderRef.current) {
       void stopBatchStt(false);
       return;
@@ -3279,7 +4633,7 @@ export function Composer({
       setSttAwaitingFinal(false);
       revertComposerSttPreview();
       sttSnapshotRef.current = null;
-      VoiceService.setInactivityTimeoutMs(15_000);
+      VoiceService.setInactivityTimeoutMs(180_000);
     }, 2_500);
     try {
       VoiceService.stopListening();
@@ -3298,6 +4652,8 @@ export function Composer({
     return () => {
       transcribeGenRef.current += 1;
       clearSttFinalizeTimer();
+      deepgramSessionRef.current?.stop();
+      deepgramSessionRef.current = null;
       if (sttListening || sttAwaitingFinal) VoiceService.stopListening();
       clearAudioSilenceTimer();
       stopSttVolumeMeter();
@@ -3360,6 +4716,7 @@ export function Composer({
         />
       )}
       <div className={cn('px-3 py-2.5', compact && 'px-3.5 py-3')}>
+        <HarnessReadinessGate />
         {promptForge.recoverableJob ? (
           <PromptForgeRecovery
             job={promptForge.recoverableJob}
@@ -3379,6 +4736,10 @@ export function Composer({
           open={mentionCtx !== null || slashCtx !== null || optionPickerCtx !== null}
           onOpenChange={(open) => {
             if (!open) {
+              if (anyThemePickerActive) {
+                themePickerRef.current?.cancel();
+                return;
+              }
               setMentionCtx(null);
               setSlashCtx(null);
               setOptionPickerCtx(null);
@@ -3390,19 +4751,84 @@ export function Composer({
               data-terminal-drop="chat"
               data-terminal-drop-chat-id={String(chatId)}
               data-hive-active={chatModelSelection.mode === 'hive' ? 'true' : undefined}
+              data-composer-drop-zone="true"
+              onDragOver={(e) => {
+                if (getChatDragKind(e.dataTransfer.types) || hasOsFileDrag(e.dataTransfer.types)) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.dataTransfer.dropEffect = 'copy';
+                  setDragOver(true);
+                }
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                  setDragOver(false);
+                }
+              }}
+              onDrop={(e) => {
+                const fileList = e.dataTransfer.files;
+                if (fileList && fileList.length > 0) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDragOver(false);
+                  void attachBrowserFileList(fileList);
+                  const payload = getChatDropPayload(e.dataTransfer);
+                  if (payload?.kind === 'context') addDroppedContext(payload.raw);
+                  else if (payload?.kind === 'terminal') addDroppedTerminal(payload.raw);
+                  return;
+                }
+                const payload = getChatDropPayload(e.dataTransfer);
+                if (!payload) return;
+                e.preventDefault();
+                e.stopPropagation();
+                setDragOver(false);
+                if (payload.kind === 'context') addDroppedContext(payload.raw);
+                else if (payload.kind === 'terminal') addDroppedTerminal(payload.raw);
+                else void addDroppedPath(payload.path);
+              }}
               className={cn(
                 'rounded-lg border border-input bg-background',
                 'transition-colors focus-within:border-accent-cyan/40 focus-within:ring-1 focus-within:ring-ring',
                 chatModelSelection.mode === 'hive' && 'border-accent-copper/40',
+                dragOver &&
+                  'border-accent-copper/60 bg-accent-copper/5 ring-1 ring-accent-copper/40',
                 compact && 'p-1',
               )}
             >
+              {/* Media sits above the input as an extension of the chat box */}
+              <ComposerMediaStrip
+                images={attachedImages}
+                files={attachedFiles}
+                compact={compact}
+                onRemoveImage={(id) =>
+                  setAttachedImages((cur) => cur.filter((item) => item.id !== id))
+                }
+                onRemoveFile={(path) => {
+                  setAttachedFiles((cur) => cur.filter((p) => p !== path));
+                  setMediaPreview((current) =>
+                    current?.kind === 'file' && current.path === path ? null : current,
+                  );
+                }}
+                onActivateImage={(image) => setMediaPreview(mediaTargetFromAttachment(image))}
+                onActivateFile={(path) => {
+                  setMediaPreview({
+                    kind: 'file',
+                    path,
+                    projectRoot: getStoredProjectRoot(projectId),
+                  });
+                }}
+              />
               <textarea
                 ref={textareaRef}
                 value={text}
+                disabled={harnessBlocked}
                 rows={1}
                 onChange={(e) => {
-                  setText(e.target.value);
+                  const nextDraft = e.target.value;
+                  setText(nextDraft);
+                  if (promptForge.reviewOpen) {
+                    promptForge.setUpgradedDraft(nextDraft);
+                  }
                   // Recompute on next tick so selectionStart reflects the new value
                   requestAnimationFrame(() => {
                     recomputeMention();
@@ -3421,50 +4847,54 @@ export function Composer({
                 onPaste={(e) => {
                   const files = e.clipboardData?.files;
                   if (files && files.length > 0) {
-                    const images = splitImageFiles(files);
-                    if (images.length > 0) {
-                      e.preventDefault();
-                      void addBrowserImages(images);
-                    }
-                  }
-                }}
-                onDragOver={(e) => {
-                  if (getChatDragKind(e.dataTransfer.types)) {
+                    // Prevent default so OS file paste is not also inserted as text.
                     e.preventDefault();
-                    setDragOver(true);
+                    void attachBrowserFileList(files);
                   }
                 }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={(e) => {
-                  const images = splitImageFiles(e.dataTransfer.files);
-                  if (images.length > 0) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setDragOver(false);
-                    void addBrowserImages(images);
-                    return;
-                  }
-                  const payload = getChatDropPayload(e.dataTransfer);
-                  if (!payload) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setDragOver(false);
-                  if (payload.kind === 'context') addDroppedContext(payload.raw);
-                  else if (payload.kind === 'terminal') addDroppedTerminal(payload.raw);
-                  else void addDroppedPath(payload.path);
-                }}
-                placeholder={placeholder ?? 'Message Jarvis...   (use @ to mention an agent)'}
+                placeholder={
+                  placeholder ??
+                  (compact
+                    ? 'Message Jarvis…  (@ agent)'
+                    : 'Message Jarvis...   (use @ to mention an agent)')
+                }
                 aria-label="Message"
                 data-sik-evidence={KERNEL_SMOKE_ENABLED ? SIK_CONTROL.chatComposer : undefined}
-                style={{ minHeight: MIN_HEIGHT, maxHeight: MAX_HEIGHT }}
+                data-composer-input="true"
+                style={
+                  compact
+                    ? {
+                        // Driven by --pet-composer-* inside the mini panel so
+                        // "Message Jarvis…" tracks panel resize scale.
+                        minHeight: 'var(--pet-composer-min-h, 2rem)',
+                        maxHeight: MAX_HEIGHT,
+                        fontSize: 'var(--pet-composer-font, 0.75rem)',
+                        lineHeight: 1.35,
+                      }
+                    : { minHeight: MIN_HEIGHT, maxHeight: MAX_HEIGHT }
+                }
                 className={cn(
-                  'block w-full resize-none bg-transparent px-3 py-2 text-body text-foreground',
+                  'block w-full resize-none bg-transparent px-3 py-2 text-foreground',
                   'placeholder:text-muted-foreground outline-none',
                   'scrollbar-hidden',
-                  compact && 'py-2.5 text-secondary',
-                  dragOver && 'bg-accent-copper/10 ring-1 ring-accent-copper/50',
+                  !compact && 'text-body',
+                  compact && 'px-2 py-1.5 leading-snug',
                 )}
               />
+              {promptForge.job?.status === 'ready' && promptForge.job.generatedDraft !== null ? (
+                <PromptForgeReview
+                  open={promptForge.reviewOpen}
+                  compact={compact}
+                  job={promptForge.job}
+                  onAccept={promptForge.accept}
+                  onRegenerate={() => void promptForge.regenerate()}
+                  onRegenerateWithInstructions={(instructions) =>
+                    void promptForge.regenerate(instructions)
+                  }
+                  onRestoreOriginal={promptForge.restoreOriginal}
+                  onReturnFocus={returnPromptForgeFocus}
+                />
+              ) : null}
               {confirmedAgentMentions.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 px-2 pb-1">
                   <TokenList>
@@ -3497,34 +4927,6 @@ export function Composer({
                       />
                     ))}
                   </TokenList>
-                </div>
-              )}
-              {attachedFiles.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 px-2 pb-1">
-                  {attachedFiles.map((path) => (
-                    <InputToken
-                      key={path}
-                      type="file"
-                      label={path.split(/[/\\]/).pop() ?? path}
-                      sublabel={path.includes('/') || path.includes('\\') ? '...' : undefined}
-                      onRemove={() => setAttachedFiles((cur) => cur.filter((p) => p !== path))}
-                    />
-                  ))}
-                </div>
-              )}
-              {attachedImages.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 px-2 pb-1">
-                  {attachedImages.map((image) => (
-                    <InputToken
-                      key={image.id}
-                      type="image"
-                      label={image.name}
-                      sublabel={image.size ? `${Math.ceil(image.size / 1024)} KB` : image.mimeType}
-                      onRemove={() =>
-                        setAttachedImages((cur) => cur.filter((item) => item.id !== image.id))
-                      }
-                    />
-                  ))}
                 </div>
               )}
               {attachedTerminals.length > 0 && (
@@ -3597,149 +4999,167 @@ export function Composer({
               />
               <div
                 className={cn(
-                  'flex items-center gap-1 px-2 pb-2 pt-0.5',
-                  compact && 'flex-wrap gap-x-1.5 gap-y-1.5 px-2.5 pb-2.5 pt-1',
+                  'composer-toolbar flex min-w-0 items-center gap-1 px-1.5 pb-1.5 pt-0.5',
+                  compact && 'gap-0.5 px-1 pb-1 pt-0',
                 )}
+                data-composer-toolbar="true"
               >
-                <ModelPicker
-                  selection={chatModelSelection}
-                  modelCtx={modelCtx}
-                  open={modelPickerOpen}
-                  onOpenChange={setModelPickerOpen}
-                  pickerRef={modelPickerRef}
-                  compact={compact}
-                  groups={accessibleChatModels.groups}
-                  flatOptions={accessibleChatModels.flatOptions}
-                  onSelect={(next) => {
-                    setChatModelSelection(next);
-                    if (next.mode === 'single' && next.connectionId) {
-                      const descriptor = getProviderConnectionDescriptor(next.connectionId);
-                      void chatRepo
-                        .update(chatId as ChatId, {
-                          connection: { ...descriptor, modelId: next.modelId },
-                        })
-                        .catch(() =>
-                          toast.error('Connection not saved', 'Try choosing the connection again.'),
-                        );
+                {/* Scrollable tools — Send/mic stay pinned so chat never loses the send control */}
+                <div
+                  className={cn(
+                    'flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+                  )}
+                >
+                  <ModelPicker
+                    selection={chatModelSelection}
+                    modelCtx={modelCtx}
+                    open={modelPickerOpen}
+                    onOpenChange={setModelPickerOpen}
+                    pickerRef={modelPickerRef}
+                    compact={compact}
+                    groups={accessibleChatModels.groups}
+                    flatOptions={accessibleChatModels.flatOptions}
+                    onSelect={(next) => {
+                      setChatModelSelection(next);
+                      if (next.mode === 'single' && next.connectionId) {
+                        const descriptor = getProviderConnectionDescriptor(next.connectionId);
+                        void chatRepo
+                          .update(chatId as ChatId, {
+                            connection: { ...descriptor, modelId: next.modelId },
+                          })
+                          .catch(() =>
+                            toast.error(
+                              'Connection not saved',
+                              'Try choosing the connection again.',
+                            ),
+                          );
+                      }
+                      if (
+                        next.mode === 'single' &&
+                        (next.providerId === 'ollama' || next.providerId === 'local')
+                      ) {
+                        selectLocalModelForChat(next.modelId);
+                      }
+                    }}
+                  />
+                  {chatModelSelection.mode === 'single' && chatModelSelection.connectionId ? (
+                    <ConnectionInfoPopover connectionId={chatModelSelection.connectionId} />
+                  ) : null}
+                  <ModeIndicator
+                    mode={interactionMode}
+                    chatId={String(chatId)}
+                    compact={compact}
+                    onSelectMode={(nextMode) => {
+                      applyInteractionMode(nextMode);
+                    }}
+                    onCycle={() => {
+                      const nextMode = cycleInteractionMode(
+                        useJarvisInteractionStore.getState().modeForChat(chatId),
+                      );
+                      applyInteractionMode(nextMode);
+                    }}
+                  />
+                  <PromptForgeControl
+                    status={promptForge.status}
+                    statusMessage={
+                      promptForge.isRunning && promptForgeAutoUpgradeOnSend
+                        ? `${promptForge.statusMessage} · auto-upgrade`
+                        : promptForge.statusMessage
                     }
-                    if (
-                      next.mode === 'single' &&
-                      (next.providerId === 'ollama' || next.providerId === 'local')
-                    ) {
-                      selectLocalModelForChat(next.modelId);
-                    }
-                  }}
-                />
-                {chatModelSelection.mode === 'single' && chatModelSelection.connectionId ? (
-                  <ConnectionInfoPopover connectionId={chatModelSelection.connectionId} />
-                ) : null}
-                <ModeIndicator
-                  mode={interactionMode}
-                  compact={compact}
-                  onSelectMode={(nextMode) => {
-                    setInteractionMode(chatId, nextMode);
-                  }}
-                  onCycle={() => {
-                    const nextMode = cycleInteractionMode(
-                      useJarvisInteractionStore.getState().modeForChat(chatId),
-                    );
-                    setInteractionMode(chatId, nextMode);
-                  }}
-                />
-                <PromptForgeControl
-                  status={promptForge.status}
-                  statusMessage={promptForge.statusMessage}
-                  isRunning={promptForge.isRunning}
-                  disabledReason={promptForge.disabledReason}
-                  error={promptForge.error}
-                  compact={compact}
-                  modelSelection={promptForgeModelSelection}
-                  modelOptions={promptForgeModels}
-                  onModelSelectionChange={setPromptForgeModelSelection}
-                  privacyMode={promptForge.privacyMode}
-                  onPrivacyModeChange={promptForge.setPrivacyMode}
-                  allowPublicResearch={promptForge.allowPublicResearch}
-                  onAllowPublicResearchChange={promptForge.setAllowPublicResearch}
-                  publicResearchAvailable={promptForge.publicResearchAvailable}
-                  offlineMode={offlineMode}
-                  onStart={promptForge.start}
-                  onCancel={promptForge.cancel}
-                />
-                {composerSttEnabled && (
-                  <Hint
-                    label={sttListening ? 'Stop dictation' : 'Voice to text'}
-                    hotkey={HOTKEYS.COMPOSER_STT}
-                  >
+                    isRunning={promptForge.isRunning}
+                    disabledReason={promptForge.disabledReason}
+                    error={promptForge.error}
+                    compact={compact}
+                    modelSelection={promptForgeModelSelection}
+                    modelOptions={promptForgeModels}
+                    onModelSelectionChange={setPromptForgeModelSelection}
+                    privacyMode={promptForge.privacyMode}
+                    onPrivacyModeChange={promptForge.setPrivacyMode}
+                    allowPublicResearch={promptForge.allowPublicResearch}
+                    onAllowPublicResearchChange={promptForge.setAllowPublicResearch}
+                    publicResearchAvailable={promptForge.publicResearchAvailable}
+                    offlineMode={offlineMode}
+                    autoUpgradeOnSend={promptForgeAutoUpgradeOnSend}
+                    onAutoUpgradeOnSendChange={setPromptForgeAutoUpgradeOnSend}
+                    onStart={promptForge.start}
+                    onCancel={promptForge.cancel}
+                  />
+                  {!compact ? (
+                    <span className="ml-1 hidden text-metadata leading-none text-muted-foreground sm:inline">
+                      {sttTranscribing ? (
+                        <p className="px-1 text-[11px] text-muted-foreground" aria-live="polite">
+                          Transcribing…
+                        </p>
+                      ) : null}
+                      {sttListening && sttInterim && !sttTranscribing ? (
+                        <span className="italic text-foreground/70" aria-live="polite">
+                          {sttInterim}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="kbd">{renderHotkey(HOTKEYS.SEND)}</span> to send
+                        </>
+                      )}
+                    </span>
+                  ) : null}
+                  {kernelSmokeHiveBound ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={prepareKernelSmokeHive}
+                      data-sik-evidence={SIK_CONTROL.hiveFixture}
+                    >
+                      Prepare Hive smoke
+                    </Button>
+                  ) : null}
+                  {kernelSmokeHivePrepared ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void handleSend(KERNEL_SMOKE_HIVE_TEXT)}
+                      data-sik-evidence={SIK_CONTROL.hiveDispatch}
+                    >
+                      Dispatch Hive smoke
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  {composerSttEnabled && (
+                    <Hint
+                      label={sttListening ? 'Stop dictation' : 'Voice to text'}
+                      hotkey={HOTKEYS.COMPOSER_STT}
+                    >
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant={sttListening ? 'accent' : 'ghost'}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={toggleStt}
+                        aria-label={sttListening ? 'Stop dictation' : 'Start dictation'}
+                        aria-pressed={sttListening}
+                        className={cn(sttListening && 'animate-pulse', compact && 'h-6 w-6')}
+                      >
+                        {sttListening ? <MicWaveform volumeRef={volumeRef} /> : <Mic />}
+                      </Button>
+                    </Hint>
+                  )}
+                  <Hint label="Send" hotkey={HOTKEYS.SEND}>
                     <Button
                       type="button"
                       size="icon-sm"
-                      variant={sttListening ? 'accent' : 'ghost'}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={toggleStt}
-                      aria-label={sttListening ? 'Stop dictation' : 'Start dictation'}
-                      aria-pressed={sttListening}
-                      className={cn(sttListening && 'animate-pulse')}
+                      variant={canSend ? 'accent' : 'ghost'}
+                      onClick={() => void handleSend()}
+                      disabled={!canSend}
+                      aria-label="Send message"
+                      className={cn('shrink-0', compact && 'h-6 w-6 min-h-6 min-w-6')}
+                      data-sik-evidence={KERNEL_SMOKE_ENABLED ? SIK_CONTROL.chatSubmit : undefined}
                     >
-                      {sttListening ? <MicWaveform volumeRef={volumeRef} /> : <Mic />}
+                      <Send />
                     </Button>
                   </Hint>
-                )}
-                <span
-                  className={cn(
-                    'text-metadata text-muted-foreground ml-auto mr-1 hidden sm:inline',
-                    compact && 'mr-0',
-                  )}
-                >
-                  {sttTranscribing ? (
-                    <p className="text-[11px] text-muted-foreground px-1" aria-live="polite">
-                      Transcribing…
-                    </p>
-                  ) : null}
-                  {sttListening && sttInterim && !sttTranscribing ? (
-                    <span className="italic text-foreground/70" aria-live="polite">
-                      {sttInterim}
-                    </span>
-                  ) : compact ? null : (
-                    <>
-                      <span className="kbd">{renderHotkey(HOTKEYS.SEND)}</span> to send
-                    </>
-                  )}
-                </span>
-                {kernelSmokeHiveBound ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={prepareKernelSmokeHive}
-                    data-sik-evidence={SIK_CONTROL.hiveFixture}
-                  >
-                    Prepare Hive smoke
-                  </Button>
-                ) : null}
-                {kernelSmokeHivePrepared ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void handleSend(KERNEL_SMOKE_HIVE_TEXT)}
-                    data-sik-evidence={SIK_CONTROL.hiveDispatch}
-                  >
-                    Dispatch Hive smoke
-                  </Button>
-                ) : null}
-                <Hint label="Send" hotkey={HOTKEYS.SEND}>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant={canSend ? 'accent' : 'ghost'}
-                    onClick={() => void handleSend()}
-                    disabled={!canSend}
-                    aria-label="Send message"
-                    data-sik-evidence={KERNEL_SMOKE_ENABLED ? SIK_CONTROL.chatSubmit : undefined}
-                  >
-                    <Send />
-                  </Button>
-                </Hint>
+                </div>
               </div>
             </div>
           </PopoverAnchor>
@@ -3747,7 +5167,12 @@ export function Composer({
             side="top"
             align="start"
             sideOffset={8}
-            className="w-auto p-0 max-h-[280px] overflow-hidden bg-transparent border-none shadow-none"
+            className={cn(
+              'w-auto max-h-[520px] overflow-hidden border-none bg-transparent p-0 shadow-none',
+              // Pet mini-panel is z-[81]; default popover z-50 sits under it so
+              // slash / mention pickers never appear. Lift compact pickers above.
+              compact && 'z-[120]',
+            )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onInteractOutside={(e) => {
@@ -3757,7 +5182,40 @@ export function Composer({
               }
             }}
           >
-            {optionPickerCtx !== null ? (
+            {themePickerActive && optionPickerCtx !== null ? (
+              <ThemeSlashPicker
+                ref={themePickerRef}
+                commandLabel={optionPickerCtx.cmd.cmd as 'appearance'}
+                initialTheme={useUIStore.getState().theme}
+                onCommit={(theme) => {
+                  useUIStore.getState().setTheme(theme);
+                  setOptionPickerCtx(null);
+                  setSelectedOptionId('');
+                  requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+                onCancel={() => {
+                  setOptionPickerCtx(null);
+                  setSelectedOptionId('');
+                  requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+              />
+            ) : consoleThemePickerActive && optionPickerCtx !== null ? (
+              <ConsoleThemeSlashPicker
+                ref={themePickerRef}
+                initialProfile={loadConsolePreferences().profile}
+                onCommit={(profile) => {
+                  updateConsolePreferences({ profile, view: 'agentic' });
+                  setOptionPickerCtx(null);
+                  setSelectedOptionId('');
+                  requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+                onCancel={() => {
+                  setOptionPickerCtx(null);
+                  setSelectedOptionId('');
+                  requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+              />
+            ) : optionPickerCtx !== null ? (
               <SlashCommandOptionPicker
                 ref={optionPickerRef}
                 commandLabel={optionPickerCtx.cmd.cmd}
@@ -3773,10 +5231,11 @@ export function Composer({
                 error={
                   normalizeSlashCmd(optionPickerCtx.cmd.cmd) === 'file'
                     ? projectFilesError
-                    : undefined
+                    : (reasoningPickerState?.error ?? undefined)
                 }
                 onHoverId={setSelectedOptionId}
                 onSelect={selectOption}
+                compact={compact}
               />
             ) : slashCtx !== null ? (
               <SlashCommandTypeahead
@@ -3786,6 +5245,7 @@ export function Composer({
                 query={slashCtx.query}
                 onHoverCmd={setSelectedSlashCmd}
                 onSelect={insertSlashCommand}
+                compact={compact}
               />
             ) : (
               <MentionTypeahead
@@ -3799,34 +5259,8 @@ export function Composer({
           </PopoverContent>
         </Popover>
       </div>
-      {promptForge.job?.status === 'ready' && promptForge.job.generatedDraft !== null ? (
-        <PromptForgeReview
-          open={promptForge.reviewOpen}
-          job={promptForge.job}
-          upgradedDraft={promptForge.upgradedDraft}
-          onUpgradedDraftChange={promptForge.setUpgradedDraft}
-          excludedSourceIds={promptForge.excludedSourceIds}
-          onExcludeSource={promptForge.toggleSource}
-          onReplace={promptForge.replace}
-          onInsertBelow={promptForge.insertBelow}
-          onCopy={() => {
-            void promptForge
-              .copy()
-              .then(() => toast.success('Upgraded prompt copied'))
-              .catch(() =>
-                toast.error('Copy failed', 'Select the upgraded prompt and copy it manually.'),
-              );
-          }}
-          onRegenerate={() => void promptForge.regenerate()}
-          onRegenerateWithInstructions={(instructions) => void promptForge.regenerate(instructions)}
-          onReturnFocus={returnPromptForgeFocus}
-          onUndo={promptForge.undo}
-          canUndo={promptForge.canUndo}
-          onClose={() => {
-            promptForge.setReviewOpen(false);
-            returnPromptForgeFocus();
-          }}
-        />
+      {mediaPreview ? (
+        <MediaPreviewPanel target={mediaPreview} onClose={() => setMediaPreview(null)} />
       ) : null}
     </div>
   );
@@ -3857,6 +5291,7 @@ function ModelPicker({
 }: ModelPickerProps) {
   const automaticRoutingEnabled = useAuthStore((s) => s.automaticModelRoutingEnabled);
   const setAutomaticModelRoutingEnabled = useAuthStore((s) => s.setAutomaticModelRoutingEnabled);
+  const hiveEnabled = isHiveProductEnabled();
   const [selectedId, setSelectedId] = useState('');
   const displayLabel = formatChatModelSelectionLabel(selection, modelCtx);
   const activeProvider = selection.mode === 'single' ? selection.providerId : undefined;
@@ -3880,13 +5315,13 @@ function ModelPicker({
     [flatOptions],
   );
   const selectionHighlightId = useMemo(() => {
-    if (selection.mode === 'hive') return HIVE_OPTION_ID;
-    return selectionOptionId(selection) ?? HIVE_OPTION_ID;
-  }, [selection]);
+    if (hiveEnabled && selection.mode === 'hive') return HIVE_OPTION_ID;
+    return selectionOptionId(selection) ?? (hiveEnabled ? HIVE_OPTION_ID : '');
+  }, [hiveEnabled, selection]);
 
   useEffect(() => {
     if (!open) return;
-    if (selection.mode === 'hive') {
+    if (hiveEnabled && selection.mode === 'hive') {
       setSelectedId((current) => (current === HIVE_OPTION_ID ? current : HIVE_OPTION_ID));
       return;
     }
@@ -3895,8 +5330,9 @@ function ModelPicker({
       setSelectedId((current) => (current === activeId ? current : activeId));
       return;
     }
-    setSelectedId((current) => (current === HIVE_OPTION_ID ? current : HIVE_OPTION_ID));
-  }, [open, flatOptionIds, flatOptions, selectionHighlightId, selection]);
+    const fallback = hiveEnabled ? HIVE_OPTION_ID : (flatOptions[0]?.id ?? '');
+    setSelectedId((current) => (current === fallback ? current : fallback));
+  }, [open, flatOptionIds, flatOptions, hiveEnabled, selectionHighlightId, selection]);
 
   useEffect(() => {
     if (!open) return;
@@ -3935,6 +5371,7 @@ function ModelPicker({
   };
 
   const handleSelectHive = () => {
+    if (!hiveEnabled) return;
     onSelect(selectionFromHive('balanced'));
     onOpenChange(false);
   };
@@ -3947,8 +5384,8 @@ function ModelPicker({
           size="sm"
           variant="ghost"
           className={cn(
-            'gap-1 px-2 text-muted-foreground hover:text-foreground',
-            compact && 'max-w-[11rem] shrink-0',
+            'h-7 max-w-[14rem] gap-0.5 px-1.5 text-muted-foreground hover:text-foreground',
+            compact && 'h-6 max-w-[9rem] shrink-0 px-1 text-[10px] leading-none',
           )}
           aria-label="Choose model"
           data-sik-evidence={KERNEL_SMOKE_ENABLED ? SIK_CONTROL.modelPicker : undefined}
@@ -3962,16 +5399,20 @@ function ModelPicker({
               : undefined
           }
         >
-          {selection.mode === 'hive' ? <HiveModelIcon size={21} /> : null}
-          <span className={cn('text-metadata', compact && 'truncate')}>{displayLabel}</span>
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+          {hiveEnabled && selection.mode === 'hive' ? (
+            <HiveModelIcon size={compact ? 14 : 16} />
+          ) : null}
+          <span className={cn('truncate text-metadata leading-none', compact && 'text-[10px]')}>
+            {displayLabel}
+          </span>
+          <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 opacity-70', compact && 'h-3 w-3')} />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         side="top"
         align="start"
         sideOffset={6}
-        className="w-auto border-0 bg-transparent p-0 shadow-none"
+        className={cn('w-auto border-0 bg-transparent p-0 shadow-none', compact && 'z-[120]')}
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         <ModelPickerTypeahead
@@ -3980,12 +5421,13 @@ function ModelPicker({
           selectedId={selectedId}
           activeProvider={activeProvider}
           activeModel={activeModel}
-          hiveActive={selection.mode === 'hive'}
+          hiveActive={hiveEnabled && selection.mode === 'hive'}
           onHoverId={setSelectedId}
           onSelect={handleSelect}
-          onSelectHive={handleSelectHive}
+          onSelectHive={hiveEnabled ? handleSelectHive : undefined}
           automaticRoutingEnabled={automaticRoutingEnabled}
           onAutomaticRoutingChange={setAutomaticModelRoutingEnabled}
+          compact={compact}
         />
       </PopoverContent>
     </Popover>

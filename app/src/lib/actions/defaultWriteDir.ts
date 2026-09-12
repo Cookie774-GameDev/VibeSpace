@@ -1,6 +1,7 @@
 /**
- * General default folder for Jarvis file writes when the user does not
- * specify a path. Prefer Downloads, then Documents, then Home.
+ * Default folder for Jarvis file writes when the user does not specify a
+ * path. Native writes use the same app-data/Projects root already admitted
+ * by the canonical file-action path policy.
  */
 import { isTauri } from '@/lib/utils';
 
@@ -51,6 +52,12 @@ export async function resolveDefaultWriteDir(): Promise<string> {
           return null;
         }
       };
+      const appData = await tryDir(() => pathApi.appDataDir());
+      if (appData) {
+        const projects = joinSeg(appData, 'Projects');
+        cachedDefaultDir = projects;
+        return projects;
+      }
       const downloads = await tryDir(() => pathApi.downloadDir());
       if (downloads) {
         cachedDefaultDir = downloads;

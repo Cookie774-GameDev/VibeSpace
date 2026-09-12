@@ -13,6 +13,7 @@ let lastFocusBootstrapAt = 0;
 export function OllamaConnectionHost() {
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     const timers: number[] = [];
     let backgroundTimer: number | null = null;
 
@@ -20,7 +21,7 @@ export function OllamaConnectionHost() {
       if (cancelled || attempt >= RETRY_MS.length) return;
       const delay = RETRY_MS[attempt] ?? 60_000;
       const timer = window.setTimeout(() => {
-        void bootstrapOllamaConnection({ force: attempt > 0 })
+        void bootstrapOllamaConnection({ force: attempt > 0, signal: controller.signal })
           .then((result) => {
             if (cancelled || result.ready) return;
             schedule(attempt + 1);
@@ -39,7 +40,8 @@ export function OllamaConnectionHost() {
 
     backgroundTimer = window.setInterval(() => {
       if (cancelled) return;
-      void bootstrapOllamaConnection({ force: true }).catch((err) => {
+      void bootstrapOllamaConnection({ force: true, signal: controller.signal }).catch((err) => {
+        if (cancelled || controller.signal.aborted) return;
         console.warn('[ollama] background probe failed:', err);
       });
     }, BACKGROUND_PROBE_MS);
@@ -48,7 +50,8 @@ export function OllamaConnectionHost() {
       const now = Date.now();
       if (now - lastFocusBootstrapAt < FOCUS_DEBOUNCE_MS) return;
       lastFocusBootstrapAt = now;
-      void bootstrapOllamaConnection({ force: true }).catch((err) => {
+      void bootstrapOllamaConnection({ force: true, signal: controller.signal }).catch((err) => {
+        if (cancelled || controller.signal.aborted) return;
         console.warn('[ollama] focus bootstrap failed:', err);
       });
     }
@@ -56,6 +59,7 @@ export function OllamaConnectionHost() {
     window.addEventListener('focus', onFocus);
     return () => {
       cancelled = true;
+      controller.abort();
       for (const timer of timers) window.clearTimeout(timer);
       if (backgroundTimer !== null) window.clearInterval(backgroundTimer);
       window.removeEventListener('focus', onFocus);

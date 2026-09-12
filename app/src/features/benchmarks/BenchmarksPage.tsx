@@ -2,9 +2,9 @@
  * BenchmarksPage — live AI model benchmark page for Jarvis.
  *
  * Shows a sortable, filterable table + horizontal bar chart of public
- * leaderboard scores. Data comes from `benchmarkData.fetchBenchmarks()`,
- * which falls back to a curated Top-50 unique-model snapshot (AA Intelligence
- * + OpenRouter list prices) when live fetch fails. The header chip makes that state explicit.
+ * leaderboard scores. Data comes from `benchmarkData.fetchBenchmarks()`.
+ * Only structured Arena rows are ranked; provider-published evaluations are
+ * displayed separately with their exact benchmark and setup.
  *
  * The page is fully self-contained: no parent route wiring, no provider,
  * no shared state beyond reading `useAuthStore` to allow the detail
@@ -32,7 +32,13 @@ import { Separator } from '@/components/ui/separator';
 import { toast } from '@/components/ui/toast';
 import { cn, formatCost, formatRelative, formatTokenCount } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
 import { fetchBenchmarks, isSupportedProvider, type BenchmarkRow } from './benchmarkData';
+import { OFFICIAL_BENCHMARK_EVIDENCE } from './officialBenchmarkData';
+import {
+  BENCHMARK_REFRESH_COMPLETE_EVENT,
+  type BenchmarkRefreshCompleteEvent,
+} from './BenchmarkRefreshHost';
 import { BarChart } from './BarChart';
 import './sakura-benchmarks.css';
 
@@ -40,9 +46,10 @@ type SortKey = 'arena_score' | 'cost' | 'context';
 
 const PROVIDER_FILTER_ALL = '__all__';
 const TOP_N_FOR_CHART = 25;
+const WARM_BENCHMARK_SCENE_ASSET =
+  '/assets/themes/warm/benchmarks/continuation-v2/benchmark-scroll-composite-v2.webp';
 /** Show at least this many rows before collapsing the rest behind a button. */
 const MIN_VISIBLE_ROWS = 50;
-const SNAPSHOT_SOURCE_URL = 'https://artificialanalysis.ai/leaderboards/models';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/models';
 
 /** One-line capability summary used for the row hover tooltip. */
@@ -66,8 +73,8 @@ function rowTooltip(r: BenchmarkRow): string {
   const ciHalf = (r.ci_high - r.ci_low) / 2;
   parts.push(
     ciHalf > 0
-      ? `Intelligence ${r.arena_score} (±${Math.round(ciHalf)})`
-      : `Intelligence ${r.arena_score}`,
+      ? `Arena rating ${r.arena_score} (±${Math.round(ciHalf)})`
+      : `Arena rating ${r.arena_score}`,
   );
   return parts.join('\n');
 }
@@ -93,12 +100,16 @@ function licenseSeverity(row: BenchmarkRow): 'low' | 'med' | 'high' | 'info' {
 }
 
 export function BenchmarksPage() {
+  const warmActive = useUIStore((state) => state.theme === 'warm');
   const [rows, setRows] = React.useState<BenchmarkRow[]>([]);
-  const [fromSnapshot, setFromSnapshot] = React.useState(false);
+  const [refreshStale, setRefreshStale] = React.useState(false);
+  const [unavailable, setUnavailable] = React.useState(false);
   const [fetchedAt, setFetchedAt] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [errorReason, setErrorReason] = React.useState<string | null>(null);
+  const [dataset, setDataset] = React.useState<
+    Awaited<ReturnType<typeof fetchBenchmarks>>['dataset'] | null
+  >(null);
 
   const [providerFilter, setProviderFilter] = React.useState<string>(PROVIDER_FILTER_ALL);
   const [openOnly, setOpenOnly] = React.useState(false);
@@ -113,9 +124,10 @@ export function BenchmarksPage() {
   // the four code paths can't drift apart.
   const applyResult = React.useCallback((result: Awaited<ReturnType<typeof fetchBenchmarks>>) => {
     setRows(result.rows);
-    setFromSnapshot(result.fromSnapshot);
-    setErrorReason(result.fromSnapshot ? (result.reason ?? null) : null);
-    setFetchedAt(result.rows.length > 0 ? result.rows[0].fetched_at : Date.now());
+    setRefreshStale(result.stale === true);
+    setUnavailable(result.unavailable === true);
+    setFetchedAt(result.dataset?.benchmarkDate ?? Date.now());
+    setDataset(result.dataset ?? null);
   }, []);
 
   // Initial load.
@@ -131,6 +143,15 @@ export function BenchmarksPage() {
     return () => {
       cancelled = true;
     };
+  }, [applyResult]);
+
+  React.useEffect(() => {
+    const onScheduledRefresh = (event: Event) => {
+      const outcome = (event as BenchmarkRefreshCompleteEvent).detail;
+      if (outcome?.result) applyResult(outcome.result);
+    };
+    window.addEventListener(BENCHMARK_REFRESH_COMPLETE_EVENT, onScheduledRefresh);
+    return () => window.removeEventListener(BENCHMARK_REFRESH_COMPLETE_EVENT, onScheduledRefresh);
   }, [applyResult]);
 
   // Tick once a minute so the header relative-time stays fresh.
@@ -162,40 +183,33 @@ export function BenchmarksPage() {
     };
   }, [applyResult, refreshing, loading]);
 
-  // Background polling. Arena ELO publishes weekly-ish, so 24h is the
-  // right cadence; faster just shows the same snapshot fallback toast on
-  // a loop. Forced fetch (skips cache) so we actually re-hit the upstream.
-  React.useEffect(() => {
-    const POLL_MS = 24 * 60 * 60 * 1000;
-    let cancelled = false;
-    const id = setInterval(() => {
-      if (cancelled || refreshing || loading) return;
-      void fetchBenchmarks({ force: true }).then((result) => {
-        if (!cancelled) applyResult(result);
-      });
-    }, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [applyResult, refreshing, loading]);
-
   const handleRefresh = React.useCallback(async () => {
     setRefreshing(true);
-    const result = await fetchBenchmarks({ force: true });
-    applyResult(result);
-    setRefreshing(false);
-    if (result.fromSnapshot) {
-      toast.warning(
-        'Using snapshot data',
-        result.reason
-          ? `Live fetch failed: ${result.reason}`
-          : 'Live fetch failed; showing frozen leaderboard.',
+    try {
+      const result = await fetchBenchmarks({ force: true });
+      applyResult(result);
+      if (result.stale || result.unavailable) {
+        toast.warning(
+          result.unavailable ? 'Verified benchmark data unavailable' : 'Using last-known-good data',
+          result.reason
+            ? `Live fetch failed: ${result.reason}`
+            : 'The last verified structured leaderboard remains available.',
+        );
+      } else {
+        toast.success('Benchmarks refreshed', `${result.rows.length} models loaded`);
+      }
+    } catch (error) {
+      toast.error(
+        'Benchmark refresh failed',
+        error instanceof Error ? error.message : 'The previous dataset remains available.',
       );
-    } else {
-      toast.success('Benchmarks refreshed', `${result.rows.length} models loaded`);
+    } finally {
+      setRefreshing(false);
     }
   }, [applyResult]);
+
+  const stale =
+    refreshStale || (fetchedAt != null && Date.now() - fetchedAt > 7 * 24 * 60 * 60 * 1000);
 
   // Distinct providers, sorted alphabetically.
   const providers = React.useMemo(() => {
@@ -241,6 +255,7 @@ export function BenchmarksPage() {
       .sort((a, b) => b.arena_score - a.arena_score)
       .slice(0, TOP_N_FOR_CHART);
   }, [filtered]);
+  const chartRows = topForChart;
 
   const visibleRows = React.useMemo(
     () => (showAll ? sorted : sorted.slice(0, MIN_VISIBLE_ROWS)),
@@ -272,39 +287,69 @@ export function BenchmarksPage() {
     <div
       data-monochrome-route="benchmarks"
       data-sakura-route="benchmarks"
+      data-warm-page="benchmarks"
       className="bg-paper-soft min-h-full w-full [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:font-sans [html[data-theme=monochrome]_&_.cozy-card]:rounded-sm [html[data-theme=monochrome]_&_.cozy-card]:border [html[data-theme=monochrome]_&_.cozy-card]:border-border-mid [html[data-theme=monochrome]_&_.cozy-card]:bg-panel [html[data-theme=monochrome]_&_.cozy-card]:shadow-none"
     >
-      <div className="max-w-7xl mx-auto px-6 py-8 flex flex-col gap-6">
+      <div
+        aria-hidden="true"
+        className="hidden [html[data-theme=warm]_&]:block"
+        data-warm-decoration="benchmarks-scene"
+      >
+        <img
+          alt=""
+          decoding="async"
+          draggable={false}
+          loading="eager"
+          role="presentation"
+          src={WARM_BENCHMARK_SCENE_ASSET}
+        />
+      </div>
+      <div
+        data-warm-surface="benchmarks-content"
+        className="max-w-7xl mx-auto px-6 py-8 flex flex-col gap-6"
+      >
         {/* Header */}
-        <header className="flex items-start justify-between gap-4 flex-wrap">
+        <header
+          data-warm-surface="benchmarks-header"
+          className="flex items-start justify-between gap-4 flex-wrap"
+        >
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-metadata text-muted-foreground uppercase tracking-wider">
               <span
                 className={cn(
                   'inline-block h-1.5 w-1.5 rounded-full',
-                  fromSnapshot ? 'bg-warning' : 'bg-success',
+                  unavailable || stale ? 'bg-warning' : 'bg-success',
                 )}
               />
               <span>
-                {loading ? 'Loading' : fromSnapshot ? 'Snapshot' : 'Live'}
+                {loading ? 'Loading' : unavailable ? 'Unavailable' : stale ? 'Stale' : 'Live'}
                 {fetchedAt && ' · last fetched '}
                 {fetchedAt && formatRelative(fetchedAt)}
               </span>
-              {fromSnapshot && (
-                <span
-                  className="sev-pill med ml-2 [html[data-theme=monochrome]_&]:bg-none [html[data-theme=monochrome]_&]:bg-border-mid"
-                  title={errorReason ?? 'Live endpoint unavailable; using frozen data.'}
-                >
-                  from snapshot
-                </span>
-              )}
             </div>
             <h1 className="font-display text-foreground text-4xl font-semibold leading-tight">
               Benchmarks
             </h1>
             <p className="text-secondary text-muted-foreground max-w-xl">
-              Free public leaderboards. BYOK to run any of them.
+              Hourly structured Arena rankings with source-linked official evaluations kept
+              separate.
             </p>
+            {dataset && (
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-metadata text-muted-foreground">
+                <a
+                  href={dataset.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-foreground underline-offset-2 hover:underline"
+                >
+                  {dataset.sourceName}
+                </a>
+                <span>Metric: {dataset.metricLabel}</span>
+                <span>Benchmark: {formatRelative(dataset.benchmarkDate)}</span>
+                <span>Ingested: {formatRelative(dataset.ingestedAt)}</span>
+                <span>Confidence: {dataset.confidence}</span>
+              </div>
+            )}
           </div>
           <Button
             variant="outline"
@@ -321,30 +366,14 @@ export function BenchmarksPage() {
           </Button>
         </header>
 
-        {/* Snapshot warning panel — full width, only when we're on fallback */}
-        {fromSnapshot && !loading && (
-          <div className="cozy-card !py-3 !px-4 flex items-start gap-3 border-warning/40">
-            <AlertTriangle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
-            <div className="text-secondary text-foreground">
-              {errorReason ? (
-                <>
-                  Showing a frozen snapshot from {fetchedAt && formatRelative(fetchedAt)}.{' '}
-                  <span className="text-muted-foreground">
-                    Live fetch failed ({errorReason}). Numbers below are the curated Top 50
-                    unique-model table — hit refresh to retry.
-                  </span>
-                </>
-              ) : (
-                <>
-                  Curated Top 50 unique models (one model per row)
-                  {fetchedAt ? ` · ${formatRelative(fetchedAt)}` : ''}.{' '}
-                  <span className="text-muted-foreground">
-                    Ranked by Artificial Analysis Intelligence Index; OpenRouter list prices &
-                    modalities. Hit refresh for a live Arena pull.
-                  </span>
-                </>
-              )}
-            </div>
+        {stale && !loading && (
+          <div
+            data-warm-surface="benchmarks-warning"
+            className="cozy-card !px-4 !py-3 flex items-center gap-2 border-warning/40 text-secondary"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+            Benchmark data is stale. The last known dataset remains visible; use Refresh to retry
+            verified structured sources.
           </div>
         )}
 
@@ -352,6 +381,7 @@ export function BenchmarksPage() {
         <section
           data-monochrome-surface="benchmarks-filters"
           data-sakura-surface="benchmarks-filters"
+          data-warm-surface="benchmarks-filters"
           className="flex flex-wrap items-end gap-4 [html[data-theme=monochrome]_&]:border-y [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:py-3"
         >
           <div className="flex flex-col gap-1.5">
@@ -389,7 +419,7 @@ export function BenchmarksPage() {
                 'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors',
               )}
             >
-              <option value="arena_score">Intelligence score</option>
+              <option value="arena_score">Arena rating</option>
               <option value="cost">Cost</option>
               <option value="context">Context window</option>
             </select>
@@ -419,11 +449,12 @@ export function BenchmarksPage() {
         <section
           data-monochrome-surface="benchmarks-chart"
           data-sakura-surface="benchmarks-chart"
+          data-warm-surface="benchmarks-chart"
           className="cozy-card !p-5"
         >
           <div className="flex items-baseline justify-between mb-4">
             <h2 className="text-page-title text-foreground">
-              Top {Math.min(TOP_N_FOR_CHART, topForChart.length)} by Intelligence
+              Top {Math.min(TOP_N_FOR_CHART, topForChart.length)} by Arena rating
             </h2>
             <div className="flex items-center gap-3 text-metadata text-muted-foreground">
               <span className="flex items-center gap-1.5">
@@ -441,7 +472,7 @@ export function BenchmarksPage() {
               Loading leaderboard…
             </div>
           ) : (
-            <BarChart rows={topForChart} />
+            <BarChart rows={chartRows} height={warmActive ? 420 : undefined} />
           )}
         </section>
 
@@ -449,9 +480,15 @@ export function BenchmarksPage() {
         <section
           data-monochrome-surface="benchmarks-table"
           data-sakura-surface="benchmarks-table"
+          data-warm-table-mode={warmActive ? 'compact-scroll' : undefined}
           className="cozy-card !p-0 overflow-hidden"
         >
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-auto"
+            data-warm-region={warmActive ? 'benchmarks-table-scroll' : undefined}
+            tabIndex={warmActive ? 0 : undefined}
+            aria-label={warmActive ? `Leaderboard table, ${visibleRows.length} models` : undefined}
+          >
             <table className="w-full text-secondary [html[data-theme=monochrome]_&]:font-mono">
               <thead>
                 <tr className="border-b border-border bg-paper-soft text-metadata text-muted-foreground uppercase tracking-wider [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background">
@@ -459,7 +496,7 @@ export function BenchmarksPage() {
                   <th className="text-left font-semibold px-4 py-3">Provider</th>
                   <th className="text-left font-semibold px-4 py-3">Type</th>
                   <SortableTh
-                    label="Intel"
+                    label="Arena"
                     active={sortKey === 'arena_score'}
                     dir={sortDir}
                     onClick={() => toggleSort('arena_score')}
@@ -482,9 +519,9 @@ export function BenchmarksPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((row) => (
+                {visibleRows.map((row, index) => (
                   <tr
-                    key={row.model}
+                    key={`${row.model}:${row.provider}:${index}`}
                     onClick={() => setSelectedModel(row.model)}
                     title={rowTooltip(row)}
                     className="border-b border-border/60 last:border-b-0 hover:bg-paper-soft cursor-pointer transition-colors [html[data-theme=monochrome]_&]:transition-none [html[data-theme=monochrome]_&]:hover:bg-muted"
@@ -584,7 +621,9 @@ export function BenchmarksPage() {
                       colSpan={7}
                       className="px-4 py-10 text-center text-secondary text-muted-foreground"
                     >
-                      No models match the current filters.
+                      {unavailable
+                        ? 'Verified Arena data is unavailable. No fallback scores were invented.'
+                        : 'No models match the current filters.'}
                     </td>
                   </tr>
                 )}
@@ -607,9 +646,55 @@ export function BenchmarksPage() {
             </div>
           )}
         </section>
+
+        <section
+          aria-labelledby="official-evaluations-title"
+          className="cozy-card !p-5 flex flex-col gap-4"
+        >
+          <div className="flex flex-col gap-1">
+            <h2 id="official-evaluations-title" className="text-page-title text-foreground">
+              Official provider evaluations
+            </h2>
+            <p className="text-secondary text-muted-foreground max-w-3xl">
+              Source-linked results reported by model providers. Scores are shown with their exact
+              benchmark and setup and are never merged into the Arena ranking.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {OFFICIAL_BENCHMARK_EVIDENCE.map((entry) => (
+              <article
+                key={`${entry.provider}:${entry.model}:${entry.benchmark}:${entry.evaluationSetup}`}
+                className="rounded-lg border border-border p-4 flex flex-col gap-2"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-foreground font-medium">{entry.model}</div>
+                    <div className="text-metadata text-muted-foreground">{entry.provider}</div>
+                  </div>
+                  <div className="font-mono text-foreground">
+                    {entry.value}
+                    {entry.unit}
+                  </div>
+                </div>
+                <div className="text-secondary text-foreground">{entry.benchmark}</div>
+                <div className="text-metadata text-muted-foreground">
+                  {entry.metric} · {entry.evaluationSetup}
+                </div>
+                <a
+                  href={entry.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="mt-auto inline-flex items-center gap-1 text-metadata text-accent-copper hover:underline"
+                >
+                  Source: {entry.reportedBy} <ExternalLink className="h-3 w-3" />
+                </a>
+              </article>
+            ))}
+          </div>
+        </section>
       </div>
 
-      <DetailDrawer row={selectedRow} onClose={() => setSelectedModel(null)} />
+      <DetailDrawer row={selectedRow} dataset={dataset} onClose={() => setSelectedModel(null)} />
     </div>
   );
 }
@@ -647,10 +732,11 @@ function SortableTh({ label, active, dir, onClick, align = 'left' }: SortableThP
 
 interface DetailDrawerProps {
   row: BenchmarkRow | null;
+  dataset: Awaited<ReturnType<typeof fetchBenchmarks>>['dataset'] | null;
   onClose: () => void;
 }
 
-function DetailDrawer({ row, onClose }: DetailDrawerProps) {
+function DetailDrawer({ row, dataset, onClose }: DetailDrawerProps) {
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
   const open = !!row;
 
@@ -708,7 +794,7 @@ function DetailDrawer({ row, onClose }: DetailDrawerProps) {
                 {/* Score block */}
                 <div>
                   <div className="text-metadata text-muted-foreground uppercase tracking-wider mb-1">
-                    Intelligence score
+                    Arena rating
                   </div>
                   <div className="flex items-baseline gap-2">
                     <span className="text-hero font-mono text-foreground">{row.arena_score}</span>
@@ -802,15 +888,17 @@ function DetailDrawer({ row, onClose }: DetailDrawerProps) {
                     Source
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <a
-                      href={SNAPSHOT_SOURCE_URL}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="inline-flex items-center gap-1.5 text-secondary text-accent-copper hover:underline"
-                    >
-                      Artificial Analysis leaderboard
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
+                    {dataset && (
+                      <a
+                        href={dataset.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="inline-flex items-center gap-1.5 text-secondary text-accent-copper hover:underline"
+                      >
+                        {dataset.sourceName}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
                     <a
                       href={OPENROUTER_MODELS_URL}
                       target="_blank"
@@ -822,10 +910,7 @@ function DetailDrawer({ row, onClose }: DetailDrawerProps) {
                     </a>
                   </div>
                   <div className="text-metadata text-muted-foreground mt-2">
-                    Data source:{' '}
-                    <span className="font-mono">
-                      {row.source === 'snapshot' ? 'AA unique-model snapshot' : 'Arena live'}
-                    </span>
+                    Data source: <span className="font-mono">Structured Arena feed</span>
                     {' · '}
                     fetched {formatRelative(row.fetched_at)}
                   </div>

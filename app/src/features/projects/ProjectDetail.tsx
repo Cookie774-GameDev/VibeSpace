@@ -22,7 +22,16 @@
 
 import * as React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowLeft, Save, RotateCcw, Trash2, AlertTriangle } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ExternalLink,
+  Link2,
+  RotateCcw,
+  Save,
+  Trash2,
+  Unlink,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,10 +46,22 @@ import './sakura-projects.css';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { useAgentStore } from '@/stores/agents';
-import { projectRepo, chatRepo } from '@/lib/db';
-import type { Project } from '@/lib/db/schema';
+import { projectRepo, chatRepo, db } from '@/lib/db';
+import type { Project, ProviderProjectLinkRow } from '@/lib/db/schema';
 import type { ProjectId, WorkspaceId } from '@/types';
 import { cn } from '@/lib/utils';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
+import { openExternal } from '@/lib/tauri';
+import { createProviderProjectLinkRepository } from '@/features/browser-chat/browserChatRepository';
+import {
+  BROWSER_CHAT_PROVIDERS,
+  type BrowserChatProviderId,
+} from '@/features/browser-chat/providerRegistry';
+
+const providerProjectLinkRepo = createProviderProjectLinkRepository(db);
+const linkableProviders = BROWSER_CHAT_PROVIDERS.filter(
+  (provider) => provider.availability === 'available',
+);
 
 interface DraftState {
   name: string;
@@ -72,6 +93,7 @@ function draftDiffers(d: DraftState, p: Project): boolean {
 }
 
 export function ProjectDetail() {
+  const accountId = useAuthStore((s) => resolveAccountIdentity(s)?.accountId ?? null);
   const projectId = useAuthStore((s) => s.projectId) as ProjectId | null;
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const setProjectId = useAuthStore((s) => s.setProjectId);
@@ -97,7 +119,23 @@ export function ProjectDetail() {
     0,
   );
 
+  const providerProjectLinks = useLiveQuery(
+    async () => {
+      if (!accountId || !workspaceId || !projectId) return [] as ProviderProjectLinkRow[];
+      const rows = await providerProjectLinkRepo.list({
+        accountId,
+        workspaceId: String(workspaceId),
+      });
+      return rows.filter((row) => row.projectId === String(projectId));
+    },
+    [accountId, workspaceId, projectId],
+    [] as ProviderProjectLinkRow[],
+  );
+
   const [draft, setDraft] = React.useState<DraftState | null>(null);
+  const [providerProjectUrls, setProviderProjectUrls] = React.useState<
+    Partial<Record<BrowserChatProviderId, string>>
+  >({});
   React.useEffect(() => {
     if (project) setDraft(projectToDraft(project));
   }, [project?.id, project?.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -165,6 +203,59 @@ export function ProjectDetail() {
       setRoute('chat');
     } catch (err) {
       toast.error('Delete failed', err instanceof Error ? err.message : 'Try again.');
+    }
+  };
+
+  const saveProviderProjectLink = async (provider: BrowserChatProviderId) => {
+    const providerProjectUrl = providerProjectUrls[provider]?.trim();
+    if (!accountId || !workspaceId || !projectId || !providerProjectUrl) return;
+    try {
+      await providerProjectLinkRepo.create({
+        accountId,
+        workspaceId: String(workspaceId),
+        projectId: String(projectId),
+        provider,
+        providerProjectUrl,
+      });
+      setProviderProjectUrls((current) => ({ ...current, [provider]: '' }));
+      toast.success(
+        'Local link saved',
+        'The provider project is bookmarked locally; VibeSpace has not verified remote membership.',
+      );
+    } catch (err) {
+      toast.error(
+        'Link not saved',
+        err instanceof Error && err.message === 'provider_project_url_invalid'
+          ? 'Enter an exact project URL from the selected provider.'
+          : err instanceof Error
+            ? err.message
+            : 'Try again.',
+      );
+    }
+  };
+
+  const openProviderProject = async (link: ProviderProjectLinkRow) => {
+    if (!link.providerProjectUrl) return;
+    try {
+      await openExternal(link.providerProjectUrl);
+    } catch (err) {
+      toast.error('Open failed', err instanceof Error ? err.message : 'Try again.');
+    }
+  };
+
+  const removeProviderProjectLink = async (link: ProviderProjectLinkRow) => {
+    if (!accountId || !workspaceId) return;
+    try {
+      await providerProjectLinkRepo.remove(
+        { accountId, workspaceId: String(workspaceId) },
+        link.id,
+      );
+      toast.success(
+        'Local link removed',
+        'Only the VibeSpace pointer was removed; the remote project was not changed.',
+      );
+    } catch (err) {
+      toast.error('Unlink failed', err instanceof Error ? err.message : 'Try again.');
     }
   };
 
@@ -321,6 +412,103 @@ export function ProjectDetail() {
                   Context is disabled — agents won't see this blob.
                 </span>
               )}
+            </div>
+          </section>
+
+          {/* Browser Chat provider project pointers */}
+          <section
+            data-sakura-surface="project-provider-links"
+            className="surface-panel rounded-lg p-5 space-y-4"
+          >
+            <div>
+              <div className="flex items-center gap-2 text-ui-strong text-foreground">
+                <Link2 className="h-4 w-4" />
+                Browser Chat project links
+              </div>
+              <p className="text-metadata text-muted-foreground mt-0.5">
+                Save provider project URLs as local bookmarks. VibeSpace does not create or verify
+                remote project membership, move conversations, or change provider data.
+              </p>
+            </div>
+            <div className="space-y-3">
+              {linkableProviders.map((provider) => {
+                const link = providerProjectLinks.find((row) => row.provider === provider.id);
+                return (
+                  <div
+                    key={provider.id}
+                    className="rounded-md border border-border bg-panel p-3 space-y-2"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-secondary text-foreground">{provider.label}</div>
+                        <div className="text-metadata text-muted-foreground">
+                          {link ? 'Saved locally · remote access not verified' : 'Not linked'}
+                        </div>
+                      </div>
+                      {link ? (
+                        <Badge variant="outline">
+                          {link.state === 'stale' ? 'Stale local link' : 'Local link'}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    {link ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {link.providerProjectUrl ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            aria-label={`Open ${provider.label} project`}
+                            onClick={() => void openProviderProject(link)}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Open
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Unlink ${provider.label} project`}
+                          onClick={() => void removeProviderProjectLink(link)}
+                        >
+                          <Unlink className="h-3.5 w-3.5" />
+                          Unlink
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <div className="min-w-0 flex-1">
+                          <Label className="sr-only" htmlFor={`provider-project-${provider.id}`}>
+                            {provider.label} project URL
+                          </Label>
+                          <Input
+                            id={`provider-project-${provider.id}`}
+                            type="url"
+                            placeholder={provider.homeUrl}
+                            value={providerProjectUrls[provider.id] ?? ''}
+                            onChange={(event) =>
+                              setProviderProjectUrls((current) => ({
+                                ...current,
+                                [provider.id]: event.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={!providerProjectUrls[provider.id]?.trim()}
+                          onClick={() => void saveProviderProjectLink(provider.id)}
+                        >
+                          Save local link
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </section>
 

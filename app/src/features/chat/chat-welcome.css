@@ -1,0 +1,176 @@
+html:not([data-theme='warm']) [data-vibespace-page='chat'] > :not(.warm-chat-welcome) {
+  position: relative;
+  z-index: 2;
+}
+
+/* Composer (media strip, drop zone, input) must paint above empty-chat welcome. */
+html:not([data-theme='warm']) [data-vibespace-page='chat'] [data-surface='chat-composer'] {
+  position: relative;
+  z-index: 5;
+}
+
+html:not([data-theme='warm'])
+  [data-vibespace-page='chat']:has(.warm-chat-welcome)
+  [data-testid='jarvis-session-panel'],
+html:not([data-theme='warm'])
+  [data-vibespace-page='chat']:has(.warm-chat-welcome)
+  [data-sakura-surface='thread-empty'] {
+  display: none;
+}
+
+html:not([data-theme='warm']) .warm-chat-welcome {
+  position: absolute;
+  z-index: 3;
+  inset: clamp(20px, 4vh, 48px) 24px clamp(124px, 16vh, 160px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  user-select: none;
+}
+
+html:not([data-theme='warm']) .warm-chat-welcome__content {
+  width: min(100%, 960px);
+  min-width: 0;
+  color: var(--foreground);
+  text-align: center;
+}
+
+html:not([data-theme='warm']) .warm-chat-welcome__art {
+  display: block;
+  width: clamp(128px, 12vw, 176px);
+  height: clamp(112px, 11vw, 156px);
+  margin: 0 auto 8px;
+  object-fit: cover;
+  border-radius: 0;
+  -webkit-mask-image: radial-gradient(
+    ellipse 74% 72% at center,
+    #000 34%,
+    rgb(0 0 0 / 0.88) 52%,
+    rgb(0 0 0 / 0.36) 72%,
+    transparent 88%
+  );
+  mask-image: radial-gradient(
+    ellipse 74% 72% at center,
+    #000 34%,
+    rgb(0 0 0 / 0.88) 52%,
+    rgb(0 0 0 / 0.36) 72%,
+    transparent 88%
+  );
+}
+
+html:not([data-theme='warm']) [data-chat-welcome-theme='default'] .warm-chat-welcome__art {
+  opacity: 0.78;
+  filter: none;
+}
+
+html:not([data-theme='warm']) [data-chat-welcome-theme='jarvis'] .warm-chat-welcome__art {
+  opacity: 0.82;
+  filter: none;
+}
+
+html:not([data-theme='warm']) [data-chat-welcome-theme='monochrome'] .warm-chat-welcome__art {
+  opacity: 0.72;
+  filter: none;
+}
+
+html:not([data-theme='warm']) .warm-chat-welcome h1 {
+  margin: 0;
+  font-size: clamp(24px, 2vw, 31px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+html:not([data-theme='warm']) .warm-chat-welcome__content > p {
+  margin: 7px 0 22px;
+  color: var(--muted-foreground);
+  font-size: 15px;
+}
+
+html:not([data-theme='warm']) .warm-chat-welcome__prompts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
+  min-width: 0;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt] {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  min-height: 72px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  color: var(--foreground);
+  text-align: left;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.08);
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt] > svg {
+  width: 25px;
+  height: 25px;
+  color: var(--accent-copper);
+  stroke-width: 1.6;
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt] span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt] strong,
+html:not([data-theme='warm']) [data-warm-quick-prompt] small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt] strong {
+  font-size: 14px;
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt] small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt]:hover {
+  border-color: var(--accent-copper);
+  transform: translateY(-1px);
+}
+
+html:not([data-theme='warm']) [data-warm-quick-prompt]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1040px) {
+  html:not([data-theme='warm']) .warm-chat-welcome__prompts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  html:not([data-theme='warm']) .warm-chat-welcome {
+    inset-inline: 14px;
+  }
+
+  html:not([data-theme='warm']) .warm-chat-welcome__prompts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-theme='warm']) [data-warm-quick-prompt] {
+    transition: none;
+  }
+}

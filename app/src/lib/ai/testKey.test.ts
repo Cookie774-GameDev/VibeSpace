@@ -86,7 +86,9 @@ describe('testProviderKey', () => {
 
     it('reports invalid with the parsed error message on 401', async () => {
       fetchMock.mockResolvedValueOnce(
-        errorResponse(401, { error: { type: 'authentication_error', message: 'invalid x-api-key' } }),
+        errorResponse(401, {
+          error: { type: 'authentication_error', message: 'invalid x-api-key' },
+        }),
       );
       const result = await testProviderKey('anthropic', 'sk-ant-bad');
       expect(result.kind).toBe('invalid');
@@ -115,6 +117,21 @@ describe('testProviderKey', () => {
       await testProviderKey('groq', 'gsk_test');
       const [url] = fetchMock.mock.calls[0]!;
       expect(url).toBe('https://api.groq.com/openai/v1/models');
+    });
+  });
+
+  describe('Qwen', () => {
+    it('validates against the official Model Studio US OpenAI-compatible catalog', async () => {
+      fetchMock.mockResolvedValueOnce(okResponse({ data: [] }));
+
+      const result = await testProviderKey('qwen', 'qwen-test-key');
+
+      expect(result.kind).toBe('ok');
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(url).toBe('https://dashscope-us.aliyuncs.com/compatible-mode/v1/models');
+      expect(new Headers((init as RequestInit).headers).get('Authorization')).toBe(
+        'Bearer qwen-test-key',
+      );
     });
   });
 

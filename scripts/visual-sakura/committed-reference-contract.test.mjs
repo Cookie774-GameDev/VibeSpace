@@ -38,7 +38,11 @@ test('committed Sakura palette and geometry retain the supplied design authority
 
   assert.match(css, /--sakura-radius-shell:\s*24px/);
   assert.match(css, /--sakura-blur:\s*14px/);
-  assert.match(shellCss, /--sakura-shell-inset:\s*clamp\(10px,\s*1vw,\s*14px\)/);
+  assert.match(
+    shellCss,
+    /\[data-sakura-shell='true'\]\s*\{[^}]*padding:\s*0;[^}]*border-radius:\s*0;/s,
+  );
+  assert.doesNotMatch(shellCss, /--sakura-shell-inset:/);
   assert.match(
     shellCss,
     /\.sakura-shell-top-bar\s*\{[^}]*min-height:\s*40px;[^}]*max-height:\s*48px/s,
@@ -62,5 +66,5 @@ test('committed Sakura materials and effects preserve depth without prototype ru
   assert.doesNotMatch(petalsSource, /Math\.random|setInterval|requestAnimationFrame/);
 
   const petalRows = [...petalsSource.matchAll(/\{\s*delay:\s*'[^']+'/g)];
-  assert.equal(petalRows.length, 8, 'production must keep exactly eight deterministic petals');
+  assert.equal(petalRows.length, 12, 'production must keep exactly twelve deterministic petals');
 });

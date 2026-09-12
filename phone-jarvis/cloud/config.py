@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = Field(default="")
     TWILIO_PHONE_NUMBER: str = Field(default="")
 
+    # --- Telnyx (approved production PSTN/SMS transport) ---
+    TELNYX_API_KEY: str = Field(default="")
+    TELNYX_PUBLIC_KEY: str = Field(default="")
+    TELNYX_CALL_CONTROL_CONNECTION_ID: str = Field(default="")
+    TELNYX_PHONE_NUMBER: str = Field(default="")
+
     # --- LiveKit (Path C) ---
     LIVEKIT_API_KEY: str = Field(default="")
     LIVEKIT_API_SECRET: str = Field(default="")
@@ -38,12 +44,17 @@ class Settings(BaseSettings):
 
     # --- Operator-default provider keys (fallback when user has no BYOK) ---
     DEEPGRAM_API_KEY: str = Field(default="")
+    DEEPGRAM_FLUX_MODEL: str = Field(default="flux-general-en")
+    DEEPGRAM_AURA_MODEL: str = Field(default="")
+    DEEPSEEK_API_KEY: str = Field(default="")
+    DEEPSEEK_MODEL: str = Field(default="deepseek-chat")
     ANTHROPIC_API_KEY: str = Field(default="")
     CARTESIA_API_KEY: str = Field(default="")
     GROQ_API_KEY: str = Field(default="")
 
     # --- Bridge auth ---
     BRIDGE_TOKEN_PEPPER: str = Field(default="dev_pepper_replace_in_production")
+    MCP_PUBLIC_URL: str = Field(default="")
 
     # --- Behavior ---
     AUDIT_RETENTION_DAYS: int = Field(default=30)
@@ -52,6 +63,12 @@ class Settings(BaseSettings):
     BRIDGE_TOKEN_TTL_SECONDS: int = Field(default=300)
     PIN_MAX_ATTEMPTS: int = Field(default=3)
     PIN_COOLDOWN_SECONDS: int = Field(default=3600)
+    TELNYX_VOICE_USD_PER_MINUTE: float = Field(default=0.0)
+    DEEPGRAM_FLUX_USD_PER_MINUTE: float = Field(default=0.0)
+    DEEPGRAM_AURA_USD_PER_MILLION_CHARS: float = Field(default=0.0)
+    DEEPSEEK_INPUT_USD_PER_MILLION_TOKENS: float = Field(default=0.0)
+    DEEPSEEK_OUTPUT_USD_PER_MILLION_TOKENS: float = Field(default=0.0)
+    CALL_ANYONE_MAX_CREDITS_PER_MINUTE: float = Field(default=0.0)
 
     # --- Server ---
     PORT: int = Field(default=8080)
@@ -62,12 +79,41 @@ class Settings(BaseSettings):
         return bool(self.TWILIO_ACCOUNT_SID and self.TWILIO_AUTH_TOKEN and self.TWILIO_PHONE_NUMBER)
 
     @property
+    def has_telnyx(self) -> bool:
+        return bool(
+            self.TELNYX_API_KEY
+            and self.TELNYX_PUBLIC_KEY
+            and self.TELNYX_CALL_CONTROL_CONNECTION_ID
+            and self.TELNYX_PHONE_NUMBER
+        )
+
+    @property
+    def has_call_anyone_pipeline(self) -> bool:
+        return bool(
+            self.has_telnyx
+            and self.DEEPGRAM_API_KEY
+            and self.DEEPGRAM_AURA_MODEL
+            and self.DEEPSEEK_API_KEY
+            and self.SUPABASE_URL
+            and self.SUPABASE_SERVICE_ROLE_KEY
+            and self.CALL_ANYONE_MAX_CREDITS_PER_MINUTE > 0
+        )
+
+    @property
     def has_livekit(self) -> bool:
         return bool(self.LIVEKIT_API_KEY and self.LIVEKIT_API_SECRET and self.LIVEKIT_URL)
 
     @property
     def has_supabase(self) -> bool:
         return bool(self.SUPABASE_URL and self.SUPABASE_SERVICE_ROLE_KEY)
+
+    @property
+    def has_browser_chat_mcp(self) -> bool:
+        return bool(
+            self.SUPABASE_URL.startswith("https://")
+            and self.MCP_PUBLIC_URL.startswith("https://")
+            and self.MCP_PUBLIC_URL.rstrip("/").endswith("/mcp")
+        )
 
 
 @lru_cache

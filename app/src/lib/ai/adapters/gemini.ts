@@ -107,6 +107,7 @@ export const GEMINI_CLI_DEFINITION: CliProviderDefinition = Object.freeze({
   promptTransport: 'prefixed-preamble',
   executableName: 'gemini',
   versionArgs: Object.freeze(['--version']),
+  modelListArgs: Object.freeze(['/model']),
   buildInvocation: buildGeminiInvocation,
   normalizeRecord: normalizeGeminiRecord,
 });

@@ -100,6 +100,117 @@ describe('trusted JARVIS security runtime composition', () => {
     expect(Object.keys(runtimeModule)).toEqual(['createJarvisSecurityRuntime']);
   });
 
+  it('executes only the one canonical read-only plugin registration selected by the gateway', async () => {
+    let activeAccountId: string | undefined = 'account-a';
+    const grants = createPluginCredentialAccountGrantRepository({ storage: memoryStorage() });
+    const authorization = createJarvisExistingCredentialAuthorization({
+      grants,
+      getActiveAccountId: () => activeAccountId,
+    });
+    const catalog = createJarvisActionCatalog([
+      {
+        ...registration(),
+        id: 'mock-connector.ping',
+        risk: 'read-only',
+        approval: 'never',
+        executor: { kind: 'plugin_tool', pluginId: 'mock-connector', toolName: 'ping' },
+        credentialBindings: [],
+        validateParameters: (params) => {
+          if (Reflect.ownKeys(params).length > 0) throw new Error('ping parameters are invalid');
+          return {};
+        },
+        deriveTarget: ({ accountId }) => ({
+          kind: 'plugin_tool',
+          accountId,
+          pluginId: 'mock-connector',
+          toolName: 'ping',
+          resourceId: 'mock-connector',
+        }),
+      },
+      {
+        ...registration(),
+        id: 'mock-connector.list-tools-write-policy',
+        risk: 'read-only',
+        approval: 'always',
+        executor: {
+          kind: 'plugin_tool',
+          pluginId: 'mock-connector',
+          toolName: 'list_tools',
+        },
+        credentialBindings: [],
+        deriveTarget: ({ accountId }) => ({
+          kind: 'plugin_tool',
+          accountId,
+          pluginId: 'mock-connector',
+          toolName: 'list_tools',
+          resourceId: 'mock-connector',
+        }),
+      },
+    ]);
+    const runtime = createJarvisSecurityRuntime({
+      repositories: {
+        run: { getById: vi.fn() },
+        approval: { getById: vi.fn(), listByRun: vi.fn(async () => []) },
+      } as never,
+      catalog,
+      capabilitySnapshots: { getForAccount: vi.fn() },
+      entitlementSnapshots: { getForAccount: vi.fn() },
+      credentialGrants: grants,
+      credentialAuthorization: authorization,
+      pluginConnections: { upsertConnection: vi.fn(), removeConnection: vi.fn() },
+      activeAccountId: () => activeAccountId,
+      executeRegisteredAction: vi.fn(),
+      bootId: 'boot-read-port',
+      randomUUID: () => 'fixed',
+      now: () => 10_000,
+    });
+    const context = {
+      requestId: 'request-1',
+      sessionId: 'session-1',
+      messageId: 'message-1',
+    };
+
+    await expect(
+      runtime.runReadOnlyPlugin({
+        pluginId: 'mock-connector',
+        operation: 'ping',
+        params: {},
+        context,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      summary: 'Fixed plugin tool completed.',
+      data: { ok: true, message: 'pong' },
+    });
+    await expect(
+      runtime.runReadOnlyPlugin({
+        pluginId: 'mock-connector',
+        operation: 'list_tools',
+        params: {},
+        context,
+      }),
+    ).rejects.toThrow('plugin_operation_unavailable');
+    await expect(
+      runtime.runReadOnlyPlugin({
+        pluginId: 'mock-connector',
+        operation: 'ping',
+        params: { pluginId: 'github' },
+        context,
+      }),
+    ).rejects.toThrow('ping parameters are invalid');
+
+    activeAccountId = undefined;
+    await expect(
+      runtime.runReadOnlyPlugin({
+        pluginId: 'mock-connector',
+        operation: 'ping',
+        params: {},
+        context,
+      }),
+    ).rejects.toThrow('authority was revoked');
+    runtime.invalidateAll();
+  });
+
   it('shares account authority and binds catalog credentials before lifecycle persistence', async () => {
     let activeAccountId: string | undefined = 'account-a';
     const grants = createPluginCredentialAccountGrantRepository({ storage: memoryStorage() });
@@ -204,6 +315,7 @@ describe('trusted JARVIS security runtime composition', () => {
       'invalidateAll',
       'pluginManagement',
       'recoveryVerifier',
+      'runReadOnlyPlugin',
     ]);
     expect(runtime).not.toHaveProperty('execute');
 

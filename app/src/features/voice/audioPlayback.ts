@@ -2,9 +2,11 @@
  * Minimal base64 → HTMLAudioElement playback with abort + cleanup.
  * Returns a stop() function. Resolves when playback ends (or is aborted).
  *
- * Used by Kokoro and cloud providers. Guards against duplicate playback and
+ * Used by Jarvis High and cloud providers. Guards against duplicate playback and
  * leaked object URLs / audio elements.
  */
+
+import { tapJarvisPlaybackElement } from './jarvisPlaybackEnergy';
 
 export interface PlaybackOptions {
   volume?: number;
@@ -29,9 +31,11 @@ export async function playBase64Audio(
   const url = URL.createObjectURL(base64ToBlob(b64, mime));
   const audio = new Audio(url);
   audio.volume = Math.min(1, Math.max(0, options.volume ?? 1));
+  const releaseTap = tapJarvisPlaybackElement(audio);
 
   let settled = false;
   const cleanup = () => {
+    releaseTap();
     try {
       audio.pause();
       audio.src = '';

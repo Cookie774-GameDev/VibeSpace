@@ -126,6 +126,7 @@ export type JarvisKernelPrepareProvider = (input: {
   runId: string;
   requestId: string;
   attemptNumber: number;
+  interactionMode: JarvisRequestEnvelope['interactionMode'];
   compiledPrompt: Readonly<CompiledJarvisPrompt>;
   agent: Agent;
   model: Readonly<JarvisModelSnapshot>;
@@ -226,11 +227,29 @@ export type JarvisKernelDeps = Readonly<{
 
 type ActionProposalPart = Extract<Part, { kind: 'action_proposal' }>;
 
-function soleResponseAction(parts: readonly Part[]): ActionProposalPart | undefined {
+function isExactFileActionBatch(actions: readonly ActionProposalPart[]): boolean {
+  if (actions.length < 2 || actions.length > 10) return false;
+  const actionId = actions[0]?.action_id;
+  if (actionId !== 'files.create' && actionId !== 'files.read') return false;
+  if (!actions.every((action) => action.action_id === actionId)) return false;
+  const paths = actions.map((action) => {
+    const path = (action.params as { path?: unknown } | undefined)?.path;
+    return typeof path === 'string' ? path : '';
+  });
+  return paths.every((path) => path.length > 0) && new Set(paths).size === paths.length;
+}
+
+function responseActionBatch(parts: readonly Part[]): readonly ActionProposalPart[] {
   const actions = parts.filter(
     (part): part is ActionProposalPart => part.kind === 'action_proposal',
   );
-  if (actions.length > 1) throw new Error('kernel_multiple_response_actions_unsupported');
+  if (actions.length <= 1) return actions;
+  if (isExactFileActionBatch(actions)) return actions;
+  throw new Error('kernel_multiple_response_actions_unsupported');
+}
+
+function soleResponseAction(parts: readonly Part[]): ActionProposalPart | undefined {
+  const actions = responseActionBatch(parts);
   return actions[0];
 }
 
@@ -242,7 +261,9 @@ function projectCanonicalResponseAction(input: {
   error?: string;
 }): Readonly<JarvisResponseEnvelope> {
   const parts = input.response.parts.map((part): Part => {
-    if (part !== input.source) return structuredClone(part);
+    if (part.kind !== 'action_proposal' || part.call_id !== input.source.call_id) {
+      return structuredClone(part);
+    }
     return {
       ...structuredClone(part),
       call_id: createTaskApprovalCallId(input.approvalId),
@@ -635,6 +656,7 @@ async function runJarvisKernelExecution(
           runId: input.run.id,
           requestId: input.attempt.requestId,
           attemptNumber: input.attempt.attemptNumber,
+          interactionMode: input.interactionMode,
           compiledPrompt: compiled,
           agent: input.agent,
           model: input.model,
@@ -728,7 +750,8 @@ async function runJarvisKernelExecution(
     let artifacts = await waitForProviderStage(materializeProviderArtifacts);
     let projectedResponse = processedResponse;
     let pendingApprovalId: string | undefined;
-    const responseAction = soleResponseAction(processedResponse.parts);
+    const responseActionList = responseActionBatch(processedResponse.parts);
+    const responseAction = responseActionList[0];
     if (responseAction) {
       const responseActions = deps.responseActions;
       if (!responseActions) throw new Error('kernel_response_action_port_unavailable');
@@ -838,26 +861,36 @@ async function runJarvisKernelExecution(
         if (deferTerminalCommit) {
           throw new Error('kernel_deferred_action_approval_unsupported');
         }
-        const created = await responseActions.create(actionInput);
-        if (created.kind === 'account_authority_revoked') return retainRevokedOutcome();
-        const approval = created.value;
-        if (
-          approval.runId !== input.run.id ||
-          approval.requestId !== input.attempt.requestId ||
-          approval.attemptNumber !== input.attempt.attemptNumber ||
-          approval.actionId !== registration.id ||
-          approval.actionVersion !== registration.version ||
-          approval.status !== 'pending'
-        ) {
-          throw new Error('kernel_pending_action_scope_mismatch');
+        let nextResponse = processedResponse;
+        for (const batchAction of responseActionList) {
+          if (batchAction.action_id !== registration.id) {
+            throw new Error('kernel_response_action_unavailable');
+          }
+          const created = await responseActions.create({
+            ...actionInput,
+            params: structuredClone(batchAction.params),
+          });
+          if (created.kind === 'account_authority_revoked') return retainRevokedOutcome();
+          const approval = created.value;
+          if (
+            approval.runId !== input.run.id ||
+            approval.requestId !== input.attempt.requestId ||
+            approval.attemptNumber !== input.attempt.attemptNumber ||
+            approval.actionId !== registration.id ||
+            approval.actionVersion !== registration.version ||
+            approval.status !== 'pending'
+          ) {
+            throw new Error('kernel_pending_action_scope_mismatch');
+          }
+          pendingApprovalId = approval.id;
+          nextResponse = projectCanonicalResponseAction({
+            response: nextResponse,
+            source: batchAction,
+            approvalId: approval.id,
+            status: 'pending',
+          });
         }
-        pendingApprovalId = approval.id;
-        projectedResponse = projectCanonicalResponseAction({
-          response: processedResponse,
-          source: responseAction,
-          approvalId: approval.id,
-          status: 'pending',
-        });
+        projectedResponse = nextResponse;
       }
     }
     const response = deepFreezeJarvisCopy({

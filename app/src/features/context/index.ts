@@ -122,6 +122,32 @@ export {
   type RetrievedContextReference,
 } from './contextRetrievalService';
 export {
+  MAX_ADDRESSABLE_CORPUS_TOKENS,
+  CorpusScaleError,
+  createCorpusScaleMetadata,
+  locateCorpusTokenPosition,
+  parseCorpusTokenCount,
+  parseSerializedCorpusScaleMetadata,
+  serializeCorpusScaleMetadata,
+  type CorpusScaleMetadata,
+  type CorpusTokenCountInput,
+  type SerializedCorpusScaleMetadata,
+} from './corpusScale';
+export {
+  RECURSIVE_CONTEXT_LIMITS,
+  RecursiveContextError,
+  createRecursiveContextPlanner,
+  type RecursiveContextBudgets,
+  type RecursiveContextDependencies,
+  type RecursiveContextEvidence,
+  type RecursiveContextEvidenceProvenance,
+  type RecursiveContextRequest,
+  type RecursiveContextResult,
+  type RecursiveContextRoundRequest,
+  type RecursiveContextRoundResult,
+  type RecursiveContextStopReason,
+} from './recursiveContextPlanner';
+export {
   CODE_ENTRY_POINT_SIGNAL_KINDS,
   buildCodeIntelligenceSummary,
   planAffectedCodeSummaryRegeneration,
@@ -282,6 +308,7 @@ export {
   type GitHubContextServerRequest,
   type GitHubContextServerResult,
 } from './githubContextAuth';
+export { buildGitHubProjectContextTree } from './githubContextTree';
 export {
   CONTEXT_RECOVERY_ACTIONS,
   appendContextRevision,
@@ -534,3 +561,82 @@ export {
   type ContextTreeNode,
   type ProjectContextTree,
 } from './tree';
+export * from './nightlySecondBrain';
+export * from './nightlySecondBrainScheduler';
+export {
+  formatRepositoryRetrievalItem,
+  retrieveLiveRepositoryContext,
+  type LiveRepositoryRetrievalInput,
+} from './repositoryRetrievalRuntime';
+export { NightlySecondBrainPanel } from './NightlySecondBrainPanel';
+export { NightlySecondBrainHost } from './NightlySecondBrainHost';
+export {
+  CONTEXT_SOURCE_KINDS,
+  ContextContractError,
+  createContextPointer,
+  createContextRecord,
+  pointerBounds,
+  type ContextPointer,
+  type ContextPointerBounds,
+  type ContextRecord,
+  type ContextSourceKind,
+} from './losslessContext';
+export {
+  ContextQueryError,
+  createContextQueryService,
+  type ContextOpenResult,
+  type ContextQueryErrorCode,
+  type ContextQueryLimits,
+  type ContextQueryRepository,
+  type ContextQueryService,
+  type ContextScope,
+  type ContextSearchHit,
+  type ContextSearchItem,
+  type ContextSourceRead,
+} from './contextQueryService';
+export {
+  decideContextMode,
+  type ContextExecutionMode,
+  type ContextModeDecision,
+  type ContextModeSignals,
+} from './adaptiveContextRouter';
+export {
+  formatRlmStatus,
+  parseRlmSlashArgument,
+  resolveRlmEnabled,
+  setChatRlmEnabled,
+  type ResolvedRlmPreference,
+  type RlmSlashAction,
+} from './rlmPreferenceStore';
+export {
+  RLM_CHILD_MODEL,
+  RLM_CHILD_PROVIDER,
+  RlmRuntimeError,
+  createRlmRuntime,
+  type RlmBudget,
+  type RlmChildAnalysis,
+  type RlmChildRequest,
+  type RlmRuntime,
+  type RlmRuntimeErrorCode,
+  type RlmRuntimeResult,
+  type RlmSynthesis,
+  type RlmSynthesisRequest,
+  type RlmTraceEvent,
+  type RlmTraceEventType,
+} from './rlmRuntime';
+export {
+  RLM_CONTEXT_OPERATIONS,
+  RLM_OPENCODE_TOOL_NAME,
+  RlmOpenCodeToolError,
+  createRlmOpenCodeTool,
+  type RlmContextLease,
+  type RlmContextOperation,
+  type RlmOpenCodeToolErrorCode,
+} from './rlmOpenCodeTool';
+export {
+  createContextMapRlmRepository,
+  createOllamaRlmChildRunner,
+  createProductionRlmContextTool,
+  productionRlmContextTool,
+} from './contextRlmProduction';
+export { createRecursiveContextQueryAdapter } from './recursiveContextQueryAdapter';

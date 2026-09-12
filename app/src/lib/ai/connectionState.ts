@@ -1,3 +1,5 @@
+import type { ProviderConnection } from './adapters/types';
+
 export interface ConnectionPickerState {
   available: boolean;
   auth: 'authenticated' | 'unauthenticated' | 'unknown';
@@ -13,6 +15,77 @@ export interface ConnectionMetadataRecord {
 }
 
 export type ConnectionMetadata = Partial<Record<string, ConnectionMetadataRecord>>;
+
+export interface AiConnectionHealth {
+  connectionId: string;
+  providerFamilyId: string;
+  mode: ProviderConnection['mode'];
+  installation: 'installed' | 'not_installed' | 'not_applicable' | 'unknown';
+  auth: 'authenticated' | 'unauthenticated' | 'not_required' | 'unknown';
+  credentialPersistence: 'saved' | 'not_saved' | 'not_applicable' | 'error';
+  requestHealth: 'healthy' | 'unverified' | 'error';
+  usable: boolean;
+  lastCheckedAt?: number;
+  lastSuccessfulRequestAt?: number;
+  errorCode?: string;
+}
+
+export function deriveAiConnectionHealth(input: {
+  connection: Readonly<ProviderConnection>;
+  metadata?: ConnectionMetadataRecord;
+  credentialSaved?: boolean;
+  credentialVaultError?: boolean;
+  requestHealth?: AiConnectionHealth['requestHealth'];
+  lastSuccessfulRequestAt?: number;
+  errorCode?: string;
+}): Readonly<AiConnectionHealth> {
+  const { connection, metadata } = input;
+  const external = connection.mode === 'external-cli';
+  const api = connection.mode === 'native-api';
+  const installation: AiConnectionHealth['installation'] = external
+    ? metadata?.installation === 'not-installed'
+      ? 'not_installed'
+      : (metadata?.installation ?? 'unknown')
+    : 'not_applicable';
+  const auth: AiConnectionHealth['auth'] = external
+    ? (metadata?.auth ?? 'unknown')
+    : connection.mode === 'local'
+      ? 'not_required'
+      : input.credentialSaved
+        ? 'authenticated'
+        : 'unauthenticated';
+  const credentialPersistence: AiConnectionHealth['credentialPersistence'] = api
+    ? input.credentialVaultError
+      ? 'error'
+      : input.credentialSaved
+        ? 'saved'
+        : 'not_saved'
+    : 'not_applicable';
+  const requestHealth = input.requestHealth ?? 'unverified';
+  const usable =
+    connection.enabled &&
+    metadata?.disabled !== true &&
+    (external
+      ? installation === 'installed' && auth === 'authenticated'
+      : connection.mode === 'local' ||
+        (credentialPersistence === 'saved' && auth === 'authenticated'));
+
+  return Object.freeze({
+    connectionId: connection.id,
+    providerFamilyId: connection.providerId,
+    mode: connection.mode,
+    installation,
+    auth,
+    credentialPersistence,
+    requestHealth,
+    usable,
+    ...(metadata?.lastCheckedAt === undefined ? {} : { lastCheckedAt: metadata.lastCheckedAt }),
+    ...(input.lastSuccessfulRequestAt === undefined
+      ? {}
+      : { lastSuccessfulRequestAt: input.lastSuccessfulRequestAt }),
+    ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+  });
+}
 
 export const AI_CONNECTION_STATE_EVENT = 'jarvis:ai-connections:changed';
 export const AI_CONNECTION_STATE_KEY = 'vibespace.ai-connection-states.v1';
@@ -164,8 +237,12 @@ export function readConnectionMetadata(): ConnectionMetadata {
 }
 
 export function writeConnectionMetadata(metadata: ConnectionMetadata): ConnectionMetadata {
+  const previous = sessionMetadataSnapshot ?? {};
+  const hadSessionSnapshot = sessionMetadataSnapshot !== undefined;
   const canonical = canonicalMetadata(metadata);
   if (!sessionMetadataSnapshot) readConnectionMetadata();
+  // Re-read previous after ensuring snapshot exists for first-write baseline.
+  const baseline = hadSessionSnapshot ? previous : {};
   observeMetadataSnapshot(canonical);
   if (typeof window !== 'undefined') {
     try {
@@ -176,17 +253,38 @@ export function writeConnectionMetadata(metadata: ConnectionMetadata): Connectio
       metadataPersistenceDirty = true;
     }
   }
-  const pickerStates: Partial<Record<string, ConnectionPickerState>> = Object.fromEntries(
-    Object.entries(canonical).map(([id, record]) => [
-      id,
-      {
-        available: record?.installation === 'installed' && record.disabled !== true,
-        auth: record?.auth ?? 'unknown',
-      },
-    ]),
+  const pickerStates: Partial<Record<string, ConnectionPickerState>> = {
+    ...readConnectionPickerStates(),
+    ...Object.fromEntries(
+      Object.entries(canonical).map(([id, record]) => [
+        id,
+        {
+          available: record?.installation === 'installed' && record.disabled !== true,
+          auth: record?.auth ?? 'unknown',
+        },
+      ]),
+    ),
+  };
+  sessionPickerStates = canonicalPickerStates(
+    Object.fromEntries(
+      Object.entries(canonical).map(([id, record]) => [
+        id,
+        {
+          available: record?.installation === 'installed' && record.disabled !== true,
+          auth: record?.auth ?? 'unknown',
+        },
+      ]),
+    ),
   );
-  sessionPickerStates = canonicalPickerStates(pickerStates);
   writeConnectionPickerStates(pickerStates);
+
+  // Real auth-loss event: authenticated → unauthenticated (not first hydrate).
+  if (hadSessionSnapshot) {
+    void import('@/lib/notifications').then(({ detectAndNotifyConnectorAuthLoss }) => {
+      detectAndNotifyConnectorAuthLoss(baseline, canonical);
+    });
+  }
+
   return canonical;
 }
 

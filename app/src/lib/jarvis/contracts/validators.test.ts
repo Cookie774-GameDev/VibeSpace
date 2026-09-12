@@ -147,9 +147,20 @@ function validActionSchemaSnapshot() {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Exact command.' },
+        paneId: { type: 'string' },
       },
-      required: ['command'],
+      required: [],
       additionalProperties: false,
+      oneOf: [
+        {
+          type: 'object',
+          required: ['command'],
+        },
+        {
+          type: 'object',
+          required: ['paneId'],
+        },
+      ],
     },
     outputSchema: {
       type: 'object',
@@ -794,6 +805,33 @@ describe('valid construction and JSON round trips', () => {
     });
 
     expectFailure(result, 'invalid_type', ['actionSchemas']);
+  });
+
+  it('rejects empty and oversized model-visible oneOf branches', () => {
+    const empty = validActionSchemaSnapshot();
+    empty.inputSchema.oneOf = [];
+    expectFailure(
+      validateJarvisCapabilitySnapshot({
+        ...validCapabilitySnapshot(),
+        actionSchemas: [empty],
+      }),
+      'invalid_type',
+      ['actionSchemas', 0, 'inputSchema', 'oneOf'],
+    );
+
+    const oversized = validActionSchemaSnapshot();
+    oversized.inputSchema.oneOf = Array.from({ length: 9 }, () => ({
+      type: 'object' as const,
+      required: ['command'],
+    }));
+    expectFailure(
+      validateJarvisCapabilitySnapshot({
+        ...validCapabilitySnapshot(),
+        actionSchemas: [oversized],
+      }),
+      'invalid_type',
+      ['actionSchemas', 0, 'inputSchema', 'oneOf'],
+    );
   });
 
   it('accepts every optional field both present and absent', () => {

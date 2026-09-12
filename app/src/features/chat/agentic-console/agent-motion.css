@@ -1,0 +1,504 @@
+.agent-motion-transition {
+  position: relative;
+  display: inline-grid;
+  width: 82px;
+  height: 54px;
+  flex: 0 0 82px;
+  place-items: center;
+}
+
+.agent-motion-transition[data-agent-motion-transition-size='compact'] {
+  width: 40px;
+  height: 28px;
+  flex-basis: 40px;
+}
+
+.agent-motion-transition > .agent-motion-slot {
+  grid-area: 1 / 1;
+}
+
+.agent-motion-slot[data-agent-motion-presence='current'] {
+  z-index: 1;
+  animation: agent-motion-enter 180ms ease-out both;
+}
+
+.agent-motion-slot[data-agent-motion-presence='exiting'] {
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  animation: agent-motion-exit 1400ms ease-out both;
+}
+
+.agent-motion-slot[data-agent-motion-presence='exiting'] .agent-motion {
+  --agent-motion-speed: 0.48;
+}
+
+.agent-motion-slot {
+  --agent-motion-canvas-width: 82px;
+  --agent-motion-canvas-height: 54px;
+  --agent-motion-scale: 1;
+  --agent-motion-primary: var(--console-accent, hsl(var(--accent-copper)));
+  --agent-motion-secondary: hsl(var(--accent-cyan));
+  position: relative;
+  display: inline-grid;
+  width: var(--agent-motion-canvas-width);
+  height: var(--agent-motion-canvas-height);
+  flex: 0 0 var(--agent-motion-canvas-width);
+  place-items: center;
+  color: var(--agent-motion-primary);
+}
+
+.agent-motion-slot[data-agent-motion-size='compact'] {
+  --agent-motion-scale: 0.48;
+  width: 40px;
+  height: 28px;
+  flex-basis: 40px;
+}
+
+html[data-theme='default'] .agent-motion-slot {
+  --agent-motion-primary: hsl(var(--accent-copper));
+  --agent-motion-secondary: hsl(var(--accent-cyan));
+}
+
+html[data-theme='monochrome'] .agent-motion-slot {
+  --agent-motion-primary: hsl(var(--foreground));
+  --agent-motion-secondary: hsl(var(--muted-foreground));
+}
+
+html[data-theme='jarvis'] .agent-motion-slot {
+  --agent-motion-primary: hsl(var(--accent-copper));
+  --agent-motion-secondary: hsl(var(--accent-cyan));
+}
+
+html[data-theme='warm'] .agent-motion-slot {
+  --agent-motion-primary: var(--warm-terracotta-deep);
+  --agent-motion-secondary: var(--warm-sage);
+}
+
+.agent-motion {
+  --agent-motion-speed: 1;
+  --agent-motion-ease: cubic-bezier(0.65, 0, 0.35, 1);
+  position: relative;
+  display: inline-grid;
+  width: var(--agent-motion-canvas-width);
+  height: var(--agent-motion-canvas-height);
+  place-items: center;
+  overflow: visible;
+  color: inherit;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, currentColor 28%, transparent));
+  transform: scale(var(--agent-motion-scale));
+  transform-origin: center;
+}
+
+.agent-motion--glyph-current {
+  place-items: center start;
+  width: 82px;
+}
+
+.agent-motion__word {
+  position: relative;
+  color: color-mix(in srgb, var(--console-ink, currentColor) 20%, transparent);
+  font:
+    700 15px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  letter-spacing: 0.13em;
+}
+
+.agent-motion__word::after {
+  position: absolute;
+  inset: 0;
+  color: currentColor;
+  content: attr(data-text);
+  clip-path: inset(0 100% 0 0);
+  animation: agent-motion-glyph-fill calc(2.8s * var(--agent-motion-speed)) var(--agent-motion-ease)
+    infinite;
+}
+
+.agent-motion__baseline {
+  position: absolute;
+  right: 2px;
+  bottom: 10px;
+  left: 0;
+  height: 1px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--console-ink, currentColor) 8%, transparent);
+}
+
+.agent-motion__baseline::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, currentColor, transparent);
+  content: '';
+  transform: translateX(-110%);
+  animation: agent-motion-line-pass calc(2.8s * var(--agent-motion-speed)) var(--agent-motion-ease)
+    infinite;
+}
+
+.agent-motion--nine-dot-fold {
+  grid-template: repeat(3, 7px) / repeat(3, 7px);
+  gap: 8px;
+}
+
+.agent-motion--nine-dot-fold i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: agent-motion-dot-fold calc(2.8s * var(--agent-motion-speed)) var(--agent-motion-ease)
+    infinite;
+  animation-delay: calc(var(--motion-index) * -0.09s * var(--agent-motion-speed));
+}
+
+.agent-motion--nine-dot-fold i:nth-child(1) {
+  --motion-x: 12px;
+  --motion-y: 12px;
+}
+.agent-motion--nine-dot-fold i:nth-child(2) {
+  --motion-x: 0px;
+  --motion-y: 12px;
+}
+.agent-motion--nine-dot-fold i:nth-child(3) {
+  --motion-x: -12px;
+  --motion-y: 12px;
+}
+.agent-motion--nine-dot-fold i:nth-child(4) {
+  --motion-x: 12px;
+  --motion-y: 0px;
+}
+.agent-motion--nine-dot-fold i:nth-child(5) {
+  --motion-x: 0px;
+  --motion-y: 0px;
+}
+.agent-motion--nine-dot-fold i:nth-child(6) {
+  --motion-x: -12px;
+  --motion-y: 0px;
+}
+.agent-motion--nine-dot-fold i:nth-child(7) {
+  --motion-x: 12px;
+  --motion-y: -12px;
+}
+.agent-motion--nine-dot-fold i:nth-child(8) {
+  --motion-x: 0px;
+  --motion-y: -12px;
+}
+.agent-motion--nine-dot-fold i:nth-child(9) {
+  --motion-x: -12px;
+  --motion-y: -12px;
+}
+
+.agent-motion--twin-loop i {
+  position: absolute;
+  width: 48px;
+  height: 25px;
+  border: 1px solid color-mix(in srgb, var(--console-ink, currentColor) 18%, transparent);
+  border-radius: 50%;
+  transform: rotate(24deg);
+  animation: agent-motion-oval-turn calc(3.6s * var(--agent-motion-speed)) linear infinite;
+}
+
+.agent-motion--twin-loop i:nth-child(2) {
+  transform: rotate(-24deg);
+  animation-direction: reverse;
+}
+
+.agent-motion--twin-loop i::after {
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 7px color-mix(in srgb, currentColor 35%, transparent);
+  content: '';
+}
+
+.agent-motion--cursor-forge {
+  place-items: center start;
+}
+
+.agent-motion__forge-line {
+  width: 58px;
+  height: 2px;
+  background: color-mix(in srgb, var(--console-ink, currentColor) 10%, transparent);
+}
+
+.agent-motion__forge-cursor {
+  position: absolute;
+  left: 1px;
+  width: 7px;
+  height: 17px;
+  border-radius: 2px;
+  background: currentColor;
+  transform-origin: left center;
+  animation: agent-motion-cursor-forge calc(2.7s * var(--agent-motion-speed))
+    var(--agent-motion-ease) infinite;
+}
+
+.agent-motion--breathing-brackets {
+  width: 72px;
+}
+
+.agent-motion__bracket {
+  position: absolute;
+  color: color-mix(in srgb, var(--console-ink, currentColor) 45%, transparent);
+  font:
+    400 31px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  animation: agent-motion-bracket-breathe calc(2.4s * var(--agent-motion-speed))
+    var(--agent-motion-ease) infinite;
+}
+
+.agent-motion__bracket--left {
+  left: 7px;
+  --motion-direction: 8px;
+}
+.agent-motion__bracket--right {
+  right: 7px;
+  --motion-direction: -8px;
+}
+
+.agent-motion__seed {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: agent-motion-seed-pulse calc(2.4s * var(--agent-motion-speed)) ease-in-out infinite;
+}
+
+.agent-motion--stack-shift {
+  width: 68px;
+  perspective: 240px;
+}
+
+.agent-motion--stack-shift i {
+  position: absolute;
+  width: 45px;
+  height: 13px;
+  border: 1px solid color-mix(in srgb, var(--console-ink, currentColor) 14%, transparent);
+  border-radius: 3px;
+  background: var(--console-raised, hsl(var(--muted)));
+  animation: agent-motion-stack-shift calc(3.2s * var(--agent-motion-speed))
+    var(--agent-motion-ease) infinite;
+  animation-delay: calc(var(--motion-index) * -0.42s * var(--agent-motion-speed));
+}
+
+.agent-motion--stack-shift i::after {
+  position: absolute;
+  inset: 3px 4px;
+  border-radius: 99px;
+  background: currentColor;
+  content: '';
+  opacity: 0.45;
+  transform: scaleX(var(--motion-fill));
+  transform-origin: left;
+}
+
+.agent-motion--code-shimmer {
+  width: 80px;
+  gap: 7px;
+  align-content: center;
+  justify-items: start;
+}
+
+.agent-motion--code-shimmer i {
+  position: relative;
+  width: calc(64px * var(--motion-width));
+  height: 3px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--console-ink, currentColor) 13%, transparent);
+}
+
+.agent-motion--code-shimmer i::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, currentColor, transparent);
+  content: '';
+  transform: translateX(-110%);
+  animation: agent-motion-code-shimmer calc(2.4s * var(--agent-motion-speed))
+    var(--agent-motion-ease) infinite;
+  animation-delay: calc(var(--motion-index) * 0.12s * var(--agent-motion-speed));
+}
+
+@keyframes agent-motion-glyph-fill {
+  0%,
+  12% {
+    clip-path: inset(0 100% 0 0);
+  }
+  48%,
+  70% {
+    clip-path: inset(0 0 0 0);
+  }
+  88%,
+  100% {
+    clip-path: inset(0 0 0 100%);
+  }
+}
+
+@keyframes agent-motion-line-pass {
+  0%,
+  12% {
+    transform: translateX(-110%);
+  }
+  56%,
+  100% {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes agent-motion-dot-fold {
+  0%,
+  100% {
+    opacity: 0.22;
+    transform: translate(0, 0) scale(0.78);
+  }
+  36%,
+  52% {
+    opacity: 0.95;
+    transform: translate(var(--motion-x), var(--motion-y)) scale(1.05);
+  }
+  72% {
+    opacity: 0.5;
+    transform: translate(0, 0) scale(0.86);
+  }
+}
+
+@keyframes agent-motion-oval-turn {
+  to {
+    transform: rotate(384deg);
+  }
+}
+
+@keyframes agent-motion-cursor-forge {
+  0%,
+  12% {
+    width: 6px;
+    opacity: 1;
+    transform: translateX(0) scaleY(1);
+  }
+  44%,
+  61% {
+    width: 58px;
+    opacity: 0.8;
+    transform: translateX(0) scaleY(0.12);
+  }
+  78% {
+    width: 7px;
+    opacity: 1;
+    transform: translateX(51px) scaleY(1);
+  }
+  92%,
+  100% {
+    width: 7px;
+    opacity: 0;
+    transform: translateX(51px) scaleY(0.45);
+  }
+}
+
+@keyframes agent-motion-bracket-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: translateX(0);
+  }
+  50% {
+    opacity: 1;
+    color: currentColor;
+    transform: translateX(var(--motion-direction));
+  }
+}
+
+@keyframes agent-motion-seed-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.65);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes agent-motion-stack-shift {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: translateY(9px) translateZ(-18px) scale(0.88);
+  }
+  35%,
+  55% {
+    opacity: 1;
+    border-color: currentColor;
+    transform: translateY(-6px) translateZ(16px) scale(1.03);
+  }
+  78% {
+    opacity: 0.4;
+    transform: translateY(4px) translateZ(0) scale(0.95);
+  }
+}
+
+@keyframes agent-motion-code-shimmer {
+  0%,
+  8% {
+    transform: translateX(-110%);
+  }
+  68%,
+  100% {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes agent-motion-enter {
+  from {
+    transform: scale(0.96);
+    filter: brightness(0.82);
+  }
+  to {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+}
+
+@keyframes agent-motion-exit {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  58% {
+    opacity: 0.35;
+    transform: scale(0.985);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+html[data-app-visibility='hidden'] .agent-motion *,
+html[data-app-visibility='hidden'] .agent-motion *::after {
+  animation-play-state: paused !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-motion-slot[data-agent-motion-presence] {
+    animation: none !important;
+  }
+
+  .agent-motion-slot[data-agent-motion-presence='exiting'] {
+    opacity: 0;
+  }
+
+  .agent-motion *,
+  .agent-motion *::after {
+    animation: none !important;
+  }
+}

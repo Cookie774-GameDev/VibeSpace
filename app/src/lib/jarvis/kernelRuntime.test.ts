@@ -228,6 +228,7 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
     requestId: string;
     approvalId: string;
     actionId: string;
+    providerResultState?: 'completed' | 'degraded';
   }): Promise<void> {
     await db.chats.add({
       id: input.parentRun.chatId as ChatId,
@@ -269,6 +270,28 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
         sourceRefs: [],
         artifactIds: [],
         createdAt: NOW,
+        ...(input.providerResultState === undefined
+          ? {}
+          : {
+              producerSourceEvidence: {
+                schemaVersion: 1 as const,
+                accountId: input.parentRun.accountId,
+                runId: input.parentRun.id,
+                requestId: input.requestId,
+                attemptNumber: 1,
+                producerKind: 'provider' as const,
+                producerIdentity: {
+                  producerKind: 'provider' as const,
+                  providerId: input.parentRun.model.providerId,
+                  modelId: input.parentRun.model.modelId,
+                  modelSnapshotRef: `${input.parentRun.model.providerId}:${input.parentRun.model.modelId}`,
+                },
+                resultRef: `jprovider_result:${input.requestId}`,
+                observedAt: NOW,
+                phase: 'result' as const,
+                state: input.providerResultState,
+              },
+            }),
       }),
     );
   }
@@ -684,7 +707,10 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       (value) => ({ kind: 'resolved' as const, value }),
       (error: unknown) => ({ kind: 'rejected' as const, error }),
     );
-    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(start).toHaveBeenCalledOnce();
+      expect(registeredOwners.has(`${turn.run.id}:provider`)).toBe(true);
+    });
 
     const cancellation = await runtime.kernel.requestCancellation({
       accountId: turn.accountId,
@@ -1440,6 +1466,296 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       status: 'awaiting_approval',
     });
     expect(await db.jarvis_events.count()).toBe(3);
+  });
+
+  it('decides an exact typed-chat approval backed by completed provider response evidence', async () => {
+    const requestId = 'request-runtime-response-backed-approval';
+    const approvalId = 'jappr_runtime_response_backed';
+    const parentRun: JarvisRun = {
+      ...kernelRun(),
+      status: 'running',
+      updatedAt: NOW - 5,
+    };
+    await db.jarvis_runs.add(toJarvisRunRow(parentRun));
+    await db.jarvis_events.add(
+      toJarvisEventRow({
+        runId: parentRun.id,
+        seq: 1,
+        idempotencyKey: `provider-start:${requestId}`,
+        type: 'model',
+        status: 'started',
+        title: 'Provider started',
+        safeSummary: 'The protected provider request started.',
+        sourceRefs: [],
+        artifactIds: [],
+        createdAt: NOW - 5,
+        producerSourceEvidence: {
+          schemaVersion: 1,
+          accountId: parentRun.accountId,
+          runId: parentRun.id,
+          requestId,
+          attemptNumber: 1,
+          producerKind: 'provider',
+          producerIdentity: {
+            producerKind: 'provider',
+            providerId: parentRun.model.providerId,
+            modelId: parentRun.model.modelId,
+            modelSnapshotRef: `${parentRun.model.providerId}:${parentRun.model.modelId}`,
+          },
+          resultRef: `jprovider_start:${requestId}`,
+          observedAt: NOW - 5,
+          phase: 'start',
+          state: 'started',
+        },
+      }),
+    );
+    const bindKernelActions: JarvisApprovalActionBinder = (lifecycle) => ({
+      async create(createInput) {
+        const result = await lifecycle.putPreparedApproval({
+          ...createInput,
+          secretHandleRefs: [],
+          approvalId,
+          paramsHash: 'params-hash-response-backed',
+          targetSnapshot: {
+            kind: 'app_resource',
+            namespace: 'files',
+            resourceId: 'response-backed',
+          },
+          risk: 'confirm',
+          capabilityId: 'capability.files.write',
+          capabilitySnapshotHash: 'capability-hash-response-backed',
+          expectedEffect: 'Create the exact approved file.',
+          createdAt: NOW,
+        } as never);
+        if (result.kind !== 'committed') throw new Error('unexpected_authority_revocation');
+        return result.value;
+      },
+      async decide(decideInput) {
+        const result = await lifecycle.decidePreparedApproval({
+          approvalId: decideInput.approvalId,
+          decision: decideInput.decision,
+        });
+        if (result.kind !== 'committed') throw new Error('unexpected_authority_revocation');
+        return result.value;
+      },
+      execute: vi.fn() as never,
+      executeAutoApprovedSafe: vi.fn() as never,
+    });
+    const runtime = createJarvisKernelRuntime({
+      db,
+      artifactEvidenceAuthorities: artifactAuthorities() as never,
+      journal: { allocateRun: vi.fn(), getRun: vi.fn() } as never,
+      cancellationDeliveryAuthority: {} as never,
+      abortRegistrationAuthority: {} as never,
+      bindKernelActions,
+      liveEvidenceVerifiers: unavailableVerifiers() as never,
+      prepareProvider: vi.fn() as never,
+      processResponse: vi.fn() as never,
+      takeProviderArtifactDrafts: vi.fn(() => []),
+      randomUUID: () => 'runtime-response-backed-approval-uuid',
+      now: () => NOW,
+    });
+
+    await runtime.kernel.actions.create({
+      parentRun,
+      attempt: { kind: 'initial', requestId, runId: parentRun.id, attemptNumber: 1 },
+      actionId: 'files.create',
+      actionVersion: 1,
+      params: { title: 'Response backed' },
+      expiresAt: NOW + 60_000,
+    });
+    const awaitingRun: JarvisRun = {
+      ...parentRun,
+      status: 'awaiting_approval',
+      updatedAt: NOW,
+    };
+    await db.jarvis_runs.put(toJarvisRunRow(awaitingRun));
+    await expect(
+      runtime.kernel.actions.decide({
+        parentRun: awaitingRun,
+        approvalId,
+        decision: 'approve',
+      }),
+    ).rejects.toThrow('kernel_action_scope_mismatch');
+    expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(approvalId))!)).toMatchObject({
+      id: approvalId,
+      status: 'pending',
+    });
+    await seedActionResponseCheckpoint({
+      parentRun: awaitingRun,
+      requestId,
+      approvalId,
+      actionId: 'files.create',
+      providerResultState: 'completed',
+    });
+
+    await expect(
+      runtime.kernel.actions.decide({
+        parentRun: awaitingRun,
+        approvalId,
+        decision: 'approve',
+      }),
+    ).resolves.toMatchObject({
+      kind: 'committed',
+      value: {
+        id: approvalId,
+        runId: awaitingRun.id,
+        requestId,
+        attemptNumber: 1,
+        status: 'approved',
+      },
+    });
+  });
+
+  it('decides the first files.create in a ten-file batch from the last-card response checkpoint', async () => {
+    const requestId = 'request-runtime-files-create-batch';
+    const approvalIds = Array.from(
+      { length: 10 },
+      (_value, index) => `jappr_runtime_files_create_${String(index + 1).padStart(2, '0')}`,
+    );
+    const parentRun: JarvisRun = {
+      ...kernelRun(),
+      id: 'run-runtime-files-create-batch',
+      chatId: 'chat-runtime-files-create-batch',
+      status: 'running',
+      updatedAt: NOW - 5,
+    };
+    await db.jarvis_runs.add(toJarvisRunRow(parentRun));
+    await db.jarvis_events.add(
+      toJarvisEventRow({
+        runId: parentRun.id,
+        seq: 1,
+        idempotencyKey: `provider-start:${requestId}`,
+        type: 'model',
+        status: 'started',
+        title: 'Provider started',
+        safeSummary: 'The protected provider request started.',
+        sourceRefs: [],
+        artifactIds: [],
+        createdAt: NOW - 5,
+        producerSourceEvidence: {
+          schemaVersion: 1,
+          accountId: parentRun.accountId,
+          runId: parentRun.id,
+          requestId,
+          attemptNumber: 1,
+          producerKind: 'provider',
+          producerIdentity: {
+            producerKind: 'provider',
+            providerId: parentRun.model.providerId,
+            modelId: parentRun.model.modelId,
+            modelSnapshotRef: `${parentRun.model.providerId}:${parentRun.model.modelId}`,
+          },
+          resultRef: `jprovider_start:${requestId}`,
+          observedAt: NOW - 5,
+          phase: 'start',
+          state: 'started',
+        },
+      }),
+    );
+    let nextApprovalIndex = 0;
+    const bindKernelActions: JarvisApprovalActionBinder = (lifecycle) => ({
+      async create(createInput) {
+        const approvalId = approvalIds[nextApprovalIndex];
+        nextApprovalIndex += 1;
+        if (!approvalId) throw new Error('unexpected_extra_batch_create');
+        const result = await lifecycle.putPreparedApproval({
+          ...createInput,
+          secretHandleRefs: [],
+          approvalId,
+          paramsHash: `params-hash-files-create-batch-${approvalId}`,
+          targetSnapshot: {
+            kind: 'app_resource',
+            namespace: 'files',
+            resourceId: approvalId,
+          },
+          risk: 'confirm',
+          capabilityId: 'capability.files.write',
+          capabilitySnapshotHash: 'capability-hash-files-create-batch',
+          expectedEffect: 'Create the exact approved file.',
+          createdAt: NOW,
+        } as never);
+        if (result.kind !== 'committed') throw new Error('unexpected_authority_revocation');
+        return result.value;
+      },
+      async decide(decideInput) {
+        const result = await lifecycle.decidePreparedApproval({
+          approvalId: decideInput.approvalId,
+          decision: decideInput.decision,
+        });
+        if (result.kind !== 'committed') throw new Error('unexpected_authority_revocation');
+        return result.value;
+      },
+      execute: vi.fn() as never,
+      executeAutoApprovedSafe: vi.fn() as never,
+    });
+    const runtime = createJarvisKernelRuntime({
+      db,
+      artifactEvidenceAuthorities: artifactAuthorities() as never,
+      journal: { allocateRun: vi.fn(), getRun: vi.fn() } as never,
+      cancellationDeliveryAuthority: {} as never,
+      abortRegistrationAuthority: {} as never,
+      bindKernelActions,
+      liveEvidenceVerifiers: unavailableVerifiers() as never,
+      prepareProvider: vi.fn() as never,
+      processResponse: vi.fn() as never,
+      takeProviderArtifactDrafts: vi.fn(() => []),
+      randomUUID: () => 'runtime-files-create-batch-uuid',
+      now: () => NOW,
+    });
+
+    for (const [index, approvalId] of approvalIds.entries()) {
+      await runtime.kernel.actions.create({
+        parentRun: {
+          ...parentRun,
+          status: index === 0 ? 'running' : 'awaiting_approval',
+          updatedAt: NOW,
+        },
+        attempt: { kind: 'initial', requestId, runId: parentRun.id, attemptNumber: 1 },
+        actionId: 'files.create',
+        actionVersion: 1,
+        params: { path: `${approvalId}.txt` },
+        expiresAt: NOW + 60_000,
+      });
+    }
+
+    const awaitingRun: JarvisRun = {
+      ...parentRun,
+      status: 'awaiting_approval',
+      updatedAt: NOW,
+    };
+    await expect(
+      runtime.kernel.actions.decide({
+        parentRun: awaitingRun,
+        approvalId: approvalIds[0]!,
+        decision: 'approve',
+      }),
+    ).rejects.toThrow('kernel_action_scope_mismatch');
+
+    await seedActionResponseCheckpoint({
+      parentRun: awaitingRun,
+      requestId,
+      approvalId: approvalIds[9]!,
+      actionId: 'files.create',
+      providerResultState: 'completed',
+    });
+
+    await expect(
+      runtime.kernel.actions.decide({
+        parentRun: awaitingRun,
+        approvalId: approvalIds[0]!,
+        decision: 'approve',
+      }),
+    ).resolves.toMatchObject({
+      kind: 'committed',
+      value: {
+        id: approvalIds[0],
+        runId: awaitingRun.id,
+        requestId,
+        attemptNumber: 1,
+        status: 'approved',
+      },
+    });
   });
 
   it('claims and settles an approved action with durable start, result, and live evidence', async () => {
@@ -2315,8 +2631,7 @@ describe('createJarvisKernelRuntime scheduled attempt authority', () => {
           source.state === evidence.state &&
           source.producerIdentity.providerId === evidence.producerIdentity.providerId &&
           source.producerIdentity.modelId === evidence.producerIdentity.modelId &&
-          source.producerIdentity.modelSnapshotRef ===
-            evidence.producerIdentity.modelSnapshotRef
+          source.producerIdentity.modelSnapshotRef === evidence.producerIdentity.modelSnapshotRef
           ? Object.freeze(structuredClone(evidence))
           : null;
       },
@@ -2400,9 +2715,8 @@ describe('createJarvisKernelRuntime scheduled attempt authority', () => {
         outputContract: { ...basis.outputContract, voiceDelivery: 'none' as const },
       })),
       providerAttemptEvidence: {
-        revalidateFailure: providerEvidenceAuthority.revalidateFailure.bind(
-          providerEvidenceAuthority,
-        ),
+        revalidateFailure:
+          providerEvidenceAuthority.revalidateFailure.bind(providerEvidenceAuthority),
       },
       prepareProvider,
       processResponse: vi.fn() as never,

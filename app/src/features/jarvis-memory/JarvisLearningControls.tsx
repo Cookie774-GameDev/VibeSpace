@@ -91,7 +91,7 @@ export function JarvisLearningControls({ onExport = downloadMarkdown }: JarvisLe
             </div>
           )}
           <span className="ml-auto text-metadata text-muted-foreground">
-            {profile.meaningfulMessageCount % 10}/10 until review
+            {profile.meaningfulMessageCount % 20}/20 until review
           </span>
         </div>
 

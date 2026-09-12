@@ -6,16 +6,15 @@
  * the desktop chrome and is inert for every other appearance.
  */
 html[data-theme='sakura'] [data-sakura-shell='true'] {
-  --sakura-shell-inset: clamp(10px, 1vw, 14px);
-  padding: var(--sakura-shell-inset);
+  padding: 0;
   border-radius: 0;
 }
 
 html[data-theme='sakura'] [data-sakura-shell='true'] > .sakura-shell-frame {
   overflow: hidden;
-  border: 1px solid hsl(var(--sakura-ivory-hsl) / var(--sakura-essential-border-alpha));
-  border-radius: var(--sakura-radius-shell);
-  box-shadow: var(--shadow-cozy);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 html[data-theme='sakura'] .sakura-shell-top-bar {
@@ -68,14 +67,6 @@ html[data-theme='sakura']
 }
 
 @media (max-width: 1100px), (max-height: 760px) {
-  html[data-theme='sakura'] [data-sakura-shell='true'] {
-    --sakura-shell-inset: 10px;
-  }
-
-  html[data-theme='sakura'] [data-sakura-shell='true'] > .sakura-shell-frame {
-    border-radius: 22px;
-  }
-
   html[data-theme='sakura'] .sakura-shell-inspector {
     position: absolute;
     z-index: 20;
@@ -102,7 +93,7 @@ html[data-theme='sakura']
 @media (forced-colors: active) {
   html[data-theme='sakura'] [data-sakura-shell='true'] > .sakura-shell-frame {
     background: Canvas;
-    border-color: CanvasText;
+    border: 0;
     box-shadow: none;
   }
 }

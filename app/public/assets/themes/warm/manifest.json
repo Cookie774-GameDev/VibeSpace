@@ -1,0 +1,90 @@
+{
+  "version": 2,
+  "theme": "warm",
+  "assets": {
+    "brand": {
+      "path": "reference/brand-logo.png",
+      "sha256": "7b992d8c46528baeb0d123fa9f635413e3aa73a77ec6e731d1ee299bfa31e1a9"
+    },
+    "chat": {
+      "path": "reference/chat-notebook.png",
+      "sha256": "305213eef824a04b1ed8a83006dffc37d67fdfe2f75f39532fdb6397642b0f57"
+    },
+    "files": {
+      "path": "reference/files-stationery.png",
+      "sha256": "9121cb53df4ed256c9260fc6e4064289d6005fd4188a775a701246ee69d15b73"
+    },
+    "kanbanChecklist": {
+      "path": "reference/kanban-checklist.png",
+      "sha256": "7996c901da622357fa841d621a765cde9ef3898cd319a52456ee356f85f8c9e0"
+    },
+    "kanbanMilestone": {
+      "path": "reference/kanban-milestone.png",
+      "sha256": "541b113632edaaff7221349b14446bf47687b6f10f6ccf57b9d199f97bd5de80"
+    },
+    "schedulerCenter": {
+      "path": "reference/scheduler-center.png",
+      "sha256": "03681b34b4587423547c23550c1044518031cfe6ca937488f06ca616f39710b3"
+    },
+    "schedulerLandscape": {
+      "path": "reference/scheduler-landscape.jpg",
+      "sha256": "fda60fb99315a1a2a4816a68a5361fe93c99b19ded39456706b0d62aef20b207"
+    },
+    "schedulerCenterHd": {
+      "path": "reference/scheduler-center-hd.webp",
+      "sha256": "b428756ed012eb7fed7f1e39302d8edfd5e756bf7f1fb5eb2bec5733c410d6b4"
+    },
+    "schedulerLandscapeHd": {
+      "path": "reference/scheduler-landscape-hd.webp",
+      "sha256": "23cf990b01e104b05ee00013f4a79376182c6c89b7cf4c409f8d18928b8d1e7d"
+    },
+    "skillsCorner": {
+      "path": "reference/skills-corner.png",
+      "sha256": "856aa9514f1858baff4f1f174592123d1e17ed7ba8b494656434a7810fedd625"
+    },
+    "skillsLandscape": {
+      "path": "reference/skills-landscape.jpg",
+      "sha256": "75133117307f3121b18bec4552abfb265957ba5a43f6e01b0550fcb6013d41b4"
+    },
+    "toolsCorner": {
+      "path": "reference/tools-corner.png",
+      "sha256": "143311d2ad5e7e3026391a70062b2e43facf5f6a13a61f0170c08c84f653cb7e"
+    },
+    "toolsLandscape": {
+      "path": "reference/tools-landscape.jpg",
+      "sha256": "46d26bdfa226a1b56b3a9b3e265d692ae25c8636c2f2d95a4f9c813ffe7895dd"
+    },
+    "contextFolder": {
+      "path": "context/context-folder-v1.webp",
+      "sha256": "2d6492728bbd113e51042c3f050fafdd23772ee4b46196bb99348e096fec6e48"
+    },
+    "contextFile": {
+      "path": "context/context-file-v1.webp",
+      "sha256": "0e34629b0977726b146c2dd711c89b40faf7a02e3baa5e58b40c9ea816caaf4b"
+    },
+    "contextRepository": {
+      "path": "context/context-repository-v1.webp",
+      "sha256": "5233c49e104812423cd34ef45a0184e7af6823fb27ccd497ad18b176db42e09b"
+    },
+    "contextValley": {
+      "path": "context/context-valley-v1.webp",
+      "sha256": "6a1263a3f991ade72b984d9a3acf0dc66937ca972bec5b5a6e4fe87cd5b7f094"
+    },
+    "modelFoundryLandscape": {
+      "path": "model-foundry/model-foundry-landscape-v1.webp",
+      "sha256": "85f138bbdf07c5d30fedb8004d69d345260ceaf0b68fc1c0b02b30bbcdc51a31"
+    },
+    "historyReplayLandscape": {
+      "path": "history/history-replay-landscape-v1.webp",
+      "sha256": "44b2648f47b4176cbcff30e1256e683feae6994c80898109937fc4449bd5cee4"
+    },
+    "agentsEditorLandscape": {
+      "path": "agents/agents-editor-landscape-v1.webp",
+      "sha256": "134370f3f87f5d44d611ed23ddf4144e2476cc94de7620ca11a7832c186b4e28"
+    },
+    "toolsUpperRightLandscape": {
+      "path": "tools/tools-upper-right-landscape-v1.webp",
+      "sha256": "dc9361efc20482acc2b3ff73b0a4ca2ec4c7c13f07eb1d3c5ec0f7c57e93ff7c"
+    }
+  }
+}

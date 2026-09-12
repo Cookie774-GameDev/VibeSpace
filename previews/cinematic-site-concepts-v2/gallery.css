@@ -1,0 +1,544 @@
+@import url('https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500&family=Instrument+Sans:wdth,wght@75..100,400..650&family=League+Gothic&family=Newsreader:opsz,wght@6..72,300..600&family=Sometype+Mono:wght@400;500&family=Syne:wght@500..800&display=swap');
+
+:root {
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 1100px;
+  scroll-behavior: smooth;
+  background: #060708;
+}
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+  background: #060708;
+  color: #f2f0e9;
+  font-family: "Instrument Sans", sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 100;
+  top: 1rem;
+  left: 1rem;
+  padding: 0.7rem 1rem;
+  transform: translateY(-200%);
+  background: #f2f0e9;
+  color: #060708;
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.65rem;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+.gallery-nav {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 1.75rem 2.4rem;
+  color: #f2f0e9;
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.56rem;
+  letter-spacing: 0.12em;
+  mix-blend-mode: difference;
+  text-transform: uppercase;
+}
+
+.gallery-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-self: start;
+  text-decoration: none;
+}
+
+.gallery-brand span {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  border-radius: 50%;
+  font-size: 0.46rem;
+  letter-spacing: 0;
+}
+
+.gallery-nav p {
+  margin: 0;
+}
+
+.gallery-nav i {
+  margin: 0 0.45rem;
+  font-style: normal;
+  opacity: 0.4;
+}
+
+.gallery-clock {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.gallery-intro {
+  position: relative;
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: 0.7fr 2.4fr 1fr;
+  grid-template-rows: 1fr auto auto 1fr;
+  padding: 8rem 5vw 4rem;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 77% 27%, rgba(109, 86, 211, 0.14), transparent 28%),
+    radial-gradient(circle at 28% 72%, rgba(35, 116, 111, 0.1), transparent 24%),
+    #060708;
+}
+
+.gallery-intro::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 8.333vw 8.333vw;
+  mask-image: linear-gradient(90deg, black, transparent 72%);
+}
+
+.intro-index {
+  z-index: 1;
+  grid-column: 1;
+  grid-row: 2 / 4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-self: end;
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.58rem;
+  opacity: 0.45;
+}
+
+.intro-index span:first-child {
+  color: #77e6dd;
+  opacity: 1;
+}
+
+.intro-kicker {
+  z-index: 1;
+  grid-column: 2;
+  grid-row: 2;
+  margin: 0 0 2.2rem;
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.61rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.gallery-intro h1 {
+  z-index: 1;
+  grid-column: 2 / 4;
+  grid-row: 3;
+  align-self: end;
+  margin: 0;
+  font-family: "Syne", sans-serif;
+  font-size: clamp(7rem, 13.2vw, 15.5rem);
+  font-weight: 600;
+  letter-spacing: -0.08em;
+  line-height: 0.7;
+}
+
+.intro-thesis {
+  z-index: 1;
+  grid-column: 3;
+  grid-row: 2;
+  align-self: end;
+  max-width: 24rem;
+  margin: 0 0 2.2rem;
+  color: rgba(242, 240, 233, 0.64);
+  font-size: 0.94rem;
+  line-height: 1.55;
+}
+
+.intro-scroll {
+  z-index: 1;
+  grid-column: 3;
+  grid-row: 4;
+  display: flex;
+  width: 12rem;
+  gap: 1rem;
+  align-items: center;
+  align-self: end;
+  margin-top: 4rem;
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.56rem;
+  letter-spacing: 0.12em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.intro-scroll i {
+  position: relative;
+  width: 3.5rem;
+  height: 1px;
+  overflow: hidden;
+  background: rgba(242, 240, 233, 0.28);
+}
+
+.intro-scroll i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: #f2f0e9;
+  animation: line-travel 2.4s ease-in-out infinite;
+}
+
+.worlds {
+  position: relative;
+}
+
+.portal-shell {
+  --portal-fg: #edf7f4;
+  --portal-accent: #6ce7df;
+  position: relative;
+  min-height: 108vh;
+  overflow: hidden;
+  background: #020305;
+}
+
+.portal-shell[data-world="memory-forest"] {
+  --portal-fg: #f1f0e7;
+  --portal-accent: #72e5a3;
+  background: #03110d;
+}
+
+.portal-shell[data-world="machine-opera"] {
+  --portal-fg: #12110f;
+  --portal-accent: #df351f;
+  background: #efece4;
+}
+
+.world-portal {
+  position: sticky;
+  top: 0;
+  display: block;
+  height: 100vh;
+  overflow: hidden;
+  color: var(--portal-fg);
+  text-decoration: none;
+}
+
+.portal-image,
+.portal-wash {
+  position: absolute;
+  inset: -4%;
+}
+
+.portal-image {
+  transform:
+    translate3d(var(--portal-x, 0), var(--portal-y, 0), 0)
+    scale(1.09);
+  background:
+    center / cover no-repeat
+    url("assets/first-contact/scene-04.webp");
+  filter: brightness(0.72) saturate(0.9);
+  transition:
+    transform 1.4s cubic-bezier(0.16, 1, 0.3, 1),
+    filter 1.2s ease;
+  will-change: transform;
+}
+
+[data-world="memory-forest"] .portal-image {
+  background-image: url("assets/memory-forest/scene-07.webp");
+  filter: brightness(0.62) saturate(0.8);
+}
+
+[data-world="machine-opera"] .portal-image {
+  background-image: url("assets/machine-opera/scene-04.webp");
+  filter: brightness(1.03) saturate(0.7);
+}
+
+.portal-wash {
+  background:
+    linear-gradient(90deg, rgba(2, 3, 5, 0.76), rgba(2, 3, 5, 0.06) 65%),
+    linear-gradient(0deg, rgba(2, 3, 5, 0.7), transparent 60%);
+}
+
+[data-world="memory-forest"] .portal-wash {
+  background:
+    radial-gradient(circle at 45% 42%, transparent 13%, rgba(3, 17, 13, 0.43) 67%),
+    linear-gradient(90deg, rgba(3, 17, 13, 0.7), transparent 54%);
+}
+
+[data-world="machine-opera"] .portal-wash {
+  background:
+    linear-gradient(90deg, rgba(239, 236, 228, 0.86), rgba(239, 236, 228, 0.08) 62%),
+    linear-gradient(0deg, rgba(239, 236, 228, 0.74), transparent 58%);
+}
+
+.portal-header {
+  position: absolute;
+  z-index: 2;
+  top: 7rem;
+  right: 5vw;
+  left: 5vw;
+  display: flex;
+  justify-content: space-between;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--portal-fg) 28%, transparent);
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.56rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.portal-title {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 7vw;
+  transform: translateY(-54%);
+}
+
+.portal-title p {
+  margin: 0 0 1.5rem;
+  font-family: "Sometype Mono", monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.portal-title h2 {
+  margin: 0;
+  font-family: "Syne", sans-serif;
+  font-size: clamp(7rem, 12.5vw, 15rem);
+  font-weight: 600;
+  letter-spacing: -0.08em;
+  line-height: 0.72;
+  transition: letter-spacing 1s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-world="memory-forest"] .portal-title {
+  top: auto;
+  right: 7vw;
+  bottom: 10vh;
+  left: auto;
+  transform: none;
+  text-align: right;
+}
+
+[data-world="memory-forest"] .portal-title h2 {
+  font-family: "Newsreader", serif;
+  font-size: clamp(7rem, 11vw, 13rem);
+  font-style: italic;
+  font-weight: 350;
+  letter-spacing: -0.065em;
+  line-height: 0.73;
+}
+
+[data-world="machine-opera"] .portal-title {
+  top: 20vh;
+  right: 6vw;
+  left: auto;
+  transform: none;
+  text-align: right;
+}
+
+[data-world="machine-opera"] .portal-title h2 {
+  font-family: "League Gothic", sans-serif;
+  font-size: clamp(10rem, 18vw, 21rem);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.68;
+  text-transform: uppercase;
+}
+
+.portal-statement {
+  position: absolute;
+  z-index: 2;
+  right: 6vw;
+  bottom: 10vh;
+  width: min(25rem, 25vw);
+}
+
+.portal-statement p {
+  margin: 0 0 2rem;
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.portal-statement span {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  padding: 1.05rem 0;
+  border-bottom: 1px solid var(--portal-accent);
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.portal-statement i {
+  font-style: normal;
+  transition: transform 400ms ease;
+}
+
+[data-world="memory-forest"] .portal-statement {
+  right: auto;
+  bottom: 10vh;
+  left: 6vw;
+}
+
+[data-world="machine-opera"] .portal-statement {
+  right: auto;
+  bottom: 10vh;
+  left: 6vw;
+}
+
+.portal-specimen {
+  position: absolute;
+  z-index: 2;
+  right: 5vw;
+  bottom: 2.4rem;
+  left: 5vw;
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 1rem;
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.52rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.portal-specimen b {
+  font-weight: 500;
+}
+
+.portal-specimen span {
+  opacity: 0.58;
+}
+
+.portal-number {
+  position: absolute;
+  z-index: 1;
+  right: -1.5vw;
+  bottom: -7vw;
+  font-family: "Syne", sans-serif;
+  font-size: 26vw;
+  font-weight: 600;
+  letter-spacing: -0.1em;
+  line-height: 1;
+  opacity: 0.055;
+}
+
+[data-world="machine-opera"] .portal-number {
+  font-family: "League Gothic", sans-serif;
+  opacity: 0.08;
+}
+
+.world-portal:hover .portal-image {
+  transform:
+    translate3d(var(--portal-x, 0), var(--portal-y, 0), 0)
+    scale(1.035);
+  filter: brightness(0.82) saturate(1);
+}
+
+[data-world="memory-forest"] .world-portal:hover .portal-image {
+  filter: brightness(0.71) saturate(0.93);
+}
+
+[data-world="machine-opera"] .world-portal:hover .portal-image {
+  filter: brightness(1.08) saturate(0.83);
+}
+
+.world-portal:hover .portal-title h2 {
+  letter-spacing: -0.045em;
+}
+
+[data-world="machine-opera"] .world-portal:hover .portal-title h2 {
+  letter-spacing: 0;
+}
+
+.world-portal:hover .portal-statement i {
+  transform: translate(0.25rem, -0.25rem);
+}
+
+.gallery-footer {
+  display: flex;
+  min-height: 34vh;
+  align-items: end;
+  justify-content: space-between;
+  padding: 4rem 5vw;
+  background: #060708;
+  font-family: "Azeret Mono", monospace;
+  font-size: 0.56rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.gallery-footer p {
+  margin: 0;
+}
+
+@keyframes line-travel {
+  0%,
+  100% {
+    transform: translateX(-100%);
+  }
+
+  50% {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 1099px) {
+  html {
+    min-width: 0;
+  }
+
+  body::before {
+    content: "These cinematic studies are authored for desktop. Open them on a wider screen.";
+    position: fixed;
+    z-index: 200;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    padding: 10vw;
+    background: #060708;
+    color: #f2f0e9;
+    font-family: "Syne", sans-serif;
+    font-size: clamp(2rem, 7vw, 5rem);
+    line-height: 0.98;
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

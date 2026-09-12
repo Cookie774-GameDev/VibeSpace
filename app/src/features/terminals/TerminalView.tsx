@@ -51,6 +51,7 @@ import {
   type HoldConfirmPhase,
 } from './holdToConfirm';
 import { useTerminalTranscriptStore } from './transcriptStore';
+import { TerminalWarmIdleScene } from './terminalWarmIdleScene';
 import { resolveTerminalRestoreSession, type BackendTerminalInfo } from './restoreSession';
 import {
   buildAgentSpawnEnv,
@@ -77,12 +78,18 @@ import {
 } from './terminalClearRegistry';
 import { TERMINAL_CLEAR_SUPPRESS_MS } from './terminalClear';
 import { createWebglDisposeTracker } from './terminalDispose';
+import { subscribeTerminalOutput, type TerminalOutputSubscription } from './terminalOutputRouter';
+import { createTerminalRenderQueue } from './terminalRenderQueue';
+import { terminalWebglBudget, type TerminalWebglLease } from './terminalWebglBudget';
+import { RESOURCE_PRESSURE_EVENT } from '@/stability/resourcePressure';
+import { stabilityDiagnostics } from '@/stability/stabilityDiagnostics';
 import { shouldSendTerminalResize, type TerminalGridSize } from './terminalGeometry';
 import { applyTerminalFollowScroll, terminalUserHasScrolled } from './terminalViewport';
 import { COMPOSER_STT_STOP_EVENT, COMPOSER_STT_TOGGLE_EVENT } from '@/features/composer-stt';
 import { startSttVolumeMeter, stopSttVolumeMeter } from '@/features/composer-stt/sttVolume';
 import { VoiceService } from '@/features/voice/VoiceService';
 import { useUIStore } from '@/stores/ui';
+import { useAuthStore } from '@/stores/auth';
 import {
   CONTEXT_MIME,
   formatContextAttachmentForTerminal,
@@ -102,9 +109,18 @@ import {
   type TerminalSnapshotPayload,
 } from './terminalSnapshot';
 import { registerTerminalSnapshotFlush } from './terminalSnapshotRegistry';
+import {
+  captureTerminalScreenSnapshot,
+  claimTerminalScreenSnapshotLease,
+  clearTerminalScreenSnapshot,
+  clearTerminalScreenSnapshotsOutsideAccount,
+  readTerminalScreenSnapshot,
+  type TerminalScreenSnapshotLease,
+} from './terminalScreenSnapshotCache';
 import { terminalRestartDecision } from './terminalRestartPolicy';
 import {
   attachTerminalExecution,
+  authorizeCanonicalTerminalSpawn,
   ensureTerminalExecutionExitListener,
   failTerminalExecutionBeforeNativeExit,
   hasCanonicalTerminalExecution,
@@ -115,6 +131,7 @@ import {
   terminalExecutionCancellationToken,
   type NativeTerminalExitPayload,
   useTerminalExecutionStore,
+  type TerminalProcessAttachment,
 } from './terminalExecutionStore';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_EVIDENCE } from '@/lib/jarvis/smoke/evidenceIds';
@@ -134,6 +151,7 @@ import {
   TERMINAL_VIBESPACE_PALETTE_EVENT,
 } from './terminalSlashIntegration';
 import type { TerminalPromptEvidence } from './terminalCommandFoundation';
+import { prepareUpgradedPromptInsert } from './terminalPromptUpgrade';
 import {
   applyTerminalTheme,
   resolveTerminalDocumentTheme,
@@ -147,6 +165,7 @@ const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
 
 const TERMINAL_FONT_READINESS_TIMEOUT_MS = 2_000;
 const TERMINAL_OUTPUT_READINESS_TIMEOUT_MS = 2_000;
+const TERMINAL_TEARDOWN_WRITE_TIMEOUT_MS = 2_000;
 
 type TerminalVoiceFailureKind = 'unsupported' | 'startup';
 
@@ -221,6 +240,99 @@ export function terminalSmokeFailureCode(error: string | null): string | undefin
   return 'kernel_terminal_initialization_failed';
 }
 
+interface TerminalTeardownBatch {
+  displayData: string;
+  transcriptData: string;
+}
+
+interface TerminalTeardownWriter {
+  write(data: string, callback: () => void): void;
+}
+
+interface FinalizeTerminalRendererTeardownInput {
+  terminal: TerminalTeardownWriter;
+  pendingWrite: Promise<void>;
+  drainAcceptedOutput: () => TerminalTeardownBatch | null;
+  appendTranscript: (text: string) => void;
+  identityIsCurrent: () => boolean;
+  captureSnapshot: () => void | Promise<void>;
+  dispose: () => void;
+  timeoutMs?: number;
+}
+
+function awaitBoundedTerminalCommit(pending: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (committed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(committed);
+    };
+    const timer = setTimeout(() => settle(false), Math.max(0, timeoutMs));
+    void pending.then(
+      () => settle(true),
+      () => settle(false),
+    );
+  });
+}
+
+function commitTerminalWrite(
+  terminal: TerminalTeardownWriter,
+  data: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (!data) return Promise.resolve(true);
+  return awaitBoundedTerminalCommit(
+    new Promise<void>((resolve, reject) => {
+      try {
+        terminal.write(data, resolve);
+      } catch (error) {
+        reject(error);
+      }
+    }),
+    timeoutMs,
+  );
+}
+
+export async function finalizeTerminalRendererTeardown({
+  terminal,
+  pendingWrite,
+  drainAcceptedOutput,
+  appendTranscript,
+  identityIsCurrent,
+  captureSnapshot,
+  dispose,
+  timeoutMs = TERMINAL_TEARDOWN_WRITE_TIMEOUT_MS,
+}: FinalizeTerminalRendererTeardownInput): Promise<void> {
+  try {
+    if (!(await awaitBoundedTerminalCommit(pendingWrite, timeoutMs))) return;
+    for (let batch = drainAcceptedOutput(); batch; batch = drainAcceptedOutput()) {
+      const commit = commitTerminalWrite(terminal, batch.displayData, timeoutMs);
+      let transcriptAppended = true;
+      try {
+        appendTranscript(batch.transcriptData);
+      } catch {
+        transcriptAppended = false;
+      }
+      if (!(await commit) || !transcriptAppended) return;
+    }
+    if (identityIsCurrent()) {
+      await captureSnapshot();
+    }
+  } catch {
+    // Teardown is fail-closed: never snapshot a renderer whose accepted
+    // output could not be committed, and never leak raw terminal content.
+  } finally {
+    try {
+      dispose();
+    } catch {
+      // A renderer/backend disposal failure must not become an unhandled
+      // rejection during React cleanup.
+    }
+  }
+}
+
 /**
  * When the parent owns its own chrome (`<TileGrid>`'s pane-tile or the
  * splits renderer's leaf header) we suppress this component's internal
@@ -230,6 +342,10 @@ export function terminalSmokeFailureCode(error: string | null): string | undefin
 
 interface SpawnResult {
   sessionId: string;
+  processInstanceId: string;
+  pid: number;
+  processStartedAt: number;
+  runtimeGeneration: string;
   /** Resolved working directory reported by the backend. */
   cwd?: string;
   /** True when the backend launched the shell with the startup command. */
@@ -303,14 +419,24 @@ export function createTerminalExitLatch(
   onExactExit: (payload: NativeTerminalExitPayload) => void,
 ): {
   observe(payload: NativeTerminalExitPayload): void;
-  bind(sessionId: string): boolean;
+  bind(attachment: TerminalProcessAttachment): boolean;
 } {
-  const pending = new Map<string, NativeTerminalExitPayload>();
-  let boundSessionId: string | undefined;
+  const pending: NativeTerminalExitPayload[] = [];
+  let boundAttachment: TerminalProcessAttachment | undefined;
   let delivered = false;
 
+  const matches = (
+    payload: NativeTerminalExitPayload,
+    attachment: TerminalProcessAttachment,
+  ): boolean =>
+    payload.sessionId === attachment.sessionId &&
+    payload.processInstanceId === attachment.processInstanceId &&
+    payload.pid === attachment.pid &&
+    payload.processStartedAt === attachment.processStartedAt &&
+    payload.runtimeGeneration === attachment.runtimeGeneration;
+
   const deliver = (payload: NativeTerminalExitPayload): boolean => {
-    if (delivered || payload.sessionId !== boundSessionId) return false;
+    if (!boundAttachment || delivered || !matches(payload, boundAttachment)) return false;
     delivered = true;
     onExactExit(payload);
     return true;
@@ -318,17 +444,30 @@ export function createTerminalExitLatch(
 
   return {
     observe(payload) {
-      if (boundSessionId === undefined) {
-        if (!pending.has(payload.sessionId)) pending.set(payload.sessionId, payload);
+      if (boundAttachment === undefined) {
+        if (pending.length >= MAX_EARLY_TERMINAL_OUTPUT_CHUNKS) pending.shift();
+        pending.push(payload);
         return;
       }
       deliver(payload);
     },
-    bind(sessionId) {
-      if (boundSessionId !== undefined && boundSessionId !== sessionId) return false;
-      boundSessionId = sessionId;
-      const early = pending.get(sessionId);
-      pending.clear();
+    bind(attachment) {
+      if (
+        boundAttachment !== undefined &&
+        !matches(
+          {
+            ...attachment,
+            code: null,
+            reason: 'natural_exit',
+          },
+          boundAttachment,
+        )
+      ) {
+        return false;
+      }
+      boundAttachment = Object.freeze({ ...attachment });
+      const early = pending.find((payload) => matches(payload, attachment));
+      pending.length = 0;
       return early ? deliver(early) : false;
     },
   };
@@ -336,16 +475,14 @@ export function createTerminalExitLatch(
 
 export async function attachTerminalViewExecution(
   executionId: string | undefined,
-  sessionId: string,
+  attachment: TerminalProcessAttachment,
   dependencies: {
     isCanonical?: typeof hasCanonicalTerminalExecution;
     attach?: typeof attachTerminalExecution;
   } = {},
 ): Promise<boolean> {
   if (!executionId) return true;
-  const isCanonical = dependencies.isCanonical ?? hasCanonicalTerminalExecution;
-  if (!isCanonical(executionId)) return true;
-  return (dependencies.attach ?? attachTerminalExecution)(executionId, sessionId);
+  return (dependencies.attach ?? attachTerminalExecution)(executionId, attachment);
 }
 
 export function canonicalTerminalSpawnToken(
@@ -479,6 +616,8 @@ export function TerminalView({
   paneId,
   command,
   startupCommand,
+  startupCommands,
+  preserveExisting = false,
   executionId,
   pendingCommand,
   pendingCommandId,
@@ -498,6 +637,12 @@ export function TerminalView({
   projectId,
   projectName,
 }: TerminalViewProps): JSX.Element {
+  const terminalAccountId = useAuthStore((state) =>
+    state.cloudSession ? state.cloudSession.user_id.trim() : state.localUserId?.trim() || '',
+  );
+  const terminalWorkspaceId = useAuthStore((state) => state.workspaceId?.trim() ?? '');
+  const terminalAccountIdRef = useRef(terminalAccountId);
+  terminalAccountIdRef.current = terminalAccountId;
   const resolvedAgentMode = agentMode ?? (agentSlug ? 'default' : undefined);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -522,6 +667,21 @@ export function TerminalView({
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(existingSessionId ?? null);
   const [isFocused, setIsFocused] = useState(false);
+  const [warmIdleInteractionAt, setWarmIdleInteractionAt] = useState(() => Date.now());
+  const [warmIdlePointerEnteredAt, setWarmIdlePointerEnteredAt] = useState<number | null>(null);
+  const [warmIdlePointerInside, setWarmIdlePointerInside] = useState(false);
+  const warmTheme = useUIStore((state) => state.theme);
+  const markWarmIdleInteraction = () => setWarmIdleInteractionAt(Date.now());
+  const markWarmIdlePointerEntered = () => {
+    setWarmIdlePointerInside(true);
+    setWarmIdlePointerEnteredAt(Date.now());
+  };
+  const markWarmIdlePointerLeft = () => {
+    setWarmIdlePointerInside(false);
+    setWarmIdlePointerEnteredAt(null);
+    markWarmIdleInteraction();
+  };
+  const warmIdleLastActivityAt = warmIdleInteractionAt;
   const [dictating, setDictating] = useState(false);
   const [terminalPaletteOpen, setTerminalPaletteOpen] = useState(false);
   const [terminalPromptEvidence, setTerminalPromptEvidence] = useState<TerminalPromptEvidence>(() =>
@@ -584,8 +744,17 @@ export function TerminalView({
     onBlurRef.current = onBlur;
   }, [onBlur]);
 
+  const flushCurrentInput = () => {
+    const sid = sessionRef.current;
+    if (!sid) return;
+    useTerminalTranscriptStore.getState().setCurrentInput(sid, currentInputRef.current);
+  };
+
   useEffect(() => {
-    const openPalette = () => setTerminalPaletteOpen(true);
+    const openPalette = () => {
+      flushCurrentInput();
+      setTerminalPaletteOpen(true);
+    };
     const onPaletteRequest = (event: Event) => {
       if (!terminalPaletteRequestTargetsPane(event, paneId)) return;
       openPalette();
@@ -617,6 +786,9 @@ export function TerminalView({
   useEffect(() => {
     agentModeRef.current = resolvedAgentMode;
   }, [resolvedAgentMode]);
+  useEffect(() => {
+    clearTerminalScreenSnapshotsOutsideAccount(terminalAccountId);
+  }, [terminalAccountId]);
 
   useEffect(() => {
     return () => {
@@ -628,12 +800,6 @@ export function TerminalView({
     setPowerUpTitle(title);
     if (powerUpTimerRef.current) clearTimeout(powerUpTimerRef.current);
     powerUpTimerRef.current = setTimeout(() => setPowerUpTitle(null), 1500);
-  };
-
-  const flushCurrentInput = () => {
-    const sid = sessionRef.current;
-    if (!sid) return;
-    useTerminalTranscriptStore.getState().setCurrentInput(sid, currentInputRef.current);
   };
 
   const scheduleCurrentInputFlush = () => {
@@ -816,15 +982,15 @@ export function TerminalView({
     let cancelled = false;
     let term: Terminal | null = null;
     let fit: FitAddon | null = null;
-    let unlistenOutput: UnlistenFn | undefined;
+    let outputSubscription: TerminalOutputSubscription | undefined;
     let unlistenExit: UnlistenFn | undefined;
     let scrollListenerDispose: { dispose: () => void } | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let mutationObserver: MutationObserver | null = null;
     let rafToken: number | null = null;
     let outputRafToken: number | null = null;
-    let pendingOutput = '';
-    let pendingTranscript = '';
+    const renderQueue = createTerminalRenderQueue();
+    let terminalWriteInFlight = false;
     const outputBuffer = createTerminalOutputBuffer();
     let handleVisible: (() => void) | null = null;
     let onClear: ((e: Event) => void) | null = null;
@@ -834,12 +1000,15 @@ export function TerminalView({
     let snapshotSaveTimer: number | null = null;
     let snapshotSaveInFlight: Promise<void> | null = null;
     let latestTerminalWrite: Promise<void> = Promise.resolve();
+    let screenSnapshotLease: TerminalScreenSnapshotLease | null = null;
     let lastSnapshotFingerprint = '';
     let deferredRestartCommand: string | null = null;
     let restartConfirmationHandled = false;
     let startupRestoreMode = false;
     let sshSession = isSshSessionCommand(startupCommand);
     const webglDispose = createWebglDisposeTracker();
+    let webglLease: TerminalWebglLease | null = null;
+    let onResourcePressure: (() => void) | null = null;
     const inputTracker = createPersistedInputTracker(currentInputRef.current);
     const slashIntegration = createTerminalSlashIntegration({ command });
     const publishPromptEvidence = (next: TerminalPromptEvidence) => {
@@ -917,8 +1086,7 @@ export function TerminalView({
 
     const resetTerminalSurface = () => {
       outputBuffer.flush();
-      pendingOutput = '';
-      pendingTranscript = '';
+      renderQueue.clear();
       if (outputRafToken != null) {
         cancelAnimationFrame(outputRafToken);
         outputRafToken = null;
@@ -1009,6 +1177,25 @@ export function TerminalView({
         command: startupCommand ?? command ?? null,
         interactive: isInteractiveAgentSession(sessionRef.current ?? ''),
       });
+      const snapshotSessionId = sessionRef.current;
+      if (
+        terminalAccountId &&
+        terminalAccountIdRef.current === terminalAccountId &&
+        paneId &&
+        snapshotSessionId &&
+        screenSnapshotLease
+      ) {
+        captureTerminalScreenSnapshot(
+          {
+            accountId: terminalAccountId,
+            projectId: projectId ?? null,
+            paneId,
+            sessionId: snapshotSessionId,
+          },
+          snapshot,
+          screenSnapshotLease,
+        );
+      }
       const fingerprint = terminalSnapshotFingerprint(snapshot);
       if (fingerprint === lastSnapshotFingerprint) return;
       snapshotSaveInFlight = invoke('terminal_snapshot_save', { snapshot });
@@ -1032,11 +1219,17 @@ export function TerminalView({
 
     const flushTerminalOutput = () => {
       outputRafToken = null;
-      if (!pendingOutput) return;
-      const displayData = pendingOutput;
-      const transcriptData = pendingTranscript;
-      pendingOutput = '';
-      pendingTranscript = '';
+      if (terminalWriteInFlight) return;
+      const pending = renderQueue.drain();
+      if (!pending) return;
+      const { displayData, transcriptData, droppedCharacters } = pending;
+      if (droppedCharacters > 0) {
+        stabilityDiagnostics.record({
+          type: 'terminal-output-trimmed',
+          at: Date.now(),
+          droppedCharacters,
+        });
+      }
       const sid = sessionRef.current;
       if (!sid) return;
 
@@ -1044,6 +1237,7 @@ export function TerminalView({
         const currentTerm = termRef.current;
         const followUserScrolled = userHasScrolledRef.current;
         if (currentTerm) {
+          terminalWriteInFlight = true;
           latestTerminalWrite = new Promise<void>((resolve) => {
             currentTerm.write(displayData, () => {
               if (!cancelled) {
@@ -1059,7 +1253,11 @@ export function TerminalView({
                 }
                 scheduleTerminalSnapshot();
               }
+              terminalWriteInFlight = false;
               resolve();
+              if (!cancelled && !renderQueue.isEmpty() && outputRafToken == null) {
+                outputRafToken = requestAnimationFrame(flushTerminalOutput);
+              }
             });
           });
         }
@@ -1076,8 +1274,7 @@ export function TerminalView({
 
     const queueTerminalOutput = (displayData: string, transcriptData: string) => {
       if (!displayData) return;
-      pendingOutput += displayData;
-      pendingTranscript += transcriptData;
+      renderQueue.enqueue(displayData, transcriptData);
       if (outputRafToken != null) return;
       outputRafToken = requestAnimationFrame(flushTerminalOutput);
     };
@@ -1094,6 +1291,10 @@ export function TerminalView({
     const flushTerminalPersistenceNow = async (): Promise<void> => {
       if (outputRafToken != null) {
         cancelAnimationFrame(outputRafToken);
+        flushTerminalOutput();
+      }
+      while (terminalWriteInFlight || !renderQueue.isEmpty()) {
+        await latestTerminalWrite;
         flushTerminalOutput();
       }
       flushCurrentInput();
@@ -1140,10 +1341,16 @@ export function TerminalView({
       // If WebGL isn't available — or the browser reclaims the context
       // because too many are alive — we dispose the addon and xterm falls
       // back to the DOM renderer transparently.
+      webglLease = terminalWebglBudget.acquire();
       try {
+        if (!webglLease) {
+          throw new Error('terminal WebGL context budget reached');
+        }
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
           webglDispose.disposeAddon();
+          webglLease?.release();
+          webglLease = null;
           requestAnimationFrame(() => {
             if (cancelled) return;
             const currentTerm = termRef.current;
@@ -1160,8 +1367,17 @@ export function TerminalView({
         term.loadAddon(webgl);
       } catch (err) {
         webglDispose.setAddon(null);
+        webglLease?.release();
+        webglLease = null;
         console.warn('[Jarvis] WebGL renderer unavailable, using DOM renderer:', err);
       }
+
+      onResourcePressure = () => {
+        webglDispose.disposeAddon();
+        webglLease?.release();
+        webglLease = null;
+      };
+      window.addEventListener(RESOURCE_PRESSURE_EVENT, onResourcePressure);
 
       // Belt-and-braces: re-assigning fontFamily forces xterm's option
       // proxy to re-run its cell measurement, in case fonts.ready
@@ -1200,6 +1416,7 @@ export function TerminalView({
       }
 
       term.onData((data: string) => {
+        markWarmIdleInteraction();
         const sid = sessionRef.current;
         if (!sid) return;
 
@@ -1218,6 +1435,7 @@ export function TerminalView({
         });
         publishPromptEvidence(slashIntegration.snapshot());
         if (capture.openPalette) {
+          flushCurrentInput();
           setTerminalPaletteOpen(true);
           return;
         }
@@ -1267,14 +1485,12 @@ export function TerminalView({
           await ensureTerminalExecutionExitListener();
         }
         setInitializationPhase('kernel_terminal_phase_output_listener');
-        const u1 = await listen<OutputPayload>('terminal://output', (e) => {
-          outputLatch.observe(e.payload);
-        });
+        const u1 = await subscribeTerminalOutput((payload) => outputLatch.observe(payload));
         if (cancelled) {
-          u1();
+          u1.unsubscribe();
           return;
         }
-        unlistenOutput = u1;
+        outputSubscription = u1;
 
         setInitializationPhase('kernel_terminal_phase_native_exit_listener');
         const u2 = await listen<NativeTerminalExitPayload>('terminal://exit', (e) => {
@@ -1316,6 +1532,7 @@ export function TerminalView({
       let nativeStartupCommandConsumed = false;
       let restoredInput = '';
       let sessionCwd: string | null = cwd ?? null;
+      let processAttachment: TerminalProcessAttachment | null = null;
       let briefingDelivered = false;
       const slugAtSpawn = agentSlugRef.current;
       const modeAtSpawn = agentModeRef.current;
@@ -1349,6 +1566,16 @@ export function TerminalView({
           activeSessions,
           transcripts: useTerminalTranscriptStore.getState().sessions,
           renderedSnapshot,
+          readActiveScreenSnapshot:
+            terminalAccountId && paneId
+              ? (sessionId) =>
+                  readTerminalScreenSnapshot({
+                    accountId: terminalAccountId,
+                    projectId: projectId ?? null,
+                    paneId,
+                    sessionId,
+                  })
+              : undefined,
         });
         startupRestoreMode = Boolean(restoreDecision.restoredText);
 
@@ -1357,7 +1584,8 @@ export function TerminalView({
           restoredInput = restoreDecision.restoredInput;
           let spawnCommand = command;
           const isRecoveredSession = restoreDecision.source !== 'new-pane';
-          const nativeStartupCommand = isRecoveredSession ? undefined : startupCommand;
+          const nativeStartupCommand =
+            isRecoveredSession || startupCommands?.length ? undefined : startupCommand;
           if (isRecoveredSession) {
             const restart = terminalRestartDecision(command, startupCommand);
             spawnCommand = restart.spawnCommand;
@@ -1412,6 +1640,18 @@ export function TerminalView({
               : {}),
             ...(paneId ? { VIBESPACE_PANE_ID: paneId } : {}),
           };
+          let spawnCancellationToken = canonicalTerminalSpawnToken(executionId);
+          if (executionId && hasCanonicalTerminalExecution(executionId)) {
+            const authorizedCancellationToken = authorizeCanonicalTerminalSpawn(executionId, {
+              accountId: terminalAccountId,
+              workspaceId: terminalWorkspaceId,
+              projectId: projectId ?? null,
+            });
+            if (!authorizedCancellationToken) {
+              throw new TypeError('canonical_terminal_scope_revoked_before_spawn');
+            }
+            spawnCancellationToken = authorizedCancellationToken;
+          }
           const result = await invoke<SpawnResult>('terminal_spawn', {
             command: spawnCommand,
             startupCommand: nativeStartupCommand,
@@ -1420,21 +1660,40 @@ export function TerminalView({
             cols: term.cols,
             projectId: projectId,
             projectName: projectName,
-            cancellationToken: canonicalTerminalSpawnToken(executionId),
+            cancellationToken: spawnCancellationToken,
+            preserveExisting: preserveExisting || undefined,
             // Make the assignment discoverable by any process in the pane,
             // not just AGENTS.md readers (env is inherited by child CLIs).
             env: Object.keys(spawnEnv).length > 0 ? spawnEnv : undefined,
           });
           sid = result.sessionId;
+          processAttachment = {
+            accountId: terminalAccountId,
+            projectId: projectId ?? null,
+            paneId: paneId ?? '',
+            sessionId: result.sessionId,
+            processInstanceId: result.processInstanceId,
+            pid: result.pid,
+            processStartedAt: result.processStartedAt,
+            runtimeGeneration: result.runtimeGeneration,
+          };
           nativeStartupCommandConsumed = result.startupCommandConsumed;
           nativeSessionStarted = true;
+          setInitializationPhase('kernel_terminal_phase_execution_attach');
+          const attached = await attachTerminalViewExecution(executionId, processAttachment);
+          if (!attached) throw new TypeError('terminal_native_attach_failed');
           if (executionId && hasCanonicalTerminalExecution(executionId)) {
-            setInitializationPhase('kernel_terminal_phase_execution_attach');
-            const attached = await attachTerminalExecution(executionId, sid);
-            if (!attached) throw new TypeError('canonical_terminal_native_attach_failed');
             executionAttached = true;
           }
           sessionRef.current = sid;
+          if (terminalAccountId && paneId) {
+            screenSnapshotLease = claimTerminalScreenSnapshotLease({
+              accountId: terminalAccountId,
+              projectId: projectId ?? null,
+              paneId,
+              sessionId: sid,
+            });
+          }
           viewSessionBound = true;
           if (!cancelled) setActiveSessionId(sid);
           setInitializationPhase('kernel_terminal_phase_session_bound');
@@ -1442,7 +1701,8 @@ export function TerminalView({
             markTerminalExecution(executionId, 'running', { sessionId: sid });
           }
           outputLatch.bind(sid);
-          if (exitLatch.bind(sid)) return;
+          outputSubscription?.bind(sid);
+          if (exitLatch.bind(processAttachment)) return;
           sessionCwd = result.cwd || cwd || null;
           console.log(`[Jarvis] Spawned new PTY session: ${sid}`);
 
@@ -1481,7 +1741,38 @@ export function TerminalView({
           });
         } else {
           sid = restoreDecision.sessionId;
-          const backendInfo = activeSessions.find((s) => s.sessionId === sid);
+          const backendInfo = restoreDecision.backendInfo;
+          processAttachment = {
+            accountId: terminalAccountId,
+            projectId: projectId ?? null,
+            paneId: paneId ?? '',
+            sessionId: backendInfo.sessionId,
+            processInstanceId: backendInfo.processInstanceId,
+            pid: backendInfo.pid,
+            processStartedAt: backendInfo.processStartedAt,
+            runtimeGeneration: backendInfo.runtimeGeneration,
+          };
+          setInitializationPhase('kernel_terminal_phase_execution_attach');
+          const attached = await attachTerminalViewExecution(executionId, processAttachment);
+          if (!attached) throw new TypeError('terminal_native_attach_failed');
+          if (executionId && hasCanonicalTerminalExecution(executionId)) {
+            executionAttached = true;
+          }
+          sessionRef.current = sid;
+          if (terminalAccountId && paneId) {
+            screenSnapshotLease = claimTerminalScreenSnapshotLease({
+              accountId: terminalAccountId,
+              projectId: projectId ?? null,
+              paneId,
+              sessionId: sid,
+            });
+          }
+          viewSessionBound = true;
+          if (!cancelled) setActiveSessionId(sid);
+          setInitializationPhase('kernel_terminal_phase_session_bound');
+          outputLatch.bind(sid);
+          outputSubscription?.bind(sid);
+          if (exitLatch.bind(processAttachment)) return;
           sessionCwd = backendInfo?.cwd || cwd || null;
           console.log(
             `[Jarvis] Re-attaching to existing active session: ${sid} (${restoreDecision.source})`,
@@ -1528,18 +1819,14 @@ export function TerminalView({
       }
 
       if (!cancelled && !viewSessionBound) {
-        setInitializationPhase('kernel_terminal_phase_view_attach');
-        const attached = await attachTerminalViewExecution(executionId, sid);
-        if (!attached) {
-          setError('Canonical terminal ownership handoff failed.');
-          return;
-        }
-        sessionRef.current = sid;
-        viewSessionBound = true;
-        if (!cancelled) setActiveSessionId(sid);
-        setInitializationPhase('kernel_terminal_phase_session_bound');
-        outputLatch.bind(sid);
-        if (exitLatch.bind(sid)) return;
+        await settleTerminalInitializationFailure({
+          executionId,
+          sessionId: sid,
+          nativeSessionStarted,
+          executionAttached,
+        });
+        setError('Terminal process ownership binding was unavailable.');
+        return;
       }
 
       // Race fix: if the effect was torn down between awaiting the
@@ -1599,9 +1886,14 @@ export function TerminalView({
       const executionWasCancelled = executionId
         ? useTerminalExecutionStore.getState().executions[executionId]?.status === 'cancelled'
         : false;
+      const orderedStartupCommands = startupCommands?.length
+        ? startupCommands
+        : startupCommand
+          ? [startupCommand]
+          : [];
       if (
         spawnedFresh &&
-        startupCommand &&
+        orderedStartupCommands.length > 0 &&
         !nativeStartupCommandConsumed &&
         !deferredRestartCommand &&
         !executionWasCancelled
@@ -1615,10 +1907,17 @@ export function TerminalView({
         if (cancelledBeforeStartupWrite) return;
         try {
           setInitializationPhase('kernel_terminal_phase_startup_command_write');
-          await invoke('terminal_write', {
-            sessionId: sid,
-            data: commandToInput(startupCommand),
-          });
+          for (const startupWrite of orderedStartupCommands) {
+            if (cancelled) return;
+            const cancelledDuringStartup = executionId
+              ? useTerminalExecutionStore.getState().executions[executionId]?.status === 'cancelled'
+              : false;
+            if (cancelledDuringStartup) return;
+            await invoke('terminal_write', {
+              sessionId: sid,
+              data: commandToInput(startupWrite),
+            });
+          }
           markTerminalExecution(executionId, 'running', { sessionId: sid });
           setInitializationPhase('kernel_terminal_phase_startup_command_sent');
         } catch {
@@ -1712,40 +2011,23 @@ export function TerminalView({
 
     return () => {
       cancelled = true;
+      outputSubscription?.unsubscribe();
+      outputSubscription = undefined;
+      unlistenExit?.();
       if (rafToken != null) cancelAnimationFrame(rafToken);
       if (currentInputFlushTimerRef.current != null) {
         window.clearTimeout(currentInputFlushTimerRef.current);
         currentInputFlushTimerRef.current = null;
       }
-      flushCurrentInput();
       if (snapshotSaveTimer != null) {
         window.clearTimeout(snapshotSaveTimer);
         snapshotSaveTimer = null;
       }
-      void flushTerminalSnapshot().catch(() => {
-        /* app or route may already be tearing down */
-      });
       if (outputRafToken != null) {
         cancelAnimationFrame(outputRafToken);
-        flushTerminalOutput();
+        outputRafToken = null;
       }
-      const tailRaw = outputBuffer.flush();
-      const tailDisplay = prepareTerminalChunk(tailRaw);
-      if (tailDisplay) {
-        try {
-          termRef.current?.write(tailDisplay);
-        } catch {
-          /* xterm may already be disposed */
-        }
-        const sid = sessionRef.current;
-        if (sid && tailRaw) {
-          try {
-            useTerminalTranscriptStore.getState().appendOutput(sid, tailRaw);
-          } catch {
-            /* store may be tearing down */
-          }
-        }
-      }
+      flushCurrentInput();
       window.removeEventListener('resize', dispatchResize);
       if (handleVisible) {
         window.removeEventListener('jarvis:terminals:visible', handleVisible);
@@ -1754,19 +2036,93 @@ export function TerminalView({
       if (onPersistNow) window.removeEventListener('jarvis:terminal:persist-now', onPersistNow);
       unregisterSnapshotFlush?.();
       unregisterPaneClear?.();
-      if (paneId) clearTerminalPaneSessionId(paneId);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
-      unlistenOutput?.();
-      unlistenExit?.();
       scrollListenerDispose?.dispose();
-      try {
-        webglDispose.disposeTerminal(termRef.current);
-      } catch {
-        /* best-effort teardown */
+      if (onResourcePressure) {
+        window.removeEventListener(RESOURCE_PRESSURE_EVENT, onResourcePressure);
       }
+      const tailRaw = outputBuffer.flush();
+      const tailDisplay = prepareTerminalChunk(tailRaw);
+      if (tailDisplay) {
+        renderQueue.enqueue(tailDisplay, tailRaw);
+      }
+      const currentTerm = termRef.current;
+      const currentSessionId = sessionRef.current;
+      const teardownLease = screenSnapshotLease;
+      screenSnapshotLease = null;
+      const teardownWebglLease = webglLease;
+      webglLease = null;
+      const teardownExited = exitFiredRef.current;
+      if (paneId) clearTerminalPaneSessionId(paneId);
       termRef.current = null;
       fitRef.current = null;
+      if (currentTerm) {
+        void finalizeTerminalRendererTeardown({
+          terminal: currentTerm,
+          pendingWrite: latestTerminalWrite,
+          drainAcceptedOutput: () => {
+            const pending = renderQueue.drain();
+            if (!pending) return null;
+            if (pending.droppedCharacters > 0) {
+              stabilityDiagnostics.record({
+                type: 'terminal-output-trimmed',
+                at: Date.now(),
+                droppedCharacters: pending.droppedCharacters,
+              });
+            }
+            return {
+              displayData: pending.displayData,
+              transcriptData: pending.transcriptData,
+            };
+          },
+          appendTranscript: (text) => {
+            if (!currentSessionId || !text) return;
+            useTerminalTranscriptStore.getState().appendOutput(currentSessionId, text);
+          },
+          identityIsCurrent: () =>
+            Boolean(
+              teardownLease &&
+              currentSessionId &&
+              paneId &&
+              terminalAccountId &&
+              terminalAccountIdRef.current === terminalAccountId &&
+              !teardownExited,
+            ),
+          captureSnapshot: () => {
+            if (!teardownLease || !currentSessionId || !paneId || !terminalAccountId) return;
+            const snapshot = createTerminalSnapshot(currentTerm, {
+              projectId: projectId ?? null,
+              paneId,
+              rows: currentTerm.rows,
+              cols: currentTerm.cols,
+              updatedAt: Date.now(),
+              command: startupCommand ?? command ?? null,
+              interactive: isInteractiveAgentSession(currentSessionId),
+            });
+            captureTerminalScreenSnapshot(
+              {
+                accountId: terminalAccountId,
+                projectId: projectId ?? null,
+                paneId,
+                sessionId: currentSessionId,
+              },
+              snapshot,
+              teardownLease,
+            );
+          },
+          dispose: () => {
+            try {
+              webglDispose.disposeTerminal(currentTerm);
+            } catch {
+              /* best-effort teardown */
+            }
+            teardownWebglLease?.release();
+          },
+        });
+      } else {
+        teardownWebglLease?.release();
+      }
       // NOTE: deliberately no `terminal_kill` here. Sessions persist past
       // unmount; the user closes them via the chrome `×` button.
     };
@@ -1942,6 +2298,14 @@ export function TerminalView({
       const result = await requestTerminalExecutionCancellation(executionId);
       const disposition = terminalCancellationDisposition(result);
       if (disposition === 'terminal') {
+        if (terminalAccountId && paneId && sid) {
+          clearTerminalScreenSnapshot({
+            accountId: terminalAccountId,
+            projectId: projectId ?? null,
+            paneId,
+            sessionId: sid,
+          });
+        }
         if (!exitFiredRef.current) {
           exitFiredRef.current = true;
           onExitRef.current?.(
@@ -1967,6 +2331,14 @@ export function TerminalView({
       // kill IPC so a failure to kill still cleans up the in-memory
       // buffer (the pane is going away from the user's POV either way).
       useTerminalTranscriptStore.getState().forgetSession(sid);
+      if (terminalAccountId && paneId) {
+        clearTerminalScreenSnapshot({
+          accountId: terminalAccountId,
+          projectId: projectId ?? null,
+          paneId,
+          sessionId: sid,
+        });
+      }
     }
     if (paneId) {
       try {
@@ -2050,6 +2422,10 @@ export function TerminalView({
       data-terminal-status={
         KERNEL_SMOKE_ENABLED && executionId ? terminalExecutionStatus : undefined
       }
+      onPointerEnter={markWarmIdlePointerEntered}
+      onPointerLeave={markWarmIdlePointerLeft}
+      onPointerDownCapture={markWarmIdleInteraction}
+      onKeyDownCapture={markWarmIdleInteraction}
       onDragOver={(e) => {
         const nextKind =
           e.dataTransfer.types.includes('application/x-jarvis-file') ||
@@ -2095,6 +2471,13 @@ export function TerminalView({
         className,
       )}
     >
+      <TerminalWarmIdleScene
+        identity={activeSessionId ?? paneId ?? command ?? 'terminal'}
+        lastActivityAt={warmIdleLastActivityAt}
+        pointerEnteredAt={warmIdlePointerEnteredAt}
+        pointerInside={warmIdlePointerInside}
+        theme={warmTheme}
+      />
       {dropKind && (
         <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-accent-copper/60 bg-background/90 px-3 py-1 text-metadata text-accent-copper shadow-soft">
           Drop {dropKind === 'context' ? 'Context' : 'file'} here to paste into this terminal
@@ -2120,11 +2503,25 @@ export function TerminalView({
         sessionId={activeSessionId}
         projectId={projectId ?? null}
         evidence={terminalPromptEvidence}
+        cwd={cwdRef.current ?? cwd ?? null}
+        agentSlug={agentSlug ?? null}
+        projectName={projectName ?? null}
+        projectRoot={cwd ?? null}
         onClose={() => {
           setTerminalPaletteOpen(false);
           requestAnimationFrame(() => termRef.current?.focus());
         }}
         onNavigate={(route) => useUIStore.getState().setRoute(route)}
+        onInsertUpgradedPrompt={async (text) => {
+          const sid = sessionRef.current ?? activeSessionId;
+          if (!sid) throw new Error('No active terminal session');
+          // Never called during upgrade itself — only after user confirms Insert.
+          // Single-line: submit with CR. Multi-line: type body without auto-run.
+          await invoke('terminal_write', {
+            sessionId: sid,
+            data: prepareUpgradedPromptInsert(text),
+          });
+        }}
         onInstallCli={installTerminalCli}
         onUninstallCli={uninstallTerminalCli}
         onInstallShellIntegration={installTerminalShellIntegration}

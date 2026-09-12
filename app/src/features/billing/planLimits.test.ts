@@ -15,11 +15,14 @@ import {
   type UsageBucket,
 } from './planLimits';
 
-function bucket(partial: Partial<UsageBucket> & Pick<UsageBucket, 'included' | 'used'>): UsageBucket {
+function bucket(
+  partial: Partial<UsageBucket> & Pick<UsageBucket, 'included' | 'used'>,
+): UsageBucket {
   return {
     remaining: Math.max(0, partial.included - partial.used),
     remaining_now: Math.max(0, partial.included - partial.used),
-    window_5h_remaining: partial.window_5h_remaining ?? Math.max(0, partial.included - partial.used),
+    window_5h_remaining:
+      partial.window_5h_remaining ?? Math.max(0, partial.included - partial.used),
     window_weekly_remaining:
       partial.window_weekly_remaining ?? Math.max(0, partial.included - partial.used),
     available: partial.included > 0,
@@ -55,6 +58,27 @@ describe('PUBLIC_PLANS', () => {
 
   it('orders plans free -> apex', () => {
     expect(BILLING_PLAN_ORDER).toEqual(['free', 'starter', 'pro', 'ultra', 'apex']);
+  });
+});
+
+it('uses explicit server-authoritative shared credit totals when available', () => {
+  const usage = {
+    plan: 'starter' as const,
+    admin_unlimited: false,
+    reset_date: null,
+    message: bucket({ included: 1, used: 1 }),
+    call: bucket({ included: 1, used: 1 }),
+    sms: bucket({ included: 1, used: 1 }),
+    credits_included: 5_500,
+    credits_used: 275,
+    credits_remaining: 5_225,
+  };
+
+  expect(unifiedCreditsFromCombined(usage)).toMatchObject({
+    included: 5_500,
+    used: 275,
+    remaining: 5_225,
+    percent: 5,
   });
 });
 

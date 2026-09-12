@@ -10,6 +10,7 @@ vi.mock('@/lib/sync', () => syncMock);
 import {
   applyCloudPluginConnectionForAccount,
   pluginConnectionSyncRowId,
+  selectInstalledPluginIdsForAccount,
   selectPluginConnectionsForAccount,
   usePluginStore,
 } from './store';
@@ -30,7 +31,25 @@ describe('plugin connection account scopes', () => {
   beforeEach(() => {
     localStorage.clear();
     syncMock.enqueueMutation.mockClear();
-    usePluginStore.setState({ connectionsByAccount: {} });
+    usePluginStore.setState({
+      connectionsByAccount: {},
+      installedPluginIdsByAccount: {},
+      pinnedPluginIdsByAccount: {},
+    });
+  });
+
+  it('persists installed plugins per exact account without affecting another account', () => {
+    usePluginStore.getState().installPlugin('user-a', 'github');
+    usePluginStore.getState().installPlugin('user-a', 'github');
+    usePluginStore.getState().installPlugin('user-b', 'gmail');
+
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), 'user-a')).toEqual([
+      'github',
+    ]);
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), 'user-b')).toEqual([
+      'gmail',
+    ]);
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), ' user-a')).toEqual([]);
   });
 
   it('uses a reversible, collision-safe v2 sync row id', () => {
@@ -95,8 +114,12 @@ describe('plugin connection account scopes', () => {
     expect(selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a')).toEqual({});
     expect(localStorage.getItem('jarvis-plugin-connections')).not.toBeNull();
     expect(JSON.parse(localStorage.getItem('jarvis-plugin-connections-v2') ?? '{}')).toEqual({
-      state: { connectionsByAccount: {} },
-      version: 2,
+      state: {
+        connectionsByAccount: {},
+        installedPluginIdsByAccount: {},
+        pinnedPluginIdsByAccount: {},
+      },
+      version: 4,
     });
   });
 
@@ -121,6 +144,9 @@ describe('plugin connection account scopes', () => {
     expect(selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a')).toEqual({
       github: connection('user-a', 'github'),
     });
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), 'user-a')).toEqual([
+      'github',
+    ]);
     expect(selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-b')).toEqual({});
   });
 

@@ -1,7 +1,4 @@
-/**
- * Pure helpers that turn the static news catalog into sectioned feeds.
- * No React / store deps — easy to unit test.
- */
+/** Pure local-calendar helpers for the offline and live news feeds. */
 import {
   NEWS_CATALOG,
   type NewsItem,
@@ -9,56 +6,63 @@ import {
   type NewsSectionId,
 } from './newsCatalog';
 
-/** Parse YYYY-MM-DD as a local calendar day (noon UTC to avoid TZ edge cases). */
-export function parseNewsDay(isoDay: string): Date {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDay.trim());
-  if (!m) return new Date(NaN);
-  const y = Number(m[1]);
-  const mo = Number(m[2]) - 1;
-  const d = Number(m[3]);
-  return new Date(Date.UTC(y, mo, d, 12, 0, 0));
+const DAY_MS = 86_400_000;
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Parse either a static YYYY-MM-DD day or a full timezone-aware ISO timestamp. */
+export function parseNewsDay(value: string): Date {
+  const day = ISO_DAY.exec(value.trim());
+  if (day) {
+    return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]), 12, 0, 0, 0);
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp) : new Date(NaN);
 }
 
-/** Format a Date as YYYY-MM-DD in UTC calendar. */
+/** Format a Date as YYYY-MM-DD in the user's local calendar. */
 export function toIsoDay(date: Date): string {
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(date.getUTCDate()).padStart(2, '0');
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 
-/**
- * Days between two YYYY-MM-DD values (b - a), integer calendar days.
- * Returns NaN if either date is invalid.
- */
+function localDayOrdinal(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_MS;
+}
+
+/** Calendar-day delta (b - a) in the user's local timezone. */
 export function daysBetween(isoA: string, isoB: string): number {
   const a = parseNewsDay(isoA);
   const b = parseNewsDay(isoB);
   if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return Number.NaN;
-  const ms = b.getTime() - a.getTime();
-  return Math.round(ms / 86_400_000);
+  return localDayOrdinal(b) - localDayOrdinal(a);
+}
+
+function resolveReferenceDate(today: string | Date): Date {
+  return typeof today === 'string' ? parseNewsDay(today) : today;
 }
 
 /**
- * Which panel tab an item belongs to for a given "today".
- *
- * - today: same calendar day
- * - last_week: 1–7 days before today (inclusive of 7)
- * - more: older than 7 days, or invalid / future dates
+ * - Today: same user-local calendar date.
+ * - Last week: one through seven preceding local calendar dates.
+ * - More: older, future, or invalid.
  */
 export function sectionForItem(
   item: Pick<NewsItem, 'publishedAt'>,
-  todayIso: string,
+  today: string | Date,
 ): NewsSectionId {
-  const delta = daysBetween(item.publishedAt, todayIso);
-  if (Number.isNaN(delta)) return 'more';
+  const published = parseNewsDay(item.publishedAt);
+  const reference = resolveReferenceDate(today);
+  if (Number.isNaN(published.getTime()) || Number.isNaN(reference.getTime())) return 'more';
+  const delta = localDayOrdinal(reference) - localDayOrdinal(published);
   if (delta === 0) return 'today';
   if (delta >= 1 && delta <= 7) return 'last_week';
   return 'more';
 }
 
 export interface NewsFeedOptions {
-  /** Override "today" for tests. Defaults to current UTC calendar day. */
+  /** Override "today" for tests. Defaults to current local calendar day. */
   now?: Date;
   /** Optional kind filter. */
   kind?: NewsKind | 'all';
@@ -69,19 +73,31 @@ export function resolveTodayIso(now: Date = new Date()): string {
   return toIsoDay(now);
 }
 
+export function groupNewsBySection<T extends Pick<NewsItem, 'publishedAt'>>(
+  items: readonly T[],
+  now: Date = new Date(),
+): Record<NewsSectionId, T[]> {
+  return items.reduce<Record<NewsSectionId, T[]>>(
+    (grouped, item) => {
+      grouped[sectionForItem(item, now)].push(item);
+      return grouped;
+    },
+    { today: [], last_week: [], more: [] },
+  );
+}
+
 export function getNewsFeed(section: NewsSectionId, options: NewsFeedOptions = {}): NewsItem[] {
   const catalog = options.catalog ?? NEWS_CATALOG;
-  const todayIso = resolveTodayIso(options.now ?? new Date());
+  const now = options.now ?? new Date();
   const kind = options.kind ?? 'all';
 
   return catalog
-    .filter((item) => sectionForItem(item, todayIso) === section)
+    .filter((item) => sectionForItem(item, now) === section)
     .filter((item) => kind === 'all' || item.kind === kind)
     .slice()
     .sort((a, b) => {
-      // Newest first, then title for stability.
-      const byDate = b.publishedAt.localeCompare(a.publishedAt);
-      if (byDate !== 0) return byDate;
+      const byDate = parseNewsDay(b.publishedAt).getTime() - parseNewsDay(a.publishedAt).getTime();
+      if (Number.isFinite(byDate) && byDate !== 0) return byDate;
       return a.title.localeCompare(b.title);
     });
 }
@@ -94,14 +110,22 @@ export function countNewsBySection(options: NewsFeedOptions = {}): Record<NewsSe
   };
 }
 
-/** Friendly long date for cards. */
-export function formatNewsDate(isoDay: string, locale?: string): string {
-  const d = parseNewsDay(isoDay);
-  if (Number.isNaN(d.getTime())) return isoDay;
-  return d.toLocaleDateString(locale, {
+/** Date-only snapshots stay date-only; live timestamps include local time. */
+export function formatNewsDate(value: string, locale?: string): string {
+  const date = parseNewsDay(value);
+  if (Number.isNaN(date.getTime())) return value;
+  if (ISO_DAY.test(value.trim())) {
+    return date.toLocaleDateString(locale, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+  return date.toLocaleString(locale, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-    timeZone: 'UTC',
+    hour: 'numeric',
+    minute: '2-digit',
   });
 }

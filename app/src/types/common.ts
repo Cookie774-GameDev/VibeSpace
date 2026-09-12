@@ -51,7 +51,7 @@ export type Theme = SelectableTheme;
  * Persona presets the user can pick for Jarvis.
  * Drives system prompt + voice persona.
  */
-export type PersonaPreset = 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal';
+export type PersonaPreset = 'jarvis' | 'friday';
 
 /** Persisted spoken-voice profiles. Independent from the conversational persona. */
 export type VoicePresetId = 'jarvis-prime' | 'aurora' | 'atlas' | 'nova' | 'sentinel';
@@ -60,16 +60,34 @@ export type VoicePresetId = 'jarvis-prime' | 'aurora' | 'atlas' | 'nova' | 'sent
  * Spoken voice engine:
  *  - 'system': any OS/browser voice (Windows Natural / online enhanced) — fallback.
  *  - 'local':  restricts playback to locally-installed system voices.
- *  - 'kokoro': local Kokoro-82M neural TTS (downloads once on first launch);
+ *  - 'jarvis': local Jarvis High neural TTS (downloads once on first launch);
  *              default engine. Falls back to local then Windows voices if unavailable.
  */
-export type VoiceEngine = 'system' | 'local' | 'kokoro' | 'deepgram';
+export type VoiceEngine = 'system' | 'local' | 'jarvis' | 'deepgram';
 
-/** Composer toolbar mic — speech-to-text provider for chat dictation. */
-export type ComposerSttProvider = 'system' | 'faster-whisper';
+/**
+ * Composer toolbar mic — speech-to-text provider for chat dictation.
+ * - system: free Web Speech / Groq fallback path
+ * - faster-whisper: local downloaded models (desktop)
+ * - deepgram: cloud STT entry (credentials live in Settings → Voice; full STT wiring in later prompts)
+ */
+export type ComposerSttProvider = 'system' | 'faster-whisper' | 'deepgram';
 
-/** Local faster-whisper model sizes for offline composer dictation. */
-export type FasterWhisperModelId = 'tiny' | 'small' | 'large-v3';
+/**
+ * Local STT model ids persisted for composer dictation.
+ * Includes downloadable faster-whisper packs plus catalog-only Moonshine/Cohere ids.
+ */
+export type FasterWhisperModelId =
+  | 'tiny'
+  | 'small'
+  | 'base'
+  | 'large-v3'
+  | 'whisper-small-en-q8'
+  | 'whisper-base-en-q5'
+  | 'moonshine-medium-streaming'
+  | 'moonshine-medium-streaming-q4'
+  | 'moonshine-tiny-streaming-q4'
+  | 'cohere-transcribe-03-2026';
 
 /**
  * Provider IDs we know about.
@@ -95,8 +113,10 @@ export type ProviderId =
   | 'openrouter'
   | 'groq'
   | 'deepseek'
+  | 'zai'
   | 'mistral'
   | 'together'
+  | 'qwen'
   | 'ollama'
   // V3 — additional OpenAI-compatible providers.
   | 'cohere'
@@ -110,7 +130,9 @@ export type ProviderId =
   | 'azure'
   | 'cerebras'
   | 'huggingface'
-  | 'bedrock';
+  | 'bedrock'
+  // V5 — local Model Foundry promoted adapters.
+  | 'foundry';
 
 /**
  * Branded type helpers - useful when we want compile-time distinction

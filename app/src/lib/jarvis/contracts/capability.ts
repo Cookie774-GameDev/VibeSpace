@@ -15,6 +15,7 @@ export interface JarvisActionJsonSchema {
   required?: string[];
   additionalProperties?: boolean;
   enum?: string[];
+  oneOf?: JarvisActionJsonSchema[];
 }
 
 export interface JarvisActionSchemaSnapshot {

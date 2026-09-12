@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ProviderId } from '@/types';
 import type { PlanId } from '@/lib/entitlements';
 import { useAuthStore } from '@/stores/auth';
+import { OLLAMA_LOCAL_CONNECTION } from './adapters/nativeCatalog';
 import { ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
 import { GOOGLE_DEFAULT_MODEL } from './providers/google';
 import { GROQ_DEFAULT_MODEL } from './providers/groq';
@@ -13,6 +14,7 @@ import {
   MISTRAL_DEFAULT_MODEL,
   TOGETHER_DEFAULT_MODEL,
   XAI_DEFAULT_MODEL,
+  QWEN_DEFAULT_MODEL,
 } from './providers/compatibleInstances';
 
 export interface ModelOption {
@@ -34,9 +36,11 @@ export const REAL_CHAT_PROVIDERS: readonly ProviderId[] = [
   'anthropic',
   'openrouter',
   'deepseek',
+  'zai',
   'mistral',
   'together',
   'xai',
+  'qwen',
   'ollama',
   'local',
 ];
@@ -48,16 +52,18 @@ const CLOUD_KEY_PROVIDERS: readonly ProviderId[] = [
   'anthropic',
   'openrouter',
   'deepseek',
+  'zai',
   'mistral',
   'together',
   'xai',
+  'qwen',
 ];
 
 export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   {
     provider: 'google',
     id: GOOGLE_DEFAULT_MODEL,
-    label: 'Gemini 2.5 Flash Lite',
+    label: 'Gemini 3.6 Flash',
     contextWindowTokens: 1_000_000,
   },
   {
@@ -67,12 +73,6 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
     contextWindowTokens: 1_048_576,
     maximumCostPerMillionUsd: 2.5,
     costMetadataSource: 'embedded_snapshot',
-  },
-  {
-    provider: 'google',
-    id: 'gemini-2.0-flash',
-    label: 'Gemini 2.0 Flash',
-    contextWindowTokens: 1_000_000,
   },
   {
     provider: 'google',
@@ -89,28 +89,33 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
     contextWindowTokens: 1_000_000,
   },
   {
+    provider: 'google',
+    id: 'gemini-3.1-pro-preview',
+    label: 'Gemini 3.1 Pro Preview',
+    contextWindowTokens: 1_000_000,
+  },
+  {
     provider: 'groq',
     id: GROQ_DEFAULT_MODEL,
-    label: 'Llama 3.3 70B Versatile',
+    label: 'GPT-OSS 20B (Groq)',
     contextWindowTokens: 131_072,
   },
   {
     provider: 'groq',
-    id: 'llama-3.1-8b-instant',
-    label: 'Llama 3.1 8B Instant',
+    id: 'openai/gpt-oss-120b',
+    label: 'GPT-OSS 120B (Groq)',
     contextWindowTokens: 131_072,
   },
   {
     provider: 'groq',
-    id: 'mixtral-8x7b-32768',
-    label: 'Mixtral 8x7B',
-    contextWindowTokens: 32_768,
+    id: 'llama-3.3-70b-versatile',
+    label: 'Llama 3.3 70B (Groq)',
+    contextWindowTokens: 128_000,
   },
   {
     provider: 'openai',
     id: OPENAI_DEFAULT_MODEL,
-    label: 'GPT-4o Mini',
-    contextWindowTokens: 128_000,
+    label: 'GPT-5.1',
   },
   {
     provider: 'openai',
@@ -122,6 +127,30 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
     provider: 'openai',
     id: 'gpt-4.1-mini',
     label: 'GPT-4.1 Mini',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    provider: 'openai',
+    id: 'gpt-5.3-codex-spark',
+    label: 'GPT-5.3 Codex Spark',
+    contextWindowTokens: 128_000,
+  },
+  {
+    provider: 'openai',
+    id: 'gpt-5.3-codex',
+    label: 'GPT-5.3 Codex',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    provider: 'openai',
+    id: 'gpt-5.4-mini',
+    label: 'GPT-5.4 Mini',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    provider: 'openai',
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
     contextWindowTokens: 1_000_000,
   },
   {
@@ -143,15 +172,32 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
     contextWindowTokens: 1_000_000,
   },
   {
-    provider: 'anthropic',
-    id: ANTHROPIC_DEFAULT_MODEL,
-    label: 'Claude 3.5 Sonnet',
-    contextWindowTokens: 200_000,
+    provider: 'openai',
+    id: 'gpt-5.6-luna',
+    label: 'GPT-5.6 Luna',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    provider: 'openai',
+    id: 'gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    contextWindowTokens: 1_000_000,
+  },
+  {
+    provider: 'openai',
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    contextWindowTokens: 1_000_000,
   },
   {
     provider: 'anthropic',
-    id: 'claude-3-5-haiku-20241022',
-    label: 'Claude 3.5 Haiku',
+    id: ANTHROPIC_DEFAULT_MODEL,
+    label: 'Claude Sonnet 5',
+  },
+  {
+    provider: 'anthropic',
+    id: 'claude-haiku-4-5',
+    label: 'Claude Haiku 4.5',
     contextWindowTokens: 200_000,
   },
   {
@@ -168,21 +214,26 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   },
   {
     provider: 'deepseek',
-    id: 'deepseek-chat',
-    label: 'DeepSeek V3 Chat',
+    id: DEEPSEEK_DEFAULT_MODEL,
+    label: 'DeepSeek V4 Flash',
     contextWindowTokens: 128_000,
   },
   {
     provider: 'deepseek',
-    id: 'deepseek-reasoner',
-    label: 'DeepSeek R1',
+    id: 'deepseek-v4-pro',
+    label: 'DeepSeek V4 Pro',
     contextWindowTokens: 128_000,
+  },
+  {
+    provider: 'zai',
+    id: 'glm-5.1',
+    label: 'GLM 5.1',
+    contextWindowTokens: 200_000,
   },
   {
     provider: 'openrouter',
     id: OPENROUTER_DEFAULT_MODEL,
-    label: 'Claude 3.5 Sonnet (OR)',
-    contextWindowTokens: 200_000,
+    label: 'OpenRouter Auto',
   },
   {
     provider: 'openrouter',
@@ -199,16 +250,13 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
   {
     provider: 'together',
     id: TOGETHER_DEFAULT_MODEL,
-    label: 'Llama 3.3 70B (Together)',
-    contextWindowTokens: 131_072,
+    label: 'Qwen 3.5 397B A17B (Together)',
+    contextWindowTokens: 262_144,
   },
   {
     provider: 'xai',
     id: XAI_DEFAULT_MODEL,
-    label: 'Grok 2',
-    contextWindowTokens: 131_072,
-    maximumCostPerMillionUsd: 10,
-    costMetadataSource: 'embedded_snapshot',
+    label: 'Grok 4.5',
   },
   {
     provider: 'xai',
@@ -216,12 +264,64 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
     label: 'Grok 4.3',
     contextWindowTokens: 1_000_000,
   },
+  {
+    provider: 'qwen',
+    id: 'qwen3.7-max',
+    label: 'Qwen 3.7 Max',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3.7-max-2026-06-08',
+    label: 'Qwen 3.7 Max (2026-06-08)',
+  },
+  {
+    provider: 'qwen',
+    id: QWEN_DEFAULT_MODEL,
+    label: 'Qwen 3.7 Plus',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3.7-plus-2026-05-26',
+    label: 'Qwen 3.7 Plus (2026-05-26)',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3.6-plus',
+    label: 'Qwen 3.6 Plus',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3.6-plus-2026-04-02',
+    label: 'Qwen 3.6 Plus (2026-04-02)',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3.6-flash',
+    label: 'Qwen 3.6 Flash',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3.6-flash-2026-04-16',
+    label: 'Qwen 3.6 Flash (2026-04-16)',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3.6-27b',
+    label: 'Qwen 3.6 27B',
+  },
+  {
+    provider: 'qwen',
+    id: 'qwen3-coder-next',
+    label: 'Qwen3 Coder Next',
+  },
 ];
 
 // ── Dynamic Ollama model discovery ──────────────────────────────────────
 
 let _discoveredOllama: string[] = [];
+let _foundryModels: Array<{ id: string; label: string }> = [];
 let _discoveredListeners: Array<() => void> = [];
+let _foundryHydration: Promise<void> | null = null;
 
 /** Replace the set of discovered Ollama model names. Call after each scan. */
 export function syncDiscoveredOllamaModels(models: string[]): void {
@@ -233,19 +333,71 @@ export function getDiscoveredOllamaModels(): readonly string[] {
   return _discoveredOllama;
 }
 
+export function syncFoundryModelOptions(
+  models: ReadonlyArray<{ id: string; label: string }>,
+): void {
+  _foundryModels = models
+    .map((model) => ({ id: model.id.trim(), label: model.label.trim() }))
+    .filter(
+      (model, index, all) =>
+        model.id.startsWith('foundry:') &&
+        Boolean(model.label) &&
+        all.findIndex((candidate) => candidate.id === model.id) === index,
+    );
+  _discoveredListeners.forEach((fn) => fn());
+}
+
+export function getOllamaModelOptions(): ModelOption[] {
+  return [
+    ..._foundryModels.map((model) => ({
+      provider: 'ollama' as const,
+      id: model.id,
+      label: model.label,
+    })),
+    ..._discoveredOllama.map((name) => ({
+      provider: 'ollama' as const,
+      id: name,
+      label: name,
+    })),
+  ];
+}
+
+function hydrateFoundryModelOptions(): Promise<void> {
+  if (_foundryHydration) return _foundryHydration;
+  _foundryHydration = (async () => {
+    const { foundryModelOptions, loadJobs } = await import('@/features/model-foundry/modelHub');
+    let jobs = typeof window === 'undefined' ? [] : loadJobs(window.localStorage);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const nativeJobs = await invoke<unknown>('model_foundry_list_jobs');
+      if (Array.isArray(nativeJobs)) jobs = nativeJobs;
+    } catch {
+      // Browser preview and an unavailable native host use the durable snapshot.
+    }
+    syncFoundryModelOptions(foundryModelOptions(jobs));
+  })();
+  return _foundryHydration;
+}
+
 /** React hook: returns current discovered Ollama models as ModelOption[]. */
 export function useOllamaModelOptions(): ModelOption[] {
   const [, bump] = useState(0);
   useEffect(() => {
     const listener = () => bump((n) => n + 1);
     _discoveredListeners.push(listener);
+    void hydrateFoundryModelOptions();
     return () => {
       _discoveredListeners = _discoveredListeners.filter((l) => l !== listener);
     };
   }, []);
   return useMemo(
-    () => _discoveredOllama.map((name) => ({ provider: 'ollama' as const, id: name, label: name })),
-    [_discoveredOllama.length, _discoveredOllama.join('\0')],
+    () => getOllamaModelOptions(),
+    [
+      _discoveredOllama.length,
+      _discoveredOllama.join('\0'),
+      _foundryModels.length,
+      _foundryModels.map((model) => `${model.id}\0${model.label}`).join('\u0001'),
+    ],
   );
 }
 
@@ -258,7 +410,7 @@ function hasCloudApiKey(
   return Boolean(apiKeys[provider]?.trim());
 }
 
-function resolveLocalModelNames(localDefault = ''): string[] {
+function resolveLocalModelNames(_localDefault = ''): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
   const add = (name: string) => {
@@ -270,7 +422,6 @@ function resolveLocalModelNames(localDefault = ''): string[] {
     names.push(trimmed);
   };
   for (const name of _discoveredOllama) add(name);
-  add(localDefault);
   return names;
 }
 
@@ -353,6 +504,17 @@ export function selectLocalModelForChat(modelName: string, enableOffline = false
   auth.setDefaultProvider('ollama');
   auth.setSelectedModel('ollama', trimmed);
   auth.setSelectedModel('local', trimmed);
+  // Pin the composer chat selection to Ollama so send validation and the
+  // runtime actually use the local model (not a stale Google/Hive pick).
+  auth.setChatModelSelection({
+    mode: 'single',
+    providerId: 'ollama',
+    modelId: trimmed,
+    connectionId: OLLAMA_LOCAL_CONNECTION.id,
+    connectionMode: OLLAMA_LOCAL_CONNECTION.mode,
+    authSource: OLLAMA_LOCAL_CONNECTION.authSource,
+    capabilities: OLLAMA_LOCAL_CONNECTION.capabilities,
+  });
   if (enableOffline) auth.setOfflineMode(true);
 }
 
@@ -387,6 +549,8 @@ export function defaultModelForProvider(
       return GROQ_DEFAULT_MODEL;
     case 'deepseek':
       return DEEPSEEK_DEFAULT_MODEL;
+    case 'zai':
+      return 'glm-5.1';
     case 'openrouter':
       return OPENROUTER_DEFAULT_MODEL;
     case 'mistral':
@@ -395,6 +559,8 @@ export function defaultModelForProvider(
       return TOGETHER_DEFAULT_MODEL;
     case 'xai':
       return XAI_DEFAULT_MODEL;
+    case 'qwen':
+      return QWEN_DEFAULT_MODEL;
     case 'ollama':
     case 'local':
       if (localModelsAvailable(localModel)) {

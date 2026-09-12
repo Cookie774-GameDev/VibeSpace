@@ -26,6 +26,7 @@
 // performs no fetch and touches no Deno globals.
 
 import { planForPriceId } from '../_shared/voice.ts';
+import { resolveStripeEntitlement } from '../_shared/billingCatalog.ts';
 import {
   invoicePaymentFailedForcesFree,
   subscriptionKeepsPaidAccess,
@@ -339,6 +340,13 @@ async function handleAppAccess(event, metadata, deps, checkoutSubscription = nul
 // wraps the shared allowlist), never from the client. This path NEVER writes
 // app_access tables; app-access events never reach here.
 function planFromSubscription(deps, sub) {
+  if (deps.config && deps.config.billingPrices) {
+    const entitlement = resolveStripeEntitlement(
+      subscriptionPriceIds(sub),
+      deps.config.billingPrices,
+    );
+    return entitlement.ok ? entitlement.plan.id : null;
+  }
   for (const item of (sub && sub.items && sub.items.data) || []) {
     const p = deps.planForPriceId(item && item.price && item.price.id);
     if (p) return p;
@@ -589,6 +597,14 @@ if (import.meta.main) {
             ? APP_ACCESS_GRACE_DAYS
             : 3,
         knownPriceIds,
+      },
+      billingPrices: {
+        addonPriceIds: {
+          starter: Deno.env.get('STRIPE_STARTER_PRICE_ID') ?? '',
+          pro: Deno.env.get('STRIPE_PRO_PRICE_ID') ?? '',
+          ultra: Deno.env.get('STRIPE_ULTRA_PRICE_ID') ?? '',
+          apex: Deno.env.get('STRIPE_APEX_PRICE_ID') ?? '',
+        },
       },
     },
     async verifySignature(rawBody, sig) {

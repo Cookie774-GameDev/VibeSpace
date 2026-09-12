@@ -20,7 +20,7 @@ describe('TerminalContextMenu MonoChrome appearance', () => {
       />,
     );
 
-    const menu = screen.getByText('Ask Jarvis').closest<HTMLElement>('[class*="shadow-lg"]');
+    const menu = screen.getByText(/^Ask (Jarvis|Friday)$/).closest<HTMLElement>('[class*="shadow-lg"]');
     expect(menu?.className).toContain('animate-in');
     expect(menu?.className).toContain('shadow-lg');
     expect(menu?.className).toContain('[html[data-theme=monochrome]_&]:shadow-none');

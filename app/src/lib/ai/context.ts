@@ -413,12 +413,45 @@ function boundedTerminalFactList(values: readonly string[]): string | undefined 
   return `${visible.join(',')}${hidden > 0 ? `,+${hidden}_more` : ''}`;
 }
 
+function validTerminalIdentityFact(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    value === value.trim() &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function terminalProcessFacts(pane: JarvisTerminalPaneSnapshot): readonly string[] {
+  if (
+    !validTerminalIdentityFact(pane.executionId) ||
+    !validTerminalIdentityFact(pane.processInstanceId) ||
+    !Number.isSafeInteger(pane.pid) ||
+    (pane.pid ?? 0) <= 0 ||
+    (pane.pid ?? 0) > 0xffff_ffff ||
+    !Number.isSafeInteger(pane.processStartedAt) ||
+    (pane.processStartedAt ?? 0) <= 0 ||
+    !validTerminalIdentityFact(pane.runtimeGeneration)
+  ) {
+    return [];
+  }
+  return [
+    `executionId=${boundedTerminalFact(pane.executionId)}`,
+    `processInstanceId=${boundedTerminalFact(pane.processInstanceId)}`,
+    `pid=${pane.pid}`,
+    `processStartedAt=${pane.processStartedAt}`,
+    `runtimeGeneration=${boundedTerminalFact(pane.runtimeGeneration)}`,
+  ];
+}
+
 function formatTerminalPaneFacts(pane: JarvisTerminalPaneSnapshot): string {
   const locked = boundedTerminalFactList(pane.lockedFiles);
   const edited = boundedTerminalFactList(pane.editedFiles);
   const facts = [
     `pane=${boundedTerminalFact(pane.paneId)}`,
     pane.sessionId ? `session=${boundedTerminalFact(pane.sessionId)}` : '',
+    ...terminalProcessFacts(pane),
     pane.agentSlug ? `agent=${boundedTerminalFact(pane.agentSlug)}` : '',
     pane.cwd ? `cwd=${boundedTerminalFact(pane.cwd)}` : '',
     pane.launchedCommand ? `command=${boundedTerminalFact(pane.launchedCommand)}` : '',

@@ -78,6 +78,10 @@ const AgentsRoute = React.lazy(() =>
   import('@/features/agents').then((m) => ({ default: m.AgentManager })),
 );
 
+const ModelFoundryRoute = React.lazy(() =>
+  import('@/features/model-foundry').then((m) => ({ default: m.BuildYourOwnAIPage })),
+);
+
 const AgentDetailRoute = React.lazy(() =>
   import('@/features/agents')
     .then((m) => ({ default: m.AgentDetail }))
@@ -214,6 +218,7 @@ const routeMap: Record<Route, React.LazyExoticComponent<React.ComponentType>> = 
   kanban: KanbanPage,
   schedule: SchedulePage,
   agents: AgentsRoute,
+  'model-foundry': ModelFoundryRoute,
   'agent-detail': AgentDetailRoute,
   'project-detail': ProjectDetailRoute,
   context: ContextPage,
@@ -268,7 +273,7 @@ export function PageRouter() {
             aria-hidden={visibleRoute !== 'terminal'}
             className={visibleRoute === 'terminal' ? 'h-full w-full' : 'hidden'}
           >
-            <TerminalsPage />
+            <TerminalsPage routeVisible={visibleRoute === 'terminal'} />
           </div>
         ) : null}
         {shouldRenderCanvas ? (
@@ -295,7 +300,7 @@ export function PageRouter() {
             aria-hidden={visibleRoute !== 'browser'}
             className={visibleRoute === 'browser' ? 'h-full w-full' : 'hidden'}
           >
-            <BrowserPage />
+            <BrowserPage routeVisible={visibleRoute === 'browser'} />
           </div>
         ) : null}
         {!isCachedSurface ? <Page key={visibleRoute} /> : null}

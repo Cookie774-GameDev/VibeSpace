@@ -26,7 +26,9 @@ const IMPLEMENTED_BASE: PluginManifest[] = [
     provider: 'GitHub',
     description: 'Repositories, issues, pull requests, actions, and authenticated account context.',
     category: 'Developer Tools',
-    authType: 'token',
+    authType: 'oauth',
+    connectionStrategy: 'device_authorization',
+    requiredScopes: ['read:user', 'repo'],
     fields: [
       token(
         'token',
@@ -37,14 +39,15 @@ const IMPLEMENTED_BASE: PluginManifest[] = [
     ],
     status: 'implemented',
     docsUrl:
-      'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
+      'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps',
     credentialUrl: 'https://github.com/settings/personal-access-tokens',
-    help: 'Create a fine-grained personal access token. VibeSpace tests it against the authenticated-user endpoint and never exposes it to terminals.',
-    tags: ['developer tools', 'git', 'token', 'repositories'],
+    authorizationUrl: 'https://github.com/login/device',
+    help: 'Authorize VibeSpace on GitHub’s provider-owned device verification page. Tokens are handled only by the trusted connection runtime and never exposed to terminals.',
+    tags: ['developer tools', 'git', 'oauth', 'device authorization', 'repositories'],
     setupSteps: [
-      'Open GitHub Settings → Developer settings → Personal access tokens.',
-      'Create a fine-grained token with the repositories you need.',
-      'Paste the token here and run Test Connection.',
+      'Choose Continue with GitHub.',
+      'Enter the one-time code on GitHub’s verification page and approve the requested access.',
+      'Return to VibeSpace while it verifies the connection.',
     ],
     supportedFeatures: ['repositories', 'issues', 'pull requests', 'actions'],
     tools: [

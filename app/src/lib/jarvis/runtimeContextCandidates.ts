@@ -6,6 +6,7 @@ import { deepFreezeJarvisCopy } from './requestEnvelope';
 export type JarvisRuntimeContextBlockKey =
   | 'project'
   | 'project_tree'
+  | 'repository_context'
   | 'local_knowledge'
   | 'user_identity'
   | 'default_write_folder'
@@ -63,6 +64,14 @@ const DEFINITIONS = Object.freeze({
     trust: 'app_verified',
     origin: 'app_observed',
     purpose: 'answer',
+    explicitlyAttached: false,
+  },
+  repository_context: {
+    kind: 'project_file',
+    label: 'Selected repository evidence',
+    trust: 'app_verified',
+    origin: 'user_authored',
+    purpose: 'citation',
     explicitlyAttached: false,
   },
   local_knowledge: {
@@ -248,9 +257,9 @@ function sourceId(requestId: string, key: JarvisRuntimeContextBlockKey): string 
   return key === 'all_about_me' ? JARVIS_ALL_ABOUT_ME_SOURCE_ID : `jsource_${requestId}_${key}`;
 }
 
-type LocalKnowledgeSource = NonNullable<JarvisRuntimeContextBlock['source']>;
+type BoundedRetrievedSource = NonNullable<JarvisRuntimeContextBlock['source']>;
 
-interface ValidLocalKnowledgeSource extends LocalKnowledgeSource {
+interface ValidBoundedRetrievedSource extends BoundedRetrievedSource {
   id: string;
   label: string;
   uri: string;
@@ -258,10 +267,17 @@ interface ValidLocalKnowledgeSource extends LocalKnowledgeSource {
   contentHash: string;
 }
 
-function validLocalKnowledgeSource(
-  source: LocalKnowledgeSource | undefined,
-): source is ValidLocalKnowledgeSource {
+function validBoundedRetrievedSource(
+  key: JarvisRuntimeContextBlockKey,
+  source: BoundedRetrievedSource | undefined,
+): source is ValidBoundedRetrievedSource {
   if (!source) return false;
+  const validId =
+    key === 'local_knowledge'
+      ? /^jlocal_[a-f0-9]{16}$/.test(source.id)
+      : key === 'repository_context'
+        ? /^jrepo_[a-f0-9]{16}$/.test(source.id)
+        : false;
   const stableText = (value: string | undefined, max: number) =>
     typeof value === 'string' &&
     value.length > 0 &&
@@ -269,7 +285,7 @@ function validLocalKnowledgeSource(
     value.trim() === value &&
     !/[\u0000-\u001f\u007f]/.test(value);
   return (
-    /^jlocal_[a-f0-9]{16}$/.test(source.id) &&
+    validId &&
     stableText(source.label, 240) &&
     typeof source.uri === 'string' &&
     stableText(source.uri, 480) &&
@@ -298,27 +314,29 @@ export function buildJarvisRuntimeContextCandidates(input: {
   const admittedBlocks = input.blocks.filter(
     (block) =>
       block.text.trim().length > 0 &&
-      (block.key !== 'local_knowledge' || validLocalKnowledgeSource(block.source)),
+      (!['local_knowledge', 'repository_context'].includes(block.key) ||
+        validBoundedRetrievedSource(block.key, block.source)),
   );
   const candidates = admittedBlocks.map((block, index) => {
     const definition = DEFINITIONS[block.key];
-    const localSource =
-      block.key === 'local_knowledge' && validLocalKnowledgeSource(block.source)
+    const boundedSource =
+      (block.key === 'local_knowledge' || block.key === 'repository_context') &&
+      validBoundedRetrievedSource(block.key, block.source)
         ? block.source
         : null;
     return {
       source: {
-        id: localSource?.id ?? sourceId(input.requestId, block.key),
+        id: boundedSource?.id ?? sourceId(input.requestId, block.key),
         kind: definition.kind,
-        label: localSource?.label ?? definition.label,
-        ...(localSource ? { uri: localSource.uri } : {}),
+        label: boundedSource?.label ?? definition.label,
+        ...(boundedSource ? { uri: boundedSource.uri } : {}),
         accountId: input.accountId,
         ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
         trust: definition.trust,
         origin: definition.origin,
         sensitivity: 'private' as const,
-        observedAt: localSource?.observedAt ?? input.observedAt,
-        ...(localSource ? { contentHash: localSource.contentHash } : {}),
+        observedAt: boundedSource?.observedAt ?? input.observedAt,
+        ...(boundedSource ? { contentHash: boundedSource.contentHash } : {}),
       },
       purpose: definition.purpose,
       excerpt: block.text,

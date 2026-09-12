@@ -10,6 +10,7 @@ import {
   canonicalTerminalSpawnToken,
   createTerminalExitLatch,
   createTerminalOutputLatch,
+  finalizeTerminalRendererTeardown,
   formatTerminalVoiceFailure,
   observeTerminalDocumentTheme,
   settleTerminalInitializationFailure,
@@ -221,7 +222,7 @@ describe('TerminalView canonical execution truth', () => {
       binding.indexOf("setInitializationPhase('kernel_terminal_phase_session_bound')"),
     );
     expect(binding.indexOf('setActiveSessionId(sid);')).toBeLessThan(
-      binding.indexOf('exitLatch.bind(sid)'),
+      binding.indexOf('exitLatch.bind(processAttachment)'),
     );
   });
 
@@ -310,8 +311,18 @@ describe('TerminalView canonical execution truth', () => {
 
   it('attaches the exact canonical session before releasing an early native exit', async () => {
     const order: string[] = [];
-    const payload = {
+    const attachment = {
+      accountId: 'account-a',
+      projectId: 'project-a',
+      paneId: 'pane-a',
       sessionId: 'pty_early',
+      processInstanceId: 'process-instance-1',
+      pid: 4242,
+      processStartedAt: 1_723_456_789_000,
+      runtimeGeneration: 'runtime-generation-1',
+    } as const;
+    const payload = {
+      ...attachment,
       code: 0,
       reason: 'natural_exit' as const,
     };
@@ -325,29 +336,97 @@ describe('TerminalView canonical execution truth', () => {
 
     latch.observe(payload);
     await expect(
-      attachTerminalViewExecution('jterm_1', payload.sessionId, {
-        isCanonical: () => true,
+      attachTerminalViewExecution('jterm_1', attachment, {
         attach,
       }),
     ).resolves.toBe(true);
-    expect(latch.bind(payload.sessionId)).toBe(true);
+    expect(latch.bind(attachment)).toBe(true);
 
-    expect(attach).toHaveBeenCalledWith('jterm_1', 'pty_early');
+    expect(attach).toHaveBeenCalledWith('jterm_1', {
+      accountId: 'account-a',
+      projectId: 'project-a',
+      paneId: 'pane-a',
+      sessionId: 'pty_early',
+      processInstanceId: 'process-instance-1',
+      pid: 4242,
+      processStartedAt: 1_723_456_789_000,
+      runtimeGeneration: 'runtime-generation-1',
+    });
     expect(order).toEqual(['attach', 'exit:pty_early']);
+  });
+
+  it('passes a legacy execution through the real native attachment call site', async () => {
+    const attachment = {
+      accountId: 'account-a',
+      projectId: 'project-a',
+      paneId: 'pane-a',
+      sessionId: 'pty-legacy',
+      processInstanceId: 'process-legacy',
+      pid: 4242,
+      processStartedAt: 1_723_456_789_000,
+      runtimeGeneration: 'runtime-generation-1',
+    } as const;
+    const attach = vi.fn(async () => true);
+
+    await expect(
+      attachTerminalViewExecution('legacy-execution', attachment, {
+        attach,
+      }),
+    ).resolves.toBe(true);
+
+    expect(attach).toHaveBeenCalledExactlyOnceWith('legacy-execution', attachment);
+  });
+
+  it('attaches the full spawn or fresh-list process binding before publishing readiness', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/features/terminals/TerminalView.tsx'),
+      'utf8',
+    );
+
+    expect(source).toContain('processInstanceId: string;');
+    expect(source).toContain('runtimeGeneration: string;');
+    expect(source).toContain('const backendInfo = restoreDecision.backendInfo;');
+    const ready = source.indexOf('onReadyRef.current?.(sid)');
+    const spawnAttach = source.indexOf(
+      'const attached = await attachTerminalViewExecution(executionId, processAttachment);',
+    );
+    const restoreAttach = source.indexOf(
+      'const attached = await attachTerminalViewExecution(executionId, processAttachment);',
+      spawnAttach + 1,
+    );
+    expect(spawnAttach).toBeGreaterThan(0);
+    expect(restoreAttach).toBeGreaterThan(spawnAttach);
+    expect(spawnAttach).toBeLessThan(ready);
+    expect(restoreAttach).toBeLessThan(ready);
   });
 
   it('delivers only the first exact native exit after binding a session', () => {
     const delivered = vi.fn();
     const latch = createTerminalExitLatch(delivered);
+    const attachment = {
+      accountId: 'account-a',
+      projectId: 'project-a',
+      paneId: 'pane-a',
+      sessionId: 'pty_exact',
+      processInstanceId: 'process-exact',
+      pid: 4242,
+      processStartedAt: 1_723_456_789_000,
+      runtimeGeneration: 'runtime-exact',
+    } as const;
 
-    latch.observe({ sessionId: 'pty_other', code: 1, reason: 'natural_exit' });
-    expect(latch.bind('pty_exact')).toBe(false);
-    latch.observe({ sessionId: 'pty_exact', code: 0, reason: 'natural_exit' });
-    latch.observe({ sessionId: 'pty_exact', code: 1, reason: 'natural_exit' });
+    latch.observe({
+      ...attachment,
+      processInstanceId: 'process-stale',
+      code: 1,
+      reason: 'natural_exit',
+    });
+    expect(latch.bind(attachment)).toBe(false);
+    latch.observe({ ...attachment, code: 0, reason: 'natural_exit' });
+    latch.observe({ ...attachment, code: 1, reason: 'natural_exit' });
 
     expect(delivered).toHaveBeenCalledOnce();
     expect(delivered).toHaveBeenCalledWith({
-      sessionId: 'pty_exact',
+      ...attachment,
       code: 0,
       reason: 'natural_exit',
     });
@@ -396,6 +475,161 @@ describe('TerminalView canonical execution truth', () => {
     expect(backend).toContain('builder.env("VIBESPACE_PROJECT_ID", project_id);');
     expect(sessionCreation).toBeGreaterThan(0);
     expect(childSpawn).toBeGreaterThan(sessionCreation);
+  });
+
+  it('revalidates canonical ownership synchronously before native spawn', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/features/terminals/TerminalView.tsx'),
+      'utf8',
+    );
+    const authorize = source.indexOf('authorizeCanonicalTerminalSpawn(executionId');
+    const spawnStatement = source.indexOf('const result = await', authorize);
+    const spawn = source.indexOf("invoke<SpawnResult>('terminal_spawn'", spawnStatement);
+    expect(authorize).toBeGreaterThan(0);
+    expect(spawn).toBeGreaterThan(authorize);
+    expect(source.slice(authorize, spawnStatement)).not.toContain('await ');
+    expect(source.slice(authorize, spawn)).toContain(
+      "throw new TypeError('canonical_terminal_scope_revoked_before_spawn')",
+    );
+  });
+
+  it('restores an exact live screen once without spawning, writing to the PTY, or appending replay', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/features/terminals/TerminalView.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('readTerminalScreenSnapshot({');
+    expect(source).toContain('readActiveScreenSnapshot:');
+    expect(source).toContain('captureTerminalScreenSnapshot(');
+
+    const attachStart = source.indexOf(
+      '} else {',
+      source.indexOf("if (restoreDecision.kind === 'spawn')"),
+    );
+    const attachEnd = source.indexOf('      } catch (err) {', attachStart);
+    const attachBlock = source.slice(attachStart, attachEnd);
+    expect(attachBlock.match(/term\.write\(restoreDecision\.restoredText/gu)).toHaveLength(1);
+    expect(attachBlock).not.toContain("invoke('terminal_spawn'");
+    expect(attachBlock).not.toContain("invoke('terminal_write'");
+    expect(attachBlock).not.toContain('.appendOutput(');
+  });
+
+  it('waits for the final accepted xterm write before capturing and disposing the old renderer', async () => {
+    const order: string[] = [];
+    let renderedScreen = 'PS C:\\repo> ';
+    let releaseWrite: (() => void) | undefined;
+    let drained = false;
+    const capture = vi.fn(() => {
+      order.push('capture');
+      expect(renderedScreen.match(/FINAL_MARKER/gu)).toHaveLength(1);
+    });
+    const appendTranscript = vi.fn((text: string) => {
+      order.push('append');
+      expect(text).toBe('FINAL_MARKER');
+    });
+    const dispose = vi.fn(() => order.push('dispose'));
+
+    const finalizer = finalizeTerminalRendererTeardown({
+      terminal: {
+        write(data, callback) {
+          order.push('write');
+          releaseWrite = () => {
+            renderedScreen += data;
+            callback();
+          };
+        },
+      },
+      pendingWrite: Promise.resolve(),
+      drainAcceptedOutput: () => {
+        if (drained) return null;
+        drained = true;
+        return { displayData: 'FINAL_MARKER', transcriptData: 'FINAL_MARKER' };
+      },
+      appendTranscript,
+      identityIsCurrent: () => true,
+      captureSnapshot: capture,
+      dispose,
+    });
+
+    await vi.waitFor(() => expect(releaseWrite).toBeTypeOf('function'));
+    expect(capture).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+
+    releaseWrite?.();
+    await finalizer;
+
+    expect(appendTranscript).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(order).toEqual(['write', 'append', 'capture', 'dispose']);
+  });
+
+  it('does not let a delayed old-renderer finalizer overwrite a later identity owner', async () => {
+    let releaseWrite: (() => void) | undefined;
+    let identityIsCurrent = true;
+    let drained = false;
+    const capture = vi.fn();
+    const dispose = vi.fn();
+
+    const finalizer = finalizeTerminalRendererTeardown({
+      terminal: {
+        write(_data, callback) {
+          releaseWrite = callback;
+        },
+      },
+      pendingWrite: Promise.resolve(),
+      drainAcceptedOutput: () => {
+        if (drained) return null;
+        drained = true;
+        return { displayData: 'OLD_FINAL', transcriptData: 'OLD_FINAL' };
+      },
+      appendTranscript: vi.fn(),
+      identityIsCurrent: () => identityIsCurrent,
+      captureSnapshot: capture,
+      dispose,
+    });
+
+    await vi.waitFor(() => expect(releaseWrite).toBeTypeOf('function'));
+    identityIsCurrent = false;
+    releaseWrite?.();
+    await finalizer;
+
+    expect(capture).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('settles teardown without an unhandled rejection when snapshot and disposal fail', async () => {
+    await expect(
+      finalizeTerminalRendererTeardown({
+        terminal: { write: vi.fn() },
+        pendingWrite: Promise.resolve(),
+        drainAcceptedOutput: () => null,
+        appendTranscript: vi.fn(),
+        identityIsCurrent: () => true,
+        captureSnapshot: () => {
+          throw new Error('private snapshot failure');
+        },
+        dispose: () => {
+          throw new Error('private disposal failure');
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps preserve-existing capacity native and writes ordered setup commands in sequence', () => {
+    const frontend = readFileSync(
+      resolve(process.cwd(), 'src/features/terminals/TerminalView.tsx'),
+      'utf8',
+    );
+    const backend = readFileSync(resolve(process.cwd(), 'src-tauri/src/terminal.rs'), 'utf8');
+
+    expect(frontend).toContain('preserveExisting: preserveExisting || undefined');
+    expect(frontend).toContain('for (const startupWrite of orderedStartupCommands)');
+    expect(frontend).toContain('data: commandToInput(startupWrite)');
+    expect(backend).toContain('preserve_existing: Option<bool>');
+    expect(backend).toContain(
+      'terminal: project capacity reached; existing terminals were preserved',
+    );
   });
 
   it('regenerates the managed briefing and Context pack from supervised session changes', () => {

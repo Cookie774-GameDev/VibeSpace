@@ -9,7 +9,6 @@ const { ui } = vi.hoisted(() => ({
     voiceListening: false,
     composerSttListening: false,
     composerStt: true,
-    chatFullscreen: false,
     route: 'chat',
     toggleNav: vi.fn(),
     toggleInspector: vi.fn(),
@@ -20,12 +19,20 @@ const { ui } = vi.hoisted(() => ({
     setAssistantOpen: vi.fn(),
     setWhatsNewOpen: vi.fn(),
     setNewsPanelOpen: vi.fn(),
-    toggleChatFullscreen: vi.fn(),
     setRoute: vi.fn(),
   },
 }));
 
 vi.mock('@/stores/ui', () => ({
+  createDefaultDoneNotifications: () => ({
+    jarvis: false,
+    terminal: false,
+    tasks: false,
+    contextMaps: false,
+    skills: false,
+    connectors: false,
+    reminders: false,
+  }),
   useUIStore: (selector: (state: typeof ui) => unknown) => selector(ui),
 }));
 

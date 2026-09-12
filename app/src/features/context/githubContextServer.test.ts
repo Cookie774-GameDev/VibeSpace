@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import { createGitHubContextProxy } from '../../../../supabase/functions/_shared/githubContextProxy';
 import { createGitHubContextServerExecutor } from './githubContextAuth';
 
@@ -330,7 +331,7 @@ describe('GitHub Context client boundary', () => {
           page: 1,
           hasMore: false,
           repositories: [],
-          token: 'ghs_SyntheticLeakedInstallationToken123456',
+          token: syntheticCredentialFixture('ghs_', 'SyntheticLeakedInstallationToken123456'),
         },
         error: null,
       },
@@ -340,7 +341,9 @@ describe('GitHub Context client boundary', () => {
           repositoryId: '101',
           sha: 'b'.repeat(40),
           encoding: 'base64',
-          content: btoa('token=ghp_SyntheticCredentialValue1234567890'),
+          content: btoa(
+            `token=${syntheticCredentialFixture('ghp_', 'SyntheticCredentialValue1234567890')}`,
+          ),
           size: 47,
         },
         error: null,

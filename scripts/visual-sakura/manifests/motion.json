@@ -12,7 +12,7 @@
     {
       "id": "shell.default",
       "path": "app/src/components/layout/AppShell.tsx",
-      "line": 20,
+      "line": 22,
       "occurrence": 1,
       "locator": "LEGACY_SHELL_TRANSITION",
       "role": "root MotionConfig fallback",
@@ -32,7 +32,7 @@
     {
       "id": "inspector.resize",
       "path": "app/src/components/layout/Inspector.tsx",
-      "line": 74,
+      "line": 75,
       "occurrence": 1,
       "locator": "LEGACY_INSPECTOR_TRANSITION",
       "role": "inspector width open and close",
@@ -52,7 +52,7 @@
     {
       "id": "nav.resize",
       "path": "app/src/components/layout/NavPane.tsx",
-      "line": 51,
+      "line": 59,
       "occurrence": 1,
       "locator": "LEGACY_NAV_PANE_TRANSITION",
       "role": "navigation width collapse and expand",
@@ -72,7 +72,7 @@
     {
       "id": "tabs.item",
       "path": "app/src/components/layout/TabStrip.tsx",
-      "line": 74,
+      "line": 77,
       "occurrence": 1,
       "locator": "LEGACY_TAB_TRANSITION",
       "role": "tab entrance exit and reflow",
@@ -492,7 +492,7 @@
     {
       "id": "schedule.timeline-item",
       "path": "app/src/features/schedule/SchedulePage.tsx",
-      "line": 41,
+      "line": 37,
       "occurrence": 1,
       "locator": "LEGACY_SCHEDULE_TIMELINE_TRANSITION",
       "role": "schedule timeline staggered entrance",
@@ -672,7 +672,7 @@
     {
       "id": "voice.modal",
       "path": "app/src/features/voice/VoiceModal.tsx",
-      "line": 146,
+      "line": 153,
       "occurrence": 1,
       "locator": "LEGACY_VOICE_PANEL_TRANSITION",
       "role": "voice modal entrance exit and size reflow",
@@ -692,7 +692,7 @@
     {
       "id": "voice.command-center",
       "path": "app/src/features/voice/VoiceModal.tsx",
-      "line": 151,
+      "line": 158,
       "occurrence": 1,
       "locator": "LEGACY_COMMAND_CENTER_TRANSITION",
       "role": "voice command center height expansion",

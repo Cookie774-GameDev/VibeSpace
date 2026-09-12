@@ -92,7 +92,10 @@ export const CURRENT_PROMO_PHASE: PromoPhase = 'launch_1k';
 
 const DEEPGRAM_USES = 'Deepgram credit — AI calls, talk to Jarvis & speech-to-text';
 
-export function deepgramPromoMinutes(plan: CallVoicePlanId, phase: PromoPhase = CURRENT_PROMO_PHASE): number {
+export function deepgramPromoMinutes(
+  plan: CallVoicePlanId,
+  phase: PromoPhase = CURRENT_PROMO_PHASE,
+): number {
   return DEEPGRAM_PROMO_MINUTES_DISPLAY[phase][plan];
 }
 
@@ -120,14 +123,12 @@ export const DEEPGRAM_PROMO_LABEL: Record<CallVoicePlanId, string | null> = {
   apex: deepgramPromoLabel('apex'),
 };
 
-export const FOUNDER_REWARD_HEADLINE =
-  `First ${LAUNCH_FOUNDER_SLOTS} users: $${FOUNDER_WELCOME_VOICE_USD} FREE ${DEEPGRAM_USES}. Use within ${SPARK_PROMO_SPEND_DAYS} days. No card.`;
+export const FOUNDER_REWARD_HEADLINE = `First ${LAUNCH_FOUNDER_SLOTS} users: $${FOUNDER_WELCOME_VOICE_USD} FREE ${DEEPGRAM_USES}. Use within ${SPARK_PROMO_SPEND_DAYS} days. No card.`;
 
 export const FOUNDER_WELCOME_TRY_LINE =
   '$5 Deepgram credit — ~50 min AI calls · ~5+ hr speech-to-text · ~110+ min Jarvis voice';
 
-export const SPARK_PHASE2_HEADLINE =
-  `At $5k pool: first ${LAUNCH_SPARK_PROMO_SLOTS.toLocaleString()} Spark users get $${SPARK_PROMO_VOICE_USD} ${DEEPGRAM_USES}`;
+export const SPARK_PHASE2_HEADLINE = `At $5k pool: first ${LAUNCH_SPARK_PROMO_SLOTS.toLocaleString()} Spark users get $${SPARK_PROMO_VOICE_USD} ${DEEPGRAM_USES}`;
 
 export const SPARK_PHASE2_TRY_LINE =
   '$2 Deepgram credit — ~20 min AI calls · ~2+ hr speech-to-text · ~45+ min Jarvis voice';
@@ -136,12 +137,12 @@ export const SCALE_5K_PAID_PROMO_LINE =
   'At $5k pool — Orbit 3 hr · Nova 9 hr · Singularity 15 hr · Supernova 30 hr launch Deepgram credit (subscriptions)';
 
 export const SPARK_NO_FREE_CREDIT_LINE =
-  'Unlimited local Kokoro · BYOK for cloud · first 200 get $5 Deepgram launch credit';
+  'Unlimited local Jarvis High · BYOK for cloud · first 200 get $5 Deepgram launch credit';
 
 export const GLOBAL_DICTATION_LINE =
   'Global dictation (Ctrl+Space) — VibeSpace STT everywhere; uses Deepgram launch credit when you have it';
 
-export const UNLIMITED_LOCAL_KOKORO_LINE = 'Unlimited local Kokoro voice on every plan';
+export const UNLIMITED_LOCAL_KOKORO_LINE = 'Unlimited local Jarvis High voice on every plan';
 
 export function maxCloudVoiceMinutes(budgetUsd: number): number {
   if (budgetUsd <= 0) return 0;

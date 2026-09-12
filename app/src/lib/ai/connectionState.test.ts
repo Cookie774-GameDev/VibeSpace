@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CODEX_CLI_CONNECTION } from './adapters/catalog';
+import { OPENAI_API_CONNECTION } from './adapters/nativeCatalog';
 import {
   AI_CONNECTION_METADATA_KEY,
   AI_CONNECTION_STATE_EVENT,
+  deriveAiConnectionHealth,
   isConnectionSessionChecked,
   markConnectionSessionChecked,
   readConnectionMetadata,
@@ -10,6 +13,7 @@ import {
   readConnectionSessionPickerStates,
   resetConnectionSessionChecksForTests,
   writeConnectionMetadata,
+  writeConnectionPickerStates,
 } from './connectionState';
 
 describe('AI connection state persistence', () => {
@@ -61,6 +65,24 @@ describe('AI connection state persistence', () => {
     expect(changed).toHaveBeenCalledOnce();
 
     window.removeEventListener(AI_CONNECTION_STATE_EVENT, changed);
+  });
+
+  it('preserves independently probed native API health when external metadata changes', () => {
+    writeConnectionPickerStates({
+      'qwen-api': { available: false, auth: 'unauthenticated' },
+    });
+
+    writeConnectionMetadata({
+      'openai-codex': {
+        installation: 'installed',
+        auth: 'authenticated',
+      },
+    });
+
+    expect(readConnectionPickerStates()).toEqual({
+      'qwen-api': { available: false, auth: 'unauthenticated' },
+      'openai-codex': { available: true, auth: 'authenticated' },
+    });
   });
 
   it('fails closed over malformed storage and keeps disabled connections unavailable', () => {
@@ -208,5 +230,56 @@ describe('AI connection state persistence', () => {
     ).toMatchObject({
       'openai-codex': { disabled: true },
     });
+  });
+});
+
+describe('deriveAiConnectionHealth', () => {
+  it('makes an authenticated installed CLI usable', () => {
+    expect(
+      deriveAiConnectionHealth({
+        connection: CODEX_CLI_CONNECTION,
+        metadata: {
+          installation: 'installed',
+          auth: 'authenticated',
+          lastCheckedAt: 42,
+        },
+      }),
+    ).toMatchObject({
+      installation: 'installed',
+      auth: 'authenticated',
+      credentialPersistence: 'not_applicable',
+      usable: true,
+      lastCheckedAt: 42,
+    });
+  });
+
+  it('keeps a signed-out CLI unusable', () => {
+    expect(
+      deriveAiConnectionHealth({
+        connection: CODEX_CLI_CONNECTION,
+        metadata: { installation: 'installed', auth: 'unauthenticated' },
+      }).usable,
+    ).toBe(false);
+  });
+
+  it('requires verified secure persistence for API usability', () => {
+    expect(
+      deriveAiConnectionHealth({
+        connection: OPENAI_API_CONNECTION,
+        credentialSaved: true,
+      }),
+    ).toMatchObject({
+      installation: 'not_applicable',
+      auth: 'authenticated',
+      credentialPersistence: 'saved',
+      usable: true,
+    });
+    expect(
+      deriveAiConnectionHealth({
+        connection: OPENAI_API_CONNECTION,
+        credentialSaved: true,
+        credentialVaultError: true,
+      }).usable,
+    ).toBe(false);
   });
 });

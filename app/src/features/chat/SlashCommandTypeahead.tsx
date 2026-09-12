@@ -1,10 +1,13 @@
-import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useEffect, forwardRef, useImperativeHandle, type CSSProperties } from 'react';
+import { useLivePanelUiScale } from '@/lib/ui/panelScale';
 import { motion, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils';
 import { HiveModelIcon } from '@/components/brand';
+import { isHiveProductEnabled } from '@/lib/features/hiveProductGate';
 import { scrollPickerItemIntoView } from './pickerScroll';
 import { LEGACY_DROPDOWN_TRANSITION, resolveDropdownMotion } from './dropdownMotion';
 import { useThemeMotionTransition } from '@/features/appearance/themeMotion';
+import { SLASH_COMMAND_ALIASES, normalizeSlashCommand } from './slashCommandRouting';
 import {
   BarChart3,
   Bot,
@@ -12,6 +15,7 @@ import {
   CalendarDays,
   ChevronRight,
   ClipboardList,
+  Gauge,
   FileText,
   HelpCircle,
   History,
@@ -22,6 +26,7 @@ import {
   Plug,
   Redo2,
   Shield,
+  SlidersHorizontal,
   Sparkles,
   Terminal,
   Undo2,
@@ -33,6 +38,10 @@ import {
 
 export interface SlashCommandDef {
   cmd: string;
+  /** Optional owner-facing label for commands whose canonical parser token is shorter. */
+  label?: string;
+  /** Exact command text shown in the picker. */
+  displayCommand?: string;
   /** Legacy spellings that resolve to this command (e.g. terminal → terminals). */
   aliases?: string[];
   description: string;
@@ -45,31 +54,10 @@ export interface SlashCommandDef {
   hasOptions?: boolean;
 }
 
-export const SLASH_CMD_ALIASES: Record<string, string> = {
-  terminal: 'terminals',
-  contextmap: 'context',
-  contexts: 'context',
-  agent: 'multitask',
-  multitaksk: 'multitask',
-  multiatask: 'multitask',
-  mulititask: 'multitask',
-  multitaks: 'multitask',
-  subagent: 'subagents',
-  suabagent: 'subagents',
-  subagnts: 'subagents',
-  subagens: 'subagents',
-  clearfile: 'clearfiles',
-  'clear-files': 'clearfiles',
-  cearfile: 'clearfiles',
-  cearfiles: 'clearfiles',
-  permission: 'permissions',
-  perms: 'permissions',
-  access: 'permissions',
-};
+export const SLASH_CMD_ALIASES: Readonly<Record<string, string>> = SLASH_COMMAND_ALIASES;
 
 export function normalizeSlashCmd(raw: string): string {
-  const cmd = raw.toLowerCase();
-  return SLASH_CMD_ALIASES[cmd] ?? cmd;
+  return normalizeSlashCommand(raw);
 }
 
 export const CHAT_ATTACH_SLASH_CMDS = new Set([
@@ -87,7 +75,16 @@ export function isChatAttachSlashCmd(cmd: string): boolean {
 
 export function findSlashCommandDef(cmd: string): SlashCommandDef | undefined {
   const canonical = normalizeSlashCmd(cmd);
-  return SLASH_COMMANDS.find((entry) => entry.cmd === canonical);
+  const def = SLASH_COMMANDS.find((entry) => entry.cmd === canonical);
+  // Hive slash is archived in the full table but hidden while the product is gated.
+  if (def?.cmd === 'hive' && !isHiveProductEnabled()) return undefined;
+  return def;
+}
+
+/** Slash commands visible in product typeahead / search (Hive filtered when gated). */
+export function getVisibleSlashCommands(): SlashCommandDef[] {
+  if (isHiveProductEnabled()) return SLASH_COMMANDS;
+  return SLASH_COMMANDS.filter((entry) => entry.cmd !== 'hive');
 }
 
 function fuzzyTokenScore(query: string, target: string): number {
@@ -111,12 +108,12 @@ export function slashCmdMatchScore(query: string, def: SlashCommandDef): number 
 export const SLASH_COMMANDS: SlashCommandDef[] = [
   {
     cmd: 'permissions',
-    aliases: ['permission', 'perms', 'access'],
-    description: 'Set chat mode: Agent, Plan, or Ask',
+    aliases: ['permission', 'perms'],
+    description: 'Set mode, access, and Approve All for this run',
     icon: Shield,
     category: 'chat',
     takesArg: true,
-    argPlaceholder: 'agent | plan | ask',
+    argPlaceholder: 'agent | plan | ask | read | write | full | approve-all',
     hasOptions: true,
   },
   {
@@ -136,8 +133,14 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     argPlaceholder: '<goal>',
   },
   {
+    cmd: 'agent',
+    description: 'Open a live multitask/subagent thread for this chat',
+    icon: Bot,
+    category: 'chat',
+    hasOptions: true,
+  },
+  {
     cmd: 'multitask',
-    aliases: ['agent'],
     description: 'Agent Mode task — launch a chat-native Jarvis agent',
     icon: Bot,
     category: 'chat',
@@ -206,12 +209,81 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     hasOptions: true,
   },
   {
+    cmd: 'md',
+    description: 'Create and attach a structured Markdown document',
+    icon: FileText,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: '<type> <brief>',
+    hasOptions: true,
+  },
+  {
     cmd: 'model',
     description: 'Switch AI model',
     icon: Zap,
     category: 'chat',
     takesArg: true,
     argPlaceholder: '<provider>',
+    hasOptions: true,
+  },
+  {
+    cmd: 'effort',
+    description: 'Set reasoning effort for the current model',
+    icon: SlidersHorizontal,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: 'auto | minimal | low | medium | high | ultra | max | status',
+    hasOptions: true,
+  },
+  {
+    cmd: 'fast',
+    description: 'Use the selected model connection’s real Fast mode',
+    icon: Zap,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: 'on | off | status',
+  },
+  {
+    cmd: 'performance',
+    description: 'Set VibeSpace orchestration performance without changing model or effort',
+    icon: Gauge,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: 'responsive | balanced | quality | status',
+  },
+  {
+    cmd: 'rlm',
+    description: 'Control adaptive VibeSpace Context/RLM for this chat',
+    icon: Brain,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: 'on | off | status | refresh | trace',
+    hasOptions: true,
+  },
+  {
+    cmd: 'access',
+    description: 'Set independent tool access ceiling',
+    icon: Shield,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: 'read-only | write | full | status',
+  },
+  {
+    cmd: 'approveall',
+    aliases: ['approve-all'],
+    description: 'Approve eligible safe actions for the next scoped run only',
+    icon: Shield,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: 'on | off | status',
+  },
+  {
+    cmd: 'mode',
+    description: 'Set Token Saver, Normal, or Token Final Boss',
+    icon: Gauge,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: 'token saver | normal | token final boss',
     hasOptions: true,
   },
   {
@@ -227,6 +299,12 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     aliases: ['clearfile', 'clear-files', 'cearfile'],
     description: 'Clear all attached files & images from this message',
     icon: FileText,
+    category: 'chat',
+  },
+  {
+    cmd: 'output',
+    description: 'Show this chat’s media inputs and outputs',
+    icon: ClipboardList,
     category: 'chat',
   },
 
@@ -252,7 +330,13 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     icon: CalendarDays,
     category: 'navigation',
   },
-  { cmd: 'chat', description: 'Reference Chat', icon: MessageSquare, category: 'navigation' },
+  {
+    cmd: 'chat',
+    description: 'Choose VibeSpace Chat or Browser Chat',
+    icon: MessageSquare,
+    category: 'chat',
+    hasOptions: true,
+  },
 
   {
     cmd: 'usage',
@@ -263,11 +347,21 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   },
   {
     cmd: 'theme',
-    description: 'Switch Jarvis Core, VibeSpace, Default, MonoChrome, or Sakura',
+    description: 'Style this agentic chat console',
     icon: Palette,
     category: 'utility',
     takesArg: true,
-    argPlaceholder: 'jarvis | vibespace | default | monochrome | sakura',
+    argPlaceholder: 'paper white | sakura mist | graphite | oled void',
+    hasOptions: true,
+  },
+  {
+    cmd: 'appearance',
+    description: 'Switch the global VibeSpace appearance',
+    icon: Palette,
+    category: 'utility',
+    takesArg: true,
+    argPlaceholder: 'jarvis one | default | monochrome | warm',
+    hasOptions: true,
   },
   {
     cmd: 'undo',
@@ -309,6 +403,8 @@ export interface SlashCommandTypeaheadProps {
   query: string;
   onHoverCmd?: (cmd: string) => void;
   onSelect: (cmd: SlashCommandDef) => void;
+  /** Dense sizing for pet mini-panel / narrow composer. */
+  compact?: boolean;
 }
 
 export interface SlashCommandTypeaheadRef {
@@ -320,11 +416,16 @@ export interface SlashCommandTypeaheadRef {
 export const SlashCommandTypeahead = forwardRef<
   SlashCommandTypeaheadRef,
   SlashCommandTypeaheadProps
->(function SlashCommandTypeahead({ commands, selectedCmd, query, onHoverCmd, onSelect }, ref) {
+>(function SlashCommandTypeahead(
+  { commands, selectedCmd, query, onHoverCmd, onSelect, compact = false },
+  ref,
+) {
   const listRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
   const dropdownTransition = useThemeMotionTransition(LEGACY_DROPDOWN_TRANSITION);
   const dropdownMotion = resolveDropdownMotion(reducedMotion, dropdownTransition);
+  // Live scale — re-renders when the mini panel is resized while menu is open.
+  const panelScale = useLivePanelUiScale(compact);
   const displayCommands = orderSlashCommandsForDisplay(commands);
 
   useImperativeHandle(ref, () => ({
@@ -358,28 +459,59 @@ export const SlashCommandTypeahead = forwardRef<
     return acc;
   }, {});
 
+  // Intrinsic compact sizes (not only CSS transform — transform left a huge layout footprint).
+  const compactWidth = compact ? Math.round(200 * panelScale + 40 * (1 - panelScale)) : 276;
+  const compactFontPx = compact ? Math.max(9, Math.round(11 * panelScale)) : 11;
+  const compactMaxH = compact ? Math.round(140 * panelScale + 40) : 200;
+
   return (
     <motion.div
       {...dropdownMotion}
+      data-pet-scaled-picker={compact ? 'true' : undefined}
+      data-pet-ui-scale={compact ? String(panelScale) : undefined}
       className={cn(
-        'jarvis-slash-dropdown w-[276px] overflow-hidden rounded-[12px] border border-border-mid/80',
+        'jarvis-slash-dropdown overflow-hidden border border-border-mid/80',
+        compact ? 'rounded-[10px] font-mono' : 'w-[276px] rounded-[12px] font-mono text-[11px]',
         'bg-elevated/95 text-foreground backdrop-blur-xl',
         'shadow-[0_18px_48px_rgba(0,0,0,0.48),inset_0_1px_0_hsl(var(--foreground)/0.05)]',
-        'font-mono text-[11px]',
       )}
+      style={
+        compact
+          ? ({
+              width: `${compactWidth}px`,
+              maxWidth: 'min(86vw, 260px)',
+              fontSize: `${compactFontPx}px`,
+              ['--pet-ui-scale' as string]: String(panelScale),
+            } as CSSProperties)
+          : undefined
+      }
     >
-      <div className="border-b border-border bg-panel/90 px-3 py-2">
+      <div
+        className={cn('border-b border-border bg-panel/90', compact ? 'px-2 py-1' : 'px-3 py-2')}
+      >
         <div className="flex items-center gap-1.5">
-          <Zap className="h-3 w-3 text-accent-copper" />
-          <span className="text-[10px] text-muted-foreground">
+          <Zap className={cn(compact ? 'h-2.5 w-2.5' : 'h-3 w-3', 'text-accent-copper')} />
+          <span className={cn('text-muted-foreground', compact ? 'text-[9px]' : 'text-[10px]')}>
             {query ? `/${query}` : 'commands'}
           </span>
         </div>
       </div>
 
-      <div ref={listRef} className="max-h-[200px] overflow-y-auto py-0.5 scrollbar-hidden">
+      <div
+        ref={listRef}
+        className={cn(
+          'overflow-y-auto scrollbar-hidden',
+          compact ? 'py-0.5' : 'max-h-[200px] py-0.5',
+        )}
+        style={compact ? { maxHeight: `${compactMaxH}px` } : undefined}
+      >
         {commands.length === 0 ? (
-          <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
+          <div
+            className={cn(
+              'text-center text-muted-foreground',
+              compact ? 'px-1.5 py-2 text-[9px]' : 'px-2 py-3 text-[10px]',
+            )}
+          >
             No match for /{query}
           </div>
         ) : (
@@ -419,7 +551,16 @@ export const SlashCommandTypeahead = forwardRef<
                           )}
                         />
                       )}
-                      <span className="flex-1 truncate">/{c.cmd}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">
+                          {c.label ?? c.displayCommand ?? `/${c.cmd}`}
+                        </span>
+                        {c.label ? (
+                          <span className="block truncate text-[9px] text-muted-foreground/75">
+                            {c.displayCommand} · {c.description}
+                          </span>
+                        ) : null}
+                      </span>
                       {c.hasOptions && (
                         <ChevronRight className="h-2.5 w-2.5 text-accent-copper/60" />
                       )}

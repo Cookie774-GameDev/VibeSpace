@@ -36,6 +36,7 @@ const MAX_PROPERTIES: usize = 256;
 const MAX_NATIVE_CLAUSES: usize = 32;
 const MAX_NATIVE_TOKENS: usize = 64;
 const MAX_QUARANTINES_PER_SCOPE: usize = 2;
+#[cfg(unix)]
 const MAX_PERMISSION_ENTRIES: usize = 10_000;
 const MAX_JAVASCRIPT_TIMESTAMP: i64 = 8_640_000_000_000_000;
 const MAX_INDEX_SCOPES: usize = 512;
@@ -866,6 +867,7 @@ fn prune_quarantines(root: &Path, scope_key: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn harden_tree_permissions(root: &Path) -> Result<(), String> {
     let mut pending = vec![root.to_path_buf()];
     let mut inspected = 0_usize;
@@ -891,6 +893,14 @@ fn harden_tree_permissions(root: &Path) -> Result<(), String> {
             }
         }
     }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_tree_permissions(_root: &Path) -> Result<(), String> {
+    // Windows inherits the protected per-user LocalAppData ACL. Tantivy may
+    // remove transient files immediately after commit, so recursively walking
+    // them here creates a false failure race without strengthening the ACL.
     Ok(())
 }
 

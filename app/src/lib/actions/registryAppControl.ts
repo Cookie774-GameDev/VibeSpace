@@ -23,7 +23,7 @@ import type { ActionDef, ActionRunContext } from './types';
 const ok = (summary: string, data?: unknown) => ({ ok: true as const, summary, data });
 const fail = (error: string) => ({ ok: false as const, error });
 
-const VOICE_ENGINES: VoiceEngine[] = ['system', 'local', 'kokoro', 'deepgram'];
+const VOICE_ENGINES: VoiceEngine[] = ['system', 'local', 'jarvis', 'deepgram'];
 const VOICE_PRESET_IDS: VoicePresetId[] = ['jarvis-prime', 'aurora', 'atlas', 'nova', 'sentinel'];
 
 function dispatchAfterCommit(name: string, detail?: unknown): void {
@@ -81,7 +81,12 @@ async function runWorkflowSteps(
   );
 }
 
-function makeSettingsTabAction(id: string, label: string, tab: SettingsTab, icon: LucideIcon): ActionDef {
+function makeSettingsTabAction(
+  id: string,
+  label: string,
+  tab: SettingsTab,
+  icon: LucideIcon,
+): ActionDef {
   return {
     id,
     category: 'settings',
@@ -97,14 +102,19 @@ function makeSettingsTabAction(id: string, label: string, tab: SettingsTab, icon
 }
 
 export const APP_CONTROL_ACTIONS: ActionDef[] = [
-  makeSettingsTabAction('settings.jarvisactions', 'Open Settings → Jarvis Actions', 'jarvisactions', Zap),
+  makeSettingsTabAction(
+    'settings.jarvisactions',
+    'Open Settings → Jarvis Actions',
+    'jarvisactions',
+    Zap,
+  ),
 
   {
     id: 'voice.setEngine',
     category: 'voice',
     label: 'Set voice engine',
     description:
-      'Switch TTS/STT engine: system (OS voices), local (installed voices), kokoro (on-device), or deepgram (cloud).',
+      'Switch voice engine: jarvis (default offline Piper), local (OS fallback), system (configured cloud/system), or deepgram (cloud).',
     icon: Mic,
     params: [
       {
@@ -134,7 +144,8 @@ export const APP_CONTROL_ACTIONS: ActionDef[] = [
     id: 'voice.setPreset',
     category: 'voice',
     label: 'Set voice character',
-    description: 'Switch the spoken voice preset (Jarvis Prime, Aurora/Friday, Atlas, Nova, Sentinel).',
+    description:
+      'Switch the spoken voice preset (Jarvis Prime, Aurora/Friday, Atlas, Nova, Sentinel).',
     icon: Mic,
     params: [
       {
@@ -164,7 +175,7 @@ export const APP_CONTROL_ACTIONS: ActionDef[] = [
     category: 'voice',
     label: 'Configure voice (engine + preset)',
     description:
-      'One-shot voice setup. Use for requests like "switch voice to Deepgram" or "use Friday voice with Kokoro".',
+      'One-shot voice setup. Use for requests like "switch voice to Deepgram" or "use Friday with the OS local fallback".',
     icon: Settings2,
     params: [
       {
@@ -196,10 +207,9 @@ export const APP_CONTROL_ACTIONS: ActionDef[] = [
       if (params.openSettings !== false) openSettingsTab('voice');
       if (engine) useAuthStore.getState().setVoiceEngine(engine);
       if (preset) useAuthStore.getState().setVoicePreset(preset);
-      const parts = [
-        engine ? `engine=${engine}` : null,
-        preset ? `preset=${preset}` : null,
-      ].filter(Boolean);
+      const parts = [engine ? `engine=${engine}` : null, preset ? `preset=${preset}` : null].filter(
+        Boolean,
+      );
       return ok(`Voice updated (${parts.join(', ')}).`);
     },
   },
@@ -250,7 +260,8 @@ export const APP_CONTROL_ACTIONS: ActionDef[] = [
     id: 'preferences.setChatAutoApprove',
     category: 'chat',
     label: 'Set chat auto-approve',
-    description: 'When on, typed chat runs Jarvis action proposals without Approve cards (Shift+Tab toggles).',
+    description:
+      'When on, typed chat runs Jarvis action proposals without Approve cards (Shift+Tab toggles).',
     icon: Zap,
     params: [
       {

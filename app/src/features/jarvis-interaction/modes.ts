@@ -72,52 +72,17 @@ export function modeFromSlashCommand(command: string): JarvisInteractionMode | n
   }
 
   if (normalized === 'ask' || normalized === 'askonly' || normalized === 'ask-only') return 'ask';
-  if (
-    normalized === 'plan' ||
-    normalized === 'readonly' ||
-    normalized === 'read-only' ||
-    normalized === 'read'
-  ) {
-    return 'plan';
-  }
-  if (
-    normalized === 'agent' ||
-    normalized === 'multitask' ||
-    normalized === 'full' ||
-    normalized === 'fullaccess' ||
-    normalized === 'full-access' ||
-    normalized === 'access'
-  ) {
-    return 'agent';
-  }
+  if (normalized === 'plan' || normalized === 'planning') return 'plan';
+  if (normalized === 'agent' || normalized === 'multitask') return 'agent';
   return null;
 }
 
 export function parsePermissionModeArg(arg: string): JarvisInteractionMode | null {
   const a = arg.trim().toLowerCase().replace(/[_-]+/g, ' ');
   if (!a) return null;
-  if (
-    a === 'full' ||
-    a === 'full access' ||
-    a === 'agent' ||
-    a === 'access' ||
-    a === 'write' ||
-    a === 'all'
-  ) {
-    return 'agent';
-  }
-  if (
-    a === 'read' ||
-    a === 'read only' ||
-    a === 'readonly' ||
-    a === 'plan' ||
-    a === 'planning'
-  ) {
-    return 'plan';
-  }
-  if (a === 'ask' || a === 'ask only' || a === 'askonly' || a === 'chat') {
-    return 'ask';
-  }
+  if (a === 'agent') return 'agent';
+  if (a === 'plan' || a === 'planning') return 'plan';
+  if (a === 'ask' || a === 'ask only' || a === 'askonly') return 'ask';
   return null;
 }
 

@@ -57,11 +57,22 @@ export interface JarvisPermissionRequest {
   title: string;
   description: string;
   risk: 'low' | 'medium' | 'high';
-  action: 'write_file' | 'delete_file' | 'run_command' | 'apply_changes' | 'change_project' | 'launch_agents';
+  action:
+    | 'write_file'
+    | 'delete_file'
+    | 'run_command'
+    | 'apply_changes'
+    | 'change_project'
+    | 'launch_agents';
   targets?: string[];
   planId?: string;
   status: JarvisPermissionStatus;
   instruction?: string;
+  harness?: {
+    sessionId: string;
+    approvalId: string;
+    capability: string;
+  };
 }
 
 export type JarvisAgentStatus =
@@ -82,6 +93,10 @@ export interface JarvisChatAgent {
   name: string;
   parentChatId: ChatId | string;
   childChatId: ChatId | string;
+  /** Opaque OpenCode session bound to this VibeSpace child chat. */
+  harnessSessionId?: string;
+  /** Opaque OpenCode parent session bound to the supervising VibeSpace chat. */
+  harnessParentSessionId?: string;
   task: string;
   modelLabel: string;
   modelSelection?: ChatModelSelection;
@@ -101,7 +116,10 @@ export interface JarvisChatAgent {
   error?: string;
 }
 
-export type JarvisCoordinationAgent = Omit<JarvisChatAgent, 'parentChatId' | 'modelSelection' | 'filesTouched' | 'createdAt' | 'updatedAt'> & {
+export type JarvisCoordinationAgent = Omit<
+  JarvisChatAgent,
+  'parentChatId' | 'modelSelection' | 'filesTouched' | 'createdAt' | 'updatedAt'
+> & {
   chatId: ChatId | string;
   plannedChanges: string[];
   completedChanges: string[];
@@ -138,7 +156,13 @@ export interface JarvisCoordinationSnapshot {
 }
 
 export interface JarvisStructuredContext {
-  kind: 'question_answers' | 'plan_build' | 'plan_redo' | 'permission_response' | 'multitask' | 'subagents';
+  kind:
+    | 'question_answers'
+    | 'plan_build'
+    | 'plan_redo'
+    | 'permission_response'
+    | 'multitask'
+    | 'subagents';
   sourceMessageId?: MessageId | string;
   payload: unknown;
 }

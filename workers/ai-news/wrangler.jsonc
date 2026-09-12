@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "vibespace-ai-news",
+  "main": "src/free.ts",
+  "compatibility_date": "2026-08-10",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "triggers": {
+    "crons": ["7 * * * *"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vibespace-ai-news-db",
+      "database_id": "75fd3bdc-6041-45cb-b1b8-3358e1509290",
+    },
+  ],
+  "vars": {
+    "BENCHMARK_SOURCE_URL": "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=text",
+    "CORS_ORIGIN": "*",
+    "MAX_ITEMS_PER_RUN": "30",
+    "RETENTION_DAYS": "45",
+  },
+}

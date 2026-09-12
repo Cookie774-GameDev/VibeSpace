@@ -5,7 +5,10 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
@@ -19,6 +22,7 @@ const PANEL_DEFAULT_W: f64 = 430.0;
 const PANEL_DEFAULT_H: f64 = 560.0;
 const PANEL_MIN_W: f64 = 360.0;
 const PANEL_MIN_H: f64 = 360.0;
+const MAIN_NAV_EXCLUSION_LOGICAL_W: f64 = 240.0;
 const PET_AUTOSTART_VALUE_NAME: &str = "VibeSpace";
 
 fn windows_startup_command(executable: &Path) -> String {
@@ -281,6 +285,7 @@ pub struct PetGeometryState {
 pub struct PetWindowState {
     pub geometry: Mutex<PetGeometryState>,
     pub panel_open: Mutex<bool>,
+    pub reconstrain_generation: AtomicU64,
 }
 
 fn geometry_path(app: &AppHandle) -> Option<PathBuf> {
@@ -401,6 +406,296 @@ fn clamp_to_monitors(
     (cx, cy)
 }
 
+fn main_nav_exclusion_active(main_visible: bool, main_minimized: bool) -> bool {
+    main_visible && !main_minimized
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct MonitorWorkArea {
+    name: Option<String>,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct OverlayPlacement {
+    x: f64,
+    y: f64,
+    monitor_name: Option<String>,
+}
+
+fn monitor_work_areas(app: &AppHandle) -> Vec<MonitorWorkArea> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|monitor| {
+            let area = monitor.work_area();
+            MonitorWorkArea {
+                name: monitor.name().cloned(),
+                x: area.position.x as f64,
+                y: area.position.y as f64,
+                width: area.size.width as f64,
+                height: area.size.height as f64,
+            }
+        })
+        .collect()
+}
+
+fn clamp_to_work_area(x: f64, y: f64, w: f64, h: f64, area: &MonitorWorkArea) -> (f64, f64) {
+    (
+        x.clamp(area.x, (area.x + area.width - w).max(area.x)),
+        y.clamp(area.y, (area.y + area.height - h).max(area.y)),
+    )
+}
+
+fn final_monitor_name_for_position(
+    areas: &[MonitorWorkArea],
+    x: f64,
+    y: f64,
+    observed_monitor_name: Option<String>,
+) -> Option<String> {
+    areas
+        .iter()
+        .find(|area| {
+            x >= area.x && y >= area.y && x < area.x + area.width && y < area.y + area.height
+        })
+        .and_then(|area| area.name.clone())
+        .or(observed_monitor_name)
+}
+
+fn main_nav_exit_candidates(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    main_x: f64,
+    main_y: f64,
+    main_w: f64,
+    main_h: f64,
+    main_scale_factor: f64,
+) -> Option<[(f64, f64); 4]> {
+    let scale = if main_scale_factor.is_finite() && main_scale_factor > 0.0 {
+        main_scale_factor
+    } else {
+        1.0
+    };
+    let main_right = main_x + main_w.max(0.0);
+    let main_bottom = main_y + main_h.max(0.0);
+    let nav_right = (main_x + MAIN_NAV_EXCLUSION_LOGICAL_W * scale).min(main_right);
+    let overlaps_main_vertically = y < main_bottom && y + h > main_y;
+    let overlaps_navigation_horizontally = x < nav_right && x + w > main_x;
+
+    if overlaps_main_vertically && overlaps_navigation_horizontally {
+        Some([
+            (main_x - w, y),
+            (nav_right, y),
+            (x, main_y - h),
+            (x, main_bottom),
+        ])
+    } else {
+        None
+    }
+}
+
+fn position_distance_squared(origin: (f64, f64), candidate: (f64, f64)) -> f64 {
+    (candidate.0 - origin.0).powi(2) + (candidate.1 - origin.1).powi(2)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn select_candidate_in_areas(
+    raw_candidates: &[(f64, f64); 4],
+    origin: (f64, f64),
+    w: f64,
+    h: f64,
+    main_x: f64,
+    main_y: f64,
+    main_w: f64,
+    main_h: f64,
+    main_scale_factor: f64,
+    areas: &[&MonitorWorkArea],
+) -> Option<OverlayPlacement> {
+    raw_candidates
+        .iter()
+        .flat_map(|(candidate_x, candidate_y)| {
+            areas.iter().filter_map(move |area| {
+                if area.width < w || area.height < h {
+                    return None;
+                }
+                let (x, y) = clamp_to_work_area(*candidate_x, *candidate_y, w, h, area);
+                main_nav_exit_candidates(
+                    x,
+                    y,
+                    w,
+                    h,
+                    main_x,
+                    main_y,
+                    main_w,
+                    main_h,
+                    main_scale_factor,
+                )
+                .is_none()
+                .then(|| OverlayPlacement {
+                    x,
+                    y,
+                    monitor_name: area.name.clone(),
+                })
+            })
+        })
+        .min_by(|left, right| {
+            position_distance_squared(origin, (left.x, left.y))
+                .total_cmp(&position_distance_squared(origin, (right.x, right.y)))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn select_main_nav_exit_candidate(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    main_x: f64,
+    main_y: f64,
+    main_w: f64,
+    main_h: f64,
+    main_scale_factor: f64,
+    areas: &[MonitorWorkArea],
+    preferred_monitor_name: Option<&str>,
+) -> Option<OverlayPlacement> {
+    let raw_candidates = main_nav_exit_candidates(
+        x,
+        y,
+        w,
+        h,
+        main_x,
+        main_y,
+        main_w,
+        main_h,
+        main_scale_factor,
+    )?;
+    let preferred_areas: Vec<_> = preferred_monitor_name
+        .map(|preferred| {
+            areas
+                .iter()
+                .filter(|area| area.name.as_deref() == Some(preferred))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(selected) = select_candidate_in_areas(
+        &raw_candidates,
+        (x, y),
+        w,
+        h,
+        main_x,
+        main_y,
+        main_w,
+        main_h,
+        main_scale_factor,
+        &preferred_areas,
+    ) {
+        return Some(selected);
+    }
+
+    let fallback_areas: Vec<_> = areas
+        .iter()
+        .filter(|area| {
+            preferred_monitor_name.is_none() || area.name.as_deref() != preferred_monitor_name
+        })
+        .collect();
+    select_candidate_in_areas(
+        &raw_candidates,
+        (x, y),
+        w,
+        h,
+        main_x,
+        main_y,
+        main_w,
+        main_h,
+        main_scale_factor,
+        &fallback_areas,
+    )
+}
+
+fn exclude_main_nav_overlap(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    main_x: f64,
+    main_y: f64,
+    main_w: f64,
+    main_h: f64,
+    main_scale_factor: f64,
+) -> (f64, f64) {
+    main_nav_exit_candidates(
+        x,
+        y,
+        w,
+        h,
+        main_x,
+        main_y,
+        main_w,
+        main_h,
+        main_scale_factor,
+    )
+    .and_then(|candidates| {
+        candidates.into_iter().min_by(|left, right| {
+            position_distance_squared((x, y), *left)
+                .total_cmp(&position_distance_squared((x, y), *right))
+        })
+    })
+    .unwrap_or((x, y))
+}
+
+fn constrain_overlay_position(
+    app: &AppHandle,
+    x: f64,
+    y: f64,
+    preferred_monitor_name: Option<&str>,
+) -> (f64, f64) {
+    let (clamped_x, clamped_y) = clamp_to_monitors(
+        app,
+        x,
+        y,
+        OVERLAY_SIZE as f64,
+        OVERLAY_SIZE as f64,
+        preferred_monitor_name,
+    );
+    let Some(main) = app.get_webview_window("main") else {
+        return (clamped_x, clamped_y);
+    };
+    let main_visible = main.is_visible().unwrap_or(false);
+    let main_minimized = main.is_minimized().unwrap_or(false);
+    if !main_nav_exclusion_active(main_visible, main_minimized) {
+        return (clamped_x, clamped_y);
+    }
+    let Ok(main_position) = main.outer_position() else {
+        return (clamped_x, clamped_y);
+    };
+    let Ok(main_size) = main.outer_size() else {
+        return (clamped_x, clamped_y);
+    };
+    let scale_factor = main.scale_factor().unwrap_or(1.0);
+    let Some(selected) = select_main_nav_exit_candidate(
+        clamped_x,
+        clamped_y,
+        OVERLAY_SIZE as f64,
+        OVERLAY_SIZE as f64,
+        main_position.x as f64,
+        main_position.y as f64,
+        main_size.width as f64,
+        main_size.height as f64,
+        scale_factor,
+        &monitor_work_areas(app),
+        preferred_monitor_name,
+    ) else {
+        return (clamped_x, clamped_y);
+    };
+    (selected.x, selected.y)
+}
+
 /// When saved monitor is gone, fall back to primary top-right-ish.
 fn recover_position(
     app: &AppHandle,
@@ -518,8 +813,9 @@ fn get_or_create_pet_panel(app: &AppHandle) -> Result<WebviewWindow, String> {
     .resizable(true)
     .decorations(false)
     .transparent(false)
+    // The panel is a normal window unless the user explicitly selects topmost.
     .always_on_top(false)
-    .skip_taskbar(false)
+    .skip_taskbar(true)
     .visible(false)
     .focused(false)
     .build()
@@ -533,8 +829,8 @@ pub async fn pet_show_overlay(app: AppHandle) -> Result<(), String> {
     eprintln!("[pets] pet_show_overlay invoked");
 
     let state = app.state::<PetWindowState>();
-    let geo = state.geometry.lock().map_err(|e| e.to_string())?;
-    let (x, y) = recover_position(
+    let mut geo = state.geometry.lock().map_err(|e| e.to_string())?;
+    let (recovered_x, recovered_y) = recover_position(
         &app,
         geo.overlay_x,
         geo.overlay_y,
@@ -542,6 +838,15 @@ pub async fn pet_show_overlay(app: AppHandle) -> Result<(), String> {
         OVERLAY_SIZE as f64,
         geo.overlay_monitor_name.as_deref(),
     );
+    let (x, y) = constrain_overlay_position(
+        &app,
+        recovered_x,
+        recovered_y,
+        geo.overlay_monitor_name.as_deref(),
+    );
+    geo.overlay_x = Some(x);
+    geo.overlay_y = Some(y);
+    save_geometry(&app, &geo);
     drop(geo);
 
     let app_for_create = app.clone();
@@ -593,6 +898,8 @@ fn show_existing_pet_overlay(app: AppHandle, x: f64, y: f64) -> Result<(), Strin
     // Re-assert the exact pet surface size after visibility is applied.
     win.set_size(overlay_size)
         .map_err(|e| format!("failed to confirm pet-overlay size: {e}"))?;
+    // Second topmost pass — some hosts drop Z-order during the first show.
+    let _ = win.set_always_on_top(true);
     #[cfg(debug_assertions)]
     log_pet_window_metrics("after pet_show_overlay", &win);
     Ok(())
@@ -681,6 +988,81 @@ pub fn pet_reassert_overlay_topmost(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn reconstrain_visible_overlay(app: &AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window(PET_OVERLAY_LABEL) else {
+        return Ok(());
+    };
+    if !win.is_visible().unwrap_or(false) {
+        return Ok(());
+    }
+    let position = win
+        .outer_position()
+        .map_err(|error| format!("failed to read pet-overlay position: {error}"))?;
+    let monitor_name = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .and_then(|monitor| monitor.name().cloned());
+    let (x, y) = constrain_overlay_position(
+        app,
+        position.x as f64,
+        position.y as f64,
+        monitor_name.as_deref(),
+    );
+    if position.x == x as i32 && position.y == y as i32 {
+        return Ok(());
+    }
+    win.set_position(PhysicalPosition::new(x as i32, y as i32))
+        .map_err(|error| format!("failed to reconstrain pet-overlay: {error}"))?;
+    let observed_monitor_name = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .and_then(|monitor| monitor.name().cloned());
+    let final_monitor_name =
+        final_monitor_name_for_position(&monitor_work_areas(app), x, y, observed_monitor_name);
+    if let Ok(mut geo) = app.state::<PetWindowState>().geometry.lock() {
+        geo.overlay_x = Some(x);
+        geo.overlay_y = Some(y);
+        geo.overlay_monitor_name = final_monitor_name;
+        save_geometry(app, &geo);
+    }
+    Ok(())
+}
+
+pub fn schedule_visible_overlay_reconstrain(app: AppHandle) {
+    let generation = app
+        .state::<PetWindowState>()
+        .reconstrain_generation
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        if app
+            .state::<PetWindowState>()
+            .reconstrain_generation
+            .load(Ordering::Relaxed)
+            != generation
+        {
+            return;
+        }
+        let app_for_callback = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if app_for_callback
+                .state::<PetWindowState>()
+                .reconstrain_generation
+                .load(Ordering::Relaxed)
+                != generation
+            {
+                return;
+            }
+            if let Err(error) = reconstrain_visible_overlay(&app_for_callback) {
+                eprintln!("[pets] failed to reconstrain visible overlay: {error}");
+            }
+        });
+    });
+}
+
 /// Move pet overlay to physical position (DPI-aware path via physical coords).
 /// Always clamped so the sprite cannot be dragged fully off-screen.
 #[tauri::command]
@@ -689,7 +1071,7 @@ pub fn pet_set_overlay_position(app: AppHandle, x: f64, y: f64) -> Result<(), St
         return Ok(());
     };
     // Keep at least ~24px of the pet window on-screen (cannot disappear off edge).
-    let (cx, cy) = clamp_to_monitors(&app, x, y, OVERLAY_SIZE as f64, OVERLAY_SIZE as f64, None);
+    let (cx, cy) = constrain_overlay_position(&app, x, y, None);
     let _ = win.set_position(PhysicalPosition::new(cx as i32, cy as i32));
     if let Ok(mut geo) = app.state::<PetWindowState>().geometry.lock() {
         geo.overlay_x = Some(cx);
@@ -752,7 +1134,7 @@ pub fn pet_snap_overlay_to_edge(app: AppHandle) -> Result<(), String> {
     let work_area = monitor.work_area();
     let monitor_position = work_area.position;
     let monitor_size = work_area.size;
-    let (x, y) = nearest_edge_position(
+    let (snapped_x, snapped_y) = nearest_edge_position(
         position.x as f64,
         position.y as f64,
         OVERLAY_SIZE as f64,
@@ -762,6 +1144,12 @@ pub fn pet_snap_overlay_to_edge(app: AppHandle) -> Result<(), String> {
         monitor_size.width as f64,
         monitor_size.height as f64,
         8.0,
+    );
+    let (x, y) = constrain_overlay_position(
+        &app,
+        snapped_x,
+        snapped_y,
+        monitor.name().map(String::as_str),
     );
     win.set_position(PhysicalPosition::new(x as i32, y as i32))
         .map_err(|e| format!("failed to snap pet-overlay: {e}"))?;
@@ -996,11 +1384,178 @@ mod tests {
     }
 
     #[test]
-    fn panel_mode_defaults_to_normal_and_only_explicit_mode_is_topmost() {
+    fn panel_mode_defaults_to_normal_but_preserves_explicit_topmost() {
         assert_eq!(PetPanelMode::default(), PetPanelMode::Normal);
-        assert!(!panel_stays_on_top(PetPanelMode::Normal));
         assert!(!panel_stays_on_top(PetPanelMode::FollowPet));
         assert!(panel_stays_on_top(PetPanelMode::AlwaysOnTop));
+        assert!(!panel_stays_on_top(PetPanelMode::Normal));
+    }
+
+    #[test]
+    fn overlay_is_shifted_past_the_scaled_main_navigation_when_rectangles_overlap() {
+        assert_eq!(
+            exclude_main_nav_overlap(110.0, 180.0, 144.0, 144.0, 100.0, 100.0, 1600.0, 900.0, 1.5,),
+            (-44.0, 180.0),
+        );
+    }
+
+    #[test]
+    fn main_navigation_exclusion_requires_a_visible_non_minimized_main_window() {
+        assert!(main_nav_exclusion_active(true, false));
+        assert!(!main_nav_exclusion_active(false, false));
+        assert!(!main_nav_exclusion_active(true, true));
+    }
+
+    #[test]
+    fn overlay_outside_the_main_navigation_keeps_its_position() {
+        assert_eq!(
+            exclude_main_nav_overlap(
+                -200.0, 180.0, 144.0, 144.0, 100.0, 100.0, 1600.0, 900.0, 1.0,
+            ),
+            (-200.0, 180.0),
+        );
+        assert_eq!(
+            exclude_main_nav_overlap(
+                110.0, 1100.0, 144.0, 144.0, 100.0, 100.0, 1600.0, 900.0, 1.0,
+            ),
+            (110.0, 1100.0),
+        );
+        assert_eq!(
+            exclude_main_nav_overlap(500.0, 180.0, 144.0, 144.0, 100.0, 100.0, 1600.0, 900.0, 1.0,),
+            (500.0, 180.0),
+        );
+    }
+
+    #[test]
+    fn invalid_scale_factor_uses_one_for_a_safe_navigation_boundary() {
+        assert_eq!(
+            exclude_main_nav_overlap(
+                -1810.0,
+                80.0,
+                144.0,
+                144.0,
+                -1920.0,
+                0.0,
+                1600.0,
+                900.0,
+                f64::NAN,
+            ),
+            (-1680.0, 80.0),
+        );
+    }
+
+    #[test]
+    fn preferred_monitor_candidate_does_not_teleport_across_a_seam() {
+        let areas = [
+            MonitorWorkArea {
+                name: Some("left".to_string()),
+                x: -1920.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            MonitorWorkArea {
+                name: Some("right".to_string()),
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+        ];
+
+        let selected = select_main_nav_exit_candidate(
+            10.0,
+            100.0,
+            144.0,
+            144.0,
+            0.0,
+            0.0,
+            1920.0,
+            1080.0,
+            1.0,
+            &areas,
+            Some("right"),
+        )
+        .expect("right monitor has a valid navigation exit");
+
+        assert_eq!(selected.x, 240.0);
+        assert_eq!(selected.y, 100.0);
+        assert_eq!(selected.monitor_name.as_deref(), Some("right"));
+        assert_ne!(selected.x, -144.0);
+    }
+
+    #[test]
+    fn candidate_selection_uses_other_monitors_only_as_a_fallback() {
+        let areas = [
+            MonitorWorkArea {
+                name: Some("narrow".to_string()),
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 200.0,
+            },
+            MonitorWorkArea {
+                name: Some("left".to_string()),
+                x: -1920.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+        ];
+
+        let selected = select_main_nav_exit_candidate(
+            10.0,
+            10.0,
+            144.0,
+            144.0,
+            0.0,
+            0.0,
+            200.0,
+            200.0,
+            1.0,
+            &areas,
+            Some("narrow"),
+        )
+        .expect("the adjacent monitor is a valid explicit fallback");
+
+        assert_eq!(selected.x, -144.0);
+        assert_eq!(selected.monitor_name.as_deref(), Some("left"));
+    }
+
+    #[test]
+    fn destination_monitor_identity_overrides_a_stale_observed_monitor() {
+        let areas = [
+            MonitorWorkArea {
+                name: Some("left".to_string()),
+                x: -1920.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            MonitorWorkArea {
+                name: Some("right".to_string()),
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+        ];
+
+        assert_eq!(
+            final_monitor_name_for_position(&areas, -144.0, 100.0, Some("right".to_string()))
+                .as_deref(),
+            Some("left"),
+        );
+        assert_eq!(
+            final_monitor_name_for_position(&areas, 240.0, 100.0, Some("left".to_string()))
+                .as_deref(),
+            Some("right"),
+        );
+        assert_eq!(
+            final_monitor_name_for_position(&areas, 5000.0, 100.0, Some("right".to_string()))
+                .as_deref(),
+            Some("right"),
+        );
     }
 
     #[test]
@@ -1169,6 +1724,7 @@ pub fn init_pet_state(app: &AppHandle) -> PetWindowState {
     PetWindowState {
         geometry: Mutex::new(geo),
         panel_open: Mutex::new(false),
+        reconstrain_generation: AtomicU64::new(0),
     }
 }
 

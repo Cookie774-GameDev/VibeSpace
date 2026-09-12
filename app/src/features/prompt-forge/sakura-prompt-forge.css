@@ -21,7 +21,7 @@ html[data-theme='sakura'] [data-sakura-surface='prompt-forge'][data-sakura-state
 
 html[data-theme='sakura'] [data-sakura-surface='prompt-forge-settings'],
 html[data-theme='sakura'] [data-sakura-surface='prompt-forge-recovery'],
-html[data-theme='sakura'] [data-sakura-surface='prompt-forge-review'] {
+html[data-theme='sakura'] [data-sakura-surface='prompt-forge-inline-review'] {
   border-color: hsl(var(--sakura-ivory-hsl) / var(--sakura-essential-border-alpha));
   background: var(--sakura-panel-strong-fallback);
   box-shadow: var(--shadow-lift);
@@ -36,25 +36,14 @@ html[data-theme='sakura'] [data-sakura-surface='prompt-forge-recovery'] {
   background: hsl(var(--sakura-night-2-hsl) / 0.88);
 }
 
-html[data-theme='sakura'] [data-sakura-surface='prompt-forge-review'] {
-  border-radius: var(--sakura-radius-feature);
-}
-
-html[data-theme='sakura'] [data-sakura-surface='prompt-forge-review-header'],
-html[data-theme='sakura'] [data-sakura-surface='prompt-forge-review-footer'] {
-  background: hsl(var(--sakura-night-2-hsl) / 0.92);
-}
-
-html[data-theme='sakura'] [data-sakura-surface='prompt-forge-review-tabs'] {
-  background: hsl(var(--sakura-night-hsl) / 0.72);
+html[data-theme='sakura'] [data-sakura-surface='prompt-forge-inline-review'] {
+  border-radius: var(--radius-lg);
+  background: hsl(var(--sakura-night-2-hsl) / 0.74);
 }
 
 html[data-theme='sakura']
   [data-sakura-surface='prompt-forge-settings']
-  [role='radio'][aria-checked='true'],
-html[data-theme='sakura']
-  [data-sakura-surface='prompt-forge-review-tabs']
-  [role='tab'][aria-selected='true'] {
+  [role='radio'][aria-checked='true'] {
   border-color: hsl(var(--sakura-pink-hsl) / 0.32);
   background: linear-gradient(
     90deg,
@@ -66,7 +55,7 @@ html[data-theme='sakura']
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   html[data-theme='sakura'] [data-sakura-surface='prompt-forge-settings'],
-  html[data-theme='sakura'] [data-sakura-surface='prompt-forge-review'] {
+  html[data-theme='sakura'] [data-sakura-surface='prompt-forge-inline-review'] {
     background: hsl(var(--sakura-night-hsl) / var(--sakura-panel-alpha-strong));
     -webkit-backdrop-filter: blur(var(--sakura-blur)) saturate(1.1);
     backdrop-filter: blur(var(--sakura-blur)) saturate(1.1);

@@ -12,6 +12,9 @@ const motionProbe = vi.hoisted(() => ({
   layoutInputs: [] as unknown[],
   layoutTransitions: [] as unknown[],
   legacyTransitions: [] as unknown[],
+  renderedTransitions: [] as unknown[],
+  useLegacyTransition: false,
+  useReducedTransition: false,
   themedLayoutTransition: { duration: 0 } as const,
   themedTransition: { duration: 0.123, ease: 'linear' } as const,
 }));
@@ -27,6 +30,8 @@ vi.mock('@/features/appearance/themeMotion', () => ({
   },
   useThemeMotionTransition: (legacyTransition: unknown) => {
     motionProbe.legacyTransitions.push(legacyTransition);
+    if (motionProbe.useReducedTransition) return { duration: 0 } as const;
+    if (motionProbe.useLegacyTransition) return legacyTransition;
     return motionProbe.themedTransition;
   },
 }));
@@ -46,8 +51,9 @@ vi.mock('motion/react', async () => {
           ...props
         },
         ref,
-      ) =>
-        ReactModule.createElement(
+      ) => {
+        motionProbe.renderedTransitions.push(transition);
+        return ReactModule.createElement(
           tag,
           {
             ...props,
@@ -56,7 +62,8 @@ vi.mock('motion/react', async () => {
             'data-motion-transition': JSON.stringify(transition),
           },
           children as React.ReactNode,
-        ),
+        );
+      },
     );
 
   return {
@@ -76,6 +83,9 @@ describe('Chat Sakura Motion consumers', () => {
     motionProbe.layoutInputs.length = 0;
     motionProbe.layoutTransitions.length = 0;
     motionProbe.legacyTransitions.length = 0;
+    motionProbe.renderedTransitions.length = 0;
+    motionProbe.useLegacyTransition = false;
+    motionProbe.useReducedTransition = false;
   });
 
   it('routes MessageBubble through the shared policy with its exact legacy transition', () => {
@@ -110,9 +120,35 @@ describe('Chat Sakura Motion consumers', () => {
     expect(motionProbe.legacyTransitions).toEqual([
       { type: 'spring', stiffness: 520, damping: 26, mass: 0.7 },
     ]);
-    expect(
-      rendered.container.querySelector(`[data-motion-transition='${themedTransitionText}']`),
-    ).toBeTruthy();
+    expect(motionProbe.renderedTransitions.at(-1)).toEqual({
+      ...motionProbe.themedTransition,
+      filter: { type: 'tween', duration: 0.18, ease: 'easeOut' },
+    });
+  });
+
+  it('keeps the spring motion but gives blur a non-overshooting tween', () => {
+    motionProbe.useLegacyTransition = true;
+
+    render(<InputToken type="command" label="/mode" />);
+
+    expect(motionProbe.renderedTransitions.at(-1)).toEqual({
+      type: 'spring',
+      stiffness: 520,
+      damping: 26,
+      mass: 0.7,
+      filter: { type: 'tween', duration: 0.18, ease: 'easeOut' },
+    });
+  });
+
+  it('keeps the blur transition disabled when reduced motion is active', () => {
+    motionProbe.useReducedTransition = true;
+
+    render(<InputToken type="command" label="/mode" />);
+
+    expect(motionProbe.renderedTransitions.at(-1)).toEqual({
+      duration: 0,
+      filter: { duration: 0 },
+    });
   });
 
   it('routes both ToolCallCard expansion branches through the shared policy', () => {

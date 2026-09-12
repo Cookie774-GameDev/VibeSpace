@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Clock, Coins, Database, FileInput, FileOutput, Sparkles } from 'lucide-react';
+import { AlertCircle, Clock, Coins, Database, FileInput, FileOutput, Loader2, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ProviderId } from '@/types/common';
 
@@ -15,6 +15,10 @@ export interface ProviderUsageData {
 interface ProviderUsageCounterProps {
   providerId: ProviderId;
   usage: ProviderUsageData | null;
+  status?: 'loading' | 'ready' | 'error';
+  source?: 'vibespace' | 'provider' | 'unavailable';
+  error?: string;
+  lastUpdated?: number | null;
   className?: string;
 }
 
@@ -44,7 +48,15 @@ function formatLastUsed(ts: number | null): string {
   return new Date(ts).toLocaleDateString();
 }
 
-export function ProviderUsageCounter({ providerId, usage, className }: ProviderUsageCounterProps) {
+export function ProviderUsageCounter({
+  providerId,
+  usage,
+  status = 'ready',
+  source = 'vibespace',
+  error,
+  lastUpdated,
+  className,
+}: ProviderUsageCounterProps) {
   const hasUsage = usage && usage.totalTokens > 0;
 
   const stats = useMemo(() => {
@@ -84,6 +96,31 @@ export function ProviderUsageCounter({ providerId, usage, className }: ProviderU
     ];
   }, [hasUsage, usage]);
 
+  if (status === 'loading') {
+    return (
+      <div
+        className={cn('flex items-center gap-1.5 py-1 text-metadata text-muted-foreground', className)}
+        role="status"
+      >
+        <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" />
+        <span>Loading usage…</span>
+      </div>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <div
+        className={cn('flex items-center gap-1.5 py-1 text-metadata text-destructive', className)}
+        role="status"
+        title={error}
+      >
+        <AlertCircle className="h-3 w-3" />
+        <span>Usage unavailable</span>
+      </div>
+    );
+  }
+
   if (!hasUsage) {
     return (
       <div
@@ -91,26 +128,36 @@ export function ProviderUsageCounter({ providerId, usage, className }: ProviderU
           'flex items-center gap-1.5 py-1 text-metadata text-muted-foreground/60',
           className,
         )}
-        title={`No locally recorded ${providerId} usage this month`}
+        title={`No ${providerId} usage recorded this month`}
       >
         <Database className="h-3 w-3" />
-        <span>No local usage recorded this month</span>
+        <span>No usage recorded this month.</span>
       </div>
     );
   }
 
   return (
-    <div
-      className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 py-1', className)}
-      title={`Locally recorded ${providerId} usage this month`}
-    >
-      {stats?.map((stat) => (
-        <div key={stat.label} className="flex items-center gap-1 text-metadata">
-          <stat.icon className={cn('h-3 w-3', stat.color)} />
-          <span className="text-muted-foreground/70">{stat.label}:</span>
-          <span className={cn('font-medium', stat.color)}>{stat.value}</span>
-        </div>
-      ))}
+    <div className={cn('py-1', className)}>
+      <div
+        className="flex flex-wrap items-center gap-x-3 gap-y-1"
+        title={`${providerId} usage known to VibeSpace this month`}
+      >
+        {stats?.map((stat) => (
+          <div key={stat.label} className="flex items-center gap-1 text-metadata">
+            <stat.icon className={cn('h-3 w-3', stat.color)} />
+            <span className="text-muted-foreground/70">{stat.label}:</span>
+            <span className={cn('font-medium', stat.color)}>{stat.value}</span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-1 text-[10px] text-muted-foreground/65">
+        {source === 'provider'
+          ? 'Provider-reported usage'
+          : source === 'unavailable'
+            ? 'Provider usage API unavailable'
+            : 'Requests made through VibeSpace'}
+        {lastUpdated ? ` · Updated ${formatLastUsed(lastUpdated)}` : ''}
+      </p>
     </div>
   );
 }

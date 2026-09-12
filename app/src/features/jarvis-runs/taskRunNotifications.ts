@@ -4,7 +4,12 @@ import { notify as nativeNotify } from '@/lib/tauri';
 
 interface TaskRunNotificationBindings {
   subscribe: (listener: (event: JarvisEvent) => void) => () => void;
-  notify?: (title: string, body: string, status: JarvisRunStatus) => Promise<unknown> | unknown;
+  notify?: (
+    title: string,
+    body: string,
+    status: JarvisRunStatus,
+    completionIdentity?: string,
+  ) => Promise<unknown> | unknown;
   onError?: (error: unknown) => void;
 }
 
@@ -17,9 +22,17 @@ const COPY: Partial<Record<JarvisRunStatus, readonly [string, string]>> = {
   cancelled: ['Jarvis task cancelled', 'Open VibeSpace to view the verified cancellation.'],
 };
 
-async function defaultNotify(title: string, body: string, status: JarvisRunStatus): Promise<void> {
+async function defaultNotify(
+  title: string,
+  body: string,
+  status: JarvisRunStatus,
+  completionIdentity?: string,
+): Promise<void> {
   if (status === 'completed') {
-    await notifyDone('tasks', title, body, { allowFallbackToast: true });
+    await notifyDone('tasks', title, body, {
+      allowFallbackToast: true,
+      ...(completionIdentity ? { completionIdentity } : {}),
+    });
     return;
   }
   if (typeof window !== 'undefined') {
@@ -42,7 +55,8 @@ export function startJarvisTaskRunNotifications(bindings: TaskRunNotificationBin
     if (!status) return;
     const copy = COPY[status];
     if (!copy) return;
-    void Promise.resolve(notify(copy[0], copy[1], status)).catch((error) => {
+    const completionIdentity = status === 'completed' ? `jarvis-run:${event.runId}` : undefined;
+    void Promise.resolve(notify(copy[0], copy[1], status, completionIdentity)).catch((error) => {
       if (bindings.onError) bindings.onError(error);
       else console.warn('[jarvis-task] notification unavailable', error);
     });

@@ -1,0 +1,23 @@
+- description: Prompt Forge preserves exact constraints and structured material
+  vars:
+    candidate_output: |
+      Preserve path C:\workspace\src\auth.ts, URL https://example.com/api?v=2,
+      version 3.8, date 2026-08-04, and limit 2,000.
+      ```ts
+      export const enabled = true;
+      ```
+  assert:
+    - type: contains
+      value: 'C:\workspace\src\auth.ts'
+    - type: contains
+      value: 'https://example.com/api?v=2'
+    - type: contains
+      value: 'version 3.8'
+    - type: contains
+      value: 'date 2026-08-04'
+    - type: contains
+      value: 'limit 2,000'
+    - type: contains
+      value: '```ts'
+    - type: not-contains
+      value: 'already completed'

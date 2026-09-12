@@ -17,13 +17,7 @@ import type { SupabaseClient as SupabaseClientGeneric } from '@supabase/supabase
 // Primitives
 // ---------------------------------------------------------------------------
 
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: Json | undefined }
-  | Json[];
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 /**
  * Tier values that may appear in `profiles.tier`.
@@ -39,27 +33,12 @@ export type UsageStatus = 'ok' | 'rate_limit' | 'error';
 export type SubscriptionPlan = 'free' | 'starter' | 'pro' | 'ultra' | 'apex';
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
 export type MessageRole = 'user' | 'assistant' | 'agent' | 'system' | 'tool';
-export type TaskStatus =
-  | 'open'
-  | 'in_progress'
-  | 'blocked'
-  | 'done'
-  | 'cancelled';
+export type TaskStatus = 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type EnergyLevel = 'low' | 'medium' | 'high';
-export type ReminderStatus =
-  | 'scheduled'
-  | 'fired'
-  | 'snoozed'
-  | 'dismissed'
-  | 'completed';
+export type ReminderStatus = 'scheduled' | 'fired' | 'snoozed' | 'dismissed' | 'completed';
 export type MemoryScope = 'agent' | 'project' | 'workspace' | 'global';
-export type IntegrationKind =
-  | 'supabase'
-  | 'github'
-  | 'google'
-  | 'opencode'
-  | 'ollama';
+export type IntegrationKind = 'supabase' | 'github' | 'google' | 'opencode' | 'ollama';
 export type CallTransport = 'twilio' | 'livekit';
 
 // ---------------------------------------------------------------------------
@@ -137,6 +116,25 @@ export type StripeEvent = {
   processed_at: string | null;
   error: string | null;
   created_at: string;
+};
+
+export type DesktopPresenceRow = {
+  user_id: string;
+  device_id: string;
+  display_name: string;
+  app_version: string;
+  is_online: boolean;
+  last_seen_at: string;
+  active_terminals: Json;
+  active_chats: Json;
+  active_agent_jobs: Json;
+  active_runtime: string | null;
+  provider_usage: Json;
+  background_task_count: number;
+  recent_sync_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ModelCatalogEntry = {
@@ -410,54 +408,28 @@ export type Database = {
       profiles: Crud<Profile, 'id'>;
       api_keys: Crud<ApiKey, 'user_id' | 'provider' | 'encrypted'>;
       usage_log: Crud<UsageLog, 'user_id' | 'provider' | 'model' | 'status'>;
-      subscriptions: Crud<
-        Subscription,
-        'id' | 'user_id' | 'plan' | 'status'
-      >;
+      subscriptions: Crud<Subscription, 'id' | 'user_id' | 'plan' | 'status'>;
       stripe_events: Crud<StripeEvent, 'id' | 'type' | 'payload'>;
-      models_catalog: Crud<
-        ModelCatalogEntry,
-        'id' | 'provider' | 'display_name'
+      desktop_presence: Crud<
+        DesktopPresenceRow,
+        'user_id' | 'device_id' | 'display_name' | 'app_version'
       >;
+      models_catalog: Crud<ModelCatalogEntry, 'id' | 'provider' | 'display_name'>;
       workspaces: Crud<Workspace, 'id' | 'user_id' | 'name'>;
       projects: Crud<Project, 'id' | 'user_id' | 'name'>;
-      agents: Crud<
-        AgentRow,
-        'id' | 'user_id' | 'slug' | 'name' | 'model'
-      >;
+      agents: Crud<AgentRow, 'id' | 'user_id' | 'slug' | 'name' | 'model'>;
       chats: Crud<ChatRow, 'id' | 'user_id' | 'title'>;
-      messages: Crud<
-        MessageRow,
-        'id' | 'user_id' | 'chat_id' | 'role'
-      >;
+      messages: Crud<MessageRow, 'id' | 'user_id' | 'chat_id' | 'role'>;
       tasks: Crud<TaskRow, 'id' | 'user_id' | 'title'>;
-      reminders: Crud<
-        ReminderRow,
-        'id' | 'user_id' | 'task_id' | 'fires_at'
-      >;
+      reminders: Crud<ReminderRow, 'id' | 'user_id' | 'task_id' | 'fires_at'>;
       memories: Crud<MemoryRow, 'id' | 'user_id' | 'content'>;
-      events: Crud<
-        EventRow,
-        'id' | 'user_id' | 'title' | 'starts_at'
-      >;
-      integrations: Crud<
-        IntegrationRow,
-        'id' | 'user_id' | 'kind'
-      >;
-      quick_links: Crud<
-        QuickLinkRow,
-        'id' | 'user_id' | 'label' | 'url'
-      >;
+      events: Crud<EventRow, 'id' | 'user_id' | 'title' | 'starts_at'>;
+      integrations: Crud<IntegrationRow, 'id' | 'user_id' | 'kind'>;
+      quick_links: Crud<QuickLinkRow, 'id' | 'user_id' | 'label' | 'url'>;
       terminal_sessions: Crud<TerminalSessionRow, 'id' | 'user_id'>;
       phone_settings: Crud<PhoneSettings, 'user_id'>;
-      outbound_pending: Crud<
-        OutboundPending,
-        'call_sid' | 'user_id' | 'reason'
-      >;
-      call_audit: Crud<
-        CallAudit,
-        'call_id' | 'user_id' | 'transport' | 'started_at'
-      >;
+      outbound_pending: Crud<OutboundPending, 'call_sid' | 'user_id' | 'reason'>;
+      call_audit: Crud<CallAudit, 'call_id' | 'user_id' | 'transport' | 'started_at'>;
     };
     Views: {
       usage_month: { Row: UsageMonthRow; Relationships: [] };
@@ -469,6 +441,29 @@ export type Database = {
       };
       prune_outbound_pending: { Args: Record<string, never>; Returns: number };
       prune_call_audit: { Args: { p_days?: number }; Returns: number };
+      publish_desktop_presence: {
+        Args: {
+          p_device_id: string;
+          p_display_name: string;
+          p_app_version: string;
+          p_active_terminals: Json;
+          p_active_chats: Json;
+          p_active_agent_jobs: Json;
+          p_active_runtime: string | null;
+          p_provider_usage: Json;
+          p_background_task_count: number;
+          p_recent_sync_at: string | null;
+        };
+        Returns: boolean;
+      };
+      mark_desktop_presence_offline: {
+        Args: { p_device_id: string };
+        Returns: boolean;
+      };
+      revoke_desktop_device: {
+        Args: { p_device_id: string };
+        Returns: boolean;
+      };
     };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };

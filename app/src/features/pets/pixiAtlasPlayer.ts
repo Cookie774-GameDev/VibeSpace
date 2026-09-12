@@ -55,8 +55,36 @@ export interface PixiAtlasPlayerOptions {
 /** Track live applications so tests can assert single-instance discipline. */
 const liveApplications = new WeakSet<Application>();
 let liveApplicationCount = 0;
+const managedAssetRefCounts = new Map<string, number>();
 const textureObjectIds = new WeakMap<object, string>();
 let textureObjectSeq = 0;
+
+function retainManagedAsset(url: string): void {
+  managedAssetRefCounts.set(url, (managedAssetRefCounts.get(url) ?? 0) + 1);
+}
+
+async function releaseManagedAsset(url: string): Promise<void> {
+  const current = managedAssetRefCounts.get(url) ?? 0;
+  if (current > 1) {
+    managedAssetRefCounts.set(url, current - 1);
+    return;
+  }
+  managedAssetRefCounts.delete(url);
+  try {
+    await Assets.unload(url);
+  } catch {
+    /* Ignore an already-evicted cache entry. */
+  }
+}
+
+async function unloadUnreferencedManagedAsset(url: string): Promise<void> {
+  if (managedAssetRefCounts.has(url)) return;
+  try {
+    await Assets.unload(url);
+  } catch {
+    /* Ignore an already-evicted cache entry. */
+  }
+}
 
 function textureObjectId(value: unknown): string | null {
   if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
@@ -94,8 +122,12 @@ export class PixiAtlasPlayer {
   private onComplete: (() => void) | null = null;
   private displaySize = 128;
   private destroyed = false;
+  private contextLost = false;
   private tickerFn: ((ticker: { deltaMS: number }) => void) | null = null;
   private mountEl: HTMLElement | null = null;
+  private contextLostHandler: ((event: Event) => void) | null = null;
+  private contextRestoredHandler: ((event: Event) => void) | null = null;
+  private onContextLostCallback: (() => void) | null = null;
   private lastFilter: 'nearest' | 'linear' | null = null;
   private loadGeneration = 0;
   private activePlaybackKey: string | null = null;
@@ -166,17 +198,17 @@ export class PixiAtlasPlayer {
     const canvas = this.app?.canvas as HTMLCanvasElement | undefined;
     return Boolean(
       !this.destroyed &&
-        this.app &&
-        this.sprite &&
-        this.atlas &&
-        this.frameTextures.size > 1 &&
-        this.frameNames.length > 1 &&
-        this.activePlaybackKey === playbackKey &&
-        this.lastAtlasJsonUrl === atlasJsonUrl &&
-        this.isTickerAttached &&
-        tickerStarted &&
-        this.sprite.texture &&
-        canvas?.parentElement === this.mountEl,
+      this.app &&
+      this.sprite &&
+      this.atlas &&
+      this.frameTextures.size > 1 &&
+      this.frameNames.length > 1 &&
+      this.activePlaybackKey === playbackKey &&
+      this.lastAtlasJsonUrl === atlasJsonUrl &&
+      this.isTickerAttached &&
+      tickerStarted &&
+      this.sprite.texture &&
+      canvas?.parentElement === this.mountEl,
     );
   }
 
@@ -298,9 +330,7 @@ export class PixiAtlasPlayer {
   }
 
   private isTickerStarted(): boolean {
-    const ticker = this.app?.ticker as
-      | { started?: boolean; start?: () => void }
-      | undefined;
+    const ticker = this.app?.ticker as { started?: boolean; start?: () => void } | undefined;
     return Boolean(ticker?.started);
   }
 
@@ -339,8 +369,7 @@ export class PixiAtlasPlayer {
       2,
       Math.max(
         1,
-        opts.resolution ??
-          (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1),
+        opts.resolution ?? (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1),
       ),
     );
     await app.init({
@@ -382,6 +411,28 @@ export class PixiAtlasPlayer {
     host.style.border = 'none';
     host.style.boxShadow = 'none';
     host.replaceChildren(canvas);
+
+    // WebGL context loss blanks the sprite while the window/drag surface remains.
+    // Prevent default so the browser can restore, then request a full re-init.
+    this.contextLostHandler = (event: Event) => {
+      event.preventDefault();
+      this.contextLost = true;
+      try {
+        this.onContextLostCallback?.();
+      } catch {
+        /* host recovery is best-effort */
+      }
+    };
+    this.contextRestoredHandler = () => {
+      this.contextLost = false;
+      try {
+        this.onContextLostCallback?.();
+      } catch {
+        /* host recovery is best-effort */
+      }
+    };
+    canvas.addEventListener('webglcontextlost', this.contextLostHandler, false);
+    canvas.addEventListener('webglcontextrestored', this.contextRestoredHandler, false);
 
     const sprite = new Sprite();
     sprite.roundPixels = true;
@@ -437,8 +488,8 @@ export class PixiAtlasPlayer {
    * Always unloads `lastImageUrl` plus any extra URLs passed by the caller.
    */
   async unloadCharacterCache(imageUrls: string[] = []): Promise<void> {
+    const ownedImageUrl = this.lastImageUrl;
     const urls = new Set<string>();
-    if (this.lastImageUrl) urls.add(this.lastImageUrl);
     for (const u of imageUrls) {
       if (u) urls.add(u);
     }
@@ -447,12 +498,12 @@ export class PixiAtlasPlayer {
     this.lastImageUrl = null;
     this.activePlaybackKey = null;
     this.activeFrameSignature = '';
+    if (ownedImageUrl) {
+      urls.delete(ownedImageUrl);
+      await releaseManagedAsset(ownedImageUrl);
+    }
     for (const url of urls) {
-      try {
-        await Assets.unload(url);
-      } catch {
-        /* ignore missing cache entries */
-      }
+      await unloadUnreferencedManagedAsset(url);
     }
   }
 
@@ -472,7 +523,6 @@ export class PixiAtlasPlayer {
 
     const gen = ++this.loadGeneration;
     const prevImageUrl = this.lastImageUrl;
-    const prevBase = this.baseTexture;
     const prevFrames = new Map(this.frameTextures);
 
     // CRITICAL: do NOT clear current textures until the new atlas is ready.
@@ -484,19 +534,8 @@ export class PixiAtlasPlayer {
     if (gen !== this.loadGeneration || this.destroyed) return;
 
     // Load full sheet; prefer non-premultiplied alpha so cream stays bright on dark UI.
-    const base = (await Assets.load({
-      src: imageUrl,
-      data: {
-        scaleMode: SCALE_MODES.NEAREST,
-        alphaMode: 'no-premultiply-alpha',
-      },
-    })) as Texture;
+    const base = (await Assets.load(imageUrl)) as Texture;
     if (gen !== this.loadGeneration || this.destroyed) {
-      try {
-        base.destroy(true);
-      } catch {
-        /* ignore */
-      }
       return;
     }
 
@@ -513,6 +552,7 @@ export class PixiAtlasPlayer {
     }
 
     // Atomic swap — old sprite keeps drawing until this point.
+    if (prevImageUrl !== imageUrl) retainManagedAsset(imageUrl);
     this.baseTexture = base;
     this.lastAtlasJsonUrl = atlasUrl;
     this.lastImageUrl = imageUrl;
@@ -530,19 +570,8 @@ export class PixiAtlasPlayer {
         /* ignore */
       }
     }
-    if (prevBase && prevBase !== base) {
-      try {
-        prevBase.destroy(true);
-      } catch {
-        /* ignore */
-      }
-    }
     if (prevImageUrl && prevImageUrl !== imageUrl) {
-      try {
-        await Assets.unload(prevImageUrl);
-      } catch {
-        /* ignore */
-      }
+      await releaseManagedAsset(prevImageUrl);
     }
   }
 
@@ -572,14 +601,7 @@ export class PixiAtlasPlayer {
       }
     }
     this.frameTextures.clear();
-    if (this.baseTexture) {
-      try {
-        this.baseTexture.destroy(true);
-      } catch {
-        /* ignore */
-      }
-      this.baseTexture = null;
-    }
+    this.baseTexture = null;
   }
 
   setAnimation(meta: AnimPlaybackMeta, onComplete?: () => void): void {
@@ -639,6 +661,69 @@ export class PixiAtlasPlayer {
     this.done = false;
     this.manuallyPaused = false;
     this.applyCurrentFrame();
+  }
+
+  /**
+   * Register a host-side recovery callback for WebGL context loss/restore.
+   * The host should dispose this player and re-init + reload the current anim.
+   */
+  setContextLostHandler(handler: (() => void) | null): void {
+    this.onContextLostCallback = handler;
+  }
+
+  /** True when the WebGL context is known-lost or the canvas is detached. */
+  isContextUnhealthy(): boolean {
+    if (this.destroyed || this.contextLost) return true;
+    if (!this.app || !this.sprite) return true;
+    const canvas = this.app.canvas as HTMLCanvasElement | undefined;
+    if (!canvas || !canvas.isConnected) return true;
+    try {
+      const gl = (
+        this.app.renderer as unknown as { gl?: WebGLRenderingContext | WebGL2RenderingContext }
+      ).gl;
+      if (gl && typeof gl.isContextLost === 'function' && gl.isContextLost()) {
+        this.contextLost = true;
+        return true;
+      }
+    } catch {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Soft recovery when the canvas is still valid: restart ticker, re-assert
+   * transparent clear, and re-apply the current frame so the sprite reappears.
+   * Returns false when a hard re-init is required.
+   */
+  ensureAliveRendering(): boolean {
+    if (this.destroyed) return false;
+    if (this.isContextUnhealthy()) return false;
+    if (!this.app || !this.sprite) return false;
+    try {
+      this.forceTransparentBackground(this.app);
+      if (!this.isTickerStarted()) {
+        try {
+          this.app.ticker.start();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (this.frameNames.length > 0) {
+        this.applyCurrentFrame();
+      }
+      // Nudge a single render so a paused/static frame is painted again.
+      try {
+        (this.app.renderer as unknown as { render?: (stage: unknown) => void }).render?.(
+          this.app.stage,
+        );
+      } catch {
+        /* ignore */
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -707,8 +792,12 @@ export class PixiAtlasPlayer {
       const ox = entry.spriteSourceSize.x;
       const oy = entry.spriteSourceSize.y;
       // With bottom-center anchor on the texture itself, apply trim offset in texture space.
-      this.sprite.x = Math.round(this.displaySize / 2 + (ox + entry.frame.w / 2 - entry.sourceSize.w / 2) * use);
-      this.sprite.y = Math.round(this.displaySize + (oy + entry.frame.h - entry.sourceSize.h) * use);
+      this.sprite.x = Math.round(
+        this.displaySize / 2 + (ox + entry.frame.w / 2 - entry.sourceSize.w / 2) * use,
+      );
+      this.sprite.y = Math.round(
+        this.displaySize + (oy + entry.frame.h - entry.sourceSize.h) * use,
+      );
     }
   }
 
@@ -725,12 +814,27 @@ export class PixiAtlasPlayer {
 
   dispose(): void {
     if (this.destroyed) return;
+    const ownedImageUrl = this.lastImageUrl;
     this.destroyed = true;
     this.onComplete = null;
+    this.onContextLostCallback = null;
     this.frameNames = [];
     this.atlas = null;
     this.lastAtlasJsonUrl = null;
     this.lastImageUrl = null;
+
+    if (this.app) {
+      const canvas = this.app.canvas as HTMLCanvasElement | undefined;
+      if (canvas && this.contextLostHandler) {
+        canvas.removeEventListener('webglcontextlost', this.contextLostHandler, false);
+      }
+      if (canvas && this.contextRestoredHandler) {
+        canvas.removeEventListener('webglcontextrestored', this.contextRestoredHandler, false);
+      }
+    }
+    this.contextLostHandler = null;
+    this.contextRestoredHandler = null;
+    this.contextLost = false;
 
     if (this.app && this.tickerFn) {
       try {
@@ -741,6 +845,7 @@ export class PixiAtlasPlayer {
     }
     this.tickerFn = null;
     this.clearFrameTextures();
+    if (ownedImageUrl) void releaseManagedAsset(ownedImageUrl);
 
     if (this.sprite) {
       try {
@@ -756,7 +861,7 @@ export class PixiAtlasPlayer {
       liveApplicationCount = Math.max(0, liveApplicationCount - 1);
       petPerfSetCanvasCount(liveApplicationCount);
       try {
-        this.app.destroy(true, { children: true, texture: true });
+        this.app.destroy(true, { children: true, texture: false, textureSource: false });
       } catch {
         /* ignore */
       }

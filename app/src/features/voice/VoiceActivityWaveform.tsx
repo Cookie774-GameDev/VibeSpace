@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { useAppForeground } from './useAppForeground';
+import { waveformBarWeight } from './voiceSignal';
 
 interface VoiceActivityWaveformProps {
   levelRef: React.RefObject<number>;
   active: boolean;
 }
 
-const BAR_COUNT = 36;
+const BAR_COUNT = 18;
 const ACTIVE_FRAME_MS = 48;
 
 function drawStaticWaveform(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
@@ -20,17 +21,18 @@ function drawStaticWaveform(context: CanvasRenderingContext2D, canvas: HTMLCanva
   }
 
   context.clearRect(0, 0, width, height);
-  const gap = 2.8 * scale;
+  const gap = 1.15 * scale;
   const barWidth = Math.max(1 * scale, (width - gap * (BAR_COUNT - 1)) / BAR_COUNT);
   const centerY = height / 2;
-  const idleHeight = 1.4 * scale;
-  context.fillStyle = 'rgba(249, 139, 8, 0.22)';
+  context.fillStyle = 'rgba(92, 233, 255, 0.92)';
 
   for (let index = 0; index < BAR_COUNT; index += 1) {
+    const envelope = waveformBarWeight(index, BAR_COUNT);
+    const amplitude = Math.max(1.2 * scale, envelope * height * 0.78);
     const x = index * (barWidth + gap);
-    const y = centerY - idleHeight / 2;
+    const y = centerY - amplitude / 2;
     context.beginPath();
-    context.roundRect(x, y, barWidth, idleHeight, barWidth / 2);
+    context.roundRect(x, y, barWidth, amplitude, barWidth / 2);
     context.fill();
   }
 }
@@ -69,6 +71,7 @@ export const VoiceActivityWaveform = React.memo(function VoiceActivityWaveform({
     let frame = 0;
     let disposed = false;
     let smoothedLevel = 0;
+    let peakLevel = 0;
     let lastDraw = 0;
     let gradient: CanvasGradient | null = null;
     let gradientHeight = 0;
@@ -93,36 +96,40 @@ export const VoiceActivityWaveform = React.memo(function VoiceActivityWaveform({
 
       context.clearRect(0, 0, width, height);
       const target = Math.min(1, Math.max(0, levelRef.current ?? 0));
-      smoothedLevel += (target - smoothedLevel) * (target > smoothedLevel ? 0.42 : 0.18);
+      smoothedLevel += (target - smoothedLevel) * (target > smoothedLevel ? 0.62 : 0.22);
+      if (target > peakLevel) peakLevel = target;
+      else peakLevel += (target - peakLevel) * 0.12;
 
-      const gap = 2.8 * scale;
+      const gap = 1.15 * scale;
       const barWidth = Math.max(1 * scale, (width - gap * (BAR_COUNT - 1)) / BAR_COUNT);
       const centerY = height / 2;
-      const phase = time * 0.005;
+      const live = 0.08 + Math.max(smoothedLevel, peakLevel * 0.72) * 0.9;
 
       if (!gradient || gradientHeight !== height) {
         gradient = context.createLinearGradient(0, 0, 0, height);
-        gradient.addColorStop(0, 'rgba(248, 174, 44, 0.58)');
-        gradient.addColorStop(0.5, 'rgba(249, 139, 8, 1)');
-        gradient.addColorStop(1, 'rgba(176, 82, 13, 0.58)');
+        gradient.addColorStop(0, 'rgba(158, 248, 255, 0.78)');
+        gradient.addColorStop(0.5, 'rgba(60, 231, 245, 1)');
+        gradient.addColorStop(1, 'rgba(18, 120, 140, 0.78)');
         gradientHeight = height;
       }
       context.fillStyle = gradient;
+      context.globalAlpha = 0.42 + live * 0.58;
 
       for (let index = 0; index < BAR_COUNT; index += 1) {
-        const normalized = index / Math.max(1, BAR_COUNT - 1);
-        const envelope = Math.sin(normalized * Math.PI);
-        const variation =
-          0.48 + Math.sin(phase + index * 0.68) * 0.2 + Math.sin(phase * 1.6 + index * 0.27) * 0.16;
-        const spike = index % 13 === 0 || index % 23 === 0 ? 1.55 : 1;
-        const amplitude =
-          (1.4 * scale + envelope * variation * smoothedLevel * height * 0.68) * spike;
+        const envelope = waveformBarWeight(index, BAR_COUNT);
+        const neighbor = waveformBarWeight(
+          (index + Math.round(smoothedLevel * 11)) % BAR_COUNT,
+          BAR_COUNT,
+        );
+        const spread = 0.52 + neighbor * 0.48 * Math.max(0.18, smoothedLevel);
+        const amplitude = Math.max(1.2 * scale, envelope * height * live * spread);
         const x = index * (barWidth + gap);
         const y = centerY - amplitude / 2;
         context.beginPath();
         context.roundRect(x, y, barWidth, amplitude, barWidth / 2);
         context.fill();
       }
+      context.globalAlpha = 1;
 
       frame = window.requestAnimationFrame(draw);
     };

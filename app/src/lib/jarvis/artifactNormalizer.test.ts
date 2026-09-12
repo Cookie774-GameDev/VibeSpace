@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import type { JarvisArtifactDraft, JarvisArtifactV1 } from './contracts/execution';
 import type { ArtifactPreDigestBinding } from './artifactReceipts';
 import { createArtifactReceiptAuthority } from './artifactReceipts';
@@ -8,6 +9,31 @@ import {
 } from './artifactNormalizer';
 
 const NOW = 1_786_200_100_000;
+const GITHUB_OAUTH_FIXTURE = syntheticCredentialFixture(
+  'gho_',
+  'SyntheticCredentialValue1234567890',
+);
+const GITHUB_TOKEN_FIXTURE = syntheticCredentialFixture('ghp_', 'abcdefghijklmnopqrstuvwxyz123456');
+const SLACK_BOT_FIXTURE = syntheticCredentialFixture(
+  'xoxb-',
+  '111111111111-222222222222-syntheticTokenValue',
+);
+const SLACK_USER_FIXTURE = syntheticCredentialFixture(
+  'xoxp-',
+  '111111111111-222222222222-syntheticTokenValue',
+);
+const GOOGLE_KEY_FIXTURE = syntheticCredentialFixture(
+  'AIza',
+  'SyntheticProviderCredential1234567890',
+);
+const GROQ_KEY_FIXTURE = syntheticCredentialFixture(
+  'gsk_',
+  'syntheticProviderCredential1234567890',
+);
+const SUPABASE_KEY_FIXTURE = syntheticCredentialFixture(
+  'sb_secret_',
+  'syntheticProviderCredential1234567890',
+);
 
 function binding(overrides: Partial<ArtifactPreDigestBinding> = {}): ArtifactPreDigestBinding {
   return {
@@ -191,7 +217,7 @@ describe('verified artifact normalizer', () => {
     await expect(
       canonicalizeArtifactDraftInternal({
         binding: binding({
-          requestId: 'jreq_gho_SyntheticCredentialValue1234567890',
+          requestId: `jreq_${GITHUB_OAUTH_FIXTURE}`,
         }),
         draft: draft(),
       }),
@@ -216,7 +242,7 @@ describe('verified artifact normalizer', () => {
   });
 
   it.each([
-    ['GitHub OAuth token', 'gho_SyntheticCredentialValue1234567890'],
+    ['GitHub OAuth token', GITHUB_OAUTH_FIXTURE],
     ['digitless raw credential', 'AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKl+/'],
   ])('rejects a secret-bearing plugin result reference: %s', async (_label, resultRef) => {
     await expect(
@@ -298,7 +324,7 @@ describe('verified artifact normalizer', () => {
       draft({
         artifact: {
           ...draft().artifact,
-          safeSummary: 'token=ghp_abcdefghijklmnopqrstuvwxyz123456',
+          safeSummary: `token=${GITHUB_TOKEN_FIXTURE}`,
         },
       }),
     ],
@@ -309,18 +335,18 @@ describe('verified artifact normalizer', () => {
   });
 
   it.each([
-    ['Slack bot token', 'xoxb-111111111111-222222222222-syntheticTokenValue'],
-    ['Slack user token', 'xoxp-111111111111-222222222222-syntheticTokenValue'],
-    ['GitHub OAuth token', 'gho_SyntheticCredentialValue1234567890'],
+    ['Slack bot token', SLACK_BOT_FIXTURE],
+    ['Slack user token', SLACK_USER_FIXTURE],
+    ['GitHub OAuth token', GITHUB_OAUTH_FIXTURE],
     ['raw AWS secret access key', 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AB'],
     ['raw AWS secret access key without digits', 'AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKl+/'],
     [
       'bearer JWT',
       'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.syntheticSignatureValue',
     ],
-    ['Google provider key', 'AIzaSyntheticProviderCredential1234567890'],
-    ['Groq provider key', 'gsk_syntheticProviderCredential1234567890'],
-    ['Supabase secret key', 'sb_secret_syntheticProviderCredential1234567890'],
+    ['Google provider key', GOOGLE_KEY_FIXTURE],
+    ['Groq provider key', GROQ_KEY_FIXTURE],
+    ['Supabase secret key', SUPABASE_KEY_FIXTURE],
     [
       'private key block',
       '-----BEGIN PRIVATE KEY-----\nc3ludGhldGljLW5vdC1hLXJlYWwta2V5\n-----END PRIVATE KEY-----',
@@ -370,7 +396,7 @@ describe('verified artifact normalizer', () => {
       draft({
         backing: {
           kind: 'uri',
-          uri: 'https://example.test/artifact?api_key=ghp_SyntheticCredentialValue1234567890',
+          uri: `https://example.test/artifact?api_key=${GITHUB_TOKEN_FIXTURE}`,
         },
       }),
     ],
@@ -382,7 +408,7 @@ describe('verified artifact normalizer', () => {
           sourceRefs: [
             {
               ...draft().artifact.sourceRefs[0]!,
-              label: 'token=ghp_SyntheticCredentialValue1234567890',
+              label: `token=${GITHUB_TOKEN_FIXTURE}`,
             },
           ],
         },
@@ -395,12 +421,12 @@ describe('verified artifact normalizer', () => {
   });
 
   it.each([
-    ['Slack token summary', 'Completed with xoxp-111111111111-222222222222-syntheticTokenValue'],
+    ['Slack token summary', `Completed with ${SLACK_USER_FIXTURE}`],
     [
       'bearer JWT summary',
       'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.syntheticSignatureValue',
     ],
-    ['provider-token summary', 'x-api-key: gsk_syntheticProviderCredential1234567890'],
+    ['provider-token summary', `x-api-key: ${GROQ_KEY_FIXTURE}`],
   ] as const)(
     'rejects synthetic %s instead of redact-and-save',
     async (_credentialClass, safeSummary) => {

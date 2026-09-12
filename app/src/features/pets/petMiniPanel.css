@@ -1,8 +1,17 @@
 .pet-mini-panel-shell {
+  --pet-paper: color-mix(in srgb, var(--background) 92%, #f5e7d4 8%);
+  --pet-paper-raised: color-mix(in srgb, var(--panel) 88%, #fff4e5 12%);
+  --pet-ink: color-mix(in srgb, var(--foreground) 88%, #3c2c23 12%);
+  --pet-copper: color-mix(in srgb, var(--accent-copper) 82%, #d77852 18%);
+  --pet-teal: #71a39b;
   container: pet-panel / size;
   min-width: 0;
   min-height: 0;
   isolation: isolate;
+  color: var(--pet-ink);
+  background:
+    linear-gradient(color-mix(in srgb, var(--pet-paper) 96%, transparent), var(--pet-paper)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.74' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.08'/%3E%3C/svg%3E");
 }
 
 [data-pet-panel-lifecycle='opening'],
@@ -56,6 +65,13 @@
 .pet-panel-top {
   flex: 0 0 auto;
   min-width: 0;
+  background:
+    radial-gradient(
+      circle at 20% 0%,
+      color-mix(in srgb, var(--pet-teal) 9%, transparent),
+      transparent 45%
+    ),
+    var(--pet-paper-raised);
   transition:
     background-color 140ms ease,
     border-color 140ms ease;
@@ -77,8 +93,36 @@
 
 .pet-panel-nav-button {
   min-width: 0;
-  flex: 1 1 0;
+  flex: 0 1 auto;
   justify-content: center;
+}
+
+.pet-panel-nav-button[aria-current='page'] {
+  color: var(--pet-copper);
+}
+
+.pet-panel-workspace {
+  background:
+    radial-gradient(circle at 8% 10%, rgb(255 255 255 / 12%), transparent 30%),
+    radial-gradient(
+      circle at 92% 82%,
+      color-mix(in srgb, var(--pet-copper) 6%, transparent),
+      transparent 30%
+    );
+}
+
+.pet-panel-surface-frame,
+.pet-chat-canvas {
+  background: color-mix(in srgb, var(--pet-paper-raised) 92%, transparent);
+}
+
+.pet-chat-tab-strip {
+  scrollbar-color: color-mix(in srgb, var(--pet-copper) 45%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.pet-chat-rename-input::selection {
+  background: color-mix(in srgb, var(--pet-teal) 28%, transparent);
 }
 
 .pet-panel-nav-label,
@@ -89,51 +133,332 @@
 }
 
 [data-pet-mini-panel='true'] [data-pet-chat-surface='true'],
-[data-pet-mini-panel='true'] [data-pet-terminal-surface='true'],
-[data-pet-mini-panel='true'] [data-pet-voice-surface='true'] {
+[data-pet-mini-panel='true'] [data-pet-terminal-surface='true'] {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-[data-pet-mini-panel='true'] [data-pet-chat-message-list],
-[data-pet-mini-panel='true'] [data-pet-voice-transcript],
+[data-pet-mini-panel='true'] [data-tour='chat-thread'],
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'],
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'],
 [data-pet-mini-panel='true'] [data-testid='pet-activity'] {
   overflow-wrap: anywhere;
 }
 
+/* Continuous scale: set by PetMiniPanel --pet-ui-scale (0.62–1). */
+[data-pet-mini-panel='true'] {
+  --pet-space-1: calc(0.25rem * var(--pet-ui-scale, 1));
+  --pet-space-2: calc(0.5rem * var(--pet-ui-scale, 1));
+  --pet-control-h: calc(1.65rem * var(--pet-ui-scale, 1));
+  --pet-control-h-sm: calc(1.4rem * var(--pet-ui-scale, 1));
+  --pet-font: calc(0.8125rem * var(--pet-ui-scale, 1));
+  --pet-font-sm: calc(0.7rem * var(--pet-ui-scale, 1));
+  --pet-icon: calc(0.85rem * var(--pet-ui-scale, 1));
+  /* Composer input + "Message Jarvis…" placeholder track panel size. */
+  --pet-composer-font: calc(0.8125rem * var(--pet-ui-scale, 1));
+  --pet-composer-min-h: calc(2rem * var(--pet-ui-scale, 1));
+  /* Message bubbles (YOU / Jarvis / AI) — matches Tailwind type ladder × scale */
+  --pet-msg-body: calc(13px * var(--pet-ui-scale, 1));
+  --pet-msg-secondary: calc(12px * var(--pet-ui-scale, 1));
+  --pet-msg-metadata: calc(11px * var(--pet-ui-scale, 1));
+  --pet-msg-strong: calc(14px * var(--pet-ui-scale, 1));
+  --pet-msg-lh-body: calc(20px * var(--pet-ui-scale, 1));
+  --pet-msg-lh-meta: calc(14px * var(--pet-ui-scale, 1));
+  font-size: var(--pet-font);
+}
+
+[data-pet-mini-panel='true'] .pet-panel-header-row {
+  min-height: calc(2rem * var(--pet-ui-scale, 1));
+  padding-block: var(--pet-space-1);
+  gap: var(--pet-space-1);
+}
+
+[data-pet-mini-panel='true'] .pet-panel-nav-button {
+  height: var(--pet-control-h);
+  font-size: var(--pet-font-sm);
+  padding-inline: calc(0.45rem * var(--pet-ui-scale, 1));
+}
+
+[data-pet-mini-panel='true'] .pet-panel-nav-button svg,
+[data-pet-mini-panel='true'] .pet-panel-header-row button svg {
+  width: var(--pet-icon) !important;
+  height: var(--pet-icon) !important;
+}
+
+[data-pet-mini-panel='true'] .pet-panel-workspace {
+  padding: calc(0.2rem * var(--pet-ui-scale, 1));
+}
+
+[data-pet-mini-panel='true'] [data-pet-chat-surface='true'],
+[data-pet-mini-panel='true'] [data-pet-terminal-surface='true'] {
+  gap: calc(0.35rem * var(--pet-ui-scale, 1));
+  padding: calc(0.2rem * var(--pet-ui-scale, 1));
+}
+
+[data-pet-mini-panel='true'] [data-pet-chat-toolbar='true'],
+[data-pet-mini-panel='true'] [data-pet-terminal-toolbar='true'] {
+  min-height: var(--pet-control-h-sm);
+  gap: calc(0.2rem * var(--pet-ui-scale, 1));
+}
+
+[data-pet-mini-panel='true'] [data-pet-chat-toolbar='true'] button,
+[data-pet-mini-panel='true'] [data-pet-terminal-toolbar='true'] button {
+  height: var(--pet-control-h-sm) !important;
+  min-height: var(--pet-control-h-sm) !important;
+  font-size: var(--pet-font-sm) !important;
+  padding-inline: calc(0.35rem * var(--pet-ui-scale, 1)) !important;
+}
+
+/* Main-app PaneToolbar chrome inside pet terminals tracks panel scale. */
+[data-pet-mini-panel='true'] [data-pet-terminal-chrome='true'] {
+  min-height: var(--pet-control-h-sm);
+  height: var(--pet-control-h-sm);
+  font-size: var(--pet-font-sm);
+}
+
+[data-pet-mini-panel='true'] [data-pet-terminal-chrome='true'] button:not([aria-label^='Confirm']) {
+  height: calc(1.35rem * var(--pet-ui-scale, 1)) !important;
+  width: calc(1.35rem * var(--pet-ui-scale, 1)) !important;
+  min-height: calc(1.35rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] [data-pet-terminal-chrome='true'] button[aria-label^='Confirm'] {
+  height: calc(1.25rem * var(--pet-ui-scale, 1)) !important;
+  width: auto !important;
+  min-width: unset !important;
+  font-size: calc(0.55rem * var(--pet-ui-scale, 1)) !important;
+  padding-inline: calc(0.35rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] [data-pet-terminal-chrome='true'] button svg {
+  width: calc(0.7rem * var(--pet-ui-scale, 1)) !important;
+  height: calc(0.7rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] [data-pet-terminal-stage='true'] {
+  /* Tabs only — never a multi-tile grid */
+  display: block;
+}
+
+/* Portaled slash / option pickers (rendered outside the panel DOM). */
+[data-pet-scaled-picker='true'] {
+  font-size: calc(0.7rem * var(--pet-ui-scale, 1)) !important;
+}
+
+/* Composer shell + "Message Jarvis…" placeholder follow panel scale. */
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] {
+  font-size: var(--pet-composer-font) !important;
+}
+
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] > div {
+  padding: calc(0.35rem * var(--pet-ui-scale, 1)) calc(0.4rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] textarea,
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] textarea[data-composer-input='true'],
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] .text-body,
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] .text-secondary {
+  min-height: var(--pet-composer-min-h) !important;
+  font-size: var(--pet-composer-font) !important;
+  line-height: 1.35 !important;
+  padding: calc(0.35rem * var(--pet-ui-scale, 1)) calc(0.45rem * var(--pet-ui-scale, 1)) !important;
+}
+
+/* Placeholders need explicit rules — some engines don't inherit textarea font-size. */
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] textarea::placeholder,
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] textarea::-webkit-input-placeholder,
+[data-pet-mini-panel='true'] [data-surface='chat-composer'] textarea::-moz-placeholder {
+  font-size: var(--pet-composer-font) !important;
+  line-height: 1.35 !important;
+  opacity: 1;
+}
+
+/*
+ * Chat messages (YOU / Jarvis / AI body) must track panel scale.
+ * Tailwind type tokens are fixed px (body 13, secondary 12, metadata 11, ui-strong 14)
+ * so they override inheritance unless forced on the real thread surface.
+ */
+[data-pet-mini-panel='true'] [data-tour='chat-thread'],
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'],
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'],
+[data-pet-mini-panel='true'] [data-pet-chat-thread-host='true'] {
+  font-size: var(--pet-msg-body) !important;
+  line-height: var(--pet-msg-lh-body) !important;
+}
+
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .text-body,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] .text-body,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] .text-body {
+  font-size: var(--pet-msg-body) !important;
+  line-height: var(--pet-msg-lh-body) !important;
+}
+
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .text-secondary,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] .text-secondary,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] .text-secondary {
+  font-size: var(--pet-msg-secondary) !important;
+  line-height: calc(16px * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .text-ui-strong,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] .text-ui-strong,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] .text-ui-strong {
+  font-size: var(--pet-msg-strong) !important;
+  line-height: var(--pet-msg-lh-body) !important;
+}
+
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .text-metadata,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] .text-metadata,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] .text-metadata {
+  font-size: var(--pet-msg-metadata) !important;
+  line-height: var(--pet-msg-lh-meta) !important;
+}
+
+/* User + assistant bubble body (often only text-foreground, no type class). */
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .rounded-lg,
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .border-l,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] .rounded-lg,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] .border-l,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] .rounded-lg,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] .border-l {
+  font-size: var(--pet-msg-body) !important;
+  line-height: var(--pet-msg-lh-body) !important;
+}
+
+/* Markdown / prose inside AI replies */
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] p,
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] li,
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] span,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] p,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] li,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] p,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] li {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Message stack gaps + bubble padding densify with scale. */
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] {
+  gap: calc(0.65rem * var(--pet-ui-scale, 1)) !important;
+  padding-inline: calc(0.45rem * var(--pet-ui-scale, 1)) !important;
+  padding-block: calc(0.55rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .rounded-lg.bg-muted,
+[data-pet-mini-panel='true'] [data-sakura-surface='message-stack'] .rounded-lg.bg-muted {
+  padding: calc(0.4rem * var(--pet-ui-scale, 1)) calc(0.55rem * var(--pet-ui-scale, 1)) !important;
+}
+
+/* RUNNING / activity strip */
+[data-pet-mini-panel='true'] [data-tour='chat-thread'] .text-sm,
+[data-pet-mini-panel='true'] [data-pet-chat-message-list='true'] .text-sm {
+  font-size: var(--pet-msg-secondary) !important;
+}
+
+/* Always densify composer chrome inside the mini panel (any size). */
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] {
+  flex-wrap: nowrap !important;
+  gap: calc(0.15rem * var(--pet-ui-scale, 1)) !important;
+  min-height: calc(1.45rem * var(--pet-ui-scale, 1));
+  max-height: calc(1.75rem * var(--pet-ui-scale, 1));
+  padding: 0 0.15rem calc(0.2rem * var(--pet-ui-scale, 1)) !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+[data-pet-mini-panel='true'] [data-composer-toolbar='true']::-webkit-scrollbar {
+  display: none;
+}
+
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] > * {
+  flex: 0 0 auto;
+  max-height: calc(1.55rem * var(--pet-ui-scale, 1));
+}
+
+/* Model/mode/token selectors + labels track panel scale. */
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] button,
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] [role='combobox'],
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] [data-slot='select-trigger'] {
+  height: calc(1.45rem * var(--pet-ui-scale, 1)) !important;
+  min-height: calc(1.45rem * var(--pet-ui-scale, 1)) !important;
+  max-height: calc(1.45rem * var(--pet-ui-scale, 1)) !important;
+  max-width: calc(9.5rem * var(--pet-ui-scale, 1)) !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  padding-inline: calc(0.3rem * var(--pet-ui-scale, 1)) !important;
+  font-size: calc(0.625rem * var(--pet-ui-scale, 1)) !important;
+  line-height: 1 !important;
+}
+
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] button span,
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] .text-metadata,
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] .text-\[10px\] {
+  font-size: calc(0.625rem * var(--pet-ui-scale, 1)) !important;
+  line-height: 1 !important;
+}
+
+[data-pet-mini-panel='true'] [data-composer-toolbar='true'] button svg {
+  width: calc(0.7rem * var(--pet-ui-scale, 1)) !important;
+  height: calc(0.7rem * var(--pet-ui-scale, 1)) !important;
+}
+
+/* Chat tab + delete X scale with panel. */
+[data-pet-mini-panel='true'] [data-pet-chat-tab='true'] {
+  height: var(--pet-control-h-sm) !important;
+  max-width: calc(8.5rem * var(--pet-ui-scale, 1)) !important;
+  font-size: var(--pet-font-sm) !important;
+  gap: calc(0.15rem * var(--pet-ui-scale, 1));
+}
+
+[data-pet-mini-panel='true'] .pet-chat-tab-close {
+  width: calc(0.85rem * var(--pet-ui-scale, 1)) !important;
+  height: calc(0.85rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] .pet-chat-tab-close svg {
+  width: calc(0.55rem * var(--pet-ui-scale, 1)) !important;
+  height: calc(0.55rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] .pet-chat-delete-confirm-card {
+  max-width: min(16rem, 92%);
+  padding: calc(0.65rem * var(--pet-ui-scale, 1));
+  gap: calc(0.55rem * var(--pet-ui-scale, 1));
+  font-size: var(--pet-font-sm);
+}
+
+[data-pet-mini-panel='true'] .pet-chat-delete-confirm-card button {
+  height: calc(1.55rem * var(--pet-ui-scale, 1)) !important;
+  font-size: var(--pet-font-sm) !important;
+}
+
+/* Small panels: hide secondary labels only — keep --pet-ui-scale for text/controls. */
 @container pet-panel (max-width: 499px) or (max-height: 559px) {
-  .pet-panel-header-row {
-    padding: 0.45rem 0.55rem;
-    gap: 0.35rem;
+  .pet-panel-secondary-copy,
+  [data-pet-compact-label] {
+    display: none;
   }
 
-  .pet-panel-identity-icon {
-    width: 1.9rem;
-    height: 1.9rem;
-    border-radius: 0.6rem;
+  .pet-panel-header-row {
+    min-height: calc(1.85rem * var(--pet-ui-scale, 1));
+    padding: calc(0.12rem * var(--pet-ui-scale, 1)) calc(0.25rem * var(--pet-ui-scale, 1));
+    gap: calc(0.12rem * var(--pet-ui-scale, 1));
   }
 
   .pet-panel-nav {
-    gap: 0.2rem;
-    padding: 0.3rem 0.4rem;
-  }
-
-  .pet-panel-nav-button {
-    gap: 0.3rem;
-    padding: 0.35rem 0.45rem;
-    font-size: 0.78rem;
+    gap: calc(0.12rem * var(--pet-ui-scale, 1));
   }
 
   .pet-panel-workspace {
-    padding: 0.4rem;
+    padding: calc(0.12rem * var(--pet-ui-scale, 1));
   }
 
   [data-pet-mini-panel='true'] [data-pet-chat-surface='true'],
-  [data-pet-mini-panel='true'] [data-pet-terminal-surface='true'],
-  [data-pet-mini-panel='true'] [data-pet-voice-surface='true'] {
-    gap: 0.4rem;
-    padding: 0.35rem;
+  [data-pet-mini-panel='true'] [data-pet-terminal-surface='true'] {
+    gap: calc(0.18rem * var(--pet-ui-scale, 1));
+    padding: calc(0.12rem * var(--pet-ui-scale, 1));
   }
 }
 
@@ -147,17 +472,18 @@
   }
 
   .pet-panel-header-row {
-    min-height: 2.5rem;
-    padding: 0.3rem 0.4rem;
+    min-height: 2rem;
+    padding: 0.2rem 0.35rem;
   }
 
   .pet-panel-nav-button {
-    min-height: 2rem;
-    padding: 0.3rem;
+    min-height: 1.5rem;
+    height: 1.5rem;
+    padding: 0.2rem;
   }
 
   .pet-panel-workspace {
-    padding: 0.25rem;
+    padding: 0.2rem;
   }
 
   .pet-panel-surface-frame {
@@ -165,7 +491,7 @@
   }
 
   [data-pet-mini-panel='true'] button {
-    min-width: 1.9rem;
+    min-width: 1.5rem;
   }
 }
 
@@ -178,4 +504,201 @@
   .pet-panel-error-details {
     animation: none;
   }
+}
+
+/* Agentic console messages (YOU / answer text) track panel scale */
+[data-pet-mini-panel='true'] .agentic-console,
+[data-pet-mini-panel='true'] [data-agentic-console] {
+  font-size: var(--pet-msg-body) !important;
+}
+
+[data-pet-mini-panel='true'] .agentic-prompt-band__text {
+  font-size: var(--pet-msg-body) !important;
+  line-height: 1.55 !important;
+}
+
+[data-pet-mini-panel='true'] .agentic-answer__text,
+[data-pet-mini-panel='true'] .agentic-reasoning p {
+  font-size: var(--pet-msg-body) !important;
+  line-height: 1.6 !important;
+}
+
+[data-pet-mini-panel='true'] .agentic-session__title strong,
+[data-pet-mini-panel='true'] .agentic-prompt-band__meta,
+[data-pet-mini-panel='true'] .agentic-prompt-band__meta strong,
+[data-pet-mini-panel='true'] .agentic-answer__meta,
+[data-pet-mini-panel='true'] .agentic-session__title span,
+[data-pet-mini-panel='true'] .agentic-inline-action,
+[data-pet-mini-panel='true'] .agentic-history {
+  font-size: var(--pet-msg-metadata) !important;
+}
+
+[data-pet-mini-panel='true'] .agentic-session {
+  min-height: calc(40px * var(--pet-ui-scale, 1)) !important;
+  gap: calc(8px * var(--pet-ui-scale, 1)) !important;
+  padding: calc(6px * var(--pet-ui-scale, 1)) calc(10px * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] .agentic-prompt-band,
+[data-pet-mini-panel='true'] .agentic-answer {
+  padding: calc(8px * var(--pet-ui-scale, 1)) calc(10px * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] .agentic-transcript {
+  gap: calc(6px * var(--pet-ui-scale, 1)) !important;
+}
+/* ── Empty chat welcome (art + 4 starters) inside pet mini panel ── */
+[data-pet-mini-panel='true'] .warm-chat-welcome,
+[data-pet-mini-panel='true'] [data-pet-chat-welcome='true'] {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 4;
+  display: flex !important;
+  align-items: flex-start;
+  justify-content: center;
+  pointer-events: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: calc(8px * var(--pet-ui-scale, 1)) calc(10px * var(--pet-ui-scale, 1))
+    calc(12px * var(--pet-ui-scale, 1)) !important;
+  user-select: none;
+  background: transparent;
+}
+
+[data-pet-mini-panel='true'] .warm-chat-welcome__content {
+  width: min(100%, 100%);
+  max-width: 100%;
+  min-height: min-content;
+  margin-block: auto;
+  padding-block: calc(4px * var(--pet-ui-scale, 1));
+  text-align: center;
+  color: hsl(var(--foreground));
+  transform: none !important;
+  pointer-events: auto;
+}
+
+[data-pet-mini-panel='true'] .warm-chat-welcome__art {
+  display: block;
+  width: calc(120px * var(--pet-ui-scale, 1) + 40px) !important;
+  max-width: 55%;
+  height: auto !important;
+  margin: 0 auto calc(4px * var(--pet-ui-scale, 1)) !important;
+  object-fit: contain;
+  opacity: 1;
+}
+
+[data-pet-mini-panel='true'] .warm-chat-welcome h1 {
+  margin: 0 !important;
+  font-size: calc(16px * var(--pet-ui-scale, 1) + 4px) !important;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2 !important;
+  color: hsl(var(--foreground));
+}
+
+[data-pet-mini-panel='true'] .warm-chat-welcome__content > p {
+  margin: calc(4px * var(--pet-ui-scale, 1)) 0 calc(10px * var(--pet-ui-scale, 1)) !important;
+  font-size: calc(11px * var(--pet-ui-scale, 1) + 2px) !important;
+  line-height: 1.35 !important;
+  color: hsl(var(--muted-foreground));
+}
+
+[data-pet-mini-panel='true'] .warm-chat-welcome__prompts {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: calc(6px * var(--pet-ui-scale, 1) + 2px) !important;
+  width: 100%;
+  min-width: 0;
+  pointer-events: auto;
+}
+
+/* Wider panels can show all 4 in a row */
+@container pet-panel (min-width: 520px) {
+  [data-pet-mini-panel='true'] .warm-chat-welcome__prompts {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
+[data-pet-mini-panel='true'] [data-warm-quick-prompt] {
+  display: grid !important;
+  grid-template-columns: calc(22px * var(--pet-ui-scale, 1) + 8px) minmax(0, 1fr) !important;
+  align-items: center;
+  min-width: 0;
+  min-height: calc(44px * var(--pet-ui-scale, 1) + 8px) !important;
+  padding: calc(6px * var(--pet-ui-scale, 1)) calc(8px * var(--pet-ui-scale, 1)) !important;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(10px * var(--pet-ui-scale, 1) + 2px);
+  background: hsl(var(--elevated));
+  color: hsl(var(--foreground));
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.06);
+  gap: calc(4px * var(--pet-ui-scale, 1));
+}
+
+[data-pet-mini-panel='true'] [data-warm-quick-prompt] > svg {
+  width: calc(16px * var(--pet-ui-scale, 1) + 4px) !important;
+  height: calc(16px * var(--pet-ui-scale, 1) + 4px) !important;
+  color: hsl(var(--accent-copper));
+  stroke-width: 1.55;
+}
+
+[data-pet-mini-panel='true'] [data-warm-quick-prompt] strong {
+  display: block;
+  font-size: calc(10px * var(--pet-ui-scale, 1) + 2px) !important;
+  font-weight: 600;
+  line-height: 1.2 !important;
+}
+
+[data-pet-mini-panel='true'] [data-warm-quick-prompt] small {
+  display: block;
+  margin-top: 1px;
+  font-size: calc(9px * var(--pet-ui-scale, 1) + 1px) !important;
+  line-height: 1.25 !important;
+  color: hsl(var(--muted-foreground));
+}
+
+[data-pet-mini-panel='true'] [data-warm-quick-prompt] span {
+  min-width: 0;
+}
+
+[data-pet-mini-panel='true'] [data-warm-quick-prompt] strong,
+[data-pet-mini-panel='true'] [data-warm-quick-prompt] small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container pet-panel (max-width: 359px) {
+  [data-pet-mini-panel='true'] .warm-chat-welcome__prompts {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  [data-pet-mini-panel='true'] .warm-chat-welcome__art {
+    width: calc(96px * var(--pet-ui-scale, 1) + 24px) !important;
+  }
+}
+
+/* Hide the sparse ThreadHint when the full welcome is present */
+[data-pet-mini-panel='true']
+  [data-pet-chat-thread-host='true']:has([data-pet-chat-welcome='true'])
+  [data-sakura-surface='thread-empty'] {
+  display: none !important;
+}
+
+/* Message avatars + action strip (copy/branch) densify with panel */
+[data-pet-mini-panel='true'] [data-pet-message-avatar='true'] {
+  transform: scale(var(--pet-ui-scale, 1));
+  transform-origin: top center;
+}
+
+[data-pet-mini-panel='true'] [data-message-actions='true'] button {
+  height: calc(1.35rem * var(--pet-ui-scale, 1)) !important;
+  width: calc(1.35rem * var(--pet-ui-scale, 1)) !important;
+  min-height: calc(1.35rem * var(--pet-ui-scale, 1)) !important;
+}
+
+[data-pet-mini-panel='true'] [data-message-actions='true'] button svg {
+  width: calc(0.7rem * var(--pet-ui-scale, 1)) !important;
+  height: calc(0.7rem * var(--pet-ui-scale, 1)) !important;
 }

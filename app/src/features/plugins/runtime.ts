@@ -18,6 +18,7 @@ import {
 import type { PluginStore } from './store';
 import type { PluginHttpTest, PluginManifest, PluginTestResult } from './types';
 import { isConnectableStatus } from './types';
+import { PLUGIN_CONNECTION_ADAPTERS } from './connectionFramework';
 import { gmailArtifactDrafts, runGmailTool, testGmailConnection } from './gmailProvider';
 import {
   googleDriveArtifactDrafts,
@@ -39,7 +40,40 @@ import type { JarvisArtifactDraft } from '@/lib/jarvis/contracts';
 
 type CredentialMap = Record<string, string>;
 
+export type PluginAuthorizationStartResult =
+  | Readonly<{
+      ok: true;
+      state: 'awaiting_approval' | 'connected';
+      authorizationUrl?: string;
+      userCode?: string;
+      accountLabel?: string;
+    }>
+  | Readonly<{
+      ok: false;
+      error: string;
+      setupUrl?: string;
+    }>;
+
+/**
+ * Trusted provider boundary. Implementations own PKCE/device secrets and
+ * secure grant storage; the renderer receives only a token-free receipt.
+ */
+export interface PluginAuthorizationAuthority {
+  begin(input: {
+    accountId: string;
+    pluginId: string;
+    path: 'native_oauth_pkce' | 'hosted_oauth' | 'device_authorization' | 'app_installation';
+    scopes: readonly string[];
+  }): Promise<PluginAuthorizationStartResult>;
+  cancel(input: { accountId: string; pluginId: string }): Promise<void>;
+}
+
 export interface PluginManagementCapability {
+  beginAuthorization(input: {
+    accountId: string;
+    pluginId: string;
+  }): Promise<PluginAuthorizationStartResult>;
+  cancelAuthorization(input: { accountId: string; pluginId: string }): Promise<void>;
   saveCredential(input: {
     accountId: string;
     pluginId: string;
@@ -1235,6 +1269,7 @@ export function createAccountScopedPluginRuntime(input: {
   randomUUID: () => string;
   now: () => number;
   zapierGatewayFactory?: ZapierGatewayFactory;
+  authorization?: PluginAuthorizationAuthority;
 }): Readonly<{
   management: PluginManagementCapability;
   registeredTools: PreparedRegisteredPluginToolExecutor;
@@ -1440,6 +1475,135 @@ export function createAccountScopedPluginRuntime(input: {
   };
 
   const management: PluginManagementCapability = Object.freeze({
+    async beginAuthorization({
+      accountId,
+      pluginId,
+    }: {
+      accountId: string;
+      pluginId: string;
+    }): Promise<PluginAuthorizationStartResult> {
+      assertActiveAccount(accountId, input.activeAccountId);
+      const manifest = manifestFor(pluginId);
+      const adapter = PLUGIN_CONNECTION_ADAPTERS[manifest.id];
+      if (
+        !adapter ||
+        !['native_oauth_pkce', 'hosted_oauth', 'device_authorization', 'app_installation'].includes(
+          adapter.path,
+        )
+      ) {
+        return {
+          ok: false,
+          error: 'This plugin uses the manual credential connection flow.',
+          setupUrl: manifest.docsUrl,
+        };
+      }
+      if (!input.authorization) {
+        return {
+          ok: false,
+          error:
+            'Provider authorization is not configured in this VibeSpace build. A registered provider application and callback are required.',
+          setupUrl: adapter.documentationUrl,
+        };
+      }
+      input.connections.upsertConnection({
+        accountId,
+        pluginId: manifest.id,
+        state: 'connecting',
+        enabled: false,
+        enabledProjectIds: [],
+        configuredFields: [],
+        updatedAt: input.now(),
+      });
+      try {
+        const result = await input.authorization.begin({
+          accountId,
+          pluginId: manifest.id,
+          path: adapter.path as Parameters<PluginAuthorizationAuthority['begin']>[0]['path'],
+          scopes: adapter.scopes,
+        });
+        assertActiveAccount(accountId, input.activeAccountId);
+        if (!result.ok) {
+          input.connections.upsertConnection({
+            accountId,
+            pluginId: manifest.id,
+            state: 'error',
+            enabled: false,
+            enabledProjectIds: [],
+            error: result.error,
+            configuredFields: [],
+            updatedAt: input.now(),
+          });
+          return result;
+        }
+        let authorizationUrl: string | undefined;
+        if (result.authorizationUrl) {
+          const url = new URL(result.authorizationUrl);
+          if (
+            url.protocol !== 'https:' ||
+            url.username ||
+            url.password ||
+            url.hash ||
+            result.authorizationUrl.length > 8192 ||
+            ['access_token', 'refresh_token', 'id_token', 'client_secret'].some((key) =>
+              url.searchParams.has(key),
+            )
+          ) {
+            throw safeFailure('oauth_authorization_url_invalid');
+          }
+          authorizationUrl = url.toString();
+        }
+        const userCode =
+          result.userCode &&
+          result.userCode.trim() === result.userCode &&
+          result.userCode.length <= 128
+            ? result.userCode
+            : undefined;
+        if (result.userCode && !userCode) throw safeFailure('oauth_user_code_invalid');
+        const accountLabel =
+          result.accountLabel && result.accountLabel.length <= 256
+            ? result.accountLabel
+            : undefined;
+        const safeResult: PluginAuthorizationStartResult = Object.freeze({
+          ok: true,
+          state: result.state,
+          ...(authorizationUrl ? { authorizationUrl } : {}),
+          ...(userCode ? { userCode } : {}),
+          ...(accountLabel ? { accountLabel } : {}),
+        });
+        input.connections.upsertConnection({
+          accountId,
+          pluginId: manifest.id,
+          state: result.state,
+          enabled: result.state === 'connected',
+          enabledProjectIds: [],
+          accountLabel,
+          configuredFields: manifest.fields.map((field) => field.id),
+          updatedAt: input.now(),
+        });
+        return safeResult;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Provider authorization failed.';
+        input.connections.upsertConnection({
+          accountId,
+          pluginId: manifest.id,
+          state: 'error',
+          enabled: false,
+          enabledProjectIds: [],
+          error: message,
+          configuredFields: [],
+          updatedAt: input.now(),
+        });
+        return { ok: false, error: message, setupUrl: adapter.documentationUrl };
+      }
+    },
+    async cancelAuthorization({ accountId, pluginId }: { accountId: string; pluginId: string }) {
+      assertActiveAccount(accountId, input.activeAccountId);
+      if (input.authorization) {
+        await input.authorization.cancel({ accountId, pluginId });
+      }
+      assertActiveAccount(accountId, input.activeAccountId);
+      input.connections.removeConnection(accountId, pluginId);
+    },
     async saveCredential({
       accountId,
       pluginId,

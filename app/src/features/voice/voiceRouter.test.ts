@@ -16,6 +16,7 @@ const h = vi.hoisted(() => {
     ttsStop: vi.fn(),
     endSession: vi.fn(),
     requestCancellation: vi.fn(async () => ({ kind: 'authority_revoked_before_intent' as const })),
+    ensureJarvisReady: vi.fn(async () => false),
     resolveSpeak() {
       const resolve = speakResolve;
       speakResolve = null;
@@ -28,7 +29,7 @@ vi.mock('./speechSynthesis', () => ({
   isSpeechSynthesisSupported: () => true,
   speakText: h.speakText,
   stopSpeech: h.stopSpeech,
-  VOICE_PREVIEW_TEXT: 'preview phrase',
+  VOICE_PREVIEW_TEXT: 'Hi, what should we get to work on?',
   preloadSpeechVoices: vi.fn(async () => {}),
 }));
 
@@ -47,8 +48,8 @@ vi.mock('./providers/deepgramTts', () => ({
   deepgramTtsProvider: { isAvailable: vi.fn(async () => false) },
 }));
 
-vi.mock('./providers/kokoroLocal', () => ({
-  kokoroLocalProvider: {
+vi.mock('./providers/jarvisHighLocal', () => ({
+  jarvisHighLocalProvider: {
     isAvailable: vi.fn(async () => false),
     stop: vi.fn(),
     warmup: vi.fn(async () => {}),
@@ -57,7 +58,7 @@ vi.mock('./providers/kokoroLocal', () => ({
 
 vi.mock('./modelManager', () => ({
   ModelManager: {
-    ensureKokoroReady: vi.fn(async () => false),
+    ensureJarvisReady: h.ensureJarvisReady,
     status: vi.fn(async () => ({ ready: false })),
   },
 }));
@@ -110,6 +111,23 @@ describe('voiceRouter preview cancellation', () => {
     useAuthStore.setState({ voiceEngine: 'system', voicePreset: 'jarvis-prime' });
     registerActiveStreamingVoiceSession(null);
     registerActiveVoiceTurnCancellation(null);
+    Object.defineProperty(globalThis, 'Audio', {
+      configurable: true,
+      value: vi.fn(function MockAudio(
+        this: {
+          src: string;
+          play: () => Promise<void>;
+          pause: () => void;
+          addEventListener: (name: string, callback: () => void) => void;
+        },
+        src: string,
+      ) {
+        this.src = src;
+        this.play = vi.fn(async () => {});
+        this.pause = vi.fn();
+        this.addEventListener = vi.fn();
+      }),
+    });
   });
 
   afterEach(() => {
@@ -148,6 +166,27 @@ describe('voiceRouter preview cancellation', () => {
     expect(h.speakText).toHaveBeenCalledTimes(2);
     expect(h.stopSpeech.mock.calls.length).toBeGreaterThan(stopCallsAfterFirst);
   });
+
+  it('plays the bundled exact-script Jarvis preview without model or cloud access', async () => {
+    await previewVoiceWithSettings('jarvis-prime', 'jarvis');
+
+    expect(Audio).toHaveBeenCalledWith('/voice/jarvis-high-preview.mp3');
+    expect(h.ensureJarvisReady).not.toHaveBeenCalled();
+    expect(h.testVoice).not.toHaveBeenCalled();
+    expect(h.speakText).not.toHaveBeenCalled();
+  });
+
+  it('previews Friday through the operating-system fallback with the exact script', async () => {
+    h.speakText.mockResolvedValue(undefined);
+
+    await previewVoiceWithSettings('aurora', 'jarvis');
+
+    expect(h.speakText).toHaveBeenCalledWith('Hi, what should we get to work on?', {
+      voicePreset: 'aurora',
+      engine: 'local',
+    });
+    expect(h.ensureJarvisReady).not.toHaveBeenCalled();
+  });
 });
 
 describe('voice module gate', () => {
@@ -156,7 +195,11 @@ describe('voice module gate', () => {
     voiceModalOpen = true;
     syncVoiceModuleOpenState(false);
     syncVoiceModuleOpenState(true);
-    useAuthStore.setState({ voiceEngine: 'system', voicePreset: 'jarvis-prime' });
+    useAuthStore.setState({
+      voiceEngine: 'system',
+      voicePreset: 'jarvis-prime',
+      speakReplies: false,
+    });
   });
 
   it('speakWithSettings does nothing when the voice module is closed', async () => {
@@ -181,6 +224,29 @@ describe('voice module gate', () => {
     await speakWithSettings('Hello from Jarvis.');
     expect(h.speakText).toHaveBeenCalledTimes(1);
   });
+
+  it('speakWithSettings runs for chat replies when speakReplies is on and the panel is closed', async () => {
+    voiceModalOpen = false;
+    syncVoiceModuleOpenState(false);
+    useAuthStore.setState({ speakReplies: true });
+    h.speakText.mockResolvedValue(undefined);
+    await speakWithSettings('Hello from Jarvis.');
+    expect(h.speakText).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes Jarvis output through Jarvis High even when Settings still lists another engine', async () => {
+    voiceModalOpen = true;
+    syncVoiceModuleOpenState(true);
+    useAuthStore.setState({
+      voiceEngine: 'system',
+      voicePreset: 'jarvis-prime',
+      speakReplies: false,
+    });
+    h.speakText.mockResolvedValue(undefined);
+    await speakWithSettings('Hello from Jarvis.');
+    expect(h.ensureJarvisReady).toHaveBeenCalled();
+    expect(h.speakText).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('voice module lifecycle', () => {
@@ -190,6 +256,7 @@ describe('voice module lifecycle', () => {
     voiceModalOpen = true;
     syncVoiceModuleOpenState(true);
     registerActiveStreamingVoiceSession(null);
+    useAuthStore.setState({ speakReplies: false });
   });
 
   afterEach(async () => {

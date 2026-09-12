@@ -8,9 +8,9 @@
  *     intercept `tauri://` schemes; web fallback opens in a new tab)
  *   - file                                   → window.open with `file://`
  *     (Tauri only; no-op in pure browser dev)
- *   - jarvis-action                          → emits a `jarvis:link-action`
- *     CustomEvent that features can listen for. We bake-in handlers for the
- *     common shapes (open settings tab, ambient mode, schedule, palette).
+ *   - jarvis-action                          → handles built-in actions or emits
+ *     a cancelable `jarvis:link-action` CustomEvent. A feature listener calls
+ *     `preventDefault()` to acknowledge that it handled the custom action.
  *
  * Always bumps `last_used_at` so the AmbientHome's "stale links" hint can
  * surface forgotten links over time.
@@ -19,6 +19,7 @@ import { quickLinkRepo } from '@/lib/db';
 import { toast } from '@/components/ui/toast';
 import { openExternal, isTauri } from '@/lib/tauri';
 import { useUIStore } from '@/stores/ui';
+import { useFullscreenStore } from '@/features/fullscreen/fullscreenStore';
 import type { QuickLink } from '@/types/quick-link';
 
 export interface LaunchResult {
@@ -108,18 +109,24 @@ export async function launchLink(link: QuickLink): Promise<LaunchResult> {
           ui.setAmbientActive(true);
           return { ok: true };
         case 'fullscreen':
-          ui.toggleChatFullscreen();
+          useFullscreenStore.getState().toggleFocus();
           return { ok: true };
         case 'voice':
           ui.toggleVoice();
           return { ok: true };
         default: {
+          const reason = 'No VibeSpace feature handled this action.';
           if (typeof window !== 'undefined') {
-            window.dispatchEvent(
-              new CustomEvent('jarvis:link-action', { detail: { action, link } }),
+            const handled = !window.dispatchEvent(
+              new CustomEvent('jarvis:link-action', {
+                cancelable: true,
+                detail: { action, link },
+              }),
             );
+            if (handled) return { ok: true };
           }
-          return { ok: true };
+          toast.warning('Action unavailable', reason);
+          return { ok: false, reason };
         }
       }
     }

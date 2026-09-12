@@ -26,6 +26,10 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
     label: 'main',
     listen: vi.fn(async () => () => {}),
+    setFullscreen: vi.fn(async () => undefined),
+    isFullscreen: vi.fn(async () => false),
+    onResized: vi.fn(async () => () => {}),
+    onFocusChanged: vi.fn(async () => () => {}),
   }),
 }));
 

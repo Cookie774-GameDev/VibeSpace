@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Avatar } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
+import { isMonochromeWorkbenchRequest, MonochromeWorkbench } from './MonochromeWorkbench';
 
 const WORKBENCH_PATH = path.resolve(
   process.cwd(),
@@ -44,18 +45,12 @@ const EXPECTED_STATES = [
   'screen-reader',
 ] as const;
 
-async function loadWorkbench() {
-  return import('./MonochromeWorkbench');
-}
-
 describe('MonoChrome development workbench', () => {
   it('exists as an owned workbench module', () => {
     expect(existsSync(WORKBENCH_PATH)).toBe(true);
   });
 
-  it('requires both a development build and the explicit query', async () => {
-    const { isMonochromeWorkbenchRequest, MonochromeWorkbench } = await loadWorkbench();
-
+  it('requires both a development build and the explicit query', () => {
     expect(
       isMonochromeWorkbenchRequest({
         devBuild: true,
@@ -113,7 +108,6 @@ describe('MonoChrome development workbench', () => {
   });
 
   it('renders every frozen shared primitive and approved surface from fixtures', async () => {
-    const { MonochromeWorkbench } = await loadWorkbench();
     const view = render(<MonochromeWorkbench devBuild search="?monochrome-workbench=1" />);
 
     for (const primitive of EXPECTED_PRIMITIVES) {
@@ -132,8 +126,7 @@ describe('MonoChrome development workbench', () => {
     }
   });
 
-  it('renders the synthetic operator avatar with a solid local treatment', async () => {
-    const { MonochromeWorkbench } = await loadWorkbench();
+  it('renders the synthetic operator avatar with a solid local treatment', () => {
     const view = render(<MonochromeWorkbench devBuild search="?monochrome-workbench=1" />);
     const avatar = view.container.querySelector<HTMLElement>(
       '[data-monochrome-primitive="Avatar"]',
@@ -153,8 +146,7 @@ describe('MonoChrome development workbench', () => {
     expect(defaultAvatar?.style.backgroundImage).toBe('');
   });
 
-  it('renders the loading fixture with a solid local treatment', async () => {
-    const { MonochromeWorkbench } = await loadWorkbench();
+  it('renders the loading fixture with a solid local treatment', () => {
     const view = render(<MonochromeWorkbench devBuild search="?monochrome-workbench=1" />);
     const skeleton = view.container.querySelector<HTMLElement>(
       '[data-monochrome-primitive="Skeleton"]',
@@ -165,8 +157,7 @@ describe('MonoChrome development workbench', () => {
     expect(skeleton?.style.backgroundColor).toBe('hsl(var(--muted))');
   });
 
-  it('removes the checked Switch thumb shadow only inside the development fixture', async () => {
-    const { MonochromeWorkbench } = await loadWorkbench();
+  it('removes the checked Switch thumb shadow only inside the development fixture', () => {
     render(<MonochromeWorkbench devBuild search="?monochrome-workbench=1" />);
 
     expect(screen.getByRole('switch', { name: 'Deterministic mode' }).className).toContain(
@@ -180,8 +171,7 @@ describe('MonoChrome development workbench', () => {
     ).toContain('shadow-lg');
   });
 
-  it('exposes the complete state vocabulary without removing native semantics', async () => {
-    const { MonochromeWorkbench } = await loadWorkbench();
+  it('exposes the complete state vocabulary without removing native semantics', () => {
     const view = render(<MonochromeWorkbench devBuild search="?monochrome-workbench=1" />);
 
     for (const state of EXPECTED_STATES) {
@@ -200,7 +190,6 @@ describe('MonoChrome development workbench', () => {
   });
 
   it('supports named keyboard-operable controls and visible interactive outcomes', async () => {
-    const { MonochromeWorkbench } = await loadWorkbench();
     render(<MonochromeWorkbench devBuild search="?monochrome-workbench=1" />);
 
     const checkbox = screen.getByRole('checkbox', { name: 'Include repository context' });
@@ -228,8 +217,7 @@ describe('MonoChrome development workbench', () => {
     expect(screen.getByRole('tabpanel', { name: 'Terminal' })).toBeTruthy();
   });
 
-  it('labels validation, disabled, loading, destructive, and empty states', async () => {
-    const { MonochromeWorkbench } = await loadWorkbench();
+  it('labels validation, disabled, loading, destructive, and empty states', () => {
     render(<MonochromeWorkbench devBuild search="?monochrome-workbench=1" />);
 
     const form = screen.getByRole('form', { name: 'Prompt run configuration' });

@@ -21,7 +21,9 @@ jobs:
   frontend:
     name: Frontend (typecheck + build + test)
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    # Full app vitest is ~11k tests and exceeds the old 15-minute job cap
+    # (GitHub cancelled the step at 15m15s / 15m18s on 5301ff91).
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
         with:

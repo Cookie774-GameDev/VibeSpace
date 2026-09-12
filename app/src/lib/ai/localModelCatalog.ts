@@ -7,9 +7,78 @@ export interface LocalCatalogModel {
   label: string;
   blurb: string;
   recommended?: boolean;
+  availability?: 'verified' | 'pending';
+  sourceUrl?: string;
+  license?: string;
+  quantizationOptions?: readonly string[];
+  contextTokens?: number;
+  approximateDownloadBytes?: number;
+  hardware?: Readonly<{
+    ram: string;
+    vram: string;
+    cpuOnly: string;
+    speedClass: string;
+  }>;
 }
 
 export const LOCAL_MODEL_CATALOG: readonly LocalCatalogModel[] = [
+  {
+    name: 'qwen3.6:35b-a3b',
+    displayName: 'Qwen3.6 35B-A3B',
+    size: '24 GB',
+    label: 'Large reasoning',
+    blurb: 'Sparse mixture-of-experts model for high-quality reasoning, vision, and tool use.',
+    availability: 'verified',
+    sourceUrl: 'https://ollama.com/library/qwen3.6:35b-a3b',
+    license: 'Apache-2.0',
+    quantizationOptions: ['Q4_K_M'],
+    contextTokens: 262_144,
+    approximateDownloadBytes: 24_000_000_000,
+    hardware: {
+      ram: '32 GB system RAM recommended',
+      vram: '24 GB VRAM for full GPU residency',
+      cpuOnly: 'Possible but slow; a modern high-memory CPU system is required',
+      speedClass: 'Heavy',
+    },
+  },
+  {
+    name: 'gpt-oss:20b',
+    displayName: 'GPT-OSS 20B',
+    size: '14 GB',
+    label: 'Agentic',
+    blurb: 'OpenAI open-weight model for reasoning, tool use, and agent workflows.',
+    availability: 'verified',
+    sourceUrl: 'https://ollama.com/library/gpt-oss:20b',
+    license: 'Apache-2.0',
+    quantizationOptions: ['MXFP4'],
+    contextTokens: 131_072,
+    approximateDownloadBytes: 14_000_000_000,
+    hardware: {
+      ram: '16 GB unified or system memory minimum',
+      vram: '16 GB VRAM or unified memory recommended',
+      cpuOnly: 'Supported on sufficient RAM, with lower generation speed',
+      speedClass: 'Medium-heavy',
+    },
+  },
+  {
+    name: 'qwen3.5:4b',
+    displayName: 'Qwen3.5 4B',
+    size: '3.4 GB',
+    label: 'Efficient reasoning',
+    blurb: 'Compact multimodal model for local chat, reasoning, coding, and tool use.',
+    availability: 'verified',
+    sourceUrl: 'https://ollama.com/library/qwen3.5:4b',
+    license: 'Apache-2.0',
+    quantizationOptions: ['Q4_K_M'],
+    contextTokens: 262_144,
+    approximateDownloadBytes: 3_400_000_000,
+    hardware: {
+      ram: '8 GB system RAM recommended',
+      vram: '4–6 GB VRAM recommended',
+      cpuOnly: 'Practical on a modern desktop or laptop CPU',
+      speedClass: 'Fast',
+    },
+  },
   {
     name: 'qwen3:0.6b',
     displayName: 'Qwen3 0.6B',
@@ -35,7 +104,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalCatalogModel[] = [
     name: 'llama3.2',
     displayName: 'Llama 3.2',
     size: '2.0 GB',
-    label: 'Recommended',
+    label: 'Balanced',
     blurb: 'Balanced 3B default with tool use and strong instruction following.',
     recommended: true,
   },
@@ -63,7 +132,10 @@ export const LOCAL_MODEL_CATALOG: readonly LocalCatalogModel[] = [
 ] as const;
 
 function normalizeCatalogName(name: string): string {
-  return name.trim().toLowerCase().replace(/:latest$/, '');
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/:latest$/, '');
 }
 
 export function catalogDisplayName(name: string): string {

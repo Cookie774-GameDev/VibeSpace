@@ -5,7 +5,11 @@ import { PageRouter } from './PageRouter';
 import { useUIStore } from '@/stores/ui';
 
 vi.mock('@/features/terminals/TerminalsPage', () => ({
-  TerminalsPage: () => <div data-testid="terminals-page">Terminals live surface</div>,
+  TerminalsPage: ({ routeVisible }: { routeVisible?: boolean }) => (
+    <div data-testid="terminals-page" data-route-visible={String(routeVisible)}>
+      Terminals live surface
+    </div>
+  ),
 }));
 
 vi.mock('@/features/schedule', () => ({
@@ -26,6 +30,7 @@ describe('PageRouter terminal preservation', () => {
     render(<PageRouter />);
 
     expect(await screen.findByTestId('terminals-page')).toBeTruthy();
+    expect(screen.getByTestId('terminals-page').getAttribute('data-route-visible')).toBe('true');
 
     await act(async () => {
       useUIStore.getState().setRoute('schedule');
@@ -33,6 +38,7 @@ describe('PageRouter terminal preservation', () => {
 
     expect(await screen.findByTestId('schedule-page')).toBeTruthy();
     expect(screen.getByTestId('terminals-page')).toBeTruthy();
+    expect(screen.getByTestId('terminals-page').getAttribute('data-route-visible')).toBe('false');
     expect(
       screen
         .getByTestId('terminals-page')
@@ -50,5 +56,6 @@ describe('PageRouter terminal preservation', () => {
         .closest('[data-terminal-route-cache]')
         ?.getAttribute('aria-hidden'),
     ).toBe('false');
+    expect(screen.getByTestId('terminals-page').getAttribute('data-route-visible')).toBe('true');
   });
 });

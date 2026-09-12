@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="presentation">
+  <defs>
+    <linearGradient id="wing" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#faf5e9"/>
+      <stop offset=".47" stop-color="#c5b4d5"/>
+      <stop offset="1" stop-color="#786695"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="16" flood-color="#392f46" flood-opacity=".2"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path fill="#f4b087" d="m360 126-48 142 48-28 48 28z"/>
+    <path fill="#d77c78" d="m360 126-94 126 94-12z"/>
+    <path fill="#eb9a84" d="m360 126 94 126-94-12z"/>
+    <path fill="#f3c3a2" d="m312 268-86-76 40 120 94-72z"/>
+    <path fill="#bc6f8f" d="m408 268 86-76-40 120-94-72z"/>
+    <path fill="#7fa4a2" d="m267 312-91-28 86 76 98-120z"/>
+    <path fill="#6e8e8d" d="m453 312 91-28-86 76-98-120z"/>
+    <path fill="url(#wing)" d="m212 108 126 56-42 76-120-2z"/>
+    <path fill="#9b89b5" d="m508 108-126 56 42 76 120-2z"/>
+    <path fill="#efe5d1" d="m338 164 22-112 22 112-22 76z"/>
+    <path fill="#66517f" d="m360 52 88 56-66 56z"/>
+  </g>
+  <ellipse cx="360" cy="378" rx="178" ry="18" fill="#6e8e8d" opacity=".22"/>
+</svg>

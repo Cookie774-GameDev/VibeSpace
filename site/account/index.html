@@ -3,16 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VibeSpace account and billing guide</title>
+    <title>VibeSpace Account Hub</title>
     <meta
       name="description"
-      content="How to review VibeSpace Access status and manage billing safely from the VibeSpace desktop app."
+      content="Securely review your VibeSpace account, plan, usage, and desktop status."
     />
-    <meta name="theme-color" content="#2E2823" />
+    <meta name="theme-color" content="#2e2823" />
     <link rel="icon" type="image/png" href="/images/vibespace-logo.png" />
     <link rel="stylesheet" href="/css/style.css" />
+    <link rel="stylesheet" href="/account/account.css" />
   </head>
-  <body class="info-body">
+  <body class="account-body">
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <header class="nav info-nav">
       <div class="nav-inner">
@@ -22,91 +23,158 @@
           ></a
         >
         <nav class="info-nav-links" aria-label="Primary">
-          <a href="/access/">Access pricing</a><a href="/download/">Download</a
-          ><a href="/terms/">Terms</a><a href="/privacy/">Privacy</a>
+          <a href="/access/">Access</a><a href="/download/">Download</a
+          ><a href="/privacy/">Privacy</a>
         </nav>
       </div>
     </header>
 
-    <main class="info-main" id="main-content">
-      <div class="info-hero compact">
-        <div class="kicker">Account guidance</div>
-        <h1>Your account lives in the desktop app.</h1>
+    <main class="account-main" id="main-content">
+      <section class="account-intro">
+        <p class="kicker">Account Hub</p>
+        <h1>Your VibeSpace, from the web.</h1>
         <p>
-          This public website does not provide a web login and cannot read your subscription or
-          entitlement status.
+          Review account-scoped plan and desktop metadata. Runtime control, terminal output, chat
+          messages, prompts, keys, and local paths never appear here.
         </p>
-        <div class="info-actions">
-          <a class="btn primary" href="/download/">Download VibeSpace</a
-          ><a class="btn ghost" href="/access/">Review Access pricing</a>
-        </div>
-      </div>
+        <p class="info-disclosure">
+          VibeSpace Access: $20/month after the introductory 30-day access trial. Optional
+          AI/voice/cloud plans are billed separately.
+        </p>
+      </section>
 
-      <p class="info-disclosure">
-        VibeSpace Access: $20/month after the introductory 30-day access trial. Optional
-        AI/voice/cloud plans are billed separately.
+      <p id="account-status" class="account-status" role="status" aria-live="polite">
+        Preparing secure sign-in…
       </p>
 
-      <section class="info-section" aria-labelledby="billing-guide">
-        <h2 id="billing-guide">Review or manage billing</h2>
-        <ol class="plain-list">
-          <li>Open the VibeSpace desktop app.</li>
-          <li>Use the verified account associated with your workspace.</li>
-          <li>Open <strong>Settings</strong>, then <strong>Billing &amp; Access</strong>.</li>
-          <li>
-            Refresh status there before starting checkout, retrying a payment, or assuming a
-            cancellation completed.
-          </li>
-          <li>
-            Use the billing-management action shown in the app to review renewal or cancellation
-            options.
-          </li>
-        </ol>
-        <p>
-          The desktop surface displays server-confirmed billing status. This static guide cannot
-          confirm a trial, payment, cancellation, refund, or entitlement.
-        </p>
-      </section>
+      <section id="auth-view" class="account-auth" hidden>
+        <div class="account-card">
+          <h2>Sign in</h2>
+          <p>Use the same VibeSpace identity as the desktop app.</p>
+          <form id="signin-form">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" required />
+            <label for="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+            <button class="btn primary" type="submit">Sign in</button>
+          </form>
+          <button id="email-code-button" class="account-link-button" type="button">
+            Email me a 6-digit code
+          </button>
+        </div>
 
-      <section class="info-section" aria-labelledby="results-guide">
-        <h2 id="results-guide">After checkout</h2>
-        <div class="info-grid">
-          <article class="info-card">
-            <h3>Returned from checkout</h3>
-            <p>
-              Go back to VibeSpace and refresh Billing &amp; Access. Access changes only after the
-              service confirms billing state.
-            </p>
-          </article>
-          <article class="info-card">
-            <h3>Checkout was canceled</h3>
-            <p>
-              No new subscription is confirmed by the cancel page. Return to the desktop app if you
-              want to review or retry.
-            </p>
-          </article>
+        <div class="account-card" id="otp-card" hidden>
+          <h2>Enter your code</h2>
+          <p>Codes expire in one hour. Never share a sign-in code.</p>
+          <form id="otp-form">
+            <label for="otp-code">6-digit email code</label>
+            <input
+              id="otp-code"
+              name="code"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              pattern="[0-9]{6}"
+              maxlength="6"
+              required
+            />
+            <button class="btn primary" type="submit">Verify code</button>
+          </form>
         </div>
       </section>
 
-      <section class="info-section" aria-labelledby="help-guide">
-        <h2 id="help-guide">Need help?</h2>
-        <p>
-          Use the support route shown inside the desktop billing surface so the request can be tied
-          safely to the correct account. For public software defects, you may use the
-          <a href="https://github.com/Cookie774-GameDev/VibeSpace/issues">GitHub issue tracker</a>,
-          but do not post secrets or personal information there.
-        </p>
+      <section id="hub-view" hidden>
+        <div class="account-toolbar">
+          <div>
+            <p class="kicker">Signed in as</p>
+            <h2 id="account-email">VibeSpace account</h2>
+          </div>
+          <div class="account-toolbar-actions">
+            <button id="refresh-button" class="btn ghost" type="button">Refresh</button>
+            <button id="signout-button" class="btn ghost" type="button">Sign out</button>
+          </div>
+        </div>
+
+        <div class="account-summary-grid">
+          <article class="account-card">
+            <p class="account-label">VibeSpace Access</p>
+            <strong id="access-value">Unavailable</strong>
+            <p id="access-detail">Waiting for server authority.</p>
+          </article>
+          <article class="account-card">
+            <p class="account-label">Current plan</p>
+            <strong id="plan-value">Unavailable</strong>
+            <p id="plan-detail">Waiting for server authority.</p>
+          </article>
+          <article class="account-card">
+            <p class="account-label">Company usage</p>
+            <strong id="usage-value">Unavailable</strong>
+            <p id="usage-detail">Waiting for server authority.</p>
+          </article>
+          <article class="account-card">
+            <p class="account-label">Connected devices</p>
+            <strong id="device-count">0</strong>
+            <p id="online-summary">No presence received yet.</p>
+          </article>
+          <article class="account-card">
+            <p class="account-label">Recent synchronization</p>
+            <strong id="sync-value">Not reported</strong>
+            <p>Desktop heartbeats age offline after two minutes.</p>
+          </article>
+        </div>
+
+        <section class="account-section" aria-labelledby="devices-heading">
+          <div class="account-section-heading">
+            <div>
+              <p class="kicker">Desktop presence</p>
+              <h2 id="devices-heading">Your connected devices</h2>
+            </div>
+          </div>
+          <div id="device-list" class="device-list"></div>
+        </section>
       </section>
     </main>
 
-    <footer class="info-footer">
-      <div class="info-footer-inner">
-        <span>&copy; 2026 VibeSpace</span>
-        <nav class="info-footer-links" aria-label="Legal and account">
-          <a href="/">Home</a><a href="/access/">Access</a><a href="/terms/">Terms</a
-          ><a href="/privacy/">Privacy</a>
-        </nav>
-      </div>
-    </footer>
+    <template id="device-template">
+      <article class="device-card">
+        <div class="device-heading">
+          <div>
+            <div class="device-title-row">
+              <h3 data-field="name"></h3>
+              <span data-field="state" class="device-state"></span>
+            </div>
+            <p data-field="last-seen"></p>
+          </div>
+          <button data-action="revoke" class="account-link-button" type="button">
+            Revoke presence
+          </button>
+        </div>
+        <div class="device-runtime"><span>Runtime</span><strong data-field="runtime"></strong></div>
+        <div class="device-columns">
+          <div>
+            <h4>Terminals</h4>
+            <ul data-list="terminals"></ul>
+          </div>
+          <div>
+            <h4>Chats</h4>
+            <ul data-list="chats"></ul>
+          </div>
+          <div>
+            <h4>Agent jobs</h4>
+            <ul data-list="agents"></ul>
+          </div>
+        </div>
+        <div class="device-footer">
+          <span data-field="background"></span><span data-field="usage"></span>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="/account/account.js"></script>
   </body>
 </html>

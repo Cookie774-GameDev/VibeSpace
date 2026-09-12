@@ -1,7 +1,8 @@
+use crate::harness::tool_gateway::{create_codex_context_lease, ToolGatewayState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -11,12 +12,24 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 const MIN_TIMEOUT_MS: u64 = 100;
-const MAX_TIMEOUT_MS: u64 = 300_000;
+const MAX_TIMEOUT_MS: u64 = 86_400_000; // App-lifetime persistent OpenCode server (24h); still cancellable.
 const MIN_OUTPUT_LIMIT_BYTES: usize = 1_024;
 const MAX_OUTPUT_LIMIT_BYTES: usize = 1_048_576;
-const PROVIDER_EXECUTABLE_NAMES: [&str; 6] =
-    ["codex", "claude", "gemini", "copilot", "qwen", "opencode"];
+const PROVIDER_EXECUTABLE_NAMES: [&str; 11] = [
+    "codex",
+    "claude",
+    "gemini",
+    "copilot",
+    "qwen",
+    "opencode",
+    "cursor-agent",
+    "cline",
+    "aider",
+    "goose",
+    "openai",
+];
 const KERNEL_SMOKE_EXECUTABLE_NAME: &str = "vibespace_kernel_smoke_cli";
+const CODEX_CONTEXT_TOKEN_ENV: &str = "VIBESPACE_CODEX_CONTEXT_TOKEN";
 static NEXT_EXECUTABLE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +42,7 @@ pub struct CliStartRequest {
     pub stdin: Option<String>,
     pub timeout_ms: u64,
     pub output_limit_bytes: usize,
+    pub tool_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +60,22 @@ pub struct CliProbeRequest {
     pub args: Vec<String>,
     pub timeout_ms: u64,
     pub output_limit_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAccountSnapshotRequest {
+    pub executable_id: String,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAccountSnapshot {
+    pub rate_limits: serde_json::Value,
+    pub token_usage: serde_json::Value,
+    pub updated_at: u64,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +115,7 @@ struct ExecutableFingerprint {
 struct TrustedExecutable {
     canonical_path: PathBuf,
     fingerprint: ExecutableFingerprint,
+    requested_name: Option<String>,
 }
 
 pub struct CliBridgeState {
@@ -160,6 +191,7 @@ impl CliBridgeState {
             TrustedExecutable {
                 canonical_path: canonical_path.clone(),
                 fingerprint,
+                requested_name: requested_name.clone(),
             },
         );
         Ok(DetectedExecutable {
@@ -170,6 +202,15 @@ impl CliBridgeState {
     }
 
     fn resolve_trusted_executable(&self, executable_id: &str) -> Result<PathBuf, String> {
+        Ok(self
+            .resolve_trusted_executable_entry(executable_id)?
+            .canonical_path)
+    }
+
+    fn resolve_trusted_executable_entry(
+        &self,
+        executable_id: &str,
+    ) -> Result<TrustedExecutable, String> {
         let trusted = self
             .trusted_executables
             .lock()
@@ -188,7 +229,11 @@ impl CliBridgeState {
         {
             return Err("trusted executable was replaced after discovery".to_string());
         }
-        Ok(canonical)
+        Ok(TrustedExecutable {
+            canonical_path: canonical,
+            fingerprint: trusted.fingerprint,
+            requested_name: trusted.requested_name,
+        })
     }
 
     fn register(&self, request_id: &str) -> Result<(CancellationFlag, ActiveRequestGuard), String> {
@@ -297,6 +342,24 @@ struct PreparedStartRequest {
     stdin: Option<Vec<u8>>,
     timeout_ms: u64,
     output_limit_bytes: usize,
+    tool_scope: bool,
+    secret_environment: Option<SecretEnvironment>,
+}
+
+#[derive(PartialEq, Eq)]
+struct SecretEnvironment {
+    name: &'static str,
+    value: String,
+}
+
+impl std::fmt::Debug for SecretEnvironment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SecretEnvironment")
+            .field("name", &self.name)
+            .field("value", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -421,6 +484,15 @@ fn validate_runtime_limits(timeout_ms: u64, output_limit_bytes: usize) -> Result
     Ok(())
 }
 
+fn validate_timeout(timeout_ms: u64) -> Result<(), String> {
+    if !(MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS).contains(&timeout_ms) {
+        return Err(format!(
+            "timeout must be between {MIN_TIMEOUT_MS} and {MAX_TIMEOUT_MS} milliseconds"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_request_id(request_id: &str) -> Result<(), String> {
     if request_id.is_empty()
         || request_id.len() > 128
@@ -454,7 +526,15 @@ fn prepare_start_request(
 ) -> Result<PreparedStartRequest, String> {
     validate_request_id(&request.request_id)?;
     validate_runtime_limits(request.timeout_ms, request.output_limit_bytes)?;
-    let executable_path = state.resolve_trusted_executable(&request.executable_id)?;
+    let trusted = state.resolve_trusted_executable_entry(&request.executable_id)?;
+    let tool_scope = match request.tool_scope.as_deref() {
+        None => false,
+        Some("vibespace_context") if trusted.requested_name.as_deref() == Some("codex") => true,
+        Some("vibespace_context") => {
+            return Err("Context Map tools require the discovered Codex executable".into())
+        }
+        Some(_) => return Err("CLI tool scope is unsupported".into()),
+    };
     let cwd = request
         .cwd
         .as_deref()
@@ -462,13 +542,103 @@ fn prepare_start_request(
         .transpose()?;
 
     Ok(PreparedStartRequest {
-        executable_path,
+        executable_path: trusted.canonical_path,
         args: request.args,
         cwd,
         stdin: request.stdin.map(String::into_bytes),
         timeout_ms: request.timeout_ms,
         output_limit_bytes: request.output_limit_bytes,
+        tool_scope,
+        secret_environment: None,
     })
+}
+
+fn configure_codex_context_invocation(
+    prepared: &mut PreparedStartRequest,
+    endpoint_url: &str,
+    token: &str,
+) -> Result<(), String> {
+    if !prepared.tool_scope {
+        return Err("Codex Context Map scope was not requested".into());
+    }
+    if prepared.stdin.is_none() || !valid_codex_context_base_args(&prepared.args) {
+        return Err("Codex Context Map invocation is not safely isolatable".into());
+    }
+    if !endpoint_url.starts_with("http://127.0.0.1:")
+        || endpoint_url.contains('"')
+        || token.len() < 32
+    {
+        return Err("Codex Context Map lease is invalid".into());
+    }
+    prepared.args.splice(
+        1..1,
+        [
+            "--ignore-user-config".to_string(),
+            "--ephemeral".to_string(),
+        ],
+    );
+    prepared.args.extend([
+        "--sandbox".into(),
+        "read-only".into(),
+        "-c".into(),
+        "approval_policy=\"never\"".into(),
+        "-c".into(),
+        format!("mcp_servers.vibespace_context.url=\"{endpoint_url}\""),
+        "-c".into(),
+        format!("mcp_servers.vibespace_context.bearer_token_env_var=\"{CODEX_CONTEXT_TOKEN_ENV}\""),
+        "-c".into(),
+        "mcp_servers.vibespace_context.enabled_tools=[\"vibespace_context\"]".into(),
+        "-c".into(),
+        "mcp_servers.vibespace_context.required=true".into(),
+        "-".into(),
+    ]);
+    prepared.secret_environment = Some(SecretEnvironment {
+        name: CODEX_CONTEXT_TOKEN_ENV,
+        value: token.to_string(),
+    });
+    Ok(())
+}
+
+fn valid_codex_context_base_args(args: &[String]) -> bool {
+    if args.get(0).map(String::as_str) != Some("exec")
+        || args.get(1).map(String::as_str) != Some("--json")
+    {
+        return false;
+    }
+    let mut index = 2;
+    if args.get(index).map(String::as_str) == Some("--cd") {
+        let Some(directory) = args.get(index + 1) else {
+            return false;
+        };
+        if directory.is_empty() {
+            return false;
+        }
+        index += 2;
+    }
+    if args.get(index).map(String::as_str) != Some("--model")
+        || !matches!(
+            args.get(index + 1).map(String::as_str),
+            Some("gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna")
+        )
+    {
+        return false;
+    }
+    index += 2;
+    if args.get(index).map(String::as_str) == Some("-c") {
+        if !matches!(
+            args.get(index + 1).map(String::as_str),
+            Some(
+                "model_reasoning_effort=\"low\""
+                    | "model_reasoning_effort=\"medium\""
+                    | "model_reasoning_effort=\"high\""
+                    | "model_reasoning_effort=\"xhigh\""
+            )
+        ) {
+            return false;
+        }
+        index += 2;
+    }
+    index == args.len()
 }
 
 fn prepare_probe_request(
@@ -969,6 +1139,102 @@ fn scan_search_paths(
     Ok(detections)
 }
 
+#[cfg(windows)]
+fn managed_executable_candidates_for_roots(
+    executable_names: &[String],
+    app_data: Option<&Path>,
+    local_app_data: Option<&Path>,
+    user_profile: Option<&Path>,
+) -> Vec<(String, PathBuf)> {
+    let mut candidates = Vec::new();
+    if executable_names.iter().any(|name| name == "codex") {
+        if let Some(root) = app_data {
+            candidates.push((
+                "codex".to_string(),
+                root.join("npm")
+                    .join("node_modules")
+                    .join("@openai")
+                    .join("codex")
+                    .join("node_modules")
+                    .join("@openai")
+                    .join("codex-win32-x64")
+                    .join("vendor")
+                    .join("x86_64-pc-windows-msvc")
+                    .join("bin")
+                    .join("codex.exe"),
+            ));
+        }
+        if let Some(root) = local_app_data {
+            candidates.push((
+                "codex".to_string(),
+                root.join("Programs")
+                    .join("OpenAI")
+                    .join("Codex")
+                    .join("bin")
+                    .join("codex.exe"),
+            ));
+        }
+        if let Some(root) = user_profile {
+            candidates.push((
+                "codex".to_string(),
+                root.join(".codex")
+                    .join("packages")
+                    .join("standalone")
+                    .join("current")
+                    .join("bin")
+                    .join("codex.exe"),
+            ));
+            candidates.push((
+                "codex".to_string(),
+                root.join(".bun")
+                    .join("install")
+                    .join("global")
+                    .join("node_modules")
+                    .join("@openai")
+                    .join("codex")
+                    .join("node_modules")
+                    .join("@openai")
+                    .join("codex-win32-x64")
+                    .join("vendor")
+                    .join("x86_64-pc-windows-msvc")
+                    .join("bin")
+                    .join("codex.exe"),
+            ));
+        }
+    }
+    candidates
+}
+
+#[cfg(windows)]
+fn scan_managed_executable_candidates(
+    state: &CliBridgeState,
+    executable_names: &[String],
+) -> Result<Vec<DetectedExecutable>, String> {
+    let app_data = std::env::var_os("APPDATA").map(PathBuf::from);
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let user_profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    let mut detections = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (name, candidate) in managed_executable_candidates_for_roots(
+        executable_names,
+        app_data.as_deref(),
+        local_app_data.as_deref(),
+        user_profile.as_deref(),
+    ) {
+        let Some(candidate_string) = candidate.to_str() else {
+            continue;
+        };
+        let Ok(canonical) = canonical_executable_path(candidate_string) else {
+            continue;
+        };
+        if seen.insert(canonical.clone()) {
+            detections.push(state.register_trusted_executable(canonical, Some(name))?);
+        }
+    }
+    Ok(detections)
+}
+
 fn path_extensions() -> Vec<String> {
     #[cfg(windows)]
     {
@@ -1014,6 +1280,17 @@ fn scan_with_state(
         &search_paths,
         &path_extensions(),
     )?;
+    #[cfg(windows)]
+    {
+        for detection in scan_managed_executable_candidates(state, &request.executable_names)? {
+            if !executables
+                .iter()
+                .any(|item| item.executable_path == detection.executable_path)
+            {
+                executables.push(detection);
+            }
+        }
+    }
 
     if let Some(custom_path) = request.custom_path {
         let canonical = validate_executable_path(&custom_path, request.custom_path_confirmed)?;
@@ -1034,6 +1311,135 @@ pub fn cli_bridge_scan(
     request: CliScanRequest,
 ) -> Result<CliDetectionResult, String> {
     scan_with_state(&state, request)
+}
+
+#[tauri::command]
+pub fn cli_bridge_codex_account_snapshot(
+    state: tauri::State<'_, CliBridgeState>,
+    request: CodexAccountSnapshotRequest,
+) -> Result<CodexAccountSnapshot, String> {
+    validate_timeout(request.timeout_ms)?;
+    let executable = state.resolve_trusted_executable(&request.executable_id)?;
+    let file_name = executable
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if file_name != "codex" && file_name != "codex.exe" {
+        return Err("account snapshot requires a trusted Codex executable".to_string());
+    }
+
+    let mut child = Command::new(&executable)
+        .arg("app-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "Codex app-server could not start".to_string())?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Codex app-server stdin is unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Codex app-server stdout is unavailable".to_string())?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(line) => {
+                    if sender.send(line).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    });
+    let interaction = (|| -> Result<(serde_json::Value, serde_json::Value), String> {
+        let write_request = |writer: &mut std::process::ChildStdin,
+                             value: serde_json::Value|
+         -> Result<(), String> {
+            serde_json::to_writer(&mut *writer, &value)
+                .map_err(|_| "Codex app-server request encoding failed".to_string())?;
+            writer
+                .write_all(b"\n")
+                .and_then(|_| writer.flush())
+                .map_err(|_| "Codex app-server request write failed".to_string())
+        };
+        write_request(
+            &mut stdin,
+            serde_json::json!({
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {
+                        "name": "vibespace",
+                        "title": "VibeSpace",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "capabilities": { "experimentalApi": true }
+                }
+            }),
+        )?;
+
+        let deadline = Instant::now() + Duration::from_millis(request.timeout_ms);
+        let receive_until = |wanted_id: u64| -> Result<serde_json::Value, String> {
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("Codex app-server request timed out".to_string());
+                }
+                let line = receiver
+                    .recv_timeout(remaining)
+                    .map_err(|_| "Codex app-server request timed out".to_string())?;
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                if value.get("id").and_then(serde_json::Value::as_u64) != Some(wanted_id) {
+                    continue;
+                }
+                if value.get("error").is_some() {
+                    return Err("Codex app-server returned a protocol error".to_string());
+                }
+                return value
+                    .get("result")
+                    .cloned()
+                    .ok_or_else(|| "Codex app-server result is missing".to_string());
+            }
+        };
+        receive_until(1)?;
+        write_request(
+            &mut stdin,
+            serde_json::json!({"method": "initialized", "params": {}}),
+        )?;
+        write_request(
+            &mut stdin,
+            serde_json::json!({"id": 2, "method": "account/rateLimits/read", "params": {}}),
+        )?;
+        let rate_limits = receive_until(2)?;
+        write_request(
+            &mut stdin,
+            serde_json::json!({"id": 3, "method": "account/usage/read", "params": {}}),
+        )?;
+        let token_usage = receive_until(3)?;
+        Ok((rate_limits, token_usage))
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    let (rate_limits, token_usage) = interaction?;
+
+    Ok(CodexAccountSnapshot {
+        rate_limits,
+        token_usage,
+        updated_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .min(u64::MAX as u128) as u64,
+        source: "codex-app-server".to_string(),
+    })
 }
 
 #[derive(Debug)]
@@ -1570,6 +1976,11 @@ fn run_supervised_process(
     if let Some(cwd) = &prepared.cwd {
         command.current_dir(cwd);
     }
+    if let Some(secret) = &prepared.secret_environment {
+        command.env_remove("OPENAI_API_KEY");
+        command.env_remove("OPENAI_KEY");
+        command.env(secret.name, &secret.value);
+    }
     let mut child = spawn_contained_process(&mut command)?;
     on_started();
 
@@ -1668,17 +2079,32 @@ fn status_event(
 pub fn cli_bridge_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, CliBridgeState>,
+    tool_gateway: tauri::State<'_, ToolGatewayState>,
     request: CliStartRequest,
 ) -> Result<(), String> {
     let request_id = request.request_id.clone();
     let output_limit = request.output_limit_bytes;
-    let prepared = prepare_start_request(&state, request)?;
+    let mut prepared = prepare_start_request(&state, request)?;
+    let context_lease = if prepared.tool_scope {
+        let directory = prepared
+            .cwd
+            .as_ref()
+            .and_then(|path| path.to_str())
+            .map(str::to_string);
+        let lease =
+            create_codex_context_lease(&app, &tool_gateway, &request_id, directory.as_deref())?;
+        configure_codex_context_invocation(&mut prepared, lease.url(), lease.token())?;
+        Some(lease)
+    } else {
+        None
+    };
     let (cancellation, active_guard) = state.register(&request_id)?;
     let thread_request_id = request_id.clone();
     thread::Builder::new()
         .name(format!("cli-bridge-{request_id}"))
         .spawn(move || {
             let _active_guard = active_guard;
+            let _context_lease = context_lease;
             let result = run_supervised_process(
                 prepared,
                 cancellation,
@@ -1800,8 +2226,128 @@ mod tests {
     }
 
     #[test]
+    fn codex_context_scope_requires_codex_identity_and_injects_only_isolated_http_mcp() {
+        let executable = fixture_path("codex.exe");
+        fs::write(&executable, b"codex fixture").unwrap();
+        let canonical = fs::canonicalize(&executable).unwrap();
+        let state = CliBridgeState::default();
+        let codex_id = state
+            .register_trusted_executable(canonical.clone(), Some("codex".into()))
+            .unwrap()
+            .executable_id;
+        let mut prepared = prepare_start_request(
+            &state,
+            CliStartRequest {
+                request_id: "codex-context-1".into(),
+                executable_id: codex_id,
+                args: vec![
+                    "exec".into(),
+                    "--json".into(),
+                    "--model".into(),
+                    "gpt-5.6-luna".into(),
+                    "-c".into(),
+                    "model_reasoning_effort=\"xhigh\"".into(),
+                ],
+                cwd: None,
+                stdin: Some("exact prompt".into()),
+                timeout_ms: 1_000,
+                output_limit_bytes: 1_024,
+                tool_scope: Some("vibespace_context".into()),
+            },
+        )
+        .unwrap();
+        let secret = "s".repeat(64);
+        configure_codex_context_invocation(
+            &mut prepared,
+            "http://127.0.0.1:43123/v1/codex-context/lease",
+            &secret,
+        )
+        .unwrap();
+
+        assert_eq!(
+            prepared.args,
+            vec![
+                "exec",
+                "--ignore-user-config",
+                "--ephemeral",
+                "--json",
+                "--model",
+                "gpt-5.6-luna",
+                "-c",
+                "model_reasoning_effort=\"xhigh\"",
+                "--sandbox",
+                "read-only",
+                "-c",
+                "approval_policy=\"never\"",
+                "-c",
+                "mcp_servers.vibespace_context.url=\"http://127.0.0.1:43123/v1/codex-context/lease\"",
+                "-c",
+                "mcp_servers.vibespace_context.bearer_token_env_var=\"VIBESPACE_CODEX_CONTEXT_TOKEN\"",
+                "-c",
+                "mcp_servers.vibespace_context.enabled_tools=[\"vibespace_context\"]",
+                "-c",
+                "mcp_servers.vibespace_context.required=true",
+                "-"
+            ]
+        );
+        assert!(!prepared.args.iter().any(|arg| arg.contains(&secret)));
+        assert_eq!(prepared.stdin, Some(b"exact prompt".to_vec()));
+        assert_eq!(
+            format!("{:?}", prepared.secret_environment),
+            "Some(SecretEnvironment { name: \"VIBESPACE_CODEX_CONTEXT_TOKEN\", value: \"[redacted]\" })"
+        );
+
+        let custom_state = CliBridgeState::default();
+        let custom_id = custom_state
+            .register_trusted_executable(canonical, None)
+            .unwrap()
+            .executable_id;
+        assert!(prepare_start_request(
+            &custom_state,
+            CliStartRequest {
+                request_id: "codex-context-2".into(),
+                executable_id: custom_id,
+                args: vec!["exec".into()],
+                cwd: None,
+                stdin: Some("prompt".into()),
+                timeout_ms: 1_000,
+                output_limit_bytes: 1_024,
+                tool_scope: Some("vibespace_context".into()),
+            }
+        )
+        .is_err());
+        prepared.args = vec![
+            "exec".into(),
+            "--json".into(),
+            "--model".into(),
+            "gpt-5.6-luna".into(),
+            "--dangerously-bypass-approvals-and-sandbox".into(),
+        ];
+        prepared.secret_environment = None;
+        assert!(configure_codex_context_invocation(
+            &mut prepared,
+            "http://127.0.0.1:43123/v1/codex-context/lease",
+            &secret,
+        )
+        .is_err());
+        let _ = fs::remove_file(executable);
+    }
+
+    #[test]
     fn cli_bridge_accepts_safe_executable_names_and_rejects_unsafe_names() {
-        for name in ["codex", "claude", "gemini", "copilot", "qwen", "opencode"] {
+        for name in [
+            "codex",
+            "claude",
+            "gemini",
+            "copilot",
+            "qwen",
+            "opencode",
+            "cursor-agent",
+            "cline",
+            "aider",
+            "goose",
+            "openai",
+        ] {
             assert!(validate_executable_name(name).is_ok(), "rejected {name:?}");
         }
 
@@ -1880,6 +2426,7 @@ mod tests {
                 stdin: Some(prompt.clone()),
                 timeout_ms: 1_000,
                 output_limit_bytes: 1_024,
+                tool_scope: None,
             },
         )
         .expect("valid request");
@@ -1892,9 +2439,10 @@ mod tests {
     #[test]
     fn cli_bridge_validates_timeout_output_and_request_id_bounds() {
         assert!(validate_runtime_limits(100, 1_024).is_ok());
-        assert!(validate_runtime_limits(300_000, 1_048_576).is_ok());
+        assert!(validate_runtime_limits(86_400_000, 1_048_576).is_ok());
+        assert!(validate_runtime_limits(86_400_001, 1_048_576).is_err());
         assert!(validate_runtime_limits(99, 1_024).is_err());
-        assert!(validate_runtime_limits(300_001, 1_024).is_err());
+        assert!(validate_runtime_limits(300_001, 1_024).is_ok());
         assert!(validate_runtime_limits(100, 1_023).is_err());
         assert!(validate_runtime_limits(100, 1_048_577).is_err());
 
@@ -2027,6 +2575,69 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn cli_bridge_resolves_the_official_codex_native_binary_beneath_an_npm_shim() {
+        let app_data = fixture_path("managed-codex-appdata");
+        let npm_root = app_data.join("npm");
+        let native_binary = npm_root
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("bin")
+            .join("codex.exe");
+        fs::create_dir_all(native_binary.parent().unwrap()).unwrap();
+        fs::write(npm_root.join("codex.cmd"), b"@echo off\nnode codex.js %*").unwrap();
+        fs::write(&native_binary, b"native fixture; never executed").unwrap();
+
+        let candidates = managed_executable_candidates_for_roots(
+            &["codex".to_string()],
+            Some(&app_data),
+            None,
+            None,
+        );
+
+        assert_eq!(candidates, vec![("codex".to_string(), native_binary)]);
+        assert!(!candidates[0].1.to_string_lossy().ends_with(".cmd"));
+        fs::remove_dir_all(app_data).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cli_bridge_includes_current_official_windows_standalone_codex_locations() {
+        let local_app_data = PathBuf::from(r"C:\Users\Test\AppData\Local");
+        let user_profile = PathBuf::from(r"C:\Users\Test");
+        let candidates = managed_executable_candidates_for_roots(
+            &["codex".to_string()],
+            None,
+            Some(&local_app_data),
+            Some(&user_profile),
+        );
+
+        assert!(candidates.iter().any(|(_, path)| {
+            path == &local_app_data
+                .join("Programs")
+                .join("OpenAI")
+                .join("Codex")
+                .join("bin")
+                .join("codex.exe")
+        }));
+        assert!(candidates.iter().any(|(_, path)| {
+            path == &user_profile
+                .join(".codex")
+                .join("packages")
+                .join("standalone")
+                .join("current")
+                .join("bin")
+                .join("codex.exe")
+        }));
+    }
+
     #[test]
     fn cli_bridge_scan_accepts_a_confirmed_canonical_custom_executable() {
         let executable = std::env::current_exe().expect("current test executable");
@@ -2114,6 +2725,7 @@ mod tests {
             stdin: None,
             timeout_ms: 1_000,
             output_limit_bytes: 1_024,
+            tool_scope: None,
         };
 
         assert!(prepare_probe_request(&state, probe(raw_path.clone())).is_err());
@@ -2326,6 +2938,7 @@ mod tests {
                 stdin: None,
                 timeout_ms: 10_000,
                 output_limit_bytes: 1_024,
+                tool_scope: None,
             },
         )
         .unwrap();
@@ -2356,6 +2969,7 @@ mod tests {
                 stdin: None,
                 timeout_ms: 10_000,
                 output_limit_bytes: 4_096,
+                tool_scope: None,
             },
         )
         .unwrap();
@@ -2409,6 +3023,7 @@ mod tests {
                 stdin: None,
                 timeout_ms: 10_000,
                 output_limit_bytes: 8_192,
+                tool_scope: None,
             },
         )
         .unwrap();
@@ -2458,6 +3073,8 @@ mod tests {
             stdin: None,
             timeout_ms: 1_000,
             output_limit_bytes: 1_024,
+            tool_scope: false,
+            secret_environment: None,
         };
         let mut started_count = 0;
 

@@ -25,6 +25,7 @@ import {
 import { cn } from '@/lib/utils';
 import { UsageCard } from './UsageCard';
 import { ContextInspectorCard } from './ContextInspectorCard';
+import { TokenOptimizationReceiptView } from '@/features/token-optimizer';
 
 function textForDisplay(text: string): string {
   if (!text.includes('```')) return text;
@@ -205,6 +206,8 @@ export interface MessagePartProps {
   chatId?: string;
   /** When true, prose renders with the flowing warm Hive gradient. */
   hiveWords?: boolean;
+  /** Keep user-pasted media compact while retaining an on-demand preview. */
+  compactAttachments?: boolean;
   /** Enables Make-with-Jarvis apply/push controls for the matching creator thread only. */
   creatorDraftKind?: JarvisCreatorKind;
 }
@@ -219,6 +222,7 @@ export function MessagePart({
   messageId,
   chatId,
   hiveWords,
+  compactAttachments,
   creatorDraftKind,
 }: MessagePartProps) {
   switch (part.kind) {
@@ -265,6 +269,10 @@ export function MessagePart({
 
     case 'usage_card': {
       return <UsageCard snapshots={part.snapshots} scope={part.scope} />;
+    }
+
+    case 'token_optimization_receipt': {
+      return <TokenOptimizationReceiptView receipt={part.receipt} usage={part.usage} />;
     }
 
     case 'context_inspector': {
@@ -355,6 +363,24 @@ export function MessagePart({
     }
 
     case 'image': {
+      if (compactAttachments) {
+        return (
+          <details className="max-w-sm rounded-md border border-border bg-elevated">
+            <summary className="cursor-pointer list-none px-2 py-1 text-secondary text-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                [Image{part.alt ? `: ${part.alt}` : ''}]
+              </span>
+            </summary>
+            <img
+              src={part.url}
+              alt={part.alt ?? ''}
+              className="block h-auto max-h-80 w-full object-contain"
+              loading="lazy"
+            />
+          </details>
+        );
+      }
       return (
         <div className="rounded-md overflow-hidden border border-border bg-elevated max-w-sm">
           <img

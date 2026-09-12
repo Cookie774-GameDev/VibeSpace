@@ -73,6 +73,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
       });
       setHistoryIndex((idx) => Math.min(idx + 1, 39));
     }
+    setLoadState('loading');
     setFrameKey((value) => value + 1);
   };
 
@@ -98,6 +99,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
       const normalized = normalizeBrowserUrl(url);
       setDraft(normalized);
       onUpdate({ settings: { ...panel.settings, url: normalized }, status: 'ready' });
+      setLoadState('loading');
       setFrameKey((value) => value + 1);
     } catch (cause) {
       toast.warning(
@@ -132,7 +134,8 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
     }
   };
 
-  const showFrame = policy && !policy.frameBlocked && loadState !== 'blocked';
+  const showFrame =
+    policy && !policy.frameBlocked && loadState !== 'blocked' && loadState !== 'idle';
 
   return (
     <div
@@ -176,7 +179,10 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
           size="icon-sm"
           variant="ghost"
           aria-label="Reload browser"
-          onClick={() => setFrameKey((value) => value + 1)}
+          onClick={() => {
+            setLoadState('loading');
+            setFrameKey((value) => value + 1);
+          }}
         >
           <RefreshCw />
         </Button>

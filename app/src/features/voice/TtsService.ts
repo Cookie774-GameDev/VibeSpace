@@ -7,7 +7,7 @@
  *   - stop / pause / resume / setProvider / setVoicePreset / getUsage /
  *     testVoice / getAvailableVoices / preload / warmup.
  *   - Provider selection with graceful fallback:
- *       cloud (openai/deepgram/elevenlabs) -> kokoro_local -> system_tts_fallback
+ *       cloud (openai/deepgram/elevenlabs) -> jarvis_local -> system_tts_fallback
  *   - Phrase cache for common short acknowledgements.
  *   - No duplicate playback, no hung audio, abortable at any time.
  *
@@ -22,7 +22,7 @@ import {
 } from './voicePlans';
 import type { VoiceProvider } from './providers/types';
 import { systemFallbackProvider } from './providers/systemFallback';
-import { kokoroLocalProvider } from './providers/kokoroLocal';
+import { jarvisHighLocalProvider } from './providers/jarvisHighLocal';
 import { deepgramTtsProvider } from './providers/deepgramTts';
 import { elevenlabsTtsProvider, openaiTtsProvider } from './providers/cloudTts';
 import { prepareForSpeech, type CleanupOptions } from './textCleanup';
@@ -55,10 +55,15 @@ export interface VoiceUsageSnapshot {
 
 export type TtsStatus = 'idle' | 'speaking' | 'paused';
 
-const CACHED_PHRASES = new Set(['Task complete.', 'Systems online.', 'Diagnostics complete.', "I'm ready."]);
+const CACHED_PHRASES = new Set([
+  'Task complete.',
+  'Systems online.',
+  'Diagnostics complete.',
+  "I'm ready.",
+]);
 
 const PROVIDERS: Record<VoiceProviderId, VoiceProvider> = {
-  kokoro_local: kokoroLocalProvider,
+  jarvis_local: jarvisHighLocalProvider,
   openai_tts: openaiTtsProvider,
   deepgram_tts: deepgramTtsProvider,
   elevenlabs_tts: elevenlabsTtsProvider,
@@ -69,7 +74,7 @@ type StatusListener = (status: TtsStatus) => void;
 type NoticeListener = (message: string) => void;
 
 class TtsServiceImpl {
-  private provider: VoiceProviderId = 'kokoro_local';
+  private provider: VoiceProviderId = 'jarvis_local';
   private preset: VoiceTtsPreset = DEFAULT_VOICE_TTS_PRESET;
   private status: TtsStatus = 'idle';
   private abort: AbortController | null = null;
@@ -127,7 +132,7 @@ class TtsServiceImpl {
   // ── ordered fallback chain for a requested provider ─────────────────────────
   private fallbackChain(requested: VoiceProviderId): VoiceProviderId[] {
     const chain: VoiceProviderId[] = [requested];
-    if (requested !== 'kokoro_local') chain.push('kokoro_local');
+    if (requested !== 'jarvis_local') chain.push('jarvis_local');
     if (requested !== 'system_tts_fallback') chain.push('system_tts_fallback');
     return chain;
   }
@@ -137,7 +142,7 @@ class TtsServiceImpl {
     if (this.warmed) return;
     this.warmed = true;
     try {
-      await kokoroLocalProvider.warmup?.();
+      await jarvisHighLocalProvider.warmup?.();
     } catch {
       /* best effort */
     }
@@ -229,7 +234,7 @@ class TtsServiceImpl {
 
   private notifyDowngrade(requested: VoiceProviderId, used: VoiceProviderId, err: unknown): void {
     const code = err instanceof Error ? err.message : '';
-    if (requested !== 'kokoro_local' && requested !== 'system_tts_fallback') {
+    if (requested !== 'jarvis_local' && requested !== 'system_tts_fallback') {
       if (code === 'quota_exceeded') this.notify(FALLBACK_MESSAGES.quotaExceeded);
       else this.notify(FALLBACK_MESSAGES.cloudFailure);
     } else if (used === 'system_tts_fallback') {

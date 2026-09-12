@@ -29,6 +29,6 @@ describe('AllAboutMe MonoChrome appearance', () => {
     // Meaningful product surface and copy are preserved.
     expect(screen.getByRole('heading', { name: 'All About Me' })).toBeTruthy();
     expect(screen.getByText(/60-question test/)).toBeTruthy();
-    expect(screen.getByText(/private personality profile/)).toBeTruthy();
+    expect(screen.getByText(/Private profile Jarvis uses/i)).toBeTruthy();
   });
 });

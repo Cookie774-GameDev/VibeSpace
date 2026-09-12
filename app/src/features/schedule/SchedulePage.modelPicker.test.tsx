@@ -48,6 +48,7 @@ vi.mock('./hooks', () => ({
 
 describe('SchedulePage Jarvis Action model picker', () => {
   beforeEach(() => {
+    window.localStorage.clear();
     createEvent.mockReset();
     createEvent.mockResolvedValue({});
     deleteEvent.mockReset();
@@ -73,7 +74,96 @@ describe('SchedulePage Jarvis Action model picker', () => {
   });
 
   afterEach(() => {
+    window.localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it('restores an unfinished event draft and clears it only after persistence succeeds', async () => {
+    window.localStorage.setItem(
+      'vibespace-schedule-draft-v1:workspace_1',
+      JSON.stringify({
+        schemaVersion: 1,
+        quick: '',
+        title: 'Recovered planning session',
+        startInput: '2026-08-10T09:00',
+        endInput: '2026-08-10T10:00',
+        allDay: false,
+        description: 'This draft survived an abrupt shutdown.',
+        reminderOffsets: [15],
+        scheduleMode: 'event',
+        jarvisRecurrence: 'once',
+        intervalAmount: 2,
+        intervalUnit: 'hours',
+        jarvisModelOptionId: '',
+      }),
+    );
+    let resolveCreate: ((value: unknown) => void) | undefined;
+    createEvent.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+
+    render(<SchedulePage />);
+
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe(
+      'Recovered planning session',
+    );
+    expect((screen.getByRole('textbox', { name: 'Notes' }) as HTMLTextAreaElement).value).toBe(
+      'This draft survived an abrupt shutdown.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Save event/i }));
+    await waitFor(() => expect(createEvent).toHaveBeenCalledOnce());
+    expect(window.localStorage.getItem('vibespace-schedule-draft-v1:workspace_1')).toBeTruthy();
+
+    await act(async () => resolveCreate?.({}));
+    await waitFor(() =>
+      expect(window.localStorage.getItem('vibespace-schedule-draft-v1:workspace_1')).toBeNull(),
+    );
+  });
+
+  it('rehydrates the selected workspace without copying another workspace draft', async () => {
+    const draftFor = (title: string) =>
+      JSON.stringify({
+        schemaVersion: 1,
+        quick: '',
+        title,
+        startInput: '2026-08-10T09:00',
+        endInput: '2026-08-10T10:00',
+        allDay: false,
+        description: '',
+        reminderOffsets: [15],
+        scheduleMode: 'event',
+        jarvisRecurrence: 'once',
+        intervalAmount: 2,
+        intervalUnit: 'hours',
+        jarvisModelOptionId: '',
+      });
+    window.localStorage.setItem(
+      'vibespace-schedule-draft-v1:workspace_1',
+      draftFor('Workspace one draft'),
+    );
+    window.localStorage.setItem(
+      'vibespace-schedule-draft-v1:workspace_2',
+      draftFor('Workspace two draft'),
+    );
+    render(<SchedulePage />);
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Workspace one draft');
+
+    act(() => {
+      useAuthStore.setState({ workspaceId: 'workspace_2' as WorkspaceId });
+    });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe(
+        'Workspace two draft',
+      ),
+    );
+    expect(
+      JSON.parse(window.localStorage.getItem('vibespace-schedule-draft-v1:workspace_2') ?? '{}')
+        .title,
+    ).toBe('Workspace two draft');
   });
 
   it('saves a Jarvis Action with the selected connected model', async () => {
@@ -83,13 +173,17 @@ describe('SchedulePage Jarvis Action model picker', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Jarvis Action$/i }));
     expect(screen.queryByLabelText('All day')).toBeNull();
     expect(screen.queryByText('Reminders')).toBeNull();
-    fireEvent.change(screen.getByLabelText('Jarvis action model'), {
-      target: { value: 'google:gemini-2.5-flash' },
-    });
-    fireEvent.change(screen.getByLabelText('Jarvis action title'), {
+    // Redundant natural-language "schedule request" field is gone in Action mode.
+    expect(screen.queryByLabelText(/schedule request/i)).toBeNull();
+    fireEvent.click(screen.getByLabelText(/action model/i));
+    // Prefer non-Lite Flash when multiple Gemini 2.5 Flash options appear.
+    const flashOptions = screen.getAllByRole('option', { name: /Gemini 2\.5 Flash/i });
+    const nonLite = flashOptions.find((el) => !/Lite/i.test(el.textContent ?? ''));
+    fireEvent.click(nonLite ?? flashOptions[0]!);
+    fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review release notes' },
     });
-    fireEvent.change(screen.getByLabelText('System prompt'), {
+    fireEvent.change(screen.getByLabelText(/instruction/i), {
       target: { value: 'Review the release notes before publishing.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Save Jarvis Action/i }));
@@ -139,10 +233,10 @@ describe('SchedulePage Jarvis Action model picker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Jarvis Action$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Daily$/i }));
-    fireEvent.change(screen.getByLabelText('Jarvis action title'), {
+    fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Football news' },
     });
-    fireEvent.change(screen.getByLabelText('System prompt'), {
+    fireEvent.change(screen.getByLabelText(/instruction/i), {
       target: { value: 'Give me the top football headlines.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Save Jarvis Action/i }));

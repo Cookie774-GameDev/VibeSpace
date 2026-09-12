@@ -1,0 +1,19 @@
+[project]
+name = "vibespace-model-foundry-worker"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "accelerate==1.8.1",
+  "peft==0.16.0",
+  "safetensors==0.5.3",
+  "torch==2.7.1",
+  "transformers==4.53.2",
+]
+
+[project.optional-dependencies]
+qlora = [
+  "bitsandbytes==0.46.1; platform_system != 'Darwin'",
+]
+
+[tool.uv]
+package = false

@@ -15,6 +15,7 @@
  */
 
 import * as React from 'react';
+import { matchesHotkey, resolveHotkey } from '@/lib/hotkeys';
 import { DevConsolePanel } from './DevConsolePanel';
 import { installPatchers } from './patchers';
 import { devConsole, useDevConsoleStore } from './store';
@@ -82,17 +83,13 @@ export function DevConsoleHost() {
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Mod+Shift+D — same modifier convention as the rest of the app
-      // (Mod = Cmd on macOS, Ctrl elsewhere). We don't go through
-      // useHotkey here because the dev console must work even when
-      // the rest of the hotkey system has crashed.
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+      // Live registry so Settings → Hotkeys rebinds apply immediately.
+      if (matchesHotkey(e, resolveHotkey('DEV_CONSOLE'))) {
         e.preventDefault();
         toggleOpen();
+        return;
       }
-      // F12 also opens / closes for parity with browser devtools.
-      if (e.key === 'F12') {
+      if (matchesHotkey(e, resolveHotkey('DEV_CONSOLE_F12'))) {
         e.preventDefault();
         toggleOpen();
       }

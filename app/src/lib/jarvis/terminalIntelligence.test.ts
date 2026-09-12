@@ -46,6 +46,24 @@ function execution(
   };
 }
 
+function processIdentity(
+  overrides: Partial<NonNullable<TerminalExecution['processIdentity']>> = {},
+): NonNullable<TerminalExecution['processIdentity']> {
+  return Object.freeze({
+    accountId: 'account-a',
+    projectId: 'project-a',
+    runId: 'run-a',
+    executionId: 'exec-1',
+    paneId: 'pane-1',
+    sessionId: 'pty-1',
+    processInstanceId: 'ptyproc-1',
+    pid: 4242,
+    processStartedAt: 1_723_456_789_000,
+    runtimeGeneration: 'runtime-1',
+    ...overrides,
+  });
+}
+
 function shellCommand(
   id: string,
   command: string,
@@ -66,6 +84,113 @@ afterEach(() => {
 });
 
 describe('createJarvisTerminalOperatingSnapshot', () => {
+  it('projects only the exact frozen canonical execution and native process identity', () => {
+    const snapshot = createJarvisTerminalOperatingSnapshot({
+      observedAt: 1_000,
+      transcripts: {
+        'pty-1': transcript('pty-1', 'pane-1'),
+      },
+      executions: {
+        'exec-1': execution('exec-1', 'pty-1', 'running', {
+          accountId: 'account-a',
+          runId: 'run-a',
+          processIdentity: processIdentity(),
+        }),
+      },
+      queue: [],
+    });
+
+    expect(snapshot.panes[0]).toMatchObject({
+      executionId: 'exec-1',
+      processInstanceId: 'ptyproc-1',
+      pid: 4242,
+      processStartedAt: 1_723_456_789_000,
+      runtimeGeneration: 'runtime-1',
+    });
+  });
+
+  it.each([
+    ['account', { accountId: 'account-other' }],
+    ['project', { projectId: 'project-other' }],
+    ['run', { runId: 'run-other' }],
+    ['execution', { executionId: 'exec-other' }],
+    ['pane', { paneId: 'pane-other' }],
+    ['session', { sessionId: 'pty-other' }],
+  ])('omits process identity on a %s authority mismatch', (_label, mismatch) => {
+    const snapshot = createJarvisTerminalOperatingSnapshot({
+      observedAt: 1_000,
+      transcripts: {
+        'pty-1': transcript('pty-1', 'pane-1'),
+      },
+      executions: {
+        'exec-1': execution('exec-1', 'pty-1', 'running', {
+          accountId: 'account-a',
+          runId: 'run-a',
+          processIdentity: processIdentity(mismatch),
+        }),
+      },
+      queue: [],
+    });
+
+    expect(snapshot.panes[0]).not.toHaveProperty('executionId');
+    expect(snapshot.panes[0]).not.toHaveProperty('processInstanceId');
+  });
+
+  it('omits missing, incomplete, mutable, or ambiguous process identity atomically', () => {
+    const base = processIdentity();
+    const cases: TerminalExecution[] = [
+      execution('exec-1', 'pty-1', 'running', {
+        accountId: 'account-a',
+        runId: 'run-a',
+      }),
+      execution('exec-1', 'pty-1', 'running', {
+        accountId: 'account-a',
+        runId: 'run-a',
+        processIdentity: { ...base },
+      }),
+      execution('exec-1', 'pty-1', 'running', {
+        accountId: 'account-a',
+        runId: 'run-a',
+        processIdentity: Object.freeze({ ...base, processInstanceId: '' }),
+      }),
+    ];
+
+    for (const candidate of cases) {
+      const snapshot = createJarvisTerminalOperatingSnapshot({
+        observedAt: 1_000,
+        transcripts: { 'pty-1': transcript('pty-1', 'pane-1') },
+        executions: { 'exec-1': candidate },
+        queue: [],
+      });
+      expect(snapshot.panes[0]).not.toHaveProperty('executionId');
+      expect(snapshot.panes[0]).not.toHaveProperty('processInstanceId');
+    }
+
+    const ambiguous = createJarvisTerminalOperatingSnapshot({
+      observedAt: 1_000,
+      transcripts: { 'pty-1': transcript('pty-1', 'pane-1') },
+      executions: {
+        'exec-1': execution('exec-1', 'pty-1', 'running', {
+          accountId: 'account-a',
+          runId: 'run-a',
+          processIdentity: base,
+        }),
+        'exec-2': execution('exec-2', 'pty-1', 'running', {
+          accountId: 'account-a',
+          runId: 'run-b',
+          processIdentity: processIdentity({
+            runId: 'run-b',
+            executionId: 'exec-2',
+            processInstanceId: 'ptyproc-2',
+          }),
+          updatedAt: 951,
+        }),
+      },
+      queue: [],
+    });
+    expect(ambiguous.panes[0]).not.toHaveProperty('executionId');
+    expect(ambiguous.panes[0]).not.toHaveProperty('processInstanceId');
+  });
   it('captures every available pane fact from existing sources with bounded redaction', () => {
     const snapshot = createJarvisTerminalOperatingSnapshot({
       observedAt: 1_000,
@@ -314,8 +439,30 @@ describe('terminal operating-intelligence live adapter and summary', () => {
     });
     useTerminalExecutionStore.setState({
       executions: {
-        active: execution('active', 'pty-active', 'running'),
-        other: execution('other', 'pty-other', 'running'),
+        active: execution('active', 'pty-active', 'running', {
+          accountId: 'account-a',
+          runId: 'run-active',
+          processIdentity: processIdentity({
+            projectId: 'project-active',
+            runId: 'run-active',
+            executionId: 'active',
+            paneId: 'pane-active',
+            sessionId: 'pty-active',
+            processInstanceId: 'ptyproc-active',
+          }),
+        }),
+        other: execution('other', 'pty-other', 'running', {
+          accountId: 'account-a',
+          runId: 'run-other',
+          processIdentity: processIdentity({
+            projectId: 'project-other',
+            runId: 'run-other',
+            executionId: 'other',
+            paneId: 'pane-other',
+            sessionId: 'pty-other',
+            processInstanceId: 'ptyproc-other',
+          }),
+        }),
       },
     });
     useTerminalCommandQueue.setState({
@@ -342,7 +489,12 @@ describe('terminal operating-intelligence live adapter and summary', () => {
 
     expect(snapshot.panes.map(({ paneId }) => paneId)).toEqual(['pane-active']);
     expect(snapshot.panes[0]?.queuedCommand).toBe('npm test');
+    expect(snapshot.panes[0]).toMatchObject({
+      executionId: 'active',
+      processInstanceId: 'ptyproc-active',
+    });
     expect(JSON.stringify(snapshot)).not.toContain('pane-other');
+    expect(JSON.stringify(snapshot)).not.toContain('ptyproc-other');
     expect(JSON.stringify(snapshot)).not.toContain('npm publish');
   });
 

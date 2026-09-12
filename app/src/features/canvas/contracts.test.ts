@@ -109,7 +109,18 @@ describe('createCanvasDocument', () => {
     expect(doc.thumbnail).toBeNull();
     expect(doc.layoutMode).toBe('page');
     expect(doc.camera).toEqual({ x: 0, y: 0, zoom: 1 });
-    expect(doc.background).toEqual({ kind: 'plain', color: '#ffffff' });
+    expect(doc.background).toEqual({
+      kind: 'plain',
+      color: '#ffffff',
+      wallpaper: {
+        id: 'none',
+        paused: false,
+        interactive: true,
+        intensity: 0.72,
+        brightness: 0.5,
+        quality: 'balanced',
+      },
+    });
     expect(doc.blocks).toEqual([]);
     expect(doc.pageOrder).toEqual([]);
     expect(doc.placements).toEqual([]);
@@ -164,6 +175,33 @@ describe('createCanvasDocument', () => {
     expect(() => baseDoc({ background: { kind: 'plain', color: 'white' } })).toThrow(
       CanvasValidationError,
     );
+  });
+
+  it('normalizes a Canvas-owned ambience wallpaper without sharing mutable state', () => {
+    const doc = baseDoc({
+      background: {
+        kind: 'dots',
+        color: '#101820',
+        wallpaper: {
+          id: 'warm-gradient',
+          paused: true,
+          interactive: false,
+          intensity: 5,
+          brightness: -1,
+          quality: 'high',
+        },
+      },
+    });
+
+    expect(doc.background.wallpaper).toEqual({
+      id: 'warm-gradient',
+      paused: true,
+      interactive: false,
+      intensity: 1,
+      brightness: 0,
+      quality: 'high',
+    });
+    expect(Object.isFrozen(doc.background.wallpaper)).toBe(true);
   });
 
   it('rejects control characters and overlong titles', () => {
@@ -692,7 +730,11 @@ describe('document mutations', () => {
   it('updates background, archive, and deletion state', () => {
     const doc = baseDoc();
     const bg = withBackground(doc, { kind: 'grid', color: '#112233' }, T1);
-    expect(bg.background).toEqual({ kind: 'grid', color: '#112233' });
+    expect(bg.background).toEqual({
+      kind: 'grid',
+      color: '#112233',
+      wallpaper: doc.background.wallpaper,
+    });
     const archived = withArchived(doc, true, T1);
     expect(archived.archivedAt).toBe(T1);
     expect(withArchived(archived, false, T1 + 1).archivedAt).toBeNull();
@@ -700,6 +742,27 @@ describe('document mutations', () => {
     expect(deleted.deletedAt).toBe(T1);
     expect(withDeleted(doc, true, T1)).not.toBe(doc);
     expect(withArchived(doc, false, T1)).toBe(doc);
+  });
+
+  it('preserves the Canvas ambience when only the grid background changes', () => {
+    const doc = baseDoc({
+      background: {
+        kind: 'plain',
+        color: '#ffffff',
+        wallpaper: {
+          id: 'aurora',
+          paused: true,
+          interactive: false,
+          intensity: 0.45,
+          brightness: 0.6,
+          quality: 'high',
+        },
+      },
+    });
+
+    const updated = withBackground(doc, { kind: 'dots', color: '#101820' }, T1);
+
+    expect(updated.background.wallpaper).toEqual(doc.background.wallpaper);
   });
 
   it('keeps prior documents immutable', () => {

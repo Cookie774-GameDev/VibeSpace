@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useId, useRef, type ClipboardEvent, type KeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from 'react';
 import { cn } from '@/lib/utils';
 import { normalizeOtpCode } from './authValidation';
 import './sakura-auth.css';
@@ -100,6 +107,8 @@ export function OtpCodeInput({
         {digits.map((digit, index) => (
           <input
             key={index}
+            id={`auth-otp-digit-${index + 1}`}
+            name={`otp-digit-${index + 1}`}
             ref={(el) => {
               refs.current[index] = el;
             }}

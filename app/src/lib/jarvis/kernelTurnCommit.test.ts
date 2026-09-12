@@ -482,6 +482,201 @@ describe('createKernelTurnCommit', () => {
     );
   });
 
+  it('persists only a bounded approved files.read result on the finalized action part', async () => {
+    await seed({
+      source: 'typed_chat',
+      status: 'awaiting_approval',
+      transportAttempts: [],
+      updatedAt: NOW + 5,
+    });
+    const state = harness();
+    await state.commit.commitActionResponseReady({
+      accountId: 'account-kernel',
+      runId: 'run-kernel',
+      requestId: 'request-kernel',
+      attemptNumber: 1,
+      approvalId: 'jappr_action-ready',
+      accountBinding: state.value,
+      assistantMessage: {
+        ...actionMessage(),
+        parts: [
+          { kind: 'text', text: 'Canonical file read response.' },
+          {
+            kind: 'action_proposal',
+            call_id: 'jarvisapproval:jappr_action-ready',
+            action_id: 'files.read',
+            params: { path: 'C:\\project\\build-corpus.mjs' },
+            status: 'pending',
+          },
+        ],
+      },
+      artifacts: [],
+      providerResultSource: providerResultSource(),
+      createdAt: NOW + 10,
+    });
+    const awaiting = fromJarvisRunRow((await db.jarvis_runs.get('run-kernel'))!);
+    await db.jarvis_runs.put(
+      toJarvisRunRow({ ...awaiting, status: 'running', updatedAt: NOW + 11 }),
+    );
+
+    const actionResult = {
+      ok: true as const,
+      summary: 'Read C:\\project\\build-corpus.mjs.',
+      data: {
+        path: 'C:\\project\\build-corpus.mjs',
+        content: 'const shardSize = 48_000;',
+      },
+    };
+    const finalized = await state.commit.finalizeActionResponse({
+      accountId: 'account-kernel',
+      runId: 'run-kernel',
+      requestId: 'request-kernel',
+      attemptNumber: 1,
+      approvalId: 'jappr_action-ready',
+      messageId: 'message-kernel',
+      accountBinding: state.value,
+      outcome: 'completed',
+      resultRef: 'jresult_file-read',
+      result: actionResult,
+      completedAt: NOW + 12,
+    });
+
+    expect(finalized).toMatchObject({
+      committed: true,
+      message: {
+        parts: [
+          expect.anything(),
+          expect.objectContaining({
+            action_id: 'files.read',
+            status: 'success',
+            result: actionResult,
+          }),
+        ],
+      },
+    });
+  });
+
+  it('projects each files.read in a ten-file batch onto its own part and only completes the run on the last card', async () => {
+    await seed({
+      source: 'typed_chat',
+      status: 'awaiting_approval',
+      transportAttempts: [],
+      updatedAt: NOW + 5,
+    });
+    const firstId = 'jappr_read_01';
+    const lastId = 'jappr_read_10';
+    const firstResult = {
+      ok: true as const,
+      summary: 'Read C:\\project\\01_readme.txt.',
+      data: { path: 'C:\\project\\01_readme.txt', content: 'Title: Northstar Ledger' },
+    };
+    const lastResult = {
+      ok: true as const,
+      summary: 'Read C:\\project\\10_status.html.',
+      data: { path: 'C:\\project\\10_status.html', content: '<title>Observatory Page</title>' },
+    };
+    const state = harness();
+    await state.commit.commitActionResponseReady({
+      accountId: 'account-kernel',
+      runId: 'run-kernel',
+      requestId: 'request-kernel',
+      attemptNumber: 1,
+      approvalId: lastId,
+      accountBinding: state.value,
+      assistantMessage: {
+        ...actionMessage(),
+        parts: [
+          { kind: 'text', text: 'Ten disk reads require approval.' },
+          {
+            kind: 'action_proposal',
+            call_id: `jarvisapproval:${firstId}`,
+            action_id: 'files.read',
+            params: { path: 'C:\\project\\01_readme.txt' },
+            status: 'pending',
+          },
+          {
+            kind: 'action_proposal',
+            call_id: `jarvisapproval:${lastId}`,
+            action_id: 'files.read',
+            params: { path: 'C:\\project\\10_status.html' },
+            status: 'pending',
+          },
+        ],
+      },
+      artifacts: [],
+      providerResultSource: providerResultSource(),
+      createdAt: NOW + 10,
+    });
+
+    const first = await state.commit.finalizeActionResponse({
+      accountId: 'account-kernel',
+      runId: 'run-kernel',
+      requestId: 'request-kernel',
+      attemptNumber: 1,
+      approvalId: firstId,
+      messageId: 'message-kernel',
+      accountBinding: state.value,
+      outcome: 'completed',
+      resultRef: 'jresult_read_01',
+      result: firstResult,
+      completedAt: NOW + 12,
+    });
+
+    expect(first).toMatchObject({
+      committed: true,
+      run: { status: 'awaiting_approval' },
+      message: {
+        parts: [
+          expect.anything(),
+          expect.objectContaining({
+            action_id: 'files.read',
+            status: 'success',
+            result: firstResult,
+          }),
+          expect.objectContaining({ action_id: 'files.read', status: 'pending' }),
+        ],
+      },
+    });
+    expect(first).not.toHaveProperty('run.completedAt');
+    expect(fromJarvisRunRow((await db.jarvis_runs.get('run-kernel'))!).status).toBe(
+      'awaiting_approval',
+    );
+
+    const last = await state.commit.finalizeActionResponse({
+      accountId: 'account-kernel',
+      runId: 'run-kernel',
+      requestId: 'request-kernel',
+      attemptNumber: 1,
+      approvalId: lastId,
+      messageId: 'message-kernel',
+      accountBinding: state.value,
+      outcome: 'completed',
+      resultRef: 'jresult_read_10',
+      result: lastResult,
+      completedAt: NOW + 13,
+    });
+
+    expect(last).toMatchObject({
+      committed: true,
+      run: { status: 'completed', completedAt: NOW + 13 },
+      message: {
+        parts: [
+          expect.anything(),
+          expect.objectContaining({
+            action_id: 'files.read',
+            status: 'success',
+            result: firstResult,
+          }),
+          expect.objectContaining({
+            action_id: 'files.read',
+            status: 'success',
+            result: lastResult,
+          }),
+        ],
+      },
+    });
+  });
+
   it('fails a voice response-ready attempt mismatch before artifact consumption or writes', async () => {
     await seed({ source: 'voice', transportAttempts: [] });
     const state = harness();

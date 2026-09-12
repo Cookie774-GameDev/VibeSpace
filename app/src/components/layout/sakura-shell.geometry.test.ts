@@ -11,8 +11,15 @@ const css = compactCss(
 );
 
 describe('Sakura shell source geometry', () => {
-  it('defines the 1440x900 frame, chrome, and optional inspector bounds', () => {
-    expect(css).toContain('--sakura-shell-inset: clamp(10px, 1vw, 14px)');
+  it('uses the native application edge with no inset demo frame', () => {
+    expect(css).toMatch(/\[data-sakura-shell='true'\] \{ padding: 0; border-radius: 0;/);
+    expect(css).toMatch(
+      /\[data-sakura-shell='true'\] > \.sakura-shell-frame \{ overflow: hidden; border: 0; border-radius: 0; box-shadow: none;/,
+    );
+    expect(css).not.toContain('--sakura-shell-inset');
+  });
+
+  it('preserves chrome and optional inspector bounds', () => {
     expect(css).toMatch(/\.sakura-shell-top-bar \{ min-height: 40px; max-height: 48px;/);
     expect(css).toMatch(/\.sakura-shell-tab-strip \{ min-height: 32px; max-height: 40px;/);
     expect(css).toMatch(/\.sakura-shell-inspector \{ max-width: 320px;/);
@@ -30,13 +37,13 @@ describe('Sakura shell source geometry', () => {
     );
   });
 
-  it('uses the 1024x768/narrow overlay boundary and an opaque forced-colors frame', () => {
+  it('uses the 1024x768/narrow overlay boundary and an opaque forced-colors surface', () => {
     expect(css).toContain('@media (max-width: 1100px), (max-height: 760px)');
     expect(css).toMatch(
       /\.sakura-shell-inspector \{ position: absolute;[\s\S]*max-width: clamp\(278px, 32vw, 320px\);/,
     );
     expect(css).toMatch(
-      /@media \(forced-colors: active\)[\s\S]*background: Canvas; border-color: CanvasText; box-shadow: none;/,
+      /@media \(forced-colors: active\)[\s\S]*background: Canvas; border: 0; box-shadow: none;/,
     );
   });
 

@@ -1,0 +1,927 @@
+[data-agentic-console] {
+  --console-bg: hsl(var(--background));
+  --console-panel: hsl(var(--card));
+  --console-raised: hsl(var(--muted));
+  --console-ink: hsl(var(--foreground));
+  --console-muted: hsl(var(--muted-foreground));
+  --console-line: hsl(var(--border));
+  --console-accent: hsl(var(--accent-copper));
+  --console-accent-soft: color-mix(in srgb, var(--console-accent) 13%, transparent);
+  --console-add: #4e8f65;
+  --console-add-soft: color-mix(in srgb, var(--console-add) 16%, transparent);
+  --console-remove: #b85f62;
+  --console-remove-soft: color-mix(in srgb, var(--console-remove) 15%, transparent);
+  --console-code: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  color: var(--console-ink);
+}
+
+[data-agentic-console][data-console-theme='paper-white'] {
+  --console-bg: #fcfcfb;
+  --console-panel: #ffffff;
+  --console-raised: #f3f3f1;
+  --console-ink: #20211f;
+  --console-muted: #686b65;
+  --console-line: #d9dad6;
+  --console-accent: #5f6f67;
+}
+
+[data-agentic-console][data-console-theme='solar-sand'] {
+  --console-bg: #f6efe0;
+  --console-panel: #fff9ec;
+  --console-raised: #efe3cb;
+  --console-ink: #3d3225;
+  --console-muted: #786a58;
+  --console-line: #d8c7a8;
+  --console-accent: #a56a2d;
+}
+
+[data-agentic-console][data-console-theme='sakura-mist'] {
+  --console-bg: #f8eff2;
+  --console-panel: #fff7f8;
+  --console-raised: #f1e0e6;
+  --console-ink: #432f37;
+  --console-muted: #806a72;
+  --console-line: #dec8d0;
+  --console-accent: #aa6077;
+}
+
+[data-agentic-console][data-console-theme='icebound'] {
+  --console-bg: #edf5f7;
+  --console-panel: #f8fcfd;
+  --console-raised: #dfecef;
+  --console-ink: #20343a;
+  --console-muted: #61777e;
+  --console-line: #c3d7dc;
+  --console-accent: #3e7c8c;
+}
+
+[data-agentic-console][data-console-theme='vibespace-amber'] {
+  --console-bg: #171514;
+  --console-panel: #1e1b19;
+  --console-raised: #27221e;
+  --console-ink: #f4ede2;
+  --console-muted: #aa9e90;
+  --console-line: #3b332c;
+  --console-accent: #d89b5c;
+}
+
+[data-agentic-console][data-console-theme='graphite'] {
+  --console-bg: #1a1c1f;
+  --console-panel: #22252a;
+  --console-raised: #2b2f34;
+  --console-ink: #eef0f2;
+  --console-muted: #a3a8ae;
+  --console-line: #3b4047;
+  --console-accent: #9aa8b8;
+}
+
+[data-agentic-console][data-console-theme='midnight-blue'] {
+  --console-bg: #0e1728;
+  --console-panel: #142139;
+  --console-raised: #1b2b49;
+  --console-ink: #e8f0ff;
+  --console-muted: #91a3c0;
+  --console-line: #2a3d60;
+  --console-accent: #6b9de9;
+}
+
+[data-agentic-console][data-console-theme='monokai-ember'] {
+  --console-bg: #1c1c19;
+  --console-panel: #25241f;
+  --console-raised: #302e27;
+  --console-ink: #f1f1e8;
+  --console-muted: #aaa796;
+  --console-line: #464337;
+  --console-accent: #e69f4b;
+  --console-add: #8caa4b;
+  --console-remove: #d95c61;
+}
+
+[data-agentic-console][data-console-theme='matrix-moss'] {
+  --console-bg: #0e1711;
+  --console-panel: #132017;
+  --console-raised: #1a2b1f;
+  --console-ink: #d9f5df;
+  --console-muted: #81a58b;
+  --console-line: #294431;
+  --console-accent: #66c77e;
+}
+
+[data-agentic-console][data-console-theme='oled-void'] {
+  --console-bg: #000000;
+  --console-panel: #080808;
+  --console-raised: #111111;
+  --console-ink: #f7f7f7;
+  --console-muted: #999999;
+  --console-line: #282828;
+  --console-accent: #e6a764;
+}
+
+/* App themes remain the visual canvas. Console profiles may tune neutral
+ * themes, while the four authored visual systems always project work events
+ * through their own paper/glass/console materials. */
+html[data-theme='monochrome'] [data-agentic-console] {
+  --console-bg: transparent;
+  --console-panel: hsl(var(--panel));
+  --console-raised: hsl(var(--elevated));
+  --console-ink: hsl(var(--foreground));
+  --console-muted: hsl(var(--muted-foreground));
+  --console-line: hsl(var(--border));
+  --console-accent: hsl(var(--accent-cyan));
+}
+
+html[data-theme='sakura'] [data-agentic-console] {
+  --console-bg: transparent;
+  --console-panel: color-mix(in srgb, var(--sakura-night-2) 78%, transparent);
+  --console-raised: color-mix(in srgb, var(--sakura-indigo) 66%, transparent);
+  --console-ink: var(--sakura-ivory);
+  --console-muted: var(--sakura-peach);
+  --console-line: color-mix(in srgb, var(--sakura-ivory) 30%, transparent);
+  --console-accent: var(--sakura-coral);
+  --console-add: var(--sakura-mint);
+  --console-remove: var(--sakura-coral);
+}
+
+html[data-theme='warm'] [data-agentic-console] {
+  --console-bg: transparent;
+  --console-panel: color-mix(in srgb, var(--warm-surface-raised) 94%, transparent);
+  --console-raised: var(--warm-surface-muted);
+  --console-ink: var(--warm-text-strong);
+  --console-muted: var(--warm-text-muted);
+  --console-line: var(--warm-border);
+  --console-accent: var(--warm-terracotta-deep);
+  --console-add: var(--warm-sage-deep);
+  --console-remove: var(--warm-terracotta-deep);
+}
+
+html[data-theme='origami'] [data-agentic-console] {
+  --console-bg: transparent;
+  --console-panel: color-mix(in srgb, var(--origami-paper-raised) 94%, transparent);
+  --console-raised: var(--origami-surface);
+  --console-ink: var(--origami-ink);
+  --console-muted: var(--origami-muted);
+  --console-line: var(--origami-line);
+  --console-accent: var(--origami-coral);
+  --console-add: var(--origami-sage);
+  --console-remove: var(--origami-terracotta-deep);
+}
+
+.agentic-console {
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.agentic-session {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, auto) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border: 1px solid var(--console-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--console-panel) 94%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--console-ink) 7%, transparent);
+}
+
+.agentic-session__metrics-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.agentic-session__identity,
+.agentic-session__metrics,
+.agentic-session__metrics span,
+.agentic-session__actions,
+.agentic-block-head,
+.agentic-block-head > span,
+.agentic-answer__meta,
+.agentic-prompt-band__meta,
+.agentic-activity,
+.agentic-tool summary,
+.agentic-inline-action {
+  display: flex;
+  align-items: center;
+}
+
+.agentic-session__identity {
+  min-width: 0;
+  gap: 9px;
+}
+
+.agentic-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--console-muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-muted) 14%, transparent);
+}
+
+.agentic-status-dot.is-queued,
+.agentic-status-dot.is-planning,
+.agentic-status-dot.is-running,
+.agentic-status-dot.is-recovering {
+  background: var(--console-accent);
+  box-shadow: 0 0 0 3px var(--console-accent-soft);
+}
+
+.agentic-status-dot.is-done {
+  background: var(--console-add);
+}
+
+.agentic-status-dot.is-partial {
+  background: color-mix(in srgb, var(--console-accent) 55%, var(--console-remove));
+}
+
+.agentic-status-dot.is-error,
+.agentic-status-dot.is-blocked {
+  background: var(--console-remove);
+}
+
+.agentic-session__title {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.agentic-session__title strong {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agentic-session__title span {
+  max-width: 36ch;
+  color: var(--console-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentic-session__metrics {
+  min-width: 0;
+  gap: 10px;
+  border: 0;
+  padding: 4px;
+  background: transparent;
+  color: var(--console-muted);
+  font: 500 11px/1.2 var(--console-code);
+  cursor: pointer;
+}
+
+.agentic-session__metrics span {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.agentic-session__metrics svg,
+.agentic-session__actions svg,
+.agentic-block-head svg,
+.agentic-answer__meta svg,
+.agentic-activity svg,
+.agentic-tool summary svg,
+.agentic-inline-action svg,
+.agentic-history svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agentic-session__model {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agentic-session__actions {
+  position: relative;
+  gap: 4px;
+}
+
+.agentic-settings {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(330px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--console-line);
+  border-radius: 9px;
+  background: var(--console-panel);
+  box-shadow: 0 18px 54px rgb(0 0 0 / 26%);
+}
+
+.agentic-settings label {
+  display: grid;
+  gap: 6px;
+  color: var(--console-muted);
+  font-size: 11px;
+}
+
+.agentic-settings__evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.agentic-settings__evidence div {
+  min-width: 0;
+}
+
+.agentic-settings__evidence dt {
+  color: var(--console-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.agentic-settings__evidence dd {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--console-ink);
+  font: 500 11px/1.3 var(--console-code);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentic-settings select {
+  min-height: 34px;
+  width: 100%;
+  border: 1px solid var(--console-line);
+  border-radius: 6px;
+  padding: 0 9px;
+  background: var(--console-raised);
+  color: var(--console-ink);
+}
+
+.agentic-settings__row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.agentic-settings__wide {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.agentic-settings__controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+  border-top: 1px solid var(--console-line);
+  padding-top: 6px;
+}
+
+.agentic-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.agentic-prompt-band {
+  padding: 13px 16px 14px;
+  border: 1px solid var(--console-line);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, var(--console-accent-soft), transparent 65%), var(--console-panel);
+}
+
+.agentic-prompt-band__meta {
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+  color: var(--console-muted);
+  font-size: 11px;
+}
+
+.agentic-prompt-band__meta strong {
+  color: var(--console-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.agentic-prompt-band__text,
+.agentic-answer__text,
+.agentic-reasoning p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agentic-prompt-band__text {
+  font: 500 13px/1.65 var(--console-code);
+}
+
+.agentic-prompt-band__text.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 7;
+  overflow: hidden;
+}
+
+.agentic-inline-action,
+.agentic-history {
+  gap: 5px;
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--console-accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agentic-answer {
+  padding: 15px 16px;
+  border: 1px solid color-mix(in srgb, var(--console-line) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--console-panel) 78%, transparent);
+}
+
+.agentic-answer.is-final {
+  background: color-mix(in srgb, var(--console-accent) 5%, transparent);
+}
+
+.agentic-answer__meta {
+  gap: 7px;
+  margin-bottom: 9px;
+  color: var(--console-accent);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agentic-answer__meta span {
+  margin-left: auto;
+  color: var(--console-muted);
+  font: 400 10px/1.2 var(--console-code);
+  text-transform: none;
+}
+
+.agentic-answer__text {
+  font-size: 14px;
+  line-height: 1.72;
+}
+
+.agentic-reasoning,
+.agentic-tool {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--console-line) 82%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--console-raised) 45%, transparent);
+}
+
+.agentic-reasoning summary,
+.agentic-tool summary {
+  min-height: 32px;
+  padding: 6px 16px;
+  color: var(--console-muted);
+  font: 600 11px/1.3 var(--console-code);
+  cursor: pointer;
+}
+
+.agentic-reasoning p {
+  padding: 4px 16px 13px 38px;
+  color: var(--console-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.agentic-activity {
+  min-height: 30px;
+  gap: 7px;
+  padding: 5px 16px;
+  border: 1px solid color-mix(in srgb, var(--console-line) 62%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--console-panel) 68%, transparent);
+  color: var(--console-muted);
+  font: 500 11px/1.4 var(--console-code);
+}
+
+.agentic-activity strong {
+  color: var(--console-ink);
+  font-weight: 550;
+}
+
+.agentic-activity code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentic-activity > span:last-child {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentic-activity__kind,
+.agentic-activity__status {
+  display: grid;
+  place-items: center;
+}
+
+.agentic-activity.is-error .agentic-activity__status {
+  color: var(--console-remove);
+}
+
+.agentic-activity.is-done .agentic-activity__status {
+  color: var(--console-add);
+}
+
+.agentic-activity.is-running .agentic-activity__status {
+  color: var(--console-accent);
+}
+
+.agentic-diff,
+.agentic-command {
+  overflow: hidden;
+  border: 1px solid var(--console-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--console-raised) 36%, transparent);
+}
+
+.agentic-block-head {
+  min-height: 34px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px 6px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--console-line) 75%, transparent);
+  color: var(--console-muted);
+  font: 500 11px/1.3 var(--console-code);
+}
+
+.agentic-block-head > span {
+  min-width: 0;
+  gap: 7px;
+}
+
+.agentic-block-head strong {
+  overflow: hidden;
+  color: var(--console-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentic-block-head small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentic-block-head button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 4px;
+  background: transparent;
+  color: var(--console-muted);
+  cursor: pointer;
+}
+
+.agentic-block-head__metrics {
+  margin-left: auto;
+}
+
+.is-add {
+  color: var(--console-add);
+}
+
+.is-remove {
+  color: var(--console-remove);
+}
+
+.agentic-diff pre,
+.agentic-command pre,
+.agentic-tool pre {
+  max-width: 100%;
+  margin: 0;
+  overflow: auto;
+  font: 11px/1.55 var(--console-code);
+  tab-size: 2;
+}
+
+.agentic-diff-line {
+  display: grid;
+  grid-template-columns: 4ch 4ch minmax(max-content, 1fr);
+  min-height: 1.55em;
+  white-space: pre;
+}
+
+.agentic-diff-line__number {
+  padding: 0 6px;
+  border-right: 1px solid var(--console-line);
+  color: var(--console-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.agentic-diff-line__text {
+  padding: 0 12px;
+}
+
+.agentic-diff-line--add {
+  background: var(--console-add-soft);
+  color: color-mix(in srgb, var(--console-add) 78%, var(--console-ink));
+}
+
+.agentic-diff-line--remove {
+  background: var(--console-remove-soft);
+  color: color-mix(in srgb, var(--console-remove) 82%, var(--console-ink));
+}
+
+.agentic-diff-line--meta {
+  color: var(--console-accent);
+}
+
+.agentic-command > pre {
+  padding: 10px 16px;
+}
+
+.agentic-command__output {
+  max-height: 320px;
+  border-top: 1px solid var(--console-line);
+  padding: 10px 16px;
+  background: var(--console-bg);
+  color: var(--console-muted);
+}
+
+.agentic-command__output.is-error,
+.agentic-tool .is-error {
+  color: var(--console-remove);
+}
+
+.agentic-tool summary {
+  gap: 7px;
+}
+
+.agentic-tool summary span {
+  margin-left: auto;
+  font-weight: 400;
+}
+
+.agentic-tool > div {
+  display: grid;
+  gap: 6px;
+  padding: 0 16px 13px 38px;
+}
+
+.agentic-tool small {
+  color: var(--console-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.agentic-tool pre {
+  max-height: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--console-line);
+  border-radius: 5px;
+  background: var(--console-bg);
+}
+
+.agentic-legacy {
+  padding: 2px 0;
+}
+
+.agentic-history {
+  justify-content: center;
+  min-height: 34px;
+  width: 100%;
+  border-bottom: 1px solid var(--console-line);
+}
+
+.agentic-view-notice {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+[data-agentic-console][data-console-density='compact'] .agentic-session {
+  min-height: 50px;
+  padding-block: 6px;
+}
+
+[data-agentic-console][data-console-density='compact'] .agentic-prompt-band,
+[data-agentic-console][data-console-density='compact'] .agentic-answer {
+  padding-block: 10px;
+}
+
+[data-agentic-console][data-console-density='compact'] .agentic-activity {
+  min-height: 26px;
+  padding-block: 3px;
+}
+
+@media (max-width: 1023px) {
+  .agentic-session {
+    grid-template-columns: minmax(130px, 1fr) auto;
+  }
+
+  .agentic-session__metrics {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    padding-left: 17px;
+  }
+
+  .agentic-session__actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .agentic-session__model {
+    display: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .agentic-console {
+    border-radius: 0;
+  }
+
+  .agentic-session {
+    gap: 6px;
+    padding-inline: 10px;
+  }
+
+  .agentic-session__metrics span:nth-child(n + 5) {
+    display: none;
+  }
+
+  .agentic-prompt-band,
+  .agentic-answer,
+  .agentic-activity,
+  .agentic-legacy {
+    padding-inline: 11px;
+  }
+
+  .agentic-activity > span:last-child,
+  .agentic-activity code {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-agentic-console],
+  [data-agentic-console] *,
+  [data-agentic-console] *::before,
+  [data-agentic-console] *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  [data-agentic-console] {
+    --console-line: currentColor;
+  }
+
+  .agentic-session,
+  .agentic-prompt-band,
+  .agentic-answer,
+  .agentic-activity,
+  .agentic-diff,
+  .agentic-command {
+    border-bottom-width: 2px;
+  }
+}
+
+html[data-agentic-console-caret='block'] [data-tour='chat-composer'] textarea {
+  caret-shape: block;
+}
+
+/* Subagents header control + mini panel (confined to agentic console). */
+.agentic-session__metrics-row {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.agentic-session__subagents-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--console-accent) 35%, var(--console-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--console-accent) 12%, var(--console-panel));
+  color: var(--console-ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+}
+
+.agentic-session__subagents-btn svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  color: var(--console-accent);
+}
+
+.agentic-session__subagents-btn:hover {
+  background: color-mix(in srgb, var(--console-accent) 20%, var(--console-panel));
+}
+
+.agentic-subagents-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 40;
+  width: min(22rem, 86vw);
+  max-height: min(20rem, 50vh);
+  overflow: auto;
+  border: 1px solid var(--console-line);
+  border-radius: 0.75rem;
+  background: var(--console-panel);
+  box-shadow: 0 14px 36px rgb(0 0 0 / 0.28);
+  padding: 0.45rem;
+}
+
+.agentic-subagents-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.15rem 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--console-line);
+  margin-bottom: 0.35rem;
+  font-size: 12px;
+}
+
+.agentic-subagents-panel__empty {
+  margin: 0;
+  padding: 0.65rem 0.35rem;
+  font-size: 12px;
+  color: var(--console-muted);
+}
+
+.agentic-subagents-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.agentic-subagents-panel__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--console-accent) 18%, var(--console-line));
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--console-raised) 70%, transparent);
+  padding: 0.4rem 0.45rem;
+}
+
+.agentic-subagents-panel__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--console-accent) 30%, var(--console-line));
+  color: var(--console-accent);
+  background: var(--console-accent-soft);
+  flex-shrink: 0;
+}
+
+.agentic-subagents-panel__badge {
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--console-accent) 28%, var(--console-line));
+  padding: 0.05rem 0.35rem;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--console-accent);
+}

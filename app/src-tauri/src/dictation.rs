@@ -27,7 +27,12 @@ pub fn dictation_paste_text(text: String) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn get_clipboard() -> Result<String, String> {
     let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-Clipboard -Raw",
+        ])
         .output()
         .map_err(|err| format!("clipboard read unavailable: {err}"))?;
     if output.status.success() {
@@ -120,7 +125,10 @@ fn set_clipboard(text: &str) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn paste_clipboard() -> Result<(), String> {
     let status = Command::new("osascript")
-        .args(["-e", "tell application \"System Events\" to keystroke \"v\" using command down"])
+        .args([
+            "-e",
+            "tell application \"System Events\" to keystroke \"v\" using command down",
+        ])
         .status()
         .map_err(|err| format!("paste unavailable: {err}"))?;
     if status.success() {
@@ -151,7 +159,11 @@ fn set_clipboard(text: &str) -> Result<(), String> {
         ("wl-copy", Vec::<&str>::new()),
         ("xclip", vec!["-selection", "clipboard"]),
     ] {
-        let mut child = match Command::new(program).args(args).stdin(Stdio::piped()).spawn() {
+        let mut child = match Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .spawn()
+        {
             Ok(child) => child,
             Err(_) => continue,
         };
@@ -194,8 +206,8 @@ fn trigger_os_dictation_inner() -> Result<(), String> {
     #[cfg(windows)]
     {
         use windows::Win32::UI::Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-            VK_H, VK_LWIN, VIRTUAL_KEY,
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, VIRTUAL_KEY,
+            VK_H, VK_LWIN,
         };
 
         fn key_input(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {

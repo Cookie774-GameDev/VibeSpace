@@ -4,6 +4,8 @@
 
 This document is the **authoritative spec** for **Hive**: the sequential multi-model chat pipeline. It covers presets, frontier model roster, stack architecture, credit-bucket integration, terminal boundaries, UI surfaces, implementation phases, and a single master rebuild prompt for build agents.
 
+> **Product status (2026-08):** Hive is **gated off** in the active product (`VITE_HIVE_ENABLED` defaults to disabled). Implementation modules remain for recovery. See **[HIVE_PRODUCT_GATE.md](./HIVE_PRODUCT_GATE.md)** for what was gated, where the code lives, and how to re-enable.
+
 > **Implementation status:** Hive stack code ships in **v0.1.42**. VibeBench and quota-slider UI remain planned — see linked plan docs.
 
 > **Naming:** User-facing copy is always **Hive** (e.g. **Hive Fast**, **Hive Quality**). Internal code paths may still use `vibe_hive`, `stack_*`, or `StackPicker` historically — do not expose those names in UI or planning docs.

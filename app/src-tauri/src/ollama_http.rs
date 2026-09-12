@@ -13,14 +13,17 @@
 //!
 //! Only loopback endpoints are allowed (defense-in-depth, mirrors local_ai.rs).
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::time::{Duration, Instant};
 
 use reqwest::blocking::Client;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
 const OLLAMA_BASE: &str = "http://127.0.0.1:11434";
+const MAX_MODEL_DETAILS_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_TOOL_PROBE_BYTES: u64 = 1024 * 1024;
 
 fn resolve_base(base_url: Option<String>) -> String {
     let trimmed = base_url
@@ -93,6 +96,7 @@ fn valid_model_name(name: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct OllamaModel {
     name: String,
+    digest: Option<String>,
     size: Option<u64>,
     modified_at: Option<String>,
 }
@@ -121,6 +125,10 @@ pub fn ollama_list_models(base_url: Option<String>) -> Result<Vec<OllamaModel>, 
             if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
                 out.push(OllamaModel {
                     name: name.to_string(),
+                    digest: m
+                        .get("digest")
+                        .and_then(|digest| digest.as_str())
+                        .map(str::to_string),
                     size: m.get("size").and_then(|s| s.as_u64()),
                     modified_at: m
                         .get("modified_at")
@@ -131,6 +139,172 @@ pub fn ollama_list_models(base_url: Option<String>) -> Result<Vec<OllamaModel>, 
         }
     }
     Ok(out)
+}
+
+fn read_bounded_response(
+    response: reqwest::blocking::Response,
+    maximum_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    let mut bounded = response.take(maximum_bytes + 1);
+    let mut body = Vec::new();
+    bounded.read_to_end(&mut body).map_err(|e| e.to_string())?;
+    if body.len() as u64 > maximum_bytes {
+        return Err("response_too_large".to_string());
+    }
+    Ok(body)
+}
+
+fn context_window_tokens(value: &serde_json::Value) -> Option<u64> {
+    value
+        .get("model_info")
+        .and_then(|info| info.as_object())
+        .and_then(|info| {
+            info.iter()
+                .filter(|(key, _)| key.ends_with(".context_length"))
+                .filter_map(|(_, value)| value.as_u64())
+                .max()
+        })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OllamaModelDetails {
+    digest: String,
+    capabilities: Vec<String>,
+    context_window_tokens: Option<u64>,
+}
+
+fn show_model_blocking(
+    model: String,
+    base_url: Option<String>,
+) -> Result<OllamaModelDetails, String> {
+    if !valid_model_name(&model) {
+        return Err("invalid_model".to_string());
+    }
+    let base = resolve_base(base_url);
+    if !is_allowed_local_endpoint(&base) {
+        return Err("invalid_base_url".to_string());
+    }
+    let response = build_client(15)?
+        .post(format!("{base}/api/show"))
+        .json(&serde_json::json!({ "model": model, "verbose": false }))
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("status_{}", response.status().as_u16()));
+    }
+    let body = read_bounded_response(response, MAX_MODEL_DETAILS_BYTES)?;
+    let value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    let capabilities = value
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|capability| capability.as_str())
+        .take(32)
+        .map(|capability| capability.chars().take(64).collect())
+        .collect();
+    let digest = format!("sha256:{:x}", Sha256::digest(&body));
+    Ok(OllamaModelDetails {
+        digest,
+        capabilities,
+        context_window_tokens: context_window_tokens(&value),
+    })
+}
+
+/// Read bounded model metadata used by the local-agent compatibility layer.
+#[tauri::command]
+pub async fn ollama_show_model(
+    model: String,
+    base_url: Option<String>,
+) -> Result<OllamaModelDetails, String> {
+    tauri::async_runtime::spawn_blocking(move || show_model_blocking(model, base_url))
+        .await
+        .map_err(|_| "model_details_worker_failed".to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OllamaToolProbe {
+    supported: bool,
+    reason: Option<&'static str>,
+}
+
+fn probe_tools_blocking(
+    model: String,
+    base_url: Option<String>,
+) -> Result<OllamaToolProbe, String> {
+    if !valid_model_name(&model) {
+        return Err("invalid_model".to_string());
+    }
+    let base = resolve_base(base_url);
+    if !is_allowed_local_endpoint(&base) {
+        return Err("invalid_base_url".to_string());
+    }
+    let response = build_client(30)?
+        .post(format!("{base}/api/chat"))
+        .json(&serde_json::json!({
+            "model": model,
+            "stream": false,
+            "messages": [{
+                "role": "user",
+                "content": "Call compatibility_check exactly once with ok set to true."
+            }],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "compatibility_check",
+                    "description": "Side-effect-free local compatibility check.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": { "ok": { "type": "boolean" } },
+                        "required": ["ok"]
+                    }
+                }
+            }],
+            "options": { "temperature": 0, "num_predict": 32 }
+        }))
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Ok(OllamaToolProbe {
+            supported: false,
+            reason: Some("Ollama rejected the safe tool probe."),
+        });
+    }
+    let body = read_bounded_response(response, MAX_TOOL_PROBE_BYTES)?;
+    let value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    let supported = value
+        .pointer("/message/tool_calls")
+        .and_then(|calls| calls.as_array())
+        .map(|calls| !calls.is_empty())
+        .unwrap_or(false);
+    Ok(OllamaToolProbe {
+        supported,
+        reason: (!supported).then_some("No tool call was returned."),
+    })
+}
+
+/// Run one tiny, side-effect-free tool-schema roundtrip. The advertised tool
+/// has no executor and cannot read or write files.
+#[tauri::command]
+pub async fn ollama_probe_tools(
+    model: String,
+    base_url: Option<String>,
+) -> Result<OllamaToolProbe, String> {
+    tauri::async_runtime::spawn_blocking(move || probe_tools_blocking(model, base_url))
+        .await
+        .map_err(|_| "tool_probe_worker_failed".to_string())?
+}
+
+/// Best-effort model discovery for the private OpenCode server. This is
+/// deliberately fixed to the default loopback daemon and never starts Ollama.
+pub(crate) fn harness_model_names() -> Vec<String> {
+    ollama_list_models(Some(OLLAMA_BASE.to_string()))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|model| model.name)
+        .collect()
 }
 
 #[derive(Serialize, Clone)]
@@ -148,7 +322,11 @@ struct PullProgress {
 /// the UI never blocks; emits `ollama:pull-progress` events with a final
 /// `done: true` (or `error`). Returns immediately after spawning.
 #[tauri::command]
-pub fn ollama_pull_model(app: AppHandle, model: String, base_url: Option<String>) -> Result<(), String> {
+pub fn ollama_pull_model(
+    app: AppHandle,
+    model: String,
+    base_url: Option<String>,
+) -> Result<(), String> {
     if !valid_model_name(&model) {
         return Err("invalid_model_name".to_string());
     }
@@ -165,7 +343,14 @@ pub fn ollama_pull_model(app: AppHandle, model: String, base_url: Option<String>
         let client = match build_client(0) {
             Ok(c) => c,
             Err(e) => {
-                emit(PullProgress { status: "error".into(), total: None, completed: None, percent: None, done: true, error: Some(e) });
+                emit(PullProgress {
+                    status: "error".into(),
+                    total: None,
+                    completed: None,
+                    percent: None,
+                    done: true,
+                    error: Some(e),
+                });
                 return;
             }
         };
@@ -178,13 +363,27 @@ pub fn ollama_pull_model(app: AppHandle, model: String, base_url: Option<String>
         {
             Ok(r) => r,
             Err(e) => {
-                emit(PullProgress { status: "error".into(), total: None, completed: None, percent: None, done: true, error: Some(format!("connect: {e}")) });
+                emit(PullProgress {
+                    status: "error".into(),
+                    total: None,
+                    completed: None,
+                    percent: None,
+                    done: true,
+                    error: Some(format!("connect: {e}")),
+                });
                 return;
             }
         };
         let status = resp.status();
         if !status.is_success() {
-            emit(PullProgress { status: "error".into(), total: None, completed: None, percent: None, done: true, error: Some(format!("status_{}", status.as_u16())) });
+            emit(PullProgress {
+                status: "error".into(),
+                total: None,
+                completed: None,
+                percent: None,
+                done: true,
+                error: Some(format!("status_{}", status.as_u16())),
+            });
             return;
         }
 
@@ -210,27 +409,51 @@ pub fn ollama_pull_model(app: AppHandle, model: String, base_url: Option<String>
                 continue;
             };
             if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-                emit(PullProgress { status: "error".into(), total: None, completed: None, percent: None, done: true, error: Some(err.to_string()) });
+                emit(PullProgress {
+                    status: "error".into(),
+                    total: None,
+                    completed: None,
+                    percent: None,
+                    done: true,
+                    error: Some(err.to_string()),
+                });
                 return;
             }
-            let st = v.get("status").and_then(|s| s.as_str()).unwrap_or("downloading").to_string();
+            let st = v
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("downloading")
+                .to_string();
             let total = v.get("total").and_then(|x| x.as_u64());
             let completed = v.get("completed").and_then(|x| x.as_u64());
             let percent = match (total, completed) {
-                (Some(t), Some(c)) if t > 0 => Some(((c as f64 / t as f64) * 100.0).clamp(0.0, 100.0)),
+                (Some(t), Some(c)) if t > 0 => {
+                    Some(((c as f64 / t as f64) * 100.0).clamp(0.0, 100.0))
+                }
                 _ => None,
             };
             if st == "success" {
                 saw_success = true;
             }
             emit_throttled(
-                PullProgress { status: st, total, completed, percent, done: false, error: None },
+                PullProgress {
+                    status: st,
+                    total,
+                    completed,
+                    percent,
+                    done: false,
+                    error: None,
+                },
                 false,
             );
         }
         emit_throttled(
             PullProgress {
-                status: if saw_success { "success".into() } else { "success".into() },
+                status: if saw_success {
+                    "success".into()
+                } else {
+                    "success".into()
+                },
                 total: None,
                 completed: None,
                 percent: Some(100.0),
@@ -252,19 +475,91 @@ struct ChatDelta {
     error: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OllamaChatResult {
+    text: String,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+/// Reliable native chat completion. Unlike the event-only compatibility
+/// command below, this returns the completed text through Tauri IPC so a
+/// missed WebView event can never leave the chat waiting forever.
+#[tauri::command]
+pub async fn ollama_chat(
+    model: String,
+    messages: serde_json::Value,
+    options: serde_json::Value,
+    think: bool,
+    base_url: Option<String>,
+) -> Result<OllamaChatResult, String> {
+    if !valid_model_name(&model) {
+        return Err("invalid_model_name".to_string());
+    }
+    let base = resolve_base(base_url);
+    if !is_allowed_local_endpoint(&base) {
+        return Err("invalid_base_url".to_string());
+    }
+    let name = model.trim().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = build_client(180)?;
+        let body = serde_json::json!({
+            "model": name,
+            "messages": messages,
+            "stream": false,
+            "think": think,
+            "keep_alive": "15m",
+            "options": options,
+        });
+        let response = client
+            .post(format!("{base}/api/chat"))
+            .json(&body)
+            .send()
+            .map_err(|error| format!("connect: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("status_{}", status.as_u16()));
+        }
+        let value: serde_json::Value = response.json().map_err(|error| error.to_string())?;
+        if let Some(error) = value.get("error").and_then(|entry| entry.as_str()) {
+            return Err(error.to_string());
+        }
+        let text = value
+            .pointer("/message/content")
+            .and_then(|entry| entry.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if text.trim().is_empty() {
+            return Err("empty_response".to_string());
+        }
+        Ok(OllamaChatResult {
+            text,
+            input_tokens: value
+                .get("prompt_eval_count")
+                .and_then(|entry| entry.as_u64()),
+            output_tokens: value.get("eval_count").and_then(|entry| entry.as_u64()),
+        })
+    })
+    .await
+    .map_err(|error| format!("worker: {error}"))?
+}
+
 /// Stream a chat completion via POST /api/chat (NDJSON). Runs on a worker
 /// thread; emits `ollama:chat:<requestId>` events with incremental `delta`s
 /// and a final `done: true` (or `error`). `messages` is the OpenAI-style
 /// array `[{role, content}]`.
 #[tauri::command]
-pub fn ollama_chat_stream(
+pub async fn ollama_chat_stream(
     app: AppHandle,
     request_id: String,
     model: String,
     messages: serde_json::Value,
     temperature: Option<f64>,
+    options: Option<serde_json::Value>,
+    think: Option<bool>,
     base_url: Option<String>,
-) -> Result<(), String> {
+) -> Result<OllamaChatResult, String> {
     if !valid_model_name(&model) {
         return Err("invalid_model_name".to_string());
     }
@@ -275,30 +570,39 @@ pub fn ollama_chat_stream(
     let event = format!("ollama:chat:{request_id}");
     let name = model.trim().to_string();
     let temp = temperature.unwrap_or(0.45);
+    let request_options = options.unwrap_or_else(|| {
+        serde_json::json!({
+            "temperature": temp,
+            "num_ctx": 4096,
+            "num_predict": 320,
+            "repeat_penalty": 1.18,
+            "top_p": 0.9
+        })
+    });
+    let request_think = think.unwrap_or(false);
 
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let emit = |d: ChatDelta| {
             let _ = app.emit(event.as_str(), d);
         };
         let client = match build_client(180) {
             Ok(c) => c,
             Err(e) => {
-                emit(ChatDelta { delta: String::new(), done: true, error: Some(e) });
-                return;
+                emit(ChatDelta {
+                    delta: String::new(),
+                    done: true,
+                    error: Some(e.clone()),
+                });
+                return Err(e);
             }
         };
         let chat_body = serde_json::json!({
             "model": name,
             "messages": messages,
             "stream": true,
+            "think": request_think,
             "keep_alive": "15m",
-            "options": {
-                "temperature": temp,
-                "num_ctx": 4096,
-                "num_predict": 320,
-                "repeat_penalty": 1.18,
-                "top_p": 0.9
-            }
+            "options": request_options
         })
         .to_string();
         let resp = match client
@@ -309,21 +613,42 @@ pub fn ollama_chat_stream(
         {
             Ok(r) => r,
             Err(e) => {
-                emit(ChatDelta { delta: String::new(), done: true, error: Some(format!("connect: {e}")) });
-                return;
+                let error = format!("connect: {e}");
+                emit(ChatDelta {
+                    delta: String::new(),
+                    done: true,
+                    error: Some(error.clone()),
+                });
+                return Err(error);
             }
         };
         let status = resp.status();
         if !status.is_success() {
-            emit(ChatDelta { delta: String::new(), done: true, error: Some(format!("status_{}", status.as_u16())) });
-            return;
+            let error = format!("status_{}", status.as_u16());
+            emit(ChatDelta {
+                delta: String::new(),
+                done: true,
+                error: Some(error.clone()),
+            });
+            return Err(error);
         }
 
         let reader = BufReader::new(resp);
+        let mut text = String::new();
+        let mut input_tokens = None;
+        let mut output_tokens = None;
         for line in reader.lines() {
             let line = match line {
                 Ok(l) => l,
-                Err(_) => break,
+                Err(error) => {
+                    let message = format!("stream: {error}");
+                    emit(ChatDelta {
+                        delta: String::new(),
+                        done: true,
+                        error: Some(message.clone()),
+                    });
+                    return Err(message);
+                }
             };
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -333,21 +658,50 @@ pub fn ollama_chat_stream(
                 continue;
             };
             if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-                emit(ChatDelta { delta: String::new(), done: true, error: Some(err.to_string()) });
-                return;
+                let error = err.to_string();
+                emit(ChatDelta {
+                    delta: String::new(),
+                    done: true,
+                    error: Some(error.clone()),
+                });
+                return Err(error);
             }
             if let Some(content) = v.pointer("/message/content").and_then(|c| c.as_str()) {
                 if !content.is_empty() {
-                    emit(ChatDelta { delta: content.to_string(), done: false, error: None });
+                    text.push_str(content);
+                    emit(ChatDelta {
+                        delta: content.to_string(),
+                        done: false,
+                        error: None,
+                    });
                 }
             }
             if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
-                emit(ChatDelta { delta: String::new(), done: true, error: None });
-                return;
+                input_tokens = v.get("prompt_eval_count").and_then(|entry| entry.as_u64());
+                output_tokens = v.get("eval_count").and_then(|entry| entry.as_u64());
+                emit(ChatDelta {
+                    delta: String::new(),
+                    done: true,
+                    error: None,
+                });
+                break;
             }
         }
-        emit(ChatDelta { delta: String::new(), done: true, error: None });
-    });
-
-    Ok(())
+        if text.trim().is_empty() {
+            let error = "empty_response".to_string();
+            emit(ChatDelta {
+                delta: String::new(),
+                done: true,
+                error: Some(error.clone()),
+            });
+            return Err(error);
+        }
+        Ok(OllamaChatResult {
+            text,
+            input_tokens,
+            output_tokens,
+        })
+    })
+    .await
+    .map_err(|error| format!("worker: {error}"))?
 }

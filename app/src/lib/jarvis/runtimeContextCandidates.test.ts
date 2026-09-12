@@ -8,6 +8,7 @@ import {
 const EXPECTED = {
   project: ['project', 'app_verified', 'user_authored', 'answer', false],
   project_tree: ['context_node', 'app_verified', 'app_observed', 'answer', false],
+  repository_context: ['project_file', 'app_verified', 'user_authored', 'citation', false],
   local_knowledge: ['project_file', 'app_verified', 'user_authored', 'citation', false],
   user_identity: ['memory', 'user_direct', 'user_authored', 'preference', false],
   default_write_folder: ['project', 'app_verified', 'app_observed', 'execution', false],
@@ -38,7 +39,7 @@ const EXPECTED = {
 describe('buildJarvisRuntimeContextCandidates', () => {
   it('projects every runtime block into distinct honest source metadata', () => {
     const keys = (Object.keys(EXPECTED) as JarvisRuntimeContextBlockKey[]).filter(
-      (key) => key !== 'local_knowledge',
+      (key) => key !== 'local_knowledge' && key !== 'repository_context',
     );
     const candidates = buildJarvisRuntimeContextCandidates({
       accountId: 'account-1',
@@ -183,6 +184,49 @@ describe('buildJarvisRuntimeContextCandidates', () => {
     expect(candidates.map((candidate) => candidate.score)).toEqual([42, 40]);
     expect(candidates.every((candidate) => candidate.purpose === 'citation')).toBe(true);
     expect(candidates.every((candidate) => candidate.explicitlyAttached === false)).toBe(true);
+  });
+
+  it('preserves separate repository files with verified portable provenance', () => {
+    const candidates = buildJarvisRuntimeContextCandidates({
+      accountId: 'account-1',
+      requestId: 'request-1',
+      projectId: 'project-1',
+      observedAt: 100,
+      blocks: [
+        {
+          key: 'repository_context',
+          text: 'export function authenticate() {}',
+          source: {
+            id: 'jrepo_1111111111111111',
+            label: 'src/auth.ts',
+            uri: 'src/auth.ts',
+            observedAt: 90,
+            contentHash: 'a'.repeat(64),
+          },
+          score: 0.9,
+        },
+        {
+          key: 'repository_context',
+          text: 'export function authorize() {}',
+          source: {
+            id: 'jrepo_2222222222222222',
+            label: 'src/permissions.ts',
+            uri: 'src/permissions.ts',
+            observedAt: 91,
+            contentHash: 'b'.repeat(64),
+          },
+          score: 0.8,
+        },
+      ],
+    });
+
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map(({ source }) => source.id)).toEqual([
+      'jrepo_1111111111111111',
+      'jrepo_2222222222222222',
+    ]);
+    expect(candidates.every(({ source }) => source.kind === 'project_file')).toBe(true);
+    expect(candidates.every(({ purpose }) => purpose === 'citation')).toBe(true);
   });
 
   it('drops retrieved local knowledge unless its exact bounded provenance is valid', () => {

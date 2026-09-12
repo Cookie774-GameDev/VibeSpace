@@ -2,9 +2,15 @@ import * as React from 'react';
 import './sakura-plugins.css';
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Download,
   ExternalLink,
   KeyRound,
   Loader2,
+  Pin,
+  PinOff,
+  Plus,
   Search,
   Settings2,
   ShieldCheck,
@@ -31,18 +37,38 @@ import { useAuthStore } from '@/stores/auth';
 import { PLUGIN_CATALOG } from './catalog';
 import { usePluginManagementCapability } from './managementContext';
 import { pluginSearchBlob } from './providerRegistry';
-import { selectPluginConnectionsForAccount, usePluginStore } from './store';
+import {
+  selectInstalledPluginIdsForAccount,
+  selectPinnedPluginIdsForAccount,
+  selectPluginConnectionsForAccount,
+  usePluginStore,
+} from './store';
 import type { PluginConnection, PluginManifest } from './types';
 import { isConnectableStatus } from './types';
 import { PluginLogo } from './PluginLogo';
+import { McpConnections } from '@/features/settings/sections/McpConnections';
+import { PLUGIN_COMPATIBILITY_BY_ID } from './compatibilityMatrix';
+import { PLUGIN_CONNECTION_ADAPTERS } from './connectionFramework';
 
 type Filter = 'all' | 'available' | 'connected' | 'planned';
+type AuthorizationPanel = Readonly<{
+  plugin: PluginManifest;
+  phase: 'opening' | 'awaiting_approval' | 'connected' | 'error';
+  authorizationUrl?: string;
+  userCode?: string;
+  error?: string;
+  setupUrl?: string;
+}>;
 
 const STATUS_LABELS = {
   connected: 'Connected',
   not_connected: 'Not connected',
   needs_setup: 'Needs setup',
   error: 'Error',
+  connecting: 'Connecting',
+  awaiting_approval: 'Awaiting approval',
+  reauthorize: 'Reauthorize',
+  expired: 'Expired',
 } as const;
 
 function defaultConnectionState(plugin: PluginManifest): PluginConnection['state'] {
@@ -65,15 +91,89 @@ function statusBadgeLabel(
   return STATUS_LABELS[connectionState];
 }
 
+function usesProviderAuthorization(pluginId: string): boolean {
+  const path = PLUGIN_CONNECTION_ADAPTERS[pluginId].path;
+  return (
+    path === 'native_oauth_pkce' ||
+    path === 'hosted_oauth' ||
+    path === 'device_authorization' ||
+    path === 'app_installation'
+  );
+}
+
 export function Plugins() {
   const accountId = useAuthStore((state) => resolveAccountIdentity(state)?.accountId ?? '');
   const connections = usePluginStore((state) =>
     selectPluginConnectionsForAccount(state, accountId),
   );
   const setEnabled = usePluginStore((state) => state.setEnabled);
+  const installedPluginIds = usePluginStore((state) =>
+    selectInstalledPluginIdsForAccount(state, accountId),
+  );
+  const installPlugin = usePluginStore((state) => state.installPlugin);
+  const pinnedPluginIds = usePluginStore((state) =>
+    selectPinnedPluginIdsForAccount(state, accountId),
+  );
+  const pinPlugin = usePluginStore((state) => state.pinPlugin);
+  const unpinPlugin = usePluginStore((state) => state.unpinPlugin);
+  const movePinnedPlugin = usePluginStore((state) => state.movePinnedPlugin);
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<Filter>('all');
   const [selected, setSelected] = React.useState<PluginManifest | null>(null);
+  const [authorizationPanel, setAuthorizationPanel] =
+    React.useState<AuthorizationPanel | null>(null);
+  const [mcpOpen, setMcpOpen] = React.useState(false);
+  const management = usePluginManagementCapability();
+
+  async function startProviderAuthorization(plugin: PluginManifest) {
+    setAuthorizationPanel({ plugin, phase: 'opening' });
+    if (!accountId || !management) {
+      setAuthorizationPanel({
+        plugin,
+        phase: 'error',
+        error: 'Plugin management is unavailable until account setup finishes.',
+      });
+      return;
+    }
+    try {
+      const result = await management.beginAuthorization({ accountId, pluginId: plugin.id });
+      if (!result.ok) {
+        setAuthorizationPanel({
+          plugin,
+          phase: 'error',
+          error: result.error,
+          setupUrl: result.setupUrl,
+        });
+        return;
+      }
+      const nextPanel: AuthorizationPanel = {
+        plugin,
+        phase: result.state,
+        authorizationUrl: result.authorizationUrl,
+        userCode: result.userCode,
+      };
+      setAuthorizationPanel(nextPanel);
+      if (result.authorizationUrl) {
+        try {
+          await openExternal(result.authorizationUrl);
+        } catch {
+          setAuthorizationPanel({
+            ...nextPanel,
+            error: `The ${plugin.provider} authorization page did not open automatically.`,
+          });
+        }
+      }
+      if (result.state === 'connected') {
+        toast.success(`${plugin.name} connected`, 'Provider authorization is verified.');
+      }
+    } catch {
+      setAuthorizationPanel({
+        plugin,
+        phase: 'error',
+        error: `Could not start the ${plugin.provider} authorization flow.`,
+      });
+    }
+  }
 
   const visible = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -109,8 +209,22 @@ export function Plugins() {
             keeps them in memory for the session only).
           </p>
         </div>
-        <Badge variant={connectedCount ? 'success' : 'outline'}>{connectedCount} connected</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={connectedCount ? 'success' : 'outline'}>{connectedCount} connected</Badge>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label="Add MCP connection"
+            aria-expanded={mcpOpen}
+            onClick={() => setMcpOpen((open) => !open)}
+          >
+            <Plus />
+          </Button>
+        </div>
       </header>
+
+      {mcpOpen && <McpConnections />}
 
       <div className="rounded-lg border border-accent-cyan/20 bg-accent-cyan/5 p-3 flex gap-3">
         <ShieldCheck className="h-5 w-5 shrink-0 text-accent-cyan" />
@@ -149,8 +263,16 @@ export function Plugins() {
           const connection = connections[plugin.id];
           const connectionState = connection?.state ?? defaultConnectionState(plugin);
           const badgeLabel = statusBadgeLabel(plugin, connectionState);
+          const pinIndex = pinnedPluginIds.indexOf(plugin.id);
+          const isPinned = pinIndex >= 0;
+          const isInstalled = installedPluginIds.includes(plugin.id) || Boolean(connection);
           return (
-            <Card key={plugin.id} data-testid={`plugin-card-${plugin.id}`} data-sakura-surface="plugin-card" data-sakura-state={connectionState}>
+            <Card
+              key={plugin.id}
+              data-testid={`plugin-card-${plugin.id}`}
+              data-sakura-surface="plugin-card"
+              data-sakura-state={connectionState}
+            >
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -186,6 +308,32 @@ export function Plugins() {
                     Connected as {connection.accountLabel}
                   </p>
                 )}
+                {connection?.state === 'connected' && (
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-metadata text-muted-foreground">
+                    <dt>Scopes</dt>
+                    <dd className="truncate text-foreground/90">
+                      {plugin.requiredScopes?.length
+                        ? plugin.requiredScopes.join(' · ')
+                        : 'No provider scopes declared'}
+                    </dd>
+                    <dt>Connected / updated</dt>
+                    <dd className="text-foreground/90">
+                      {new Intl.DateTimeFormat(undefined, {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      }).format(connection.updatedAt)}
+                    </dd>
+                    <dt>Last successful check</dt>
+                    <dd className="text-foreground/90">
+                      {connection.lastTestedAt
+                        ? new Intl.DateTimeFormat(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          }).format(connection.lastTestedAt)
+                        : 'Not yet verified'}
+                    </dd>
+                  </dl>
+                )}
                 {connection?.error && (
                   <p role="alert" className="text-metadata text-destructive">
                     {connection.error}
@@ -212,12 +360,30 @@ export function Plugins() {
                     type="button"
                     size="sm"
                     variant={connection?.state === 'connected' ? 'outline' : 'default'}
-                    disabled={!isConnectableStatus(plugin.status)}
-                    onClick={() => setSelected(plugin)}
+                    disabled={!isConnectableStatus(plugin.status) || !accountId}
+                    onClick={() => {
+                      if (connection?.state === 'connected') {
+                        setSelected(plugin);
+                      } else if (!isInstalled) {
+                        installPlugin(accountId, plugin.id);
+                        toast.success(
+                          `${plugin.name} installed`,
+                          'The connector is ready. Connect your provider account when you are ready.',
+                        );
+                      } else if (usesProviderAuthorization(plugin.id)) {
+                        void startProviderAuthorization(plugin);
+                      } else {
+                        setSelected(plugin);
+                      }
+                    }}
                   >
                     {connection?.state === 'connected' ? (
                       <>
                         <Settings2 className="h-3.5 w-3.5" /> Manage
+                      </>
+                    ) : !isInstalled ? (
+                      <>
+                        <Download className="h-3.5 w-3.5" /> Install
                       </>
                     ) : (
                       <>
@@ -226,6 +392,52 @@ export function Plugins() {
                     )}
                   </Button>
                 </div>
+                {connection?.state === 'connected' && (
+                  <div className="flex items-center justify-end gap-1">
+                    {isPinned && (
+                      <>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Move ${plugin.name} pin up`}
+                          disabled={pinIndex === 0}
+                          onClick={() => movePinnedPlugin(accountId, plugin.id, -1)}
+                        >
+                          <ChevronUp />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Move ${plugin.name} pin down`}
+                          disabled={pinIndex === pinnedPluginIds.length - 1}
+                          onClick={() => movePinnedPlugin(accountId, plugin.id, 1)}
+                        >
+                          <ChevronDown />
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        if (isPinned) {
+                          unpinPlugin(accountId, plugin.id);
+                        } else if (!pinPlugin(accountId, plugin.id)) {
+                          toast.warning(
+                            'Pin limit reached',
+                            'Workbench supports up to 10 plugin pins.',
+                          );
+                        }
+                      }}
+                    >
+                      {isPinned ? <PinOff /> : <Pin />}
+                      {isPinned ? 'Unpin from Workbench' : 'Pin to Workbench'}
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
@@ -233,7 +445,10 @@ export function Plugins() {
       </div>
 
       {visible.length === 0 && (
-        <div className="rounded-lg border border-dashed border-border p-10 text-center text-secondary text-muted-foreground" data-sakura-state="empty">
+        <div
+          className="rounded-lg border border-dashed border-border p-10 text-center text-secondary text-muted-foreground"
+          data-sakura-state="empty"
+        >
           No plugins match this search.
         </div>
       )}
@@ -243,7 +458,153 @@ export function Plugins() {
         plugin={selected}
         onClose={() => setSelected(null)}
       />
+      <PluginAuthorizationDialog
+        accountId={accountId}
+        panel={authorizationPanel}
+        onClose={() => setAuthorizationPanel(null)}
+      />
     </div>
+  );
+}
+
+function PluginAuthorizationDialog({
+  accountId,
+  panel,
+  onClose,
+}: {
+  accountId: string;
+  panel: AuthorizationPanel | null;
+  onClose: () => void;
+}) {
+  const management = usePluginManagementCapability();
+  const [cancelling, setCancelling] = React.useState(false);
+
+  if (!panel) return null;
+
+  const { plugin } = panel;
+  const isOpening = panel.phase === 'opening';
+  const canCancel = panel.phase === 'awaiting_approval';
+
+  async function cancel() {
+    if (!management || !accountId) return;
+    setCancelling(true);
+    try {
+      await management.cancelAuthorization({ accountId, pluginId: plugin.id });
+      toast.info(`${plugin.name} authorization cancelled`);
+      onClose();
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sakura-plugin-dialog max-w-md [html[data-theme=monochrome]_&]:rounded-none [html[data-theme=monochrome]_&]:shadow-none">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <PluginLogo plugin={plugin} size="sm" />
+            Connect {plugin.name}
+          </DialogTitle>
+          <DialogDescription>
+            {isOpening
+              ? `Opening ${plugin.provider}’s official authorization page…`
+              : `${plugin.provider} authorization should open in your browser.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-4">
+          {isOpening && (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-panel p-3 text-secondary text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+              Starting secure authorization…
+            </div>
+          )}
+
+          {panel.authorizationUrl && (
+            <div className="flex flex-col items-start gap-2 rounded-lg border border-accent-cyan/25 bg-accent-cyan/5 p-3">
+              <p className="text-secondary text-foreground">
+                If authorization did not open automatically, use this secure provider link.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void openExternal(panel.authorizationUrl!)}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open {plugin.provider} authorization
+              </Button>
+              {panel.userCode && (
+                <p className="text-secondary text-muted-foreground">
+                  Provider code: <strong className="font-mono text-foreground">{panel.userCode}</strong>
+                </p>
+              )}
+            </div>
+          )}
+
+          {!isOpening && (
+            <div>
+              <p className="mb-1 text-metadata uppercase tracking-wide text-muted-foreground">
+                Manual recovery
+              </p>
+              <ol className="list-decimal space-y-1 pl-5 text-secondary text-muted-foreground">
+                <li>Open the provider authorization link.</li>
+                <li>Sign in, review the requested permissions, and approve or decline.</li>
+                <li>Return to VibeSpace; the connection status updates after verification.</li>
+              </ol>
+            </div>
+          )}
+
+          {(plugin.requiredScopes?.length ?? 0) > 0 && (
+            <details className="rounded-lg border border-border bg-panel/70 p-3">
+              <summary className="cursor-pointer text-secondary font-medium text-foreground">
+                Permissions requested
+              </summary>
+              <ul className="mt-2 flex flex-col gap-1" aria-label="Permissions requested">
+                {plugin.requiredScopes?.map((scope) => (
+                  <li key={scope} className="break-all font-mono text-metadata text-muted-foreground">
+                    {scope}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {panel.error && (
+            <div role="alert" className="flex flex-col items-start gap-2 text-secondary text-destructive">
+              <p>{panel.error}</p>
+              {panel.setupUrl && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void openExternal(panel.setupUrl!)}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View provider requirements
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          {canCancel && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={cancelling || !management || !accountId}
+              onClick={() => void cancel()}
+            >
+              {cancelling && <Loader2 className="h-4 w-4 animate-spin" />}
+              Cancel authorization
+            </Button>
+          )}
+          <Button type="button" variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -263,36 +624,85 @@ function PluginSetupDialog({
   const [draft, setDraft] = React.useState<Record<string, string>>({});
   const [testing, setTesting] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [setupUrl, setSetupUrl] = React.useState('');
 
   React.useEffect(() => {
     setDraft({});
     setError('');
+    setSetupUrl('');
   }, [plugin?.id]);
 
   if (!plugin) return null;
 
   const activePlugin = plugin;
+  const compatibility = PLUGIN_COMPATIBILITY_BY_ID[activePlugin.id];
+  const adapter = PLUGIN_CONNECTION_ADAPTERS[activePlugin.id];
+  const usesProviderAuthorization =
+    adapter.path === 'native_oauth_pkce' ||
+    adapter.path === 'hosted_oauth' ||
+    adapter.path === 'device_authorization' ||
+    adapter.path === 'app_installation';
   const configuredFields = new Set(connection?.configuredFields ?? []);
   const hasAutomatedTest = Boolean(activePlugin.httpTest) || activePlugin.authType === 'none';
-  const providerConnectLabel =
-    activePlugin.authType === 'oauth'
-      ? `Continue with ${activePlugin.provider}`
-      : `Open ${activePlugin.provider} connect page`;
-  const requiresLocalCredential = activePlugin.fields.length > 0;
+  const providerConnectLabel = `Continue with ${activePlugin.provider}`;
+  const requiresLocalCredential =
+    adapter.path === 'manual_credential' && activePlugin.fields.length > 0;
+  const displayedSetupSteps = usesProviderAuthorization
+    ? [
+        `Choose Continue with ${activePlugin.provider}.`,
+        'Review the exact permissions on the provider-owned authorization page.',
+        'Approve or decline there, then return to VibeSpace for verification.',
+      ]
+    : activePlugin.setupSteps;
 
-  function openProviderConnect() {
-    if (!activePlugin.credentialUrl) return;
+  async function authorize() {
     setError('');
-    void openExternal(activePlugin.credentialUrl).then(
-      () =>
+    setSetupUrl('');
+    if (!accountId || !management) {
+      setError('Plugin management is unavailable until account setup finishes.');
+      return;
+    }
+    setTesting(true);
+    try {
+      const result = await management.beginAuthorization({
+        accountId,
+        pluginId: activePlugin.id,
+      });
+      if (!result.ok) {
+        setError(result.error);
+        setSetupUrl(result.setupUrl ?? '');
+        return;
+      }
+      if (result.authorizationUrl) {
+        await openExternal(result.authorizationUrl);
+      }
+      if (result.state === 'connected') {
+        toast.success(`${activePlugin.name} connected`, 'Provider authorization is verified.');
+      } else {
         toast.info(
-          `${activePlugin.provider} opened`,
-          requiresLocalCredential
-            ? 'Finish the provider setup in your browser, then paste the returned credential here.'
-            : 'Finish the provider authorization in your browser, then return to VibeSpace.',
-        ),
-      () => setError(`Could not open the ${activePlugin.provider} setup page.`),
-    );
+          `${activePlugin.provider} authorization opened`,
+          result.userCode
+            ? `Enter code ${result.userCode} on the provider page.`
+            : 'Approve access in the provider page, then return to VibeSpace.',
+        );
+      }
+    } catch {
+      setError(`Could not open the ${activePlugin.provider} authorization flow.`);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function cancelAuthorization() {
+    if (!accountId || !management) return;
+    setTesting(true);
+    try {
+      await management.cancelAuthorization({ accountId, pluginId: activePlugin.id });
+      toast.info(`${activePlugin.name} authorization cancelled`);
+      onClose();
+    } finally {
+      setTesting(false);
+    }
   }
 
   async function connect() {
@@ -374,7 +784,11 @@ function PluginSetupDialog({
                 : `Connect ${plugin.name}`}
             </span>
           </DialogTitle>
-          <DialogDescription>{plugin.help}</DialogDescription>
+          <DialogDescription>
+            {usesProviderAuthorization
+              ? `Authorize ${plugin.name} on ${plugin.provider}’s official page. VibeSpace receives only a token-free connection receipt in this interface.`
+              : plugin.help}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
@@ -385,6 +799,10 @@ function PluginSetupDialog({
             <p className="text-secondary text-muted-foreground">{plugin.description}</p>
             <p className="mt-1 text-metadata text-muted-foreground">
               Provider: {plugin.provider} · Auth: {plugin.authType.replace(/_/g, ' ')}
+            </p>
+            <p className="mt-1 text-metadata text-muted-foreground">
+              Connection method: {compatibility.connectionClass.replace(/_/g, ' ')} ·{' '}
+              {compatibility.redirectMethod.replace(/_/g, ' ')}
             </p>
           </div>
 
@@ -400,44 +818,48 @@ function PluginSetupDialog({
                     key={scope}
                     className="break-all rounded border border-border/70 bg-background/60 px-2 py-1 font-mono text-metadata text-foreground"
                   >
-                    {scope}
+                    <span>{scope}</span>
+                    {compatibility.highRiskScopes.includes(scope) ? (
+                      <span className="ml-1 text-warning">· elevated permission</span>
+                    ) : null}
                   </li>
                 ))}
               </ul>
             </div>
           )}
 
-          {plugin.credentialUrl && (
+          {usesProviderAuthorization && (
             <div className="mc7f-plugins-credential-hero relative overflow-hidden rounded-2xl border border-accent-cyan/20 bg-gradient-to-br from-accent-cyan/10 via-elevated to-purple-500/10 p-4 [html[data-theme=monochrome]_&]:rounded-none [html[data-theme=monochrome]_&]:bg-none">
               <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-accent-cyan/20 blur-3xl [html[data-theme=monochrome]_&]:hidden" />
               <div className="relative flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-ui-strong text-foreground">
-                    {activePlugin.authType === 'oauth'
-                      ? `Sign in with ${activePlugin.provider}`
-                      : `Connect through ${activePlugin.provider}`}
+                    Sign in with {activePlugin.provider}
                   </p>
                   <p className="text-secondary text-muted-foreground">
-                    {activePlugin.authType === 'oauth'
-                      ? 'Start from the official provider page. VibeSpace never asks for your password.'
-                      : 'We send you to the official provider page first, then store only the credential you choose to save.'}
+                    Authorization happens on the official provider page. VibeSpace never asks for
+                    your provider password, refresh grant, or client secret.
                   </p>
                 </div>
-                <Button type="button" onClick={openProviderConnect}>
-                  <ExternalLink className="h-4 w-4" />
+                <Button type="button" disabled={testing} onClick={() => void authorize()}>
+                  {testing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ExternalLink className="h-4 w-4" />
+                  )}
                   {providerConnectLabel}
                 </Button>
               </div>
             </div>
           )}
 
-          {plugin.setupSteps.length > 0 && (
+          {displayedSetupSteps.length > 0 && (
             <div>
               <p className="text-metadata uppercase tracking-wide text-muted-foreground mb-1">
                 Setup steps
               </p>
               <ol className="list-decimal pl-5 text-secondary text-muted-foreground space-y-1">
-                {plugin.setupSteps.map((step) => (
+                {displayedSetupSteps.map((step) => (
                   <li key={step}>{step}</li>
                 ))}
               </ol>
@@ -485,7 +907,7 @@ function PluginSetupDialog({
             </div>
           )}
 
-          {plugin.fields.length === 0 && (
+          {!requiresLocalCredential && !usesProviderAuthorization && plugin.fields.length === 0 && (
             <div className="rounded-md border border-border bg-panel p-3 flex gap-2">
               <CheckCircle2 className="h-4 w-4 text-success" />
               <span className="text-secondary text-muted-foreground">
@@ -524,37 +946,63 @@ function PluginSetupDialog({
           )}
 
           {error && (
-            <p role="alert" className="text-secondary text-destructive">
-              {error}
-            </p>
+            <div
+              role="alert"
+              className="flex flex-col items-start gap-2 text-secondary text-destructive"
+            >
+              <p>{error}</p>
+              {setupUrl && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void openExternal(setupUrl)}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View provider requirements
+                </Button>
+              )}
+            </div>
           )}
         </div>
 
         <DialogFooter className="justify-between">
           <div>
-            {connection && (
-              <Button
-                type="button"
-                variant="destructive"
-                disabled={testing || !accountId || !management}
-                onClick={() => void disconnect()}
-              >
-                <Unplug className="h-4 w-4" /> Disconnect
-              </Button>
-            )}
+            {connection &&
+              (connection.state === 'connecting' || connection.state === 'awaiting_approval' ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={testing || !accountId || !management}
+                  onClick={() => void cancelAuthorization()}
+                >
+                  Cancel authorization
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={testing || !accountId || !management}
+                  onClick={() => void disconnect()}
+                >
+                  <Unplug className="h-4 w-4" /> Disconnect
+                </Button>
+              ))}
           </div>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={onClose}>
               Close
             </Button>
-            <Button
-              type="button"
-              disabled={testing || !accountId || !management}
-              onClick={() => void connect()}
-            >
-              {testing && <Loader2 className="h-4 w-4 animate-spin" />}
-              {connection ? 'Test Connection' : 'Connect'}
-            </Button>
+            {!usesProviderAuthorization && (
+              <Button
+                type="button"
+                disabled={testing || !accountId || !management}
+                onClick={() => void connect()}
+              >
+                {testing && <Loader2 className="h-4 w-4 animate-spin" />}
+                {connection ? 'Test Connection' : 'Connect'}
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

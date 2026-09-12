@@ -6,13 +6,13 @@ import type { JarvisResponseEnvelope } from '@/lib/jarvis/contracts';
 import { useAuthStore } from '@/stores/auth';
 import { pullNewSpeechSegments, pullRemainingSpeech } from './textCleanup';
 import {
-  createKokoroStreamingPlayer,
+  createJarvisStreamingPlayer,
   registerActiveStreamingVoiceSession,
   speakWithSettings,
   stopAllVoiceOutput,
   canVoiceModuleSpeak,
   getActiveVoiceSessionId,
-  type KokoroStreamingPlayer,
+  type JarvisStreamingPlayer,
 } from './voiceRouter';
 import {
   SPEECH_SYNTHESIS_END_EVENT,
@@ -36,26 +36,23 @@ export class StreamingVoiceSession {
   private readonly playbackAbort = new AbortController();
   private readonly engine: VoiceEngine;
   private readonly voicePreset: VoicePresetId;
-  private readonly kokoroStream: KokoroStreamingPlayer | null;
+  private readonly jarvisStream: JarvisStreamingPlayer | null;
   private readonly sessionId: number;
 
   constructor(options: StreamingVoiceOptions = {}) {
     const state = useAuthStore.getState();
-    this.engine = options.voiceEngine ?? state.voiceEngine ?? 'kokoro';
+    this.engine = options.voiceEngine ?? state.voiceEngine ?? 'jarvis';
     this.voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
     this.sessionId = getActiveVoiceSessionId();
-    this.kokoroStream =
-      this.engine === 'kokoro' ? createKokoroStreamingPlayer(this.voicePreset) : null;
+    this.jarvisStream =
+      this.engine === 'jarvis' ? createJarvisStreamingPlayer(this.voicePreset) : null;
     registerActiveStreamingVoiceSession(this);
   }
 
   private isSessionLive(): boolean {
-    return (
-      !this.stopped &&
-      this.sessionId > 0 &&
-      this.sessionId === getActiveVoiceSessionId() &&
-      canVoiceModuleSpeak()
-    );
+    if (this.stopped || !canVoiceModuleSpeak()) return false;
+    if (this.sessionId === 0) return true;
+    return this.sessionId === getActiveVoiceSessionId();
   }
 
   /** @deprecated Temporary raw compatibility boundary; Task 16B removes its final caller. */
@@ -81,8 +78,8 @@ export class StreamingVoiceSession {
     if (remainder.trim()) {
       this.enqueueSpeechText(remainder);
     }
-    if (this.kokoroStream) {
-      await this.kokoroStream.complete();
+    if (this.jarvisStream) {
+      await this.jarvisStream.complete();
     } else {
       await this.queue;
     }
@@ -123,7 +120,7 @@ export class StreamingVoiceSession {
             : finalText;
       if (remainder) this.enqueueValidatedChunk(remainder as ValidatedSpeechChunk);
     }
-    if (this.kokoroStream) await this.kokoroStream.complete();
+    if (this.jarvisStream) await this.jarvisStream.complete();
     else await this.queue;
     if (!this.stopped) {
       window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
@@ -140,7 +137,7 @@ export class StreamingVoiceSession {
       window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
       window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_END_EVENT));
     }
-    this.kokoroStream?.stop();
+    this.jarvisStream?.stop();
   }
 
   stop(): void {
@@ -151,13 +148,13 @@ export class StreamingVoiceSession {
 
   private enqueueSpeechText(text: string): void {
     if (!this.isSessionLive()) return;
-    if (this.kokoroStream) {
+    if (this.jarvisStream) {
       if (!this.started) {
         this.started = true;
         window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT));
         window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT));
       }
-      this.kokoroStream.enqueue(text);
+      this.jarvisStream.enqueue(text);
       return;
     }
 
@@ -229,7 +226,7 @@ export function createCanonicalVoicePlaybackAdapter() {
       const spokenText = input.spokenText.trim();
       if (!spokenText) return null;
       const state = useAuthStore.getState();
-      const engine = state.voiceEngine ?? 'kokoro';
+      const engine = state.voiceEngine ?? 'jarvis';
       const voicePreset = state.voicePreset ?? 'jarvis-prime';
       const issuedAt = Date.now();
       const receipt = Object.freeze({

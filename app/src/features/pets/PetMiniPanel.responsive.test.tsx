@@ -11,10 +11,6 @@ vi.mock('./PetTerminalSurface', () => ({
   PetTerminalSurface: () => <div data-testid="shared-terminal-surface" />,
 }));
 
-vi.mock('./PetVoiceSurface', () => ({
-  PetVoiceSurface: () => <div data-testid="shared-voice-surface" />,
-}));
-
 vi.mock('./petTauriBridge', () => ({
   hidePetPanel: vi.fn(async () => undefined),
   minimizePetPanel: vi.fn(async () => undefined),
@@ -40,39 +36,35 @@ describe('PetMiniPanel responsive shell', () => {
     vi.useRealTimers();
   });
 
-  it('collapses the complete header without unmounting the active shared surface', () => {
+  it('keeps the compact two-mode header mounted above the active shared surface', () => {
     render(<PetMiniPanel open onClose={vi.fn()} windowMode />);
 
     expect(screen.getByTestId('pet-panel-header').getAttribute('data-collapsed')).toBe('false');
     expect(screen.getByTestId('shared-chat-surface')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse panel header' }));
-
-    expect(screen.getByTestId('pet-panel-header').getAttribute('data-collapsed')).toBe('true');
-    expect(screen.getByTestId('shared-chat-surface')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Expand panel header' })).toBeTruthy();
-    expect(localStorage.getItem('vibespace-pet-panel-header-collapsed')).toBe('1');
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Terminals' })).toBeTruthy();
   });
 
-  it('restores the collapsed preference and keeps every essential window control accessible', () => {
+  it('ignores the legacy collapsed preference and keeps every essential window control accessible', () => {
     localStorage.setItem('vibespace-pet-panel-header-collapsed', '1');
 
     render(<PetMiniPanel open onClose={vi.fn()} windowMode />);
 
-    expect(screen.getByTestId('pet-panel-header').getAttribute('data-collapsed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Expand panel header' })).toBeTruthy();
+    expect(screen.getByTestId('pet-panel-header').getAttribute('data-collapsed')).toBe('false');
     expect(screen.getByRole('button', { name: 'Minimize pet panel' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Close pet panel' })).toBeTruthy();
-    expect(screen.getByText('Chats')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeTruthy();
   });
 
-  it('exposes container-driven density hooks without scaling the interface', () => {
+  it('exposes density + continuous UI scale hooks without CSS transform on the shell', () => {
     render(<PetMiniPanel open onClose={vi.fn()} windowMode />);
 
     const panel = screen.getByRole('dialog', { name: 'Pet mini panel' });
     expect(panel.classList.contains('pet-mini-panel-shell')).toBe(true);
     expect(panel.hasAttribute('data-pet-panel-density')).toBe(true);
-    expect(panel.getAttribute('style') ?? '').not.toContain('scale(');
+    expect(panel.hasAttribute('data-pet-ui-scale')).toBe(true);
+    // Scale is applied via CSS variables / densification, not transform on the shell.
+    expect(panel.getAttribute('style') ?? '').not.toMatch(/(?:^|;)\s*transform:\s*scale\(/);
   });
 
   it('keeps minimize and close lifecycle states visible for their bounded transitions', () => {
@@ -94,26 +86,15 @@ describe('PetMiniPanel responsive shell', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('expands and collapses safe error activity details without exposing hidden content', () => {
-    usePetPresentationStore.setState({
-      activity: [
-        {
-          id: 'error-1',
-          kind: 'error',
-          summary: 'Terminal task failed',
-          target: { type: 'terminal', id: 'terminal-7' },
-          createdAt: 1_000,
-        },
-      ],
-    });
+  it('keeps the compact panel focused on only Chat and Terminals', () => {
     render(<PetMiniPanel open onClose={vi.fn()} windowMode />);
-    fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand error details' }));
-    expect(screen.getByText('Target: terminal')).toBeTruthy();
-    expect(screen.getByText('Reference: terminal-7')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Terminals' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Voice' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Activity' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse error details' }));
-    expect(screen.queryByText('Reference: terminal-7')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Terminals' }));
+    expect(screen.getByTestId('shared-terminal-surface')).toBeTruthy();
   });
 });

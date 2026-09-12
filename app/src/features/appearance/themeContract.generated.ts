@@ -11,17 +11,31 @@ export const SELECTABLE_THEME_IDS = [
   'default',
   'monochrome',
   'sakura',
+  'warm',
+  'origami',
 ] as const;
 export type SelectableTheme = (typeof SELECTABLE_THEME_IDS)[number];
 
+export const DEFERRED_THEME_IDS = ['vibespace', 'sakura', 'origami'] as const;
+export const RELEASE_THEME_IDS = ['jarvis', 'default', 'monochrome', 'warm'] as const;
+
 export const THEME_DEFINITIONS = [
-  { id: 'jarvis', label: 'Jarvis Core', description: 'High-contrast command center.' },
+  { id: 'jarvis', label: 'Jarvis One', description: 'High-contrast command center.' },
   { id: 'vibespace', label: 'VibeSpace', description: 'Pastel origami workspace.' },
   { id: 'default', label: 'Default', description: 'Warm, focused dark workspace.' },
   { id: 'monochrome', label: 'MonoChrome', description: 'Terminal-inspired developer console.' },
   { id: 'sakura', label: 'Sakura', description: 'Cel-painted dusk workspace.' },
+  { id: 'warm', label: 'Warm', description: 'Espresso and ivory paper workspace.' },
+  { id: 'origami', label: 'Origami', description: 'Sculpted paper workspace in motion.' },
 ] as const;
 export type ThemeDefinition = (typeof THEME_DEFINITIONS)[number];
+
+export const RELEASE_THEME_DEFINITIONS = [
+  { id: 'jarvis', label: 'Jarvis One', description: 'High-contrast command center.' },
+  { id: 'default', label: 'Default', description: 'Warm, focused dark workspace.' },
+  { id: 'monochrome', label: 'MonoChrome', description: 'Terminal-inspired developer console.' },
+  { id: 'warm', label: 'Warm', description: 'Espresso and ivory paper workspace.' },
+] as const;
 
 export const DOCUMENT_THEME_BY_ID = {
   jarvis: 'jarvis',
@@ -29,6 +43,8 @@ export const DOCUMENT_THEME_BY_ID = {
   default: 'dark',
   monochrome: 'monochrome',
   sakura: 'sakura',
+  warm: 'warm',
+  origami: 'origami',
 } as const;
 export type ResolvedDocumentTheme =
   (typeof DOCUMENT_THEME_BY_ID)[keyof typeof DOCUMENT_THEME_BY_ID];
@@ -47,15 +63,14 @@ export const SYNC_LEGACY_THEME_MAP = {
 export const THEME_COMMAND_ALIASES = {
   jarvis: 'jarvis',
   'jarvis core': 'jarvis',
+  'jarvis one': 'jarvis',
   core: 'jarvis',
-  vibespace: 'vibespace',
-  vibe: 'vibespace',
   default: 'default',
   dark: 'default',
   monochrome: 'monochrome',
   mono: 'monochrome',
   terminal: 'monochrome',
   light: 'monochrome',
-  sakura: 'sakura',
-  'sakura dusk': 'sakura',
+  warm: 'warm',
+  cozy: 'warm',
 } as const;

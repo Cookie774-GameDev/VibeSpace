@@ -88,7 +88,7 @@ describe('App trusted kernel host composition', () => {
     );
   });
 
-  it('invalidates the old account synchronously before account listener teardown', () => {
+  it('quarantines account-scoped state synchronously before awaiting terminal revocation and listener flushes', () => {
     const teardownStart = source.indexOf('async function stopAccountScopedListeners');
     const teardownEnd = source.indexOf('async function transitionAccountScopedListeners');
     const teardown = source.slice(teardownStart, teardownEnd);
@@ -96,10 +96,30 @@ describe('App trusted kernel host composition', () => {
     const invalidate = teardown.indexOf('invalidateActiveKernelAccount');
     const clear = teardown.indexOf('activeAccountIdentity = null');
     const invokeStops = teardown.indexOf('stops.map');
+    const dispose = teardown.indexOf('oldLiveEvidenceSession?.dispose()');
+    const quarantine = teardown.indexOf('quarantineAccountScopedState()');
+    const revokeTerminals = teardown.indexOf('revokeTerminalExecutionsForAccount(oldAccountId)');
+    const settle = teardown.indexOf('await Promise.allSettled');
     expect(capture).toBeGreaterThan(-1);
     expect(invalidate).toBeGreaterThan(capture);
     expect(clear).toBeGreaterThan(invalidate);
     expect(invokeStops).toBeGreaterThan(clear);
+    expect(dispose).toBeGreaterThan(invokeStops);
+    expect(quarantine).toBeGreaterThan(dispose);
+    expect(revokeTerminals).toBeGreaterThan(quarantine);
+    expect(settle).toBeGreaterThan(revokeTerminals);
+    expect(teardown).toContain('terminal_account_revocation_incomplete');
+    expect(source).toMatch(
+      /stopAccountScopedListeners\(\{\s*revokeTerminalExecutions:\s*!sameAccountIdentity\(/,
+    );
+    const transition = source.slice(
+      source.indexOf('async function transitionAccountScopedListeners'),
+      source.indexOf('function syncAccountScopedListeners'),
+    );
+    expect(transition.indexOf('if (terminalAccountRevocationBlocked)')).toBeGreaterThan(-1);
+    expect(transition.indexOf('if (terminalAccountRevocationBlocked)')).toBeLessThan(
+      transition.indexOf('const accountId = nextIdentity.accountId'),
+    );
   });
 
   it('creates the Command Center host only after the exact account session opens', () => {
@@ -131,7 +151,7 @@ describe('App trusted kernel host composition', () => {
 
   it('passes ChatThread only the minimal host port and read data port', () => {
     expect(chatThreadSource).toMatch(/hostPort\.requestCancellation/);
-    expect(chatThreadSource).toMatch(/commandCenterBinding\.dataPort/);
+    expect(chatThreadSource).toMatch(/commandCenterBinding\?\.dataPort/);
     expect(chatThreadSource).not.toMatch(
       /JarvisKernelRuntime|AccountSession|scheduledTransportRetry|scheduledLogicalRetry|host lifecycle/i,
     );

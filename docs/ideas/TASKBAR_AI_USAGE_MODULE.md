@@ -1,166 +1,149 @@
-# VibeSpace Taskbar AI Usage Module
+# VibeSpace Taskbar AI Usage Module — Production Repair and Expansion
 
-**Status:** Implementation-ready feature specification  
-**Target app:** VibeSpace desktop (Tauri + React/Vite)  
-**Target repository file:** `docs/ideas/TASKBAR_AI_USAGE_MODULE.md`
+**Status:** Required implementation/repair
+**Goal:** `VS-PR31-PRODUCTION-FUNCTIONALITY-20260802`
+**Target:** VibeSpace desktop, Tauri + React/Vite
 
-## Reference image
+## Problem statement
 
-Use the supplied screenshot for visual direction only. The functional rules in this document override the screenshot wherever they differ.
+The usage-module setting can be enabled while no module appears. An enabled-but-invisible feature is a production bug. The setting, window lifecycle, placement, persistence, provider data, theme state, and cleanup must be connected end to end.
 
-**Reference folder:**  
-`C:\Users\viper\VibeSpaceOs\VibeSpace-IDEAS!\VibeSpace UI Themes\UsageModuleRefreance`
+The module must be fully automatic: it reuses connections and activity already known to VibeSpace. It does not ask the user to enter the same key, choose a duplicate provider, or perform manual synchronization.
 
-**Reference screenshot:**  
-`C:\Users\viper\VibeSpaceOs\VibeSpace-IDEAS!\VibeSpace UI Themes\UsageModuleRefreance\ChatGPT Image Jul 31, 2026, 05_37_20 PM.png`
+## Product contract
 
-> The reference image shows four provider rows. The real compact module must show **only the top two provider usage bars at one time**.
+- One tiny taskbar-adjacent companion window.
+- Exactly two provider rows in normal view: the user's top-ranked two visible providers.
+- Fixed compact bounds; no layout growth when values update.
+- Theme-adaptive across every VibeSpace appearance.
+- Local request activity is live and event-driven.
+- Aggregate state reconciles at least every five seconds while enabled.
+- Remote quota requests use safe provider-specific intervals and caching rather than polling all providers every five seconds.
+- At least thirty provider families are supported through a data-driven adapter registry.
+- Quota is shown only when an authoritative supported source exists.
+- One provider failure cannot break the module.
+- Disabling the module stops all background work and closes the window.
 
----
+## Reference direction
 
-## Goal
+Preserve the approved compact usage-module direction: small type, thick short progress bars, restrained provider accents, and a taskbar companion feel. The reference's four rows are not the final density; normal mode shows only two rows. Appearance varies through semantic tokens, not separate hardcoded components.
 
-Add a tiny, live VibeSpace usage module that sits beside the operating-system taskbar and summarizes activity across connected AI providers without opening the full app.
+## Window lifecycle
 
-It should automatically detect supported connections such as:
+### Enable
 
-- API keys already connected inside VibeSpace
-- AI connectors/plugins connected inside VibeSpace
-- Supported terminal sessions or CLIs, including Codex when a usable local session is detected
-- Any future provider that implements the shared usage-adapter interface
+When `Show taskbar usage module` becomes enabled:
 
-The module must never invent quota data. When a provider does not expose a usable quota or usage endpoint, show the available live activity data and clearly label quota as unavailable.
+1. persist the preference;
+2. obtain or create the single native window;
+3. validate saved display/edge/offset;
+4. recover off-screen or invalid placement;
+5. load normalized cached snapshots;
+6. subscribe to request and connection events;
+7. start the reconciliation coordinator;
+8. show the window;
+9. return a verified visible/running status.
 
----
+The settings toggle must not remain on when creation fails without also showing a clear degraded/error state and Retry/Reset Position action.
 
-## Required experience
+### Disable
 
-### 1. Compact taskbar module
+When disabled:
 
-- Keep the module permanently small; it must not grow into a large dashboard.
-- Display no more than **two provider rows** in the normal live view.
-- Use smaller typography, thicker but short progress bars, and tight spacing.
-- Show the provider name, status, usage percentage or amount, and one compact activity metric.
-- The reference image is style inspiration, not a requirement to copy every element.
+1. unsubscribe from all events;
+2. abort in-flight quota refreshes owned by the module;
+3. stop timers/backoff schedules;
+4. flush ordering/placement/cache metadata;
+5. close or destroy the module window according to the chosen lifecycle;
+6. publish disabled status.
 
-Recommended maximum dimensions:
+### Single instance
 
-- **Collapsed strip:** approximately `280 × 36 px`
-- **Expanded compact panel:** approximately `340 × 128 px`
-- The panel must remain within a fixed maximum size. Management screens must scroll inside the same bounds or open the existing VibeSpace Settings page.
+Use a stable native window label. All operations are idempotent. Stale handles are detected and recreated. Repeated toggles cannot create duplicate windows or duplicate subscriptions.
 
-### 2. Taskbar placement
+### Visibility recovery
 
-A custom cross-platform panel cannot safely inject arbitrary UI directly into every operating system's native taskbar. Implement it as a frameless, transparent, taskbar-adjacent Tauri window that visually behaves like part of the taskbar.
+Recover automatically when:
 
-- Always stay attached to the active taskbar edge.
-- Allow the user to drag it horizontally or vertically along that edge.
-- Snap cleanly to the nearest valid taskbar position.
-- Persist monitor, taskbar edge, and offset.
-- Restore the saved position after restart, display changes, or monitor reconnects.
-- Respect taskbar auto-hide and multi-monitor layouts.
-- Do not modify or inject code into Windows Explorer, macOS Dock, or Linux panels.
+- the saved monitor no longer exists;
+- DPI/work area changed;
+- taskbar edge changed;
+- a laptop monitor disconnected;
+- saved coordinates are outside every work area;
+- the native window was closed externally;
+- the app restored from an older invalid placement schema.
 
-### 3. Live status
+Clamp to a visible safe default adjacent to the current primary taskbar. `Reset position` always works.
 
-The visible UI refreshes once per second.
+## Compact layout
 
-Example status:
+Recommended maximums:
 
-`Live · 35 API requests processing`
+- collapsed strip: about `280 × 36 px`;
+- expanded compact panel: about `340 × 128 px`.
 
-The `35` count is the real total of currently active requests registered across VibeSpace provider adapters. It is not a decorative number.
+Normal contents:
 
-To remain lightweight:
+- live/fresh/stale/offline indicator;
+- total active VibeSpace AI requests;
+- top provider row;
+- second provider row;
+- compact expand/reorder control.
 
-- Update locally observed request activity immediately.
-- Re-render the compact module at most once per second.
-- Do **not** call every provider's remote usage API every second.
-- Refresh remote quota snapshots on a safe provider-specific interval, normally every `15–60 seconds`, with caching, jitter, and exponential backoff.
-- Reuse existing request events whenever VibeSpace itself sends the request.
+Each provider row:
 
-### 4. Top-two provider ordering
+- provider name;
+- connection/activity status;
+- thicker short progress bar only when usage percent is authoritative;
+- compact amount/percent or `Quota unavailable`;
+- optional requests-per-minute/active-request metric;
+- stable fixed-width numeric columns with tabular numerals.
 
-Only rank `1` and rank `2` are shown in the normal module.
+No bar is rendered from guessed data.
 
-The user can:
+## Settings
 
-- Open a fixed-size reorder mode from the module.
-- Drag providers up or down in a scrollable list.
-- Use keyboard controls as an accessible alternative to dragging.
-- Immediately see the first two providers become the visible pair.
-- Hide a provider without disconnecting its API key or connector.
-- Restore the default order.
+Keep one compact section under the existing appropriate General/Usage area:
 
-The ordering must persist locally and sync only when the user has explicitly enabled settings sync.
+1. `Show taskbar usage module`
+2. `Launch with VibeSpace`
+3. `Provider order`
+4. `Hidden providers`
+5. `Reset position`
+6. small verified status: running, stopped, degraded, or error
 
-### 5. Minimal Settings controls
+Do not create a second provider connection manager inside this section.
 
-Add one compact section under:
+## Theme contract
 
-`Settings → General → Taskbar Usage`
+Consume live semantic appearance tokens from the canonical appearance store. At minimum map surface, elevated surface, border, primary text, muted text, accent, success, warning, danger, shadow, and radius.
 
-Include only:
+Requirements:
 
-1. **Show taskbar usage module** — master toggle
-2. **Launch with VibeSpace** — keep the module available when the main window is closed
-3. **Provider order** — drag-and-drop list; the first two are marked `Shown`
-4. **Reset position** — returns the module to its default taskbar edge
+- update immediately when appearance changes;
+- preserve provider logos/brand recognition without overpowering the theme;
+- no excessive blur;
+- readable contrast in dark, warm, light, Sakura, MonoChrome, and future token-compatible themes;
+- forced-colors support;
+- reduced-motion support;
+- no panel resize during theme changes.
 
-Do not create a large new settings category.
-
----
-
-## Compact UI states
-
-### Normal
-
-- Live indicator
-- Total active requests
-- Two provider rows
-- Small collapse/expand control
-- Optional pin/keep-visible control only when it has a real function
-
-### No connections
-
-Show:
-
-`No AI providers connected`
-
-Action:
-
-`Open Connections`
-
-### Connected, quota unavailable
-
-Show real activity without a fabricated progress bar:
-
-`Codex · Active · Quota unavailable`
-
-### Stale data
-
-If a quota snapshot is old, keep the last valid value but mark it:
-
-`Updated 2m ago`
-
-### Error
-
-Show a small warning state and retain other working providers. One broken adapter must never break the entire module.
-
-### Offline
-
-Continue showing locally tracked activity and the most recent cached quota with an `Offline` label.
-
----
-
-## Provider data contract
-
-Every provider adapter should normalize its data into one shared shape:
+## Data contract
 
 ```ts
+export type UsageFreshness = 'live' | 'fresh' | 'stale' | 'offline' | 'error';
+export type UsageSource =
+  | 'local-events'
+  | 'provider-api'
+  | 'cli-session'
+  | 'local-runtime'
+  | 'cached';
+
 export interface ProviderUsageSnapshot {
   providerId: string;
+  providerFamilyId: string;
   displayName: string;
+  connectionMode: 'api' | 'oauth' | 'cli' | 'local' | null;
   connected: boolean;
   hidden: boolean;
   activeRequests: number;
@@ -170,18 +153,16 @@ export interface ProviderUsageSnapshot {
   usagePercent: number | null;
   requestsPerMinute: number | null;
   updatedAt: number;
-  freshness: 'live' | 'fresh' | 'stale' | 'offline' | 'error';
-  source: 'local-events' | 'provider-api' | 'terminal-session' | 'cached';
+  freshness: UsageFreshness;
+  source: UsageSource;
+  quotaAvailable: boolean;
   errorCode?: string;
 }
-```
 
-Adapter behavior:
-
-```ts
 export interface ProviderUsageAdapter {
   id: string;
-  detect(): Promise<boolean>;
+  familyId: string;
+  detect(signal: AbortSignal): Promise<boolean>;
   getCachedSnapshot(): ProviderUsageSnapshot | null;
   refreshQuota(signal: AbortSignal): Promise<ProviderUsageSnapshot>;
   subscribeToActivity(
@@ -190,159 +171,176 @@ export interface ProviderUsageAdapter {
 }
 ```
 
-### Detection rules
+## Thirty-plus provider registry
 
-- Prefer VibeSpace's existing provider/connector registry.
-- Read only sanitized connection metadata from the frontend.
-- Keep raw API keys in the OS keychain or existing secure backend.
-- Terminal detection must identify supported local sessions without reading unrelated shell history.
-- A detected session does not automatically mean quota data is available.
-- Never scrape, estimate, or fabricate account limits merely to fill the progress bar.
+The registry must be data-driven and extensible. Initial family coverage should include, where VibeSpace supports a connection or runtime:
 
----
+1. OpenAI / Codex
+2. Anthropic / Claude
+3. Google Gemini
+4. Google Vertex AI
+5. Azure OpenAI
+6. AWS Bedrock
+7. xAI
+8. DeepSeek
+9. Groq
+10. Mistral
+11. Cohere
+12. Perplexity
+13. OpenRouter
+14. Together AI
+15. Fireworks AI
+16. Cerebras
+17. SambaNova
+18. NVIDIA NIM
+19. Hugging Face
+20. Replicate
+21. Cloudflare Workers AI
+22. Qwen / DashScope
+23. Moonshot / Kimi
+24. MiniMax
+25. OpenCode
+26. GitHub Copilot
+27. Deepgram
+28. ElevenLabs
+29. AssemblyAI
+30. Cartesia
+31. Ollama
+32. LM Studio
+33. vLLM or another supported local OpenAI-compatible runtime
 
-## Architecture
+A provider definition does not guarantee quota support. Detection and activity may be supported while quota remains unavailable. Do not use private, scraped, undocumented, or user-session web endpoints to fill the module.
 
-### Frontend
+## Refresh and performance
 
-Suggested feature boundary:
+### Event-driven path
 
-```text
-app/src/features/taskbar-usage/
-  TaskbarUsageWindow.tsx
-  TaskbarUsageCompact.tsx
-  TaskbarUsageReorder.tsx
-  ProviderUsageRow.tsx
-  taskbarUsageStore.ts
-  providerUsageRegistry.ts
-  providerUsageTypes.ts
-  taskbarUsage.css
-```
+Every supported VibeSpace request transport emits start, settle, cancel, and failure events. The module aggregates active requests immediately without network polling.
 
-Responsibilities:
+### Five-second reconciliation
 
-- Render only normalized snapshots.
-- Keep the normal view limited to the first two visible providers.
-- Persist ordering and visibility through the existing settings store.
-- Throttle visual updates to one frame per second unless a user action requires an immediate render.
-- Support reduced motion and keyboard reordering.
+While enabled, one shared coordinator wakes no more than once every five seconds to:
 
-### Tauri backend
+- reconcile connection changes;
+- merge event state with cached snapshots;
+- update freshness;
+- schedule due provider refreshes;
+- publish one batched UI snapshot.
 
-Suggested feature boundary:
+User actions such as reorder, theme change, enable, or disable may update immediately.
 
-```text
-app/src-tauri/src/taskbar_usage/
-  mod.rs
-  window.rs
-  placement.rs
-  provider_bridge.rs
-```
+### Remote quota path
 
-Responsibilities:
+- provider-defined safe intervals, typically `15–60 seconds` or longer;
+- deduplicate with fresh data already owned by the main app;
+- request only connected providers;
+- prioritize the two visible providers;
+- use jitter to avoid synchronized bursts;
+- exponential backoff and circuit behavior after repeated failure;
+- abort stale work on disable/account/mode change;
+- never send more frequent requests than official limits permit.
 
-- Create and manage the frameless taskbar-adjacent window.
-- Calculate taskbar/dock edge and usable work area.
-- Persist and restore monitor/edge/offset safely.
-- Expose sanitized provider activity events to the taskbar window.
-- Keep the module alive when the main window is hidden, when enabled.
-- Enforce a single module window.
+### Budget
 
-### Data flow
+- idle CPU target below `0.5%` on a typical modern desktop;
+- active CPU normally below `1.5%`;
+- additional memory target below `35 MB`;
+- no continuous window-position polling;
+- one renderer update per reconciliation tick at most, except direct user/theme actions;
+- no duplicate remote request when a fresh shared snapshot exists;
+- no work when disabled.
 
-```text
-Existing provider requests / connectors / terminal adapters
-                         ↓
-             Provider usage adapters
-                         ↓
-        Normalized provider usage registry
-                         ↓
-      Cached snapshots + active request totals
-                         ↓
-       Tauri event channel / shared app store
-                         ↓
-          1 Hz compact taskbar rendering
-```
+## Security and privacy
 
----
+- Raw keys and tokens never enter the taskbar webview.
+- Use stable credential/account handles and sanitized metadata.
+- Do not display account email/organization unless the user explicitly enables it and the data is already safe for UI.
+- Redact provider errors.
+- Cache only normalized metrics, provider IDs, ordering, hidden state, freshness, and placement.
+- Clear account-specific cached metrics on disconnect/account switch.
+- Keep local/BYOK usage separate from shared hosted-company credits.
 
-## Visual rules
+## States
 
-- Match the current VibeSpace dark theme and accent system.
-- Use a crisp dark surface, subtle border, restrained glow, and no excessive blur.
-- Keep provider colors as small accents only; do not turn the panel into a rainbow.
-- Progress bars should be visually thicker than the reference bars but shorter in width.
-- Avoid tiny unreadable text; compact does not mean illegible.
-- Align percentages and metrics so values do not jump horizontally when updating.
-- Use tabular numerals for live counts.
-- Animate bar changes with a brief `120–180 ms` transition, disabled under reduced motion.
-- Never resize the panel when numbers change.
+### No connections
 
----
+`No AI providers connected` with `Open Connections`.
 
-## Performance budget
+### Connected, quota unavailable
 
-Target additional overhead while enabled:
+`Codex · Active · Quota unavailable` while retaining real activity counts.
 
-- Idle CPU: below `0.5%` on a typical modern desktop
-- Active CPU: normally below `1.5%`
-- Additional memory: target below `35 MB`
-- UI render cadence: maximum `1 Hz` for live metrics
-- Network: no duplicate quota requests when the main app already has fresh data
-- Provider failures: exponential backoff with a maximum retry interval
-- Window: no continuous polling for position; respond to OS display/taskbar events where possible
+### Fresh
 
-If the system is under heavy load, skip intermediate visual ticks rather than queueing delayed renders.
+Show authoritative amount/percent and updated time only when useful.
 
----
+### Stale
 
-## Privacy and security
+Keep the last valid value and label `Updated Xm ago`.
 
-- Never display or log API keys, authorization headers, refresh tokens, or account secrets.
-- Never pass raw credentials into the taskbar webview.
-- Use the existing OS keychain/security layer for provider authentication.
-- Store only provider IDs, ordering, visibility, placement, and cached sanitized metrics.
-- Redact provider errors before displaying or logging them.
-- Turning off the module stops its background refresh timers.
-- Hiding a provider affects presentation only; it does not disconnect the provider.
+### Offline
 
----
+Show cached data plus local activity with `Offline`.
+
+### Adapter error
+
+Show a small warning for that row. Other providers continue.
+
+### Window error
+
+Settings displays the error and offers `Retry` and `Reset position`. Do not silently leave the toggle enabled with nothing visible.
+
+## Persistence
+
+Persist schema-versioned:
+
+- enabled;
+- launch-with-app;
+- provider order;
+- hidden providers;
+- monitor identity;
+- taskbar edge;
+- offset;
+- collapsed/expanded state;
+- sanitized cached snapshots and timestamps.
+
+Migrate old preference names and invalid geometry safely.
+
+## Required tests
+
+- enabling creates/shows exactly one window;
+- disabling closes it and stops timers/subscriptions;
+- repeated toggles are idempotent;
+- stale window handle recreates;
+- invalid monitor/off-screen geometry recovers;
+- restart restores when enabled;
+- top-two ordering and hidden state;
+- keyboard reorder;
+- theme token updates without remount/resize;
+- five-second reconciliation with fake timers;
+- local activity updates without remote polling;
+- provider refresh dedupe, jitter/backoff, abort;
+- one adapter failure isolation;
+- no quota bar when unavailable;
+- cached stale/offline behavior;
+- no raw secret in IPC/store/log payload;
+- browser preview desktop-only state;
+- multi-monitor/taskbar auto-hide native smoke;
+- resource budget measurement.
 
 ## Acceptance criteria
 
-The feature is complete only when all of the following are true:
-
-- [ ] A user can enable or disable the module from one Settings toggle.
-- [ ] The module restores after restart when enabled.
-- [ ] It remains within its fixed compact maximum size.
-- [ ] Exactly two provider rows are visible in the normal view.
-- [ ] Reordering providers immediately changes the visible top two.
-- [ ] Ordering, hidden state, and taskbar position persist.
-- [ ] The module can be dragged and snapped along the taskbar edge.
-- [ ] The visible activity count updates once per second using real active requests.
-- [ ] Remote quota APIs are not polled once per second.
-- [ ] Missing quota data is labeled honestly instead of being estimated.
-- [ ] One provider error does not affect other providers.
-- [ ] No API key or secret reaches the UI or logs.
-- [ ] The module behaves correctly with taskbar auto-hide and multiple monitors.
-- [ ] Keyboard users can reorder providers without drag-and-drop.
-- [ ] Reduced-motion mode removes nonessential animation.
-- [ ] Automated tests cover ordering, top-two selection, persistence, stale data, and adapter failure.
-- [ ] A real Windows desktop validation confirms placement, restart behavior, and low resource usage.
-
----
-
-## Non-goals for the first version
-
-- Full billing analytics or historical charts
-- Editing provider API keys inside the compact module
-- Showing more than two live provider rows simultaneously
-- Unsafe native taskbar injection
-- Guessing provider quotas from token counts
-- Replacing the existing Connections or Provider Settings pages
-
----
-
-## Implementation rule
-
-Build this as a focused, lightweight companion surface using VibeSpace's existing provider registry, settings persistence, security layer, and request lifecycle events. Do not duplicate provider authentication or create a second independent connection system.
+- [ ] Turning the setting on produces a visible module immediately or a clear actionable error.
+- [ ] Turning it off removes the module and background work.
+- [ ] The module restores after restart and never remains off-screen.
+- [ ] Exactly two user-ranked provider rows appear in normal mode.
+- [ ] The panel adapts to every appearance using semantic tokens.
+- [ ] Live local activity is real.
+- [ ] Aggregate state reconciles at least every five seconds.
+- [ ] Remote provider APIs are not blindly polled every five seconds.
+- [ ] Thirty-plus provider families can register through the same adapter system.
+- [ ] Unsupported quota is labeled unavailable, never invented.
+- [ ] Existing connections are detected automatically without duplicate setup.
+- [ ] One provider failure does not affect others.
+- [ ] No secret enters the UI or logs.
+- [ ] Performance remains inside the target budget in a real Windows desktop validation.

@@ -44,8 +44,12 @@ export async function testDeepgramVoiceKey(apiKey: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 12_000);
   try {
-    await speakDeepgramWithKey(apiKey, 'Deepgram voice is connected.', 'jarvis', controller.signal, 0.9);
-    return true;
+    const response = await fetch('https://api.deepgram.com/v1/projects', {
+      method: 'GET',
+      headers: { Authorization: `Token ${apiKey.trim()}` },
+      signal: controller.signal,
+    });
+    return response.ok;
   } catch {
     return false;
   } finally {

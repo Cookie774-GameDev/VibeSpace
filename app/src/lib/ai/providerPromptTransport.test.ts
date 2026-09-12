@@ -20,8 +20,13 @@ const EXPECTED_MATRIX = {
   'xai-api': 'native-system',
   'deepseek-api': 'native-system',
   'zai-api': 'native-system',
+  'zai-coding-plan': 'prefixed-preamble',
   'qwen-code': 'prefixed-preamble',
   'qwen-api': 'native-system',
+  'groq-api': 'native-system',
+  'openrouter-api': 'native-system',
+  'mistral-api': 'native-system',
+  'together-api': 'native-system',
   'ollama-local': 'native-system',
   'opencode-cli': 'prefixed-preamble',
 } as const;
@@ -89,7 +94,7 @@ function connection(strategy: ProviderConnection['promptTransport']): Readonly<P
 
 describe('provider prompt strategy catalog', () => {
   it('pins the exact current connection matrix', () => {
-    expect(PROVIDER_CONNECTIONS).toHaveLength(15);
+    expect(PROVIDER_CONNECTIONS).toHaveLength(20);
     expect(
       Object.fromEntries(PROVIDER_CONNECTIONS.map((item) => [item.id, item.promptTransport])),
     ).toEqual(EXPECTED_MATRIX);

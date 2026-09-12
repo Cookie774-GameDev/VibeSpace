@@ -9,19 +9,21 @@ import {
   Maximize2,
   Minimize2,
   Rocket,
-  Sparkles,
   Phone,
   PhoneOff,
   Megaphone,
   MoreHorizontal,
   Newspaper,
   PanelRight,
+  BrainCircuit,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { AppearanceQuickSwitch } from './AppearanceQuickSwitch';
 import { Avatar } from '@/components/ui/avatar';
 import { Hint } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useUIStore } from '@/stores/ui';
+import { useFullscreenStore } from '@/features/fullscreen/fullscreenStore';
 import { useAuthStore } from '@/stores/auth';
 import { HOTKEYS } from '@/lib/hotkeys';
 import { cn, isMac } from '@/lib/utils';
@@ -35,6 +37,7 @@ import { planAllowsJarvisCall } from '@/lib/entitlements';
 import { useAppAdmin } from '@/lib/admin';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_EVIDENCE } from '@/lib/jarvis/smoke/evidenceIds';
+import { ChatEngineMenu } from '@/features/browser-chat';
 
 /**
  * TopBar - 40px chrome at the very top of the app.
@@ -67,6 +70,7 @@ type Route =
   | 'kanban'
   | 'schedule'
   | 'agents'
+  | 'model-foundry'
   | 'agent-detail'
   | 'project-detail'
   | 'context'
@@ -84,6 +88,7 @@ const ROUTES: ReadonlyArray<Route> = [
   'kanban',
   'schedule',
   'agents',
+  'model-foundry',
   'context',
   'skills',
   'benchmarks',
@@ -100,6 +105,7 @@ const ROUTE_LABELS: Record<Route, string> = {
   kanban: 'Kanban',
   schedule: 'Schedule',
   agents: 'Agents',
+  'model-foundry': 'Build Your Own AI',
   'agent-detail': 'Agent',
   'project-detail': 'Project',
   context: 'Context',
@@ -135,11 +141,10 @@ export function TopBar() {
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   // V2 — launcher + fullscreen
   const setLauncherOpen = useUIStore((s) => s.setLauncherOpen);
-  const setAssistantOpen = useUIStore((s) => s.setAssistantOpen);
   const setWhatsNewOpen = useUIStore((s) => s.setWhatsNewOpen);
   const setNewsPanelOpen = useUIStore((s) => s.setNewsPanelOpen);
-  const chatFullscreen = useUIStore((s) => s.chatFullscreen);
-  const toggleChatFullscreen = useUIStore((s) => s.toggleChatFullscreen);
+  const focusActive = useFullscreenStore((s) => s.focusActive);
+  const toggleFocus = useFullscreenStore((s) => s.toggleFocus);
 
   // Drives the unseen-dot indicator on the "What's new" button. The
   // hook is backed by Zustand so this re-renders the moment the user
@@ -148,6 +153,7 @@ export function TopBar() {
 
   // V3 — route store (defensive read; field may be absent pre-Slice 4).
   const route = useUIStore((s) => (s as unknown as RouteStoreShape).route ?? 'chat');
+  const theme = useUIStore((s) => s.theme);
   const setRouteRaw = useUIStore((s) => (s as unknown as RouteStoreShape).setRoute);
 
   const setRouteWarned = React.useRef(false);
@@ -178,6 +184,8 @@ export function TopBar() {
   // auth/workspaces stores expose them.
   const workspaceLabel = workspaceId ? 'Workspace' : 'Loading…';
   const projectLabel = projectId ? 'Project' : null;
+  const warmBenchmarks = route === 'benchmarks' && theme === 'warm';
+  const visibleWorkspaceLabel = warmBenchmarks ? 'VibeSpace' : workspaceLabel;
 
   const offChat = route !== 'chat';
   const [routeMenuOpen, setRouteMenuOpen] = React.useState(false);
@@ -185,11 +193,11 @@ export function TopBar() {
   // V3.1 — compact chrome.
   // The user wants more vertical room for terminals; specifically the
   // top bar should shrink whenever the user is on the terminal route
-  // OR has flipped chat-fullscreen on. We collapse height to 28px and
+  // OR has enabled Workspace Focus Mode. We collapse height to 28px and
   // funnel low-frequency buttons (launcher, assistant, schedule, search,
   // voice, call, what's-new) into a `⋯` overflow popover so the right
   // cluster stays just: fullscreen, more, settings, avatar.
-  const compactChrome = route === 'terminal' || chatFullscreen;
+  const compactChrome = route === 'terminal' || focusActive;
   const [overflowOpen, setOverflowOpen] = React.useState(false);
 
   const toggleComposerStt = React.useCallback(() => {
@@ -207,6 +215,7 @@ export function TopBar() {
       aria-label="Application header"
       data-monochrome-surface="top-bar"
       data-sakura-shell-region="top-bar"
+      data-warm-shell-route={warmBenchmarks ? 'benchmarks' : undefined}
       data-tauri-drag-region
       className={cn(
         'sakura-shell-top-bar drag-region relative flex min-w-0 shrink-0 items-center gap-2 border-b bg-panel pr-2 text-secondary transition-[height,padding,colors] duration-150',
@@ -241,6 +250,7 @@ export function TopBar() {
           type="button"
           onClick={() => setVoiceModalOpen(true)}
           aria-label="Open Jarvis voice panel"
+          data-warm-brand-mark={warmBenchmarks ? 'true' : undefined}
           data-sik-evidence={kernelSmokeEnabled ? SIK_EVIDENCE.voiceOpen : undefined}
           className={cn(
             TOP_BAR_POINTER_TARGET_CLASS,
@@ -285,7 +295,7 @@ export function TopBar() {
             workspaceId ? 'text-foreground' : 'text-muted-foreground',
           )}
         >
-          {workspaceLabel}
+          {visibleWorkspaceLabel}
         </span>
         {projectLabel && (
           <>
@@ -362,15 +372,18 @@ export function TopBar() {
               are visible inline; everything else moves into the popover so
               the user keeps the maximum amount of vertical room for the
               workspace canvas (terminals especially). */}
+      <div className="no-drag flex items-center gap-1">
+        <AppearanceQuickSwitch compact={compactChrome} />
+        <ChatEngineMenu onNavigateChat={() => setRoute('chat')} />
+      </div>
       {compactChrome ? (
         <CompactRightCluster
           overflowOpen={overflowOpen}
           setOverflowOpen={setOverflowOpen}
-          chatFullscreen={chatFullscreen}
-          toggleChatFullscreen={toggleChatFullscreen}
+          focusActive={focusActive}
+          toggleFocus={toggleFocus}
           voiceListening={composerSttListening}
           setLauncherOpen={setLauncherOpen}
-          setAssistantOpen={setAssistantOpen}
           openSchedule={() => setRoute('schedule')}
           setPaletteOpen={setPaletteOpen}
           toggleComposerStt={toggleComposerStt}
@@ -397,15 +410,16 @@ export function TopBar() {
             </Button>
           </Hint>
 
-          <Hint label="Jarvis Assistant" hotkey={HOTKEYS.ASSISTANT}>
+          <Hint label="Build Your Own AI">
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => setAssistantOpen(true)}
-              aria-label="Open Jarvis Assistant"
+              onClick={() => setRoute('model-foundry')}
+              aria-label="Open Build Your Own AI"
+              aria-pressed={route === 'model-foundry'}
               className={TOP_BAR_POINTER_TARGET_CLASS}
             >
-              <Sparkles className="h-4 w-4" />
+              <BrainCircuit className="h-4 w-4" />
             </Button>
           </Hint>
 
@@ -422,22 +436,18 @@ export function TopBar() {
           </Hint>
 
           <Hint
-            label={chatFullscreen ? 'Exit fullscreen' : 'Fullscreen workspace'}
+            label={focusActive ? 'Exit Focus Mode' : 'Enter Focus Mode'}
             hotkey={HOTKEYS.TOGGLE_FULLSCREEN}
           >
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={toggleChatFullscreen}
-              aria-label={chatFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-              aria-pressed={chatFullscreen}
+              onClick={toggleFocus}
+              aria-label={focusActive ? 'Exit Focus Mode' : 'Enter Focus Mode'}
+              aria-pressed={focusActive}
               className={TOP_BAR_POINTER_TARGET_CLASS}
             >
-              {chatFullscreen ? (
-                <Minimize2 className="h-4 w-4" />
-              ) : (
-                <Maximize2 className="h-4 w-4" />
-              )}
+              {focusActive ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </Button>
           </Hint>
 
@@ -557,7 +567,7 @@ export function TopBar() {
           >
             <Avatar
               seed={displayName || workspaceId || 'jarvis'}
-              initials={(displayName || 'J').charAt(0)}
+              initials={warmBenchmarks ? 'J' : (displayName || 'J').charAt(0)}
               size={24}
             />
           </button>
@@ -568,10 +578,10 @@ export function TopBar() {
 }
 
 /**
- * Compact right-cluster for the terminal route + chat-fullscreen mode.
+ * Compact right-cluster for the terminal route + Workspace Focus Mode.
  *
  * Renders inline: Fullscreen toggle, ⋯ overflow popover, Settings, small
- * avatar. Everything else (Quick launcher, Assistant, Schedule, Search,
+ * avatar. Everything else (Quick launcher, Schedule, Search,
  * Voice, Call, What's new) moves into the popover so the user keeps the
  * maximum amount of vertical room for terminals.
  *
@@ -581,11 +591,10 @@ export function TopBar() {
 interface CompactRightClusterProps {
   overflowOpen: boolean;
   setOverflowOpen: (v: boolean) => void;
-  chatFullscreen: boolean;
-  toggleChatFullscreen: () => void;
+  focusActive: boolean;
+  toggleFocus: () => void;
   voiceListening: boolean;
   setLauncherOpen: (v: boolean) => void;
-  setAssistantOpen: (v: boolean) => void;
   openSchedule: () => void;
   setPaletteOpen: (v: boolean) => void;
   toggleComposerStt: () => void;
@@ -602,14 +611,14 @@ interface CompactRightClusterProps {
 function CompactRightCluster(props: CompactRightClusterProps) {
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
   const toggleInspector = useUIStore((s) => s.toggleInspector);
+  const route = useUIStore((s) => (s as unknown as RouteStoreShape).route ?? 'chat');
   const {
     overflowOpen,
     setOverflowOpen,
-    chatFullscreen,
-    toggleChatFullscreen,
+    focusActive,
+    toggleFocus,
     voiceListening,
     setLauncherOpen,
-    setAssistantOpen,
     openSchedule,
     setPaletteOpen,
     toggleComposerStt,
@@ -633,18 +642,18 @@ function CompactRightCluster(props: CompactRightClusterProps) {
   return (
     <div className="no-drag flex items-center gap-0.5">
       <Hint
-        label={chatFullscreen ? 'Exit fullscreen' : 'Fullscreen workspace'}
+        label={focusActive ? 'Exit Focus Mode' : 'Enter Focus Mode'}
         hotkey={HOTKEYS.TOGGLE_FULLSCREEN}
       >
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={toggleChatFullscreen}
-          aria-label={chatFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-          aria-pressed={chatFullscreen}
+          onClick={toggleFocus}
+          aria-label={focusActive ? 'Exit Focus Mode' : 'Enter Focus Mode'}
+          aria-pressed={focusActive}
           className={cn(TOP_BAR_POINTER_TARGET_CLASS, 'h-5 w-5 [&_svg]:size-3')}
         >
-          {chatFullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+          {focusActive ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
         </Button>
       </Hint>
 
@@ -680,10 +689,10 @@ function CompactRightCluster(props: CompactRightClusterProps) {
               onClick={closeAfter(() => setLauncherOpen(true))}
             />
             <MenuRow
-              icon={<Sparkles className="h-3.5 w-3.5" />}
-              label="Assistant"
-              hotkey={HOTKEYS.ASSISTANT}
-              onClick={closeAfter(() => setAssistantOpen(true))}
+              icon={<BrainCircuit className="h-3.5 w-3.5" />}
+              label="Build Your Own AI"
+              onClick={closeAfter(() => setRoute('model-foundry'))}
+              accent={route === 'model-foundry'}
             />
             <MenuRow
               icon={<CalendarDays className="h-3.5 w-3.5" />}

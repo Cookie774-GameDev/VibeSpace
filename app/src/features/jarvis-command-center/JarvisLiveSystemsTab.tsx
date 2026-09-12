@@ -9,6 +9,7 @@ import type {
 import { conciseJarvisArtifactSummary, isRenderableJarvisArtifact } from './artifactAccess';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_CONTROL } from '@/lib/jarvis/smoke/evidenceIds';
+import { formatUserTime } from '@/lib/timeFormat';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
@@ -73,10 +74,7 @@ function formatTime(timestamp: number): string | undefined {
   if (!Number.isFinite(timestamp)) return undefined;
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return undefined;
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+  return formatUserTime(date);
 }
 
 function formatDuration(startedAt: number, endedAt: number): string | undefined {

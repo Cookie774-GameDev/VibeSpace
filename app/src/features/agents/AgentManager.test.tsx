@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, AgentId } from '@/types';
 import { useAgentStore } from '@/stores/agents';
@@ -8,6 +8,14 @@ import { syncDiscoveredOllamaModels } from '@/lib/ai/models';
 import { resetProviderModelCache } from '@/lib/ai/providerModelCatalog';
 import type { JarvisProfile } from '@/lib/jarvis/profiles/types';
 import { AgentManager } from './AgentManager';
+
+const recycleBinMocks = vi.hoisted(() => ({
+  moveAgentToRecycleBin: vi.fn(),
+}));
+
+vi.mock('@/features/recycle-bin/recycleBinService', () => ({
+  recycleBinService: recycleBinMocks,
+}));
 
 vi.mock('@/lib/db', async () => {
   const actual = await vi.importActual<typeof import('@/lib/db')>('@/lib/db');
@@ -44,7 +52,7 @@ const baseAgent: Agent = {
   tools_allowed: ['files.read'],
   memory_scope: 'project',
   capabilities: ['writing'],
-  skills: ['summarize'],
+  skills: ['analyze'],
   temperature: 0.7,
   effort: 'medium',
   persona: 'jarvis',
@@ -169,9 +177,11 @@ describe('AgentManager save lifecycle', () => {
     render(<AgentManager />);
     const save = screen.getByRole('button', { name: 'Save agent' });
     expect(save).toHaveProperty('disabled', true);
+    expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('idle');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Alpha Renamed' } });
     expect(save).toHaveProperty('disabled', false);
+    expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('unsaved');
     fireEvent.change(screen.getByLabelText('System prompt'), {
       target: { value: 'Updated prompt\n\nKeep formatting.' },
     });
@@ -188,13 +198,179 @@ describe('AgentManager save lifecycle', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save agent' })).toHaveProperty('disabled', true),
     );
+    await waitFor(() =>
+      expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('saved'),
+    );
+  });
+
+  it('requires confirmation before moving a custom agent to the Recycle Bin', async () => {
+    recycleBinMocks.moveAgentToRecycleBin.mockResolvedValueOnce(undefined);
+    render(<AgentManager />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(recycleBinMocks.moveAgentToRecycleBin).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('alertdialog', { name: 'Move Alpha Agent to Recycle Bin?' }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(recycleBinMocks.moveAgentToRecycleBin).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Recycle Bin' }));
+    await waitFor(() =>
+      expect(recycleBinMocks.moveAgentToRecycleBin).toHaveBeenCalledWith(baseAgent),
+    );
+  });
+
+  it('limits persona options to jarvis and friday and offers recommended max tokens', async () => {
+    render(<AgentManager />);
+    const persona = screen.getByLabelText('Persona') as HTMLSelectElement;
+    expect(Array.from(persona.options).map((option) => option.value)).toEqual(['jarvis', 'friday']);
+    const maxTokens = screen.getByLabelText('Max output tokens') as HTMLSelectElement;
+    expect(Array.from(maxTokens.options).map((option) => option.value)).toEqual([
+      'recommended',
+      'custom',
+    ]);
+    expect(maxTokens.value).toBe('recommended');
+  });
+
+  it('renders unavailable mock-default state truthfully without migrating agent or auth state', async () => {
+    const mockDefaultAgent: Agent = {
+      ...baseAgent,
+      model: { provider: 'mock', model: 'mock-default' },
+    };
+    const agentRepo = await repoMocks(mockDefaultAgent);
+    useAuthStore.setState({
+      apiKeys: {},
+      defaultProvider: 'ollama',
+      defaultLocalModel: 'llama3.2:latest',
+    });
+    syncDiscoveredOllamaModels(['llama3.2:latest']);
+    registerOnly(mockDefaultAgent);
+
+    render(<AgentManager />);
+
+    const provider = screen.getByLabelText('Provider') as HTMLSelectElement;
+    const unavailable = Array.from(provider.options).find((option) => option.value === 'mock');
+    expect(provider.value).toBe('mock');
+    expect(unavailable?.selected).toBe(true);
+    expect(unavailable?.disabled).toBe(true);
+    expect(unavailable?.textContent).toContain('Mock (demo)');
+    expect(unavailable?.textContent).toContain('unavailable');
+    expect(screen.getByText(/configured for Mock \(demo\)/i).textContent).toContain(
+      'Default provider (Local Models)',
+    );
+    expect(screen.queryByText(/Connect Mock/i)).toBeNull();
+
+    expect(agentRepo.update).not.toHaveBeenCalled();
+    expect(useAgentStore.getState().agents[mockDefaultAgent.id]?.model).toEqual({
+      provider: 'mock',
+      model: 'mock-default',
+    });
+    expect(useAuthStore.getState().defaultProvider).toBe('ollama');
+    expect(useAuthStore.getState().defaultLocalModel).toBe('llama3.2:latest');
+  });
+
+  it('keeps a connected provider as a normal available provider', async () => {
+    registerOnly(baseAgent);
+    await repoMocks(baseAgent);
+
+    render(<AgentManager />);
+
+    const provider = screen.getByLabelText('Provider') as HTMLSelectElement;
+    const googleOption = Array.from(provider.options).find((option) => option.value === 'google');
+    expect(provider.value).toBe('google');
+    expect(googleOption?.disabled).toBe(false);
+    expect(screen.queryByText(/unavailable current provider/i)).toBeNull();
+  });
+
+  it('preserves the actual Default provider sentinel behavior', async () => {
+    const defaultAgent: Agent = {
+      ...baseAgent,
+      model: { provider: 'mock', model: 'default-provider' },
+    };
+    useAuthStore.setState({
+      apiKeys: {},
+      defaultProvider: 'ollama',
+      defaultLocalModel: 'llama3.2:latest',
+    });
+    syncDiscoveredOllamaModels(['llama3.2:latest']);
+    registerOnly(defaultAgent);
+    await repoMocks(defaultAgent);
+
+    render(<AgentManager />);
+
+    const provider = screen.getByLabelText('Provider') as HTMLSelectElement;
+    expect(provider.value).toBe('default');
+    expect(provider.selectedOptions[0]?.textContent).toContain('Default provider');
+    expect(screen.getByText('Follows Settings → Providers → Default provider')).toBeTruthy();
+    expect(screen.queryByText(/configured for Mock \(demo\).*unavailable/i)).toBeNull();
+  });
+
+  it('enables NO BS with the approved cinematic and persists its directive at the prompt end', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+
+    const noBs = screen.getByRole('checkbox', { name: /NO BS/i });
+    expect(noBs.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(noBs);
+
+    expect(noBs.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('dialog', { name: 'NO BS activation' })).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'NO BS activation' })).toBeNull();
+    expect(document.activeElement).toBe(noBs);
+    const prompt = screen.getByLabelText('System prompt') as HTMLTextAreaElement;
+    expect(prompt.value).toContain('## NO BS');
+    expect(prompt.value.trim().endsWith('<!-- vibespace:no-bs:end -->')).toBe(true);
+
+    fireEvent.change(prompt, { target: { value: `${prompt.value}\nNew base instruction.` } });
+    expect(prompt.value).toContain('New base instruction.');
+    expect(prompt.value.trim().endsWith('<!-- vibespace:no-bs:end -->')).toBe(true);
+    expect(prompt.value.indexOf('New base instruction.')).toBeLessThan(
+      prompt.value.indexOf('## NO BS'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
+    await waitFor(() => expect(agentRepo.update).toHaveBeenCalledTimes(1));
+    const patch = vi.mocked(agentRepo.update).mock.calls[0]?.[1];
+    expect(patch?.system_prompt).toBe(prompt.value);
+  });
+
+  it('blocks save on concurrent conflict until the latest agent is reloaded', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local edit' } });
+    expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('unsaved');
+
+    act(() => {
+      useAgentStore.getState().registerAgent({
+        ...baseAgent,
+        name: 'Remote edit',
+        updated_at: 99,
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('conflict'),
+    );
+    expect(screen.getByRole('button', { name: 'Retry save' })).toHaveProperty('disabled', true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload latest' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('idle'),
+    );
+    expect(screen.getByLabelText('Name')).toHaveProperty('value', 'Remote edit');
+    expect(agentRepo.update).not.toHaveBeenCalled();
   });
 
   it('tracks skills, tools, capabilities, model settings, toggles, and advanced fields', async () => {
     const agentRepo = await repoMocks();
     render(<AgentManager />);
 
-    fireEvent.change(screen.getByLabelText('Skills'), { target: { value: 'summarize, planning' } });
+    fireEvent.change(screen.getByLabelText('Skills'), { target: { value: 'build, analyze' } });
     fireEvent.change(screen.getByLabelText('Allowed tools'), {
       target: { value: 'files.read, files.write' },
     });
@@ -203,8 +379,13 @@ describe('AgentManager save lifecycle', () => {
     });
     fireEvent.change(screen.getByLabelText('Memory scope'), { target: { value: 'workspace' } });
     fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'high' } });
-    fireEvent.change(screen.getByLabelText('Persona'), { target: { value: 'athena' } });
-    fireEvent.change(screen.getByLabelText('Max output tokens'), { target: { value: '4096' } });
+    fireEvent.change(screen.getByLabelText('Persona'), { target: { value: 'friday' } });
+    fireEvent.change(screen.getByLabelText('Max output tokens'), {
+      target: { value: 'custom' },
+    });
+    fireEvent.change(screen.getByLabelText('Custom max output tokens'), {
+      target: { value: '4096' },
+    });
     fireEvent.change(screen.getByLabelText('Appearance hue'), { target: { value: '210' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
 
@@ -212,15 +393,31 @@ describe('AgentManager save lifecycle', () => {
     expect(agentRepo.update).toHaveBeenCalledWith(
       baseAgent.id,
       expect.objectContaining({
-        skills: ['planning', 'summarize'],
+        skills: ['analyze', 'build'],
         tools_allowed: ['files.read', 'files.write'],
         capabilities: ['planning', 'writing'],
         memory_scope: 'workspace',
         effort: 'high',
-        persona: 'athena',
+        persona: 'friday',
         max_output_tokens: 4096,
         color_hue: 210,
       }),
+    );
+  });
+
+  it('persists a selected VibeSpace emoji through the agent repository', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+
+    const quickChoices = screen.getByLabelText('Agent emoji quick choices');
+    const choices = within(quickChoices).getAllByRole('button', { name: /^Choose /u });
+    fireEvent.click(choices[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
+
+    await waitFor(() => expect(agentRepo.update).toHaveBeenCalledTimes(1));
+    expect(agentRepo.update).toHaveBeenCalledWith(
+      baseAgent.id,
+      expect.objectContaining({ emoji: 'vibe:aurora-builder' }),
     );
   });
 
@@ -324,7 +521,7 @@ describe('AgentManager save lifecycle', () => {
     expect(screen.getByRole('button', { name: 'Save agent' })).toHaveProperty('disabled', true);
   });
 
-  it('preserves ordinary Agent clone and delete behavior', async () => {
+  it('preserves ordinary Agent clone behavior and confirms recycle deletion', async () => {
     const agentRepo = await repoMocks();
     render(<AgentManager />);
 
@@ -339,7 +536,14 @@ describe('AgentManager save lifecycle', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     const clonedAgent = vi.mocked(agentRepo.create).mock.calls[0]?.[0];
-    await waitFor(() => expect(agentRepo.delete).toHaveBeenCalledWith(clonedAgent?.id));
+    expect(recycleBinMocks.moveAgentToRecycleBin).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Recycle Bin' }));
+    await waitFor(() =>
+      expect(recycleBinMocks.moveAgentToRecycleBin).toHaveBeenCalledWith(
+        expect.objectContaining({ id: clonedAgent?.id }),
+      ),
+    );
+    expect(agentRepo.delete).not.toHaveBeenCalled();
   });
 });
 

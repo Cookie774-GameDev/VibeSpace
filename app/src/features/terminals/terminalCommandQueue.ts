@@ -34,6 +34,18 @@ import type {
   JarvisQueuedCancellationTombstoneV1,
 } from '@/lib/jarvis/executionJournal/abortRegistry';
 import type { TerminalRef } from './terminalRefs';
+import type { TerminalFleetSelection } from './terminalFleet';
+import { MAX_PANES } from './paneTree';
+
+export const MAX_TERMINAL_FLEET_BATCH_SIZE = MAX_PANES;
+export const MAX_TERMINAL_FLEET_STAGGER_DELAY_MS = 5_000;
+
+export interface TerminalFleetRequestInput {
+  targetTotal: number;
+  selection: TerminalFleetSelection;
+  batchSize?: number;
+  staggerDelayMs?: number;
+}
 
 export type CanonicalTerminalCommandBinding = Readonly<{
   accountId: string;
@@ -54,6 +66,10 @@ export type TerminalCommand =
       id: string;
       /** Shell command line to run in the new pane. */
       command: string;
+      /** Ordered commands written after the fresh shell is ready. */
+      startupCommands?: string[];
+      /** Refuse to evict any existing project terminal at native capacity. */
+      preserveExisting?: boolean;
       /** Optional friendly label shown on the pane chrome. */
       label?: string;
       /**
@@ -85,6 +101,15 @@ export type TerminalCommand =
       id: string;
       /** How many of the most-recently-added panes to close. Clamped 1–10. */
       count: number;
+    }
+  | {
+      kind: 'fleet';
+      id: string;
+      requestId: string;
+      targetTotal: number;
+      selection: TerminalFleetSelection;
+      batchSize: number;
+      staggerDelayMs: number;
     };
 
 interface TerminalCommandQueueState {
@@ -104,6 +129,14 @@ interface TerminalCommandQueueState {
 
   /** Append a close request for the N most-recent panes; returns the assigned id. */
   requestClose: (count: number) => string;
+
+  /** Append one bounded target-total Fleet transaction. */
+  requestFleet: (input: TerminalFleetRequestInput) => string;
+
+  activeFleetRequestIds: string[];
+  cancelledFleetRequestIds: string[];
+  isFleetCancelled: (id: string) => boolean;
+  completeFleet: (id: string) => void;
 
   /**
    * Drain everything currently queued and return it. Resets the queue
@@ -310,11 +343,26 @@ function exactTombstone(
   );
 }
 
+function boundedInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
 export const useTerminalCommandQueue = create<TerminalCommandQueueState>((set, get) => ({
   queue: [],
+  activeFleetRequestIds: [],
+  cancelledFleetRequestIds: [],
   enqueue: (cmd) => {
     const id = newId('tcmd');
-    const next: TerminalCommand = { kind: 'shell', id, ...cmd };
+    const next: TerminalCommand = {
+      kind: 'shell',
+      id,
+      ...cmd,
+      ...(cmd.startupCommands === undefined
+        ? {}
+        : { startupCommands: cmd.startupCommands.slice(0, 3) }),
+      ...(cmd.preserveExisting ? { preserveExisting: true } : {}),
+    };
     set((s) => ({ queue: [...s.queue, next] }));
     return id;
   },
@@ -336,6 +384,10 @@ export const useTerminalCommandQueue = create<TerminalCommandQueueState>((set, g
       kind: 'shell',
       id: executionId,
       command: cmd.command,
+      ...(cmd.startupCommands === undefined
+        ? {}
+        : { startupCommands: cmd.startupCommands.slice(0, 3) }),
+      ...(cmd.preserveExisting ? { preserveExisting: true } : {}),
       ...(cmd.label === undefined ? {} : { label: cmd.label }),
       ...(cmd.agentSlug === undefined ? {} : { agentSlug: cmd.agentSlug }),
       ...(cmd.cwd === undefined ? {} : { cwd: cmd.cwd }),
@@ -360,6 +412,38 @@ export const useTerminalCommandQueue = create<TerminalCommandQueueState>((set, g
     set((s) => ({ queue: [...s.queue, { kind: 'close', id, count: clamped }] }));
     return id;
   },
+  requestFleet: (input) => {
+    const id = newId('tflt');
+    const next: TerminalCommand = {
+      kind: 'fleet',
+      id,
+      requestId: id,
+      targetTotal: boundedInteger(input.targetTotal, 1, MAX_PANES),
+      selection: input.selection,
+      batchSize: boundedInteger(
+        input.batchSize ?? MAX_TERMINAL_FLEET_BATCH_SIZE,
+        1,
+        MAX_TERMINAL_FLEET_BATCH_SIZE,
+      ),
+      staggerDelayMs: boundedInteger(
+        input.staggerDelayMs ?? 0,
+        0,
+        MAX_TERMINAL_FLEET_STAGGER_DELAY_MS,
+      ),
+    };
+    set((state) => ({
+      queue: [...state.queue, next],
+      activeFleetRequestIds: [...new Set([...state.activeFleetRequestIds, id])],
+    }));
+    return id;
+  },
+  isFleetCancelled: (id) => get().cancelledFleetRequestIds.includes(id),
+  completeFleet: (id) => {
+    set((state) => ({
+      activeFleetRequestIds: state.activeFleetRequestIds.filter((item) => item !== id),
+      cancelledFleetRequestIds: state.cancelledFleetRequestIds.filter((item) => item !== id),
+    }));
+  },
   drain: () => {
     const current = get().queue;
     if (current.length === 0) return current;
@@ -373,18 +457,32 @@ export const useTerminalCommandQueue = create<TerminalCommandQueueState>((set, g
     const current = get().queue;
     const item = current.find((candidate) => candidate.id === id);
     if (!item || (item.kind === 'shell' && item.canonical)) return false;
-    set({ queue: current.filter((item) => item.id !== id) });
+    set((state) => ({
+      queue: current.filter((entry) => entry.id !== id),
+      cancelledFleetRequestIds:
+        item.kind === 'fleet'
+          ? [...new Set([...state.cancelledFleetRequestIds, item.requestId])]
+          : state.cancelledFleetRequestIds,
+    }));
     return true;
   },
   clear: () => {
     claimedCanonicalIds.clear();
     cancellationTombstones.clear();
     itemLocks.clear();
-    set({ queue: [] });
+    set({ queue: [], activeFleetRequestIds: [], cancelledFleetRequestIds: [] });
   },
 }));
 
 /** Convenience for non-React callers (the action runner). */
+export function requestTerminalFleet(input: TerminalFleetRequestInput): string {
+  return useTerminalCommandQueue.getState().requestFleet(input);
+}
+
+export function isTerminalFleetRequestCancelled(id: string): boolean {
+  return useTerminalCommandQueue.getState().isFleetCancelled(id);
+}
+
 export function enqueueTerminalCommand(
   cmd: Omit<Extract<TerminalCommand, { kind: 'shell' }>, 'id' | 'kind'>,
 ): string {

@@ -1,4 +1,4 @@
-export const ALL_ABOUT_ME_UPDATE_INTERVAL = 10;
+export const ALL_ABOUT_ME_UPDATE_INTERVAL = 20;
 export const ALL_ABOUT_ME_CONTEXT_LIMIT = 8000;
 export const ALL_ABOUT_ME_FILE_LOCATION = 'VibeSpace Profile Vault/AllAboutMe.md';
 

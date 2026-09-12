@@ -27,17 +27,18 @@ describe('Jarvis interaction modes', () => {
     expect(modeFromSlashCommand('permissions agent')).toBe('agent');
     expect(modeFromSlashCommand('permissions plan')).toBe('plan');
     expect(modeFromSlashCommand('permissions ask')).toBe('ask');
-    expect(modeFromSlashCommand('permissions full')).toBe('agent');
+    expect(modeFromSlashCommand('permissions full')).toBeNull();
     expect(modeFromSlashCommand('permissions')).toBeNull();
     expect(modeFromSlashCommand('unknown')).toBeNull();
   });
 
-  it('parses /permissions arguments', () => {
+  it('parses /permissions mode arguments without collapsing access levels', () => {
     expect(parsePermissionModeArg('agent')).toBe('agent');
     expect(parsePermissionModeArg('plan')).toBe('plan');
     expect(parsePermissionModeArg('ask')).toBe('ask');
-    expect(parsePermissionModeArg('full access')).toBe('agent');
-    expect(parsePermissionModeArg('read-only')).toBe('plan');
+    expect(parsePermissionModeArg('full access')).toBeNull();
+    expect(parsePermissionModeArg('read-only')).toBeNull();
+    expect(parsePermissionModeArg('write')).toBeNull();
     expect(parsePermissionModeArg('nope')).toBeNull();
   });
 

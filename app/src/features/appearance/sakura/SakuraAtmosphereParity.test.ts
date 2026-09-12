@@ -10,13 +10,14 @@ const scene = readFileSync(
 );
 
 describe('Sakura atmosphere parity', () => {
-  it('keeps the seven cel layers while opening the sky with the approved dusk palette', () => {
-    expect(scene.match(/<g id="sakura-layer-/gu)).toHaveLength(7);
+  it('uses the approved layered source composition and dusk gradients', () => {
+    expect(scene).toContain('viewBox="0 0 1600 1000"');
     expect(scene).toMatch(
-      /<linearGradient id="sakura-sky-gradient"[\s\S]*?#f5cec8[\s\S]*?#eeabb7[\s\S]*?#a082aa[\s\S]*?#4e518a[\s\S]*?#140e30/u,
+      /<linearGradient id="sky"[\s\S]*?#f8d3c9[\s\S]*?#e89caf[\s\S]*?#a283b5[\s\S]*?#4e518a[\s\S]*?#140e30/u,
     );
-    expect(scene).toMatch(/id="sakura-atmosphere-haze"/u);
-    expect(scene).toMatch(/id="sakura-lantern-glow"/u);
+    expect(scene).toContain('transform="translate(132 485)"');
+    expect(scene).toContain('transform="translate(1368 635)"');
+    expect(scene).toContain('<!-- branch and blossoms -->');
   });
 
   it('locks the translucent ink-glass and quiet scenic veil from the approved reference', () => {

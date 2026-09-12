@@ -15,13 +15,16 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { cn } from '@/lib/utils';
+import { EmojiMark } from '@/features/emoji/EmojiMark';
+import { EmojiPicker } from '@/features/emoji/EmojiPicker';
 import {
   JARVIS_CREATOR_APPLY_SKILL_EVENT,
   normalizeJarvisCreatorSkillDraft,
   type JarvisCreatorSkillDraft,
 } from '@/features/jarvis-creator/contracts';
 import { startJarvisCreator } from '@/features/jarvis-creator/launcher';
+import { RecycleBinConfirmDialog } from '@/features/recycle-bin/RecycleBinConfirmDialog';
+import { recycleBinService } from '@/features/recycle-bin/recycleBinService';
 
 export interface SkillEditorProps {
   manifest: SkillManifest;
@@ -47,6 +50,7 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
   const [hue, setHue] = React.useState(manifest.colorHue ?? 35);
   const [tab, setTab] = React.useState<'edit' | 'preview'>('edit');
   const [saving, setSaving] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
 
   React.useEffect(() => {
     setEmoji(manifest.emoji ?? '✨');
@@ -112,21 +116,6 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
     }
   };
 
-  const onDelete = () => {
-    const label = manifest.isPreset ? `preset "${title}"` : `custom skill "${title}"`;
-    if (!window.confirm(`Delete ${label}? You can restore presets from the library header.`))
-      return;
-    const store = readSkillsStore();
-    if (manifest.isPreset) {
-      store.deletePreset(id);
-    } else {
-      store.removeCustomSkill(id);
-    }
-    skillRegistry.refresh();
-    toast.success('Deleted', title);
-    onDeleted?.();
-  };
-
   const onRestoreDefault = () => {
     if (!manifest.isPreset) return;
     if (!window.confirm(`Restore "${title}" to the factory preset?`)) return;
@@ -148,30 +137,18 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
         style={{ borderLeftWidth: 4, borderLeftColor: `hsl(${hue}, 55%, 48%)` }}
       >
         <div className="flex flex-wrap items-start gap-3">
-          <div className="flex items-center gap-2">
-            <Input
-              value={emoji}
-              onChange={(e) => setEmoji(e.target.value.slice(0, 4))}
-              className="w-14 text-center text-xl px-1"
-              aria-label="Skill emoji"
+          <div className="flex items-start gap-2">
+            <EmojiMark
+              token={emoji}
+              label="Current Skill emoji"
+              className="h-10 w-10 shrink-0 text-2xl"
             />
-            <div className="flex flex-wrap gap-1 max-w-[200px]">
-              {SKILL_EMOJI_PRESETS.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  className={cn(
-                    'h-7 w-7 rounded-md border border-border text-sm hover:border-accent-copper/60',
-                    '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:focus-visible:outline [html[data-theme=monochrome]_&]:focus-visible:outline-1 [html[data-theme=monochrome]_&]:focus-visible:outline-offset-2 [html[data-theme=monochrome]_&]:focus-visible:outline-accent-cyan',
-                    emoji === e &&
-                      'ring-1 ring-accent-copper border-accent-copper/60 [html[data-theme=monochrome]_&]:border-accent-cyan [html[data-theme=monochrome]_&]:ring-0',
-                  )}
-                  onClick={() => setEmoji(e)}
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
+            <EmojiPicker
+              value={emoji}
+              onChange={setEmoji}
+              label="Skill emoji"
+              legacyTokens={SKILL_EMOJI_PRESETS}
+            />
           </div>
           <div className="flex-1 min-w-[200px] space-y-2">
             <Input
@@ -303,10 +280,12 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
               Restore default
             </Button>
           ) : null}
-          <Button variant="ghost" size="sm" onClick={onDelete}>
-            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-            Delete
-          </Button>
+          {!manifest.isPreset ? (
+            <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+              Delete
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"
@@ -328,6 +307,18 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
           </Button>
         </div>
       </footer>
+      <RecycleBinConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Move ${manifest.title || 'skill'} to Recycle Bin?`}
+        description="This removes the custom skill from active use. You can restore it from Settings → General for 90 days."
+        confirmLabel="Move to Recycle Bin"
+        onConfirm={async () => {
+          await recycleBinService.moveSkillToRecycleBin(id);
+          toast.success('Moved to Recycle Bin', `${manifest.title} can be restored for 90 days.`);
+          onDeleted?.();
+        }}
+      />
     </div>
   );
 }

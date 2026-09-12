@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048" role="img" aria-label="Notebook, coffee, and vase illustration">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#eadbc7"/>
+    </linearGradient>
+    <linearGradient id="cup" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#d6aa83"/>
+      <stop offset="1" stop-color="#9f7458"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#fff8e9" stop-opacity=".86"/>
+      <stop offset="1" stop-color="#cdbca6" stop-opacity=".7"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="1024" cy="1540" rx="760" ry="210" fill="#7a5a43" opacity=".11"/>
+  <g transform="rotate(-7 1024 1170)">
+    <rect x="645" y="820" width="760" height="610" rx="38" fill="#b99370" opacity=".28"/>
+    <rect x="615" y="785" width="760" height="610" rx="38" fill="url(#paper)" stroke="#c9aa88" stroke-width="18"/>
+    <path d="M995 810v560" stroke="#d7bea2" stroke-width="12"/>
+    <path d="M700 925h225M700 1000h225M700 1075h225M1065 925h225M1065 1000h225M1065 1075h225" stroke="#c6aa8c" stroke-width="10" opacity=".55"/>
+    <path d="m1070 1190 55 42 92-126" fill="none" stroke="#d97855" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/>
+  </g>
+  <g transform="translate(245 680)">
+    <ellipse cx="290" cy="610" rx="250" ry="70" fill="#8a654d" opacity=".14"/>
+    <path d="M95 180h385l-34 354c-10 105-294 105-304 0z" fill="url(#cup)" stroke="#8f6247" stroke-width="18"/>
+    <ellipse cx="288" cy="184" rx="194" ry="58" fill="#f1dac0" stroke="#8f6247" stroke-width="18"/>
+    <ellipse cx="288" cy="185" rx="154" ry="39" fill="#6b4431"/>
+    <path d="M472 260c155-22 174 213 24 224" fill="none" stroke="#9f7458" stroke-width="52"/>
+    <path d="M235 92c-45-84 76-96 29-175M338 83c-40-70 63-94 25-161" fill="none" stroke="#a78770" stroke-linecap="round" stroke-width="18" opacity=".52"/>
+  </g>
+  <g transform="translate(1395 420)">
+    <ellipse cx="212" cy="910" rx="250" ry="66" fill="#765844" opacity=".1"/>
+    <path d="M104 430c-4 128-48 189-48 326 0 188 310 188 310 0 0-137-44-198-48-326z" fill="url(#glass)" stroke="#b7a38b" stroke-width="17"/>
+    <path d="M145 456h132" stroke="#a58d74" stroke-width="22"/>
+    <g fill="none" stroke="#718061" stroke-linecap="round" stroke-width="18">
+      <path d="M212 455 112 64M212 455l54-430M212 455l189-326"/>
+    </g>
+    <g fill="#8e9c76">
+      <ellipse cx="96" cy="112" rx="40" ry="78" transform="rotate(-35 96 112)"/>
+      <ellipse cx="143" cy="220" rx="37" ry="72" transform="rotate(35 143 220)"/>
+      <ellipse cx="265" cy="78" rx="37" ry="73" transform="rotate(24 265 78)"/>
+      <ellipse cx="262" cy="205" rx="38" ry="73" transform="rotate(-28 262 205)"/>
+      <ellipse cx="382" cy="160" rx="39" ry="78" transform="rotate(40 382 160)"/>
+      <ellipse cx="327" cy="263" rx="36" ry="70" transform="rotate(-45 327 263)"/>
+    </g>
+  </g>
+  <g transform="rotate(18 1450 1450)">
+    <rect x="1210" y="1400" width="590" height="42" rx="21" fill="#5f4b3e"/>
+    <path d="m1800 1400 105 21-105 21z" fill="#b88765"/>
+    <rect x="1270" y="1407" width="320" height="8" rx="4" fill="#fff7eb" opacity=".45"/>
+  </g>
+</svg>

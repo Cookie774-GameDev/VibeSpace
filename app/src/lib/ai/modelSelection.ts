@@ -4,6 +4,8 @@ import type { PlanId } from '@/lib/entitlements';
 import type { StackPresetId } from '@/lib/ai/stacks/types';
 import type { ParsedStackSlashCommand } from '@/lib/ai/stacks/classifier';
 import { classifyStackTask, parseStackSlashCommand } from '@/lib/ai/stacks/classifier';
+import { isHiveProductEnabled } from '@/lib/features/hiveProductGate';
+import { canRoutePromotedAdapter } from '@/features/model-foundry/adapterRegistry';
 import { getProviderDisplayName } from './providerRegistry';
 import {
   getAccessibleModelOptions,
@@ -163,6 +165,18 @@ export function resolveActiveStackPreset(
   selection: ChatModelSelection,
   stackSlash: ParsedStackSlashCommand,
 ): StackPresetId {
+  // Product gate: never start multi-model Hive stacks while scrapped.
+  // Kernel smoke may still exercise custom stacks when its binding is active.
+  if (!isHiveProductEnabled()) {
+    if (
+      isKernelSmokeBindingActive() &&
+      selection.mode === 'hive' &&
+      selection.hiveId === 'custom'
+    ) {
+      return 'custom';
+    }
+    return 'off';
+  }
   if (stackSlash.preset) return coerceToExposedPreset(stackSlash.preset);
   if (
     selection.mode === 'hive' &&
@@ -173,6 +187,28 @@ export function resolveActiveStackPreset(
   }
   if (selection.mode === 'hive') return coerceToExposedPreset(selection.hiveId);
   return 'off';
+}
+
+/**
+ * Neutralize Hive selection when the product surface is gated so stale
+ * persistence and deep-link state cannot keep multi-model mode active.
+ */
+export function gateChatModelSelection(selection: ChatModelSelection): ChatModelSelection {
+  if (selection.mode === 'hive' && !isHiveProductEnabled()) {
+    // Preserve kernel-smoke custom hive only while the smoke binding is live.
+    if (selection.hiveId === 'custom' && isKernelSmokeBindingActive()) {
+      return selection;
+    }
+    return EMPTY_CHAT_MODEL_SELECTION;
+  }
+  return selection;
+}
+
+function localModelIdsMatch(left: string, right: string): boolean {
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+  if (!a || !b) return false;
+  return a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
 }
 
 function findAccessibleModel(
@@ -187,7 +223,26 @@ function findAccessibleModel(
     ctx.defaultLocalModel,
     ctx.plan,
   );
-  return options.find((option) => option.id === modelId) ?? null;
+  const exact = options.find((option) => option.id === modelId);
+  if (exact) return exact;
+  // Ollama tags often differ by `:latest` vs explicit tag — accept either side.
+  if (providerId === 'ollama' || providerId === 'local') {
+    return options.find((option) => localModelIdsMatch(option.id, modelId)) ?? null;
+  }
+  // Foundry model ids are project/job adapter pairs. They are accessible only
+  // while the adapter stays promoted in the local registry (fail closed).
+  if (providerId === 'foundry') {
+    const match = /^([A-Za-z0-9_-]{1,64})--([A-Za-z0-9_-]{1,64})$/.exec(modelId);
+    if (
+      match &&
+      typeof window !== 'undefined' &&
+      canRoutePromotedAdapter(window.localStorage, match[1]!, match[2]!)
+    ) {
+      return { provider: 'foundry', id: modelId, label: modelId };
+    }
+    return null;
+  }
+  return null;
 }
 
 function isAttestedKernelSmokeNativeSelection(
@@ -412,8 +467,12 @@ export function validateSendModelAccess(
   customSteps: Parameters<typeof stepsForPreset>[2],
   options?: { voice?: boolean; attachments?: { hasImages?: boolean; hasFiles?: boolean }; tools?: boolean },
 ): ModelSelectionValidation {
-  const stackSlash = parseStackSlashCommand(text);
-  const stackPreset = resolveActiveStackPreset(selection, stackSlash);
+  const gatedSelection = gateChatModelSelection(selection);
+  // Ignore /hive|/stack slash overrides while the product is gated.
+  const stackSlash = isHiveProductEnabled()
+    ? parseStackSlashCommand(text)
+    : { matched: false as const, text };
+  const stackPreset = resolveActiveStackPreset(gatedSelection, stackSlash);
   const stackText = stackSlash.matched ? stackSlash.text : text;
   const taskType = stackSlash.taskType ?? classifyStackTask(stackText);
   const steps = stepsForPreset(stackPreset, taskType, customSteps);
@@ -425,5 +484,5 @@ export function validateSendModelAccess(
       options,
     );
   }
-  return validateChatModelSelection(selection, ctx, customSteps, options);
+  return validateChatModelSelection(gatedSelection, ctx, customSteps, options);
 }

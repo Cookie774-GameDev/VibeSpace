@@ -81,8 +81,8 @@ describe('newsSections', () => {
     expect(counts).toEqual({ today: 1, last_week: 1, more: 1 });
   });
 
-  it('formats dates in UTC', () => {
-    expect(toIsoDay(new Date(Date.UTC(2026, 6, 11)))).toBe('2026-07-11');
+  it('formats dates in the user-local calendar', () => {
+    expect(toIsoDay(new Date(2026, 6, 11, 12))).toBe('2026-07-11');
     expect(formatNewsDate('2026-07-09', 'en-US')).toMatch(/Jul/);
   });
 

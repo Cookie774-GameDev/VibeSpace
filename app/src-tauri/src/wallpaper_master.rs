@@ -44,7 +44,9 @@ fn default_masters_dir() -> PathBuf {
     }
     // Developer catalog source folder (Windows).
     if let Ok(user) = std::env::var("USERPROFILE") {
-        let p = PathBuf::from(user).join("Downloads").join("VibeSpace-WallpAPPERS");
+        let p = PathBuf::from(user)
+            .join("Downloads")
+            .join("VibeSpace-WallpAPPERS");
         if p.is_dir() {
             return p;
         }
@@ -143,7 +145,13 @@ pub fn wallpaper_cache_full_master(
 
     let safe_id = wallpaper_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     let dest = cache_root.join(format!("{safe_id}.mp4"));
 
@@ -179,13 +187,16 @@ pub fn wallpaper_cache_full_master(
 }
 
 #[tauri::command]
-pub fn wallpaper_full_cache_path(
-    app: tauri::AppHandle,
-    wallpaper_id: String,
-) -> Option<String> {
+pub fn wallpaper_full_cache_path(app: tauri::AppHandle, wallpaper_id: String) -> Option<String> {
     let safe_id = wallpaper_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     let path = app
         .path()

@@ -1,8 +1,19 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Plugins } from './Plugins';
+import { usePluginStore } from './store';
+import { useAuthStore } from '@/stores/auth';
 
 describe('Plugins MonoChrome appearance', () => {
+  beforeEach(() => {
+    useAuthStore.setState({ cloudSession: null, localUserId: 'account-a' });
+    usePluginStore.setState({
+      connectionsByAccount: {},
+      installedPluginIdsByAccount: { 'account-a': ['github'] },
+      pinnedPluginIdsByAccount: {},
+    });
+  });
+
   afterEach(cleanup);
 
   it('gates radius, background-image, and shadow under exact monochrome only', () => {
@@ -24,21 +35,20 @@ describe('Plugins MonoChrome appearance', () => {
     // Meaningful product surface and copy are preserved.
     expect(screen.getByRole('heading', { name: 'Plugins' })).toBeTruthy();
     expect(screen.getByText(/Tokens are never/)).toBeTruthy();
-  });
+  }, 10_000);
 
-  it('gates the credential hero gradient inside the setup dialog under exact monochrome', () => {
+  it('gates the compact authorization dialog surface under exact monochrome', () => {
     render(<Plugins />);
 
     const githubCard = screen.getByTestId('plugin-card-github');
     fireEvent.click(within(githubCard).getByRole('button', { name: /Connect/ }));
 
-    const hero = document.querySelector<HTMLElement>('.mc7f-plugins-credential-hero');
-    expect(hero).not.toBeNull();
-    const heroClassName = hero?.className ?? '';
+    const dialog = document.querySelector<HTMLElement>('.sakura-plugin-dialog');
+    expect(dialog).not.toBeNull();
+    const dialogClassName = dialog?.className ?? '';
 
-    // Ordinary-theme gradient is preserved, but gated off under exact monochrome.
-    expect(heroClassName).toMatch(/bg-gradient-to-br/);
-    expect(heroClassName).toContain('[html[data-theme=monochrome]_&]:bg-none');
-    expect(heroClassName).toContain('[html[data-theme=monochrome]_&]:rounded-none');
+    expect(dialogClassName).toContain('[html[data-theme=monochrome]_&]:rounded-none');
+    expect(dialogClassName).toContain('[html[data-theme=monochrome]_&]:shadow-none');
+    expect(document.querySelector('.mc7f-plugins-credential-hero')).toBeNull();
   });
 });

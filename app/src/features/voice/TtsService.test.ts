@@ -17,7 +17,7 @@ const h = vi.hoisted(() => {
   });
   return {
     calls,
-    kokoro: make('kokoro_local'),
+    jarvis: make('jarvis_local'),
     openai: make('openai_tts', { fail: true }),
     deepgram: make('deepgram_tts'),
     elevenlabs: make('elevenlabs_tts'),
@@ -25,7 +25,7 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock('./providers/kokoroLocal', () => ({ kokoroLocalProvider: h.kokoro }));
+vi.mock('./providers/jarvisHighLocal', () => ({ jarvisHighLocalProvider: h.jarvis }));
 vi.mock('./providers/systemFallback', () => ({ systemFallbackProvider: h.system }));
 vi.mock('./providers/cloudTts', () => ({
   openaiTtsProvider: h.openai,
@@ -41,10 +41,10 @@ describe('TtsService', () => {
   beforeEach(() => {
     h.calls.length = 0;
     vi.clearAllMocks();
-    h.kokoro.isAvailable.mockResolvedValue(true);
+    h.jarvis.isAvailable.mockResolvedValue(true);
     h.system.isAvailable.mockResolvedValue(true);
     h.openai.isAvailable.mockResolvedValue(true);
-    h.kokoro.speakChunk.mockResolvedValue(undefined);
+    h.jarvis.speakChunk.mockResolvedValue(undefined);
     h.system.speakChunk.mockResolvedValue(undefined);
     h.openai.speakChunk.mockImplementation(async () => {
       throw new Error('quota_exceeded');
@@ -56,24 +56,24 @@ describe('TtsService', () => {
   });
 
   it('speaks with the selected provider when available', async () => {
-    TtsService.setProvider('kokoro_local');
+    TtsService.setProvider('jarvis_local');
     await TtsService.speak('Hello there.', { raw: true });
-    expect(h.kokoro.speakChunk).toHaveBeenCalledTimes(1);
+    expect(h.jarvis.speakChunk).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to kokoro when cloud provider fails (quota_exceeded)', async () => {
+  it('falls back to Jarvis High when cloud provider fails (quota_exceeded)', async () => {
     const notices: string[] = [];
     const off = TtsService.onNotice((m) => notices.push(m));
     TtsService.setProvider('openai_tts');
     await TtsService.speak('Read this aloud.', { raw: true });
     expect(h.openai.speakChunk).toHaveBeenCalled();
-    expect(h.kokoro.speakChunk).toHaveBeenCalled(); // fell back
-    expect(notices.some((n) => /local Kokoro voice/i.test(n))).toBe(true);
+    expect(h.jarvis.speakChunk).toHaveBeenCalled();
+    expect(notices.some((n) => /local Jarvis High voice/i.test(n))).toBe(true);
     off();
   });
 
-  it('falls all the way to system fallback when kokoro is unavailable too', async () => {
-    h.kokoro.isAvailable.mockResolvedValue(false);
+  it('falls all the way to system fallback when Jarvis High is unavailable too', async () => {
+    h.jarvis.isAvailable.mockResolvedValue(false);
     TtsService.setProvider('openai_tts');
     await TtsService.speak('Final fallback test.', { raw: true });
     expect(h.system.speakChunk).toHaveBeenCalled();
@@ -87,15 +87,15 @@ describe('TtsService', () => {
   });
 
   it('stop() resets status to idle', async () => {
-    TtsService.setProvider('kokoro_local');
+    TtsService.setProvider('jarvis_local');
     await TtsService.speak('Something.', { raw: true });
     TtsService.stop();
     expect(TtsService.getStatus()).toBe('idle');
   });
 
   it('does not speak empty text', async () => {
-    TtsService.setProvider('kokoro_local');
+    TtsService.setProvider('jarvis_local');
     await TtsService.speak('   ');
-    expect(h.kokoro.speakChunk).not.toHaveBeenCalled();
+    expect(h.jarvis.speakChunk).not.toHaveBeenCalled();
   });
 });

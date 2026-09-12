@@ -49,7 +49,7 @@ describe('JarvisVoiceTranscript accessibility', () => {
       screen
         .getByText('Stable committed reply')
         .closest('.grid')
-        ?.classList.contains('grid-cols-[1rem_2.75rem_minmax(0,1fr)]'),
+        ?.classList.contains('grid-cols-[1.5rem_2.75rem_minmax(0,1fr)_auto]'),
     ).toBe(true);
     expect(
       screen.getByRole('button', { name: 'Show more' }).classList.contains('text-foreground'),

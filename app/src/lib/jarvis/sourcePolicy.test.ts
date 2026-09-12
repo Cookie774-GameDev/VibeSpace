@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 
 import {
   classifyJarvisReadError,
@@ -142,6 +143,9 @@ describe('classifyJarvisSource path admission', () => {
 });
 
 describe('classifyJarvisSource content admission', () => {
+  const githubToken = syntheticCredentialFixture('ghp_', '1234567890abcdefghijkl');
+  const googleKey = syntheticCredentialFixture('AIza', '1234567890abcdefghijkl');
+
   it.each([
     '-----BEGIN PRIVATE KEY-----\nsynthetic-secret\n-----END PRIVATE KEY-----',
     'API_KEY=synthetic-secret',
@@ -151,9 +155,9 @@ describe('classifyJarvisSource content admission', () => {
     'PASSWORD=synthetic-secret',
     'AWS_SECRET_ACCESS_KEY=synthetic-secret',
     'token: github_pat_1234567890abcdefghijkl',
-    'token=ghp_1234567890abcdefghijkl',
+    `token=${githubToken}`,
     'apiKey: sk-1234567890abcdef',
-    'googleKey=AIza1234567890abcdefghijkl',
+    `googleKey=${googleKey}`,
     'Recovery Codes\n1234-5678\n8765-4321',
     'credential export\nusername: alice\npassword: synthetic-secret',
     '-----BEGIN ENCRYPTED PRIVATE KEY-----\nsynthetic-private-material',
@@ -183,7 +187,7 @@ describe('classifyJarvisSource content admission', () => {
     for (const contentSample of [
       'The OPENAI_API_KEY environment variable is documented here without a value.',
       'example = sk-short',
-      'prefixghp_1234567890abcdefghijkl is explanatory prose',
+      `prefix${githubToken} is explanatory prose`,
       'const CLIENT_SECRET = process.env.CLIENT_SECRET;',
       "const API_KEY = '';",
       '{"PASSWORD":""}',
@@ -195,7 +199,7 @@ describe('classifyJarvisSource content admission', () => {
   });
 
   it('uses a generic single-line summary when a rejected basename is token or control shaped', () => {
-    for (const path of ['C:\\repo\\ghp_1234567890abcdefghijkl.txt', '/repo/line\nbreak.txt']) {
+    for (const path of [`C:\\repo\\${githubToken}.txt`, '/repo/line\nbreak.txt']) {
       const decision = classifyJarvisSource(
         privateText(path, {
           root: path.includes('\\') ? 'C:\\repo' : '/repo',
@@ -203,7 +207,7 @@ describe('classifyJarvisSource content admission', () => {
         }),
       );
       expect(decision).toMatchObject({ allowed: false, reason: 'secret_content' });
-      expect(decision.safeSummary).not.toContain('ghp_1234567890abcdefghijkl');
+      expect(decision.safeSummary).not.toContain(githubToken);
       expect(decision.safeSummary).not.toContain('line');
       expect(decision.safeSummary).not.toContain('break');
       expect(decision.safeSummary).not.toContain('\n');

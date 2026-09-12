@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 
 const fsMocks = vi.hoisted(() => ({
   readTextFileSample: vi.fn(),
@@ -180,12 +181,13 @@ describe('AI explicit file context safeguards', () => {
 
   it('drops content-denied connected and explicit samples without reflecting their path or secret', async () => {
     fsMocks.getStoredProjectRoot.mockReturnValue('C:\\repo');
+    const secretPathSegment = syntheticCredentialFixture('ghp_', '1234567890abcdefghijkl');
     window.localStorage.setItem(
       'jarvis-terminal-pane-tree:project_a',
       JSON.stringify({
         kind: 'leaf',
         agentSlug: 'coder',
-        connectedFiles: ['C:\\repo\\ghp_1234567890abcdefghijkl.txt'],
+        connectedFiles: [`C:\\repo\\${secretPathSegment}.txt`],
       }),
     );
     fsMocks.readTextFileSample.mockImplementation(async (path: string) => ({
@@ -201,7 +203,7 @@ describe('AI explicit file context safeguards', () => {
       expect(block).toContain('secret_content');
       expect(block).not.toContain('synthetic-secret');
       expect(block).not.toContain('C:\\repo');
-      expect(block).not.toContain('ghp_1234567890abcdefghijkl');
+      expect(block).not.toContain(secretPathSegment);
       expect(block).not.toContain('line');
       expect(block).not.toContain('break');
       expect(block).toContain('source:');
@@ -302,10 +304,24 @@ describe('AI explicit file context safeguards', () => {
       executions: {
         'exec-1': {
           id: 'exec-1',
+          accountId: 'account-a',
+          runId: 'run-a',
           sessionId: 'pty-1',
           status: 'failed',
           exitCode: 1,
           updatedAt: 995,
+          processIdentity: Object.freeze({
+            accountId: 'account-a',
+            projectId: 'project-a',
+            runId: 'run-a',
+            executionId: 'exec-1',
+            paneId: 'pane-1',
+            sessionId: 'pty-1',
+            processInstanceId: 'ptyproc-1',
+            pid: 4_242,
+            processStartedAt: 1_723_456_789_000,
+            runtimeGeneration: 'runtime-1',
+          }),
         },
       },
       queue: [
@@ -331,6 +347,11 @@ describe('AI explicit file context safeguards', () => {
     expect(block).toContain('1 terminal pane observed');
     expect(block).toContain('pane=pane-1');
     expect(block).toContain('session=pty-1');
+    expect(block).toContain('executionId=exec-1');
+    expect(block).toContain('processInstanceId=ptyproc-1');
+    expect(block).toContain('pid=4242');
+    expect(block).toContain('processStartedAt=1723456789000');
+    expect(block).toContain('runtimeGeneration=runtime-1');
     expect(block).toContain('agent=builder');
     expect(block).toContain('cwd=C:\\repo');
     expect(block).toContain('command=npm run build');
@@ -347,6 +368,92 @@ describe('AI explicit file context safeguards', () => {
     expect(block).not.toContain('PRIVATE_RAW_TRANSCRIPT_LINE');
     expect(block).not.toContain('synthetic-terminal-secret');
     expect(block.length).toBeLessThanOrEqual(3_600);
+  });
+
+  it('omits the process tuple atomically when any projected field is missing or malformed', () => {
+    const completePane = {
+      paneId: 'pane-1',
+      sessionId: 'pty-1',
+      executionId: 'exec-1',
+      processInstanceId: 'ptyproc-1',
+      pid: 4_242,
+      processStartedAt: 1_723_456_789_000,
+      runtimeGeneration: 'runtime-1',
+      state: 'running',
+      stale: false,
+      markers: [],
+      errors: [],
+      lockedFiles: [],
+      editedFiles: [],
+    } as const;
+    const invalidPanes = [
+      { ...completePane, runtimeGeneration: undefined },
+      { ...completePane, executionId: ' exec-1' },
+      { ...completePane, processInstanceId: 'ptyproc-1\nforged' },
+      { ...completePane, pid: 0 },
+      { ...completePane, processStartedAt: 1.5 },
+    ];
+
+    for (const pane of invalidPanes) {
+      const block = formatJarvisTerminalOperatingContextBlock({
+        capturedAt: 1_000,
+        panes: [pane],
+      });
+      expect(block).not.toMatch(
+        /\b(?:executionId|processInstanceId|pid|processStartedAt|runtimeGeneration)=/,
+      );
+      expect(block).toContain('pane=pane-1');
+      expect(block).toContain('session=pty-1');
+      expect(block).toContain('state=running');
+    }
+  });
+
+  it('keeps an upstream authority mismatch out of normal-chat process facts', () => {
+    const snapshot = createJarvisTerminalOperatingSnapshot({
+      observedAt: 1_000,
+      transcripts: {
+        'pty-1': {
+          sessionId: 'pty-1',
+          paneId: 'pane-1',
+          projectId: 'project-a',
+          agentSlug: 'reviewer',
+          command: 'opencode',
+          text: '',
+          lastWriteAt: 990,
+          bytesSeen: 0,
+        },
+      },
+      executions: {
+        'exec-1': {
+          id: 'exec-1',
+          accountId: 'account-a',
+          runId: 'run-a',
+          sessionId: 'pty-1',
+          status: 'running',
+          updatedAt: 995,
+          processIdentity: Object.freeze({
+            accountId: 'account-a',
+            projectId: 'project-a',
+            runId: 'run-a',
+            executionId: 'exec-1',
+            paneId: 'pane-other',
+            sessionId: 'pty-1',
+            processInstanceId: 'ptyproc-1',
+            pid: 4_242,
+            processStartedAt: 1_723_456_789_000,
+            runtimeGeneration: 'runtime-1',
+          }),
+        },
+      },
+      queue: [],
+    });
+
+    const block = formatJarvisTerminalOperatingContextBlock(snapshot);
+    expect(block).not.toMatch(
+      /\b(?:executionId|processInstanceId|pid|processStartedAt|runtimeGeneration)=/,
+    );
+    expect(block).toContain('pane=pane-1');
+    expect(block).toContain('session=pty-1');
   });
 
   it('reads automatic terminal intelligence only when operating work exists', () => {

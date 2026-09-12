@@ -39,6 +39,14 @@ import { SidebarFilesTree } from '@/features/files/SidebarFilesTree';
 import { openOrFocusWorkbenchWindow } from '@/features/workbench/window';
 import { useWorkbenchStore } from '@/features/workbench/store';
 import { chatPinPatch, isChatPinned, sortChatsForDisplay } from '@/features/chat/chatPin';
+import {
+  ChatListActivityIndicator,
+  mergeChatActivityEvents,
+  type ChatActivityEvent,
+  type ChatListRunSignal,
+} from '@/features/chat/activity';
+import { useChatActivityStore } from '@/features/chat/activity/activityStore';
+import { useJarvisTaskRunStore } from '@/features/jarvis-runs/taskRunStore';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_CONTROL, type SikControlId } from '@/lib/jarvis/smoke/evidenceIds';
 import { useThemeLayoutTransition } from '@/features/appearance/themeMotion';
@@ -101,6 +109,17 @@ export function NavPane() {
 
   const agents = useAgentStore((s) => s.agents);
   const agentList = React.useMemo(() => Object.values(agents), [agents]);
+  const taskRuns = useJarvisTaskRunStore((state) => state.runs);
+  const taskActivityByChat = useJarvisTaskRunStore((state) => state.activityByChat);
+  const liveActivityByChat = useChatActivityStore((state) => state.eventsByChat);
+  const taskRunsByChat = React.useMemo(() => {
+    const grouped: Record<string, ChatListRunSignal[]> = {};
+    Object.values(taskRuns).forEach((run) => {
+      if (!run.chatId) return;
+      (grouped[run.chatId] ??= []).push(run);
+    });
+    return grouped;
+  }, [taskRuns]);
 
   // Live projects + chats. dexie-react-hooks re-renders on any insert/update.
   const projects = useLiveQuery(
@@ -411,6 +430,11 @@ export function NavPane() {
                 chat={c}
                 navOpen={navOpen}
                 active={(c.id as unknown as string) === activeChatId}
+                activityEvents={mergeChatActivityEvents(
+                  taskActivityByChat[String(c.id)] ?? [],
+                  liveActivityByChat[String(c.id)] ?? [],
+                )}
+                activityRuns={taskRunsByChat[String(c.id)] ?? []}
                 onOpen={() => openChat(c)}
                 onTogglePin={() => void onTogglePinChat(c)}
               />
@@ -504,6 +528,11 @@ export function NavPane() {
                 chat={c}
                 navOpen={navOpen}
                 active={(c.id as unknown as string) === activeChatId}
+                activityEvents={mergeChatActivityEvents(
+                  taskActivityByChat[String(c.id)] ?? [],
+                  liveActivityByChat[String(c.id)] ?? [],
+                )}
+                activityRuns={taskRunsByChat[String(c.id)] ?? []}
                 onOpen={() => openChat(c)}
                 onTogglePin={() => void onTogglePinChat(c)}
               />
@@ -921,11 +950,21 @@ interface ChatNavRowProps {
   chat: Chat;
   navOpen: boolean;
   active?: boolean;
+  activityRuns?: readonly ChatListRunSignal[];
+  activityEvents?: readonly ChatActivityEvent[];
   onOpen: () => void;
   onTogglePin: () => void;
 }
 
-export function ChatNavRow({ chat, navOpen, active, onOpen, onTogglePin }: ChatNavRowProps) {
+export function ChatNavRow({
+  chat,
+  navOpen,
+  active,
+  activityRuns = [],
+  activityEvents = [],
+  onOpen,
+  onTogglePin,
+}: ChatNavRowProps) {
   const label = (chat.title || 'Untitled chat').trim() || 'Untitled chat';
   const pinned = isChatPinned(chat);
 
@@ -970,6 +1009,7 @@ export function ChatNavRow({ chat, navOpen, active, onOpen, onTogglePin }: ChatN
         <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       </button>
+      <ChatListActivityIndicator runs={activityRuns} events={activityEvents} />
       <Hint label={pinned ? 'Unpin chat' : 'Pin chat'}>
         <button
           type="button"

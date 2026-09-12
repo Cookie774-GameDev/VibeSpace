@@ -365,4 +365,33 @@ describe('production Context persistence service', () => {
     ).rejects.toThrow(/map_scope_conflict/u);
     await expect(database.context_maps.count()).resolves.toBe(2);
   });
+
+  it('refuses an update-only save when the selected persisted map no longer exists', async () => {
+    const service = createContextPersistenceService(database, localStorage);
+    await service.initialize('account-1', 'project-1');
+
+    await expect(
+      service.saveTree('account-1', treeFixture(), {
+        mapId: 'missing-map',
+        requireExisting: true,
+      }),
+    ).rejects.toThrow(/map_missing/u);
+    await expect(database.context_maps.count()).resolves.toBe(0);
+
+    const saved = await service.saveTree('account-1', treeFixture());
+    await expect(
+      service.saveTree(
+        'account-1',
+        { ...treeFixture(), summary: 'stale overwrite' },
+        {
+          mapId: saved.selectedMapId!,
+          requireExisting: true,
+          expectedUpdatedAt: 0,
+        },
+      ),
+    ).rejects.toThrow(/map_changed/u);
+    await expect(service.load('account-1', 'project-1')).resolves.toMatchObject({
+      maps: [{ tree: { summary: 'Project knowledge.' } }],
+    });
+  });
 });

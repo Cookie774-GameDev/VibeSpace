@@ -11,6 +11,8 @@ export const WORKBENCH_PANEL_KINDS = [
   'notes',
   'diagram',
   'plugins',
+  'plugin',
+  'tools',
   'github',
   'supabase',
   'activity',
@@ -46,6 +48,8 @@ export interface WorkbenchPanelSettings {
   previewDocument?: string;
   /** Display name of the source file/language for device-preview chrome. */
   previewLabel?: string;
+  /** Plugin manifest id for a pinned plugin dashboard panel. */
+  pluginId?: string;
 }
 
 export interface WorkbenchPanel {
@@ -92,6 +96,8 @@ export interface WorkbenchWallpaperConfig {
   paused: boolean;
   interactive: boolean;
   intensity: number;
+  /** Wallpaper-layer brightness only, normalized from 0 to 1. */
+  brightness: number;
   quality: 'low' | 'balanced' | 'high';
   assetUrl?: string;
 }
@@ -134,6 +140,8 @@ export const DEFAULT_PANEL_SIZE: Record<WorkbenchPanelKind, { width: number; hei
   notes: { width: 360, height: 330 },
   diagram: { width: 560, height: 400 },
   plugins: { width: 400, height: 360 },
+  plugin: { width: 480, height: 420 },
+  tools: { width: 680, height: 500 },
   github: { width: 440, height: 380 },
   supabase: { width: 480, height: 400 },
   activity: { width: 400, height: 360 },
@@ -152,6 +160,8 @@ export const PANEL_TITLES: Record<WorkbenchPanelKind, string> = {
   notes: 'Notes',
   diagram: 'Diagram',
   plugins: 'Plugins & MCP',
+  plugin: 'Plugin',
+  tools: 'Tools',
   github: 'GitHub',
   supabase: 'Supabase',
   activity: 'Activity',

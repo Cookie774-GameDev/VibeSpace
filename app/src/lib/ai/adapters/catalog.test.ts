@@ -12,13 +12,19 @@ import {
   CLI_BRIDGE_EVENT,
   MAX_CLI_PROMPT_CHARS,
   probeCliBridge,
+  requireModelId,
   streamCliBridge,
   type CliBridgeEvent,
   type CliProbeRequest,
   type CliStartRequest,
 } from './cliBridge';
 import { buildClaudeInvocation } from './claude';
-import { buildCodexInvocation, classifyCodexAuthProbe, CODEX_CLI_DEFINITION } from './codex';
+import {
+  buildCodexInvocation,
+  classifyCodexAuthProbe,
+  codexCliAdapter,
+  CODEX_CLI_DEFINITION,
+} from './codex';
 import { buildCopilotInvocation } from './copilot';
 import { buildGeminiInvocation } from './gemini';
 import { buildOpenCodeInvocation } from './opencode';
@@ -36,8 +42,13 @@ const EXPECTED_CONNECTIONS = [
   'xai-api',
   'deepseek-api',
   'zai-api',
+  'zai-coding-plan',
   'qwen-code',
   'qwen-api',
+  'groq-api',
+  'openrouter-api',
+  'mistral-api',
+  'together-api',
   'ollama-local',
   'opencode-cli',
 ] as const;
@@ -80,7 +91,7 @@ describe('provider capability catalog', () => {
     ]);
   });
 
-  it('covers the ten approved families and fifteen distinct connections', () => {
+  it('covers every implemented chat family and distinct connection', () => {
     expect(Object.keys(PROVIDER_CATALOG)).toEqual([
       'openai',
       'anthropic',
@@ -90,11 +101,17 @@ describe('provider capability catalog', () => {
       'deepseek',
       'zai',
       'qwen',
+      'groq',
+      'openrouter',
+      'mistral',
+      'together',
       'ollama',
       'opencode',
     ]);
     expect(PROVIDER_CONNECTIONS.map(({ id }) => id)).toEqual(EXPECTED_CONNECTIONS);
-    expect(new Set(PROVIDER_CONNECTIONS.map(({ id }) => id)).size).toBe(15);
+    expect(new Set(PROVIDER_CONNECTIONS.map(({ id }) => id)).size).toBe(
+      EXPECTED_CONNECTIONS.length,
+    );
   });
 
   it('keeps every approved connection mode explicit', () => {
@@ -111,19 +128,47 @@ describe('provider capability catalog', () => {
       'xai-api': 'native-api',
       'deepseek-api': 'native-api',
       'zai-api': 'native-api',
+      'zai-coding-plan': 'external-cli',
       'qwen-code': 'external-cli',
       'qwen-api': 'native-api',
+      'groq-api': 'native-api',
+      'openrouter-api': 'native-api',
+      'mistral-api': 'native-api',
+      'together-api': 'native-api',
       'ollama-local': 'local',
       'opencode-cli': 'external-cli',
     });
   });
 
-  it('does not invent external bridges for xAI, DeepSeek, or Z.AI', () => {
-    for (const id of ['xai', 'deepseek', 'zai'] as const) {
+  it('does not invent external bridges for xAI or DeepSeek', () => {
+    for (const id of ['xai', 'deepseek'] as const) {
       expect(PROVIDER_CATALOG[id].externalCli).toBeUndefined();
       expect(PROVIDER_CATALOG[id].connections).toHaveLength(1);
       expect(PROVIDER_CATALOG[id].connections[0]?.mode).toBe('native-api');
     }
+  });
+
+  it('keeps Z.AI API and Z.AI Coding Plan as separate catalog identities', () => {
+    expect(PROVIDER_CATALOG.zai.connections.map((connection) => connection.id)).toEqual([
+      'zai-api',
+      'zai-coding-plan',
+    ]);
+    expect(PROVIDER_CATALOG.zai.connections[0]).toMatchObject({
+      id: 'zai-api',
+      mode: 'native-api',
+      authSource: 'api-key',
+    });
+    expect(PROVIDER_CATALOG.zai.connections[1]).toMatchObject({
+      id: 'zai-coding-plan',
+      mode: 'external-cli',
+      adapterId: 'opencode-cli',
+      authSource: 'opencode-provider-session',
+    });
+    expect(PROVIDER_CATALOG.zai.externalCli).toMatchObject({
+      connectionId: 'zai-coding-plan',
+      executableName: 'opencode',
+      modelListArgs: ['models', 'zai', '--refresh'],
+    });
   });
 
   it('keeps executable metadata off native and local connection descriptors', () => {
@@ -153,7 +198,16 @@ describe('provider capability catalog', () => {
       subscriptionQuota: false,
       localOnly: false,
     };
-    expect(getProviderConnectionDescriptor('openai-codex').capabilities).toEqual(external);
+    expect(getProviderConnectionDescriptor('openai-codex').capabilities).toEqual({
+      ...external,
+      tools: true,
+    });
+    expect(getProviderConnectionDescriptor('openai-codex').toolAllowlist).toEqual([
+      'vibespace_context',
+    ]);
+    expect(Object.isFrozen(getProviderConnectionDescriptor('openai-codex').toolAllowlist)).toBe(
+      true,
+    );
     expect(getProviderConnectionDescriptor('anthropic-claude-code').capabilities).toEqual(external);
     expect(getProviderConnectionDescriptor('google-gemini-cli').capabilities).toEqual({
       ...external,
@@ -166,6 +220,7 @@ describe('provider capability catalog', () => {
     });
     expect(getProviderConnectionDescriptor('qwen-code').capabilities).toEqual(external);
     expect(getProviderConnectionDescriptor('opencode-cli').capabilities).toEqual(external);
+    expect(getProviderConnectionDescriptor('zai-coding-plan').capabilities).toEqual(external);
 
     const native = {
       text: true,
@@ -183,7 +238,16 @@ describe('provider capability catalog', () => {
       subscriptionQuota: false,
       localOnly: false,
     };
-    for (const id of ['xai-api', 'deepseek-api', 'zai-api', 'qwen-api']) {
+    for (const id of [
+      'xai-api',
+      'deepseek-api',
+      'zai-api',
+      'qwen-api',
+      'groq-api',
+      'openrouter-api',
+      'mistral-api',
+      'together-api',
+    ]) {
       expect(getProviderConnectionDescriptor(id).capabilities).toEqual(native);
     }
     for (const id of ['openai-api', 'anthropic-api', 'google-gemini-api', 'google-vertex']) {
@@ -194,6 +258,9 @@ describe('provider capability catalog', () => {
     }
     expect(getProviderConnectionDescriptor('ollama-local').capabilities).toEqual({
       ...native,
+      images: true,
+      files: true,
+      tools: true,
       localOnly: true,
     });
     expect(() => getProviderConnectionDescriptor('missing')).toThrowError(
@@ -215,32 +282,49 @@ describe('provider capability catalog', () => {
     expect(PROVIDER_CATALOG.google.externalCli).toMatchObject({
       executableName: 'gemini',
       versionArgs: ['--version'],
+      modelListArgs: ['/model'],
     });
     expect(PROVIDER_CATALOG.google.externalCli?.authProbeArgs).toBeUndefined();
     expect(PROVIDER_CATALOG.github.externalCli).toMatchObject({
       executableName: 'copilot',
       versionArgs: ['version'],
+      modelListArgs: ['/model'],
     });
     expect(PROVIDER_CATALOG.github.externalCli?.authProbeArgs).toBeUndefined();
     expect(PROVIDER_CATALOG.qwen.externalCli).toMatchObject({
       executableName: 'qwen',
       versionArgs: ['--version'],
+      modelListArgs: ['/model'],
     });
     expect(PROVIDER_CATALOG.qwen.externalCli?.authProbeArgs).toBeUndefined();
     expect(PROVIDER_CATALOG.opencode.externalCli).toMatchObject({
       executableName: 'opencode',
       versionArgs: ['--version'],
       authProbeArgs: ['auth', 'list'],
-      modelListArgs: ['models'],
+      modelListArgs: ['models', 'openai', '--refresh'],
     });
   });
 
   it('publishes a frozen current model catalog only for the Codex subscription connection', () => {
-    expect(CONNECTION_MODEL_OPTIONS['openai-codex']).toEqual([
-      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', contextWindowTokens: 1_000_000 },
-      { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', contextWindowTokens: 1_000_000 },
-      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', contextWindowTokens: 1_000_000 },
+    expect(CONNECTION_MODEL_OPTIONS['openai-codex']?.map((option) => option.id)).toEqual([
+      'gpt-5.3-codex-spark',
+      'gpt-5.3-codex',
+      'gpt-5.4-mini',
+      'gpt-5.4',
+      'gpt-5.5-codex',
+      'gpt-5.5',
+      'gpt-5.5-pro',
+      'gpt-5.6-luna',
+      'gpt-5.6-terra',
+      'gpt-5.6-sol',
     ]);
+    expect(
+      CONNECTION_MODEL_OPTIONS['openai-codex']?.find((option) => option.id === 'gpt-5.3-codex-spark'),
+    ).toEqual({
+      id: 'gpt-5.3-codex-spark',
+      label: 'GPT-5.3 Codex Spark',
+      contextWindowTokens: 128_000,
+    });
     expect(Object.isFrozen(CONNECTION_MODEL_OPTIONS)).toBe(true);
     expect(Object.isFrozen(CONNECTION_MODEL_OPTIONS['openai-codex'])).toBe(true);
     expect(
@@ -269,16 +353,22 @@ describe('provider capability catalog', () => {
       status: 'authenticated',
       detail: 'Authenticated through ChatGPT.',
     });
+    expect(classifyCodexAuthProbe(probe('Logged in using an API key'))).toEqual({
+      status: 'unauthenticated',
+      detail: 'Codex is using an API key, not a ChatGPT subscription session.',
+    });
+    expect(classifyCodexAuthProbe(probe('Unexpected future output'))).toEqual({
+      status: 'unauthenticated',
+      detail: 'ChatGPT subscription sign-in is not active.',
+    });
     for (const result of [
-      probe('Logged in using an API key'),
       probe('Logged in using ChatGPT', { truncated: true }),
-      probe('Unexpected future output'),
       probe('', { exitCode: 1 }),
       probe('', { timedOut: true }),
     ]) {
       expect(classifyCodexAuthProbe(result)).toEqual({
-        status: 'unauthenticated',
-        detail: 'ChatGPT subscription sign-in is not active.',
+        status: 'unknown',
+        detail: 'Codex sign-in status could not be verified.',
       });
     }
     expect(CODEX_CLI_DEFINITION.classifyAuthProbe).toBe(classifyCodexAuthProbe);
@@ -291,15 +381,75 @@ describe('shell-free provider command vectors', () => {
   it('builds Codex arguments without embedding the prompt', () => {
     const invocation = buildCodexInvocation({
       prompt,
-      modelId: 'gpt-5.5-codex',
+      modelId: 'gpt-5.6-luna',
       workingDirectory: 'C:\\work space',
+      reasoningEffort: 'xhigh',
     });
     expect(invocation).toEqual({
-      args: ['exec', '--json', '--cd', 'C:\\work space', '--model', 'gpt-5.5-codex'],
+      args: [
+        'exec',
+        '--ignore-user-config',
+        '--ephemeral',
+        '--json',
+        '--cd',
+        'C:\\work space',
+        '--model',
+        'gpt-5.6-luna',
+        '-c',
+        'model_reasoning_effort="xhigh"',
+      ],
       stdin: prompt,
       cwd: 'C:\\work space',
     });
+    expect(invocation.args.filter((arg) => arg === '--ignore-user-config')).toHaveLength(1);
+    expect(invocation.args.filter((arg) => arg === '--ephemeral')).toHaveLength(1);
     expect(invocation.args.join(' ')).not.toContain(prompt);
+  });
+
+  it('passes a validated Codex reasoning effort as a literal config argument', () => {
+    expect(
+      buildCodexInvocation({
+        prompt,
+        modelId: 'gpt-5.6-sol',
+        reasoningEffort: 'xhigh',
+      }).args,
+    ).toEqual([
+      'exec',
+      '--ignore-user-config',
+      '--ephemeral',
+      '--json',
+      '--model',
+      'gpt-5.6-sol',
+      '-c',
+      'model_reasoning_effort="xhigh"',
+    ]);
+    expect(() =>
+      buildCodexInvocation({ prompt, reasoningEffort: 'high; Remove-Item C:\\' }),
+    ).toThrowError('Codex CLI reasoning effort is unsupported');
+  });
+
+  it('marks only an exact Context Map request for the native run-scoped bridge', () => {
+    expect(
+      buildCodexInvocation({
+        prompt,
+        modelId: 'gpt-5.6-luna',
+        reasoningEffort: 'xhigh',
+        tools: { vibespace_context: true },
+      }),
+    ).toEqual({
+      args: ['exec', '--json', '--model', 'gpt-5.6-luna', '-c', 'model_reasoning_effort="xhigh"'],
+      stdin: prompt,
+      toolScope: 'vibespace_context',
+    });
+    const invalidToolScopes: ReadonlyArray<Readonly<Record<string, boolean>>> = [
+      { 'terminal.list': true },
+      { vibespace_context: true, 'terminal.list': true },
+    ];
+    for (const tools of invalidToolScopes) {
+      expect(() => buildCodexInvocation({ prompt, tools })).toThrowError(
+        'Codex CLI tool scope is unsupported',
+      );
+    }
   });
 
   it('keeps Claude and OpenCode prompts on stdin', () => {
@@ -317,6 +467,16 @@ describe('shell-free provider command vectors', () => {
     });
     expect(buildOpenCodeInvocation({ prompt, modelId: 'anthropic/claude-sonnet' })).toEqual({
       args: ['run', '--format', 'json', '--model', 'anthropic/claude-sonnet'],
+      stdin: prompt,
+    });
+    expect(
+      buildOpenCodeInvocation({
+        prompt,
+        modelId: 'gpt-5.3-codex-spark',
+        reasoningEffort: 'xhigh',
+      }),
+    ).toEqual({
+      args: ['run', '--format', 'json', '--model', 'openai/gpt-5.3-codex-spark#xhigh'],
       stdin: prompt,
     });
   });
@@ -380,6 +540,8 @@ describe('shell-free provider command vectors', () => {
 
     expect(invocation.args).toEqual([
       'exec',
+      '--ignore-user-config',
+      '--ephemeral',
       '--json',
       '--cd',
       optionLookingCwd,
@@ -421,6 +583,196 @@ describe('shell-free provider command vectors', () => {
     expect(() =>
       buildCodexInvocation({ prompt, modelId: '--dangerously-skip-permissions' }),
     ).toThrowError('Codex CLI model ID contains unsafe characters');
+  });
+
+  it('preserves bounded supported model punctuation and spaces as one literal argv item', () => {
+    const modelId = 'model family/v2 + preview';
+    const vectors = [
+      buildCodexInvocation({ prompt, modelId }).args,
+      buildClaudeInvocation({ prompt, modelId }).args,
+      buildCopilotInvocation({ prompt, modelId }).args,
+      buildQwenInvocation({ prompt, modelId }).args,
+      buildOpenCodeInvocation({ prompt, modelId }).args,
+    ];
+
+    expect(vectors[0]).toContain(modelId);
+    expect(vectors[1]).toContain(modelId);
+    expect(vectors[2]).toContain(`--model=${modelId}`);
+    expect(vectors[3]).toContain(modelId);
+    expect(vectors[4]).toContain(modelId);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '   '],
+    ['option-leading', '--dangerously-skip-permissions'],
+    ['control-bearing', 'safe\nunsafe'],
+    ['bidi-bearing', 'safe\u202eunsafe'],
+    ['oversized', `m${'x'.repeat(512)}`],
+  ])('rejects %s model IDs before constructing provider argv', (_label, modelId) => {
+    expect(() => requireModelId(modelId, 'Test')).toThrow();
+  });
+});
+
+describe('fail-closed CLI version detection', () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(listen).mockReset();
+  });
+
+  async function detectCodex() {
+    if (!codexCliAdapter.detect) throw new Error('Codex detection is not registered');
+    return codexCliAdapter.detect();
+  }
+
+  function mockCodexVersionProbe(probe: {
+    exitCode: number | null;
+    stdout: { data: string; truncated: boolean };
+    stderr: { data: string; truncated: boolean };
+    timedOut: boolean;
+  }): void {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({
+        executables: [
+          {
+            executableId: 'codex-safe-id',
+            requestedName: 'codex',
+            executablePath: 'C:\\safe\\codex.exe',
+          },
+        ],
+      })
+      .mockResolvedValueOnce(probe);
+  }
+
+  it('keeps a bounded well-formed version available', async () => {
+    mockCodexVersionProbe({
+      exitCode: 0,
+      stdout: { data: 'codex-cli 1.2.3\n', truncated: false },
+      stderr: { data: '', truncated: false },
+      timedOut: false,
+    });
+
+    await expect(detectCodex()).resolves.toEqual({
+      status: 'available',
+      executablePath: 'C:\\safe\\codex.exe',
+      version: 'codex-cli 1.2.3',
+    });
+  });
+
+  it.each([
+    [
+      'stdout truncation',
+      {
+        exitCode: 0,
+        stdout: { data: 'codex-cli 1.2.3', truncated: true },
+        stderr: { data: '', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'stderr truncation',
+      {
+        exitCode: 0,
+        stdout: { data: 'codex-cli 1.2.3', truncated: false },
+        stderr: { data: 'bounded diagnostic', truncated: true },
+        timedOut: false,
+      },
+    ],
+    [
+      'empty output',
+      {
+        exitCode: 0,
+        stdout: { data: '', truncated: false },
+        stderr: { data: '', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'control-only output',
+      {
+        exitCode: 0,
+        stdout: { data: '\u001b[31m\u0000', truncated: false },
+        stderr: { data: '', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'malformed output',
+      {
+        exitCode: 0,
+        stdout: { data: 'unexpected future response', truncated: false },
+        stderr: { data: '', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'oversized output',
+      {
+        exitCode: 0,
+        stdout: { data: `codex-cli 1.2.3 ${'x'.repeat(256)}`, truncated: false },
+        stderr: { data: '', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'bidi-bearing output',
+      {
+        exitCode: 0,
+        stdout: { data: 'codex-cli 1.2.3\u202efake', truncated: false },
+        stderr: { data: '', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'secret-shaped output',
+      {
+        exitCode: 0,
+        stdout: { data: 'sk-abcdefgh1234', truncated: false },
+        stderr: { data: '', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'nonzero exit',
+      {
+        exitCode: 1,
+        stdout: { data: 'codex-cli 1.2.3', truncated: false },
+        stderr: { data: 'sensitive detail must not surface', truncated: false },
+        timedOut: false,
+      },
+    ],
+    [
+      'timeout',
+      {
+        exitCode: null,
+        stdout: { data: '', truncated: false },
+        stderr: { data: '', truncated: false },
+        timedOut: true,
+      },
+    ],
+  ])('requires attention for %s without surfacing probe output', async (_label, probe) => {
+    mockCodexVersionProbe(probe);
+
+    const result = await detectCodex();
+
+    expect(result.status).toBe('requires_attention');
+    expect(result).not.toHaveProperty('version');
+    if (probe.stdout.data) expect(JSON.stringify(result)).not.toContain(probe.stdout.data);
+    if (probe.stderr.data) expect(JSON.stringify(result)).not.toContain(probe.stderr.data);
+  });
+
+  it('does not surface a raw native detection exception', async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(
+      new Error('native bridge failed with token=should-never-surface'),
+    );
+
+    const result = await detectCodex();
+
+    expect(result).toEqual({
+      status: 'requires_attention',
+      detail: 'CLI detection failed.',
+    });
+    expect(JSON.stringify(result)).not.toContain('should-never-surface');
   });
 });
 

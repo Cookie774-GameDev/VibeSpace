@@ -27,7 +27,10 @@ import type {
   JarvisTransportAttemptV1,
   JarvisZeroConsequentialEffectEvidenceV1,
 } from '@/lib/jarvis/contracts';
-import type { JarvisCanonicalLiveProducerVerifier } from '@/lib/jarvis/contracts/execution';
+import type {
+  JarvisCanonicalLiveProducerVerifier,
+  JarvisProducerSourceEvidenceV1,
+} from '@/lib/jarvis/contracts/execution';
 import {
   canonicalizeJarvisApprovalJson,
   validateJarvisCanonicalResultEvidence,
@@ -311,6 +314,8 @@ export interface JarvisIssuedActionExecution {
     state: 'completed' | 'degraded';
     resultRef: string;
     completedAt: number;
+    /** Only a narrowly validated result may be projected into the response message. */
+    responseResult?: ActionResult;
   }): Promise<JarvisAuthorityBoundResult<JarvisLiveEvidenceProof>>;
   recordCancellationVerified(input: {
     cancellationRequestId: string;
@@ -1681,6 +1686,9 @@ export function createJarvisApprovalEngine(
           state: outcome.result.ok ? 'completed' : 'degraded',
           resultRef: `jresult_${resultRefHash}`,
           completedAt: input.now(),
+          ...(inputValue.registration.id === 'files.read' && outcome.result.ok
+            ? { responseResult: outcome.result }
+            : {}),
         }),
       );
       return { kind: 'settled', result: outcome.result };
@@ -1770,18 +1778,61 @@ export function createJarvisApprovalEngine(
       const event = exactPendingApprovalEvent(events, run.id);
       if (!event) return { valid: false as const, reason: 'approval_missing' as const };
       const latestAttempt = currentRun.transportAttempts?.at(-1);
-      if (
-        !latestAttempt ||
-        latestAttempt.state !== 'provider_in_flight' ||
-        !latestAttempt.requestId ||
-        !Number.isSafeInteger(latestAttempt.attemptNumber) ||
-        latestAttempt.attemptNumber <= 0
-      ) {
-        return { valid: false as const, reason: 'approval_binding_mismatch' as const };
+      let requestId: string;
+      let attemptNumber: number;
+      if (latestAttempt) {
+        if (
+          latestAttempt.state !== 'provider_in_flight' ||
+          !latestAttempt.requestId ||
+          !Number.isSafeInteger(latestAttempt.attemptNumber) ||
+          latestAttempt.attemptNumber <= 0
+        ) {
+          return { valid: false as const, reason: 'approval_binding_mismatch' as const };
+        }
+        requestId = latestAttempt.requestId;
+        attemptNumber = latestAttempt.attemptNumber;
+      } else {
+        if (currentRun.source === 'schedule') {
+          return { valid: false as const, reason: 'approval_binding_mismatch' as const };
+        }
+        const providerSources = events
+          .filter((candidate) => candidate.runId === currentRun.id)
+          .map((candidate) => candidate.producerSourceEvidence)
+          .filter(
+            (
+              source,
+            ): source is Extract<JarvisProducerSourceEvidenceV1, { producerKind: 'provider' }> =>
+              source?.producerKind === 'provider',
+          );
+        const starts = providerSources.filter((source) => source.phase === 'start');
+        const results = providerSources.filter((source) => source.phase === 'result');
+        if (
+          starts.length !== 1 ||
+          results.length !== 1 ||
+          starts[0]!.state !== 'started' ||
+          results[0]!.state !== 'completed' ||
+          starts[0]!.accountId !== currentRun.accountId ||
+          results[0]!.accountId !== currentRun.accountId ||
+          starts[0]!.runId !== currentRun.id ||
+          results[0]!.runId !== currentRun.id ||
+          starts[0]!.producerIdentity.providerId !== currentRun.model.providerId ||
+          results[0]!.producerIdentity.providerId !== currentRun.model.providerId ||
+          starts[0]!.producerIdentity.modelId !== currentRun.model.modelId ||
+          results[0]!.producerIdentity.modelId !== currentRun.model.modelId ||
+          starts[0]!.requestId !== results[0]!.requestId ||
+          starts[0]!.attemptNumber !== results[0]!.attemptNumber ||
+          !starts[0]!.requestId ||
+          !Number.isSafeInteger(starts[0]!.attemptNumber) ||
+          starts[0]!.attemptNumber !== 1
+        ) {
+          return { valid: false as const, reason: 'approval_binding_mismatch' as const };
+        }
+        requestId = starts[0]!.requestId;
+        attemptNumber = starts[0]!.attemptNumber;
       }
       const approvals = await input.approvals.listByRun(accountId, run.id, {
-        requestId: latestAttempt.requestId,
-        attemptNumber: latestAttempt.attemptNumber,
+        requestId,
+        attemptNumber,
         limit: 2,
       });
       if (approvals.length !== 1 || approvals[0]!.id !== event.idempotencyKey) {
@@ -1800,8 +1851,8 @@ export function createJarvisApprovalEngine(
       if (
         approval.schemaVersion !== 1 ||
         approval.runId !== run.id ||
-        approval.requestId !== latestAttempt.requestId ||
-        approval.attemptNumber !== latestAttempt.attemptNumber
+        approval.requestId !== requestId ||
+        approval.attemptNumber !== attemptNumber
       ) {
         return { valid: false as const, reason: 'approval_binding_mismatch' as const };
       }

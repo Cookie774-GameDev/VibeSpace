@@ -34,6 +34,7 @@ vi.mock('@/lib/accountIdentity', () => ({
 
 vi.mock('@/lib/notifications', () => ({
   notifyDone: vi.fn(),
+  detectAndNotifyConnectorAuthLoss: vi.fn(),
 }));
 
 vi.mock('@/features/files/projectFiles', () => ({

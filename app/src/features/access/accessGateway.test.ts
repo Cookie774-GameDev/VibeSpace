@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import {
   AccessGatewayError,
   createAccessGateway,
@@ -292,7 +293,7 @@ describe('transport errors and cancellation', () => {
   });
 
   it('redacts secret-shaped material from transport errors', async () => {
-    const secret = 'sk_live_abc123def456ghi789jkl012mno345pqr678';
+    const secret = syntheticCredentialFixture('sk_live_', 'abc123def456ghi789jkl012mno345pqr678');
     const { gateway } = makeGateway({
       rpc: vi.fn().mockRejectedValue(new Error(`provider failed with ${secret}`)),
     });

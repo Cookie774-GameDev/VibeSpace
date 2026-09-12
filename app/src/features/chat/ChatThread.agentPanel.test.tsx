@@ -96,12 +96,16 @@ describe('ChatThread agent panel attachment', () => {
     expect(screen.getAllByText('Audit model dropdowns').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Reading coordination').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Reading provider registry')).toBeTruthy();
-    expect(screen.getByText('AGENT_COORDINATION.md')).toBeTruthy();
-    expect(screen.getByText('ProviderModelSelect.tsx')).toBeTruthy();
+    expect(screen.getAllByText('docs/AGENT_COORDINATION.md').length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getAllByText('app/src/components/ai/ProviderModelSelect.tsx').length,
+    ).toBeGreaterThanOrEqual(1);
     expect(screen.getByTestId('chat-agent-card')).toBeTruthy();
     expect(screen.getAllByText('Agent').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Subagent').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole('button', { name: /Stop all/i })).toBeNull();
-    expect(screen.getAllByRole('button', { name: /Open chat for/i }).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByRole('button', { name: /Open chat for/i }).length).toBeGreaterThanOrEqual(
+      2,
+    );
   });
 });

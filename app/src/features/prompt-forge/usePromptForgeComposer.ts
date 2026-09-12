@@ -80,6 +80,7 @@ type ActiveComposerRun = {
 };
 
 type PromptForgeUndoState = Readonly<{ scopeKey: string; value: string }>;
+type PromptForgeApprovedDraft = Readonly<{ scopeKey: string; value: string }>;
 
 function composerScopeKey(scope: PromptForgeComposerScope): string {
   return JSON.stringify([scope.accountId, scope.chatId, scope.projectId]);
@@ -239,7 +240,7 @@ function modelDisabledReason(
       return 'Choose a single chat model or select a separate Prompt Forge model.';
     }
     if (error.code === 'model_unavailable' && selection.mode === 'prefer_local') {
-      return 'Connect or start an available local model.';
+      return 'Please assign a prompt-upgrade model in Settings. Connect a local model, or use Spark/Flash.';
     }
     if (error.code === 'connection_ambiguous') {
       return 'Choose an exact provider connection for this Prompt Forge model.';
@@ -270,9 +271,12 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [upgradedDraft, setUpgradedDraft] = useState('');
   const [excludedSourceIds, setExcludedSourceIds] = useState<readonly string[]>([]);
-  const [privacyMode, setPrivacyModeState] = useState<PromptForgePrivacyMode>('local_only');
+  const [privacyMode, setPrivacyModeState] = useState<PromptForgePrivacyMode>(() =>
+    options.offlineMode ? 'local_only' : 'provider_allowed',
+  );
   const [allowPublicResearch, setAllowPublicResearchState] = useState(false);
   const [undoValue, setUndoValue] = useState<PromptForgeUndoState | null>(null);
+  const [approvedDraft, setApprovedDraft] = useState<PromptForgeApprovedDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recoverableJob, setRecoverableJob] = useState<PromptForgeJob | null>(null);
   const [recoveryLoading, setRecoveryLoading] = useState(false);
@@ -381,6 +385,10 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
     if (next === 'local_only') setAllowPublicResearchState(false);
   }, []);
 
+  useEffect(() => {
+    if (options.offlineMode) setPrivacyMode('local_only');
+  }, [options.offlineMode, setPrivacyMode]);
+
   const createRunService = useCallback(
     (activeRun: ActiveComposerRun, excludedForRun: readonly string[]) => {
       const prepare = createPromptForgeContextPreparer({
@@ -446,6 +454,7 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
       setUpgradedDraft('');
       setExcludedSourceIds([]);
       setUndoValue(null);
+      setApprovedDraft(null);
       setError(null);
       setRecoverableJob(null);
       setRecoveryLoading(false);
@@ -511,8 +520,10 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
     async (
       regenerationInstructions?: string,
       originalDraftOverride?: string,
+      runOptions: Readonly<{ openReview?: boolean }> = {},
     ): Promise<PromptForgeJob | null> => {
       const originalDraft = originalDraftOverride ?? options.draft;
+      const openReview = runOptions.openReview !== false;
       if (
         !options.accountId ||
         !originalDraft.trim() ||
@@ -539,11 +550,12 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
       activeRunRef.current = activeRun;
       let activeService: ReturnType<typeof createPromptForgeService> | null = null;
       try {
-        const isRegeneration = originalDraftOverride !== undefined;
+        const isRegeneration = originalDraftOverride !== undefined && openReview;
         const excludedForRun = isRegeneration ? excludedSourceIds : [];
         if (!isRegeneration) setExcludedSourceIds([]);
         setError(null);
         setReviewOpen(false);
+        setApprovedDraft(null);
         const createdAt = clock();
         const initial = createPromptForgeJob({
           id: activeRun.jobId,
@@ -578,8 +590,12 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
         setJob(completed);
         setStatus(completed.status);
         if (completed.status === 'ready' && completed.generatedDraft !== null) {
+          setUndoValue({ scopeKey: currentScopeKey, value: originalDraft });
           setUpgradedDraft(completed.generatedDraft);
-          setReviewOpen(true);
+          if (openReview) {
+            setDraftRef.current(completed.generatedDraft);
+            setReviewOpen(true);
+          }
         } else {
           setError(errorMessage(completed));
         }
@@ -619,6 +635,52 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
       privacyMode,
       status,
     ],
+  );
+
+  /**
+   * Upgrade a draft for Send and require visible approval before dispatch.
+   * Always returns the original text on failure/cancel so the caller can fail open.
+   */
+  const upgradeForSend = useCallback(
+    async (
+      draft: string,
+    ): Promise<
+      Readonly<{
+        text: string;
+        upgraded: boolean;
+        requiresReview?: boolean;
+        reason?: string;
+      }>
+    > => {
+      const original = draft;
+      if (!original.trim()) return { text: original, upgraded: false, reason: 'empty' };
+      if (currentModelDisabledReason !== null) {
+        return {
+          text: original,
+          upgraded: false,
+          reason: currentModelDisabledReason,
+        };
+      }
+      const completed = await start(undefined, original, { openReview: true });
+      if (completed?.status === 'ready' && completed.generatedDraft?.trim()) {
+        return {
+          text: completed.generatedDraft.trim(),
+          upgraded: true,
+          requiresReview: true,
+        };
+      }
+      if (completed?.status === 'cancelled') {
+        return { text: original, upgraded: false, reason: 'cancelled' };
+      }
+      return {
+        text: original,
+        upgraded: false,
+        reason:
+          (completed ? errorMessage(completed) : null) ??
+          'Prompt upgrade failed. Sending your original text.',
+      };
+    },
+    [currentModelDisabledReason, start],
   );
 
   const resumeRecovery = useCallback(async (): Promise<PromptForgeJob | null> => {
@@ -664,8 +726,11 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
       setJob(completed);
       setStatus(completed.status);
       if (completed.status === 'ready' && completed.generatedDraft !== null) {
+        setUndoValue({ scopeKey: currentScopeKey, value: recovered.originalDraft });
         setUpgradedDraft(completed.generatedDraft);
+        setDraftRef.current(completed.generatedDraft);
         setReviewOpen(true);
+        setApprovedDraft(null);
         setRecoverableJob(null);
         setRecoveryContextConfirmation(null);
       } else {
@@ -763,11 +828,32 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
     return cancelled;
   }, [currentScopeKey]);
 
-  const replace = useCallback(() => {
-    if (!currentJobMatchesScope || !upgradedDraft.trim()) return;
-    setUndoValue({ scopeKey: currentScopeKey, value: options.draft });
-    options.setDraft(upgradedDraft);
+  const accept = useCallback((): boolean => {
+    if (!currentJobMatchesScope || !upgradedDraft.trim()) return false;
+    if (options.draft !== upgradedDraft) options.setDraft(upgradedDraft);
+    setApprovedDraft({ scopeKey: currentScopeKey, value: upgradedDraft });
+    setReviewOpen(false);
+    return true;
   }, [currentJobMatchesScope, currentScopeKey, options.draft, options.setDraft, upgradedDraft]);
+
+  const replace = accept;
+
+  const restoreOriginal = useCallback((): boolean => {
+    if (!currentJobMatchesScope || job === null) return false;
+    options.setDraft(job.originalDraft);
+    setApprovedDraft(null);
+    setReviewOpen(false);
+    setUndoValue(null);
+    return true;
+  }, [currentJobMatchesScope, job, options.setDraft]);
+
+  const isDraftApproved = useCallback(
+    (value: string): boolean =>
+      approvedDraft?.scopeKey === currentScopeKey &&
+      approvedDraft.value.trim() === value.trim() &&
+      value.trim().length > 0,
+    [approvedDraft, currentScopeKey],
+  );
 
   const insertBelow = useCallback(() => {
     if (!currentJobMatchesScope || !upgradedDraft.trim()) return;
@@ -780,6 +866,8 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
     if (undoValue === null || undoValue.scopeKey !== currentScopeKey) return;
     options.setDraft(undoValue.value);
     setUndoValue(null);
+    setApprovedDraft(null);
+    setReviewOpen(false);
   }, [currentScopeKey, options.setDraft, undoValue]);
 
   const regenerate = useCallback(
@@ -834,12 +922,16 @@ export function usePromptForgeComposer(options: UsePromptForgeComposerOptions) {
           allowed,
       ),
     start,
+    upgradeForSend,
     resumeRecovery,
     confirmRecoveryContextChange,
     restoreRecoveryDraft,
     discardRecovery,
     cancel,
+    accept,
     replace,
+    restoreOriginal,
+    isDraftApproved,
     insertBelow,
     regenerate,
     copy,

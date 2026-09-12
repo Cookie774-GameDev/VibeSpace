@@ -69,18 +69,18 @@ export function JarvisVoiceTranscript({
         return (
           <div
             key={message.id}
-            className="grid grid-cols-[1rem_2.75rem_minmax(0,1fr)] items-start gap-1 text-xs leading-4"
+            className="grid grid-cols-[1.5rem_2.75rem_minmax(0,1fr)_auto] items-start gap-2 text-xs leading-5"
           >
             <span
               className={cn(
-                'mt-px flex h-4 w-4 items-center justify-center rounded-full border',
+                'mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border',
                 user ? 'border-info/80 text-info' : 'border-accent-copper/80 text-accent-copper',
               )}
               aria-hidden="true"
             >
-              {user ? <UserRound className="h-2 w-2" /> : <Bot className="h-2 w-2" />}
+              {user ? <UserRound className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
             </span>
-            <span className="font-medium text-foreground">{user ? 'You' : 'Jarvis'}</span>
+            <span className="pt-0.5 font-medium text-foreground">{user ? 'You' : 'Jarvis'}</span>
             <span className="min-w-0 text-foreground/85">
               <span
                 className={cn(
@@ -101,11 +101,20 @@ export function JarvisVoiceTranscript({
                 </button>
               ) : null}
             </span>
+            <time
+              className="shrink-0 pt-0.5 text-[0.65rem] tabular-nums text-muted-foreground"
+              dateTime={new Date(message.created_at).toISOString()}
+            >
+              {new Date(message.created_at).toLocaleTimeString(undefined, {
+                hour: 'numeric',
+                minute: '2-digit',
+              })}
+            </time>
           </div>
         );
       })}
       {partial ? (
-        <div className="grid grid-cols-[1rem_2.75rem_minmax(0,1fr)] items-center gap-1 text-xs leading-4">
+        <div className="grid grid-cols-[1.5rem_2.75rem_minmax(0,1fr)_auto] items-center gap-2 text-xs leading-5">
           <span
             className="flex h-4 w-4 items-center justify-center rounded-full border border-info/80 text-info"
             aria-hidden="true"

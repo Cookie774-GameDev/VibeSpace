@@ -38,6 +38,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { useAgentStore } from '@/stores/agents';
 import { findProtectedJarvisAgent } from '@/lib/jarvis/identity';
+import { askAssistantAboutLabel, useAssistantPersonaName } from '@/lib/assistantPersona';
 import { ChatThread, Composer } from '@/features/chat';
 import { EmptyChat } from '@/features/chat/EmptyChat';
 // `useTodayEvents` exists on the V2 schedule hooks (added by the parallel
@@ -108,6 +109,7 @@ import {
 } from '@/features/jarvis-creator/launcher';
 import { usePinnedStore } from '@/features/inspector/pinnedStore';
 import { openExternal, isTauri } from '@/lib/tauri';
+import { TokenReactiveLoading } from '@/features/loading-animation';
 
 interface InspectorCustomTool {
   slug: string;
@@ -195,6 +197,7 @@ export function Inspector() {
   const themeLayoutTransition = useThemeLayoutTransition(LEGACY_INSPECTOR_TRANSITION);
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const projectId = useAuthStore((s) => s.projectId);
+  const assistantName = useAssistantPersonaName();
   const toggleInspector = useUIStore((s) => s.toggleInspector);
   const [inspectorChatId, setInspectorChatId] = React.useState<string | null>(null);
   const [activeTab, setActiveTab] = React.useState('today');
@@ -502,7 +505,7 @@ export function Inspector() {
                           chatId={inspectorChatId}
                           compact
                           disableRouteSlashCommands
-                          placeholder="Ask Jarvis about this project..."
+                          placeholder={`${askAssistantAboutLabel('this project', assistantName)}...`}
                         />
                       </>
                     ) : (
@@ -1277,6 +1280,7 @@ function TerminalResourceRow({
     label: session.title,
     command: [session.shell_command, ...(session.shell_args ?? [])].filter(Boolean).join(' '),
   };
+  const isWorking = session.status === 'running';
   return (
     <button
       type="button"
@@ -1290,7 +1294,17 @@ function TerminalResourceRow({
       className={resourceButtonClass}
       title={session.cwd ?? session.title}
     >
-      <TerminalIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-copper" />
+      {isWorking ? (
+        <TokenReactiveLoading
+          responseId={`terminal:${session.id}`}
+          active
+          lifecycle="tooling"
+          compact
+          className="mt-0.5"
+        />
+      ) : (
+        <TerminalIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-copper" />
+      )}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-secondary text-foreground">{session.title}</span>
         <span className="block truncate text-metadata text-muted-foreground">
@@ -1803,13 +1817,32 @@ function TerminalRow({ session }: { session: TerminalSession }) {
     }
   }, [session.id]);
 
+  const isWorking = session.status === 'running';
+
   return (
-    <li className="flex items-start gap-2 rounded-md bg-paper-soft px-2 py-1.5">
+    <li
+      className="flex items-start gap-2 rounded-md bg-paper-soft px-2 py-1.5"
+      data-terminal-working={isWorking ? 'true' : 'false'}
+    >
+      {isWorking ? (
+        <TokenReactiveLoading
+          responseId={`terminal-strip:${session.id}`}
+          active
+          lifecycle="tooling"
+          compact
+          className="mt-0.5"
+        />
+      ) : (
+        <TerminalIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-copper" aria-hidden />
+      )}
       <div className="min-w-0 flex-1">
         <div className="text-secondary text-foreground truncate">{session.title}</div>
         <div className="text-metadata text-muted-foreground truncate" title={session.cwd}>
           {session.cwd ?? '~'} · {formatRelative(session.created_at)}
         </div>
+        {isWorking ? (
+          <span className="sr-only">Terminal is working</span>
+        ) : null}
       </div>
       <Button
         variant="ghost"

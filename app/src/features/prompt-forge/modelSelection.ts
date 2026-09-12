@@ -58,6 +58,9 @@ export class PromptForgeModelSelectionError extends Error {
   }
 }
 
+export const PROMPT_UPGRADE_ASSIGN_MODEL_MESSAGE =
+  'Please assign a prompt-upgrade model in Settings. You can use the next-best fast model (Spark or Flash) if one is connected.';
+
 function isLocal(option: PromptForgeModelOption): boolean {
   return (
     option.localOnly ||
@@ -65,6 +68,31 @@ function isLocal(option: PromptForgeModelOption): boolean {
     option.providerId === 'ollama' ||
     option.providerId === 'local'
   );
+}
+
+function fastFallbackRank(option: PromptForgeModelOption): number {
+  const haystack = `${option.modelId} ${option.label}`.toLocaleLowerCase('en-US');
+  if (haystack.includes('gpt-5.3-codex-spark')) return 0;
+  if (haystack.includes('codex-spark')) return 1;
+  if (haystack.includes('spark')) return 2;
+  if (haystack.includes('flash-lite') || haystack.includes('flashlite')) return 10;
+  if (haystack.includes('flash')) return 11;
+  return Number.POSITIVE_INFINITY;
+}
+
+/** Next-best prompt-upgrade model when no local/assigned model exists: Spark, then Flash. */
+export function pickFastPromptUpgradeFallback(
+  options: readonly PromptForgeModelOption[],
+): PromptForgeModelOption | undefined {
+  return options
+    .filter((option) => option.available && !isLocal(option) && fastFallbackRank(option) < 100)
+    .sort((left, right) => {
+      const rank = fastFallbackRank(left) - fastFallbackRank(right);
+      if (rank !== 0) return rank;
+      return (
+        left.label.localeCompare(right.label, 'en-US') || left.id.localeCompare(right.id, 'en-US')
+      );
+    })[0];
 }
 
 function resolved(option: PromptForgeModelOption): ResolvedPromptForgeModel {
@@ -138,12 +166,18 @@ export function resolvePromptForgeModelSelection(
           left.label.localeCompare(right.label, 'en-US') ||
           left.id.localeCompare(right.id, 'en-US'),
       )[0];
+    if (!option && !context.offlineMode) {
+      option = pickFastPromptUpgradeFallback(context.options);
+    }
   } else {
     const matches = exactMatches(selection, context.options);
     if (matches.length > 1 && selection.connectionId === undefined) {
       throw new PromptForgeModelSelectionError('connection_ambiguous');
     }
     option = matches[0];
+    if (!option && !context.offlineMode) {
+      option = pickFastPromptUpgradeFallback(context.options);
+    }
   }
   if (!option) throw new PromptForgeModelSelectionError('model_unavailable');
   if (context.offlineMode && !isLocal(option)) {

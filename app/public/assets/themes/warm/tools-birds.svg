@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048" role="img" aria-label="Four folded-paper birds">
+  <g opacity=".76">
+    <g transform="translate(130 590) rotate(-8)">
+      <path d="m0 210 250-180 90 245 125-190 95 420-270-175-210 210 55-270z" fill="#c39bc9"/>
+      <path d="m250 30 40 300 50-55z" fill="#9e79ae"/>
+    </g>
+    <g transform="translate(560 360) rotate(7)">
+      <path d="m0 250 260-210 80 255 145-205 70 430-270-170-220 220 65-285z" fill="#efab88"/>
+      <path d="m260 40 25 310 55-55z" fill="#d98261"/>
+    </g>
+    <g transform="translate(1020 530) rotate(-4)">
+      <path d="m0 220 240-185 100 240 130-180 90 400-265-155-205 195 50-255z" fill="#abb58e"/>
+      <path d="m240 35 55 305 45-65z" fill="#7f906f"/>
+    </g>
+    <g transform="translate(1430 390) rotate(10)">
+      <path d="m0 205 215-165 90 220 110-165 85 365-240-145-180 185 42-230z" fill="#d6c7b3"/>
+      <path d="m215 40 45 275 45-55z" fill="#ae9b83"/>
+    </g>
+  </g>
+  <g fill="#dda15d" opacity=".75"><path d="m300 390 18 55 55 18-55 18-18 55-18-55-55-18 55-18z"/><path d="m1750 750 14 44 44 14-44 14-14 44-14-44-44-14 44-14z"/></g>
+</svg>

@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "pipeline": "Higgsfield Kling 3.0 Pro exact-frame cinematic chain",
+  "ready": true,
+  "generatedAt": "2026-07-16",
+  "promptSource": "work/higgsfield-test/generate-connectors-uploaded-request.txt",
+  "settings": {
+    "model": "kling3_0",
+    "mode": "pro",
+    "durationSeconds": 5,
+    "aspectRatio": "16:9",
+    "sound": "off",
+    "enhancePrompt": false,
+    "requestedResolution": "1920x1080",
+    "deliveredResolution": "1916x1080",
+    "frameRate": 24,
+    "videoCodec": "h264",
+    "pixelFormat": "yuv420p",
+    "audio": false
+  },
+  "credits": {
+    "connectorCount": 5,
+    "perConnector": 8.75,
+    "connectorSpend": 43.75,
+    "balanceAfterConnectors": 13.75
+  },
+  "dives": [
+    {
+      "id": "network",
+      "jobId": "45e029b2-d08c-4a2b-8542-ee362cb4c339",
+      "output": "work/higgsfield-test/dives/scene-01-network.mp4"
+    },
+    {
+      "id": "jarvis-voice",
+      "jobId": "e6c3f777-a93f-4d32-b49b-8e8190b67626",
+      "output": "work/higgsfield-test/dives/scene-02-jarvis-voice.mp4"
+    },
+    {
+      "id": "terminal-workshop",
+      "jobId": "e7e8bf33-e0d0-4b01-8b80-6128ae696b3e",
+      "output": "work/higgsfield-test/dives/scene-03-terminal-workshop.mp4"
+    },
+    {
+      "id": "jarvis-actions",
+      "jobId": "a4b92c04-ea03-41e1-b568-34e9601adef1",
+      "output": "work/higgsfield-test/dives/scene-04-jarvis-actions.mp4"
+    },
+    {
+      "id": "deep-context",
+      "jobId": "296d9a35-4edc-4c81-924e-194f19ecf42e",
+      "output": "work/higgsfield-test/dives/scene-05-context-memory.mp4"
+    },
+    {
+      "id": "personal-workspace",
+      "jobId": "86699483-6716-4dae-b0c3-26ff9f6b0fa6",
+      "output": "work/higgsfield-test/dives/scene-05-outro-workspace.mp4"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "network-to-jarvis-voice",
+      "startMediaId": "426f9c24-5a3e-4410-8fcb-380b82263115",
+      "endMediaId": "e82dbb18-d2fa-404c-b744-0d7fdc220d4a",
+      "jobId": "de11c03a-6a4a-424a-81dd-825d4041b9dd",
+      "output": "work/higgsfield-test/connectors/scene-01-to-02.mp4",
+      "startFrameSsim": 0.974537,
+      "endFrameSsim": 0.965026,
+      "attempts": 1
+    },
+    {
+      "id": "jarvis-voice-to-terminal",
+      "startMediaId": "a4cf7c0d-060a-417a-b795-54109eef5015",
+      "endMediaId": "ba8ccde5-1e97-44e0-8529-42483ef91b72",
+      "jobId": "00e6f053-93a4-4871-aef8-139dba6c5cd5",
+      "output": "work/higgsfield-test/connectors/scene-02-to-03.mp4",
+      "startFrameSsim": 0.96379,
+      "endFrameSsim": 0.937427,
+      "attempts": 1
+    },
+    {
+      "id": "terminal-to-jarvis-actions",
+      "startMediaId": "11156a7a-9ee3-4479-986a-77c183d477dd",
+      "endMediaId": "722746a0-6c1f-475c-9c00-7387c8aa295b",
+      "jobId": "3e4d6dc8-01c1-4617-a714-f41622f9a917",
+      "output": "work/higgsfield-test/connectors/scene-03-to-04.mp4",
+      "startFrameSsim": 0.972191,
+      "endFrameSsim": 0.942228,
+      "attempts": 1
+    },
+    {
+      "id": "jarvis-actions-to-deep-context",
+      "startMediaId": "40f724c1-ba3e-4cd6-9d1b-efdc5208d701",
+      "endMediaId": "e9e50b0a-5898-4bbf-86ad-e06559db73d4",
+      "jobId": "4ff02554-413c-4b2c-b9c0-5546f0320fb4",
+      "output": "work/higgsfield-test/connectors/scene-04-to-05.mp4",
+      "startFrameSsim": 0.973662,
+      "endFrameSsim": 0.955515,
+      "attempts": 1
+    },
+    {
+      "id": "deep-context-to-personal-workspace",
+      "startMediaId": "f6894bc4-9bc7-4838-a948-b51728c02af8",
+      "endMediaId": "67d0af36-efc1-4dea-b33f-15b61fa17b80",
+      "jobId": "fa8e1438-24c0-430f-96b6-5a1a15b6e2f7",
+      "output": "work/higgsfield-test/connectors/scene-05-to-outro.mp4",
+      "startFrameSsim": 0.966642,
+      "endFrameSsim": 0.965816,
+      "attempts": 1
+    }
+  ]
+}

@@ -108,7 +108,21 @@ export const EXTRA_NAVIGATION_ACTIONS: ActionDef[] = [
 
 /** One-click Settings tabs beyond providers/plans. */
 export const EXTRA_SETTINGS_ACTIONS: ActionDef[] = [
-  makeSettingsTabAction('settings.account', 'Open Settings → Account', 'account', Sparkles),
+  // Legacy id kept for shortcuts/memory: Account lives on the profile route, not Settings.
+  {
+    id: 'settings.account',
+    category: 'settings',
+    label: 'Open Account Center',
+    description:
+      'Open the Account Center profile dashboard (replaces the retired Settings → Account tab).',
+    icon: Sparkles,
+    params: [],
+    run: async () => {
+      useUIStore.getState().setSettingsOpen(false);
+      useUIStore.getState().setRoute('account');
+      return ok('Opened Account Center.');
+    },
+  },
   makeSettingsTabAction('settings.plugins', 'Open Settings → Plugins', 'plugins', Wrench),
   makeSettingsTabAction('settings.localmodels', 'Open Settings → Local Models', 'localmodels', HardDriveDownload),
   makeSettingsTabAction('settings.appearance', 'Open Settings → Appearance', 'appearance', Palette),

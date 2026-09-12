@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createPromptForgeJob, transitionPromptForgeJob } from './contracts';
-import { PromptForgeReview, buildPromptForgeDiff } from './PromptForgeReview';
+import { PromptForgeReview } from './PromptForgeReview';
 
 function readyJob() {
   const initial = createPromptForgeJob({
@@ -16,25 +16,16 @@ function readyJob() {
     allowPublicResearch: false,
     now: 100,
   });
-  const generating = transitionPromptForgeJob(initial, {
+  const collecting = transitionPromptForgeJob(initial, {
     expectedRevision: 1,
     status: 'collecting_context',
     now: 101,
   });
-  const readyToGenerate = transitionPromptForgeJob(generating, {
+  const generating = transitionPromptForgeJob(collecting, {
     expectedRevision: 2,
     status: 'generating',
-    selectedSourceIds: ['source-1'],
-    retrievedSources: [
-      {
-        id: 'source-1',
-        kind: 'project_file',
-        label: 'Theme tokens',
-        reference: 'app/src/index.css',
-        observedAt: 90,
-        whySelected: 'Matches the visual request.',
-      },
-    ],
+    selectedSourceIds: [],
+    retrievedSources: [],
     resolvedModel: {
       providerId: 'ollama',
       modelId: 'qwen3:8b',
@@ -46,7 +37,7 @@ function readyJob() {
     },
     now: 102,
   });
-  const validating = transitionPromptForgeJob(readyToGenerate, {
+  const validating = transitionPromptForgeJob(generating, {
     expectedRevision: 3,
     status: 'validating',
     generatedDraft: 'Build a polished, accessible endless runner game.',
@@ -69,109 +60,73 @@ function readyJob() {
   });
 }
 
-describe('Prompt Forge review', () => {
-  it('shows upgraded, original, changes, and cited sources without replacing automatically', () => {
-    const onReplace = vi.fn();
+describe('Prompt Forge inline review', () => {
+  it('renders compactly inside the composer instead of opening a dialog', () => {
     render(
       <PromptForgeReview
         open
+        compact
         job={readyJob()}
-        upgradedDraft="Build a polished, accessible endless runner game."
-        onUpgradedDraftChange={vi.fn()}
-        excludedSourceIds={[]}
-        onExcludeSource={vi.fn()}
-        onReplace={onReplace}
-        onInsertBelow={vi.fn()}
-        onCopy={vi.fn()}
+        onAccept={vi.fn()}
         onRegenerate={vi.fn()}
         onRegenerateWithInstructions={vi.fn()}
-        onUndo={vi.fn()}
-        canUndo={false}
-        onClose={vi.fn()}
+        onRestoreOriginal={vi.fn()}
         onReturnFocus={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole('dialog', { name: /prompt forge review/i })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Upgraded' }).getAttribute('aria-selected')).toBe(
-      'true',
-    );
-    expect(screen.getByDisplayValue(/polished, accessible/)).toBeTruthy();
-    expect(onReplace).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Original' }));
-    expect(screen.getByText('Build a runner game.')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Changes' }));
-    expect(screen.getByText('polished, accessible endless')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Sources' }));
-    expect(screen.getByText('app/src/index.css')).toBeTruthy();
-    expect(screen.getByText('Matches the visual request.')).toBeTruthy();
+    const review = screen.getByRole('region', { name: 'Prompt Forge inline review' });
+    expect(review.getAttribute('data-compact')).toBe('true');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText('Upgraded prompt ready')).toBeTruthy();
+    expect(screen.getByText(/Qwen 3 8B/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Accept upgraded prompt' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry prompt upgrade' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add context to prompt upgrade' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Restore original prompt' })).toBeTruthy();
   });
 
-  it('keeps replacement, insertion, copy, edit, exclusion, regeneration, undo, and close explicit', () => {
+  it('keeps accept, retry, contextual retry, and restore explicit', () => {
     const handlers = {
-      onUpgradedDraftChange: vi.fn(),
-      onExcludeSource: vi.fn(),
-      onReplace: vi.fn(),
-      onInsertBelow: vi.fn(),
-      onCopy: vi.fn(),
+      onAccept: vi.fn(),
       onRegenerate: vi.fn(),
       onRegenerateWithInstructions: vi.fn(),
-      onUndo: vi.fn(),
-      onClose: vi.fn(),
+      onRestoreOriginal: vi.fn(),
       onReturnFocus: vi.fn(),
     };
-    render(
-      <PromptForgeReview
-        open
-        job={readyJob()}
-        upgradedDraft="Build a polished, accessible endless runner game."
-        excludedSourceIds={[]}
-        canUndo
-        {...handlers}
-      />,
+    render(<PromptForgeReview open job={readyJob()} {...handlers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept upgraded prompt' }));
+    expect(handlers.onAccept).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry prompt upgrade' }));
+    expect(handlers.onRegenerate).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add context to prompt upgrade' }));
+    fireEvent.change(screen.getByLabelText('Additional prompt context'), {
+      target: { value: 'Keep the result under 200 words.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply additional context' }));
+    expect(handlers.onRegenerateWithInstructions).toHaveBeenCalledWith(
+      'Keep the result under 200 words.',
     );
 
-    fireEvent.change(screen.getByLabelText('Edit upgraded prompt'), {
-      target: { value: 'Edited upgraded prompt.' },
-    });
-    expect(handlers.onUpgradedDraftChange).toHaveBeenCalledWith('Edited upgraded prompt.');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Replace original' }));
-    expect(handlers.onReplace).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Insert below original' }));
-    expect(handlers.onInsertBelow).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy upgraded prompt' }));
-    expect(handlers.onCopy).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Undo last replacement' }));
-    expect(handlers.onUndo).toHaveBeenCalledOnce();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Sources' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove Theme tokens' }));
-    expect(handlers.onExcludeSource).toHaveBeenCalledWith('source-1');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
-    expect(handlers.onRegenerate).toHaveBeenCalledOnce();
-    expect(handlers.onReturnFocus).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Regenerate with instructions' }));
-    fireEvent.change(screen.getByLabelText('Regeneration instructions'), {
-      target: { value: 'Keep it shorter.' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply regeneration instructions' }));
-    expect(handlers.onRegenerateWithInstructions).toHaveBeenCalledWith('Keep it shorter.');
-    expect(handlers.onReturnFocus).toHaveBeenCalledTimes(2);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel and keep original' }));
-    expect(handlers.onClose).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore original prompt' }));
+    expect(handlers.onRestoreOriginal).toHaveBeenCalledOnce();
   });
 
-  it('builds a readable replacement diff while preserving common context', () => {
-    expect(buildPromptForgeDiff('Build a runner game.', 'Build a polished runner game.')).toEqual([
-      { kind: 'same', text: 'Build a ' },
-      { kind: 'added', text: 'polished ' },
-      { kind: 'same', text: 'runner game.' },
-    ]);
+  it('does not render when review is closed', () => {
+    render(
+      <PromptForgeReview
+        open={false}
+        job={readyJob()}
+        onAccept={vi.fn()}
+        onRegenerate={vi.fn()}
+        onRegenerateWithInstructions={vi.fn()}
+        onRestoreOriginal={vi.fn()}
+        onReturnFocus={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('region', { name: 'Prompt Forge inline review' })).toBeNull();
   });
 });

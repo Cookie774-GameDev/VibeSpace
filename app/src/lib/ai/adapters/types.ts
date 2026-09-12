@@ -1,6 +1,7 @@
 export type ConnectionMode = 'external-cli' | 'native-api' | 'local';
 
 export type JarvisPromptTransportStrategy = 'native-system' | 'prefixed-preamble' | 'unsupported';
+export type ProviderToolName = 'vibespace_context';
 
 export interface ProviderCapabilities {
   text: boolean;
@@ -28,6 +29,7 @@ export interface ProviderConnection {
   authSource: string;
   modelId?: string;
   capabilities: ProviderCapabilities;
+  toolAllowlist?: readonly ProviderToolName[];
   promptTransport: JarvisPromptTransportStrategy;
   enabled: boolean;
 }
@@ -84,14 +86,43 @@ export interface AuthProbeResult {
   detail?: string;
 }
 
+export interface ProviderDiscoveredModel {
+  id: string;
+  label: string;
+  /** Exact live upstream variant ids, when exposed by this connection. */
+  variants?: readonly string[];
+}
+
 export interface ProviderRequest {
   requestId: string;
   connection: ProviderConnection;
+  /** Stable VibeSpace identity/scope binding used by persistent transports. */
+  chatId?: string;
+  accountId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  worktreeId?: string;
   prompt: string;
   modelId?: string;
+  reasoningEffort?: string;
   systemPrompt?: string;
   workingDirectory?: string;
   sessionId?: string;
+  /** Exact per-turn VibeSpace controls; adapters must reject unsupported values. */
+  runtimeSettings?: import('@/features/chat/runtime/chatRuntimeCommandController').ChatRuntimeSettings;
+  interactionMode?: import('@/lib/permissions/OpenCodePermissionProfile').InteractionMode;
+  accessLevel?: import('@/lib/permissions/OpenCodePermissionProfile').AccessLevel;
+  approveAllForRun?: boolean;
+  /** Approval events remain user-visible even when the persistent adapter enforces policy. */
+  onApprovalRequested?: (
+    approval: import('@/lib/harness/types').VibeSpaceApproval,
+  ) => void | Promise<void>;
+  onSessionBound?: (binding: {
+    sessionId: string;
+    parentSessionId?: string;
+  }) => void | Promise<void>;
+  /** Explicit connection-qualified tool availability for the turn. */
+  tools?: Readonly<Record<string, boolean>>;
   signal?: AbortSignal;
   onResponseObservation?: (
     observation:
@@ -109,6 +140,7 @@ export interface ProviderAdapter {
   id: string;
   detect?: () => Promise<DetectionResult>;
   probeAuth?: (connection: ProviderConnection) => Promise<AuthProbeResult>;
+  listModels?: () => Promise<readonly Readonly<ProviderDiscoveredModel>[]>;
   send?: (request: ProviderRequest) => AsyncIterable<ProviderEvent>;
   cancel?: (requestId: string) => Promise<void>;
   getUsage?: (connection: ProviderConnection) => Promise<UsageSnapshot>;

@@ -5,9 +5,8 @@
  * The MonoChrome browser invariant (tests/visual/monochrome/styleMetrics.ts)
  * requires zero visible shadows and zero gradients under
  * html[data-theme='monochrome']. The benchmarks route kept exactly one of
- * each: the filters-row Switch thumb elevation, and the severity-pill
- * gradient used by the "from snapshot" header chip plus the table and drawer
- * license pills. These tests pin the narrow component-local gates that
+ * each: the filters-row Switch thumb elevation and the severity-pill
+ * gradients used by table and drawer license pills. These tests pin the narrow component-local gates that
  * flatten both owners without touching Default/VibeSpace/Jarvis presentation
  * or benchmark behavior.
  */
@@ -15,7 +14,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const fetchedAt = Date.parse('2026-07-11T12:00:00Z');
+  const fetchedAt = Date.now();
   const rows = [
     {
       model: 'Fixture Model A',
@@ -28,7 +27,7 @@ const mocks = vi.hoisted(() => {
       cost_per_1m_output_usd: 30,
       context_window: 400000,
       votes: 12000,
-      source: 'snapshot',
+      source: 'lmsys',
       fetched_at: fetchedAt,
     },
     {
@@ -43,7 +42,7 @@ const mocks = vi.hoisted(() => {
       cost_per_1m_output_usd: 5,
       context_window: 200000,
       votes: 9000,
-      source: 'snapshot',
+      source: 'lmsys',
       fetched_at: fetchedAt,
     },
     {
@@ -56,7 +55,7 @@ const mocks = vi.hoisted(() => {
       license: 'CC-BY-NC',
       context_window: 128000,
       votes: 4000,
-      source: 'snapshot',
+      source: 'lmsys',
       fetched_at: fetchedAt,
     },
   ];
@@ -66,8 +65,16 @@ const mocks = vi.hoisted(() => {
 vi.mock('./benchmarkData', () => ({
   fetchBenchmarks: vi.fn(async () => ({
     rows: mocks.rows,
-    fromSnapshot: true,
-    reason: 'network blocked',
+    fromSnapshot: false,
+    dataset: {
+      metricLabel: 'Arena rating',
+      sourceName: 'Arena',
+      sourceUrl: 'https://arena.ai/leaderboard/text',
+      benchmarkDate: Date.now(),
+      ingestedAt: Date.now(),
+      confidence: 'medium',
+      normalizationNote: 'Structured Arena fixture.',
+    },
   })),
   isSupportedProvider: () => false,
 }));
@@ -92,7 +99,7 @@ const MONO_SWITCH_THUMB_GATE = '[html[data-theme=monochrome]_&_span]:shadow-none
 
 async function renderLoadedPage() {
   const view = render(<BenchmarksPage />);
-  await screen.findByText('from snapshot');
+  expect((await screen.findAllByText('Fixture Model A')).length).toBeGreaterThan(0);
   return view;
 }
 
@@ -105,8 +112,7 @@ describe('BenchmarksPage MonoChrome appearance', () => {
     expect(route).not.toBeNull();
 
     const pills = Array.from(route!.querySelectorAll<HTMLElement>('.sev-pill'));
-    // Header "from snapshot" chip plus one license pill per fixture row.
-    expect(pills.length).toBe(4);
+    expect(pills.length).toBe(3);
     for (const pill of pills) {
       for (const gate of MONO_PILL_GATES) {
         expect(pill.className).toContain(gate);
@@ -143,13 +149,19 @@ describe('BenchmarksPage MonoChrome appearance', () => {
     expect(route!.className).toContain('bg-paper-soft');
 
     expect(screen.getByRole('heading', { name: 'Benchmarks' })).toBeTruthy();
-    expect(screen.getByText('Free public leaderboards. BYOK to run any of them.')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Hourly structured Arena rankings with source-linked official evaluations kept separate.',
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeTruthy();
-    expect(screen.getByText(/Live fetch failed \(network blocked\)/u)).toBeTruthy();
+    expect(screen.queryByText(/Curated Top 50 unique models/u)).toBeNull();
+    expect(screen.queryByText(/one model per row/u)).toBeNull();
+    expect(screen.queryByText(/Ranked by Artificial Analysis/u)).toBeNull();
 
-    const chip = screen.getByText('from snapshot');
-    expect(chip.className).toContain('sev-pill');
-    expect(chip.className).toContain('med');
+    expect(screen.queryByText('from snapshot')).toBeNull();
+    expect(screen.queryByText(/Artificial Analysis/u)).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Official provider evaluations' })).toBeTruthy();
 
     const table = container.querySelector('[data-monochrome-surface="benchmarks-table"]');
     expect(table).not.toBeNull();
@@ -160,6 +172,6 @@ describe('BenchmarksPage MonoChrome appearance', () => {
     const chart = container.querySelector('[data-monochrome-surface="benchmarks-chart"]');
     expect(chart).not.toBeNull();
     const chartSvg = chart!.querySelector('svg[role="img"]');
-    expect(chartSvg?.getAttribute('aria-label')).toBe('Bar chart of top 3 models by arena score');
+    expect(chartSvg?.getAttribute('aria-label')).toBe('Bar chart of top 3 models by Arena rating');
   });
 });

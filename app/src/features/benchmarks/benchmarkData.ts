@@ -13,10 +13,7 @@
  */
 import type { ProviderId } from '@/types/common';
 import { nativeFetch } from '@/lib/nativeFetch';
-import {
-  LEADERBOARD_SNAPSHOT_ROWS,
-  LEADERBOARD_SNAPSHOT_TS,
-} from './leaderboardSnapshot20260711';
+import { LEADERBOARD_SNAPSHOT_ROWS, LEADERBOARD_SNAPSHOT_TS } from './leaderboardSnapshot20260711';
 
 export interface BenchmarkRow {
   model: string;
@@ -55,7 +52,9 @@ export function inferCapabilities(model: string): { image: boolean; video: boole
     /llama-?4|llama\s?4/.test(m);
   const image =
     video ||
-    /gpt-?4o|gpt-?4\.1|gpt-?4-turbo|gpt-?4-vision|gpt-?5|chatgpt-?4o|\bo1\b|\bo3\b|\bo4\b/.test(m) ||
+    /gpt-?4o|gpt-?4\.1|gpt-?4-turbo|gpt-?4-vision|gpt-?5|chatgpt-?4o|\bo1\b|\bo3\b|\bo4\b/.test(
+      m,
+    ) ||
     /claude[-\s]?3|claude[-\s]?4|claude.*opus|claude.*sonnet|claude.*haiku/.test(m) ||
     /grok[-\s]?2|grok[-\s]?3|grok[-\s]?4|grok.*vision/.test(m) ||
     /llama[-\s]?3\.2|llama.*vision/.test(m) ||
@@ -146,6 +145,26 @@ function enrichRows(rows: BenchmarkRow[]): BenchmarkRow[] {
   return rows.map(enrichRow);
 }
 
+function dedupeRows(rows: BenchmarkRow[]): BenchmarkRow[] {
+  const unique: BenchmarkRow[] = [];
+  const indexes = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = `${row.provider.trim().toLocaleLowerCase()}:${row.model.trim().toLocaleLowerCase()}`;
+    const existingIndex = indexes.get(key);
+    if (existingIndex == null) {
+      indexes.set(key, unique.length);
+      unique.push(row);
+      continue;
+    }
+    if (row.arena_score > unique[existingIndex]!.arena_score) {
+      unique[existingIndex] = row;
+    }
+  }
+
+  return unique;
+}
+
 /** Provider IDs Jarvis can route through today. Used to gate the
  * "Use this model" button in the detail drawer. */
 const SUPPORTED_PROVIDERS: ReadonlyArray<ProviderId> = [
@@ -173,14 +192,23 @@ const LMARENA_ENDPOINTS = [
   'https://lmarena.ai/leaderboard/text/overall',
   'https://lmarena.ai/leaderboard',
 ] as const;
-const CACHE_KEY = 'jarvis-benchmark-cache-v4';
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour — live rows only
+const CACHE_KEY = 'jarvis-benchmark-cache-v5';
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour ΓÇö live rows only
+const REQUIRED_MODEL_COUNT = 50;
 /** Reject cached rows whose Arena snapshot is older than this. */
 const MAX_ROW_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 12_000;
 
+interface LiveDataset {
+  rows: BenchmarkRow[];
+  sourceName: string;
+  sourceUrl: string;
+}
+
+let liveRefreshInFlight: Promise<LiveDataset & { ingestedAt: number }> | null = null;
+
 /**
- * Snapshot timestamp — curated Top 50 UNIQUE models (AA Intelligence, 2026-07-11).
+ * Snapshot timestamp ΓÇö curated Top 50 UNIQUE models (AA Intelligence, 2026-07-11).
  * The live fetch path is authoritative on Refresh; this labels curated rows.
  */
 export const SNAPSHOT_TS = LEADERBOARD_SNAPSHOT_TS;
@@ -197,27 +225,44 @@ interface CacheEntry {
   rows: BenchmarkRow[];
   fromSnapshot: boolean;
   cachedAt: number;
+  sourceName?: string;
+  sourceUrl?: string;
 }
 
-function isLiveCacheEntry(entry: CacheEntry): boolean {
+function isLiveCacheEntry(entry: CacheEntry, allowExpired = false): boolean {
   if (entry.fromSnapshot) return false;
   if (typeof entry.cachedAt !== 'number') return false;
-  if (!Array.isArray(entry.rows) || entry.rows.length === 0) return false;
-  if (Date.now() - entry.cachedAt > CACHE_TTL_MS) return false;
+  if (!Array.isArray(entry.rows) || entry.rows.length < REQUIRED_MODEL_COUNT) return false;
+  if (!allowExpired && Date.now() - entry.cachedAt > CACHE_TTL_MS) return false;
   if (entry.rows.some((r) => r.source === 'snapshot')) return false;
+  if (
+    (entry.sourceName !== undefined || entry.sourceUrl !== undefined) &&
+    !isKnownLiveSource(entry.sourceName, entry.sourceUrl)
+  ) {
+    return false;
+  }
   const newestFetched = Math.max(...entry.rows.map((r) => r.fetched_at));
   if (!Number.isFinite(newestFetched)) return false;
   if (Date.now() - newestFetched > MAX_ROW_AGE_MS) return false;
   return true;
 }
 
-function readCache(): CacheEntry | null {
+function isKnownLiveSource(sourceName: unknown, sourceUrl: unknown): boolean {
+  if (sourceName === 'LMArena via Wu Long archive') return sourceUrl === WULONG_TEXT_LEADERBOARD;
+  return (
+    sourceName === 'LMArena' &&
+    typeof sourceUrl === 'string' &&
+    (LMARENA_ENDPOINTS as readonly string[]).includes(sourceUrl)
+  );
+}
+
+function readCache(allowExpired = false): CacheEntry | null {
   if (typeof localStorage === 'undefined') return null;
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CacheEntry;
-    if (!isLiveCacheEntry(parsed)) return null;
+    if (!isLiveCacheEntry(parsed, allowExpired)) return null;
     return parsed;
   } catch {
     return null;
@@ -229,7 +274,7 @@ function writeCache(entry: CacheEntry): void {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(entry));
   } catch {
-    /* quota exceeded — silently ignore, the page still works without cache */
+    /* quota exceeded ΓÇö silently ignore, the page still works without cache */
   }
 }
 
@@ -238,6 +283,18 @@ export interface FetchResult {
   fromSnapshot: boolean;
   reason?: string;
   cached?: boolean;
+  stale?: boolean;
+  /** True only when no verified structured benchmark rows are available. */
+  unavailable?: boolean;
+  dataset: {
+    metricLabel: 'Arena score' | 'Arena rating' | 'Artificial Analysis Intelligence Index';
+    sourceName: string;
+    sourceUrl: string;
+    benchmarkDate: number;
+    ingestedAt: number;
+    confidence: 'high' | 'medium';
+    normalizationNote: string;
+  };
 }
 
 /**
@@ -250,10 +307,10 @@ function normalize(raw: unknown, ts: number): BenchmarkRow[] {
   const candidates: unknown[] = Array.isArray(raw)
     ? raw
     : Array.isArray((raw as { models?: unknown }).models)
-    ? ((raw as { models: unknown[] }).models)
-    : Array.isArray((raw as { leaderboard?: unknown }).leaderboard)
-    ? ((raw as { leaderboard: unknown[] }).leaderboard)
-    : [];
+      ? (raw as { models: unknown[] }).models
+      : Array.isArray((raw as { leaderboard?: unknown }).leaderboard)
+        ? (raw as { leaderboard: unknown[] }).leaderboard
+        : [];
 
   const rows: BenchmarkRow[] = [];
   for (const c of candidates) {
@@ -261,10 +318,12 @@ function normalize(raw: unknown, ts: number): BenchmarkRow[] {
     const o = c as Record<string, unknown>;
     const model = pickString(o, ['model', 'name', 'model_name']);
     const provider = pickString(o, ['provider', 'organization', 'org']);
-    const score = pickNumber(o, ['arena_score', 'elo', 'rating', 'score']);
+    // A generic `score` can represent a completely different benchmark.
+    // Accept only fields that identify an Arena/Elo-style metric here.
+    const score = pickNumber(o, ['arena_score', 'elo', 'rating']);
     if (!model || !provider || score == null) continue;
-    const ciLow = pickNumber(o, ['ci_low', 'lower', 'lower_bound']) ?? score - 5;
-    const ciHigh = pickNumber(o, ['ci_high', 'upper', 'upper_bound']) ?? score + 5;
+    const ciLow = pickNumber(o, ['ci_low', 'lower', 'lower_bound']) ?? score;
+    const ciHigh = pickNumber(o, ['ci_high', 'upper', 'upper_bound']) ?? score;
     rows.push({
       model,
       provider: provider.toLowerCase(),
@@ -281,7 +340,7 @@ function normalize(raw: unknown, ts: number): BenchmarkRow[] {
       fetched_at: ts,
     });
   }
-  return rows;
+  return dedupeRows(rows);
 }
 
 function pickString(o: Record<string, unknown>, keys: string[]): string | null {
@@ -364,7 +423,7 @@ export function normalizeWulong(raw: unknown, fallbackTs: number): BenchmarkRow[
 
   for (const entry of payload.models) {
     if (!entry?.model || entry.score == null || !Number.isFinite(entry.score)) continue;
-    const ci = entry.ci ?? 5;
+    const ci = entry.ci != null && Number.isFinite(entry.ci) ? Math.max(0, entry.ci) : 0;
     const score = Math.round(entry.score);
     const vendor = entry.vendor?.trim() || 'unknown';
     rows.push({
@@ -381,10 +440,10 @@ export function normalizeWulong(raw: unknown, fallbackTs: number): BenchmarkRow[
     });
   }
 
-  return rows;
+  return dedupeRows(rows);
 }
 
-async function fetchLiveRows(now: number): Promise<BenchmarkRow[]> {
+async function fetchLiveRows(now: number): Promise<LiveDataset> {
   const errors: string[] = [];
 
   try {
@@ -392,13 +451,19 @@ async function fetchLiveRows(now: number): Promise<BenchmarkRow[]> {
       timeoutMs: FETCH_TIMEOUT_MS,
       headers: { Accept: 'application/json' },
     });
-    if (!res.ok) throw new Error(`wulong: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as unknown;
     const rows = normalizeWulong(data, now);
-    if (rows.length < 5) throw new Error(`wulong: only ${rows.length} models parsed`);
-    return rows;
+    if (rows.length < REQUIRED_MODEL_COUNT) {
+      throw new Error(`incomplete leaderboard (${rows.length}/${REQUIRED_MODEL_COUNT} models)`);
+    }
+    return {
+      rows,
+      sourceName: 'LMArena via Wu Long archive',
+      sourceUrl: WULONG_TEXT_LEADERBOARD,
+    };
   } catch (err) {
-    errors.push(err instanceof Error ? err.message : String(err));
+    errors.push(boundedLeaderboardError('wulong', err));
   }
 
   for (const url of LMARENA_ENDPOINTS) {
@@ -407,45 +472,140 @@ async function fetchLiveRows(now: number): Promise<BenchmarkRow[]> {
         timeoutMs: FETCH_TIMEOUT_MS,
         headers: { Accept: 'application/json,text/html;q=0.9,*/*;q=0.8' },
       });
-      if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const contentType = res.headers.get('content-type') ?? '';
       const data = contentType.includes('application/json')
         ? ((await res.json()) as unknown)
         : extractLeaderboardJson(await res.text());
       const rows = normalize(data, now);
-      if (rows.length < 5) throw new Error(`${url}: schema not recognized`);
-      return rows;
+      if (rows.length < REQUIRED_MODEL_COUNT) {
+        throw new Error(`incomplete leaderboard (${rows.length}/${REQUIRED_MODEL_COUNT} models)`);
+      }
+      return { rows, sourceName: 'LMArena', sourceUrl: url };
     } catch (err) {
-      errors.push(err instanceof Error ? err.message : String(err));
+      errors.push(boundedLeaderboardError('lmarena', err));
     }
   }
 
   throw new Error(errors.join(' | ') || 'Live leaderboard unavailable');
 }
 
+function boundedLeaderboardError(source: 'wulong' | 'lmarena', error: unknown): string {
+  if (error instanceof Error) {
+    const http = /^HTTP (\d{3})$/u.exec(error.message);
+    if (http) return `${source}: HTTP ${http[1]}`;
+    const incomplete = /incomplete leaderboard \((\d+)\/(\d+) models\)/u.exec(error.message);
+    if (incomplete) {
+      return `${source}: incomplete leaderboard (${incomplete[1]}/${incomplete[2]} models)`;
+    }
+  }
+  return `${source}: request failed`;
+}
+
+async function refreshLiveDataset(): Promise<LiveDataset & { ingestedAt: number }> {
+  if (liveRefreshInFlight) return liveRefreshInFlight;
+  const task = (async () => {
+    const ingestedAt = Date.now();
+    const dataset = await fetchLiveRows(ingestedAt);
+    writeCache({
+      rows: dataset.rows,
+      fromSnapshot: false,
+      cachedAt: ingestedAt,
+      sourceName: dataset.sourceName,
+      sourceUrl: dataset.sourceUrl,
+    });
+    return { ...dataset, ingestedAt };
+  })();
+  liveRefreshInFlight = task;
+  try {
+    return await task;
+  } finally {
+    if (liveRefreshInFlight === task) liveRefreshInFlight = null;
+  }
+}
+
 /**
- * Fetch benchmarks. Default load serves the curated Top 50 snapshot;
- * use `force: true` (Refresh) to pull live Wu Long / LMArena data.
+ * Fetch benchmarks. A normal load uses a fresh live cache when possible and
+ * otherwise refreshes the structured sources. The embedded snapshot is the
+ * final cold-start fallback only.
  */
 export async function fetchBenchmarks(opts?: { force?: boolean }): Promise<FetchResult> {
-  const curated = { rows: enrichRows(SNAPSHOT_ROWS), fromSnapshot: true };
+  const curated: FetchResult = {
+    rows: enrichRows(SNAPSHOT_ROWS),
+    fromSnapshot: true,
+    dataset: {
+      metricLabel: 'Artificial Analysis Intelligence Index',
+      sourceName: 'Artificial Analysis',
+      sourceUrl: 'https://artificialanalysis.ai/leaderboards/models',
+      benchmarkDate: SNAPSHOT_TS,
+      ingestedAt: SNAPSHOT_TS,
+      confidence: 'high',
+      normalizationNote:
+        'This snapshot is displayed as its own Intelligence Index dataset and is never numerically merged with Arena scores.',
+    },
+  };
 
   if (!opts?.force) {
     const cached = readCache();
     if (cached) {
-      return { rows: enrichRows(cached.rows), fromSnapshot: cached.fromSnapshot, cached: true };
+      const benchmarkDate = Math.max(...cached.rows.map((row) => row.fetched_at));
+      return {
+        rows: enrichRows(cached.rows),
+        fromSnapshot: cached.fromSnapshot,
+        cached: true,
+        dataset: {
+          metricLabel: 'Arena score',
+          sourceName: cached.sourceName ?? 'LMArena via Wu Long archive',
+          sourceUrl: cached.sourceUrl ?? WULONG_TEXT_LEADERBOARD,
+          benchmarkDate,
+          ingestedAt: cached.cachedAt,
+          confidence: 'medium',
+          normalizationNote:
+            'Arena rows are ranked only against the same Arena feed and are not merged with Intelligence Index scores.',
+        },
+      };
     }
-    return curated;
   }
 
-  const now = Date.now();
   try {
-    const rows = await fetchLiveRows(now);
-    writeCache({ rows, fromSnapshot: false, cachedAt: now });
-    return { rows: enrichRows(rows), fromSnapshot: false };
+    const { rows, ingestedAt, sourceName, sourceUrl } = await refreshLiveDataset();
+    return {
+      rows: enrichRows(rows),
+      fromSnapshot: false,
+      dataset: {
+        metricLabel: 'Arena score',
+        sourceName,
+        sourceUrl,
+        benchmarkDate: Math.max(...rows.map((row) => row.fetched_at)),
+        ingestedAt,
+        confidence: 'medium',
+        normalizationNote:
+          'Arena rows are ranked only against the same Arena feed and are not merged with Intelligence Index scores.',
+      },
+    };
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'Fetch failed';
-    return { ...curated, reason };
+    const staleCache = readCache(true);
+    if (staleCache) {
+      return {
+        rows: enrichRows(staleCache.rows),
+        fromSnapshot: false,
+        cached: true,
+        stale: true,
+        reason,
+        dataset: {
+          metricLabel: 'Arena score',
+          sourceName: staleCache.sourceName ?? 'LMArena via Wu Long archive',
+          sourceUrl: staleCache.sourceUrl ?? WULONG_TEXT_LEADERBOARD,
+          benchmarkDate: Math.max(...staleCache.rows.map((row) => row.fetched_at)),
+          ingestedAt: staleCache.cachedAt,
+          confidence: 'medium',
+          normalizationNote:
+            'Last-known-good Arena rows are retained when the hourly refresh is unavailable; no scores are synthesized.',
+        },
+      };
+    }
+    return { ...curated, reason, stale: Date.now() - SNAPSHOT_TS > CACHE_TTL_MS };
   }
 }
 
@@ -468,6 +628,7 @@ export function clearBenchmarkCache(): void {
     // Drop legacy keys that may still hold frozen snapshot rows.
     localStorage.removeItem('jarvis-benchmark-cache');
     localStorage.removeItem('jarvis-benchmark-cache-v3');
+    localStorage.removeItem('jarvis-benchmark-cache-v4');
   } catch {
     /* ignore */
   }

@@ -1,20 +1,9 @@
 /**
- * Pet mini-panel — polished floating panel: chats / terminals / activity.
+ * Pet mini-panel — compact desktop-wide Chat / Terminals companion.
  * Resizable + movable. Minimize/close hide the panel and restore the pet sprite.
  */
 import * as React from 'react';
-import {
-  MessageSquare,
-  Terminal,
-  Activity,
-  Minus,
-  X,
-  GripVertical,
-  Cat,
-  Mic,
-  ChevronUp,
-  ChevronDown,
-} from 'lucide-react';
+import { MessageSquare, Terminal, Minus, X, GripVertical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -28,18 +17,22 @@ import {
 } from './petPanelLifecycle';
 import { PetChatSurface } from './PetChatSurface';
 import { PetTerminalSurface } from './PetTerminalSurface';
-import { PetVoiceSurface } from './PetVoiceSurface';
 import { usePetPresentationStore } from './petPresentationStore';
 import { hidePetPanel, minimizePetPanel } from './petTauriBridge';
+import { setLivePanelUiScale } from '@/lib/ui/panelScale';
 import {
-  loadPetPanelHeaderCollapsed,
+  clampPetPanelSize,
+  computeBottomRightAnchoredResize,
+  loadPetPanelFloatGeometry,
   petPanelDensityForSize,
-  savePetPanelHeaderCollapsed,
+  petPanelUiScale,
+  savePetPanelFloatGeometry,
   type PetPanelDensity,
 } from './petPanelPreferences';
+import { PetPanelUiProvider } from './petPanelUi';
 import './petMiniPanel.css';
 
-export type PetMiniPanelTab = 'chats' | 'terminals' | 'activity' | 'voice';
+export type PetMiniPanelTab = 'chats' | 'terminals';
 
 export interface PetMiniPanelProps {
   open: boolean;
@@ -58,33 +51,47 @@ const MIN_H = 320;
 const MAX_W = 1200;
 const MAX_H = 1000;
 
+const DEFAULT_FLOAT = { w: 460, h: 600, right: 28, bottom: 28 };
+
+function initialFloatGeometry() {
+  return loadPetPanelFloatGeometry() ?? DEFAULT_FLOAT;
+}
+
 export function PetMiniPanel({
   open,
   onClose,
   onMinimize,
-  animLabel,
+  animLabel: _animLabel,
   className,
   windowMode = false,
   resizable = false,
   onLifecycleChange,
 }: PetMiniPanelProps) {
+  const savedFloat = React.useMemo(() => initialFloatGeometry(), []);
   const [tab, setTab] = React.useState<PetMiniPanelTab>('chats');
-  const [headerCollapsed, setHeaderCollapsed] = React.useState(loadPetPanelHeaderCollapsed);
-  const [expandedErrors, setExpandedErrors] = React.useState<Set<string>>(() => new Set());
   const [density, setDensity] = React.useState<PetPanelDensity>('comfortable');
+  const [contentSize, setContentSize] = React.useState({ w: savedFloat.w, h: savedFloat.h });
   const panelRef = React.useRef<HTMLDivElement>(null);
-  const [size, setSize] = React.useState({ w: 460, h: 600 });
-  const [panelPos, setPanelPos] = React.useState({ right: 28, bottom: 28 });
+  const [size, setSize] = React.useState({ w: savedFloat.w, h: savedFloat.h });
+  const [panelPos, setPanelPos] = React.useState({
+    right: savedFloat.right,
+    bottom: savedFloat.bottom,
+  });
+  // Prefer live measured size for scale; fall back to declared size while resizing.
+  const uiScale = petPanelUiScale(
+    contentSize.w || size.w,
+    contentSize.h || size.h,
+  );
   const [lifecycle, setLifecycle] = React.useState<PetPanelLifecycleState>(
     open || windowMode ? 'open' : createInitialPanelLifecycle(),
   );
-  const activity = usePetPresentationStore((s) => s.activity);
-  const unread = usePetPresentationStore((s) => s.unreadActivity);
   const clearUnread = usePetPresentationStore((s) => s.clearUnread);
   const setPanelLifecycle = usePetPresentationStore((s) => s.setPanelLifecycle);
-  const chats = usePetPresentationStore((s) => s.chats);
-  const terminals = usePetPresentationStore((s) => s.terminals);
   const transitionTimerRef = React.useRef(0);
+  const sizeRef = React.useRef(size);
+  const posRef = React.useRef(panelPos);
+  sizeRef.current = size;
+  posRef.current = panelPos;
 
   const transitionDuration = React.useCallback(() => {
     if (typeof window.matchMedia === 'function') {
@@ -96,6 +103,7 @@ export function PetMiniPanel({
   React.useEffect(
     () => () => {
       window.clearTimeout(transitionTimerRef.current);
+      setLivePanelUiScale(1);
     },
     [],
   );
@@ -111,6 +119,11 @@ export function PetMiniPanel({
         if (rect.width <= 0 || rect.height <= 0) return;
         const next = petPanelDensityForSize(rect.width, rect.height);
         setDensity((current) => (current === next ? current : next));
+        const nextSize = { w: Math.round(rect.width), h: Math.round(rect.height) };
+        setContentSize((current) =>
+          current.w === nextSize.w && current.h === nextSize.h ? current : nextSize,
+        );
+        setLivePanelUiScale(petPanelUiScale(nextSize.w, nextSize.h));
       });
     };
     update();
@@ -122,14 +135,6 @@ export function PetMiniPanel({
       observer?.disconnect();
       window.removeEventListener('resize', update);
     };
-  }, []);
-
-  const toggleHeaderCollapsed = React.useCallback(() => {
-    setHeaderCollapsed((current) => {
-      const next = !current;
-      savePetPanelHeaderCollapsed(next);
-      return next;
-    });
   }, []);
 
   const updateLifecycle = React.useCallback(
@@ -215,83 +220,95 @@ export function PetMiniPanel({
   if (!visible && lifecycle !== 'minimized') return null;
   if (lifecycle === 'minimized' && !windowMode) return null;
 
-  const petChatCount = Object.values(chats).filter((c) => c.owner === 'pet-mini-panel').length;
-  const petTermCount = Object.values(terminals).filter((t) => t.owner === 'pet-mini-panel').length;
-
   const startResize =
     (edge: 'se' | 'e' | 's' | 'sw' | 'ne' | 'n' | 'w') => (e: React.PointerEvent) => {
       if (!resizable || windowMode) return;
       e.preventDefault();
       e.stopPropagation();
+      const target = e.currentTarget;
+      target.setPointerCapture?.(e.pointerId);
       const startX = e.clientX;
       const startY = e.clientY;
-      const startW = size.w;
-      const startH = size.h;
-      const startRight = panelPos.right;
-      const startBottom = panelPos.bottom;
+      const startW = sizeRef.current.w;
+      const startH = sizeRef.current.h;
+      const startRight = posRef.current.right;
+      const startBottom = posRef.current.bottom;
+      let last = { w: startW, h: startH, right: startRight, bottom: startBottom };
       const move = (ev: PointerEvent) => {
-        let w = startW;
-        let h = startH;
-        let right = startRight;
-        let bottom = startBottom;
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
-        // Panel anchored bottom-right: drag left edge grows width + right offset
-        if (edge.includes('e') || edge === 'se' || edge === 'ne') {
-          w = startW + dx;
-        }
-        if (edge.includes('w') || edge === 'sw') {
-          w = startW - dx;
-          right = startRight - dx;
-        }
-        if (edge.includes('s') || edge === 'se' || edge === 'sw') {
-          h = startH + dy;
-        }
-        if (edge.includes('n') || edge === 'ne') {
-          h = startH - dy;
-          bottom = startBottom - dy;
-        }
-        setSize({
-          w: Math.max(MIN_W, Math.min(MAX_W, w)),
-          h: Math.max(MIN_H, Math.min(MAX_H, h)),
+        const next = computeBottomRightAnchoredResize({
+          edge,
+          dx: ev.clientX - startX,
+          dy: ev.clientY - startY,
+          startW,
+          startH,
+          startRight,
+          startBottom,
+          minW: MIN_W,
+          minH: MIN_H,
+          maxW: MAX_W,
+          maxH: MAX_H,
+          minInset: 8,
         });
-        setPanelPos({
-          right: Math.max(8, right),
-          bottom: Math.max(8, bottom),
-        });
+        last = { w: next.w, h: next.h, right: next.right, bottom: next.bottom };
+        setSize({ w: next.w, h: next.h });
+        setPanelPos({ right: next.right, bottom: next.bottom });
+        setContentSize({ w: next.w, h: next.h });
+        setLivePanelUiScale(petPanelUiScale(next.w, next.h));
       };
-      const up = () => {
+      const up = (ev: PointerEvent) => {
+        target.releasePointerCapture?.(ev.pointerId);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+        // Persist custom size so reopen restores the same footprint.
+        const clamped = clampPetPanelSize(last.w, last.h);
+        savePetPanelFloatGeometry({
+          w: clamped.w,
+          h: clamped.h,
+          right: last.right,
+          bottom: last.bottom,
+        });
       };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
     };
 
   const onHeaderDrag = (e: React.PointerEvent) => {
     if (windowMode || e.button !== 0) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
+    const target = e.currentTarget;
+    target.setPointerCapture?.(e.pointerId);
     const startX = e.clientX;
     const startY = e.clientY;
-    const startRight = panelPos.right;
-    const startBottom = panelPos.bottom;
+    const startRight = posRef.current.right;
+    const startBottom = posRef.current.bottom;
     const move = (ev: PointerEvent) => {
       setPanelPos({
         right: Math.max(8, startRight - (ev.clientX - startX)),
         bottom: Math.max(8, startBottom - (ev.clientY - startY)),
       });
     };
-    const up = () => {
+    const up = (ev: PointerEvent) => {
+      target.releasePointerCapture?.(ev.pointerId);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      savePetPanelFloatGeometry({
+        w: sizeRef.current.w,
+        h: sizeRef.current.h,
+        right: posRef.current.right,
+        bottom: posRef.current.bottom,
+      });
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   };
 
   // PetHost mounts outside AppShell, and the dedicated Tauri pet-mini-panel
-  // window has no shell either — chat/voice children use Tooltip/Hint and
+  // window has no shell either — chat children use Tooltip/Hint and
   // crash without a provider ("Tooltip must be used within TooltipProvider").
   return (
     <TooltipProvider delayDuration={400}>
@@ -312,15 +329,18 @@ export function PetMiniPanel({
         )}
         style={
           windowMode
-            ? undefined
-            : {
+            ? ({
+                ['--pet-ui-scale' as string]: String(uiScale),
+              } as React.CSSProperties)
+            : ({
                 right: panelPos.right,
                 bottom: panelPos.bottom,
                 width: size.w,
                 height: size.h,
                 maxWidth: '96vw',
                 maxHeight: '92vh',
-              }
+                ['--pet-ui-scale' as string]: String(uiScale),
+              } as React.CSSProperties)
         }
         role="dialog"
         aria-modal="true"
@@ -328,8 +348,10 @@ export function PetMiniPanel({
         data-pet-mini-panel="true"
         data-pet-panel-lifecycle={lifecycle}
         data-pet-panel-density={density}
+        data-pet-ui-scale={uiScale.toFixed(2)}
         data-pet-preserves-sessions={panelPreservesSessions(lifecycle) ? 'true' : 'false'}
       >
+        <PetPanelUiProvider density={density} width={contentSize.w} height={contentSize.h}>
         {/* Accent top edge */}
         {!windowMode && (
           <div
@@ -339,63 +361,51 @@ export function PetMiniPanel({
         )}
 
         <div
-          className="pet-panel-top border-b border-border/80 bg-elevated/40 backdrop-blur-sm [html[data-theme=monochrome]_&]:backdrop-blur-none"
+          className="pet-panel-top border-b border-border/80"
           data-testid="pet-panel-header"
-          data-collapsed={headerCollapsed ? 'true' : 'false'}
+          data-collapsed="false"
         >
           <header
             className={cn(
-              'pet-panel-header-row relative flex items-center gap-2 px-3 py-2.5',
+              'pet-panel-header-row relative flex items-center gap-1.5 px-2 py-1.5',
               !windowMode && 'cursor-move',
             )}
             onPointerDown={onHeaderDrag}
           >
-            <div className="flex min-w-0 items-center gap-2.5">
-              {!windowMode && (
-                <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
-              )}
-              <div className="pet-panel-identity-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-accent-copper/30 bg-accent-copper/10">
-                <Cat className="h-4.5 w-4.5 text-accent-copper" aria-hidden />
-              </div>
-              <div className={cn('min-w-0', headerCollapsed && 'hidden')}>
-                <div className="pet-panel-expanded-title truncate text-ui-strong text-foreground tracking-tight">
-                  Pet panel
-                </div>
-                <div className="pet-panel-subtitle truncate text-metadata text-muted-foreground">
-                  {animLabel ? `${animLabel}` : 'Axolotl'} · {petChatCount} chats · {petTermCount}{' '}
-                  terminals
-                </div>
-              </div>
-            </div>
-            {headerCollapsed && (
-              <div className="pet-panel-active-label min-w-0 text-sm font-medium text-foreground">
-                {tab === 'chats'
-                  ? 'Chats'
-                  : tab === 'terminals'
-                    ? 'Terminals'
-                    : tab === 'voice'
-                      ? 'Voice'
-                      : 'Activity'}
-                {unread > 0 ? ` · ${unread} unread` : ''}
-              </div>
+            {!windowMode && (
+              <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
             )}
+            <nav className="pet-panel-nav flex min-w-0 gap-1" aria-label="Compact panel sections">
+              {(
+                [
+                  ['chats', MessageSquare, 'Chat'],
+                  ['terminals', Terminal, 'Terminals'],
+                ] as const
+              ).map(([id, Icon, label]) => {
+                const active = tab === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setTab(id)}
+                    data-testid={`pet-tab-${id}`}
+                    aria-label={label}
+                    aria-current={active ? 'page' : undefined}
+                    className={cn(
+                      'pet-panel-nav-button inline-flex h-7 items-center gap-1 rounded-lg px-2.5 text-xs font-semibold transition-colors',
+                      active
+                        ? 'bg-accent-copper/15 text-accent-copper ring-1 ring-accent-copper/25'
+                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span className="pet-panel-nav-label">{label}</span>
+                  </button>
+                );
+              })}
+            </nav>
             <div className="pet-panel-drag-region" data-tauri-drag-region aria-hidden />
             <div className="flex shrink-0 items-center gap-0.5">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={toggleHeaderCollapsed}
-                aria-label={headerCollapsed ? 'Expand panel header' : 'Collapse panel header'}
-                aria-expanded={!headerCollapsed}
-                title={headerCollapsed ? 'Expand panel header' : 'Collapse panel header'}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                {headerCollapsed ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronUp className="h-4 w-4" />
-                )}
-              </Button>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -420,115 +430,14 @@ export function PetMiniPanel({
               </Button>
             </div>
           </header>
-
-          {!headerCollapsed && (
-            <nav
-              className="pet-panel-nav flex gap-1 border-t border-border/50 bg-background/30 px-2 py-1.5"
-              aria-label="Panel sections"
-            >
-              {(
-                [
-                  ['chats', MessageSquare, 'Chats'],
-                  ['terminals', Terminal, 'Terminals'],
-                  ['voice', Mic, 'Voice'],
-                  ['activity', Activity, 'Activity'],
-                ] as const
-              ).map(([id, Icon, label]) => {
-                const active = tab === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setTab(id)}
-                    data-testid={`pet-tab-${id}`}
-                    aria-label={label}
-                    aria-current={active ? 'page' : undefined}
-                    title={label}
-                    className={cn(
-                      'pet-panel-nav-button inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors',
-                      active
-                        ? 'bg-accent-copper/15 text-accent-copper shadow-sm ring-1 ring-accent-copper/25'
-                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span className="pet-panel-nav-label">{label}</span>
-                    {id === 'activity' && unread > 0 ? (
-                      <span className="rounded-full bg-accent-copper/90 px-1.5 text-[10px] font-semibold text-white">
-                        {unread}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </nav>
-          )}
         </div>
 
-        <div className="pet-panel-workspace relative flex-1 overflow-hidden p-2.5 min-h-0 bg-background/20">
-          <div className="pet-panel-surface-frame h-full min-h-0 rounded-xl border border-border/50 bg-background/70 shadow-inner overflow-hidden">
-            {tab === 'chats' && <PetChatSurface className="h-full p-2" />}
-            {tab === 'terminals' && <PetTerminalSurface className="h-full p-2" />}
-            {tab === 'voice' && (
-              <PetVoiceSurface className="h-full" onOpenChats={() => setTab('chats')} />
-            )}
-            {tab === 'activity' && (
-              <div className="h-full overflow-auto p-3" data-testid="pet-activity">
-                <p className="mb-3 text-secondary text-muted-foreground text-sm">
-                  Safe activity · no secrets · click a chat or terminal tab to work.
-                </p>
-                <ul className="space-y-2">
-                  {[...activity].reverse().map((ev) => (
-                    <li
-                      key={ev.id}
-                      className="rounded-xl border border-border/70 bg-elevated/50 p-3 text-sm"
-                      data-activity-id={ev.id}
-                    >
-                      <div className="text-metadata text-muted-foreground">
-                        {ev.kind} · {new Date(ev.createdAt).toLocaleTimeString()}
-                      </div>
-                      <div className="mt-0.5 text-foreground">{ev.summary}</div>
-                      {ev.kind === 'error' && (
-                        <div className="mt-2">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            aria-expanded={expandedErrors.has(ev.id)}
-                            aria-label={
-                              expandedErrors.has(ev.id)
-                                ? 'Collapse error details'
-                                : 'Expand error details'
-                            }
-                            onClick={() =>
-                              setExpandedErrors((current) => {
-                                const next = new Set(current);
-                                if (next.has(ev.id)) next.delete(ev.id);
-                                else next.add(ev.id);
-                                return next;
-                              })
-                            }
-                          >
-                            {expandedErrors.has(ev.id) ? 'Hide details' : 'Show details'}
-                          </Button>
-                          {expandedErrors.has(ev.id) && (
-                            <div className="pet-panel-error-details mt-2 rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-metadata text-muted-foreground">
-                              <div>Target: {ev.target.type}</div>
-                              <div className="break-all">Reference: {ev.target.id}</div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                  {activity.length === 0 && (
-                    <li className="rounded-xl border border-dashed border-border/60 px-4 py-8 text-center text-secondary text-muted-foreground text-sm">
-                      No activity yet — send a chat or terminal here to get started.
-                    </li>
-                  )}
-                </ul>
-              </div>
+        <div className="pet-panel-workspace relative flex-1 min-h-0 overflow-hidden p-1">
+          <div className="pet-panel-surface-frame h-full min-h-0 overflow-hidden rounded-lg border border-border/50">
+            {tab === 'chats' ? (
+              <PetChatSurface className="h-full p-1" />
+            ) : (
+              <PetTerminalSurface className="h-full p-1" />
             )}
           </div>
         </div>
@@ -588,6 +497,7 @@ export function PetMiniPanel({
             </div>
           </div>
         )}
+        </PetPanelUiProvider>
       </div>
     </TooltipProvider>
   );

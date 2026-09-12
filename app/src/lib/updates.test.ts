@@ -13,7 +13,7 @@ vi.mock('@/lib/persistence/workspaceFlush', () => ({
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: mocks.check }));
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: mocks.relaunch }));
 
-import { checkForAppUpdate } from './updates';
+import { checkForAppUpdate, compareReleaseVersions } from './updates';
 import { MONOCHROME_VISUAL_TEST } from './runtimeProfile';
 
 describe('checkForAppUpdate persistence gates', () => {
@@ -60,6 +60,14 @@ describe('checkForAppUpdate persistence gates', () => {
     releaseRelaunchFlush?.();
     await expect(pending).resolves.toMatchObject({ available: true, installed: true });
     expect(mocks.relaunch).toHaveBeenCalledOnce();
+  });
+});
+
+describe('compareReleaseVersions', () => {
+  it('compares numeric versions without lexicographic mistakes', () => {
+    expect(compareReleaseVersions('1.10.0', '1.9.9')).toBeGreaterThan(0);
+    expect(compareReleaseVersions('v1.5.0', '1.5.0')).toBe(0);
+    expect(compareReleaseVersions('1.5.0-beta.2', '1.5.0')).toBeLessThan(0);
   });
 });
 
