@@ -74,4 +74,25 @@ describe('StatusDashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: /^clear status history$/i }));
     await waitFor(() => expect(analytics.clear).toHaveBeenCalledTimes(1));
   });
+
+  it('switches periods and exposes exact activity details to keyboard and screen readers', async () => {
+    render(<StatusDashboard accountId="account-a" />);
+    const bar = await screen.findByRole('img', { name: /2h, 150 tokens/ });
+    expect(bar.getAttribute('tabindex')).toBe('0');
+    expect(bar.style.height).toBe('100%');
+    fireEvent.click(screen.getByRole('button', { name: '24H' }));
+    await waitFor(() => expect(analytics.load).toHaveBeenLastCalledWith('account-a', '24h'));
+    expect(screen.getByRole('button', { name: '24H' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('does not turn token-only activity into fabricated active time', async () => {
+    analytics.load.mockResolvedValue({
+      ...summary,
+      timeline: [{ timestamp: 1_800_000_000_000, activeMs: 0, tokens: 150 }],
+    });
+    render(<StatusDashboard accountId="account-a" />);
+    const bar = await screen.findByRole('img', { name: /0m, 150 tokens/ });
+    expect(bar.style.height).toBe('0%');
+    expect(bar.getAttribute('data-empty')).toBe('true');
+  });
 });

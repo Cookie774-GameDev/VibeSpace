@@ -14,7 +14,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import './status-dashboard.css';
 import {
   clearActiveAccountStatus,
   loadStatusSummary,
@@ -94,14 +94,11 @@ export function StatusDashboard({ accountId }: { accountId: string }) {
   };
 
   const cost = summary ? costTruth(summary) : { value: '$0.00', note: '' };
-  const peak = Math.max(
-    1,
-    ...(summary?.timeline.map((point) => point.activeMs + point.tokens * 10) ?? []),
-  );
+  const peak = Math.max(1, ...(summary?.timeline.map((point) => point.activeMs) ?? []));
 
   return (
-    <section className="space-y-4" aria-labelledby="local-status-heading">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className="status-dashboard" aria-labelledby="local-status-heading">
+      <div className="status-header">
         <div>
           <div className="flex items-center gap-2">
             <span className="grid h-9 w-9 place-items-center rounded-xl border border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan">
@@ -117,10 +114,7 @@ export function StatusDashboard({ accountId }: { accountId: string }) {
             </div>
           </div>
         </div>
-        <div
-          className="flex rounded-xl border border-border/70 bg-background/55 p-1"
-          aria-label="Status period"
-        >
+        <div className="status-period" aria-label="Status period">
           {PERIODS.map((option) => (
             <Button
               key={option.id}
@@ -151,7 +145,7 @@ export function StatusDashboard({ accountId }: { accountId: string }) {
         </div>
       ) : summary ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="status-metrics">
             <Metric
               icon={<Clock3 />}
               label="Active time"
@@ -173,43 +167,65 @@ export function StatusDashboard({ accountId }: { accountId: string }) {
             />
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
-            <div className="rounded-2xl border border-border/70 bg-background/50 p-4">
+          <div className="status-overview">
+            <div className="status-card">
               <div className="mb-4 flex items-center justify-between gap-2">
                 <div>
                   <h3 className="text-ui-strong text-foreground">Activity timeline</h3>
                   <p className="text-metadata text-muted-foreground">
-                    Active time and AI work, already rolled up.
+                    Active time per interval. Hover or focus a bar for details.
                   </p>
                 </div>
                 <BarChart3 className="h-4 w-4 text-accent-copper" />
               </div>
-              <div
-                className="flex h-28 items-end gap-1"
-                role="img"
-                aria-label="Activity over the selected period"
-              >
-                {summary.timeline.length ? (
-                  summary.timeline.map((point) => {
-                    const height = Math.max(5, ((point.activeMs + point.tokens * 10) / peak) * 100);
-                    return (
-                      <div
-                        key={point.timestamp}
-                        className="min-w-1 flex-1 rounded-t bg-gradient-to-t from-accent-copper/65 to-accent-cyan/75 motion-reduce:transition-none"
-                        style={{ height: `${height}%` }}
-                        title={`${new Date(point.timestamp).toLocaleString()}: ${formatDuration(point.activeMs)}, ${formatNumber(point.tokens)} tokens`}
-                      />
-                    );
-                  })
-                ) : (
-                  <p className="m-auto text-sm text-muted-foreground">
-                    Activity will appear as you use VibeSpace.
-                  </p>
-                )}
+              <div className="status-chart" aria-label="Activity over the selected period">
+                <div className="status-chart-scale" aria-hidden="true">
+                  <span>{formatDuration(peak)}</span>
+                  <span>0</span>
+                </div>
+                <div className="status-chart-plot">
+                  {summary.timeline.some((point) => point.activeMs > 0 || point.tokens > 0) ? (
+                    summary.timeline.map((point) => {
+                      const label = `${new Date(point.timestamp).toLocaleString()}: ${formatDuration(point.activeMs)}, ${formatNumber(point.tokens)} tokens`;
+                      return (
+                        <div className="status-chart-slot" key={point.timestamp}>
+                          <div
+                            className="status-chart-bar"
+                            role="img"
+                            tabIndex={0}
+                            aria-label={label}
+                            title={label}
+                            data-empty={point.activeMs <= 0}
+                            style={{ height: `${Math.max(0, (point.activeMs / peak) * 100)}%` }}
+                          />
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="status-empty">Activity will appear as you use VibeSpace.</p>
+                  )}
+                </div>
               </div>
+              {!!summary.timeline.length && (
+                <div className="status-chart-dates" aria-hidden="true">
+                  <span>
+                    {new Date(summary.timeline[0].timestamp).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                  </span>
+                  {summary.timeline.length > 1 && (
+                    <span>
+                      {new Date(
+                        summary.timeline[summary.timeline.length - 1].timestamp,
+                      ).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div className="rounded-2xl border border-border/70 bg-background/50 p-4">
+            <div className="status-card">
               <h3 className="text-ui-strong text-foreground">Work facts</h3>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <Fact
@@ -242,7 +258,7 @@ export function StatusDashboard({ accountId }: { accountId: string }) {
             </div>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="status-breakdowns">
             <Breakdown
               title="Where your time went"
               rows={summary.surfaces}
@@ -265,7 +281,7 @@ export function StatusDashboard({ accountId }: { accountId: string }) {
             />
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-muted/20 p-3">
+          <div className="status-footer">
             <p className="max-w-2xl text-metadata text-muted-foreground">
               Detailed local events expire automatically; compact rollups remain. Clearing status
               never deletes chats, projects, files, or provider settings.
@@ -303,14 +319,14 @@ function Metric({
   note: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border/70 bg-background/55 p-4 shadow-soft">
+    <div className="status-metric">
       <div className="flex items-center gap-2 text-accent-copper">
         {React.cloneElement(icon, { className: 'h-4 w-4' })}
         <span className="text-metadata font-semibold uppercase tracking-wide text-muted-foreground">
           {label}
         </span>
       </div>
-      <p className="mt-3 font-display text-2xl tabular-nums text-foreground">{value}</p>
+      <p className="status-metric-value">{value}</p>
       <p className="mt-1 text-metadata text-muted-foreground">{note}</p>
     </div>
   );
@@ -318,12 +334,12 @@ function Metric({
 
 function Fact({ icon, label, value }: { icon: React.ReactElement; label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-border/50 bg-muted/20 p-2.5">
+    <div className="status-fact">
       <div className="flex items-center gap-1.5 text-metadata text-muted-foreground">
         {React.cloneElement(icon, { className: 'h-3.5 w-3.5' })}
         {label}
       </div>
-      <p className="mt-1 text-ui-strong tabular-nums">{value}</p>
+      <p className="status-fact-value">{value}</p>
     </div>
   );
 }
@@ -338,29 +354,28 @@ function Breakdown({
   value: (row: StatusBreakdownRow) => string;
 }) {
   return (
-    <div className="rounded-2xl border border-border/70 bg-background/50 p-4">
+    <div className="status-card">
       <h3 className="text-ui-strong text-foreground">{title}</h3>
       <div className="mt-3 space-y-3">
         {rows.length ? (
           rows.slice(0, 6).map((row) => (
             <div key={`${title}-${row.id}`}>
               <div className="flex items-center justify-between gap-3 text-metadata">
-                <span className="truncate text-foreground/85">{row.label}</span>
+                <span className="truncate text-foreground/85" title={row.label}>
+                  {row.label}
+                </span>
                 <span className="shrink-0 tabular-nums text-muted-foreground">{value(row)}</span>
               </div>
               <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
-                  className={cn(
-                    'h-full rounded-full bg-accent-copper/75',
-                    row.percent <= 0 && 'w-0',
-                  )}
-                  style={{ width: `${Math.min(100, Math.max(2, row.percent))}%` }}
+                  className="status-breakdown-bar"
+                  style={{ width: `${Math.min(100, Math.max(0, row.percent))}%` }}
                 />
               </div>
             </div>
           ))
         ) : (
-          <p className="text-sm text-muted-foreground">No verified activity in this period.</p>
+          <p className="status-empty">No verified activity in this period.</p>
         )}
       </div>
     </div>
