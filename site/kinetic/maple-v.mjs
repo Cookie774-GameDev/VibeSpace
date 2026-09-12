@@ -5,10 +5,11 @@ let field=null;
 try{const r=await fetch(new URL('./maple-field.json',import.meta.url));if(!r.ok)throw Error('field');field=await r.json();field.frames=field.frames.map(s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0)))}catch{/* A procedural field keeps the scene usable if the data asset is unavailable. */}
 // Read the cream mark from the actual website asset. The substantial connected
 // components exclude sparkles and preserve both separated logo strokes.
+const makeCanvas=()=>typeof document!=='undefined'?document.createElement('canvas'):new OffscreenCanvas(1,1);
 let logoPoints=[];
 try{
- const image=new Image();image.src=new URL('./assets/vibespace-logo.png',import.meta.url);await image.decode();
- const c=document.createElement('canvas');c.width=image.naturalWidth;c.height=image.naturalHeight;const a=c.getContext('2d');a.drawImage(image,0,0);
+ const image=await createImageBitmap(await (await fetch(new URL('./assets/vibespace-logo.png',import.meta.url))).blob());
+ const c=makeCanvas();c.width=image.width;c.height=image.height;const a=c.getContext('2d');a.drawImage(image,0,0);
  const pixels=a.getImageData(0,0,c.width,c.height).data,mask=new Uint8Array(c.width*c.height);
  for(let i=0;i<mask.length;i++)mask[i]=pixels[i*4]>225&&pixels[i*4+1]>205&&pixels[i*4+2]>155&&pixels[i*4+3]>100?1:0;
  let largest=[];const components=[];
@@ -17,7 +18,7 @@ try{
 }catch{/* Controls remain usable if the local logo asset cannot load. */}
 export function createMapleV(canvas,{blue=false,ink="#eee9dd",transparent=false}={}){
  const ctx=canvas.getContext('2d'),w=808,h=1000,step=16,cols=Math.ceil(w/step),rows=Math.ceil(h/step),letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+';
- const atlas=[...letters].map(g=>{const c=document.createElement('canvas');c.width=16;c.height=18;const a=c.getContext('2d');a.font='11px monospace';a.textAlign='center';a.textBaseline='middle';a.fillStyle=ink;a.fillText(g,8,9);return c});
+ const atlas=[...letters].map(g=>{const c=makeCanvas();c.width=16;c.height=18;const a=c.getContext('2d');a.font='11px monospace';a.textAlign='center';a.textBaseline='middle';a.fillStyle=ink;a.fillText(g,8,9);return c});
  function source(t){
   const st=field?(1-Math.cos(t*Math.PI/(field.duration*1.5)))*.5*(field.frames.length-1):0,index=Math.floor(st),fraction=st-index,result=[];
   for(let row=0;row<rows;row++)for(let col=0;col<cols;col++){
