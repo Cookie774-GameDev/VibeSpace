@@ -1,4 +1,5 @@
 import { openQueuedSideChat, registerQueueSideSender } from './queueSideChat';
+import { useComposerQueueSession } from './composerQueueSession';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AxoMotion } from '@/components/ui/AxoMotion';
 import './composer-frame.css';
@@ -1407,7 +1408,11 @@ export function Composer({
   const [stoppedRequest, setStoppedRequest] = useState(
     () => getChatRunState(String(chatId))?.status === 'cancelled',
   );
-  const [queuedMessages, setQueuedMessages] = useState<QueuedChatMessage[]>([]);
+  const queueScope = useAuthStore((state) => JSON.stringify([
+    resolveAccountIdentity(state)?.accountId ?? '', state.workspaceId, state.projectId, String(chatId),
+  ]));
+  const queueSession = useComposerQueueSession(queueScope);
+  const { messages: queuedMessages, setMessages: setQueuedMessages } = queueSession;
   const escapeCancelRef = useRef<EscapeCancelState>(createEscapeCancelState());
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [attachedImages, setAttachedImages] = useState<ChatImageAttachment[]>([]);
@@ -1531,23 +1536,15 @@ export function Composer({
 
   const queuedMessagesRef = useRef(queuedMessages);
   queuedMessagesRef.current = queuedMessages;
-  const queuedHandoffsRef = useRef(
-    new Map<
-      string,
-      Readonly<{
-        payload: ReturnType<typeof buildComposerChatHandoffPayload>;
-        visibleHandoffKey: string;
-      }>
-    >(),
-  );
+  const queuedHandoffsRef = queueSession.handoffs;
   const sendingRef = useRef(sending);
   const instantCommandInFlightRef = useRef(false);
   sendingRef.current = sending;
   const activeCancellationKeyRef = useRef<string | null>(null);
-  const queuedDispatchInFlightRef = useRef<string | null>(null);
-  const queuedInterruptInFlightRef = useRef<string | null>(null);
+  const queuedDispatchInFlightRef = queueSession.dispatchInFlight;
+  const queuedInterruptInFlightRef = queueSession.interruptInFlight;
   /** When true, a user Esc×3 cancel must not auto-drain the queue. */
-  const suppressQueueFlushOnUserCancelRef = useRef(false);
+  const suppressQueueFlushOnUserCancelRef = queueSession.suppressCancelFlush;
   const interruptQueuedRef = useRef<(id: string) => void>(() => {});
   /** Latest auto-flush implementation (set after handleSend exists). */
   const flushNextQueuedRef = useRef<() => void>(() => {});
@@ -1635,7 +1632,7 @@ export function Composer({
       window.removeEventListener('jarvis:run-state', onRunState as EventListener);
       if (flushTimer) clearTimeout(flushTimer);
     };
-  }, [chatId]);
+  }, [chatId, queueScope]);
 
   // After-tool: flush when a tool finishes (not when a new tool starts).
   useEffect(
@@ -1656,7 +1653,7 @@ export function Composer({
         });
         if (toolFinished) interruptQueuedRef.current(queued.id);
       }),
-    [chatId, jarvisRunning],
+    [chatId, queueScope, jarvisRunning],
   );
 
   const enqueueCurrentMessage = (draft: string, flushMode: QueueFlushMode = 'after-run') => {
@@ -4551,6 +4548,15 @@ export function Composer({
     if (!next) return;
     dispatchQueuedMessage(next);
   };
+
+  // A reply can finish while this view is unmounted. Once its exact model is
+  // restored, drain the retained queue; an explicitly paused run stays paused.
+  useEffect(() => {
+    if (modelSelectionReadyChatId !== String(chatId) || jarvisRunning || stoppedRequest ||
+        queuedMessages.length === 0 || getChatRunState(String(chatId))) return;
+    const timer = setTimeout(() => flushNextQueuedRef.current(), 60);
+    return () => clearTimeout(timer);
+  }, [chatId, queueScope, modelSelectionReadyChatId, jarvisRunning, stoppedRequest, queuedMessages.length]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
