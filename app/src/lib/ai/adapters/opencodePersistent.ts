@@ -1671,7 +1671,7 @@ export function createGenerationSafeAsyncCache<Key, Value>(
       let promise: Promise<Value>;
       promise = loader()
         .then((value) => {
-          if (loadGeneration === generation) {
+          if (loadGeneration === generation && loads.get(key)?.promise === promise) {
             cache.set(key, { loadedAt: Date.now(), value });
           }
           return value;

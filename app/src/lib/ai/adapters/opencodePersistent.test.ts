@@ -3224,6 +3224,72 @@ describe('persistent OpenCode live authority', () => {
     expect(shouldReportPersistentTurnFailure(new Error('failed'))).toBe(true);
   });
 
+  it.each(['older-first', 'newer-first'] as const)(
+    'keeps the newest forced cache load authoritative (%s)',
+    async (order) => {
+      const cache = createGenerationSafeAsyncCache<string, string>(60_000);
+      let resolveOld!: (value: string) => void;
+      let resolveFresh!: (value: string) => void;
+      const old = cache.get(
+        'catalog',
+        () =>
+          new Promise<string>((resolve) => {
+            resolveOld = resolve;
+          }),
+      );
+      const fresh = cache.get(
+        'catalog',
+        () =>
+          new Promise<string>((resolve) => {
+            resolveFresh = resolve;
+          }),
+        true,
+      );
+      if (order === 'older-first') {
+        resolveOld('stale');
+        await expect(old).resolves.toBe('stale');
+        expect(cache.peek('catalog')).toBeUndefined();
+        expect(cache.get('catalog', async () => 'unexpected')).toBe(fresh);
+      }
+      resolveFresh('fresh');
+      await expect(fresh).resolves.toBe('fresh');
+      if (order === 'newer-first') {
+        resolveOld('stale');
+        await expect(old).resolves.toBe('stale');
+      }
+      expect(cache.peek('catalog')).toBe('fresh');
+      await expect(cache.get('catalog', async () => 'unexpected')).resolves.toBe('fresh');
+    },
+  );
+
+  it('does not publish a superseded load after the newest forced cache load fails', async () => {
+    const cache = createGenerationSafeAsyncCache<string, string>(60_000);
+    await cache.get('catalog', async () => 'verified');
+    let resolveOld!: (value: string) => void;
+    const old = cache.get(
+      'catalog',
+      () =>
+        new Promise<string>((resolve) => {
+          resolveOld = resolve;
+        }),
+      true,
+    );
+    await expect(
+      cache.get(
+        'catalog',
+        async () => {
+          throw new Error('refresh failed');
+        },
+        true,
+      ),
+    ).rejects.toThrow('refresh failed');
+    resolveOld('superseded');
+    await expect(old).resolves.toBe('superseded');
+    expect(cache.peek('catalog')).toBe('verified');
+    await expect(cache.get('catalog', async () => 'recovered', true)).resolves.toBe('recovered');
+    expect(cache.peek('catalog')).toBe('recovered');
+  });
+
   it('does not reuse or cache a stale in-flight load after invalidation', async () => {
     const cache = createGenerationSafeAsyncCache<string, string>(60_000);
     let resolveOld: ((value: string) => void) | undefined;
