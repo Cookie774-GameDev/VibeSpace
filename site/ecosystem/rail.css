@@ -30,12 +30,13 @@ body.ecosystem-visible #webgl-stage{opacity:0!important}
 
 body.ecosystem-visible #globalFireflies,body.ecosystem-visible #globalTrail{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.ecosystem-window{touch-action:auto}}
-/* Flat editorial inversion, with a restrained lift and no glow. */
-.ecosystem-tile{position:relative;isolation:isolate;overflow:hidden}
+/* Light follows the lettering, while the tile stays black. */
+.ecosystem-brand{color:#767873;text-shadow:none;transition:color .3s ease,text-shadow .3s ease}
+.ecosystem-brand img{opacity:.43;transition:opacity .3s ease,filter .3s ease}
+.ecosystem-tile:hover{background:transparent}
+.ecosystem-tile:hover .ecosystem-brand{transform:none}
 @media(hover:hover){
-.ecosystem-tile:hover{background:var(--eco-paper)}
-.ecosystem-tile:hover .ecosystem-brand{color:#121310;transform:translateY(-3px) scale(1.045)}
-.ecosystem-tile:hover .ecosystem-role{color:#53564d}
-.ecosystem-tile:hover img{opacity:1;filter:brightness(0)}
+.ecosystem-tile:hover .ecosystem-brand{color:#fff;text-shadow:0 0 8px #ffffff66,0 0 22px #ffffff33}
+.ecosystem-tile:hover img{opacity:1;filter:brightness(0) invert(1) drop-shadow(0 0 6px #ffffff66)}
 }
-@media(prefers-reduced-motion:reduce){.ecosystem-tile:hover .ecosystem-brand{transform:none}}
+@media(prefers-reduced-motion:reduce){.ecosystem-brand,.ecosystem-brand img{transition:none}}
