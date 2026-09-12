@@ -1,6 +1,5 @@
 import * as React from 'react';
 import {
-  Activity,
   BarChart3,
   Bot,
   Clock3,
@@ -101,9 +100,6 @@ export function StatusDashboard({ accountId }: { accountId: string }) {
       <div className="status-header">
         <div>
           <div className="flex items-center gap-2">
-            <span className="grid h-9 w-9 place-items-center rounded-xl border border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan">
-              <Activity className="h-4 w-4" />
-            </span>
             <div>
               <h2 id="local-status-heading" className="font-display text-xl text-foreground">
                 Your VibeSpace status
