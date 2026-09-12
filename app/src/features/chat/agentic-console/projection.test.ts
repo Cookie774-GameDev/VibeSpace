@@ -32,6 +32,47 @@ function message(
 
 describe('projectAgenticTranscript', () => {
 
+  it('ignores abandoned activity from before the current user turn', () => {
+    const messages = [
+      message('old', 'assistant', 2, [{ kind: 'text', text: 'Earlier result' }]),
+      message('new', 'user', 20, [{ kind: 'text', text: 'Current request' }]),
+    ];
+    const activity: ChatActivityEvent[] = [
+      { id: 'old-forge', chatId: 'chat-1', kind: 'agent', status: 'running', title: 'Prompt Forge', startedAt: 3, ts: 30 },
+      { id: 'current', chatId: 'chat-1', kind: 'agent', status: 'running', title: 'Current model is reasoning', startedAt: 21, ts: 25 },
+    ];
+    expect(summarizeAgenticSession(messages, activity)).toMatchObject({
+      status: 'running', currentOperation: 'Current model is reasoning',
+    });
+    expect(summarizeAgenticSession([
+      ...messages,
+      message('answer', 'assistant', 40, [{ kind: 'text', text: 'Current answer' }]),
+    ], [activity[0]!, { ...activity[1]!, status: 'done', endedAt: 40 }])).toMatchObject({
+      status: 'done', currentOperation: 'Complete',
+    });
+  });
+
+  it('keeps earlier file accounting without inheriting an earlier failed status', () => {
+    const messages = [
+      message('new', 'user', 20, [{ kind: 'text', text: 'Current request' }]),
+      message('answer', 'assistant', 30, [{ kind: 'text', text: 'Current answer' }]),
+    ];
+    expect(summarizeAgenticSession(messages, [
+      { id: 'old-error', chatId: 'chat-1', kind: 'tool', status: 'error', title: 'Earlier failed read', filePath: 'earlier.txt', ts: 3 },
+    ])).toMatchObject({ status: 'done', currentOperation: 'Complete', fileCount: 1 });
+  });
+
+  it('recognizes a completed structured plan as the current response', () => {
+    expect(summarizeAgenticSession([
+      message('old', 'assistant', 1, [{ kind: 'text', text: 'Earlier result' }]),
+      message('request', 'user', 20, [{ kind: 'text', text: 'Plan the file creation' }]),
+      message('plan', 'assistant', 30, [{ kind: 'plan_review', plan: {
+        id: 'plan-current', title: 'Create file', summary: 'Wait for approval.',
+        steps: ['Check target', 'Create file', 'Reread'], status: 'pending',
+      } }]),
+    ], [])).toMatchObject({ status: 'done', currentOperation: 'Complete' });
+  });
+
   it('does not infer an older completion while the latest saved request awaits recovery status', () => {
     const messages = [message('old', 'assistant', 1, [{ kind: 'text', text: 'Earlier result' }]), message('pending', 'user', 2, [{ kind: 'text', text: 'A new request' }])];
     expect(summarizeAgenticSession(messages, [])).toMatchObject({ status: 'recovering', currentOperation: 'Checking saved request status' });

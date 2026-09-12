@@ -2,6 +2,38 @@ import { describe, expect, it } from 'vitest';
 import { parseJarvisPlanBlocks } from './planParser';
 
 describe('parseJarvisPlanBlocks', () => {
+  it.each(['step', 'number'])('preserves action and detail from native provider %s objects in approval order', (numberKey) => {
+    const parsed = parseJarvisPlanBlocks('```jarvis_plan\n' + JSON.stringify({
+      title: 'Create fixture file', summary: 'Create and verify the file.',
+      steps: [
+        { [numberKey]: 1, action: 'Create the file', detail: 'Only plan-open.txt; never overwrite.' },
+        { [numberKey]: 2, action: 'Reread the file', detail: 'Read the same exact path.' },
+        { [numberKey]: 3, action: 'Verify and report', detail: 'Exactly two lines; STATUS=R10.' },
+      ],
+    }) + '\n```');
+    expect(parsed.parts[0]).toMatchObject({ kind: 'plan_review', plan: {
+      steps: [
+        'Create the file — Only plan-open.txt; never overwrite.',
+        'Reread the file — Read the same exact path.',
+        'Verify and report — Exactly two lines; STATUS=R10.',
+      ], status: 'pending',
+    } });
+  });
+
+  it.each([
+    ['unknown object field', { action: 'Create file', command: 'Never overwrite existing data.' }],
+    ['invalid detail', { action: 'Create file', detail: { required: 'Read first.' } }],
+    ['non-text step', 42],
+    ['conflicting step numbers', { step: 1, number: 2, action: 'Create file' }],
+  ])('retains the complete source instead of dropping an unsupported %s', (_case, step) => {
+    const text = '```jarvis_plan\n' + JSON.stringify({
+      title: 'Create file', summary: 'Review every requirement.', steps: ['Inspect first', step],
+    }) + '\n```';
+    const parsed = parseJarvisPlanBlocks(text);
+    expect(parsed.hasPlanBlocks).toBe(false);
+    expect(parsed.parts).toEqual([{ kind: 'text', text }]);
+  });
+
   it('converts fenced jarvis_plan JSON into a plan_review part', () => {
     const parsed = parseJarvisPlanBlocks(`Here is the plan.\n\n\`\`\`jarvis_plan\n{
   "id": "plan_1",

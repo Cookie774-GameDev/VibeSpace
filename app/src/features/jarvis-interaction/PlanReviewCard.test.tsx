@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlanReviewCard } from './PlanReviewCard';
 import type { Part } from '@/types/chat';
 import { useJarvisInteractionStore } from './sessionStore';
+import { requestsNoTools } from '@/lib/ai/intent';
 
 const repo = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -87,6 +88,24 @@ describe('PlanReviewCard', () => {
         }),
       }),
     );
+  });
+
+  it('keeps pre-approval restrictions in the approved payload, not the new turn instruction', async () => {
+    const part = { ...planPart, plan: {
+      ...planPart.plan, risks: ['No tools or writes will occur before clicking Implement Plan.'],
+    } };
+    repo.getById.mockResolvedValueOnce({ id: 'msg_1', chat_id: 'chat_1', role: 'assistant', parts: [part] });
+    render(<PlanReviewCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Yes — Implement Plan' }));
+    await waitFor(() => expect(window.dispatchEvent).toHaveBeenCalled());
+    const event = vi.mocked(window.dispatchEvent).mock.calls
+      .map(([value]) => value as CustomEvent)
+      .find(value => value.type === 'jarvis:send')!;
+    expect(event.detail.structuredContext).toMatchObject({
+      kind: 'plan_build', sourceMessageId: 'msg_1', payload: { plan: part.plan },
+    });
+    expect(requestsNoTools(event.detail.text)).toBe(false);
+    expect(event.detail.text).toContain('approval has been granted');
   });
 
   it.each([
@@ -195,6 +214,53 @@ describe('PlanReviewCard', () => {
 
     await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(1));
     expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(['revision', 'cancel'] as const)('keeps %s pending state distinct from implementation', async (action) => {
+    let finishRead!: (value: unknown) => void;
+    repo.getById.mockReturnValueOnce(new Promise(resolve => { finishRead = resolve; }));
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    if (action === 'revision') {
+      fireEvent.click(screen.getByRole('button', { name: 'Add to Plan' }));
+      fireEvent.change(screen.getByPlaceholderText('What should Jarvis add to the plan?'), {
+        target: { value: 'Verify the result.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Revision' }));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'No — Cancel' }));
+    }
+    expect(screen.queryByRole('button', { name: 'Implementing…' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+    await act(async () => finishRead({ chat_id: 'chat_1', parts: [planPart] }));
+    if (action === 'revision') {
+      expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
+      expect(window.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+        detail: expect.objectContaining({ interactionMode: 'plan' }),
+      }));
+    } else {
+      expect(window.dispatchEvent).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['revision', 'cancel'] as const)('recovers from a failed %s save without executing', async (action) => {
+    repo.update.mockRejectedValueOnce(new Error('Database write failed'));
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    if (action === 'revision') {
+      fireEvent.click(screen.getByRole('button', { name: 'Redo Plan' }));
+      fireEvent.change(screen.getByPlaceholderText('What should Jarvis change in the next plan?'), {
+        target: { value: 'Use three steps.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Revision' }));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'No — Cancel' }));
+    }
+    expect((await screen.findByRole('alert')).textContent).toMatch(/could not/i);
+    expect((screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: action === 'revision' ? 'Send Revision' : 'No — Cancel' }));
+    await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 
   it('renders as a wider review card for long plans', () => {

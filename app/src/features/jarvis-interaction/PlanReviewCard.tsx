@@ -14,17 +14,6 @@ export interface PlanReviewCardProps {
   chatId?: string;
 }
 
-function planText(plan: JarvisPlanReview): string {
-  return [
-    `# ${plan.title}`,
-    plan.summary,
-    ...plan.steps.map((step, index) => `${index + 1}. ${step}`),
-    ...(plan.risks?.length ? ['Risks:', ...plan.risks.map((risk) => `- ${risk}`)] : []),
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 function samePlanDefinition(left: JarvisPlanReview, right: JarvisPlanReview): boolean {
   return (
     left.id === right.id &&
@@ -44,7 +33,8 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
   const [redoOpen, setRedoOpen] = useState(false);
   const [revision, setRevision] = useState('');
   const [adding, setAdding] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'build' | 'revision' | 'cancel' | null>(null);
+  const busy = pendingAction !== null;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
 
@@ -76,7 +66,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
   const handleBuild = async () => {
     if (!chatId || busyRef.current || plan.status !== 'pending') return;
     busyRef.current = true;
-    setBusy(true);
+    setPendingAction('build');
     setError(null);
     try {
       if (!canExecute) {
@@ -89,7 +79,10 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
         new CustomEvent('jarvis:send', {
           detail: {
             chatId,
-            text: `Build this approved plan:\n\n${planText(plan)}`,
+            // Preserve the entire validated plan in structuredContext below.
+            // Quoting pre-approval restrictions as the new instruction can
+            // incorrectly disable the tools needed after approval.
+            text: 'Implement the approved plan in the attached structured context. In-app approval has been granted; use only the tools needed for that plan, preserve its constraints, then verify the result.',
             interactionMode: 'agent',
             structuredContext: {
               kind: 'plan_build',
@@ -103,43 +96,60 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
       setError('The plan could not start. Please retry.');
     } finally {
       busyRef.current = false;
-      setBusy(false);
+      setPendingAction(null);
     }
   };
 
   const handleRedo = async () => {
-    if (!chatId || busy || !revision.trim()) return;
-    setBusy(true);
-    await writeStatus('redone');
-    useJarvisInteractionStore.getState().setChatMode(chatId, 'plan');
-    const text = `Redo this plan with this instruction: ${adding ? 'Preserve the existing requirements and add: ' : ''}${revision.trim()}`;
-    await messageRepo.create({
-      chat_id: chatId as never,
-      role: 'user',
-      parts: [{ kind: 'text', text }],
-    });
-    window.dispatchEvent(
-      new CustomEvent('jarvis:send', {
-        detail: {
-          chatId,
-          text,
-          interactionMode: 'plan',
-          structuredContext: {
-            kind: 'plan_redo',
-            sourceMessageId: messageId,
-            payload: { plan, revision: revision.trim() },
+    if (!chatId || busyRef.current || plan.status !== 'pending' || !revision.trim()) return;
+    busyRef.current = true;
+    setPendingAction('revision');
+    setError(null);
+    try {
+      await writeStatus('redone');
+      useJarvisInteractionStore.getState().setChatMode(chatId, 'plan');
+      const text = `Redo this plan with this instruction: ${adding ? 'Preserve the existing requirements and add: ' : ''}${revision.trim()}`;
+      await messageRepo.create({
+        chat_id: chatId as never,
+        role: 'user',
+        parts: [{ kind: 'text', text }],
+      });
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            text,
+            interactionMode: 'plan',
+            structuredContext: {
+              kind: 'plan_redo',
+              sourceMessageId: messageId,
+              payload: { plan, revision: revision.trim() },
+            },
           },
-        },
-      }),
-    );
-    setBusy(false);
+        }),
+      );
+      setRedoOpen(false);
+    } catch {
+      setError('The plan revision could not be saved. Check the plan status before retrying.');
+    } finally {
+      busyRef.current = false;
+      setPendingAction(null);
+    }
   };
 
   const handleCancel = async () => {
-    if (busy || plan.status !== 'pending') return;
-    setBusy(true);
-    await writeStatus('cancelled');
-    setBusy(false);
+    if (busyRef.current || plan.status !== 'pending') return;
+    busyRef.current = true;
+    setPendingAction('cancel');
+    setError(null);
+    try {
+      await writeStatus('cancelled');
+    } catch {
+      setError('The plan could not be cancelled. Please retry.');
+    } finally {
+      busyRef.current = false;
+      setPendingAction(null);
+    }
   };
 
   return (
@@ -188,10 +198,10 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
             type="button"
             size="sm"
             variant="accent"
-            disabled={busy || !revision.trim()}
+            disabled={busy || plan.status !== 'pending' || !revision.trim()}
             onClick={handleRedo}
           >
-            Send Revision
+            {pendingAction === 'revision' ? 'Saving revision…' : 'Send Revision'}
           </Button>
         </div>
       )}
@@ -210,7 +220,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
           disabled={busy || plan.status !== 'pending'}
           onClick={handleBuild}
         >
-          {canExecute ? (busy ? 'Implementing…' : 'Yes — Implement Plan') : 'Done'}
+          {canExecute ? (pendingAction === 'build' ? 'Implementing…' : 'Yes — Implement Plan') : 'Done'}
         </Button>
         <Button
           type="button"
@@ -240,7 +250,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
           onClick={handleCancel}
         >
           <XCircle className="h-3 w-3" />
-          {canExecute ? 'No — Cancel' : 'Cancel'}
+          {pendingAction === 'cancel' ? 'Cancelling…' : canExecute ? 'No — Cancel' : 'Cancel'}
         </Button>
       </div>
     </section>

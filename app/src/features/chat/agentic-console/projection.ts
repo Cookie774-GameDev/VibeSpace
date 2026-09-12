@@ -701,7 +701,9 @@ export function summarizeAgenticSession(
   let model = '—';
   for (const message of messages) {
     if (message.role === 'user') latestUserAt = Math.max(latestUserAt, message.created_at);
-    if (message.role === 'assistant' && textParts(message).length > 0) {
+    const hasResponse = message.role === 'assistant' &&
+      (textParts(message).length > 0 || message.parts.some(part => part.kind === 'plan_review'));
+    if (hasResponse) {
       latestAnswerAt = Math.max(latestAnswerAt, message.created_at);
     }
     for (const part of message.parts) {
@@ -729,7 +731,7 @@ export function summarizeAgenticSession(
     ) {
       earliestStartedAt = message.created_at;
     }
-    if (!hasAssistantAnswer && message.role === 'assistant' && textParts(message).length > 0) {
+    if (hasResponse) {
       hasAssistantAnswer = true;
     }
     const usage = message.usage;
@@ -776,10 +778,19 @@ export function summarizeAgenticSession(
     typeof evidence.endedAt === 'number' &&
     Number.isFinite(evidence.endedAt) &&
     evidence.endedAt < latestUserAt;
-  if (staleTerminalEvidence) {
-    running = dedupeActivity(activity).find((event) =>
-      (event.startedAt ?? event.ts) >= latestUserAt &&
-      (event.status === 'running' || event.status === 'pending'));
+  if (Number.isFinite(latestUserAt)) {
+    // Earlier activity can survive a cancelled pre-send job or view recovery.
+    // Keep its accounting above, but let only this turn determine live status.
+    const currentActivity = dedupeActivity(activity).filter((event) =>
+      (event.startedAt ?? event.ts) >= latestUserAt);
+    running = currentActivity.filter((event) =>
+      event.status === 'running' || event.status === 'pending')
+      .sort((left, right) => right.ts - left.ts)[0];
+    hasError = currentActivity.some((event) => event.status === 'error');
+    hasBlocked = currentActivity.some((event) => /blocked|approval|permission/i.test(`${event.status} ${event.title}`));
+    hasCompletedActivity = currentActivity.some((event) => event.status === 'done');
+    latestActivity = currentActivity.sort((left, right) =>
+      (right.endedAt ?? right.ts) - (left.endedAt ?? left.ts))[0];
   }
   const inferredStatus: AgenticSessionSummary['status'] = running
     ? 'running'
