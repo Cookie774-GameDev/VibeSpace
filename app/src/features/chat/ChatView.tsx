@@ -44,6 +44,7 @@ import type { ChatId, ProjectId, WorkspaceId } from '@/types/common';
 import type { Message } from '@/types/chat';
 import './sakura-chat.css';
 import './chat-welcome.css';
+import { VibeCheckPanel } from './vibe-check/VibeCheckPanel';
 
 function sameLayout(left: ChatWorkspaceLayoutV1, right: ChatWorkspaceLayoutV1): boolean {
   return (
@@ -531,6 +532,7 @@ export function ChatView() {
         )}
       >
         <OrigamiChatDecor />
+        <VibeCheckPanel />
         {dropKind ? (
           <div className="pointer-events-none absolute right-4 top-4 z-10 rounded-md border border-accent-copper/50 bg-background/95 px-3 py-1 text-metadata text-accent-copper shadow-soft [[data-theme=monochrome]_&]:rounded-sm [[data-theme=monochrome]_&]:border-border-mid [[data-theme=monochrome]_&]:bg-background [[data-theme=monochrome]_&]:shadow-none">
             Drop{' '}

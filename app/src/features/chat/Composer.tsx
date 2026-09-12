@@ -3236,6 +3236,12 @@ export function Composer({
       setText('');
       return true;
     }
+    if (cmd === 'vibecheck') {
+      const { openVibeCheck } = await import('./vibe-check/vibeCheckStore');
+      openVibeCheck(String(chatId));
+      setText((current) => current.trim().toLowerCase() === '/vibecheck' ? '' : current);
+      return true;
+    }
     if (cmd === 'doctor') {
       if (rest && rest.toLowerCase() !== 'run') {
         await addSystem('Use /doctor or /doctor run.');

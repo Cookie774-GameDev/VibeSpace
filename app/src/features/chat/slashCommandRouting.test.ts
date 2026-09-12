@@ -7,6 +7,7 @@ import {
 } from './slashCommandRouting';
 
 const expected = {
+  vibecheck: ['vibespace-ui', 'local'],
   permissions: ['vibespace-ui', 'local'],
   ask: ['opencode-agent', 'agent-request'],
   plan: ['opencode-agent', 'agent-request'],

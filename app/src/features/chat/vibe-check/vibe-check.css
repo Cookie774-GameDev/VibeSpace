@@ -1,0 +1,314 @@
+.vibe-check-panel {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 55;
+  width: min(450px, calc(100% - 24px));
+  max-height: calc(100% - 32px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid hsl(var(--border));
+  border-radius: 20px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  box-shadow: 0 20px 75px #0004;
+  overflow: hidden;
+  font-size: 13px;
+}
+.vibe-check-header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 18px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: linear-gradient(125deg, #729d881c, transparent);
+}
+.vibe-check-header > div:nth-child(2) {
+  flex: 1;
+}
+.vibe-check-header strong {
+  font-size: 17px;
+  letter-spacing: -0.4px;
+}
+.vibe-check-header small {
+  display: block;
+  opacity: 0.6;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.vibe-check-mark {
+  padding: 10px;
+  border-radius: 13px;
+  background: #70978022;
+  color: #729d88;
+}
+.vibe-check-panel button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 9px;
+  padding: 7px;
+  cursor: pointer;
+}
+.vibe-check-panel button:hover {
+  background: #80808016;
+}
+.vibe-check-panel button:focus-visible,
+.vibe-check-orb:focus-visible {
+  outline: 2px solid #85ad95;
+  outline-offset: 2px;
+}
+.vibe-check-panel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.vibe-check-body {
+  padding: 16px 18px;
+  overflow: auto;
+  min-height: 0;
+}
+.vibe-check-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+.vibe-check-source > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.vibe-check-badge {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #85ad95;
+  border: 1px solid #729d8833;
+  padding: 3px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.vibe-check-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.vibe-check-choices legend {
+  font-size: 12px;
+  margin-bottom: 8px;
+  opacity: 0.75;
+}
+.vibe-check-choices button {
+  display: grid;
+  justify-items: start;
+  text-align: left;
+  border: 1px solid hsl(var(--border));
+  padding: 12px;
+  gap: 6px;
+}
+.vibe-check-choices button[aria-pressed='true'] {
+  border-color: #729d88;
+  background: #729d8815;
+}
+.vibe-check-choices small {
+  font-size: 10px;
+  opacity: 0.6;
+  line-height: 1.5;
+}
+.vibe-check-interrupt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 17px 0;
+  font-size: 12px;
+}
+.vibe-check-interrupt input {
+  margin-top: 3px;
+  accent-color: #729d88;
+}
+.vibe-check-interrupt small {
+  display: block;
+  opacity: 0.6;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.vibe-check-progress {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.vibe-check-progress span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.vibe-check-track {
+  height: 5px;
+  background: #80808022;
+  border-radius: 9px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.vibe-check-track > span {
+  display: block;
+  height: 100%;
+  background: #85ad95;
+  transition: width 0.4s;
+}
+.vibe-check-track.is-active > span {
+  background: linear-gradient(90deg, #729d88, #c5ddcd, #729d88);
+  background-size: 200% 100%;
+  animation: vibe-check-flow 2s linear infinite;
+}
+.vibe-check-note {
+  font-size: 10px;
+  opacity: 0.55;
+  line-height: 1.5;
+  margin: 7px 0 14px;
+}
+.vibe-check-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  overflow: hidden;
+}
+.vibe-check-metrics div {
+  padding: 10px;
+  background: #80808009;
+}
+.vibe-check-metrics strong {
+  display: block;
+  font-size: 16px;
+}
+.vibe-check-metrics small {
+  font-size: 10px;
+  opacity: 0.6;
+}
+.vibe-check-empty {
+  text-align: center;
+  padding: 21px 8px;
+  color: #85ad95;
+}
+.vibe-check-empty svg {
+  margin: auto;
+}
+.vibe-check-empty p {
+  margin: 9px 0 3px;
+}
+.vibe-check-empty small {
+  opacity: 0.65;
+  font-size: 11px;
+}
+.vibe-check-report {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.75;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 14px;
+}
+.vibe-check-error {
+  padding: 10px;
+  background: #c45a5a16;
+  border-radius: 8px;
+  color: #d97b7b;
+}
+.vibe-check-panel details {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  margin-bottom: 12px;
+}
+.vibe-check-panel footer {
+  padding: 12px 18px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid hsl(var(--border));
+  font-size: 11px;
+}
+.vibe-check-panel .vibe-check-start {
+  background: #729d88;
+  color: #101c14;
+  padding: 9px 14px;
+  margin-left: auto;
+  font-weight: 600;
+}
+.vibe-check-orb {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 55;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 1px solid #85ad9566;
+  background: hsl(var(--background));
+  color: #85ad95;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 5px 24px #0003;
+}
+.vibe-check-orb.is-active {
+  animation: vibe-check-glow 2s ease-in-out infinite;
+}
+.vibe-check-orb span {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  background: #85ad95;
+  border-radius: 50%;
+}
+.vibe-check-confirm {
+  position: absolute;
+  inset: 0;
+  background: hsl(var(--background) / 0.97);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 30px;
+  backdrop-filter: blur(10px);
+}
+.vibe-check-confirm strong {
+  font-size: 18px;
+}
+.vibe-check-confirm p {
+  line-height: 1.6;
+  opacity: 0.7;
+  margin: 12px 0;
+}
+.vibe-check-confirm > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.vibe-check-confirm button:last-child {
+  background: #c45a5a22;
+}
+@keyframes vibe-check-flow {
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes vibe-check-glow {
+  50% {
+    box-shadow:
+      0 0 0 5px #85ad9518,
+      0 5px 24px #0003;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vibe-check-track > span,
+  .vibe-check-orb {
+    animation: none !important;
+    transition: none !important;
+  }
+}

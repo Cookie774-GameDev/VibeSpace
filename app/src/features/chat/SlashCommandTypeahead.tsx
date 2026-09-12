@@ -83,7 +83,7 @@ export function isChatAttachSlashCmd(cmd: string): boolean {
 }
 
 export function isImmediateLocalSlashCommand(cmd: string): boolean {
-  return ['doctor', 'mcp', 'connect', 'settings', 'palette', 'launcher', 'back'].includes(
+  return ['vibecheck', 'doctor', 'mcp', 'connect', 'settings', 'palette', 'launcher', 'back'].includes(
     normalizeSlashCmd(cmd),
   );
 }
@@ -122,6 +122,7 @@ export function slashCmdMatchScore(query: string, def: SlashCommandDef): number 
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = [
+  { cmd: 'vibecheck', displayCommand: '/VibeCheck', description: 'Audit this chat in a compact panel', icon: Shield, category: 'utility' },
   {
     cmd: 'permissions',
     aliases: ['permission', 'perms'],

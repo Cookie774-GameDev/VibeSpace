@@ -27,6 +27,7 @@ export const SLASH_COMMAND_ALIASES = {
 } as const;
 
 const ROUTES = {
+  vibecheck: { owner: 'vibespace-ui', execution: 'local' },
   permissions: { owner: 'vibespace-ui', execution: 'local' },
   ask: { owner: 'opencode-agent', execution: 'agent-request' },
   plan: { owner: 'opencode-agent', execution: 'agent-request' },
