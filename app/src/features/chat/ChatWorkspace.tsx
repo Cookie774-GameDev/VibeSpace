@@ -7,6 +7,7 @@ import { ChatThread } from './ChatThread';
 import { Composer } from './Composer';
 import { WarmChatWelcome } from './WarmChatWelcome';
 import { ChatBotanicalBackground } from './ChatBotanicalBackground';
+import { ChatSurfaceLayout } from './ChatSurfaceLayout';
 import { TokenBossCinematic } from './token-boss/TokenBossCinematic';
 import { ChatOutputPanel } from './ChatOutputPanel';
 import { useChatPointerDrag } from './useChatPointerDrag';
@@ -80,7 +81,7 @@ function NativeChatSurface({
   }, [chatId]);
 
   return (
-    <>
+    <ChatSurfaceLayout>
       <div
         data-testid={`chat-conversation-region-${chatId}`}
         className="chat-pane-conversation relative flex min-h-0 flex-1 flex-col"
@@ -109,7 +110,7 @@ function NativeChatSurface({
       <Composer key={chatId} chatId={chatId} />
       <TokenBossCinematic chatId={chatId} />
       <ChatOutputPanel chatId={chatId} open={outputOpen} onClose={() => setOutputOpen(false)} />
-    </>
+    </ChatSurfaceLayout>
   );
 }
 

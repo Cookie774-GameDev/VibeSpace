@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { botanicalRandom, botanicalSections, paintBotanicalBackground } from './chatBotanicalPattern';
+import { botanicalRandom, botanicalSections, botanicalVariation, paintBotanicalBackground } from './chatBotanicalPattern';
 
 describe('procedural chat foliage', () => {
+  it('uses a distinct silhouette family in each adjacent section and opposite edge', () => {
+    for (let section = 0; section < 100; section++) {
+      expect(botanicalVariation('chat-a', section, 0)).not.toBe(botanicalVariation('chat-a', section + 1, 0));
+      expect(botanicalVariation('chat-a', section, 0)).not.toBe(botanicalVariation('chat-a', section, 1));
+    }
+  });
   const sample = (chat: string, section: number, side = 0) => {
     const random = botanicalRandom(chat, section, side);
     return Array.from({ length: 20 }, random);

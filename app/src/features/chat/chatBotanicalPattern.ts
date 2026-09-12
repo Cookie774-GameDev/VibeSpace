@@ -2,6 +2,11 @@ export const BOTANICAL_SECTION_HEIGHT = 480;
 // Warm-theme copper, deep sage and muted ink; softened by the leaf wash opacity.
 const LEAF_COLORS = ['#d66f49', '#647c5a', '#775f4c'] as const;
 
+export function botanicalVariation(chatId: string, section: number, side: number) {
+  const offset = Math.floor(botanicalRandom(chatId, 0, 17)() * 3);
+  return (offset + section + side) % 3;
+}
+
 type LeafBounds = { left: number; right: number; top: number; bottom: number };
 
 // A Bezier curve stays inside the convex hull of its control points.
@@ -54,6 +59,7 @@ export function paintBotanicalBackground(
       // Separate stream keeps existing leaf geometry unchanged when coloring it.
       const colorRandom = botanicalRandom(chatId, section, side + 2);
       const branchColor = Math.floor(colorRandom() * LEAF_COLORS.length);
+      const variant = botanicalVariation(chatId, section, side);
       ctx.save();
       ctx.translate(side ? width : 0, section * BOTANICAL_SECTION_HEIGHT - scrollTop);
       ctx.scale(side ? -1 : 1, 1);
@@ -66,11 +72,12 @@ export function paintBotanicalBackground(
       ctx.stroke();
       // One generous sprig per edge, staggered rather than mirrored rows.
       {
-        const base = (side ? 400 : 300) + random() * 50;
-        const length = reach * (0.65 + random() * 0.35);
-        const rise = 200 + random() * 55;
+        const descending = variant === 2;
+        const base = (descending ? 100 : side ? 400 : 310) + random() * 40;
+        const length = reach * (variant === 1 ? 0.95 : 0.65 + random() * 0.25);
+        const rise = (descending ? -1 : 1) * (variant === 1 ? 155 : 230 + random() * 35);
         const bend = 0.3 + random() * 0.4;
-        const leafCount = 4;
+        const leafCount = variant === 0 ? 5 : variant === 1 ? 3 : 4;
         ctx.globalAlpha = 0.14;
         ctx.beginPath();
         ctx.moveTo(8, base);
@@ -80,9 +87,9 @@ export function paintBotanicalBackground(
           const t = (leaf + 0.8 + random() * 0.3) / (leafCount + 1);
           const x = (1 - t) ** 2 * 8 + 2 * (1 - t) * t * length * bend + t * t * length;
           const y = base - 2 * (1 - t) * t * rise * 0.15 - t * t * rise;
-          const angle = (leaf % 2 ? -1.7 : 0.05) + (random() - 0.5) * 0.35;
-          const size = (72 + random() * 28) * Math.min(1, width / 650);
-          const fullness = 0.24 + random() * 0.08;
+          const angle = (leaf % 2 ? (descending ? 1.5 : -1.7) : 0.05) + (random() - 0.5) * 0.35;
+          const size = ((variant === 0 ? 92 : variant === 1 ? 76 : 68) + random() * 20) * Math.min(1, width / 650);
+          const fullness = (variant === 0 ? 0.14 : variant === 1 ? 0.36 : 0.26) + random() * 0.045;
           const bounds = leafBounds(x, y, size, angle, fullness);
           if (side) {
             const left = width - bounds.right;
