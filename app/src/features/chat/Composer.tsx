@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AxoMotion } from '@/components/ui/AxoMotion';
+import './composer-frame.css';
 import { useChatBackendAffinity } from './useChatBackendAffinity';
 import { NotesPicker, type NotesPickerHandle } from '../notes/NotesPicker';
 import {
@@ -5429,6 +5430,7 @@ export function Composer({
     <div
       className={cn('border-t border-border bg-panel', compact && 'text-[12px]')}
       data-tour="chat-composer"
+      data-composer-frame={compact ? undefined : 'layered'}
     >
       <CaoCommandPanel chatId={String(chatId)} request={caoCommandInput} scope={{
         accountId: resolveAccountIdentity(useAuthStore.getState())?.accountId ?? '',
@@ -5467,7 +5469,7 @@ export function Composer({
           }}
         />
       )}
-      <div className={cn('px-3 py-2.5', compact && 'px-3.5 py-3')}>
+      <div className={cn('composer-frame-body px-3 py-2.5', compact && 'px-3.5 py-3')}>
         {chatBackendAffinity?.backend === 'codex' ? (
           <CodexReadinessGate />
         ) : (
@@ -5999,7 +6001,7 @@ export function Composer({
                     </Button>
                   ) : null}
                 </div>
-                <div className="flex shrink-0 items-center gap-0.5">
+                <div className="composer-frame-actions flex shrink-0 items-center gap-0.5">
                   {composerSttEnabled && (
                     <Hint
                       label={sttListening ? 'Stop dictation' : 'Voice to text'}
