@@ -7757,29 +7757,37 @@ export function startRuntimeListener(
 
       await mirrorShadowOutcome(aborted ? 'cancelled' : 'failed', true);
 
-      if (placeholderId) {
-        const suffix = aborted ? '_[cancelled]_' : `_Error: ${safeErrorMessage(err)}_`;
-        try {
+      try {
+        if (placeholderId) {
+          const suffix = aborted ? '_[cancelled]_' : `_Error: ${safeErrorMessage(err)}_`;
           await bindings.updateMessage(placeholderId, {
             parts: currentOpenCodeErrorParts(suffix),
           });
-        } catch (writeErr) {
-          // The audit's medium finding: a DB failure inside the catch
-          // path would propagate out of handleSend as an unhandled
-          // rejection, leaving the agent stuck in 'streaming'. Keep
-          // the agent-state reset below the try so a stuck cursor
-          // unwinds even when the canonical error stamp couldn't be
-          // written.
-          devConsole.log({
-            channel: 'ai',
-            level: 'error',
-            message: 'AI error-stamp write failed',
-            detail: {
-              agent: agent.slug,
-              error: writeErr instanceof Error ? writeErr.message : String(writeErr),
-            },
+        } else if (!aborted && isProtectedJarvis &&
+            resolveAccountIdentity(authState)?.accountId &&
+            resolveAccountIdentity(authState)?.accountId ===
+              resolveAccountIdentity(useAuthStore.getState())?.accountId) {
+          // Canonical execution owns its answer messages and has no legacy
+          // placeholder. Retain the failure in the conversation without
+          // fabricating an assistant answer or exposing provider diagnostics.
+          await bindings.appendMessage({
+            chat_id: chatId as ChatId,
+            role: 'system',
+            parts: [{ kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' }],
           });
         }
+      } catch (writeErr) {
+        // Keep cleanup outside persistence so a failed error write cannot
+        // leave this request showing as running.
+        devConsole.log({
+          channel: 'ai',
+          level: 'error',
+          message: 'AI error-stamp write failed',
+          detail: {
+            agent: agent.slug,
+            error: writeErr instanceof Error ? writeErr.message : String(writeErr),
+          },
+        });
       }
       expireApproveAllForRun(String(chatId));
       useAgentStore.getState().setRunState(agent.id, aborted ? 'idle' : 'error');

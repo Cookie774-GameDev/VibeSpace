@@ -6771,7 +6771,12 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(mocks.devLog).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' })),
     );
     expect(mocks.runAgent).not.toHaveBeenCalled();
-    expect(harness.bindings.appendMessage).not.toHaveBeenCalled();
+    expect(harness.bindings.appendMessage).toHaveBeenCalledOnce();
+    expect(harness.bindings.appendMessage).toHaveBeenCalledWith({
+      chat_id: harness.chatId,
+      role: 'system',
+      parts: [{ kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' }],
+    });
   });
 
   it('applies Token Saver on the canonical kernel path and persists its receipt', async () => {
@@ -10392,6 +10397,41 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     } finally {
       disposeHost();
       useVoiceStore.getState().reset();
+      database.close();
+      await database.delete();
+    }
+  });
+
+  it.each(['saved', 'storage failure', 'account changed'])('settles canonical failure notices safely: %s', async (scenario) => {
+    const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
+    const harness = kernelRuntimeBindings(selectedAgent);
+    const database = createJarvisDb(uniqueTestDbName('canonical-failure-notice'), TEST_INDEXED_DB);
+    mocks.runAgent.mockImplementationOnce(async () => {
+      if (scenario === 'account changed') useAuthStore.setState({ localUserId: 'different-account' });
+      throw new Error('private provider diagnostic must not appear');
+    });
+    if (scenario === 'storage failure') harness.bindings.appendMessage.mockRejectedValueOnce(new Error('storage unavailable'));
+    const disposeHost = await installKernelTestHost(database, 'canonical-failure-notice');
+    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: 'Answer this current request.', cancellationKey: 'msg_kernel_user',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error'));
+      if (scenario === 'account changed') expect(harness.bindings.appendMessage).not.toHaveBeenCalled();
+      else expect(harness.bindings.appendMessage).toHaveBeenCalledWith({
+          chat_id: harness.chatId,
+          role: 'system',
+          parts: [{ kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' }],
+        });
+      expect(JSON.stringify(harness.bindings.appendMessage.mock.calls)).not.toContain('private provider diagnostic');
+      expect(harness.bindings.appendMessage.mock.calls.filter(([message]) => message.role === 'assistant')).toHaveLength(0);
+      expect(useAgentStore.getState().runStates[selectedAgent.id]).toBe('error');
+    } finally {
+      stop();
+      await stop.whenIdle();
+      disposeHost();
       database.close();
       await database.delete();
     }
