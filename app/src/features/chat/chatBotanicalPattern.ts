@@ -121,12 +121,43 @@ export function paintBotanicalBackground(
           ctx.globalAlpha = 0.22;
           ctx.lineWidth = 0.6;
           ctx.stroke();
+          // Reticulated minor veins: shared, gently irregular cell junctions.
+          // Clip to the actual leaf, so fine detail never crosses its outline.
+          ctx.clip();
+          const cell = size * 0.075;
+          const cellHeight = Math.sqrt(3) * cell;
+          const jitter = (px: number, py: number, axis: number) => {
+            const value = Math.sin(Math.round(px / cell * 100) * 12.9898 +
+              Math.round(py / cell * 100) * 78.233 + leaf * 17 + axis * 31) * 43758.5453;
+            return ((value - Math.floor(value)) - 0.5) * cell * 0.38;
+          };
+          ctx.globalAlpha = 0.27;
+          ctx.lineWidth = 0.35;
+          ctx.beginPath();
+          for (let column = 0; column < 10; column++) {
+            for (let row = -3; row <= 3; row++) {
+              const cx = column * cell * 1.5;
+              const cy = (row + (column % 2) * 0.5) * cellHeight;
+              for (let corner = 0; corner <= 6; corner++) {
+                const theta = (corner % 6) * Math.PI / 3;
+                const px = cx + cell * Math.cos(theta);
+                const py = cy + cell * Math.sin(theta);
+                const x = px + jitter(px, py, 0);
+                const y = py + jitter(px, py, 1);
+                if (corner === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+              }
+            }
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 0.36;
+          ctx.lineWidth = 0.8;
           ctx.beginPath();
           ctx.moveTo(0, 0);
           ctx.quadraticCurveTo(size * 0.4, -size * 0.045, size * 0.96, 0);
           ctx.stroke();
-          ctx.globalAlpha = 0.14;
-          ctx.lineWidth = 0.45;
+          ctx.globalAlpha = 0.3;
+          ctx.lineWidth = 0.55;
           ctx.beginPath();
           for (let vein = 1; vein < 5; vein++) {
             const t = vein / 6;
