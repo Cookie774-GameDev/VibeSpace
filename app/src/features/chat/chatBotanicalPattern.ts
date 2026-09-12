@@ -1,4 +1,6 @@
 export const BOTANICAL_SECTION_HEIGHT = 480;
+// Warm-theme copper, deep sage and muted ink; softened by the leaf wash opacity.
+const LEAF_COLORS = ['#d66f49', '#647c5a', '#775f4c'] as const;
 
 /** Coordinate-derived randomness: revisiting history never changes its artwork. */
 export function botanicalRandom(chatId: string, section: number, side: number) {
@@ -31,6 +33,9 @@ export function paintBotanicalBackground(
   for (const section of botanicalSections(scrollTop, height)) {
     for (const side of [0, 1]) {
       const random = botanicalRandom(chatId, section, side);
+      // Separate stream keeps existing leaf geometry unchanged when coloring it.
+      const colorRandom = botanicalRandom(chatId, section, side + 2);
+      const branchColor = Math.floor(colorRandom() * LEAF_COLORS.length);
       ctx.save();
       ctx.translate(side ? width : 0, section * BOTANICAL_SECTION_HEIGHT - scrollTop);
       ctx.scale(side ? -1 : 1, 1);
@@ -63,13 +68,16 @@ export function paintBotanicalBackground(
           ctx.save();
           ctx.translate(x, y);
           ctx.rotate(angle);
-          ctx.globalAlpha = 0.07 + random() * 0.035;
+          const leafColor = LEAF_COLORS[(branchColor + (colorRandom() > 0.65 ? 1 : 0)) % LEAF_COLORS.length];
+          ctx.fillStyle = leafColor;
+          ctx.strokeStyle = leafColor;
+          ctx.globalAlpha = 0.14 + random() * 0.035;
           ctx.beginPath();
           ctx.moveTo(0, 0);
           ctx.bezierCurveTo(size * 0.2, -size * fullness, size * 0.72, -size * fullness * 1.15, size, 0);
           ctx.bezierCurveTo(size * 0.65, size * fullness * 0.85, size * 0.24, size * fullness, 0, 0);
           ctx.fill();
-          ctx.globalAlpha = 0.13;
+          ctx.globalAlpha = 0.18;
           ctx.lineWidth = 0.6;
           ctx.stroke();
           ctx.beginPath();
