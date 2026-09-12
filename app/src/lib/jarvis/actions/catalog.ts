@@ -2597,6 +2597,41 @@ export const DEFAULT_JARVIS_ACTION_REGISTRATIONS = deepFreeze<
   browserRegistration('browser.navigate'),
   browserRegistration('browser.click'),
   browserRegistration('browser.type'),
+  ...(['read', 'send'] as const).map((operation): JarvisRegisteredActionDefinition => ({
+    id: `chat.${operation}`, version: 1,
+    title: operation === 'read' ? 'Read referenced chat' : 'Message referenced chat',
+    description: operation === 'read' ? 'Read a referenced chat activity file and paged public history.' : 'Send one visible message to a referenced chat agent.',
+    inputSchema: {
+      type: 'object',
+      properties: operation === 'read'
+        ? { chatId: { type: 'string' }, offset: { type: 'number' }, snapshotAt: { type: 'number' } }
+        : { chatId: { type: 'string' }, message: { type: 'string' } },
+      required: operation === 'read' ? ['chatId'] : ['chatId', 'message'],
+      additionalProperties: false,
+    },
+    outputSchema: NO_OUTPUT_SCHEMA,
+    requiredCapabilities: ['chat.actions'], requiredEntitlements: [],
+    risk: operation === 'read' ? 'read-only' : 'external-side-effect',
+    approval: operation === 'read' ? 'never' : 'always',
+    expectedEffect: operation === 'read' ? 'Reads public saved context from a chat already referenced in this conversation.' : 'Persists a user-visible message and requests a response in the referenced chat.',
+    exposeToAI: true, executor: { kind: 'builtin', registryActionId: `chat.${operation}` }, credentialBindings: [],
+    validateParameters: (input) => {
+      const params = plainRecord(input, `chat.${operation}`);
+      assertExactKeys(params, operation === 'read' ? ['chatId', 'offset', 'snapshotAt'] : ['chatId', 'message'], `chat.${operation}`);
+      const chatId = nonblank(params.chatId, 'chatId').trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(chatId)) catalogError('Invalid chat id');
+      if (operation === 'send') {
+        const message = nonblank(params.message, 'message').trim();
+        if (message.length > 16000) catalogError('Chat message is too long');
+        return { chatId, message };
+      }
+      for (const key of ['offset', 'snapshotAt']) {
+        if (params[key] !== undefined && (!Number.isSafeInteger(params[key]) || (params[key] as number) < 0)) catalogError('Invalid chat history cursor');
+      }
+      return { ...params, chatId };
+    },
+    deriveTarget: ({ params }) => ({ kind: 'app_resource', namespace: 'chat', resourceId: String(params.chatId) }),
+  })),
   {
     id: 'chat.model.switch',
     version: 1,

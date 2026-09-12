@@ -416,6 +416,7 @@ describe('Composer chat handoff integration', () => {
     expect(screen.queryByLabelText('Pending handoff from Target')).toBeNull();
 
     fireEvent.drop(dropZone!, { dataTransfer });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
     expect(await screen.findByText(/First rendered snapshot/)).not.toBeNull();
     expect(screen.getByText('Canonical source title')).not.toBeNull();
     expect(create).not.toHaveBeenCalled();
@@ -488,6 +489,7 @@ describe('Composer chat handoff integration', () => {
     );
     const dropZone = container.querySelector('[data-composer-drop-zone="true"]');
     fireEvent.drop(dropZone!, { dataTransfer });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
     await screen.findByText(/Rendered persistence snapshot/);
     fireEvent.change(screen.getByLabelText('Instruction for Canonical source title'), {
       target: { value: 'Continue with the rendered editable instruction.' },
@@ -565,6 +567,7 @@ describe('Composer chat handoff integration', () => {
     );
     const dropZone = container.querySelector('[data-composer-drop-zone="true"]');
     fireEvent.drop(dropZone!, { dataTransfer });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
     await screen.findByText(/Normalized draft snapshot/);
     fireEvent.change(screen.getByLabelText('Message'), {
       target: { value: 'Continue safely after normalization /clearfiles' },
@@ -634,6 +637,7 @@ describe('Composer chat handoff integration', () => {
     );
     const dropZone = container.querySelector('[data-composer-drop-zone="true"]');
     fireEvent.drop(dropZone!, { dataTransfer });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
     await screen.findByText(/Original submitted card/);
     const sendButton = screen.getByRole('button', { name: 'Send message' });
     expect((sendButton as HTMLButtonElement).disabled).toBe(false);

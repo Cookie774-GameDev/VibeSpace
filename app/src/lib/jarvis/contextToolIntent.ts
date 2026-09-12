@@ -481,6 +481,10 @@ function exactBulletAddressTuples(userText: string): readonly DirectAddressTuple
  * never silently removes capabilities needed to satisfy an authorized mutation.
  */
 export function requestsReadOnlyContextTool(userText: string): boolean {
+  // Appended chat snapshots are quoted evidence, not the caller's requested operation.
+  // Keep their file names and old tool instructions from restricting the current tool set.
+  const chatReferenceBoundary = userText.indexOf('\n\nChat handoff from “');
+  if (chatReferenceBoundary >= 0) userText = userText.slice(0, chatReferenceBoundary);
   // Do not replace a conversational setup/acknowledgement with a forced tool call.
   if (/\b(?:do\s+not|don['’]t|never)\s+(?:use|run|call|invoke|execute)\s+(?:any\s+)?tools?\b/iu.test(userText))
     return false;

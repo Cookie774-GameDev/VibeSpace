@@ -1,0 +1,32 @@
+.chat-reference-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, #4285f4 16%, var(--background, white));
+  color: light-dark(#205db4, #a4c8ff);
+  border: 1px solid color-mix(in srgb, #4285f4 28%, transparent);
+  vertical-align: middle;
+  user-select: none;
+}
+.chat-reference-chip > button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  font-size: 12px;
+  line-height: 18px;
+  border-radius: 5px;
+}
+.chat-reference-chip > button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.chat-reference-chip > button:hover {
+  background: color-mix(in srgb, #4285f4 12%, transparent);
+}
+.chat-reference-chip > .chat-reference-remove {
+  flex-shrink: 0;
+  padding-inline: 4px;
+}

@@ -383,9 +383,9 @@ export function ChatWorkspace({
       onDragOverCapture={(event) => {
         if (
           !Array.from(event.dataTransfer.types).includes(VIBESPACE_CHAT_MIME) ||
-          (!preview &&
-            event.target instanceof Element &&
-            event.target.closest('[data-tour="chat-composer"]'))
+          (event.target instanceof Element &&
+            event.target.closest('[data-tour="chat-composer"]') &&
+            (!preview || layout.chatIds.includes(event.target.closest('[data-chat-id]')?.getAttribute('data-chat-id') ?? '')))
         ) {
           setPreview(null);
           return;
@@ -409,9 +409,9 @@ export function ChatWorkspace({
         // Resolve once at the stable workspace boundary, including new preview
         // panes. Do not let a nested surface dispatch a second asynchronous drop.
         if (
-          !preview &&
           event.target instanceof Element &&
-          event.target.closest('[data-tour="chat-composer"]')
+          event.target.closest('[data-tour="chat-composer"]') &&
+          (!preview || layout.chatIds.includes(event.target.closest('[data-chat-id]')?.getAttribute('data-chat-id') ?? ''))
         )
           return;
         const payload = readChatDragPayload(event.dataTransfer);

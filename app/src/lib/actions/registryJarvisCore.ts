@@ -426,6 +426,7 @@ export const CORE_ACTION_IDS = [
   'chat.create',
   'chat.rename',
   'chat.send',
+  'chat.read',
   'agent.create',
   'agent.run',
   'agent.run_many',
@@ -990,26 +991,28 @@ export function createJarvisCoreActions(resolveLegacy: LegacyResolver): ActionDe
       id: 'chat.send',
       category: 'chat',
       label: 'Send chat message',
-      description: 'Persist a user message in a target chat and dispatch it to Jarvis.',
+      description: 'Send a visible message to a referenced chat and confirm runtime acceptance.',
       destructive: true,
       params: [
         { key: 'chatId', label: 'Chat id', type: 'string' },
         { key: 'message', label: 'Message', type: 'string', required: true },
       ],
       run: async (params, ctx) => {
-        const chatId = text(params, 'chatId') || ctx.chatId || '';
-        const message = text(params, 'message');
-        if (!chatId || !message) return fail('Chat id and message are required.');
-        const { chatRepo, messageRepo } = await import('@/lib/db/repositories');
-        if (!(await chatRepo.getById(chatId as never)))
-          return fail(`Chat ${chatId} was not found.`);
-        await messageRepo.create({
-          chat_id: chatId as never,
-          role: 'user',
-          parts: [{ kind: 'text', text: message }],
-        });
-        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId, text: message } }));
-        return ok('Message sent.', { chatId });
+        const { executeChatReferenceAction } = await import('@/features/chat/chatReferenceActions');
+        return executeChatReferenceAction('send', params, ctx);
+      },
+    },
+    {
+      id: 'chat.read', category: 'chat', label: 'Read referenced chat',
+      description: 'Read a referenced chat activity file and full public history in pages. Continue with nextOffset and snapshotAt.',
+      params: [
+        { key: 'chatId', label: 'Chat id', type: 'string', required: true },
+        { key: 'offset', label: 'History offset', type: 'number' },
+        { key: 'snapshotAt', label: 'Snapshot time', type: 'number' },
+      ],
+      run: async (params, ctx) => {
+        const { executeChatReferenceAction } = await import('@/features/chat/chatReferenceActions');
+        return executeChatReferenceAction('read', params, ctx);
       },
     },
     {

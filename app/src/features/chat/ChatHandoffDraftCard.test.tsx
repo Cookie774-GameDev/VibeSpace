@@ -36,12 +36,43 @@ describe('ChatHandoffDraftCard', () => {
     );
 
     expect(screen.getByText('Source chat')).toBeTruthy();
+    expect(screen.queryByText('Ship the release')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Reference Source chat' }));
     expect(screen.getByText('Ship the release')).toBeTruthy();
     expect(screen.getByText('All focused tests passed.')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Instruction for Source chat'), {
       target: { value: 'Continue and verify the release' },
     });
     expect(onInstructionChange).toHaveBeenCalledWith('Continue and verify the release');
+  });
+
+  it.each(['Backspace', 'Delete'])('removes the entire focused reference with %s', (key) => {
+    const onRemove = vi.fn();
+    render(
+      <ChatHandoffDraftCard
+        handoff={handoff}
+        instruction="Review"
+        onInstructionChange={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Reference Source chat' }), { key });
+    expect(onRemove).toHaveBeenCalledOnce();
+  });
+
+  it('does not delete the reference when editing its instruction', () => {
+    const onRemove = vi.fn();
+    render(
+      <ChatHandoffDraftCard
+        handoff={handoff}
+        instruction="Review"
+        onInstructionChange={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Reference Source chat' }));
+    fireEvent.keyDown(screen.getByLabelText('Instruction for Source chat'), { key: 'Backspace' });
+    expect(onRemove).not.toHaveBeenCalled();
   });
 
   it('exposes a labeled remove action without sending', () => {

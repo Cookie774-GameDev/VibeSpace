@@ -99,6 +99,16 @@ function layout(...chatIds: string[]): ChatWorkspaceLayoutV1 {
 }
 
 describe('ChatWorkspace', () => {
+  it('returns a drag from the conversation split preview to the composer reference target', () => {
+    render(<WorkspaceHarness initial={layout('chat-1')} />);
+    fireEvent.dragOver(screen.getByTestId('thread-chat-1'), { dataTransfer: typedTransfer('chat-2') });
+    expect(screen.getByTestId('chat-layout-drop-preview')).toBeTruthy();
+    const composer = screen.getByTestId('composer-chat-1');
+    fireEvent.dragOver(composer, { dataTransfer: typedTransfer('chat-2') });
+    fireEvent.drop(composer, { dataTransfer: typedTransfer('chat-2') });
+    expect(screen.queryByTestId('chat-layout-drop-preview')).toBeNull();
+    expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(1);
+  });
   it('leaves composer chat-context drops to the existing composer system', () => {
     render(<WorkspaceHarness initial={layout('chat-1')} />);
     const composer = screen.getByTestId('composer-chat-1');

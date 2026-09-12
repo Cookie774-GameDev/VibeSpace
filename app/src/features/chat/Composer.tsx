@@ -4466,6 +4466,15 @@ export function Composer({
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if (e.key === 'Backspace' && !e.altKey && !e.ctrlKey && !e.metaKey &&
+        e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0 &&
+        pendingHandoffRef.current) {
+      e.preventDefault();
+      handoffDraftEditRevisionRef.current += 1;
+      pendingHandoffRef.current = null;
+      setPendingHandoff(null);
+      return;
+    }
     if (notesCtx) {
       notesPickerRef.current?.keyDown(e);
       return;
@@ -5754,8 +5763,10 @@ export function Composer({
                     instruction={handoffInstruction}
                     onInstructionChange={setHandoffInstruction}
                     onRemove={() => {
+                      handoffDraftEditRevisionRef.current += 1;
                       pendingHandoffRef.current = null;
                       setPendingHandoff(null);
+                      textareaRef.current?.focus();
                     }}
                   />
                 </div>

@@ -52,6 +52,7 @@ import type { ChatId, WorkspaceId, ProjectId } from '@/types';
 import { cn } from '@/lib/utils';
 import { ensureActiveChat } from '@/features/chat/chatLifecycle';
 import { sortChatsForDisplay } from '@/features/chat/chatPin';
+import { useChatPointerDrag } from '@/features/chat/useChatPointerDrag';
 import { usePetPresentationStore } from '@/features/pets/petPresentationStore';
 import { usePetSettingsStore } from '@/features/pets/petSettingsStore';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
@@ -355,6 +356,7 @@ export function TabStrip() {
             <TabItem
               key={tab.id}
               tab={tab}
+              chat={chats?.find((chat) => chat.id === tab.id)}
               active={tab.id === activeChatId}
               onActivate={() => handleSelect(tab.id)}
               onClose={() => void handleClose(tab.id)}
@@ -423,6 +425,7 @@ export function FilesRouteTab({ activePath }: { activePath: string | null }) {
 }
 
 interface TabItemProps {
+  chat?: Chat;
   tab: TabModel;
   active: boolean;
   onActivate: () => void;
@@ -433,12 +436,14 @@ interface TabItemProps {
 
 export function TabItem({
   tab,
+  chat,
   active,
   onActivate,
   onClose,
   onRename,
   onSendToPetPanel,
 }: TabItemProps) {
+  const dragProps = useChatPointerDrag(chat ?? null);
   const themeMotionTransition = useThemeMotionTransition(LEGACY_TAB_TRANSITION);
   const themeMotionLayout = useThemeMotionLayout(true);
   const [editing, setEditing] = React.useState(false);
@@ -524,6 +529,7 @@ export function TabItem({
             aria-pressed={active}
             tabIndex={active ? 0 : -1}
             data-sik-evidence={KERNEL_SMOKE_ENABLED && active ? SIK_CONTROL.chatReturn : undefined}
+            {...dragProps}
             onClick={onActivate}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
