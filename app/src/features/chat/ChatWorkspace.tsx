@@ -6,6 +6,7 @@ import { BrowserChatHub, resolveChatEngine, useBrowserChatStore } from '@/featur
 import { ChatThread } from './ChatThread';
 import { Composer } from './Composer';
 import { WarmChatWelcome } from './WarmChatWelcome';
+import { ChatBotanicalBackground } from './ChatBotanicalBackground';
 import { TokenBossCinematic } from './token-boss/TokenBossCinematic';
 import { ChatOutputPanel } from './ChatOutputPanel';
 import { useChatPointerDrag } from './useChatPointerDrag';
@@ -100,6 +101,7 @@ function NativeChatSurface({
           onOpenBeside(event);
         }}
       >
+        <ChatBotanicalBackground chatId={chatId} />
         <WarmChatWelcome chatId={chatId} />
         <ChatThread chatId={chatId} fixtureMessages={fixtureMessages} />
         <BrowserGoalStatus chatId={chatId} />
