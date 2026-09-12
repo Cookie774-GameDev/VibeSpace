@@ -82,7 +82,7 @@ export function paintBotanicalBackground(
           const y = base - 2 * (1 - t) * t * rise * 0.15 - t * t * rise;
           const angle = (leaf % 2 ? -1.7 : 0.05) + (random() - 0.5) * 0.35;
           const size = (72 + random() * 28) * Math.min(1, width / 650);
-          const fullness = 0.16 + random() * 0.08;
+          const fullness = 0.24 + random() * 0.08;
           const bounds = leafBounds(x, y, size, angle, fullness);
           if (side) {
             const left = width - bounds.right;
@@ -102,26 +102,42 @@ export function paintBotanicalBackground(
           ctx.translate(x, y);
           ctx.rotate(angle);
           const leafColor = LEAF_COLORS[(branchColor + (colorRandom() > 0.85 ? 1 : 0)) % LEAF_COLORS.length];
-          ctx.fillStyle = leafColor;
+          // A soft highlight and shaded fold give the leaf volume without image assets.
+          const wash = ctx.createLinearGradient(size * 0.25, -size * fullness,
+            size * 0.65, size * fullness);
+          wash.addColorStop(0, '#e6d4b1');
+          wash.addColorStop(0.38, leafColor);
+          wash.addColorStop(0.5, leafColor);
+          wash.addColorStop(0.56, '#e6d4b1');
+          wash.addColorStop(1, leafColor);
+          ctx.fillStyle = wash;
           ctx.strokeStyle = leafColor;
-          ctx.globalAlpha = 0.14 + random() * 0.035;
+          ctx.globalAlpha = 0.34 + random() * 0.06;
           ctx.beginPath();
           ctx.moveTo(0, 0);
           ctx.bezierCurveTo(size * 0.2, -size * fullness, size * 0.72, -size * fullness * 1.15, size, 0);
           ctx.bezierCurveTo(size * 0.65, size * fullness * 0.85, size * 0.24, size * fullness, 0, 0);
           ctx.fill();
-          ctx.globalAlpha = 0.18;
+          ctx.globalAlpha = 0.22;
           ctx.lineWidth = 0.6;
           ctx.stroke();
           ctx.beginPath();
           ctx.moveTo(0, 0);
-          ctx.lineTo(size * 0.9, 0);
-          for (let vein = 1; vein < 4; vein++) {
-            const vx = size * vein / 6;
-            ctx.moveTo(vx, 0);
-            ctx.lineTo(vx + size * 0.13, -size * 0.12);
-            ctx.moveTo(vx, 0);
-            ctx.lineTo(vx + size * 0.1, size * 0.1);
+          ctx.quadraticCurveTo(size * 0.4, -size * 0.045, size * 0.96, 0);
+          ctx.stroke();
+          ctx.globalAlpha = 0.14;
+          ctx.lineWidth = 0.45;
+          ctx.beginPath();
+          for (let vein = 1; vein < 5; vein++) {
+            const t = vein / 6;
+            const vx = size * t;
+            const spread = size * fullness * Math.sin(t * Math.PI) * 0.62;
+            ctx.moveTo(vx, -size * 0.018);
+            ctx.quadraticCurveTo(vx + size * 0.06, -spread * 0.3,
+              vx + size * 0.15, -spread);
+            ctx.moveTo(vx, -size * 0.018);
+            ctx.quadraticCurveTo(vx + size * 0.055, spread * 0.25,
+              vx + size * 0.13, spread * 0.8);
           }
           ctx.stroke();
           ctx.restore();

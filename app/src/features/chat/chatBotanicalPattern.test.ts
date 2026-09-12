@@ -33,6 +33,7 @@ describe('procedural chat foliage', () => {
           matrix[1] * x + matrix[3] * y + matrix[5],
         ]);
         const context = {
+          createLinearGradient() { return { addColorStop() {} }; },
           clearRect() {}, stroke() {},
           save() { stack.push([...matrix]); },
           restore() { matrix = stack.pop()!; },
