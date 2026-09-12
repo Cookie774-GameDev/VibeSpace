@@ -23,6 +23,18 @@ describe('insertText', () => {
     resetSttFocusMemoryForTests();
   });
 
+  it('keeps the atomic reference editor in composer dictation routing', () => {
+    const editor = document.createElement('div');
+    editor.setAttribute('aria-label', 'Message');
+    editor.dataset.inlineChatEditor = 'true';
+    container.append(editor);
+    expect(isComposerSttTextarea(editor)).toBe(false);
+    Object.defineProperty(editor, 'setSelectionRange', { value: () => {} });
+    expect(isComposerSttTextarea(editor)).toBe(true);
+    expect(isGlobalSttEditable(editor)).toBe(false);
+    rememberSttEditableFromFocus(editor);
+    expect(resolveComposerSttTextarea()).toBe(editor);
+  });
   it('detects composer vs generic textareas', () => {
     const composer = document.createElement('textarea');
     composer.setAttribute('aria-label', 'Message');

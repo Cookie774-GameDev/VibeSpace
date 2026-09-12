@@ -83,7 +83,7 @@ export async function executeChatReferenceAction(
         !source ||
         !target ||
         source.archived ||
-        target.archived ||
+        (kind === 'send' && target.archived) ||
         source.workspace_id !== target.workspace_id ||
         String(source.workspace_id) !== scope.workspaceId
       )

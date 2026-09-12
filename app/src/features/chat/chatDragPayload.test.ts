@@ -34,6 +34,31 @@ function chat(overrides: Partial<Chat> = {}): Chat {
 }
 
 describe('typed VibeSpace chat drag payload', () => {
+  it('resolves a stale project and archived self reference using canonical identity', async () => {
+    const source = chat({ archived: true, project_id: 'moved-project' as Chat['project_id'] });
+    const payload = {
+      version: 1 as const,
+      chatId: String(source.id),
+      workspaceId: String(source.workspace_id),
+      projectId: 'old-project',
+      title: 'Sales',
+    };
+    const result = await resolveAcceptedChatDrop(
+      { payload, targetChatId: source.id, purpose: 'reference' },
+      { getChat: async () => source, canAccess: () => true },
+    );
+    expect(result).toMatchObject({ ok: true, chat: { project_id: 'moved-project' } });
+    expect(
+      await resolveAcceptedChatDrop(
+        {
+          payload: { ...payload, workspaceId: 'foreign' },
+          targetChatId: source.id,
+          purpose: 'reference',
+        },
+        { getChat: async () => source, canAccess: () => true },
+      ),
+    ).toEqual({ ok: false, reason: 'chat_unavailable' });
+  });
   it('serializes identifiers and display metadata without transcript content', () => {
     const transfer = new MemoryDataTransfer();
     const payload = writeChatDragPayload(transfer, chat());

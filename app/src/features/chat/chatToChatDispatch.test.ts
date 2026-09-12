@@ -243,6 +243,23 @@ function durablePart(message: Message) {
 }
 
 describe('dispatchChatToChat', () => {
+  it('binds the durable request before runtime dispatch and opts into busy queuing', async () => {
+    const harness = createHarness();
+    const onPrepared = vi.fn((id: string) => {
+      expect(harness.dispatchKernel).not.toHaveBeenCalled();
+      expect(harness.messages.has(id)).toBe(true);
+    });
+    const result = await dispatchChatToChat(
+      { ...INPUT, onPrepared, queueIfBusy: true },
+      harness.deps,
+    );
+    expect(result.status).toBe('dispatched');
+    expect(onPrepared).toHaveBeenCalledOnce();
+    expect(harness.dispatchKernel.mock.calls[0][0]).toMatchObject({
+      queueIfBusy: true,
+      cancellationKey: onPrepared.mock.calls[0][0],
+    });
+  });
   it('persists the exact two-part user envelope before exact-target runtime acceptance', async () => {
     const harness = createHarness();
     const receipt = await dispatchChatToChat(INPUT, harness.deps);

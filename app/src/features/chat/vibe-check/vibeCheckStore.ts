@@ -18,6 +18,7 @@ export type AuditSession = {
   scrollTop?: number;
   error?: string;
   targetId?: string;
+  auditorChatId?: string;
   evidence?: ReturnType<typeof collectAuditEvidence>;
   options: AuditOptions;
 };

@@ -19,6 +19,28 @@ afterEach(() => {
   closeVibeCheck();
 });
 describe('VibeCheck panel', () => {
+  it('reveals incremental scores with evidence and keeps protocol text out of the report', () => {
+    render(<VibeCheckPanel />);
+    const id = useVibeCheckStore.getState().session!.id;
+    const record =
+      'VIBECHECK_GRADE ' +
+      JSON.stringify({
+        metric: 'quality',
+        score: 82,
+        reason: 'Focused changes',
+        evidence: 'src/main.ts:12',
+        confidence: 'medium',
+      });
+    act(() =>
+      patchAudit(id, { report: 'Early finding\n' + record.slice(0, -1), status: 'running' }),
+    );
+    expect(screen.getByLabelText('Quality score').textContent).toBe('—');
+    act(() => patchAudit(id, { report: 'Early finding\n' + record }));
+    expect(screen.getByLabelText('Quality score').textContent).toBe('82/100');
+    expect(screen.getByText('1/6 reviewed')).toBeTruthy();
+    expect(screen.getByLabelText('Audit report').textContent).toBe('Early finding');
+    expect(screen.getByText('src/main.ts:12')).toBeTruthy();
+  });
   it('routes mixed-case slash locally', () =>
     expect(classifySlashCommand('/VibeCheck')).toMatchObject({
       command: 'vibecheck',

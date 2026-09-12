@@ -42,6 +42,8 @@ export type ChatToChatDispatchInput = Readonly<{
   projection: ChatHandoffProjectionV1;
   instruction: string;
   dispatchKey: string;
+  queueIfBusy?: boolean;
+  onPrepared?: (messageId: string) => void;
 }>;
 
 type TerminalDispatchReceipt = Readonly<{
@@ -128,7 +130,10 @@ type AuthorityResult =
 
 type DispatchState = 'pending' | 'accepted' | 'failed';
 type DispatchFailure =
-  'runtime_rejected' | 'runtime_timeout' | 'runtime_cancelled' | 'authority_revoked';
+  | 'runtime_rejected'
+  | 'runtime_timeout'
+  | 'runtime_cancelled'
+  | 'authority_revoked';
 
 type DispatchMarkerV1 = Readonly<{
   version: 1;
@@ -920,6 +925,7 @@ export async function dispatchChatToChat(
   const detail: SendDetail = {
     chatId: input.targetChatId,
     cancellationKey: messageId as MessageId,
+    ...(input.queueIfBusy ? { queueIfBusy: true } : {}),
     text: envelope.text,
     ...(modelSelection ? { modelSelectionOverride: modelSelection } : {}),
     reasoningPreference,
@@ -933,6 +939,7 @@ export async function dispatchChatToChat(
   let terminalState: Extract<DispatchState, 'accepted' | 'failed'> = 'accepted';
   let terminalFailure: DispatchFailure | undefined;
   try {
+    input.onPrepared?.(messageId);
     const acceptance = deps.dispatchKernel(detail);
     await acceptance;
   } catch (error) {

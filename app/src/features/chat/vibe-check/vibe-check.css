@@ -3,7 +3,7 @@
   right: 20px;
   bottom: 20px;
   z-index: 55;
-  width: min(450px, calc(100% - 24px));
+  width: min(490px, calc(100% - 24px));
   max-height: calc(100% - 32px);
   display: flex;
   flex-direction: column;
@@ -310,5 +310,115 @@
   .vibe-check-orb {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+.vibe-check-scorecard {
+  margin: 22px 0;
+}
+.vibe-check-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.vibe-check-section-heading strong {
+  font-size: 14px;
+  letter-spacing: -0.2px;
+}
+.vibe-check-section-heading > span {
+  font-size: 10px;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+.vibe-check-grades {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  align-items: start;
+}
+.vibe-check-panel .vibe-check-grade {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: linear-gradient(135deg, #729d880c, transparent);
+}
+.vibe-check-grade summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.vibe-check-grade summary::-webkit-details-marker {
+  display: none;
+}
+.vibe-check-grade summary > span:first-child {
+  flex: 1;
+  font-size: 11px;
+}
+.vibe-check-grade summary > strong {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -1px;
+  font-variant-numeric: tabular-nums;
+  color: #709780;
+}
+.vibe-check-grade strong small {
+  font-size: 9px;
+  opacity: 0.65;
+  letter-spacing: 0;
+  margin-left: 2px;
+}
+.vibe-check-grade summary > small {
+  width: 100%;
+  font-size: 9px;
+  opacity: 0.6;
+}
+.vibe-check-grade-meter {
+  width: 100%;
+  height: 3px;
+  background: #80808015;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.vibe-check-grade-meter i {
+  display: block;
+  height: 100%;
+  background: #85ad95;
+  transition: width 0.35s ease;
+}
+.vibe-check-grade.is-ready {
+  border-color: #85ad9545;
+  animation: vibe-check-arrive 0.3s ease-out;
+}
+.vibe-check-grade p {
+  font-size: 11px;
+  line-height: 1.65;
+  margin-top: 10px;
+}
+.vibe-check-grade-evidence {
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 8px;
+  opacity: 0.7;
+}
+@keyframes vibe-check-arrive {
+  from {
+    opacity: 0.5;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vibe-check-grade.is-ready {
+    animation: none;
+  }
+  .vibe-check-grade-meter i {
+    transition: none;
   }
 }

@@ -1,3 +1,4 @@
+import { getChatPreview, subscribeChatPreviews } from '../streamingPreviewStore';
 import { chatRepo, messageRepo, workspaceRepo } from '@/lib/db/repositories';
 import { captureSyncQueueOwner } from '@/lib/cloudSyncQueueOwner';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
@@ -65,6 +66,9 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
   let runKey: string | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
   let pollBusy = false;
+  let unsubscribePreview: (() => void) | undefined;
+  let livePreviewRun: string | undefined;
+  let livePreviewText = '';
   let terminal = false;
   let baseline = new Set<string>();
   const valid = () =>
@@ -76,6 +80,7 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
   };
   const stopWatching = () => {
     clearInterval(poll);
+    unsubscribePreview?.();
     window.removeEventListener('jarvis:run-state', onState as EventListener);
   };
   const readReport = async () => {
@@ -90,13 +95,14 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
       const own = (nextUser < 0 ? after : after.slice(0, nextUser)).filter(
         (message) => !baseline.has(String(message.id)) && message.role === 'assistant',
       );
-      const report = sanitizeChatHandoffText(
+      const savedReport = sanitizeChatHandoffText(
         own
           .flatMap((message) =>
             message.parts.flatMap((part) => (part.kind === 'text' ? [part.text] : [])),
           )
           .join('\n\n'),
       );
+      const report = !terminal && livePreviewRun ? livePreviewText : savedReport;
       if (valid() && report)
         patchAudit(id, {
           report,
@@ -130,9 +136,6 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
   const onState = (event: Event) => {
     const state = (event as CustomEvent<ChatRunState>).detail;
     if (!valid() || state?.chatId !== targetId) return;
-    // A dedicated new chat has exactly one owned dispatch; main-agent key is set before send.
-    if (!runKey && options.auditor === 'new' && state.status === 'running')
-      runKey = state.cancellationKey;
     if (!runKey || state.cancellationKey !== runKey) return;
     if (state.status === 'running')
       patchAudit(id, { status: 'running', stage: 'Auditor reviewing evidence', progress: 50 });
@@ -201,21 +204,42 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
       progress: 25,
     });
     if (options.auditor === 'new') {
-      const target = await chatRepo.createAuthorized(
-        {
-          workspace_id: source.workspace_id,
-          project_id: source.project_id,
-          title: `VibeCheck · ${source.title}`.slice(0, 160),
-          mode: 'chat',
-          active_agent_ids: [],
-          connection: source.connection,
-        },
-        captureSyncQueueOwner(),
-        valid,
-      );
+      const previousAuditor = initial.auditorChatId
+        ? await chatRepo.getById(initial.auditorChatId as ChatId)
+        : undefined;
+      assertValid();
+      const reusable =
+        previousAuditor &&
+        !previousAuditor.archived &&
+        previousAuditor.workspace_id === source.workspace_id &&
+        String(previousAuditor.project_id ?? '') === String(source.project_id ?? '');
+      const target = reusable
+        ? previousAuditor
+        : await chatRepo.createAuthorized(
+            {
+              workspace_id: source.workspace_id,
+              project_id: source.project_id,
+              title: `VibeCheck · ${source.title}`.slice(0, 160),
+              mode: 'chat',
+              active_agent_ids: [],
+              connection: source.connection,
+            },
+            captureSyncQueueOwner(),
+            valid,
+          );
       assertValid();
       if (!target) throw new Error('Could not create the auditor chat.');
       targetId = String(target.id);
+      patchAudit(id, { auditorChatId: targetId });
+      if (reusable) {
+        patchAudit(id, { status: 'waiting', stage: 'Waiting for the auditor to finish' });
+        await waitForAuditSlot(targetId, controller.signal, false);
+        assertValid();
+      }
+      baseline = new Set(
+        (await messageRepo.listByChat(target.id)).map((message) => String(message.id)),
+      );
+      assertValid();
       writeChatRuntimePolicyState(targetId, {
         ...readChatRuntimePolicyState(initial.sourceId),
         access: 'read-only',
@@ -227,7 +251,26 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
     }
     patchAudit(id, { targetId });
     window.addEventListener('jarvis:run-state', onState as EventListener);
-    poll = setInterval(() => void readReport(), 1000);
+    const accountId = resolveAccountIdentity(auth)!.accountId;
+    const oldPreviewRun = getChatPreview(accountId, targetId)?.runId;
+    unsubscribePreview = subscribeChatPreviews(accountId, targetId, () => {
+      if (!valid() || terminal || !runKey) return;
+      const preview = getChatPreview(accountId, targetId);
+      const active = getChatRunState(targetId);
+      if (
+        !preview ||
+        preview.runId === oldPreviewRun ||
+        active?.status !== 'running' ||
+        active.cancellationKey !== runKey
+      )
+        return;
+      const report = sanitizeChatHandoffText(preview.text);
+      livePreviewRun = preview.runId;
+      livePreviewText = report;
+      if (report)
+        patchAudit(id, { report, status: 'running', progress: 75, stage: 'Audit report arriving' });
+    });
+    poll = setInterval(() => void readReport(), 250);
     if (options.auditor === 'new') {
       const receipt = await dispatchChatToChat({
         sourceChatId: initial.sourceId,
@@ -235,6 +278,11 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
         projection,
         instruction,
         dispatchKey: `vibe-check:${id}`,
+        queueIfBusy: true,
+        onPrepared: (messageId) => {
+          assertValid();
+          runKey = messageId;
+        },
       });
       assertValid();
       if ('messageId' in receipt) runKey = receipt.messageId;
@@ -282,6 +330,9 @@ export async function startVibeCheck(options: AuditOptions): Promise<void> {
       });
     }
     assertValid();
+    const acceptedState = getChatRunState(targetId);
+    if (acceptedState?.cancellationKey === runKey)
+      onState(new CustomEvent('jarvis:run-state', { detail: acceptedState }));
     void readReport();
   } catch (error) {
     if (valid())

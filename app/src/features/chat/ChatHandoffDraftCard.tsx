@@ -8,6 +8,7 @@ export interface ChatHandoffDraftCardProps {
   instruction: string;
   onInstructionChange: (value: string) => void;
   onRemove: () => void;
+  initiallyExpanded?: boolean;
 }
 
 export function ChatHandoffDraftCard({
@@ -15,8 +16,9 @@ export function ChatHandoffDraftCard({
   instruction,
   onInstructionChange,
   onRemove,
+  initiallyExpanded = false,
 }: ChatHandoffDraftCardProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const [showTranscript, setShowTranscript] = useState(false);
   const detailsId = useId();
   return (

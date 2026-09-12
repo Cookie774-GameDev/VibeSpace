@@ -3,7 +3,13 @@ let lastComposerSttTextarea: HTMLTextAreaElement | null = null;
 
 /** True when the focused element is a chat composer textarea (not agent prompts, etc.). */
 export function isComposerSttTextarea(el: Element | null): el is HTMLTextAreaElement {
-  return el instanceof HTMLTextAreaElement && el.getAttribute('aria-label') === 'Message';
+  return (
+    el instanceof HTMLElement &&
+    el.getAttribute('aria-label') === 'Message' &&
+    (el instanceof HTMLTextAreaElement ||
+      (el.dataset.inlineChatEditor === 'true' &&
+        typeof (el as HTMLTextAreaElement).setSelectionRange === 'function'))
+  );
 }
 
 /** Remember the last STT-eligible field so toolbar mic clicks still target it after focus moves. */
@@ -27,7 +33,7 @@ export function noteSttEditableFromPointer(target: EventTarget | null): void {
     'textarea, input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input:not([type]), [contenteditable="true"]',
   );
   if (!editable) return;
-  if (editable instanceof HTMLTextAreaElement && isComposerSttTextarea(editable)) {
+  if (isComposerSttTextarea(editable)) {
     lastComposerSttTextarea = editable;
     lastGlobalSttEditable = null;
     return;

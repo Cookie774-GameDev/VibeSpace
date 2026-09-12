@@ -1,3 +1,4 @@
+import { AUDIT_METRICS, parseAuditGrades, auditReportText, type AuditMetric } from './auditGrades';
 import { useState } from 'react';
 import {
   Activity,
@@ -40,6 +41,8 @@ export function VibeCheckPanel() {
       </button>
     );
   const evidence = session.evidence;
+  const grades = parseAuditGrades(session.report);
+  const report = auditReportText(session.report);
   return (
     <section
       style={{ position: 'absolute', zIndex: 55 }}
@@ -86,7 +89,11 @@ export function VibeCheckPanel() {
           >
             <Sparkles size={18} />
             <strong>Fresh eyes</strong>
-            <small>New agent, full chat reference</small>
+            <small>
+              {session.auditorChatId
+                ? 'Same auditor, refreshed chat context'
+                : 'New agent, full chat reference'}
+            </small>
           </button>
           <button
             aria-pressed={options.auditor === 'main'}
@@ -136,6 +143,45 @@ export function VibeCheckPanel() {
         <p className="vibe-check-note">
           Progress tracks completed workflow steps, not estimated review time.
         </p>
+        <section className="vibe-check-scorecard" aria-label="Audit grades">
+          <div className="vibe-check-section-heading">
+            <strong>Work quality, in focus</strong>
+            <span>{Object.keys(grades).length}/6 reviewed</span>
+          </div>
+          <p className="vibe-check-note">
+            Evidence-based grades · 1–100 · appear as the auditor assesses each dimension.
+          </p>
+          <div className="vibe-check-grades">
+            {(Object.keys(AUDIT_METRICS) as AuditMetric[]).map((metric) => {
+              const grade = grades[metric];
+              return (
+                <details key={metric} className={`vibe-check-grade ${grade ? 'is-ready' : ''}`}>
+                  <summary>
+                    <span>{AUDIT_METRICS[metric]}</span>
+                    <strong aria-label={`${AUDIT_METRICS[metric]} score`}>
+                      {grade ? (grade.score ?? 'N/A') : '—'}
+                      {grade?.score != null && <small>/100</small>}
+                    </strong>
+                    <span className="vibe-check-grade-meter" aria-hidden="true">
+                      <i style={{ width: `${grade?.score ?? 0}%` }} />
+                    </span>
+                    <small>
+                      {grade
+                        ? `${grade.confidence} confidence · details`
+                        : busy
+                          ? 'Reviewing evidence'
+                          : session.status === 'ready'
+                            ? 'Awaiting audit'
+                            : 'Not reported'}
+                    </small>
+                  </summary>
+                  <p>{grade?.reason ?? 'No supported grade has been received yet.'}</p>
+                  {grade && <p className="vibe-check-grade-evidence">{grade.evidence}</p>}
+                </details>
+              );
+            })}
+          </div>
+        </section>
         {evidence && (
           <>
             <div className="vibe-check-metrics">
@@ -171,9 +217,9 @@ export function VibeCheckPanel() {
             {session.error}
           </p>
         )}
-        {session.report ? (
+        {report ? (
           <article className="vibe-check-report" aria-label="Audit report">
-            {session.report}
+            {report}
           </article>
         ) : (
           <div className="vibe-check-empty">
@@ -195,7 +241,7 @@ export function VibeCheckPanel() {
             ? 'Audit in progress'
             : session.status === 'ready'
               ? 'Start VibeCheck'
-              : 'Run fresh audit'}
+              : 'Refresh audit'}
         </button>
       </footer>
       {confirmClose && (

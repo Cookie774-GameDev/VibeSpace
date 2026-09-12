@@ -1,7 +1,8 @@
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat, Message } from '@/types/chat';
-import { chatRepo, messageRepo } from '@/lib/db';
+import { chatRepo, messageRepo, workspaceRepo } from '@/lib/db';
 import { TooltipProvider } from '@/components/ui';
 import { toast } from '@/components/ui/toast';
 import { GROQ_API_CONNECTION } from '@/lib/ai/adapters/nativeCatalog';
@@ -109,6 +110,15 @@ function enableTestModel() {
 }
 
 beforeEach(() => {
+  useAuthStore.setState({
+    localUserId: 'reference-test-owner',
+    cloudSession: null,
+    workspaceId: sourceChat.workspace_id,
+    projectId: sourceChat.project_id,
+  });
+  vi.spyOn(workspaceRepo, 'getById').mockResolvedValue({
+    owner_id: resolveAccountIdentity(useAuthStore.getState())!.accountId,
+  } as never);
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
 });
 
@@ -118,6 +128,10 @@ afterEach(() => {
   cleanup();
   resetDiscoveredConnectionModelsForTests();
   useAuthStore.setState({
+    localUserId: originalAuth.localUserId,
+    cloudSession: originalAuth.cloudSession,
+    workspaceId: originalAuth.workspaceId,
+    projectId: originalAuth.projectId,
     apiKeys: originalAuth.apiKeys,
     offlineMode: originalAuth.offlineMode,
     stackPreset: originalAuth.stackPreset,
@@ -126,12 +140,40 @@ afterEach(() => {
 });
 
 describe('Composer chat handoff integration', () => {
+  it('retains multiple independent inline references in queued and persisted payloads', () => {
+    const second = {
+      ...projection,
+      source: { ...projection.source, chatId: 'second', title: 'Sales' },
+    };
+    const queued = buildQueuedComposerChatHandoff({
+      projection,
+      additionalProjections: [second],
+      instruction: 'Review',
+      draftText: 'Compare ⟦chat:chat-source⟧ and ⟦chat:second⟧',
+    });
+    expect(queued.payload.parts.map((part) => part.handoff.sourceChatId)).toEqual([
+      'chat-source',
+      'second',
+    ]);
+    expect(queued.text).toContain('Sales');
+    expect(queued.text).not.toContain('⟦chat:');
+    expect(composerChatHandoffDeliveryKey(queued.payload)).not.toBe(
+      composerChatHandoffDeliveryKey(
+        buildComposerChatHandoffPayload({
+          projection,
+          instruction: 'Review',
+          draftText: 'Compare',
+        }),
+      ),
+    );
+  });
   it('re-resolves canonical source/messages, rejects self/stale drops, replaces without sending', async () => {
     const dispatch = vi.fn();
     const listMessages = vi
       .fn()
       .mockResolvedValueOnce([message('First canonical snapshot')])
-      .mockResolvedValueOnce([message('Replacement canonical snapshot', 100)]);
+      .mockResolvedValueOnce([message('Replacement canonical snapshot', 100)])
+      .mockResolvedValueOnce([]);
     const getChat = vi.fn(async (id: string) =>
       id === 'chat-source' ? sourceChat : id === 'chat-target' ? targetChat : undefined,
     );
@@ -166,10 +208,10 @@ describe('Composer chat handoff integration', () => {
       ok: true,
       projection: { lastMeaningfulActivity: 'Replacement canonical snapshot' },
     });
-    expect(self).toEqual({ ok: false, reason: 'same_chat' });
+    expect(self).toMatchObject({ ok: true, projection: { source: { chatId: 'chat-source' } } });
     expect(stale).toEqual({ ok: false, reason: 'chat_unavailable' });
     expect(dispatch).not.toHaveBeenCalled();
-    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(listMessages).toHaveBeenCalledTimes(3);
   });
 
   it('captures an immutable queued handoff snapshot before later draft replacement', () => {
@@ -407,18 +449,16 @@ describe('Composer chat handoff integration', () => {
         getData: (type: string) => (type === VIBESPACE_CHAT_MIME ? selfPayload : ''),
       },
     });
-    await waitFor(() =>
-      expect(warning).toHaveBeenCalledWith(
-        'That chat is already here',
-        'Choose a different source chat.',
-      ),
-    );
-    expect(screen.queryByLabelText('Pending handoff from Target')).toBeNull();
+    const selfToken = await screen.findByRole('button', { name: 'Reference Target' });
+    fireEvent.keyDown(selfToken, { key: 'Delete' });
+    expect(warning).not.toHaveBeenCalled();
 
     fireEvent.drop(dropZone!, { dataTransfer });
-    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Reference Canonical source title' }),
+    );
     expect(await screen.findByText(/First rendered snapshot/)).not.toBeNull();
-    expect(screen.getByText('Canonical source title')).not.toBeNull();
+    expect(screen.getAllByText('Canonical source title').length).toBeGreaterThan(0);
     expect(create).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
 
@@ -489,7 +529,9 @@ describe('Composer chat handoff integration', () => {
     );
     const dropZone = container.querySelector('[data-composer-drop-zone="true"]');
     fireEvent.drop(dropZone!, { dataTransfer });
-    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Reference Canonical source title' }),
+    );
     await screen.findByText(/Rendered persistence snapshot/);
     fireEvent.change(screen.getByLabelText('Instruction for Canonical source title'), {
       target: { value: 'Continue with the rendered editable instruction.' },
@@ -567,11 +609,13 @@ describe('Composer chat handoff integration', () => {
     );
     const dropZone = container.querySelector('[data-composer-drop-zone="true"]');
     fireEvent.drop(dropZone!, { dataTransfer });
-    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Reference Canonical source title' }),
+    );
     await screen.findByText(/Normalized draft snapshot/);
-    fireEvent.change(screen.getByLabelText('Message'), {
-      target: { value: 'Continue safely after normalization /clearfiles' },
-    });
+    const editor = screen.getByLabelText('Message');
+    editor.append(document.createTextNode(' Continue safely after normalization /clearfiles'));
+    fireEvent.input(editor);
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(sent).toHaveLength(1));
@@ -637,7 +681,9 @@ describe('Composer chat handoff integration', () => {
     );
     const dropZone = container.querySelector('[data-composer-drop-zone="true"]');
     fireEvent.drop(dropZone!, { dataTransfer });
-    fireEvent.click(await screen.findByRole('button', { name: 'Reference Canonical source title' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Reference Canonical source title' }),
+    );
     await screen.findByText(/Original submitted card/);
     const sendButton = screen.getByRole('button', { name: 'Send message' });
     expect((sendButton as HTMLButtonElement).disabled).toBe(false);

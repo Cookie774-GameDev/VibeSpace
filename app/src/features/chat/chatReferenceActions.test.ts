@@ -51,6 +51,18 @@ function fixture() {
 }
 const ctx = { source: 'ai' as const, chatId: 'receiver', accountId: 'owner', callId: 'call-1' };
 describe('chat reference actions', () => {
+  it('reads an accessible archived sales chat but rejects sending into its archive', async () => {
+    const { deps } = fixture();
+    deps.getChat = async (id) => ({ ...chat(id), title: 'Sales', archived: id === 'source' });
+    expect((await executeChatReferenceAction('read', { chatId: 'source' }, ctx, deps)).ok).toBe(
+      true,
+    );
+    expect(
+      (await executeChatReferenceAction('send', { chatId: 'source', message: 'Hello' }, ctx, deps))
+        .ok,
+    ).toBe(false);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+  });
   it('reuses the persisted reference snapshot when retrying the same send action', async () => {
     const { deps, messages } = fixture();
     const dispatch = vi.mocked(deps.dispatch);

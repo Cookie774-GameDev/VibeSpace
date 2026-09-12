@@ -60,7 +60,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui';
-import { chatRepo, messageRepo, projectRepo, taskRepo, terminalSessionRepo } from '@/lib/db';
+import { chatRepo, messageRepo, projectRepo, taskRepo, terminalSessionRepo, workspaceRepo } from '@/lib/db';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { getCurrentSyncQueueAuthorityScope } from '@/lib/cloudSyncQueueOwner';
 import { cn, isTauri, renderHotkey } from '@/lib/utils';
@@ -290,6 +290,8 @@ import {
   type ChatHandoffProjectionV1,
 } from './chatHandoffProjection';
 import { ChatHandoffDraftCard } from './ChatHandoffDraftCard';
+import { InlineChatReferenceInput } from './InlineChatReferenceInput';
+import { chatReferenceToken, insertChatReference, readableReferenceText } from './inlineChatReference';
 import { ComposerMediaStrip } from './ComposerMediaStrip';
 import {
   MediaPreviewPanel,
@@ -654,27 +656,42 @@ export interface ComposerProps {
 export function buildComposerChatHandoffPayload(
   input: Readonly<{
     projection: ChatHandoffProjectionV1;
+    additionalProjections?: readonly ChatHandoffProjectionV1[];
     instruction: string;
     draftText: string;
   }>,
 ) {
   const instruction = sanitizeChatHandoffText(
-    [input.instruction.trim(), input.draftText.trim()].filter(Boolean).join('\n\n'),
+    [
+      input.instruction.trim(),
+      readableReferenceText(input.draftText, [
+        input.projection,
+        ...(input.additionalProjections ?? []),
+      ]).trim(),
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
   );
-  return {
-    text: renderChatHandoffPrompt(input.projection, instruction),
-    part: {
-      kind: 'chat_handoff' as const,
-      handoff: {
-        version: 1 as const,
-        sourceChatId: input.projection.source.chatId,
-        sourceTitle: input.projection.source.title,
-        snapshotAt: input.projection.snapshotAt,
-        boundaryMessageId: input.projection.boundaryMessageId,
-        instruction,
-        projection: input.projection,
-      },
+  const parts = [input.projection, ...(input.additionalProjections ?? [])].map((projection) => ({
+    kind: 'chat_handoff' as const,
+    handoff: {
+      version: 1 as const,
+      sourceChatId: projection.source.chatId,
+      sourceTitle: projection.source.title,
+      snapshotAt: projection.snapshotAt,
+      boundaryMessageId: projection.boundaryMessageId,
+      instruction,
+      projection,
     },
+  }));
+  return {
+    text:
+      renderChatHandoffPrompt(input.projection, instruction) +
+      (input.additionalProjections ?? [])
+        .map((projection) => '\n\n' + renderChatHandoffPrompt(projection, ''))
+        .join(''),
+    part: parts[0]!,
+    parts,
   };
 }
 
@@ -697,7 +714,7 @@ export async function resolveComposerChatHandoffDraft(
     }>
 > {
   const accepted = await resolveAcceptedChatDrop(
-    { payload: input.payload, targetChatId: input.targetChatId },
+    { payload: input.payload, targetChatId: input.targetChatId, purpose:'reference' },
     {
       getChat: (id) => deps.getChat(String(id)),
       canAccess: deps.canAccess,
@@ -714,6 +731,7 @@ export async function resolveComposerChatHandoffDraft(
 export function buildQueuedComposerChatHandoff(
   input: Readonly<{
     projection: ChatHandoffProjectionV1;
+    additionalProjections?: readonly ChatHandoffProjectionV1[];
     instruction: string;
     draftText: string;
   }>,
@@ -728,6 +746,7 @@ export function createComposerQueuedMessage(
     flushMode: QueueFlushMode;
     handoff: Readonly<{
       projection: ChatHandoffProjectionV1;
+      additionalProjections?: readonly ChatHandoffProjectionV1[];
       instruction: string;
     }> | null;
     now?: number;
@@ -741,18 +760,24 @@ export function createComposerQueuedMessage(
   const snapshot = input.handoff
     ? buildQueuedComposerChatHandoff({
         projection: input.handoff.projection,
+        additionalProjections: input.handoff.additionalProjections,
         instruction: input.handoff.instruction,
         draftText: input.draft,
       })
     : null;
   const queueText =
-    input.draft.trim() ||
-    (snapshot ? `Handoff from ${snapshot.payload.part.handoff.sourceTitle}` : '');
+    readableReferenceText(
+      input.draft,
+      input.handoff
+        ? [input.handoff.projection, ...(input.handoff.additionalProjections ?? [])]
+        : [],
+    ).trim() || (snapshot ? `Handoff from ${snapshot.payload.part.handoff.sourceTitle}` : '');
   const message = createQueuedMessage(queueText, input.flushMode, input.now, input.id);
   const visibleHandoffKey = input.handoff
     ? composerChatHandoffDeliveryKey(
         buildComposerChatHandoffPayload({
           projection: input.handoff.projection,
+          additionalProjections: input.handoff.additionalProjections,
           instruction: input.handoff.instruction,
           draftText: '',
         }),
@@ -766,7 +791,9 @@ export function createComposerQueuedMessage(
 export function composerChatHandoffDeliveryKey(
   payload: ReturnType<typeof buildComposerChatHandoffPayload>,
 ): string {
-  return JSON.stringify(payload.part.handoff);
+  return JSON.stringify(
+    payload.parts.length > 1 ? payload.parts.map((part) => part.handoff) : payload.part.handoff,
+  );
 }
 
 export function shouldClearComposerHandoff(
@@ -1391,6 +1418,56 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false);
   const [pendingHandoff, setPendingHandoff] = useState<ChatHandoffProjectionV1 | null>(null);
   const pendingHandoffRef = useRef<ChatHandoffProjectionV1 | null>(null);
+  const [additionalHandoffs, setAdditionalHandoffs] = useState<readonly ChatHandoffProjectionV1[]>(
+    [],
+  );
+  const additionalHandoffsRef = useRef<readonly ChatHandoffProjectionV1[]>([]);
+  const [expandedReferenceId, setExpandedReferenceId] = useState<string | null>(null);
+  const inlineReferences = useMemo(
+    () => (pendingHandoff ? [pendingHandoff, ...additionalHandoffs] : []),
+    [pendingHandoff, additionalHandoffs],
+  );
+  const retainHandoffs = (draft: string) => {
+    const retained = [pendingHandoffRef.current, ...additionalHandoffsRef.current].filter(
+      (projection): projection is ChatHandoffProjectionV1 =>
+        !!projection && draft.includes(chatReferenceToken(projection.source.chatId)),
+    );
+    if (
+      retained.length ===
+      (pendingHandoffRef.current ? 1 : 0) + additionalHandoffsRef.current.length
+    )
+      return;
+    pendingHandoffRef.current = retained[0] ?? null;
+    setPendingHandoff(retained[0] ?? null);
+    additionalHandoffsRef.current = retained.slice(1);
+    setAdditionalHandoffs(retained.slice(1));
+  };
+  useEffect(() => {
+    retainHandoffs(text);
+  }, [text]);
+  useEffect(
+    () =>
+      useAuthStore.subscribe((next, previous) => {
+        if (
+          next.workspaceId === previous.workspaceId &&
+          resolveAccountIdentity(next)?.accountId === resolveAccountIdentity(previous)?.accountId
+        )
+          return;
+        const refs = [pendingHandoffRef.current, ...additionalHandoffsRef.current].filter(
+          (item): item is ChatHandoffProjectionV1 => !!item,
+        );
+        const draft = readableReferenceText(textRef.current, refs);
+        pendingHandoffRef.current = null;
+        setPendingHandoff(null);
+        additionalHandoffsRef.current = [];
+        setAdditionalHandoffs([]);
+        setExpandedReferenceId(null);
+        textRef.current = draft;
+        setText(draft);
+      }),
+    [],
+  );
+
   const pendingHandoffDeliveriesRef = useRef(
     new Map<string, ComposerChatHandoffDeliveryReceipt<Message>>(),
   );
@@ -1594,7 +1671,7 @@ export function Composer({
       draft,
       flushMode,
       handoff: pendingHandoff
-        ? { projection: pendingHandoff, instruction: handoffInstruction }
+        ? { projection: pendingHandoff, additionalProjections:additionalHandoffs, instruction: handoffInstruction }
         : null,
     });
     if (!queued) return false;
@@ -3656,6 +3733,7 @@ export function Composer({
         ? composerChatHandoffDeliveryKey(
             buildComposerChatHandoffPayload({
               projection: pendingHandoff,
+              additionalProjections: additionalHandoffs,
               instruction: handoffInstruction,
               draftText,
             }),
@@ -3850,6 +3928,7 @@ export function Composer({
         : pendingHandoff
           ? buildComposerChatHandoffPayload({
               projection: pendingHandoff,
+              additionalProjections: additionalHandoffs,
               instruction: handoffInstruction,
               draftText: markdownInstruction || rawSendText,
             })
@@ -4125,7 +4204,7 @@ export function Composer({
           role: 'user',
           parts: [
             { kind: 'text', text: persistedText },
-            ...(handoffPayload ? [handoffPayload.part] : []),
+            ...(handoffPayload ? handoffPayload.parts : []),
             ...attachedImages.map((image) => ({
               kind: 'image' as const,
               url: `data:${image.mimeType};base64,${image.data}`,
@@ -4234,7 +4313,8 @@ export function Composer({
         setRuntimePolicy(cleared);
       }
       voiceReplyRequestedRef.current = false;
-      if (!overrideText || options.promptForgeApproved) setText('');
+      if ((!overrideText || options.promptForgeApproved) &&
+          (!handoffPayload || handoffDraftEditRevisionRef.current === directlySubmittedDraftEditRevision)) setText('');
       if (!options.attachments) {
         setAttachedFiles([]);
         setAttachedImages([]);
@@ -4247,6 +4327,7 @@ export function Composer({
         ? composerChatHandoffDeliveryKey(
             buildComposerChatHandoffPayload({
               projection: pendingHandoffRef.current,
+              additionalProjections: additionalHandoffsRef.current,
               instruction: handoffInstructionRef.current,
               draftText:
                 directlySubmittedVisibleHandoffKey &&
@@ -4270,6 +4351,7 @@ export function Composer({
       ) {
         pendingHandoffRef.current = null;
         setPendingHandoff(null);
+        additionalHandoffsRef.current=[];setAdditionalHandoffs([]);
       }
       setMentionCtx(null);
       playUiSound('chat_message_send');
@@ -4472,15 +4554,6 @@ export function Composer({
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-    if (e.key === 'Backspace' && !e.altKey && !e.ctrlKey && !e.metaKey &&
-        e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0 &&
-        pendingHandoffRef.current) {
-      e.preventDefault();
-      handoffDraftEditRevisionRef.current += 1;
-      pendingHandoffRef.current = null;
-      setPendingHandoff(null);
-      return;
-    }
     if (notesCtx) {
       notesPickerRef.current?.keyDown(e);
       return;
@@ -5197,31 +5270,74 @@ export function Composer({
 
   const addChatHandoff = useCallback(
     async (payload: ChatDragPayloadV1) => {
-      const resolved = await resolveComposerChatHandoffDraft(
-        { payload, targetChatId: String(chatId) },
-        {
-          getChat: (id) => chatRepo.getById(id as ChatId),
-          listMessages: (id) => messageRepo.listByChat(id as ChatId),
-          canAccess: (source, target) => !source.archived && !target.archived,
-        },
-      );
-      if (!resolved.ok) {
-        toast.warning(
-          resolved.reason === 'same_chat' ? 'That chat is already here' : 'Chat handoff rejected',
-          resolved.reason === 'same_chat'
-            ? 'Choose a different source chat.'
-            : 'The source chat is stale, inaccessible, or no longer available.',
+      try {
+        const auth = useAuthStore.getState();
+        const accountId = resolveAccountIdentity(auth)?.accountId;
+        const scope = () =>
+          JSON.stringify([
+            resolveAccountIdentity(useAuthStore.getState())?.accountId,
+            useAuthStore.getState().workspaceId,
+          ]);
+        const before = scope();
+        const workspace = auth.workspaceId
+          ? await workspaceRepo.getById(auth.workspaceId)
+          : undefined;
+        if (!accountId || workspace?.owner_id !== accountId || scope() !== before) {
+          toast.warning(
+            'Chat reference unavailable',
+            'Return to the account and workspace that owns this chat.',
+          );
+          return false;
+        }
+        const resolved = await resolveComposerChatHandoffDraft(
+          { payload, targetChatId: String(chatId) },
+          {
+            getChat: (id) => chatRepo.getById(id as ChatId),
+            listMessages: (id) => messageRepo.listByChat(id as ChatId),
+            canAccess: (source, target) =>
+              !target.archived &&
+              source.workspace_id === auth.workspaceId &&
+              target.workspace_id === auth.workspaceId &&
+              scope() === before,
+          },
         );
+        if (!resolved.ok || scope() !== before) {
+          toast.warning(
+            'Chat reference unavailable',
+            !resolved.ok && resolved.reason === 'chat_unavailable'
+              ? 'This chat was removed or moved to another workspace. Reopen it from the sidebar and try again.'
+              : 'This chat is not accessible in the current account and workspace.',
+          );
+          return false;
+        }
+        const projection = resolved.projection;
+        const current = [pendingHandoffRef.current, ...additionalHandoffsRef.current].filter(
+          (item): item is ChatHandoffProjectionV1 => !!item,
+        );
+        const existing = current.findIndex((item) => item.source.chatId === projection.source.chatId);
+        if (existing >= 0) current[existing] = projection;
+        else current.push(projection);
+        pendingHandoffRef.current = current[0]!;
+        setPendingHandoff(current[0]!);
+        additionalHandoffsRef.current = current.slice(1);
+        setAdditionalHandoffs(current.slice(1));
+        handoffDraftEditRevisionRef.current += 1;
+        const insertion = insertChatReference(
+          textRef.current,
+          projection.source.chatId,
+          textareaRef.current?.selectionStart ?? textRef.current.length,
+        );
+        textRef.current = insertion.text;
+        setText(insertion.text);
+        requestAnimationFrame(() => {
+          textareaRef.current?.focus();
+          textareaRef.current?.setSelectionRange(insertion.caret, insertion.caret);
+        });
+        return true;
+      } catch {
+        toast.warning('Chat reference unavailable', 'Could not read this chat. Please try again.');
         return false;
       }
-      const projection = resolved.projection;
-      if (pendingHandoffRef.current?.source.chatId !== projection.source.chatId) {
-        setHandoffInstruction('Review this context and continue from the latest truthful state.');
-      }
-      pendingHandoffRef.current = projection;
-      setPendingHandoff(projection);
-      requestAnimationFrame(() => textareaRef.current?.focus());
-      return true;
     },
     [chatId],
   );
@@ -5762,21 +5878,6 @@ export function Composer({
                 compact && 'p-1',
               )}
             >
-              {pendingHandoff ? (
-                <div className="p-2 pb-0">
-                  <ChatHandoffDraftCard
-                    handoff={pendingHandoff}
-                    instruction={handoffInstruction}
-                    onInstructionChange={setHandoffInstruction}
-                    onRemove={() => {
-                      handoffDraftEditRevisionRef.current += 1;
-                      pendingHandoffRef.current = null;
-                      setPendingHandoff(null);
-                      textareaRef.current?.focus();
-                    }}
-                  />
-                </div>
-              ) : null}
               {/* Media sits above the input as an extension of the chat box */}
               <ComposerMediaStrip
                 images={attachedImages}
@@ -5832,13 +5933,18 @@ export function Composer({
                   ))}
                 </div>
               )}
-              <textarea
+              <InlineChatReferenceInput
+                references={inlineReferences}
+                onOpenReference={(id) =>
+                  setExpandedReferenceId((current) => (current === id ? null : id))
+                }
                 ref={textareaRef}
                 value={text}
                 rows={1}
                 onChange={(e) => {
                   const nextDraft = e.target.value;
                   handoffDraftEditRevisionRef.current += 1;
+                  retainHandoffs(nextDraft);
                   setText(nextDraft);
                   if (promptForge.reviewOpen) {
                     promptForge.setUpgradedDraft(nextDraft);
@@ -5896,6 +6002,42 @@ export function Composer({
                   compact && 'px-2 py-1.5 leading-snug',
                 )}
               />
+              {inlineReferences
+                .filter((reference) => reference.source.chatId === expandedReferenceId)
+                .map((reference) => (
+                  <div
+                    key={reference.source.chatId}
+                    className="relative mx-3 mb-2 rounded-lg border border-border bg-background p-2"
+                    role="dialog"
+                    aria-label={`Chat context: ${reference.source.title}`}
+                  >
+                    <button
+                      type="button"
+                      className="absolute right-2 top-2 z-10"
+                      aria-label="Close chat context"
+                      onClick={() => setExpandedReferenceId(null)}
+                    >
+                      ×
+                    </button>
+                    <ChatHandoffDraftCard
+                      handoff={reference}
+                      initiallyExpanded
+                      instruction={handoffInstruction}
+                      onInstructionChange={setHandoffInstruction}
+                      onRemove={() => {
+                        const next = textRef.current.replaceAll(
+                          chatReferenceToken(reference.source.chatId),
+                          '',
+                        );
+                        handoffDraftEditRevisionRef.current += 1;
+                        setText(next);
+                        retainHandoffs(next);
+                        setExpandedReferenceId(null);
+                        textareaRef.current?.focus();
+                      }}
+                    />
+                  </div>
+                ))}
               {promptForge.job?.status === 'ready' && promptForge.job.generatedDraft !== null ? (
                 <PromptForgeReview
                   open={promptForge.reviewOpen}

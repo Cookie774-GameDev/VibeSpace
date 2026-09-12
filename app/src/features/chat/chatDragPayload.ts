@@ -82,7 +82,7 @@ export type AcceptedChatDropResult =
     }>;
 
 export async function resolveAcceptedChatDrop(
-  input: Readonly<{ payload: ChatDragPayloadV1; targetChatId: string }>,
+  input: Readonly<{ payload: ChatDragPayloadV1; targetChatId: string; purpose?: 'reference' }>,
   deps: Readonly<{
     getChat: (id: ChatId) => Promise<Chat | undefined>;
     canAccess: (source: Chat, target: Chat) => boolean;
@@ -90,7 +90,8 @@ export async function resolveAcceptedChatDrop(
 ): Promise<AcceptedChatDropResult> {
   const payload = parsePayload(input.payload);
   if (!payload) return { ok: false, reason: 'invalid_payload' };
-  if (payload.chatId === input.targetChatId) return { ok: false, reason: 'same_chat' };
+  if (payload.chatId === input.targetChatId && input.purpose !== 'reference')
+    return { ok: false, reason: 'same_chat' };
 
   const [source, target] = await Promise.all([
     deps.getChat(payload.chatId as ChatId),
@@ -99,7 +100,8 @@ export async function resolveAcceptedChatDrop(
   if (!source || !target) return { ok: false, reason: 'chat_unavailable' };
   if (
     String(source.workspace_id) !== payload.workspaceId ||
-    (source.project_id ? String(source.project_id) : null) !== payload.projectId
+    (input.purpose !== 'reference' &&
+      (source.project_id ? String(source.project_id) : null) !== payload.projectId)
   ) {
     return { ok: false, reason: 'chat_unavailable' };
   }

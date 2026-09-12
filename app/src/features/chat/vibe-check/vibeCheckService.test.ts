@@ -1,3 +1,4 @@
+import { setPreview, clearAccountPreviews } from '../streamingPreviewStore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const f = vi.hoisted(() => ({
   auth: {
@@ -77,7 +78,8 @@ beforeEach(() => {
       parts: [{ kind: 'text', text: 'old work' }],
     },
   ]);
-  f.cross.mockImplementation(async () => {
+  f.cross.mockImplementation(async (input: any) => {
+    input.onPrepared?.('request');
     f.messages.set('auditor', [{ id: 'request', role: 'user', parts: [] }]);
     emit({ chatId: 'auditor', cancellationKey: 'request', status: 'running' });
     return { status: 'dispatched', messageId: 'request' };
@@ -88,10 +90,51 @@ beforeEach(() => {
   openVibeCheck('source');
 });
 afterEach(() => {
+  clearAccountPreviews('owner');
   closeVibeCheck();
   vi.useRealTimers();
 });
 describe('VibeCheck dispatch lifecycle', () => {
+  it('streams only the current owned auditor response and reuses its chat on refresh', async () => {
+    await startVibeCheck({ auditor: 'new', interrupt: false });
+    f.run = { chatId: 'auditor', status: 'running', cancellationKey: 'request' };
+    setPreview({
+      accountId: 'owner',
+      chatId: 'auditor',
+      runId: 'run-1',
+      requestId: 'req-1',
+      text: 'First finding',
+      updatedAt: 1,
+    });
+    expect(useVibeCheckStore.getState().session?.report).toBe('First finding');
+    f.run = { ...f.run, cancellationKey: 'someone-else' };
+    setPreview({
+      accountId: 'owner',
+      chatId: 'auditor',
+      runId: 'run-2',
+      requestId: 'req-2',
+      text: 'Unrelated output',
+      updatedAt: 2,
+    });
+    expect(useVibeCheckStore.getState().session?.report).toBe('First finding');
+    f.run = undefined;
+    f.messages.get('auditor')!.push({
+      id: 'answer',
+      role: 'assistant',
+      parts: [{ kind: 'text', text: 'Completed audit' }],
+    });
+    emit({ chatId: 'auditor', cancellationKey: 'request', status: 'done' });
+    await vi.advanceTimersByTimeAsync(300);
+    f.chats.set('auditor', { ...f.chats.get('source'), id: 'auditor' });
+    const refresh = startVibeCheck({ auditor: 'new', interrupt: false });
+    await vi.advanceTimersByTimeAsync(200);
+    await refresh;
+    expect(f.cross).toHaveBeenCalledTimes(2);
+    expect(f.cross.mock.calls[1][0].targetChatId).toBe('auditor');
+    expect(f.cross.mock.calls[1][0].queueIfBusy).toBe(true);
+    expect(useVibeCheckStore.getState().session?.auditorChatId).toBe('auditor');
+    expect(useVibeCheckStore.getState().session?.report).toBe('');
+  });
   it('starts a separate read-only auditor without interrupting the source', async () => {
     f.run = { chatId: 'source', status: 'running', cancellationKey: 'source-turn' };
     const cancel = vi.fn();
