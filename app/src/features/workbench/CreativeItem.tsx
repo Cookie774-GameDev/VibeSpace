@@ -1,9 +1,10 @@
 ﻿import * as React from 'react';
-import { Copy, Trash2, RotateCw, ArrowDownToLine } from 'lucide-react';
+import { Copy, Trash2, RotateCw, ArrowDownToLine, Move } from 'lucide-react';
 import type { WorkbenchPanel } from './types';
 import { creativeStyle, type CreativeStyle } from './creative';
 import { useWorkbenchStore } from './store';
 import './creative.css';
+import './creative-interaction.css';
 
 interface Props {
   panel: WorkbenchPanel;
@@ -301,6 +302,24 @@ export function CreativeItem({
               />
             </div>
             <div className="wb-creative-actions">
+              <button
+                className="wb-creative-move"
+                aria-label="Move creative item"
+                title="Drag to move · Arrow keys to nudge"
+                onPointerDown={(e) => begin(e, 'move')}
+                {...gestureProps}
+                onKeyDown={(e) => {
+                  const dx = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+                  const dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+                  if (!dx && !dy) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const step = e.shiftKey ? 10 : 1;
+                  onUpdate({ x: panel.x + dx * step, y: panel.y + dy * step });
+                }}
+              >
+                <Move size={13} />
+              </button>
               <button aria-label="Duplicate creative item" title="Duplicate" onClick={onDuplicate}>
                 <Copy size={13} />
               </button>

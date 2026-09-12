@@ -1,0 +1,18 @@
+/* Empty shape interiors must not intercept embedded editors, chats or terminals. */
+.wb-creative-item .wb-creative-art {
+  pointer-events: none;
+}
+.wb-creative-item .wb-creative-art svg > * {
+  pointer-events: visiblePainted;
+}
+/* Only the selected freehand canvas captures its empty drawing area. */
+.wb-creative-item[data-selected='true'] .wb-creative-draw {
+  pointer-events: auto;
+}
+.wb-creative-item .wb-creative-frame .wb-creative-move {
+  cursor: grab;
+  touch-action: none;
+}
+.wb-creative-item .wb-creative-frame .wb-creative-move:active {
+  cursor: grabbing;
+}
