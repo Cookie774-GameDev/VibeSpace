@@ -16,3 +16,26 @@
 .wb-creative-item .wb-creative-frame .wb-creative-move:active {
   cursor: grabbing;
 }
+/* Keep a generous grip available before selection, even when zoomed out. */
+.wb-creative-item .wb-creative-grip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid hsl(var(--border-mid));
+  border-radius: 7px;
+  background: hsl(var(--elevated));
+  color: hsl(var(--foreground));
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+  z-index: 1;
+}
+.wb-creative-item .wb-creative-grip:active { cursor: grabbing; }
+.wb-creative-item .wb-creative-grip:focus-visible {
+  outline: 2px solid hsl(var(--accent-copper));
+  outline-offset: 2px;
+}
