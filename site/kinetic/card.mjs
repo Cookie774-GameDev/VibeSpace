@@ -1,5 +1,5 @@
 const card=document.querySelector('.kinetic-brand-card'),canvas=card.querySelector('canvas'),reduced=matchMedia('(prefers-reduced-motion: reduce)');
-let draw=null,loading=null,frame=0,last=0,time=0,visible=false,costs=[];
+let draw=null,loading=null,frame=0,last=0,time=33,visible=false,costs=[];
 function paint(){const begin=performance.now();draw(time);costs.push(performance.now()-begin);if(costs.length>240)costs.shift()}
 function tick(stamp){frame=0;if(!visible||document.hidden||reduced.matches||!draw)return;time+=(stamp-last)/1000;last=stamp;paint();frame=requestAnimationFrame(tick)}
 function sync(){cancelAnimationFrame(frame);frame=0;if(visible&&!document.hidden&&!reduced.matches&&draw){last=performance.now();frame=requestAnimationFrame(tick)}}
