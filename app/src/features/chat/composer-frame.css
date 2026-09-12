@@ -1,3 +1,14 @@
+/* Shared width only; each theme keeps its own visual treatment. */
+html [data-vibespace-page='chat'] [data-tour='chat-composer'][data-composer-frame='layered'] {
+  width: 75%;
+  margin-inline: auto;
+}
+
+html [data-vibespace-page='chat'] .chat-workspace-pane[data-multi-pane='true'] [data-tour='chat-composer'][data-composer-frame='layered'] {
+  width: calc((100% - 16px) * 0.75);
+  margin-inline: auto;
+}
+
 /* Warm reference treatment: presentation only, using the existing theme palette.
    Compact companion composers retain their independently scaled layout. */
 html[data-theme='warm'] [data-vibespace-page='chat'] [data-tour='chat-composer'][data-composer-frame='layered'] {
@@ -5,12 +16,12 @@ html[data-theme='warm'] [data-vibespace-page='chat'] [data-tour='chat-composer']
   padding: 0;
   background: transparent;
   box-shadow: none;
-  width: calc((100% - clamp(32px, 4.4vw, 72px)) * 0.65);
+  width: calc((100% - clamp(32px, 4.4vw, 72px)) * 0.75);
   margin-inline: auto;
 }
 
-html[data-theme='warm'] [data-vibespace-page='chat'] .chat-workspace-pane[data-multi-pane='true'] [data-composer-frame='layered'] {
-  width: calc((100% - 16px) * 0.65);
+html[data-theme='warm'] [data-vibespace-page='chat'] .chat-workspace-pane[data-multi-pane='true'] [data-tour='chat-composer'][data-composer-frame='layered'] {
+  width: calc((100% - 16px) * 0.75);
   margin-inline: auto;
 }
 
