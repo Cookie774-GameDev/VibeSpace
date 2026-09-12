@@ -383,7 +383,7 @@ describe('QuestionBlockCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Submit/i }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toMatch(/could not send.*OpenCode.*retry/i);
+    expect(alert.textContent).toMatch(/could not send.*original agent session.*still active.*retry/i);
     expect(alert.textContent).not.toContain('secret transport detail');
     expect(repo.update).not.toHaveBeenCalled();
     expect(repo.create).not.toHaveBeenCalled();
@@ -405,7 +405,7 @@ describe('QuestionBlockCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Submit/i }));
 
     expect((await screen.findByRole('alert')).textContent).toMatch(
-      /could not send.*OpenCode.*retry/i,
+      /could not send.*original agent session.*still active.*retry/i,
     );
     expect(openCodeQuestion.respond).toHaveBeenCalledOnce();
     expect(window.dispatchEvent).not.toHaveBeenCalled();
@@ -430,7 +430,7 @@ describe('QuestionBlockCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Submit/i }));
 
     expect((await screen.findByRole('alert')).textContent).toMatch(
-      /could not send.*OpenCode.*retry/i,
+      /could not send.*original agent session.*still active.*retry/i,
     );
     expect(openCodeQuestion.respond).not.toHaveBeenCalled();
     expect(repo.update).not.toHaveBeenCalled();

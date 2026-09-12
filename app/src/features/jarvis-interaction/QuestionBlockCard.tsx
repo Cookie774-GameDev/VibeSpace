@@ -342,7 +342,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
     } catch (err) {
       setError(
         part.harness
-          ? 'Could not send this answer to OpenCode. Please retry.'
+          ? 'Could not send this answer to its original agent session. Check that the request is still active before retrying.'
           : err instanceof Error
             ? err.message
             : 'Could not save these answers. Please retry.',
