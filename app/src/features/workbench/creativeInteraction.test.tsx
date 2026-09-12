@@ -33,7 +33,7 @@ it('moves freehand at canvas zoom without rewriting its drawing, and supports ke
   expect(update).toHaveBeenCalledWith({ x: panel.x - 10, y: panel.y });
 });
 
-it('keeps the corner grip mounted while selecting, so the initial drag completes', () => {
+it('keeps the edge grip mounted while selecting, so the initial drag completes', () => {
   vi.stubGlobal('PointerEvent', MouseEvent);
   const id = useWorkbenchStore.getState().addPanel('creative', undefined, { creative: creativeStyle({ kind: 'rectangle' }) })!;
   const panel = useWorkbenchStore.getState().panels.find(p => p.id === id)!;
@@ -41,7 +41,7 @@ it('keeps the corner grip mounted while selecting, so the initial drag completes
   const props = { panel, zoom: 0.5, onUpdate: update, onSelect: select, onDuplicate: vi.fn(), onClose: vi.fn() };
   const { rerender } = render(<CreativeItem {...props} selected={false} />);
   const grip = screen.getByRole('button', { name: 'Select and move creative item' });
-  expect(grip.style.width).toBe('56px');
+  expect(grip.style.getPropertyValue('--grip-width')).toBe('24px');
   grip.setPointerCapture = vi.fn();
   fireEvent.pointerDown(grip, { button: 0, clientX: 100, clientY: 100 });
   expect(select).toHaveBeenCalledOnce();

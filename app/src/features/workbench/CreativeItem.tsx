@@ -267,12 +267,11 @@ export function CreativeItem({
         className="wb-creative-grip"
         aria-label="Select and move creative item"
         title="Select / drag to move"
-        style={{ width: 28 / zoom, height: 28 / zoom }}
+        style={{ '--grip-width': `${12 / zoom}px` } as React.CSSProperties}
         onPointerDown={(e) => begin(e, 'move')}
         {...gestureProps}
         onClick={(e) => { if (e.detail === 0) onSelect(e.shiftKey); }}
       >
-        <Move size={14 / zoom} />
       </button>
       {selected && (
         <>
