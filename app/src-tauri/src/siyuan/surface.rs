@@ -653,8 +653,8 @@ fn main_window(app: &AppHandle) -> Result<Window, String> {
         .ok_or_else(|| public_error("siyuan_surface_main_window_unavailable"))
 }
 
-fn debug_child_cdp_port(value: Option<&str>, debug_build: bool) -> Option<u16> {
-    if !debug_build {
+fn debug_child_cdp_port(value: Option<&str>, debug_build: bool, shared_profile: bool) -> Option<u16> {
+    if !debug_build || shared_profile {
         return None;
     }
     value?
@@ -664,10 +664,17 @@ fn debug_child_cdp_port(value: Option<&str>, debug_build: bool) -> Option<u16> {
         .filter(|port| *port >= 1024)
 }
 
+fn main_webview_browser_args(config: &tauri::Config) -> Option<&str> {
+    config.app.windows.iter()
+        .find(|window| window.label == "main")
+        .and_then(|window| window.additional_browser_args.as_deref())
+}
+
 fn child_cdp_configuration(app: &AppHandle) -> Result<Option<(PathBuf, String)>, String> {
     let port = debug_child_cdp_port(
         std::env::var(SIYUAN_CHILD_CDP_PORT_ENV).ok().as_deref(),
         cfg!(debug_assertions),
+        std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_some(),
     );
     let Some(port) = port else {
         return Ok(None);
@@ -909,7 +916,6 @@ pub async fn siyuan_surface_open(
     // into the later programmatic navigation even when WebView2 returned success.
     let mut builder = WebviewBuilder::new(SURFACE_LABEL, WebviewUrl::External(origin.clone()))
         .focused(true)
-        .additional_browser_args(MAIN_WEBVIEW_ADDITIONAL_BROWSER_ARGS)
         .initialization_script(&initialization_script)
         .on_page_load(move |webview, payload| {
             if !matches!(payload.event(), PageLoadEvent::Finished)
@@ -1020,6 +1026,12 @@ pub async fn siyuan_surface_open(
         })
         .on_new_window(|_, _| NewWindowResponse::Deny)
         .on_download(|_, _| false);
+    // A child sharing the main WebView2 profile must use its effective options,
+    // including development overrides. Different options can prevent creation.
+    if let Some(arguments) = main_webview_browser_args(app.config())
+    {
+        builder = builder.additional_browser_args(arguments);
+    }
     let child_cdp = match child_cdp_configuration(&app) {
         Ok(value) => value,
         Err(error) => {
@@ -1027,6 +1039,8 @@ pub async fn siyuan_surface_open(
             return Err(error);
         }
     };
+    #[cfg(windows)]
+    let share_main_environment = child_cdp.is_none();
     if let Some((data_directory, browser_args)) = child_cdp {
         builder = builder
             .data_directory(data_directory)
@@ -1052,7 +1066,40 @@ pub async fn siyuan_surface_open(
         origin: origin_key,
         operation_id: operation_id.clone(),
     });
-    let webview = match main.add_child(builder, position, size) {
+    // Reuse the actual native environment rather than recreating an approximation
+    // of its profile/options. The controller is created on its owning UI thread.
+    #[cfg(windows)]
+    let create_result = if share_main_environment {
+        if let Some(parent) = app.get_webview("main") {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let child_operation = operation_id.clone();
+            let dispatched = parent.with_webview(move |platform| {
+                let result = if operation_is_current(&child_operation) {
+                    main.add_child(builder.with_environment(platform.environment()), position, size)
+                        .map_err(|_| public_error("siyuan_surface_webview_unavailable"))
+                } else {
+                    Err(public_error("siyuan_surface_open_cancelled"))
+                };
+                let _ = sender.send(result);
+            });
+            if dispatched.is_err() {
+                Err(public_error("siyuan_surface_webview_unavailable"))
+            } else {
+                match tauri::async_runtime::spawn_blocking(move || receiver.recv_timeout(Duration::from_secs(5))).await {
+                    Ok(Ok(result)) => result,
+                    _ => Err(public_error("siyuan_surface_webview_unavailable")),
+                }
+            }
+        } else {
+            Err(public_error("siyuan_surface_main_window_unavailable"))
+        }
+    } else {
+        main.add_child(builder, position, size)
+            .map_err(|_| public_error("siyuan_surface_webview_unavailable"))
+    };
+    #[cfg(not(windows))]
+    let create_result = main.add_child(builder, position, size);
+    let webview = match create_result {
         Ok(value) => value,
         Err(_) => {
             retire_failed_open_locked(&app, &operation_id);
@@ -1369,13 +1416,31 @@ mod tests {
     }
 
     #[test]
+    fn child_inherits_effective_main_options_including_dev_overrides() {
+        let config: tauri::Config = serde_json::from_value(serde_json::json!({
+            "identifier": "ai.jarvis.test",
+            "app": { "windows": [
+                { "label": "dictation", "additionalBrowserArgs": "--other" },
+                { "label": "main", "additionalBrowserArgs": "--js-flags=--max-old-space-size=1536 --remote-debugging-port=9251" }
+            ] }
+        })).unwrap();
+        assert_eq!(main_webview_browser_args(&config), Some("--js-flags=--max-old-space-size=1536 --remote-debugging-port=9251"));
+        let mut defaults = config.clone();
+        defaults.app.windows[1].additional_browser_args = None;
+        assert_eq!(main_webview_browser_args(&defaults), None);
+        defaults.app.windows.remove(1);
+        assert_eq!(main_webview_browser_args(&defaults), None);
+    }
+
+    #[test]
     fn child_cdp_port_is_debug_only_and_validated() {
-        assert_eq!(debug_child_cdp_port(Some(" 9334 "), true), Some(9334));
-        assert_eq!(debug_child_cdp_port(Some("9334"), false), None);
-        assert_eq!(debug_child_cdp_port(Some("0"), true), None);
-        assert_eq!(debug_child_cdp_port(Some("1023"), true), None);
-        assert_eq!(debug_child_cdp_port(Some("not-a-port"), true), None);
-        assert_eq!(debug_child_cdp_port(None, true), None);
+        assert_eq!(debug_child_cdp_port(Some(" 9334 "), true, false), Some(9334));
+        assert_eq!(debug_child_cdp_port(Some("9334"), false, false), None);
+        assert_eq!(debug_child_cdp_port(Some("0"), true, false), None);
+        assert_eq!(debug_child_cdp_port(Some("1023"), true, false), None);
+        assert_eq!(debug_child_cdp_port(Some("not-a-port"), true, false), None);
+        assert_eq!(debug_child_cdp_port(None, true, false), None);
+        assert_eq!(debug_child_cdp_port(Some("9253"), true, true), None);
     }
 
     #[test]
