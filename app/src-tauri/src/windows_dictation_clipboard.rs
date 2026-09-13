@@ -3,13 +3,45 @@ use windows::Win32::{
     System::{
         DataExchange::{
             CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
-            OpenClipboard, SetClipboardData,
+            OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
         },
         Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
     },
 };
 
 const UNICODE_TEXT: u32 = 13;
+
+// Windows consumes these DWORD=0 formats before publishing a clipboard item.
+// Apply to both the temporary transcript and restoration to avoid Win+V spam.
+const PRIVATE_FORMATS: [windows::core::PCWSTR; 2] = [
+    windows::core::w!("CanIncludeInClipboardHistory"),
+    windows::core::w!("CanUploadToCloudClipboard"),
+];
+
+fn exclude_history_and_sync() -> Result<(), String> {
+    for name in PRIVATE_FORMATS {
+        unsafe {
+            let format = RegisterClipboardFormatW(name);
+            if format == 0 {
+                return Err("Could not protect dictation clipboard history.".into());
+            }
+            let memory = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of::<u32>())
+                .map_err(|_| "Could not protect dictation clipboard history.")?;
+            let pointer = GlobalLock(memory) as *mut u32;
+            if pointer.is_null() {
+                let _ = GlobalFree(Some(memory));
+                return Err("Could not protect dictation clipboard history.".into());
+            }
+            pointer.write(0);
+            let _ = GlobalUnlock(memory);
+            if SetClipboardData(format, Some(HANDLE(memory.0))).is_err() {
+                let _ = GlobalFree(Some(memory));
+                return Err("Could not protect dictation clipboard history.".into());
+            }
+        }
+    }
+    Ok(())
+}
 
 struct Clipboard;
 impl Clipboard {
@@ -58,12 +90,16 @@ fn write_text(text: &str) -> Result<(), String> {
         }
         std::ptr::copy_nonoverlapping(units.as_ptr(), pointer, units.len());
         let _ = GlobalUnlock(memory);
-        if EmptyClipboard()
-            .and_then(|_| SetClipboardData(UNICODE_TEXT, Some(HANDLE(memory.0))))
-            .is_err()
-        {
+        let result = EmptyClipboard()
+            .map_err(|_| "Could not copy dictated text.".to_string())
+            .and_then(|_| exclude_history_and_sync())
+            .and_then(|_| {
+                SetClipboardData(UNICODE_TEXT, Some(HANDLE(memory.0)))
+                    .map_err(|_| "Could not copy dictated text.".to_string())
+            });
+        if let Err(error) = result {
             let _ = GlobalFree(Some(memory));
-            return Err("Could not copy dictated text.".into());
+            return Err(error);
         }
         // Windows owns memory after SetClipboardData succeeds.
         Ok(())

@@ -154,6 +154,18 @@ describe('Deepgram capture and finalization ownership', () => {
     expect(stopTrack).toHaveBeenCalledOnce();
   });
 
+  it('requests audio resume without blocking speech on an autoplay gate', async () => {
+    const original = globalThis.AudioContext;
+    const resume = vi.fn(() => new Promise<void>(() => {}));
+    vi.stubGlobal('AudioContext', class extends original {
+      readonly state = 'suspended' as const;
+      resume = resume;
+    });
+    const session = await createDeepgramDictationSession({}, 'nova-3-mono');
+    expect(resume).toHaveBeenCalledOnce();
+    session.cancel();
+  });
+
   it('releases an acquired stream when the recording constructor fails', async () => {
     vi.stubGlobal('MediaRecorder',class { static isTypeSupported=()=>true; constructor(){throw Error('recording unavailable');} });
     await expect(createDeepgramDictationSession({},'nova-3-mono')).rejects.toThrow('recording unavailable');

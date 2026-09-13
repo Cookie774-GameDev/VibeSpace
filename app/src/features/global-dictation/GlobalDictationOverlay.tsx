@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
-import { VoiceActivityWaveform } from '@/features/voice/VoiceActivityWaveform';
+import { DictationLevelMeter } from './DictationLevelMeter';
 import { createGlobalDictationSession, type GlobalDictationSession } from './dictationSession';
 import {
   formatGlobalDictationPasteFailure,
@@ -46,13 +46,15 @@ export function GlobalDictationOverlay({
   const [engineLabel, setEngineLabel] = React.useState('');
   const levelRef = React.useRef(0);
   const sessionRef = React.useRef<GlobalDictationSession | null>(null);
+  // Delivery can fail after recognition succeeds. Keep that take for the next
+  // confirmation instead of opening a new microphone and erasing its words.
+  const pendingPasteRef = React.useRef('');
   const latestInterimRef = React.useRef('');
   const stateRef = React.useRef<OverlayState>('ready');
   const generationRef = React.useRef(0);
   const startingRef = React.useRef(false);
   const finishWhenReadyRef = React.useRef(false);
   const finalizeRef = React.useRef<() => Promise<void>>(async () => {});
-  const pasteTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearedTextRef = React.useRef('');
   const updateState = React.useCallback((next: OverlayState) => {
     stateRef.current = next;
@@ -60,6 +62,7 @@ export function GlobalDictationOverlay({
   }, []);
 
   const resetTranscript = React.useCallback(() => {
+    pendingPasteRef.current = '';
     setPartial('');
     setFinalText('');
     latestInterimRef.current = '';
@@ -69,8 +72,6 @@ export function GlobalDictationOverlay({
   const teardownSession = React.useCallback(() => {
     generationRef.current += 1;
     finishWhenReadyRef.current = false;
-    if (pasteTimerRef.current !== null) clearTimeout(pasteTimerRef.current);
-    pasteTimerRef.current = null;
     const session = sessionRef.current;
     sessionRef.current = null;
     session?.cancel();
@@ -91,6 +92,7 @@ export function GlobalDictationOverlay({
   const start = React.useCallback(async () => {
     if (
       startingRef.current ||
+      pendingPasteRef.current ||
       sessionRef.current ||
       ['starting', 'transcribing', 'pasting'].includes(stateRef.current)
     )
@@ -153,56 +155,66 @@ export function GlobalDictationOverlay({
   /** Finalize the session and paste the transcript into the focused app. */
   const confirmAndPaste = React.useCallback(async () => {
     const session = sessionRef.current;
-    if (!session || ['transcribing', 'pasting'].includes(stateRef.current)) return;
+    if (
+      (!session && !pendingPasteRef.current) ||
+      ['transcribing', 'pasting'].includes(stateRef.current)
+    )
+      return;
     const generation = generationRef.current;
     updateState('transcribing');
-    try {
-      await getCurrentWindow().hide();
-    } catch (err) {
-      failVisible(formatGlobalDictationPasteFailure(err));
-      return;
-    }
-    if (generationRef.current !== generation) return;
-    try {
-      await session.stop();
-    } catch {
-      if (generationRef.current === generation)
-        failVisible(formatGlobalDictationSessionFailure(''));
-      return;
-    }
-    if (generationRef.current !== generation) return;
-    sessionRef.current = null;
+    if (session) {
+      try {
+        await session.stop();
+      } catch {
+        if (generationRef.current === generation)
+          failVisible(formatGlobalDictationSessionFailure(''));
+        return;
+      }
+      if (generationRef.current !== generation) return;
+      sessionRef.current = null;
 
-    let baseText = (session.getFinalText() || finalText).trim();
-    if (clearedTextRef.current && baseText.startsWith(clearedTextRef.current))
-      baseText = baseText.slice(clearedTextRef.current.length).trim();
-    const interimText = latestInterimRef.current.trim();
-    const text =
-      baseText && interimText && !baseText.endsWith(interimText)
-        ? `${baseText} ${interimText}`
-        : baseText || interimText;
+      let baseText = (session.getFinalText() || finalText).trim();
+      if (clearedTextRef.current && baseText.startsWith(clearedTextRef.current))
+        baseText = baseText.slice(clearedTextRef.current.length).trim();
+      const interimText = latestInterimRef.current.trim();
+      const text =
+        baseText && interimText && !baseText.endsWith(interimText)
+          ? `${baseText} ${interimText}`
+          : baseText || interimText;
+      pendingPasteRef.current = text;
+    }
+    const text = pendingPasteRef.current;
     if (!text) {
       resetTranscript();
       updateState('ready');
       void invoke('dictation_cancel').catch(() => undefined);
+      void getCurrentWindow()
+        .hide()
+        .catch(() => undefined);
       return;
     }
     updateState('pasting');
-    pasteTimerRef.current = setTimeout(() => {
-      pasteTimerRef.current = null;
+    // Native delivery already waits for released shortcut keys and verifies
+    // the destination selected at confirmation. No renderer timer is needed.
+    try {
+      await getCurrentWindow().hide();
       if (generationRef.current !== generation) return;
-      void invoke('dictation_paste_text', { text })
-        .then(() => {
-          if (generationRef.current === generation) {
-            resetTranscript();
-            updateState('ready');
-          }
-        })
-        .catch((err) => {
-          if (generationRef.current === generation)
-            failVisible(formatGlobalDictationPasteFailure(err));
-        });
-    }, 120);
+      await invoke('dictation_paste_text', { text });
+      if (generationRef.current === generation) {
+        resetTranscript();
+        updateState('ready');
+      }
+    } catch (err) {
+      if (generationRef.current === generation) {
+        updateState('error');
+        setErrorMessage(
+          `${formatGlobalDictationPasteFailure(err)} Your transcript is kept. Select a text field and press your dictation shortcut to retry.`,
+        );
+        void getCurrentWindow()
+          .show()
+          .catch(() => undefined);
+      }
+    }
   }, [failVisible, finalText, resetTranscript, updateState]);
   finalizeRef.current = confirmAndPaste;
 
@@ -237,10 +249,8 @@ export function GlobalDictationOverlay({
       return;
     }
     if (['transcribing', 'pasting'].includes(stateRef.current)) return;
-    if (sessionRef.current) void confirmAndPaste();
+    if (sessionRef.current || pendingPasteRef.current) void confirmAndPaste();
     else {
-      void getCurrentWindow().show();
-      void getCurrentWindow().setFocus();
       void start();
     }
   };
@@ -283,9 +293,15 @@ export function GlobalDictationOverlay({
         event.preventDefault();
         cancelAndHide();
       }
-      if (event.key === 'Enter' && !event.repeat) {
+      if (
+        (event.key === 'Enter' || event.key === ' ') &&
+        !event.repeat &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
         event.preventDefault();
-        if (sessionRef.current) void confirmAndPaste();
+        if (sessionRef.current || pendingPasteRef.current) void confirmAndPaste();
         else if (stateRef.current === 'error') void start();
       }
     };
@@ -297,16 +313,19 @@ export function GlobalDictationOverlay({
   const busy = state === 'transcribing' || state === 'pasting';
 
   const dictationHotkey = useDictationHotkey();
-  const hint = state === 'error' ? errorMessage : partial || (state === 'ready' ? `${dictationHotkey} · VibeSpace STT` : STATE_HINT[state]);
+  const hint =
+    state === 'error'
+      ? errorMessage
+      : partial || (state === 'ready' ? `${dictationHotkey} · VibeSpace STT` : STATE_HINT[state]);
   return (
     <div
       data-tauri-drag-region
       data-monochrome-surface="global-dictation"
       aria-label="VibeSpace Dictation — drag to move"
-      title={`${hint}${engineLabel ? ` · ${engineLabel}` : ''}\n${dictationHotkey}: finish · Esc: cancel · Drag to move`}
+      title={`${hint}${engineLabel ? ` · ${engineLabel}` : ''}\nSpace / ${dictationHotkey}: finish · Esc: cancel · Drag to move`}
       className={cn(
-        'flex h-[30px] w-[120px] cursor-grab items-center gap-1 overflow-hidden rounded-full border border-accent-copper/45 bg-background/95 px-1 active:cursor-grabbing',
-        '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background',
+        'flex h-[30px] w-[120px] cursor-grab items-center gap-2 overflow-hidden rounded-full border-0 bg-background px-2 shadow-none outline-none active:cursor-grabbing',
+        '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:bg-background',
       )}
     >
       <style>{`
@@ -325,7 +344,7 @@ export function GlobalDictationOverlay({
       />
       <div aria-hidden="true" className="pointer-events-none min-w-0 flex-1 [&_canvas]:!h-5">
         {listening ? (
-          <VoiceActivityWaveform levelRef={levelRef} active />
+          <DictationLevelMeter levelRef={levelRef} />
         ) : (
           <div
             className={cn(
@@ -342,7 +361,7 @@ export function GlobalDictationOverlay({
         {engineLabel && <span>{engineLabel}</span>}
         <button
           type="button"
-          onClick={() => void start()}
+          onClick={() => (pendingPasteRef.current ? void confirmAndPaste() : void start())}
           disabled={busy || listening}
           aria-label={state === 'error' ? 'Retry dictation' : 'Start dictation'}
         >

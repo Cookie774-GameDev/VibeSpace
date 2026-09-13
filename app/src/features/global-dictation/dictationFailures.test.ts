@@ -105,7 +105,7 @@ describe('global dictation failure narration', () => {
     );
     expect(formatGlobalDictationPasteFailure(new Error('synthetic private paste detail'))).toBe(
       'The action failed, sir. Action: Global dictation paste. ' +
-        'Cause: The transcript could not be pasted into the previously focused app. ' +
+        'Cause: The transcript could not be pasted into the selected text field. ' +
         'Restore focus and confirm input permission, then retry.',
     );
   });
@@ -124,7 +124,7 @@ describe('global dictation failure narration', () => {
 
     expect(overlay).toContain('formatGlobalDictationStartupFailure(err)');
     expect(overlay).toContain('formatGlobalDictationSessionFailure(message)');
-    expect(overlay.match(/formatGlobalDictationPasteFailure\(err\)/gu)).toHaveLength(2);
+    expect(overlay).toContain('formatGlobalDictationPasteFailure(err)');
     expect(overlay).not.toMatch(unsafeThrownForwarding);
     expect(session).toContain('formatGlobalDictationTranscriptionFailure(engine)');
     expect(session).not.toMatch(unsafeThrownForwarding);

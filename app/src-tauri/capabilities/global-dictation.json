@@ -3,5 +3,5 @@
   "identifier": "global-dictation",
   "description": "Allow the compact dictation panel to hide after finishing or cancelling and to move by dragging.",
   "windows": ["dictation"],
-  "permissions": ["core:window:allow-hide", "core:window:allow-start-dragging"]
+  "permissions": ["core:window:allow-hide", "core:window:allow-show", "core:window:allow-start-dragging"]
 }

@@ -142,6 +142,9 @@ export async function createDeepgramDictationSession(
     const AudioCtor = getAudioContextCtor();
     if (!AudioCtor) throw new Error('Microphone level monitoring is unavailable in this runtime.');
     context = new AudioCtor();
+    // Meter readiness must not hold up the speech connection on autoplay gates.
+    if (context.state === 'suspended') void context.resume().catch(() => undefined);
+    options.signal?.throwIfAborted();
     source = context.createMediaStreamSource(stream);
     analyser = context.createAnalyser();
     analyser.fftSize = 256;

@@ -1,11 +1,13 @@
-//! Windows-wide text delivery. Keep the original destination across overlay focus
-//! changes. Native clipboard paste preserves Unicode and multiline text.
+//! Windows-wide text delivery. Capture the destination at explicit confirmation,
+//! before the overlay can acquire focus. Native clipboard paste preserves Unicode.
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Mutex,
 };
 #[path = "windows_dictation_clipboard.rs"]
 mod clipboard;
+#[path = "windows_dictation_focus.rs"]
+mod focus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Target {
@@ -13,7 +15,7 @@ struct Target {
     process: u32,
 }
 
-static TARGET: Mutex<Option<Target>> = Mutex::new(None);
+static TARGET: Mutex<Option<(Target, Vec<i32>)>> = Mutex::new(None);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 trait Desktop {
@@ -23,7 +25,7 @@ trait Desktop {
 }
 
 fn deliver(desktop: &impl Desktop, target: Option<Target>, text: &str) -> Result<(), String> {
-    let target = target.ok_or("Select a text field and start dictation again.")?;
+    let target = target.ok_or("Select a text field and confirm dictation again.")?;
     if !desktop.activate(target) || desktop.foreground() != Some(target) {
         return Err("The original text window is no longer available for dictation.".into());
     }
@@ -48,6 +50,7 @@ struct WindowsDesktop {
     owner: usize,
     expected: Option<Target>,
     generation: u64,
+    field: Vec<i32>,
 }
 
 fn identify(window: HWND) -> Option<Target> {
@@ -81,6 +84,11 @@ impl Desktop for WindowsDesktop {
     }
 
     fn insert(&self, text: &str) -> Result<(), String> {
+        if focus::focused_editable().as_ref() != Some(&self.field) {
+            return Err(
+                "The selected text field is no longer focused. Select a text field and retry.".into(),
+            );
+        }
         let restore = clipboard::prepare(self.owner, text)?;
         let result = if GENERATION.load(Ordering::SeqCst) != self.generation
             || self.foreground() != self.expected
@@ -122,18 +130,23 @@ fn paste_inputs() -> [INPUT; 4] {
 }
 
 /// Called by the native global shortcut BEFORE the overlay acquires focus.
-pub fn capture_target() {
+pub fn capture_target() -> bool {
+    let generation = GENERATION.load(Ordering::SeqCst);
+    let foreground = identify(unsafe { GetForegroundWindow() });
+    let Some(field) = focus::focused_editable() else {
+        return false;
+    };
+    if foreground.is_none() || identify(unsafe { GetForegroundWindow() }) != foreground {
+        return false;
+    }
     if let Ok(mut target) = TARGET.lock() {
-        if target.is_none() {
-            let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-            *target = WindowsDesktop {
-                owner: 0,
-                expected: None,
-                generation,
-            }
-            .foreground();
+        if target.is_none() && GENERATION.load(Ordering::SeqCst) == generation {
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+            *target = foreground.map(|target| (target, field));
+            return true;
         }
     }
+    false
 }
 
 pub fn cancel() {
@@ -143,12 +156,45 @@ pub fn cancel() {
     }
 }
 
+/// Finishing from another page/app chooses that focused field. Confirming from
+/// the pill itself retains the last selected destination. A non-editable surface
+/// explicitly clears the old destination: never silently paste into an old chat.
+pub fn refresh_target(overlay: usize) {
+    let generation = GENERATION.load(Ordering::SeqCst);
+    let foreground = identify(unsafe { GetForegroundWindow() });
+    if foreground.is_some_and(|target| target.window == overlay) {
+        return;
+    }
+    let field = focus::focused_editable();
+    let candidate = confirmed_target(foreground, field, identify(unsafe { GetForegroundWindow() }));
+    if let Ok(mut saved) = TARGET.lock() {
+        if GENERATION.load(Ordering::SeqCst) == generation {
+            *saved = candidate;
+        }
+    }
+}
+
+fn confirmed_target(
+    before: Option<Target>,
+    field: Option<Vec<i32>>,
+    after: Option<Target>,
+) -> Option<(Target, Vec<i32>)> {
+    if before == after { before.zip(field) } else { None }
+}
+
 pub fn paste(text: &str, owner: usize) -> Result<(), String> {
-    let (target, generation) = {
+    let (target, field, generation) = {
         let saved = TARGET
             .lock()
             .map_err(|_| "Dictation is busy. Please retry.")?;
-        (*saved, GENERATION.load(Ordering::SeqCst))
+        (
+            saved.as_ref().map(|(target, _)| *target),
+            saved
+                .as_ref()
+                .map(|(_, field)| field.clone())
+                .unwrap_or_default(),
+            GENERATION.load(Ordering::SeqCst),
+        )
     };
     // Do not synthesize key-up events for physically held keys. Wait for the
     // confirming shortcut to be released so it cannot modify the inserted text.
@@ -177,6 +223,7 @@ pub fn paste(text: &str, owner: usize) -> Result<(), String> {
             owner,
             expected: target,
             generation,
+            field,
         },
         target,
         text,
@@ -215,6 +262,22 @@ mod tests {
         window: 1,
         process: 10,
     };
+
+    #[test]
+    fn confirmation_can_select_another_page_or_application() {
+        let another_app = Target { window: 2, process: 20 };
+        for target in [ORIGINAL, another_app] {
+            assert_eq!(confirmed_target(Some(target), Some(vec![7, 8]), Some(target)), Some((target, vec![7, 8])));
+        }
+    }
+
+    #[test]
+    fn confirmation_rejects_non_editable_and_changing_focus() {
+        assert_eq!(confirmed_target(Some(ORIGINAL), None, Some(ORIGINAL)), None);
+        assert_eq!(confirmed_target(Some(ORIGINAL), Some(vec![1]), None), None);
+        assert_eq!(confirmed_target(None, Some(vec![1]), None), None);
+        assert_eq!(confirmed_target(Some(ORIGINAL), Some(vec![1]), Some(Target { process: 11, ..ORIGINAL })), None);
+    }
 
     #[test]
     fn never_inserts_without_an_original_destination() {

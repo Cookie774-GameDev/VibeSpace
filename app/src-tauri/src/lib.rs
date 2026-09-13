@@ -306,9 +306,6 @@ fn start_cold_start_intro(app: &tauri::AppHandle) {
 
 fn show_dictation_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("dictation") {
-        if !window.is_visible().unwrap_or(false) {
-            dictation::capture_target();
-        }
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.emit("jarvis:global-dictation-toggle", ());
@@ -317,16 +314,17 @@ fn show_dictation_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Ctrl+Shift+Space has one route regardless of foreground focus.
+/// An existing take can always finish; a new take needs an editable target.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum DictationRoute {
     /// The compact VibeSpace module transcribes and only pastes after confirm.
     Overlay,
+    Ignore,
 }
 
 /// Never returns a Win+H / OS-dictation path.
-fn dictation_route(_main_window_focused: bool) -> DictationRoute {
-    DictationRoute::Overlay
+fn dictation_route(editable_or_visible: bool) -> DictationRoute {
+    if editable_or_visible { DictationRoute::Overlay } else { DictationRoute::Ignore }
 }
 
 fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
@@ -339,13 +337,26 @@ fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
     if !enabled {
         return;
     }
-    let main_focused = app
-        .get_window("main")
-        .and_then(|window| window.is_focused().ok())
-        .unwrap_or(false);
-    match dictation_route(main_focused) {
-        DictationRoute::Overlay => show_dictation_window(app),
-    }
+    // UI Automation can cross process boundaries: never block the shortcut/UI
+    // thread or queue multiple probes while a provider is responding.
+    static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if PROBING.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(window) = app.get_webview_window("dictation").filter(|window| window.is_visible().unwrap_or(false)) {
+            // Capture where the user is typing BEFORE focusing the pill. Page
+            // navigation is independent of the recording in its own WebView.
+            dictation::refresh_target(&window);
+            let _ = window.emit("jarvis:global-dictation-toggle", ());
+            PROBING.store(false, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+        match dictation_route(dictation::capture_target()) {
+            DictationRoute::Overlay => show_dictation_window(&app),
+            DictationRoute::Ignore => {},
+        }
+        PROBING.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
 }
 
 /// Minimal invoke handler command for visual-test mode.
@@ -436,6 +447,7 @@ fn run_ordinary(
             // Keep old local dev window overrides at the current compact size.
             window.width = 120.0;
             window.height = 30.0;
+            window.shadow = false;
         }
     }
     branding::init_platform_branding();
@@ -1566,10 +1578,9 @@ wallpaper_master::wallpaper_full_cache_path";
     }
 
     #[test]
-    fn dictation_routes_to_the_same_overlay_when_vibespace_is_focused_or_unfocused() {
-        // Focus no longer changes the destination: Ctrl+Shift+Space always opens
-        // the compact module that handles transcribe + confirm/paste.
+    fn dictation_ignores_noneditable_focus() {
+        // Only an editable target or an already-visible take can use the overlay.
         assert_eq!(dictation_route(true), DictationRoute::Overlay);
-        assert_eq!(dictation_route(false), DictationRoute::Overlay);
+        assert_eq!(dictation_route(false), DictationRoute::Ignore);
     }
 }

@@ -84,6 +84,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(capability.windows).toEqual(['dictation']);
     expect(capability.permissions).toEqual([
       'core:window:allow-hide',
+      'core:window:allow-show',
       'core:window:allow-start-dragging',
     ]);
     const panel = config.app.windows.find(
@@ -91,6 +92,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     );
     expect(panel.width).toBe(120);
     expect(panel.height).toBe(30);
+    expect(panel.shadow).toBe(false);
   });
 
   beforeEach(() => {
@@ -119,11 +121,12 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
 
     render(<GlobalDictationOverlay />);
     expect(screen.getByText('VibeSpace Dictation')).toBeTruthy();
-    expect(screen.getByText(/Ctrl\+Space · VibeSpace STT/)).toBeTruthy();
+    expect(screen.getByText(/Ctrl\+Shift\+Space · VibeSpace STT/)).toBeTruthy();
 
     await openOverlay();
 
     expect(sessionMocks.createSession).toHaveBeenCalledTimes(1);
+    expect(tauriMocks.windowApi.setFocus).not.toHaveBeenCalled();
     act(() => {
       callbacks!.onOpen?.();
       callbacks!.onPartial?.('hello wor');
@@ -219,6 +222,10 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     });
     expect(session.stop).toHaveBeenCalled();
     expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
+    // No arbitrary renderer delay before native focus/key-release validation.
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_paste_text', {
+      text: 'ship the release notes',
+    });
 
     await act(async () => {
       vi.advanceTimersByTime(200);
@@ -294,6 +301,61 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     vi.useRealTimers();
   });
 
+  it('keeps recording across focus changes and retries the same transcript after a failed paste', async () => {
+    const session = fakeSession('words across four pages');
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      cb.onOpen?.();
+      return session;
+    });
+    tauriMocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'dictation_paste_text') throw new Error('No editable field');
+    });
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    for (let page = 0; page < 4; page++) {
+      fireEvent.blur(window);
+      fireEvent(document, new Event('visibilitychange'));
+      fireEvent.focus(window);
+    }
+    expect(session.cancel).not.toHaveBeenCalled();
+    expect(session.stop).not.toHaveBeenCalled();
+    await openOverlay();
+    expect(screen.getByText(/Your transcript is kept/)).toBeTruthy();
+    await openOverlay();
+    expect(sessionMocks.createSession).toHaveBeenCalledOnce();
+    expect(session.stop).toHaveBeenCalledOnce();
+    expect(
+      tauriMocks.invoke.mock.calls.filter(([command]) => command === 'dictation_paste_text'),
+    ).toEqual([
+      ['dictation_paste_text', { text: 'words across four pages' }],
+      ['dictation_paste_text', { text: 'words across four pages' }],
+    ]);
+    tauriMocks.invoke.mockResolvedValue(undefined);
+    await openOverlay();
+    expect(screen.queryByText(/Your transcript is kept/)).toBeNull();
+    expect(session.cancel).not.toHaveBeenCalled();
+    await openOverlay();
+    expect(sessionMocks.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves finalized words when hiding fails and Escape discards only the pending delivery', async () => {
+    const session = fakeSession('keep until cancelled');
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      cb.onOpen?.();
+      return session;
+    });
+    tauriMocks.windowApi.hide.mockRejectedValueOnce(new Error('Window busy'));
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    await openOverlay();
+    expect(screen.getByText(/Your transcript is kept/)).toBeTruthy();
+    expect(session.stop).toHaveBeenCalledOnce();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await openOverlay();
+    expect(sessionMocks.createSession).toHaveBeenCalledTimes(2);
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
+  });
+
   it('suppresses an unknown startup exception behind a precise retry path', async () => {
     sessionMocks.createSession.mockRejectedValue(
       new Error('synthetic dictation startup implementation detail'),
@@ -328,6 +390,26 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_cancel');
     expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
     expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
+  });
+
+  it('Space confirms once, but does not double-handle the native Ctrl+Space shortcut', async () => {
+    const session = fakeSession('confirmed with space');
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      cb.onOpen?.();
+      return session;
+    });
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    fireEvent.keyDown(window, { key: ' ', ctrlKey: true });
+    expect(session.stop).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: ' ' });
+      fireEvent.keyDown(window, { key: ' ', repeat: true });
+    });
+    expect(session.stop).toHaveBeenCalledOnce();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_paste_text', {
+      text: 'confirmed with space',
+    });
   });
 
   it('serializes rapid toggles while the microphone is starting', async () => {
@@ -382,7 +464,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     render(<GlobalDictationOverlay />);
     await openOverlay();
     await openOverlay();
-    expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
+    expect(session.stop).toHaveBeenCalled();
     fireEvent.keyDown(window, { key: 'Escape' });
     tauriMocks.windowApi.hide.mockClear();
     await act(async () => {
@@ -441,7 +523,8 @@ describe('GlobalDictationOverlay MonoChrome appearance', () => {
     // Canonical repo-wide MonoChrome gate root: matches monochrome-theme.css
     // and the other shell-overlay appearance tests.
     expect(source).toContain('[html[data-theme=monochrome]_&]:bg-background');
-    expect(source).toContain('[html[data-theme=monochrome]_&]:border-border-mid');
+    expect(source).toContain('border-0');
+    expect(source).toContain('shadow-none outline-none');
     expect(source).toContain('[html[data-theme=monochrome]_&]:rounded-sm');
 
     // The loose, non-canonical gate root must be fully normalized away.

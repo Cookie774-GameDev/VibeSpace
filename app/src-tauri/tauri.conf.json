@@ -45,6 +45,7 @@
       {
         "label": "dictation",
         "title": "VibeSpace Dictation",
+        "shadow": false,
         "url": "index.html?view=dictation",
         "width": 120,
         "height": 30,
