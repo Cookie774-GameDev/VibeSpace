@@ -1,7 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { telemetryConsentStore } from '@/features/telemetry/telemetryConsent';
 import { Telemetry } from './Telemetry';
+
+vi.mock('@/features/telemetry/accountTelemetryConsent', () => ({
+  getAccountTelemetryConsent: vi.fn(async () => ({ ok: false, error: 'cloud_not_configured' })),
+  updateAccountTelemetryConsent: vi.fn(),
+}));
 
 describe('Telemetry settings', () => {
   beforeEach(() => telemetryConsentStore.resetForTests());

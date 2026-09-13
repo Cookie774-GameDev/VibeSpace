@@ -35,7 +35,7 @@ describe('Composer active-request cancel and resume contract', () => {
     expect(composerSource).toContain("enqueueCurrentMessage(text, 'after-run')");
     expect(composerSource).toContain('messages={queuedMessages}');
     expect(queueSource).toContain('aria-label="Edit queued message"');
-    expect(queueSource).toContain('aria-label="Send queued message now"');
+    expect(queueSource).toContain("'Steer queued message'");
     expect(queueSource).toContain('aria-label="Delete queued message"');
   });
 
@@ -55,7 +55,7 @@ describe('Composer active-request cancel and resume contract', () => {
 
   it('routes an explicit steer without silently converting it into a cancel-and-resend', () => {
     const composerSteer = composerSource.slice(
-      composerSource.indexOf('const interruptAndSendQueued'),
+      composerSource.indexOf('queuedInterruptInFlightRef.current = queued.id;'),
       composerSource.indexOf('interruptQueuedRef.current = interruptAndSendQueued'),
     );
     const runtimeSteer = runtimeSource.slice(

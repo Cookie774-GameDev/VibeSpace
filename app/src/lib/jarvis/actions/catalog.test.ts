@@ -116,6 +116,8 @@ describe('Jarvis action catalog', () => {
       { id: 'browser.navigate', risk: 'external-side-effect', approval: 'always' },
       { id: 'browser.click', risk: 'external-side-effect', approval: 'always' },
       { id: 'browser.type', risk: 'external-side-effect', approval: 'always' },
+      { id: 'chat.read', risk: 'read-only', approval: 'never' },
+      { id: 'chat.send', risk: 'external-side-effect', approval: 'always' },
       { id: 'chat.model.switch', risk: 'external-side-effect', approval: 'always' },
       { id: 'mcp.invoke', risk: 'external-side-effect', approval: 'always' },
       { id: 'creator.start', risk: 'safe-write', approval: 'always' },

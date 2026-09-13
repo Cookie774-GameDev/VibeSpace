@@ -74,6 +74,8 @@ describe('createJarvisCapabilitySnapshot', () => {
       'canva.design.read',
       'canva.designs.search',
       'chat.model.switch',
+      'chat.read',
+      'chat.send',
       'creator.start',
       'file.search',
       'files.create',

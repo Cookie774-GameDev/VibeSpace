@@ -23,7 +23,7 @@ describe('General taskbar usage settings', () => {
     expect(screen.getByRole('button', { name: 'Reset taskbar usage position' })).toBeTruthy();
     expect(screen.getByText('The first four visible providers are shown.')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Recycle Bin' })).toBeTruthy();
-    expect(screen.getByText(/recoverable on this device for exactly 90 days/i)).toBeTruthy();
+    expect(screen.getByText(/recoverable on this device for 90 days/i)).toBeTruthy();
   });
 
   it('shows a recoverable sanitized mount diagnostic', () => {
