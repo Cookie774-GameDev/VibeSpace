@@ -21,6 +21,7 @@ beforeEach(() => {
     'ResizeObserver',
     class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
@@ -49,6 +50,35 @@ async function selectTwo() {
   fireEvent.click(screen.getByRole('button', { name: 'Connect Shell 2 2' }));
 }
 describe('native Fabric pane selection', () => {
+  it('avoids an offline pane and reroutes when it resizes or is removed', async () => {
+    mocks.read.mockResolvedValue(targets.slice(0, 2));
+    const targetPane = document.querySelector<HTMLElement>(
+      '[data-terminal-drop-pane-id="pane-2"]',
+    )!;
+    const blocker = document.querySelector<HTMLElement>('[data-terminal-drop-pane-id="pane-3"]')!;
+    targetPane.getBoundingClientRect = () =>
+      ({ x: 640, y: 160, width: 300, height: 600 }) as DOMRect;
+    let blockerHeight = 600;
+    blocker.getBoundingClientRect = () =>
+      ({ x: 320, y: 160, width: 300, height: blockerHeight }) as DOMRect;
+    render(<TerminalFabricOverlay visible projectId="project" />);
+    await selectTwo();
+    expect(screen.queryByRole('button', { name: 'Connect Shell 3 3' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm connection' }));
+    await screen.findByLabelText('2 connected terminals');
+    expect(document.querySelector('.vs-fabric-line')).toBeNull();
+    blockerHeight = 300;
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => expect(document.querySelector('.vs-fabric-line')).not.toBeNull());
+    const detour = document.querySelector('.vs-fabric-line')!.getAttribute('d');
+    act(() => blocker.remove());
+    await waitFor(() =>
+      expect(document.querySelector('.vs-fabric-line')!.getAttribute('d')).not.toBe(detour),
+    );
+    expect(document.querySelector('.vs-fabric-line')!.getAttribute('d')).toBe(
+      'M 300 460 L 640 460',
+    );
+  });
   it('highlights panes, requires confirmation, and draws only confirmed connections', async () => {
     const view = render(<TerminalFabricOverlay visible projectId="project" />);
     expect(
@@ -125,8 +155,8 @@ describe('divider bridge geometry', () => {
     expect(fabricBridge(left, lower)?.path).toBe('M 695 1000 L 695 1014');
     expect(fabricBridge(lower, left)?.path).toBe('M 695 1014 L 695 1000');
   });
-  it('does not draw across overlapping or diagonally separated terminal content', () => {
+  it('rejects overlapping panes and routes diagonally separated panes through the gaps', () => {
     expect(fabricBridge(left, left)).toBeNull();
-    expect(fabricBridge(left, { ...right, y: 1100 })).toBeNull();
+    expect(fabricBridge(left, { ...right, y: 1100 })).not.toBeNull();
   });
 });

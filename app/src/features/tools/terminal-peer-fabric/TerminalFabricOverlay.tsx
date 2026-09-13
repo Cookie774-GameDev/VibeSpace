@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { flushSync } from 'react-dom';
 import { Link2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { readLiveTargetSnapshot } from '@/features/instant-command/targetSnapshot';
@@ -7,27 +8,8 @@ import { terminalPeerFabricCommandPort as port } from './terminalPeerFabricTool'
 import { sameFabricMembers, useFabricPresentationStore } from './fabricPresentationStore';
 import './terminal-fabric.css';
 
-type Box = { id: string; x: number; y: number; width: number; height: number };
-// Use facing edges so selection order cannot route a bridge across terminal content.
-export function fabricBridge(from: Box, to: Box) {
-  const top = Math.max(from.y, to.y);
-  const bottom = Math.min(from.y + from.height, to.y + to.height);
-  const left = Math.max(from.x, to.x);
-  const right = Math.min(from.x + from.width, to.x + to.width);
-  let x1: number, y1: number, x2: number, y2: number;
-  if (bottom > top && (from.x + from.width <= to.x || to.x + to.width <= from.x)) {
-    const forward = from.x < to.x;
-    x1 = forward ? from.x + from.width : from.x;
-    x2 = forward ? to.x : to.x + to.width;
-    y1 = y2 = (top + bottom) / 2;
-  } else if (right > left && (from.y + from.height <= to.y || to.y + to.height <= from.y)) {
-    const forward = from.y < to.y;
-    y1 = forward ? from.y + from.height : from.y;
-    y2 = forward ? to.y : to.y + to.height;
-    x1 = x2 = (left + right) / 2;
-  } else return null;
-  return { x1, y1, x2, y2, path: `M ${x1} ${y1} L ${x2} ${y2}` };
-}
+import { createFabricRouter, type FabricBox as Box } from './fabricRouting';
+export { fabricBridge } from './fabricRouting';
 
 export function TerminalFabricOverlay({
   visible,
@@ -111,32 +93,69 @@ export function TerminalFabricOverlay({
   }, [visible, selecting, peers, projectId]);
 
   React.useLayoutEffect(() => {
-    if (!visible) return;
-    const panes = Array.from(
-      document.querySelectorAll<HTMLElement>('[data-terminal-drop-pane-id]'),
-    );
-    const update = () =>
-      setBoxes(
-        panes.flatMap((pane) => {
-          const id = pane.dataset.terminalDropPaneId ?? '';
-          if (!targets.some((t) => t.paneId === id)) return [];
-          const r = pane.getBoundingClientRect();
-          return r.width > 0 && r.height > 0
-            ? [{ id, x: r.x, y: r.y, width: r.width, height: r.height }]
-            : [];
-        }),
-      );
-    update();
-    const observer = new ResizeObserver(update);
-    panes.forEach((pane) => observer.observe(pane));
-    window.addEventListener('resize', update);
-    window.addEventListener('scroll', update, true);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', update);
-      window.removeEventListener('scroll', update, true);
+    if (!visible || (!selecting && peers.length === 0)) return;
+    const selector = '[data-terminal-drop-pane-id]';
+    let frame = 0;
+    const observed = new Set<HTMLElement>();
+    const update = () => {
+      frame = 0;
+      const panes = Array.from(document.querySelectorAll<HTMLElement>(selector));
+      for (const pane of observed)
+        if (!panes.includes(pane)) {
+          observer.unobserve(pane);
+          observed.delete(pane);
+        }
+      const next = panes.flatMap((pane) => {
+        if (!observed.has(pane)) {
+          observer.observe(pane);
+          observed.add(pane);
+        }
+        const r = pane.getBoundingClientRect();
+        return r.width > 0 && r.height > 0
+          ? [
+              {
+                id: pane.dataset.terminalDropPaneId ?? '',
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+              },
+            ]
+          : [];
+      });
+      setBoxes((previous) => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next));
     };
-  }, [targets, visible]);
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    // ResizeObserver runs before paint. Commit the measured route in that same
+    // frame so a dragged divider cannot leave a stale line over terminal content.
+    const observer = new ResizeObserver(() => flushSync(update));
+    const mutations = new MutationObserver((records) => {
+      if (
+        records.some((record) =>
+          [...record.addedNodes, ...record.removedNodes].some(
+            (node) =>
+              node instanceof Element && (node.matches(selector) || node.querySelector(selector)),
+          ),
+        )
+      )
+        schedule();
+    });
+    update();
+    mutations.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('resize', schedule);
+    window.addEventListener('scroll', schedule, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      mutations.disconnect();
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('scroll', schedule, true);
+    };
+  }, [visible, selecting, peers.length]);
+
+  const routeBridge = React.useMemo(() => createFabricRouter(boxes), [boxes]);
 
   React.useEffect(() => {
     if (!selecting) return;
@@ -214,11 +233,12 @@ export function TerminalFabricOverlay({
         <svg className="vs-fabric-bridges" aria-label={`${connected.length} connected terminals`}>
           {connected.slice(1).map((box, i) => {
             const from = connected[i];
-            const bridge = fabricBridge(from, box);
+            const bridge = routeBridge(from, box);
             if (!bridge) return null;
             return (
               <g key={`${from.id}:${box.id}`}>
-                <path d={bridge.path} />
+                <path className="vs-fabric-track" d={bridge.path} />
+                <path className="vs-fabric-line" d={bridge.path} />
                 <circle cx={bridge.x1} cy={bridge.y1} r="1.75" />
                 <circle cx={bridge.x2} cy={bridge.y2} r="1.75" />
               </g>
@@ -231,7 +251,7 @@ export function TerminalFabricOverlay({
               const from = connected.find((b) => b.id === source?.paneId);
               const to = connected.find((b) => b.id === target?.paneId);
               if (!from || !to) return null;
-              const bridge = fabricBridge(from, to);
+              const bridge = routeBridge(from, to);
               if (!bridge) return null;
               return (
                 <circle
@@ -281,7 +301,8 @@ export function TerminalFabricOverlay({
             </Button>
           </section>
           {boxes.map((box) => {
-            const target = targets.find((t) => t.paneId === box.id)!;
+            const target = targets.find((t) => t.paneId === box.id);
+            if (!target) return null;
             const checked = selected.includes(target.sessionId);
             return (
               <button

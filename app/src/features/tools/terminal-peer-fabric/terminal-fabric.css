@@ -77,15 +77,24 @@
   stroke: currentColor;
   stroke-width: 1.5;
   stroke-linecap: round;
-  opacity: 0.8;
-  filter: drop-shadow(0 0 1.5px currentColor);
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.vs-fabric-bridges .vs-fabric-track {
+  stroke: hsl(var(--background));
+  stroke-width: 3.5;
+}
+.vs-fabric-bridges .vs-fabric-line {
+  opacity: 0.95;
 }
 .vs-fabric-bridges circle {
   fill: currentColor;
-  opacity: 0.8;
+  stroke: hsl(var(--background));
+  stroke-width: 0.75;
 }
 .vs-fabric-bridges .vs-fabric-spark {
-  filter: drop-shadow(0 0 3px currentColor);
+  fill: hsl(var(--foreground));
+  stroke: currentColor;
   animation: vs-fabric-delivery 650ms both;
 }
 @keyframes vs-fabric-delivery {
