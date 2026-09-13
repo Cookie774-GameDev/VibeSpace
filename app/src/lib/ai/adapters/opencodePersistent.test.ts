@@ -86,7 +86,10 @@ import {
   buildOpenCodeQuestionReplyRequest,
 } from '@/lib/ai/openCodeQuestionReply';
 import type { ProviderEvent, ProviderRequest } from './types';
-import { readToolGatewayObservedExecutionAuthority } from '@/lib/harness/toolGatewayAuthority';
+import {
+  authorizeToolGatewayRequest,
+  readToolGatewayObservedExecutionAuthority,
+} from '@/lib/harness/toolGatewayAuthority';
 import { useAuthStore } from '@/stores/auth';
 import type { ProjectId, WorkspaceId } from '@/types/common';
 
@@ -835,6 +838,44 @@ describe('persistent OpenCode question transport authority', () => {
 
     abort.abort();
     await iterator.return?.();
+  });
+
+  it('authorizes an immediate tool call before prompt acknowledgement and releases the binding', async () => {
+    useAuthStore.setState({
+      localUserId: 'account-question-test',
+      workspaceId: 'workspace-question-test' as WorkspaceId,
+      projectId: 'project-question-test' as ProjectId,
+    });
+    configureManagedQuestionTransport([]);
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    const toolRequest = {
+      protocolVersion: 1 as const,
+      requestId: 'early-context-request',
+      sessionId: 'ses_question_exact',
+      messageId: 'early-message',
+      tool: 'vibespace_context' as const,
+      args: { operation: 'search', query: 'needle', limit: 3 },
+    };
+    let authorizedDuringSend = false;
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/prompt_async')) {
+        authorizedDuringSend = authorizeToolGatewayRequest(toolRequest);
+      }
+      return original(...args);
+    });
+    const request = {
+      ...questionProviderRequest('request-early-gateway'),
+      projectId: 'project-question-test',
+      tools: { vibespace_context: true },
+    };
+    const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session' } });
+      expect(authorizedDuringSend).toBe(true);
+    } finally {
+      await iterator.return?.();
+    }
+    expect(authorizeToolGatewayRequest(toolRequest)).toBe(false);
   });
 
   it('publishes validated observed execution identity to the exact Tool Gateway session and releases it', async () => {

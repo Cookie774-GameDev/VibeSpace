@@ -2098,8 +2098,19 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       contextSystemAddendum(request, settings),
       request.explicitReadRoot === true,
     );
-    failureStage = 'prompt_dispatch';
     requireActiveRequest();
+    // The provider may execute tools before the prompt acknowledgement reaches
+    // the renderer. Bind the prepared session first; finally releases it even
+    // when dispatch fails or acknowledgement reconciliation times out.
+    failureStage = 'session_authority';
+    if (
+      gatewayAuthority &&
+      !bindToolGatewaySessionAuthority(session.sessionId, gatewayAuthority)
+    ) {
+      throw new Error('Tool Gateway session authority changed before dispatch.');
+    }
+    boundSessionId = session.sessionId;
+    failureStage = 'prompt_dispatch';
     const dispatch = await coordinator.dispatch({
       scope,
       chatId,
@@ -2128,7 +2139,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         explicitReadSynthesis: request.explicitReadSynthesis,
         requested: request.tools,
       }),
-      expectedSessionId: request.expectedSessionId,
+      expectedSessionId: request.expectedSessionId ?? session.sessionId,
       requireExactRuntimeControls: request.explicitReadRoot === true,
     });
     if (dispatch.kind === 'command')

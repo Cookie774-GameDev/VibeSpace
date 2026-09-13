@@ -2165,11 +2165,21 @@ describe('startRuntimeListener agent routing', () => {
     expect(messages[0]?.content).toContain(JSON.stringify(content));
     expect(messages[0]?.content).not.toContain('"operation":"search"');
     expect(messages[0]?.content).not.toContain('"limit":5');
-    expect(messages[0]?.content).toContain('Do not call `search`, `open`, or `expand`');
+    expect(messages[0]?.content).not.toContain('Do not call `search`, `open`, or `expand`');
+    expect(messages[0]?.content).toContain('at most three targeted `search` calls');
+    expect(messages[0]?.content).toContain('Do not repeat the failed investigation');
     expect(messages[0]?.content).toContain('Gateway/RLM receipt');
     expect(messages[0]?.content).toContain('canonical `vibespace:context/...` provenance URI');
     expect(messages[0]?.content).toContain('This is a direct user chat, not a subagent assignment');
     expect(messages[0]?.content).toContain('Do not answer with a bootstrap receipt');
+  });
+
+  it.each([
+    'Use the actual vibespace_context tool. Make exactly one search with operation="search", query="R14_NONEXISTENT_6A84F2", limit=3. Do not investigate.',
+    'Read the mapped files with search/open only. Never call investigation. Cite the evidence.',
+  ])('preserves an explicit prohibition on investigation: %s', (content) => {
+    const messages = [{ role: 'user' as const, content }];
+    expect(prepareOpenCodeMessagesForInteractionMode(messages)).toBe(messages);
   });
 
   it('preserves a bounded relative current-working-directory read for disk tooling', () => {

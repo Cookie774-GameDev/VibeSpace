@@ -716,6 +716,30 @@ describe('production Context Map RLM repository', () => {
     expect(stat).toHaveBeenCalledTimes(14);
   });
 
+  it('stops sizing a large map once the small-map fallback budget is exceeded', async () => {
+    const map = maps()[0]!;
+    const nodes = Array.from({ length: 58 }, (_, index) => ({
+      id: `chunk-${index}`, kind: 'file' as const, title: `chunk-${index}.txt`, summary: '',
+      path: `C:\\repo\\chunk-${index}.txt`,
+    }));
+    const stat = vi.fn(async (path: string) => ({
+      ok: true as const, path, kind: 'file' as const, size: 1024 * 1024,
+    }));
+    const read = vi.fn();
+    const indexStatus = vi.fn(async () => ({ documentCount: 58, needsRebuild: false }));
+    const lexicalSearch = vi.fn(async () => []);
+    const repository = createContextMapRlmRepository({
+      loadMaps: async () => [{ ...map, tree: { nodes } }],
+      stat, read, indexStatus, lexicalSearch,
+    });
+    expect(await repository.search({ accountId: 'account-1', projectId: 'project-1' },
+      'R14_NONEXISTENT_6A84F2')).toEqual([]);
+    expect(stat.mock.calls.length).toBeLessThanOrEqual(16);
+    expect(indexStatus).toHaveBeenCalledWith('account-1', map.id);
+    expect(lexicalSearch).toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('cancels one source-validation waiter without cancelling its concurrent peer', async () => {
     const content = 'Observatory Lumen uses cobalt-fern verification 47291.';
     let releaseRead!: () => void;

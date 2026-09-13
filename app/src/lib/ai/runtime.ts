@@ -3092,6 +3092,11 @@ export function prepareOpenCodeMessagesForInteractionMode(
   const latest = messages[latestUserIndex]!;
   const userText = llmContentToText(latest.content);
   if (!requestsReadOnlyContextTool(userText)) return messages;
+  // The investigation convenience wrapper must not override a user's narrower
+  // retrieval workflow, including a single search or an explicit tool budget.
+  if (/\b(?:do not|don't|never)\s+(?:call\s+)?(?:an?\s+)?investigat(?:e|ion)\b/iu.test(userText)) {
+    return messages;
+  }
   if (requestsDirectContextAddress(userText)) return messages;
   if (parseDirectContextEvidenceContinuation(userText)) return messages;
   const mandatoryEvidence = parseMandatoryContextEvidenceResearch(userText);
@@ -3127,9 +3132,10 @@ export function prepareOpenCodeMessagesForInteractionMode(
         ? [
             'Call the real `vibespace_context` function now with exactly these two arguments:',
             `{"operation":"investigate","query":${JSON.stringify(userText)}}`,
-            'Do not include `pointer`, `recordId`, byte ranges, continuation, `limit`, or any other optional argument. Do not call `search`, `open`, or `expand` for this ordinary research turn.',
+            'For this initial investigation, do not include `pointer`, `recordId`, byte ranges, continuation, `limit`, or any other optional argument.',
             'Do not print, narrate, or wrap the call as JSON text. Wait for the real shared Gateway/RLM investigation result.',
-            'Answer only from its grounded prompt block. Include every returned canonical `vibespace:context/...` provenance URI—the Gateway/RLM receipt, source, and evidence URI—exactly as plain code; never invent a Markdown link or reconstruct a low-level pointer.',
+            'If investigation fails or leaves requested facts unsupported, and the original request permits fallback, use at most three targeted `search` calls with limit=3 and at most six `open`/`expand` calls total. Use only exact validated pointers returned by those searches, retrieve each cited source at most once, and keep all fallback evidence within 24 KiB. Respect any stricter tool or call limits in the original request. Do not repeat the failed investigation, invent pointers, or use shell/filesystem tools to bypass the Context Map.',
+            'Answer only from the grounded prompt block or verified fallback evidence. Label facts still unsupported as unavailable. Include every returned canonical `vibespace:context/...` provenance URI—the Gateway/RLM receipt, source, and evidence URI—exactly as plain code; never invent a Markdown link or reconstruct a low-level pointer.',
             'This is a direct user chat, not a subagent assignment, delegated worker task, or dispatch. No bootstrap receipt or mandatory coordination-file read applies. Do not answer with a bootstrap receipt or bootstrap error.',
           ].join('\n')
         : [

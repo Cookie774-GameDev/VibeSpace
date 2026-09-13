@@ -98,9 +98,21 @@ function isPermittedReference(
 }
 
 function isOutputLocationClaim(text: string, start: number, end: number): boolean {
+  const before = text.slice(Math.max(0, start - 96), start);
+  // A move/copy source is not a claim that the assistant produced this path.
+  // Keep checking the destination independently, including within the same sentence.
+  const after = text.slice(end, Math.min(text.length, end + 24));
+  const moveSource =
+    /\b(?:mov(?:e[ds]?|ing)|cop(?:y|ies|ied|ying))\s+(?:from|out\s+of)\s+[`"']?$/iu.test(before);
+  const copySource =
+    /\bcop(?:y|ies|ying)\s+[`"']?$/iu.test(before) &&
+    /^[`"']?\s+(?:into|to)\b/iu.test(after);
+  if (moveSource || copySource) {
+    return false;
+  }
   const local = text.slice(Math.max(0, start - 96), Math.min(text.length, end + 96));
   return (
-    DIRECT_PRODUCED_LOCATION.test(text.slice(Math.max(0, start - 96), start)) ||
+    DIRECT_PRODUCED_LOCATION.test(before) ||
     OUTPUT_ASSERTION.test(local) ||
     (OUTPUT_NOUN.test(local) && OUTPUT_ACCESS.test(local))
   );

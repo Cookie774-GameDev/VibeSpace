@@ -1746,28 +1746,37 @@ export function createContextMapRlmRepository(
 
       let useSmallFallback = admittedCandidates.length <= MAX_SMALL_MAP_FALLBACK_FILES;
       if (useSmallFallback) {
-        const preflight = await mapBoundedInOrder(
-          admittedCandidates,
-          MAX_CONCURRENT_SOURCE_VALIDATIONS,
-          async (candidate): Promise<number | undefined> => {
-            if (candidate.inlineContent !== undefined) {
-              return new TextEncoder().encode(candidate.inlineContent).length;
-            }
-            const stat = await dependencies.stat(candidate.path, false, {
-              root: candidate.map.rootDir,
-              strictProjectBoundary: true,
-            });
-            return stat.ok && stat.kind === 'file' && stat.size !== undefined && stat.size >= 0
-              ? stat.size
-              : undefined;
-          },
-        );
-        useSmallFallback =
-          preflight.every((size) => size !== undefined) &&
-          preflight.reduce(
-            (total, size) => total + (size! <= MAX_SOURCE_SHARD_BYTES ? size! : 0),
-            0,
-          ) <= MAX_SEARCH_SOURCE_BYTES;
+        let eligibleBytes = 0;
+        // Once the fallback is ruled out, additional size reads cannot change
+        // the decision. Keep the same index and physical-evidence checks below.
+        for (
+          let offset = 0;
+          useSmallFallback && offset < admittedCandidates.length;
+          offset += MAX_CONCURRENT_SOURCE_VALIDATIONS
+        ) {
+          if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+          const preflight = await mapBoundedInOrder(
+            admittedCandidates.slice(offset, offset + MAX_CONCURRENT_SOURCE_VALIDATIONS),
+            MAX_CONCURRENT_SOURCE_VALIDATIONS,
+            async (candidate): Promise<number | undefined> => {
+              if (candidate.inlineContent !== undefined) {
+                return new TextEncoder().encode(candidate.inlineContent).length;
+              }
+              const stat = await dependencies.stat(candidate.path, false, {
+                root: candidate.map.rootDir,
+                strictProjectBoundary: true,
+              });
+              return stat.ok && stat.kind === 'file' && stat.size !== undefined && stat.size >= 0
+                ? stat.size
+                : undefined;
+            },
+          );
+          for (const size of preflight) {
+            if (size === undefined) useSmallFallback = false;
+            else if (size <= MAX_SOURCE_SHARD_BYTES) eligibleBytes += size;
+          }
+          useSmallFallback = useSmallFallback && eligibleBytes <= MAX_SEARCH_SOURCE_BYTES;
+        }
       }
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
       const searchableMaps =
