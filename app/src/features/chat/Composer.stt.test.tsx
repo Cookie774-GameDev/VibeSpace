@@ -44,7 +44,7 @@ describe('Composer selected speech engine contract', () => {
 });
 
 describe('composer dictation without a confirmation panel', () => {
-  it.each(['microphone stop', 'engine finish'])(
+  it.each(['microphone stop', 'toolbar stop', 'engine finish'])(
     'inserts once on %s and never sends a chat',
     async (finish) => {
       let events: DictationEvents = {};
@@ -84,6 +84,8 @@ describe('composer dictation without a confirmation panel', () => {
         expect(screen.queryByLabelText('Composer dictation')).toBeNull();
         if (finish === 'microphone stop')
           fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }));
+        else if (finish === 'toolbar stop')
+          act(() => window.dispatchEvent(new CustomEvent('jarvis:stt:stop')));
         else
           act(() => {
             events.onFinal?.('Spoken draft');

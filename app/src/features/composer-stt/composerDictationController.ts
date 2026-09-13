@@ -68,7 +68,8 @@ export function createComposerDictationController(ports: FieldPorts) {
         },
         onFinal: text => {
           if(!current(id))return;
-          if(text.trim())committedText=(committedText+' '+text.trim()).trim();
+          // The shared selected-STT boundary publishes the full final transcript.
+          if(text.trim())committedText=text.trim();
           publish({text:committedText,partial:false});
         },
         onLevel: level => {if(current(id))ports.onLevel(level);},

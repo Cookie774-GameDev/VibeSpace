@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { useUIStore } from '@/stores/ui';
+import { resetSttFocusMemoryForTests, resolveComposerSttTextarea } from './insertText';
 import {
   COMPOSER_STT_STOP_EVENT,
   COMPOSER_STT_TOGGLE_EVENT,
@@ -15,6 +16,21 @@ describe('composerSttService toolbar routing', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetSttFocusMemoryForTests();
+  });
+
+  it('starts in the active chat pane before any field has been focused', () => {
+    useUIStore.setState({ route: 'chat' });
+    const workspace = document.createElement('div');
+    workspace.innerHTML = '<section data-chat-id="a" data-focused="false"><div data-tour="chat-composer"><textarea aria-label="Message"></textarea></div></section><section data-chat-id="b" data-focused="true"><div data-tour="chat-composer"><textarea aria-label="Message"></textarea></div></section>';
+    document.body.append(workspace);
+    try {
+      resetSttFocusMemoryForTests();
+      expect(requestComposerSttFromToolbar()).toBe(true);
+      expect(resolveComposerSttTextarea()).toBe(workspace.querySelector('[data-chat-id="b"] textarea'));
+    } finally {
+      workspace.remove();
+    }
   });
 
   it('does not change route when toolbar mic is pressed', () => {
@@ -41,10 +57,14 @@ describe('composerSttService toolbar routing', () => {
 
   it('requestComposerSttToggle includes source detail', () => {
     const received: CustomEvent<{ source?: string }>[] = [];
-    const handler = (event: Event) => received.push(event as CustomEvent<{ source?: string }>);
+    const handler = (event: Event) => {
+      event.preventDefault();
+      received.push(event as CustomEvent<{ source?: string }>);
+    };
     window.addEventListener(COMPOSER_STT_TOGGLE_EVENT, handler);
     requestComposerSttToggle('toolbar');
     expect(received[0]?.detail?.source).toBe('toolbar');
+    expect(received[0]?.defaultPrevented).toBe(true);
     window.removeEventListener(COMPOSER_STT_TOGGLE_EVENT, handler);
   });
 });

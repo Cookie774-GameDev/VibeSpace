@@ -48,6 +48,14 @@ describe('Composer selected-STT field transactions', () => {
     expect(field.value).toBe('before middle after');expect(commit).toHaveBeenCalledOnce();c.dispose();
   });
 
+  it('does not duplicate cumulative final results when the engine ends naturally', async () => {
+    const c=make();await c.start();
+    events.onFinal?.('hello');events.onFinal?.('hello world');events.onClose?.();
+    await c.accept();
+    expect(field.value).toBe('alpha hello world omega');
+    expect(commit).toHaveBeenCalledOnce();c.dispose();
+  });
+
   it('cancel leaves selected text intact and ignores late final and energy callbacks', async () => {
     const level=vi.fn();const c=createComposerDictationController({field:()=>field,commit,onLevel:level});
     await c.start();events.onPartial?.('do not insert');const late=events;

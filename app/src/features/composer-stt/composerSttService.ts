@@ -12,6 +12,12 @@ import { isTauri } from '@/lib/utils';
 import type { ComposerSttProvider, FasterWhisperModelId } from '@/types/common';
 import { FasterWhisperManager } from './fasterWhisperManager';
 import { cleanupAudioRecorder, encodeWav, getAudioContextCtor } from './audio';
+import {
+  isComposerSttTextarea,
+  resolveComposerSttTextarea,
+  resolveGlobalSttEditable,
+  rememberSttEditableFromFocus,
+} from './insertText';
 
 export const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
 export const STT_INACTIVITY_MS = 30_000;
@@ -29,7 +35,9 @@ export type ComposerSttToggleSource = 'hotkey' | 'toolbar' | 'composer' | 'conte
 /** Dispatch the global composer STT toggle event. */
 export function requestComposerSttToggle(source: ComposerSttToggleSource = 'composer'): void {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent(COMPOSER_STT_TOGGLE_EVENT, { detail: { source } }));
+  window.dispatchEvent(
+    new CustomEvent(COMPOSER_STT_TOGGLE_EVENT, { cancelable: true, detail: { source } }),
+  );
 }
 
 /** Stop any in-app speech-to-text session (composer, terminal, or generic field). */
@@ -48,6 +56,19 @@ export function requestComposerSttFromToolbar(): boolean {
   if (ui.composerSttListening) {
     requestComposerSttStop();
     return true;
+  }
+  // A fresh chat need not have received a caret click yet. Use its focused
+  // pane, while preserving an explicitly chosen composer or other text field.
+  if (ui.route === 'chat' && !resolveComposerSttTextarea() && !resolveGlobalSttEditable()) {
+    const candidates = Array.from(
+      document.querySelectorAll(
+        '[data-chat-id][data-focused="true"] [data-tour="chat-composer"] [aria-label="Message"]',
+      ),
+    ).filter(isComposerSttTextarea).filter(field => !field.disabled && !field.readOnly);
+    if (candidates.length === 1) {
+      candidates[0]!.focus();
+      rememberSttEditableFromFocus(candidates[0]!);
+    }
   }
   requestComposerSttToggle('toolbar');
   return true;

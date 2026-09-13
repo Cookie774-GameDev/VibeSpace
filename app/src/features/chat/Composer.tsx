@@ -5669,7 +5669,11 @@ export function Composer({
       if (!textarea || textarea !== textareaRef.current) return;
       event.preventDefault(); toggleStt();
     };
-    const onStop = () => sttController.cancel();
+    const onStop = () => {
+      if (sttController.getSnapshot().phase === 'starting') sttController.cancel();
+      else void sttController.finish();
+    };
+    const onPageHide = () => sttController.cancel();
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || sttController.getSnapshot().phase === 'idle') return;
       const field = textareaRef.current;
@@ -5679,12 +5683,12 @@ export function Composer({
     window.addEventListener(COMPOSER_STT_TOGGLE_EVENT, onToggle);
     window.addEventListener(COMPOSER_STT_STOP_EVENT, onStop);
     window.addEventListener('keydown', onKey, true);
-    window.addEventListener('pagehide', onStop);
+    window.addEventListener('pagehide', onPageHide);
     return () => {
       window.removeEventListener(COMPOSER_STT_TOGGLE_EVENT, onToggle);
       window.removeEventListener(COMPOSER_STT_STOP_EVENT, onStop);
       window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('pagehide', onStop);
+      window.removeEventListener('pagehide', onPageHide);
       sttController.cancel();
     };
   }, [composerSttEnabled, sttController, toggleStt]);
