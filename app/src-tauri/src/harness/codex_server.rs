@@ -49,7 +49,11 @@ pub struct CodexAppServerStartResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CodexAppServerStreamMessage {
-    Frame { frame: Value },
+    Frame {
+        frame: Value,
+        sequence: u64,
+        native_handoff_us: u64,
+    },
     Done,
     Error { message: &'static str },
 }
@@ -1004,10 +1008,22 @@ fn stream_internal(
     let cancelled = Arc::new(AtomicBool::new(false));
     let task_cancelled = cancelled.clone();
     let task = thread::spawn(move || {
+        let mut sequence = 0_u64;
+        let mut timed_frame = |frame| {
+            sequence += 1;
+            CodexAppServerStreamMessage::Frame {
+                frame,
+                sequence,
+                native_handoff_us: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64,
+            }
+        };
         for frame in buffered_frames {
             if task_cancelled.load(Ordering::Acquire)
                 || on_event
-                    .send(CodexAppServerStreamMessage::Frame { frame })
+                    .send(timed_frame(frame))
                     .is_err()
             {
                 return;
@@ -1021,7 +1037,7 @@ fn stream_internal(
             match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(ReaderMessage::Frame(frame)) => {
                     if on_event
-                        .send(CodexAppServerStreamMessage::Frame { frame })
+                        .send(timed_frame(frame))
                         .is_err()
                     {
                         return;
@@ -1147,6 +1163,20 @@ pub fn shutdown_owned_server(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stream_envelope_preserves_payload_and_handoff_metadata() {
+        let envelope = super::CodexAppServerStreamMessage::Frame {
+            frame: serde_json::json!({"method":"turn/started"}),
+            sequence: 7,
+            native_handoff_us: 1_789_300_000_123_456,
+        };
+        let value = serde_json::to_value(envelope).unwrap();
+        assert_eq!(value["sequence"], 7);
+        assert_eq!(value["native_handoff_us"], 1_789_300_000_123_456_u64);
+        assert_eq!(value["frame"]["method"], "turn/started");
+        assert_eq!(value["kind"], "frame");
+    }
+
     #[test]
     fn isolated_codex_homes_reuse_only_the_exact_process_and_chat() {
         let root = std::path::Path::new("D:/managed");

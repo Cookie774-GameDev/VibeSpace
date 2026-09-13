@@ -1498,7 +1498,11 @@ pub struct OpenCodeTransportResponse {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OpenCodeTransportStreamMessage {
-    Event { data: String },
+    Event {
+        data: String,
+        sequence: u64,
+        native_handoff_us: u64,
+    },
     Done,
     Error { message: &'static str },
 }
@@ -2197,6 +2201,7 @@ async fn run_event_stream(
         return Err("OpenCode event stream was rejected.".to_string());
     }
     let mut buffer = Vec::new();
+    let mut sequence = 0_u64;
     while let Some(chunk) = response
         .chunk()
         .await
@@ -2210,8 +2215,17 @@ async fn run_event_stream(
             let frame = buffer[..boundary].to_vec();
             buffer.drain(..boundary + delimiter);
             if let Some(data) = event_data(&frame)? {
+                sequence += 1;
+                let native_handoff_us = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
                 if on_event
-                    .send(OpenCodeTransportStreamMessage::Event { data })
+                    .send(OpenCodeTransportStreamMessage::Event {
+                        data,
+                        sequence,
+                        native_handoff_us,
+                    })
                     .is_err()
                 {
                     return Ok(());
@@ -2488,6 +2502,20 @@ mod windows_process_tree {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stream_envelope_preserves_payload_and_handoff_metadata() {
+        let envelope = super::OpenCodeTransportStreamMessage::Event {
+            data: "event-data".to_owned(),
+            sequence: 7,
+            native_handoff_us: 1_789_300_000_123_456,
+        };
+        let value = serde_json::to_value(envelope).unwrap();
+        assert_eq!(value["sequence"], 7);
+        assert_eq!(value["native_handoff_us"], 1_789_300_000_123_456_u64);
+        assert_eq!(value["data"], "event-data");
+        assert_eq!(value["kind"], "event");
+    }
+
     use super::{
         build_launch_spec_with, claim_start, ensure_transport_caller, event_data, failure,
         probe_health_once, reserve_loopback_port, reuse_or_stop_existing, server_status,
