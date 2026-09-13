@@ -70,6 +70,29 @@ async function openOverlay() {
 }
 
 describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
+  it('grants the native dictation window the hide permission required for cancel and paste', () => {
+    const config = JSON.parse(
+      readFileSync(resolve(__dirname, '../../../src-tauri/tauri.conf.json'), 'utf8'),
+    );
+    expect(config.app.security.capabilities).toContain('global-dictation');
+    const capability = JSON.parse(
+      readFileSync(
+        resolve(__dirname, '../../../src-tauri/capabilities/global-dictation.json'),
+        'utf8',
+      ),
+    );
+    expect(capability.windows).toEqual(['dictation']);
+    expect(capability.permissions).toEqual([
+      'core:window:allow-hide',
+      'core:window:allow-start-dragging',
+    ]);
+    const panel = config.app.windows.find(
+      (window: { label: string }) => window.label === 'dictation',
+    );
+    expect(panel.width).toBe(120);
+    expect(panel.height).toBe(30);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     tauriMocks.tauriListeners.clear();
@@ -302,6 +325,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     });
 
     expect(session.cancel).toHaveBeenCalled();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_cancel');
     expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
     expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
   });
@@ -339,7 +363,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
       resolveSession(session);
     });
     expect(session.cancel).toHaveBeenCalledOnce();
-    expect(tauriMocks.invoke).not.toHaveBeenCalled();
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
   });
 
   it('does not paste a transcription that completes after cancellation', async () => {
@@ -358,6 +382,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     render(<GlobalDictationOverlay />);
     await openOverlay();
     await openOverlay();
+    expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
     fireEvent.keyDown(window, { key: 'Escape' });
     tauriMocks.windowApi.hide.mockClear();
     await act(async () => {
@@ -365,6 +390,20 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     });
     expect(session.cancel).toHaveBeenCalledOnce();
     expect(tauriMocks.windowApi.hide).not.toHaveBeenCalled();
+  });
+
+  it('finishes an empty take quietly and releases its native destination', async () => {
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      cb.onOpen?.();
+      return fakeSession('');
+    });
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    await openOverlay();
+    expect(screen.queryByText(/No speech was transcribed/)).toBeNull();
+    expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_cancel');
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
   });
 
   it('Clear wipes the transcript while a streaming session keeps running', async () => {
@@ -401,8 +440,6 @@ describe('GlobalDictationOverlay MonoChrome appearance', () => {
 
     // Canonical repo-wide MonoChrome gate root: matches monochrome-theme.css
     // and the other shell-overlay appearance tests.
-    expect(source).toContain('[html[data-theme=monochrome]_&]:shadow-none');
-    expect(source).toContain('[html[data-theme=monochrome]_&]:backdrop-blur-none');
     expect(source).toContain('[html[data-theme=monochrome]_&]:bg-background');
     expect(source).toContain('[html[data-theme=monochrome]_&]:border-border-mid');
     expect(source).toContain('[html[data-theme=monochrome]_&]:rounded-sm');
@@ -411,12 +448,13 @@ describe('GlobalDictationOverlay MonoChrome appearance', () => {
     expect(source).not.toContain('[[data-theme=monochrome]_&]:');
   });
 
-  it('preserves the ordinary-theme overlay elevation, blur, and fill', () => {
+  it('keeps the pill small and draggable without a blur layer or microphone icon', () => {
     const source = readComponentSource();
 
-    expect(source).toContain('shadow-[0_18px_60px_rgba(0,0,0,0.45)]');
-    expect(source).toContain('backdrop-blur-xl');
-    expect(source).toContain('rounded-2xl');
-    expect(source).toContain('bg-background/94');
+    expect(source).toContain('h-[30px] w-[120px]');
+    expect(source).toContain('data-tauri-drag-region');
+    expect(source).toContain('/vibespace-icon.png');
+    expect(source).not.toContain('backdrop-blur');
+    expect(source).not.toContain('<Mic');
   });
 });

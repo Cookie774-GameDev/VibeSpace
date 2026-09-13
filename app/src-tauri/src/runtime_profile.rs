@@ -46,10 +46,11 @@ pub const DENIED_EFFECT_MANIFEST_HASH: &str =
 
 const ORDINARY_APP_IDENTIFIER: &str = "ai.jarvis.desktop";
 const MONOCHROME_APP_IDENTIFIER_PREFIX: &str = "ai.vibespace.monochrome.test";
-const PRODUCTION_CAPABILITY_IDENTIFIERS: [&str; 10] = [
+const PRODUCTION_CAPABILITY_IDENTIFIERS: [&str; 11] = [
     "browser-chat-host",
     "cold-start-intro",
     "default",
+    "global-dictation",
     "jarvis-ambient-overlay",
     "opencode-system-log",
     "pet-mini-panel",
@@ -680,6 +681,7 @@ mod tests {
             "browser-chat-host",
             "cold-start-intro",
             "default",
+            "global-dictation",
             "jarvis-ambient-overlay",
             "opencode-system-log",
             "pet-mini-panel",
@@ -984,6 +986,7 @@ mod tests {
             "workbench-window",
             "browser-chat-host",
             "default",
+            "global-dictation",
             "jarvis-ambient-overlay",
             "opencode-system-log",
             "pet-overlay",
@@ -998,6 +1001,13 @@ mod tests {
 
         assert_eq!(context.profile, RuntimeProfile::Ordinary);
         assert_eq!(context.capability_identifier, None);
+    }
+
+    #[test]
+    fn actual_production_config_passes_the_exact_startup_capability_policy() {
+        let config: tauri::utils::config::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert!(resolve_startup_context(None, None, &config.identifier, &config.app.security.capabilities).is_ok());
     }
 
     #[test]

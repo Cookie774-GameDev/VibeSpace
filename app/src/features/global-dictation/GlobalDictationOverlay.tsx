@@ -2,14 +2,11 @@ import * as React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Mic, MicOff, RotateCcw, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
-import { Toaster } from '@/components/ui/toast';
 import { VoiceActivityWaveform } from '@/features/voice/VoiceActivityWaveform';
 import { createGlobalDictationSession, type GlobalDictationSession } from './dictationSession';
 import {
-  formatGlobalDictationEmptyFailure,
   formatGlobalDictationPasteFailure,
   formatGlobalDictationSessionFailure,
   formatGlobalDictationStartupFailure,
@@ -83,6 +80,9 @@ export function GlobalDictationOverlay({
       teardownSession();
       updateState('error');
       setErrorMessage(message);
+      void getCurrentWindow()
+        .show()
+        .catch(() => undefined);
     },
     [teardownSession, updateState],
   );
@@ -156,6 +156,13 @@ export function GlobalDictationOverlay({
     const generation = generationRef.current;
     updateState('transcribing');
     try {
+      await getCurrentWindow().hide();
+    } catch (err) {
+      failVisible(formatGlobalDictationPasteFailure(err));
+      return;
+    }
+    if (generationRef.current !== generation) return;
+    try {
       await session.stop();
     } catch {
       if (generationRef.current === generation)
@@ -174,39 +181,27 @@ export function GlobalDictationOverlay({
         ? `${baseText} ${interimText}`
         : baseText || interimText;
     if (!text) {
-      if (stateRef.current !== 'error') {
-        failVisible(formatGlobalDictationEmptyFailure());
-      }
+      resetTranscript();
+      updateState('ready');
+      void invoke('dictation_cancel').catch(() => undefined);
       return;
     }
     updateState('pasting');
-    try {
-      await getCurrentWindow().hide();
+    pasteTimerRef.current = setTimeout(() => {
+      pasteTimerRef.current = null;
       if (generationRef.current !== generation) return;
-      pasteTimerRef.current = setTimeout(() => {
-        pasteTimerRef.current = null;
-        if (generationRef.current !== generation) return;
-        void invoke('dictation_paste_text', { text })
-          .then(() => {
-            if (generationRef.current === generation) {
-              resetTranscript();
-              updateState('ready');
-            }
-          })
-          .catch(async (err) => {
-            if (generationRef.current !== generation) return;
-            // The overlay is hidden at this point - bring it back so the
-            // failure is visible instead of vanishing into a hidden toast.
-            await getCurrentWindow()
-              .show()
-              .catch(() => undefined);
-            if (generationRef.current === generation)
-              failVisible(formatGlobalDictationPasteFailure(err));
-          });
-      }, 120);
-    } catch (err) {
-      failVisible(formatGlobalDictationPasteFailure(err));
-    }
+      void invoke('dictation_paste_text', { text })
+        .then(() => {
+          if (generationRef.current === generation) {
+            resetTranscript();
+            updateState('ready');
+          }
+        })
+        .catch((err) => {
+          if (generationRef.current === generation)
+            failVisible(formatGlobalDictationPasteFailure(err));
+        });
+    }, 120);
   }, [failVisible, finalText, resetTranscript, updateState]);
   finalizeRef.current = confirmAndPaste;
 
@@ -215,7 +210,10 @@ export function GlobalDictationOverlay({
     resetTranscript();
     setErrorMessage('');
     updateState('ready');
-    void getCurrentWindow().hide();
+    void invoke('dictation_cancel').catch(() => undefined);
+    void getCurrentWindow()
+      .hide()
+      .catch(() => undefined);
   }, [resetTranscript, teardownSession, updateState]);
 
   /** Clear the transcript but keep dictating. */
@@ -263,7 +261,19 @@ export function GlobalDictationOverlay({
     };
   }, [runtimeEffectsEnabled]);
 
-  React.useEffect(() => () => teardownSession(), [teardownSession]);
+  React.useEffect(
+    () => () => {
+      teardownSession();
+      if (runtimeEffectsEnabled) void invoke('dictation_cancel').catch(() => undefined);
+    },
+    [runtimeEffectsEnabled, teardownSession],
+  );
+
+  React.useLayoutEffect(() => {
+    if (new URLSearchParams(window.location.search).get('view') !== 'dictation') return;
+    document.documentElement.setAttribute('data-vibespace-dictation', '');
+    return () => document.documentElement.removeAttribute('data-vibespace-dictation');
+  }, []);
 
   React.useEffect(() => {
     if (!runtimeEffectsEnabled) return;
@@ -285,103 +295,69 @@ export function GlobalDictationOverlay({
   const listening = state === 'listening' || state === 'starting';
   const busy = state === 'transcribing' || state === 'pasting';
 
+  const hint = state === 'error' ? errorMessage : partial || STATE_HINT[state];
   return (
-    <div className="flex min-h-screen items-center justify-center bg-transparent p-1">
-      <div
-        data-tauri-drag-region
-        data-monochrome-surface="global-dictation"
-        className={cn(
-          'w-full max-w-[228px] max-h-[112px] overflow-y-auto select-none rounded-2xl border border-accent-copper/45',
-          'bg-background/94 px-2.5 py-1.5 text-foreground shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl',
-          '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none',
-        )}
-      >
-        <div data-tauri-drag-region className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              if (sessionRef.current) void confirmAndPaste();
-              else void start();
-            }}
-            disabled={busy || state === 'starting'}
-            className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors disabled:opacity-60',
-              listening
-                ? 'border-accent-copper bg-accent-copper/18 text-accent-copper'
-                : 'border-border bg-panel text-muted-foreground hover:text-foreground',
-            )}
-            aria-label={sessionRef.current ? 'Stop dictation' : 'Start dictation'}
-          >
-            {listening ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-          </button>
-          <div data-tauri-drag-region className="min-w-0 flex-1">
-            <div className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-accent-copper">
-              VibeSpace Dictation
-            </div>
-            <div
-              title={state === 'error' ? errorMessage : partial || STATE_HINT[state]}
-              role="status"
-              className={cn(
-                'truncate text-[11px]',
-                state === 'error' ? 'text-destructive' : 'text-muted-foreground',
-              )}
-            >
-              {state === 'error' ? errorMessage || STATE_HINT.error : partial || STATE_HINT[state]}
-            </div>
-          </div>
-        </div>
-
-        {engineLabel && state !== 'error' && (
-          <div className="mt-1 truncate text-[9px] text-muted-foreground/80">{engineLabel}</div>
-        )}
-
-        {state === 'error' ? (
-          <div className="mt-2 flex flex-col gap-1.5">
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={() => void start()}
-                className="flex flex-1 items-center justify-center gap-1 rounded-md border border-accent-copper/50 bg-accent-copper/12 px-2 py-1 text-[10px] font-semibold text-accent-copper hover:bg-accent-copper/20"
-                aria-label="Retry dictation"
-              >
-                <RotateCcw className="h-3 w-3" /> Retry
-              </button>
-              <button
-                type="button"
-                onClick={cancelAndHide}
-                className="flex items-center justify-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
-                aria-label="Close dictation"
-              >
-                <X className="h-3 w-3" /> Close
-              </button>
-            </div>
-            <div className="text-center text-[9px] text-muted-foreground">
-              Fix engines in VibeSpace → Settings → Speech to Text
-            </div>
-          </div>
+    <div
+      data-tauri-drag-region
+      data-monochrome-surface="global-dictation"
+      aria-label="VibeSpace Dictation — drag to move"
+      title={`${hint}${engineLabel ? ` · ${engineLabel}` : ''}\nCtrl+Space: finish · Esc: cancel · Drag to move`}
+      className={cn(
+        'flex h-[30px] w-[120px] cursor-grab items-center gap-1 overflow-hidden rounded-full border border-accent-copper/45 bg-background/95 px-1 active:cursor-grabbing',
+        '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background',
+      )}
+    >
+      <style>{`
+        html[data-vibespace-dictation],
+        html[data-vibespace-dictation] body,
+        html[data-vibespace-dictation] #root {
+          background: transparent !important;
+          overflow: hidden;
+        }
+      `}</style>
+      <img
+        src="/vibespace-icon.png"
+        alt=""
+        draggable={false}
+        className="pointer-events-none h-[18px] w-[18px] shrink-0 rounded-full"
+      />
+      <div aria-hidden="true" className="pointer-events-none min-w-0 flex-1 [&_canvas]:!h-5">
+        {listening ? (
+          <VoiceActivityWaveform levelRef={levelRef} active />
         ) : (
-          <>
-            <div className="h-5 [&_canvas]:!h-5">
-              <VoiceActivityWaveform levelRef={levelRef} active={listening} />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={clearTranscript}
-                disabled={busy || (!partial && !finalText)}
-                className="rounded-md border border-border bg-panel px-2 py-0.5 text-[9px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-                aria-label="Clear transcript"
-              >
-                Clear
-              </button>
-              <div className="text-center text-[9px] text-muted-foreground">
-                Ctrl+Space paste · Esc cancel
-              </div>
-            </div>
-          </>
+          <div
+            className={cn(
+              'h-px rounded-full bg-accent-copper/50',
+              state === 'error' && 'bg-destructive',
+              busy && 'opacity-40',
+            )}
+          />
         )}
       </div>
-      <Toaster />
+      <div className="sr-only">
+        <span>VibeSpace Dictation</span>
+        <span role="status">{hint}</span>
+        {engineLabel && <span>{engineLabel}</span>}
+        <button
+          type="button"
+          onClick={() => void start()}
+          disabled={busy || listening}
+          aria-label={state === 'error' ? 'Retry dictation' : 'Start dictation'}
+        >
+          Retry
+        </button>
+        <button type="button" onClick={cancelAndHide} aria-label="Close dictation">
+          Close
+        </button>
+        <button
+          type="button"
+          onClick={clearTranscript}
+          disabled={busy || (!partial && !finalText)}
+          aria-label="Clear transcript"
+        >
+          Clear
+        </button>
+      </div>
     </div>
   );
 }

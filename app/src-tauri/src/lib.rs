@@ -306,6 +306,9 @@ fn start_cold_start_intro(app: &tauri::AppHandle) {
 
 fn show_dictation_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("dictation") {
+        if !window.is_visible().unwrap_or(false) {
+            dictation::capture_target();
+        }
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.emit("jarvis:global-dictation-toggle", ());
@@ -418,8 +421,23 @@ fn should_install_single_instance_plugin(
 /// and lifecycle behavior exactly as before the runtime-profile split.
 fn run_ordinary(
     runtime_context: runtime_profile::RuntimeStartupContext,
-    tauri_context: tauri::Context<tauri::Wry>,
+    mut tauri_context: tauri::Context<tauri::Wry>,
 ) {
+    // WebView2 windows sharing a profile must use matching environment options.
+    // Inherit the main window's arguments, including the current dev CDP port,
+    // before Tauri creates the hidden dictation WebView.
+    #[cfg(target_os = "windows")]
+    {
+        let windows = &mut tauri_context.config_mut().app.windows;
+        let main_args = windows.iter().find(|window| window.label == "main")
+            .and_then(|window| window.additional_browser_args.clone());
+        if let Some(window) = windows.iter_mut().find(|window| window.label == "dictation") {
+            window.additional_browser_args = main_args;
+            // Keep old local dev window overrides at the current compact size.
+            window.width = 120.0;
+            window.height = 30.0;
+        }
+    }
     branding::init_platform_branding();
 
     let builder = tauri::Builder::default();
@@ -807,6 +825,7 @@ fn run_ordinary(
             credentials::credential_get,
             credentials::credential_delete,
             dictation::dictation_paste_text,
+            dictation::dictation_cancel,
             dictation::trigger_os_dictation,
             set_global_dictation_enabled,
             faster_whisper::faster_whisper_model_path,
@@ -1139,6 +1158,7 @@ credentials::credential_set
 credentials::credential_get
 credentials::credential_delete
 dictation::dictation_paste_text
+dictation::dictation_cancel
 dictation::trigger_os_dictation
 set_global_dictation_enabled
 faster_whisper::faster_whisper_model_path

@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "windows"))]
 use std::{
     io::Write,
     process::{Command, Stdio},
@@ -5,8 +6,51 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "windows")]
+#[path = "windows_dictation.rs"]
+mod windows_dictation;
+
+pub fn capture_target() {
+    #[cfg(target_os = "windows")]
+    windows_dictation::capture_target();
+}
+
 #[tauri::command]
-pub fn dictation_paste_text(text: String) -> Result<(), String> {
+pub fn dictation_cancel() {
+    #[cfg(target_os = "windows")]
+    windows_dictation::cancel();
+}
+
+#[tauri::command]
+pub async fn dictation_paste_text(
+    window: tauri::WebviewWindow,
+    text: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let owner = window
+        .hwnd()
+        .map_err(|_| "Dictation window is unavailable.")?
+        .0 as usize;
+    #[cfg(not(target_os = "windows"))]
+    let owner = {
+        let _ = window;
+        0
+    };
+    tauri::async_runtime::spawn_blocking(move || paste_text(&text, owner))
+        .await
+        .map_err(|_| "Dictation could not finish. Please retry.".to_string())?
+}
+
+#[cfg(target_os = "windows")]
+fn paste_text(text: &str, owner: usize) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    windows_dictation::paste(text.trim(), owner)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn paste_text(text: &str, _owner: usize) -> Result<(), String> {
     let clean = text.trim();
     if clean.is_empty() {
         return Ok(());
@@ -22,70 +66,6 @@ pub fn dictation_paste_text(text: String) -> Result<(), String> {
         });
     }
     paste_result
-}
-
-#[cfg(target_os = "windows")]
-fn get_clipboard() -> Result<String, String> {
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Get-Clipboard -Raw",
-        ])
-        .output()
-        .map_err(|err| format!("clipboard read unavailable: {err}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err("clipboard read failed".into())
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn set_clipboard(text: &str) -> Result<(), String> {
-    let mut child = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
-        ])
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("clipboard unavailable: {err}"))?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| "clipboard stdin unavailable".to_string())?
-        .write_all(text.as_bytes())
-        .map_err(|err| format!("clipboard write failed: {err}"))?;
-    let status = child
-        .wait()
-        .map_err(|err| format!("clipboard process failed: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("clipboard command failed".into())
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn paste_clipboard() -> Result<(), String> {
-    let status = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')",
-        ])
-        .status()
-        .map_err(|err| format!("paste unavailable: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("paste command failed".into())
-    }
 }
 
 #[cfg(target_os = "macos")]

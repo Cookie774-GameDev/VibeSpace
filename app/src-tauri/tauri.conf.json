@@ -46,8 +46,8 @@
         "label": "dictation",
         "title": "VibeSpace Dictation",
         "url": "index.html?view=dictation",
-        "width": 220,
-        "height": 120,
+        "width": 120,
+        "height": 30,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -60,6 +60,7 @@
     "security": {
       "capabilities": [
         "default",
+        "global-dictation",
         "browser-chat-host",
         "cold-start-intro",
         "pet-mini-panel",
