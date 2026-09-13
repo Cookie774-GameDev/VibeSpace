@@ -115,6 +115,12 @@ type RouteStoreShape = {
 const TOP_BAR_POINTER_TARGET_CLASS = 'min-h-6 min-w-6 shrink-0';
 
 export function TopBar() {
+  // Chromium tracks animated no-drag holes with native child-window geometry.
+  // On Windows, use Tauri's existing data-attribute drag handler instead.
+  const nativeWindowsDrag =
+    typeof window !== 'undefined' &&
+    '__TAURI_INTERNALS__' in window &&
+    /Windows/i.test(window.navigator.userAgent);
   const kernelSmokeEnabled = isKernelSmokeEnabled({
     devBuild: import.meta.env.DEV,
     explicitFlag: import.meta.env.VITE_SIK_SMOKE,
@@ -209,7 +215,8 @@ export function TopBar() {
       data-warm-shell-route={warmBenchmarks ? 'benchmarks' : undefined}
       data-tauri-drag-region
       className={cn(
-        'sakura-shell-top-bar drag-region relative flex min-w-0 shrink-0 items-center gap-2 border-b bg-panel pr-2 text-secondary transition-[height,padding,colors] duration-150',
+        'sakura-shell-top-bar relative flex min-w-0 shrink-0 items-center gap-2 border-b bg-panel pr-2 text-secondary transition-[height,padding,colors] duration-150',
+        !nativeWindowsDrag && 'drag-region',
         compactChrome ? 'h-7 gap-1' : 'h-10 gap-2',
         offChat ? 'border-accent-copper/40' : 'border-border',
         // Reserve room on macOS for native traffic-light buttons in

@@ -72,6 +72,20 @@ describe('TopBar Sakura native chrome contract', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the Tauri drag handler without animated Chromium drag regions on native Windows', () => {
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    );
+    render(<TopBar />);
+    const header = screen.getByRole('banner', { name: 'Application header' });
+    expect(header.hasAttribute('data-tauri-drag-region')).toBe(true);
+    expect(header.classList.contains('drag-region')).toBe(false);
+    expect(header.querySelector('.jarvis-j-glow')).toBeTruthy();
   });
 
   it('keeps an explicit native drag surface while every interactive cluster opts out', () => {
