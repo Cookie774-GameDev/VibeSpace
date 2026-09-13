@@ -36,6 +36,11 @@ function event(
 }
 
 describe('resolveChatListActivity', () => {
+  it('shows authoritative manual recovery instead of stale running events', () => {
+    const recovering = { ...run('running', NOW - 60_000), requiresManualRecovery: true };
+    expect(resolveChatListActivity({ runs: [recovering], events: [event('running', 'tool')], nowMs: NOW }).label).toBe('needs attention');
+    expect(resolveChatListActivity({ runs: [recovering, run('completed')], events: [event('running', 'tool')], nowMs: NOW }).state).toBe('complete');
+  });
   it('maps canonical run and tool states without inventing activity', () => {
     expect(resolveChatListActivity({ runs: [], events: [], nowMs: NOW }).state).toBe('idle');
     expect(

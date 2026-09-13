@@ -9,6 +9,7 @@ export interface ChatListRunSignal {
   chatId?: string;
   status: string;
   updatedAt?: string | number;
+  requiresManualRecovery?: boolean;
 }
 
 export interface ChatListActivityResolution {
@@ -109,6 +110,10 @@ export function resolveChatListActivity({
       return resolution('complete', 3_600, 0.72, changedAt + COMPLETION_SETTLE_MS);
     }
     return resolution('idle', 0, 0);
+  }
+
+  if (latestRun?.requiresManualRecovery) {
+    return resolution('error', 0, 0.8);
   }
 
   if (activeEvent && ACTIVE_TOOL_KINDS.has(activeEvent.kind)) {

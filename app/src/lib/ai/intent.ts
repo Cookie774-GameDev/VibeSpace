@@ -162,6 +162,10 @@ export function requestsNoTools(text: string): boolean {
   return EXPLICIT_NO_TOOLS_RE.test(text);
 }
 
+export function requestsNoProjectRetrieval(text: string): boolean {
+  return EXPLICIT_NO_PROJECT_RETRIEVAL_RE.test(text);
+}
+
 /** Short conversational turns that must not wait on corpus/RLM work. */
 export function isLightweightChatTurn(intent: JarvisIntent, text: string): boolean {
   const trimmed = text.trim();
@@ -184,7 +188,7 @@ export function shouldAutoRetrieveProjectKnowledge(input: {
   hasExplicitAttachments?: boolean;
 }): boolean {
   // Explicit attachments are resolved separately; do not silently search beyond them.
-  if (requestsNoTools(input.text) || EXPLICIT_NO_PROJECT_RETRIEVAL_RE.test(input.text)) return false;
+  if (requestsNoTools(input.text) || requestsNoProjectRetrieval(input.text)) return false;
   // Exact registered disk reads must not be rewritten into Context-map retrieval,
   // even when a project already has approved maps selected.
   if (EXPLICIT_DISK_FILE_READ_RE.test(input.text.trim())) return false;

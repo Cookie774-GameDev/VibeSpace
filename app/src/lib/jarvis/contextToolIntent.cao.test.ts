@@ -1,5 +1,10 @@
 import { expect, it } from 'vitest';
 import { requestsReadOnlyContextTool } from './contextToolIntent';
+it.each(['No Context Maps, RLM, or subagents.', 'Do not use Context Maps or RLM.', 'Without RLM.'])(
+  'preserves a real file read when project retrieval is prohibited: %s', restriction => {
+    expect(requestsReadOnlyContextTool(`${restriction} Use the real file read tool to reread C:/work/check.txt. Do not write anything. Report the exact line.`)).toBe(false);
+  },
+);
 it.each(['do not run tools', 'do not use any tools', "don't call tools", 'never execute tools'])(
   'preserves a no-tool setup message: %s',
   (restriction) => {

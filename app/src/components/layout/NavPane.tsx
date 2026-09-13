@@ -111,16 +111,21 @@ export function NavPane() {
   const agents = useAgentStore((s) => s.agents);
   const agentList = React.useMemo(() => Object.values(agents), [agents]);
   const taskRuns = useJarvisTaskRunStore((state) => state.runs);
+  const manualRecoveryByRun = useJarvisTaskRunStore((state) => state.manualRecoveryByRun);
   const taskActivityByChat = useJarvisTaskRunStore((state) => state.activityByChat);
   const liveActivityByChat = useChatActivityStore((state) => state.eventsByChat);
   const taskRunsByChat = React.useMemo(() => {
     const grouped: Record<string, ChatListRunSignal[]> = {};
     Object.values(taskRuns).forEach((run) => {
       if (!run.chatId) return;
-      (grouped[run.chatId] ??= []).push(run);
+      (grouped[run.chatId] ??= []).push({
+        ...run,
+        // Both collections are reset together at the store's account boundary.
+        requiresManualRecovery: Boolean(manualRecoveryByRun[run.runId]),
+      });
     });
     return grouped;
-  }, [taskRuns]);
+  }, [taskRuns, manualRecoveryByRun]);
 
   // Live projects + chats. dexie-react-hooks re-renders on any insert/update.
   const projects = useLiveQuery(

@@ -1,3 +1,5 @@
+import { requestsNoProjectRetrieval } from '@/lib/ai/intent';
+
 const EXPLICIT_CONTEXT_TOOL = /\b(?:vibespace_context|context map)\b/i;
 const MUTATING_REQUEST =
   /\b(?:write|create|make|build|generate|save|delete|remove|rename|move|edit|modify|change|run|execute|launch|start|command|terminal)\b/i;
@@ -485,6 +487,8 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
   // Keep their file names and old tool instructions from restricting the current tool set.
   const chatReferenceBoundary = userText.indexOf('\n\nChat handoff from “');
   if (chatReferenceBoundary >= 0) userText = userText.slice(0, chatReferenceBoundary);
+  // A native file read must not be rewritten into a forbidden RLM investigation.
+  if (requestsNoProjectRetrieval(userText)) return false;
   // Do not replace a conversational setup/acknowledgement with a forced tool call.
   if (/\b(?:do\s+not|don['’]t|never)\s+(?:use|run|call|invoke|execute)\s+(?:any\s+)?tools?\b/iu.test(userText))
     return false;

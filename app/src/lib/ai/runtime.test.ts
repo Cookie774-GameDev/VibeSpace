@@ -2383,6 +2383,13 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(prepared).not.toContain('"operation":"expand"');
   });
 
+  it('does not force investigate for a native file read with a retrieval opt-out', () => {
+    const content = 'No Context Maps, RLM, or subagents. Use the real file read tool to reread C:/work/check.txt. Do not write anything.';
+    expect(prepareOpenCodeMessagesForInteractionMode([{ role: 'user', content }])).toEqual([
+      { role: 'user', content },
+    ]);
+  });
+
   it('preserves one bounded old-pointer open continuation without inventing a search', () => {
     const content =
       'Using only the exact prior Q2 pointer already present in this chat, make exactly one vibespace_context open call with maxBytes=4096. Do not call search, expand, address, or any other tool.';
