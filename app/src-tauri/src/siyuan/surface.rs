@@ -630,6 +630,20 @@ fn retire_surface_window(webview: &Webview) -> Result<(), tauri::Error> {
     webview.close()
 }
 
+async fn retire_surface_window_acknowledged(webview: &Webview) -> Result<(), String> {
+    // Off-thread close only queues controller destruction and removes the label
+    // immediately. Keep the lifecycle lock until the UI thread actually retires
+    // the old child, before another open can reuse that label/environment.
+    let retiring = webview.clone();
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    webview.run_on_main_thread(move || {
+        let result = retire_surface_window(&retiring)
+            .map_err(|_| public_error("siyuan_surface_window_unavailable"));
+        let _ = sender.try_send(result);
+    }).map_err(|_| public_error("siyuan_surface_window_unavailable"))?;
+    receiver.recv().await.ok_or_else(|| public_error("siyuan_surface_window_unavailable"))?
+}
+
 fn validate_bounds(bounds: &SiyuanSurfaceBounds) -> Result<(), String> {
     if !bounds.x.is_finite()
         || !bounds.y.is_finite()
@@ -876,7 +890,7 @@ pub async fn siyuan_surface_open(
             }
             return Ok(status(&app));
         }
-        let _ = retire_surface_window(&existing);
+        retire_surface_window_acknowledged(&existing).await?;
         *SURFACE_STATE
             .lock()
             .map_err(|_| public_error("siyuan_surface_state_unavailable"))? = None;
@@ -1250,8 +1264,7 @@ pub async fn siyuan_surface_close(app: AppHandle, operation_id: String) -> Resul
     let Some(webview) = app.get_webview(SURFACE_LABEL) else {
         return Ok(false);
     };
-    retire_surface_window(&webview)
-        .map_err(|_| public_error("siyuan_surface_window_unavailable"))?;
+    retire_surface_window_acknowledged(&webview).await?;
     Ok(true)
 }
 

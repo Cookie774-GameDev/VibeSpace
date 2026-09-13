@@ -44,6 +44,91 @@ function bridge(overrides: Partial<SiyuanSurfaceBridge> = {}): SiyuanSurfaceBrid
 }
 
 describe('SiYuan Context Vault surface', () => {
+  it('keeps only the latest rectangle while a native resize is pending', async () => {
+    let finish!: (applied: boolean) => void;
+    const setBounds = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const native = bridge({ setBounds });
+    render(
+      <SiyuanVaultSurface
+        projectId="project-1"
+        {...targetProps}
+        bridge={native}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(native.open).toHaveBeenCalledOnce());
+    const resize = (width: number) => {
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+        left: 400,
+        top: 80,
+        width,
+        height: 800,
+      } as DOMRect);
+      act(() => {
+        ResizeObserverMock.callback?.([], {} as ResizeObserver);
+      });
+    };
+    resize(1100);
+    resize(1000);
+    resize(900);
+    expect(setBounds).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish(true);
+    });
+    expect(setBounds).toHaveBeenCalledTimes(2);
+    expect(setBounds.mock.calls[1]).toEqual([
+      vi.mocked(native.open).mock.calls[0][0],
+      { x: 400, y: 80, width: 900, height: 800 },
+    ]);
+    await act(async () => {
+      finish(true);
+    });
+    resize(900);
+    expect(setBounds).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not flush queued geometry after the surface unmounts', async () => {
+    let finish!: (applied: boolean) => void;
+    const setBounds = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const native = bridge({ setBounds });
+    const view = render(
+      <SiyuanVaultSurface
+        projectId="project-1"
+        {...targetProps}
+        bridge={native}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(native.open).toHaveBeenCalledOnce());
+    act(() => {
+      ResizeObserverMock.callback?.([], {} as ResizeObserver);
+    });
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+      left: 400,
+      top: 80,
+      width: 900,
+      height: 800,
+    } as DOMRect);
+    act(() => {
+      ResizeObserverMock.callback?.([], {} as ResizeObserver);
+    });
+    view.unmount();
+    await act(async () => {
+      finish(true);
+    });
+    expect(setBounds).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps loading through a slow native document navigation and accepts the ready graph', async () => {
     vi.useFakeTimers();
     try {
@@ -106,7 +191,12 @@ describe('SiYuan Context Vault surface', () => {
         status: vi.fn(async () => loading),
       });
       render(
-        <SiyuanVaultSurface projectId="project-1" {...targetProps} bridge={native} onClose={vi.fn()} />,
+        <SiyuanVaultSurface
+          projectId="project-1"
+          {...targetProps}
+          bridge={native}
+          onClose={vi.fn()}
+        />,
       );
       await act(async () => {
         await vi.advanceTimersByTimeAsync(66_000);

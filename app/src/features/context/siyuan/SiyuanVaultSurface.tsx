@@ -126,23 +126,37 @@ export function SiyuanVaultSurface({
     const element = surfaceRef.current;
     if (!element) return;
     let lastBounds = '';
-    let pendingBounds = '';
+    let inFlight = false;
+    let queued = false;
+    let disposed = false;
     const sync = () => {
+      if (disposed) return;
       try {
-        const bounds = measureSiyuanSurfaceBounds(element);
-        const serialized = `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
-        if (serialized === lastBounds || serialized === pendingBounds) return;
         const operationId = operationIdRef.current;
         if (!operationId) return;
-        pendingBounds = serialized;
+        // Native geometry is serialized. Keep just the latest measurement
+        // instead of queuing a command for every intermediate resize.
+        if (inFlight) {
+          queued = true;
+          return;
+        }
+        const bounds = measureSiyuanSurfaceBounds(element);
+        const serialized = `${operationId}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
+        if (serialized === lastBounds) return;
+        inFlight = true;
         void bridge
           .setBounds(operationId, bounds)
           .then((applied) => {
-            if (applied && operationIdRef.current === operationId) lastBounds = serialized;
+            if (!disposed && applied && operationIdRef.current === operationId)
+              lastBounds = serialized;
           })
           .catch(() => false)
           .finally(() => {
-            if (pendingBounds === serialized) pendingBounds = '';
+            inFlight = false;
+            if (queued) {
+              queued = false;
+              sync();
+            }
           });
       } catch {
         // The open/retry state remains the user-facing authority.
@@ -154,6 +168,8 @@ export function SiyuanVaultSurface({
     const moveMonitor = window.setInterval(sync, 250);
     window.addEventListener('resize', sync);
     return () => {
+      disposed = true;
+      queued = false;
       observer.disconnect();
       window.clearInterval(moveMonitor);
       window.removeEventListener('resize', sync);
