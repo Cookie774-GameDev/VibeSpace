@@ -83,21 +83,26 @@ impl Desktop for WindowsDesktop {
     }
 
     fn insert(&self, text: &str) -> Result<(), String> {
-        self.field.restore()?;
+        // Clipboard contention can wait for 200ms. Do that BEFORE restoring
+        // focus, otherwise a tab/field change during the wait receives Ctrl+V.
         let restore = clipboard::prepare(self.owner, text)?;
-        let result = if GENERATION.load(Ordering::SeqCst) != self.generation
-            || self.foreground() != self.expected
-        {
-            Err("Focus changed before dictated text could be pasted.".into())
-        } else {
-            let inputs = paste_inputs();
-            let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-            if sent == inputs.len() as u32 {
-                Ok(())
+        let result = (|| {
+            self.field.restore()?;
+            self.field.verify()?;
+            if GENERATION.load(Ordering::SeqCst) != self.generation
+                || self.foreground() != self.expected
+            {
+                Err("Focus changed before dictated text could be pasted.".into())
             } else {
-                Err("Windows could not deliver dictated text to this application.".into())
+                let inputs = paste_inputs();
+                let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                if sent == inputs.len() as u32 {
+                    Ok(())
+                } else {
+                    Err("Windows could not deliver dictated text to this application.".into())
+                }
             }
-        };
+        })();
         restore();
         result
     }

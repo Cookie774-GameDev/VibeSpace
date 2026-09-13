@@ -75,13 +75,89 @@ impl SavedField {
             element
                 .SetFocus()
                 .map_err(|_| "Return to the original page and retry. Your transcript is kept.")?;
-            if focused_id()? != self.id {
+            // UIA SetFocus and browser tab selection may complete before the
+            // renderer publishes its focus notification. Wait for this exact
+            // saved control; never substitute whichever field is now active.
+            if !wait_for_focus(|| self.matches_focus().unwrap_or(false)) {
                 return Err(
                     "The original text box could not regain focus. Your transcript is kept.".into(),
                 );
             }
             Ok(())
         }
+    }
+
+    /// Recheck after any operation that can yield before global keyboard input.
+    pub fn verify(&self) -> Result<(), String> {
+        unsafe {
+            CoInitializeEx(None, COINIT_MULTITHREADED)
+                .ok()
+                .map_err(|_| "Windows text access is unavailable.")?;
+            let _apartment = ComApartment;
+            if self.matches_focus().unwrap_or(false) {
+                Ok(())
+            } else {
+                Err("Focus left the original text box. Your transcript is kept.".into())
+            }
+        }
+    }
+
+    unsafe fn matches_focus(&self) -> Result<bool, String> {
+        if let Some(tab) = &self.tab {
+            let selected = tab
+                .resolve()
+                .and_then(|tab| {
+                    tab.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
+                        UIA_SelectionItemPatternId,
+                    )
+                })
+                .and_then(|pattern| pattern.CurrentIsSelected())
+                .map_err(|_| "The original browser tab is unavailable.")?;
+            if !selected.as_bool() {
+                return Ok(false);
+            }
+        }
+        let element = self
+            .element
+            .resolve()
+            .map_err(|_| "The original text box is unavailable.")?;
+        Ok(element
+            .CurrentHasKeyboardFocus()
+            .unwrap_or_default()
+            .as_bool()
+            && !element.CurrentIsOffscreen().unwrap_or_default().as_bool()
+            && is_editable(&element).unwrap_or(false)
+            && focused_id()? == self.id)
+    }
+}
+
+fn wait_for_focus(mut matches: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(600);
+    loop {
+        if matches() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waits_for_the_original_field_notification_instead_of_rejecting_early() {
+        let mut notifications = [false, false, true].into_iter();
+        assert!(wait_for_focus(|| notifications.next().unwrap_or(false)));
+        assert_eq!(notifications.next(), None);
+    }
+
+    #[test]
+    fn never_accepts_a_different_field_and_bounds_the_wait() {
+        assert!(!wait_for_focus(|| false));
     }
 }
 
