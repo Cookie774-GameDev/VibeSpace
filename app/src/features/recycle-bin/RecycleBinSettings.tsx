@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ArchiveRestore, Bot, Puzzle, Trash2 } from 'lucide-react';
+import { ArchiveRestore, Bot, Puzzle, Trash2, Mic, Folder, CheckSquare, File } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { RecycleBinConfirmDialog } from './RecycleBinConfirmDialog';
@@ -41,7 +41,7 @@ export function RecycleBinSettings() {
       // unavailable; the service still rejects an expired restore exactly.
     }
     const nearestExpiry = items.reduce(
-      (nearest, item) => Math.min(nearest, item.expiresAt),
+      (nearest, item) => (item.kind === 'file' ? nearest : Math.min(nearest, item.expiresAt)),
       Number.POSITIVE_INFINITY,
     );
     if (!Number.isFinite(nearestExpiry)) return;
@@ -104,8 +104,9 @@ export function RecycleBinSettings() {
             Recycle Bin
           </h3>
           <p className="mt-1 text-metadata text-muted-foreground">
-            Deleted custom agents and skills stay recoverable on this device for exactly 90 days.
-            Built-in agents and preset skills are protected.
+            Deleted agents, skills, transcripts, projects, and tasks stay recoverable on this device
+            for 90 days. Files up to 100 MiB stay until restored or permanently deleted. Notes have
+            their own Trash; chats stay in History.
           </p>
         </div>
         <Button
@@ -124,14 +125,19 @@ export function RecycleBinSettings() {
         <div className="mt-4 rounded-md border border-dashed border-border p-5 text-center">
           <ArchiveRestore className="mx-auto h-5 w-5 text-muted-foreground" aria-hidden="true" />
           <p className="mt-2 text-secondary text-foreground">Recycle Bin is empty</p>
-          <p className="text-metadata text-muted-foreground">
-            Recoverable custom agents and skills will appear here.
-          </p>
+          <p className="text-metadata text-muted-foreground">Deleted items will appear here.</p>
         </div>
       ) : (
         <ul className="mt-4 divide-y divide-border rounded-md border border-border">
           {items.map((item) => {
-            const Icon = item.kind === 'agent' ? Bot : Puzzle;
+            const Icon = {
+              agent: Bot,
+              skill: Puzzle,
+              speech: Mic,
+              project: Folder,
+              task: CheckSquare,
+              file: File,
+            }[item.kind];
             return (
               <li key={item.archiveId} className="flex flex-wrap items-center gap-3 p-3">
                 <span className="grid h-9 w-9 place-items-center rounded-md bg-muted text-muted-foreground">
@@ -140,11 +146,26 @@ export function RecycleBinSettings() {
                 <div className="min-w-[180px] flex-1">
                   <p className="truncate text-secondary font-medium text-foreground">{item.name}</p>
                   <p className="text-metadata text-muted-foreground">
-                    <span>{item.kind === 'agent' ? 'Agent' : 'Custom skill'}</span>
+                    <span>
+                      {
+                        {
+                          agent: 'Agent',
+                          skill: 'Custom skill',
+                          speech: 'Speech transcript',
+                          project: 'Project',
+                          task: 'Task',
+                          file: 'File',
+                        }[item.kind]
+                      }
+                    </span>
                     <span aria-hidden="true"> · </span>
                     Deleted {formattedDate(item.deletedAt)}
                     <span aria-hidden="true"> · </span>
-                    <span>{daysRemaining(item)} days remaining</span>
+                    <span>
+                      {item.kind === 'file'
+                        ? 'Kept until removed'
+                        : `${daysRemaining(item)} days remaining`}
+                    </span>
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -186,12 +207,12 @@ export function RecycleBinSettings() {
         confirmLabel={
           confirmation?.action === 'delete' ? 'Delete permanently' : 'Empty Recycle Bin permanently'
         }
-        onConfirm={() => {
+        onConfirm={async () => {
           if (confirmation?.action === 'delete') {
-            recycleBinService.permanentlyDelete(confirmation.item.archiveId);
+            await recycleBinService.permanentlyDelete(confirmation.item.archiveId);
             toast.info('Permanently deleted', confirmation.item.name);
           } else if (confirmation?.action === 'empty') {
-            recycleBinService.empty();
+            await recycleBinService.empty();
             toast.info('Recycle Bin emptied');
           }
         }}

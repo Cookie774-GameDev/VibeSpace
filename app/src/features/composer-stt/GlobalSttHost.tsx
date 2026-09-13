@@ -1,3 +1,7 @@
+import {
+  nativeDictationHotkey,
+  useDictationHotkey,
+} from '@/features/global-dictation/dictationHotkey';
 import * as React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from '@/lib/utils';
@@ -57,6 +61,7 @@ function isTextInputField(el: HTMLElement): el is HTMLInputElement | HTMLTextAre
 export function GlobalSttHost() {
   const composerSttEnabled = useUIStore((s) => s.composerStt);
   const setComposerSttListening = useUIStore((s) => s.setComposerSttListening);
+  const dictationHotkey = useDictationHotkey();
   const globalDictationEnabled = useUIStore((s) => s.globalDictationEnabled);
   const [listening, setListening] = React.useState(false);
   const targetRef = React.useRef<HTMLElement | null>(null);
@@ -212,10 +217,13 @@ export function GlobalSttHost() {
   // the OS shortcut in sync on startup and every preference change.
   React.useEffect(() => {
     if (!isTauri) return;
-    void invoke('set_global_dictation_enabled', { enabled: globalDictationEnabled }).catch(() => {
-      // The web preview has no native global shortcut; the setting stays saved.
+    void invoke('set_global_dictation_enabled', {
+      enabled: globalDictationEnabled,
+      shortcut: nativeDictationHotkey(dictationHotkey),
+    }).catch((error) => {
+      toast.error('Dictation shortcut unavailable', String(error));
     });
-  }, [globalDictationEnabled]);
+  }, [globalDictationEnabled, dictationHotkey]);
 
   React.useEffect(() => {
     const onStop = () => {

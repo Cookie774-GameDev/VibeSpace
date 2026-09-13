@@ -38,6 +38,10 @@ vi.mock('@/lib/ai/router', () => ({
   runAgent: vi.fn(),
 }));
 
+vi.mock('@/features/recycle-bin/contentRecycle', () => ({
+  recycleFile: (path: string, root: string) => deleteProjectFileMock(path, { root }),
+}));
+
 vi.mock('@/lib/fs', () => ({
   listDirectory: vi.fn(async () => ({
     ok: true,
@@ -236,7 +240,9 @@ describe('FilesPage workspace flow', () => {
       .mockReturnValueOnce(false)
       .mockReturnValueOnce(true);
     fireEvent.click(screen.getByRole('button', { name: 'Delete selected file' }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('discard its unsaved changes'));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('unsaved editor changes will be discarded'),
+    );
     expect(deleteProjectFileMock).not.toHaveBeenCalled();
     expect((editor as HTMLTextAreaElement).value).toBe('unsaved private edit');
 

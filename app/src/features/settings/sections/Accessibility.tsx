@@ -13,7 +13,7 @@ import { useUIStore } from '@/stores/ui';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { renderHotkey } from '@/lib/utils';
-import { HOTKEYS } from '@/lib/hotkeys';
+import { HOTKEYS, useResolvedHotkey } from '@/lib/hotkeys';
 
 type SectionGroupProps = {
   id: string;
@@ -77,6 +77,7 @@ function InfoCard({ icon: Icon, title, description, accent = 'cyan', trailing }:
 }
 
 export function Accessibility() {
+  const dictationHotkey = useResolvedHotkey('GLOBAL_DICTATION');
   const composerStt = useUIStore((state) => state.composerStt);
   const setComposerStt = useUIStore((state) => state.setComposerStt);
   const globalDictationEnabled = useUIStore((state) => state.globalDictationEnabled);
@@ -153,15 +154,15 @@ export function Accessibility() {
                     htmlFor="global-dictation-enabled"
                     className="text-sm font-semibold leading-5 text-foreground"
                   >
-                    Global dictation with Ctrl+Space
+                    Global dictation with {dictationHotkey}
                   </Label>
                   <p
                     id="global-dictation-enabled-description"
                     className="mt-1 text-sm leading-5 text-muted-foreground"
                   >
-                    Registers <span className="kbd">{renderHotkey(HOTKEYS.GLOBAL_DICTATION)}</span>{' '}
-                    natively. It always opens one compact VibeSpace dictation module, whether
-                    VibeSpace or another app is focused. Paste happens only after you confirm.
+                    Registers <span className="kbd">{renderHotkey(dictationHotkey)}</span> natively
+                    when a text field is focused. Change the combination in Settings → Keyboard
+                    Shortcuts. Paste happens only after you confirm.
                   </p>
                 </div>
                 <Switch

@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/toast';
 import { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
@@ -102,7 +103,15 @@ export function TaskCard({ task, flash, className }: TaskCardProps) {
 
   const onDelete = async () => {
     setMenuOpen(false);
-    await TaskService.deleteTask(task.id as TaskId);
+    try {
+      await TaskService.deleteTask(task.id as TaskId);
+      toast.success('Moved to Recycle Bin', task.title);
+    } catch (error) {
+      toast.error(
+        'Task kept',
+        error instanceof Error ? error.message : 'Could not save a recovery copy.',
+      );
+    }
   };
 
   const onSnooze = async (until: number) => {

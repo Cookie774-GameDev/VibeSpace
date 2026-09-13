@@ -1,3 +1,6 @@
+import type { SpeechHistoryEntry } from '@/features/composer-stt/speechHistory';
+import type { ChatId, Task } from '@/types';
+import type { Project } from '@/lib/db';
 import type { CustomSkillRecord } from '@/features/skills/skillsStore';
 import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import type { Agent, AgentId } from '@/types';
@@ -24,7 +27,48 @@ export type RecycledSkillItem = Readonly<{
   payload: CustomSkillRecord;
 }>;
 
-export type RecycleBinItem = RecycledAgentItem | RecycledSkillItem;
+export type ContentPayloads = {
+  speech: SpeechHistoryEntry;
+  project: { project: Project; chatIds: ChatId[] };
+  task: Task;
+  file: { path: string; archivePath: string; root: string; bytes: number };
+};
+export type RecycledContentItem = {
+  [K in keyof ContentPayloads]: Readonly<{
+    archiveId: string;
+    kind: K;
+    entityId: string;
+    name: string;
+    deletedAt: number;
+    expiresAt: number;
+    payload: ContentPayloads[K];
+  }>;
+}[keyof ContentPayloads];
+export type RecycleBinItem = RecycledAgentItem | RecycledSkillItem | RecycledContentItem;
+
+export function validRecycledFile(value: ContentPayloads['file']): boolean {
+  if (
+    !value ||
+    typeof value.root !== 'string' ||
+    typeof value.path !== 'string' ||
+    typeof value.archivePath !== 'string'
+  )
+    return false;
+  const root = value.root.replace(/\\/g, '/').replace(/\/$/, '');
+  const path = value.path.replace(/\\/g, '/');
+  const archived = value.archivePath.replace(/\\/g, '/');
+  return (
+    !!root &&
+    path.startsWith(root + '/') &&
+    !path.split('/').some((p) => p === '..' || p === '.') &&
+    archived.startsWith(root + '/.vibespace/recycle-bin/') &&
+    /^[0-9a-f-]{36}$/.test(archived.slice((root + '/.vibespace/recycle-bin/').length)) &&
+    !path.startsWith(root + '/.vibespace/recycle-bin/') &&
+    Number.isFinite(value.bytes) &&
+    value.bytes >= 0 &&
+    value.bytes <= 100 * 1024 * 1024
+  );
+}
 
 const STORAGE_PREFIX = 'vibespace-recycle-bin-v1';
 const SESSION_SCOPE = '__session__';
@@ -37,6 +81,7 @@ const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 type Listener = () => void;
 
 let activeScope = SESSION_SCOPE;
+let initialized = false;
 let snapshot: readonly RecycleBinItem[] = [];
 const listeners = new Set<Listener>();
 
@@ -180,6 +225,47 @@ function normalizeItem(value: unknown): RecycleBinItem | null {
     if (!payload || payload.id !== entityId || payload.name !== name) return null;
     return { archiveId, kind: 'skill', entityId, name, deletedAt, expiresAt, payload };
   }
+  if (
+    item.kind === 'speech' ||
+    item.kind === 'project' ||
+    item.kind === 'task' ||
+    item.kind === 'file'
+  ) {
+    const payload = jsonClone(item.payload) as any;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    if (
+      item.kind === 'speech' &&
+      (payload.id !== entityId ||
+        typeof payload.text !== 'string' ||
+        !payload.text.trim() ||
+        typeof payload.provider !== 'string' ||
+        safeTimestamp(payload.startedAt) === null ||
+        !['saved', 'completed', 'interrupted'].includes(payload.status))
+    )
+      return null;
+    if (
+      item.kind === 'project' &&
+      (payload.project?.id !== entityId ||
+        typeof payload.project?.workspace_id !== 'string' ||
+        typeof payload.project?.name !== 'string' ||
+        !Array.isArray(payload.chatIds) ||
+        !payload.chatIds.every((id: unknown) => typeof id === 'string'))
+    )
+      return null;
+    if (item.kind === 'task' && (payload.id !== entityId || typeof payload.title !== 'string'))
+      return null;
+    if (item.kind === 'file' && (payload.path !== entityId || !validRecycledFile(payload)))
+      return null;
+    return {
+      archiveId,
+      kind: item.kind,
+      entityId,
+      name,
+      deletedAt,
+      expiresAt,
+      payload,
+    } as RecycledContentItem;
+  }
   return null;
 }
 
@@ -191,7 +277,8 @@ function recoverItems(value: unknown, now = Date.now()): readonly RecycleBinItem
   const recovered: RecycleBinItem[] = [];
   for (const raw of rawItems.slice(0, MAX_ARCHIVES)) {
     const item = normalizeItem(raw);
-    if (!item || item.expiresAt <= now || seen.has(item.archiveId)) continue;
+    if (!item || (item.kind !== 'file' && item.expiresAt <= now) || seen.has(item.archiveId))
+      continue;
     seen.add(item.archiveId);
     recovered.push(item);
   }
@@ -199,7 +286,7 @@ function recoverItems(value: unknown, now = Date.now()): readonly RecycleBinItem
 }
 
 function load(scope: string): readonly RecycleBinItem[] {
-  if (scope === SESSION_SCOPE || typeof window === 'undefined') return [];
+  if (typeof window === 'undefined') return [];
   try {
     const raw = window.localStorage.getItem(storageKey(scope));
     return raw ? recoverItems(JSON.parse(raw)) : [];
@@ -209,7 +296,7 @@ function load(scope: string): readonly RecycleBinItem[] {
 }
 
 function persist(scope: string, items: readonly RecycleBinItem[]): void {
-  if (scope === SESSION_SCOPE || typeof window === 'undefined') return;
+  if (typeof window === 'undefined') return;
   window.localStorage.setItem(storageKey(scope), JSON.stringify({ items }));
 }
 
@@ -225,7 +312,8 @@ function publish(next: readonly RecycleBinItem[]): void {
 
 function activateScope(): void {
   const nextScope = scopeKey();
-  if (nextScope === activeScope) return;
+  if (initialized && nextScope === activeScope) return;
+  initialized = true;
   activeScope = nextScope;
   snapshot = load(nextScope);
   notify();
@@ -241,14 +329,20 @@ function newArchiveId(kind: RecycleBinItem['kind'], entityId: string, deletedAt:
 
 function archive(item: RecycleBinItem): void {
   activateScope();
-  const next = [item, ...snapshot.filter((candidate) => candidate.archiveId !== item.archiveId)]
-    .filter(
-      (candidate, index, items) =>
-        items.findIndex(
-          (other) => other.kind === candidate.kind && other.entityId === candidate.entityId,
-        ) === index,
-    )
-    .slice(0, MAX_ARCHIVES);
+  snapshot = load(activeScope);
+  const next = [
+    item,
+    ...snapshot.filter((candidate) => candidate.archiveId !== item.archiveId),
+  ].filter(
+    (candidate, index, items) =>
+      items.findIndex(
+        (other) => other.kind === candidate.kind && other.entityId === candidate.entityId,
+      ) === index,
+  );
+  if (next.length > MAX_ARCHIVES)
+    throw new Error(
+      'Recycle Bin is full. Restore or permanently delete items before deleting more.',
+    );
   publish(next);
 }
 
@@ -265,6 +359,28 @@ export const recycleBinStore = {
 
   refreshScope(): void {
     activateScope();
+  },
+
+  archiveContent<K extends keyof ContentPayloads>(
+    kind: K,
+    entityId: string,
+    name: string,
+    payload: ContentPayloads[K],
+    now = Date.now(),
+  ): RecycledContentItem {
+    const item = normalizeItem({
+      archiveId: newArchiveId(kind, entityId, now),
+      kind,
+      entityId,
+      name,
+      payload,
+      deletedAt: now,
+      expiresAt: now + RECYCLE_BIN_RETENTION_MS,
+    });
+    if (!item || item.kind === 'agent' || item.kind === 'skill')
+      throw new Error('This item cannot be safely moved to the Recycle Bin.');
+    archive(item);
+    return item;
   },
 
   archiveAgent(agent: Agent, now = Date.now()): RecycledAgentItem {
@@ -305,6 +421,7 @@ export const recycleBinStore = {
 
   removeArchive(archiveId: string): void {
     activateScope();
+    snapshot = load(activeScope);
     const next = snapshot.filter((item) => item.archiveId !== archiveId);
     if (next.length === snapshot.length) return;
     publish(next);
@@ -312,7 +429,7 @@ export const recycleBinStore = {
 
   restoreArchive(item: RecycleBinItem): void {
     const normalized = normalizeItem(item);
-    if (!normalized || normalized.expiresAt <= Date.now()) {
+    if (!normalized || (normalized.kind !== 'file' && normalized.expiresAt <= Date.now())) {
       throw new Error('This Recycle Bin item is no longer recoverable.');
     }
     archive(normalized);
@@ -326,7 +443,8 @@ export const recycleBinStore = {
 
   pruneExpired(now = Date.now()): void {
     activateScope();
-    const next = snapshot.filter((item) => item.expiresAt > now);
+    snapshot = load(activeScope);
+    const next = snapshot.filter((item) => item.kind === 'file' || item.expiresAt > now);
     if (next.length === snapshot.length) return;
     publish(next);
   },
@@ -334,6 +452,15 @@ export const recycleBinStore = {
 
 export function resetRecycleBinStoreForTests(): void {
   activeScope = SESSION_SCOPE;
+  initialized = false;
   snapshot = [];
   listeners.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== null && event.key !== storageKey(scopeKey())) return;
+    initialized = false;
+    activateScope();
+  });
 }

@@ -78,7 +78,7 @@ export const DEFAULT_HOTKEYS: Readonly<Record<HotkeyId, Hotkey>> = Object.freeze
   AMBIENT_TOGGLE: 'Mod+Shift+.',
   COMPOSER_STT: 'Ctrl+CapsLock',
   PROMPT_FORGE: 'Mod+Shift+U',
-  GLOBAL_DICTATION: 'Ctrl+Space',
+  GLOBAL_DICTATION: 'Ctrl+Shift+Space',
   SCHEDULE: 'Mod+Shift+S',
   LAUNCHER: 'Mod+Shift+L',
   ASSISTANT: 'Mod+J',
@@ -121,7 +121,7 @@ export const HOTKEY_LABELS: Readonly<Record<HotkeyId, string>> = Object.freeze({
   AMBIENT_TOGGLE: 'Toggle ambient mode',
   COMPOSER_STT: 'Voice-to-text in composer',
   PROMPT_FORGE: 'Upgrade composer draft with Prompt Forge',
-  GLOBAL_DICTATION: 'VibeSpace dictation — in-app input when focused, overlay outside',
+  GLOBAL_DICTATION: 'VibeSpace dictation — compact microphone for the focused text field',
   SCHEDULE: 'Open schedule',
   LAUNCHER: 'Open quick launcher',
   ASSISTANT: 'Open assistant command bar',
@@ -235,6 +235,11 @@ function subscribeHotkeyVersion(onStoreChange: () => void): () => void {
 
 function getHotkeyVersion(): number {
   return version;
+}
+
+export function useResolvedHotkey(id: HotkeyId): Hotkey {
+  useSyncExternalStore(subscribeHotkeyVersion, getHotkeyVersion, () => 0);
+  return resolveHotkey(id);
 }
 
 export function isHotkeyId(value: string): value is HotkeyId {
@@ -652,4 +657,9 @@ export function useHotkey(
 // Load persisted bindings as early as this module is first imported in the browser.
 if (typeof window !== 'undefined') {
   loadHotkeyBindingsFromStorage();
+  window.addEventListener('storage', (event) => {
+    if (event.key !== null && event.key !== STORAGE_KEY) return;
+    loadHotkeyBindingsFromStorage();
+    emitHotkeysChanged();
+  });
 }

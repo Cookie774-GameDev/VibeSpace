@@ -125,8 +125,11 @@ struct GlobalDictationShortcutConfig {
     opens_overlay: bool,
 }
 
+mod dictation_shortcut;
+
 struct GlobalDictationShortcutState {
     enabled: Mutex<bool>,
+    binding: Mutex<Option<Shortcut>>,
 }
 
 impl Default for GlobalDictationShortcutState {
@@ -136,18 +139,19 @@ impl Default for GlobalDictationShortcutState {
         // a startup window where a saved-off shortcut could still fire.
         Self {
             enabled: Mutex::new(false),
+            binding: Mutex::new(None),
         }
     }
 }
 
-/// Ctrl+Space global dictation.
+/// Ctrl+Shift+Space global dictation.
 ///
-/// Ctrl+Space always opens the one compact VibeSpace dictation module. It
+/// Ctrl+Shift+Space always opens the one compact VibeSpace dictation module. It
 /// never routes through OS dictation (Windows Win+H), including when the
 /// VibeSpace main window is already focused.
 fn global_dictation_shortcut_config() -> GlobalDictationShortcutConfig {
     GlobalDictationShortcutConfig {
-        modifiers: Some(Modifiers::CONTROL),
+        modifiers: Some(Modifiers::CONTROL | Modifiers::SHIFT),
         code: Code::Space,
         opens_overlay: true,
     }
@@ -159,27 +163,23 @@ fn global_dictation_shortcut() -> Shortcut {
 }
 
 #[tauri::command]
-fn set_global_dictation_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+fn set_global_dictation_enabled(app: tauri::AppHandle, enabled: bool, shortcut: Option<String>) -> Result<(), String> {
     let state = app.state::<GlobalDictationShortcutState>();
-    let mut current = state
-        .enabled
-        .lock()
-        .map_err(|_| "Global dictation shortcut state is unavailable.".to_string())?;
-    if *current == enabled {
-        return Ok(());
+    let mut current = state.enabled.lock().map_err(|_| "Dictation state is unavailable.")?;
+    let mut binding = state.binding.lock().map_err(|_| "Dictation binding is unavailable.")?;
+    let desired = if enabled { Some(dictation_shortcut::parse(shortcut.as_deref())?) } else { None };
+    if *binding == desired { return Ok(()); }
+    // Register the replacement first: a conflict must leave the old shortcut working.
+    if let Some(next) = desired {
+        app.global_shortcut().register(next).map_err(|_| "Could not register dictation shortcut. It may be in use by another app.".to_string())?;
     }
-
-    let shortcut = global_dictation_shortcut();
-    if enabled {
-        app.global_shortcut().register(shortcut).map_err(|_| {
-            "VibeSpace could not register Ctrl+Space. Check whether another app is using it."
-                .to_string()
-        })?;
-    } else {
-        app.global_shortcut()
-            .unregister(shortcut)
-            .map_err(|_| "VibeSpace could not unregister Ctrl+Space safely.".to_string())?;
+    if let Some(previous) = *binding {
+        if let Err(error) = app.global_shortcut().unregister(previous) {
+            if let Some(next) = desired { let _ = app.global_shortcut().unregister(next); }
+            return Err(format!("Could not replace dictation shortcut: {error}"));
+        }
     }
+    *binding = desired;
     *current = enabled;
     Ok(())
 }
@@ -317,7 +317,7 @@ fn show_dictation_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Ctrl+Space has one route regardless of foreground focus.
+/// Ctrl+Shift+Space has one route regardless of foreground focus.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum DictationRoute {
     /// The compact VibeSpace module transcribes and only pastes after confirm.
@@ -466,7 +466,7 @@ fn run_ordinary(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        // Ctrl+Space always opens the compact VibeSpace
+                        // Ctrl+Shift+Space always opens the compact VibeSpace
                         // module; never OS dictation (Win+H).
                         handle_global_dictation_shortcut(app);
                     }
@@ -1555,10 +1555,10 @@ wallpaper_master::wallpaper_full_cache_path";
     }
 
     #[test]
-    fn global_dictation_shortcut_is_ctrl_space_opening_the_vibespace_overlay() {
+    fn global_dictation_shortcut_is_ctrl_shift_space_opening_the_vibespace_overlay() {
         let config = global_dictation_shortcut_config();
 
-        assert_eq!(config.modifiers, Some(Modifiers::CONTROL));
+        assert_eq!(config.modifiers, Some(Modifiers::CONTROL | Modifiers::SHIFT));
         assert_eq!(config.code, Code::Space);
         // The VibeSpace overlay is the ONLY global dictation path - the
         // shortcut must never route through OS dictation (Windows Win+H).
@@ -1567,7 +1567,7 @@ wallpaper_master::wallpaper_full_cache_path";
 
     #[test]
     fn dictation_routes_to_the_same_overlay_when_vibespace_is_focused_or_unfocused() {
-        // Focus no longer changes the destination: Ctrl+Space always opens
+        // Focus no longer changes the destination: Ctrl+Shift+Space always opens
         // the compact module that handles transcribe + confirm/paste.
         assert_eq!(dictation_route(true), DictationRoute::Overlay);
         assert_eq!(dictation_route(false), DictationRoute::Overlay);

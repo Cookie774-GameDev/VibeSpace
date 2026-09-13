@@ -60,6 +60,16 @@ vi.mock('@/stores/agents', () => ({
   useAgentStore: (selector: (state: unknown) => unknown) => selector({ agents: {} }),
 }));
 
+vi.mock('@/lib/accountIdentity', async (original) => ({
+  ...(await original<typeof import('@/lib/accountIdentity')>()),
+  getActiveAccountIdentity: () => ({ source: 'local', accountId: 'project-delete-test' }),
+}));
+vi.mock('@/lib/db/repositories', () => ({
+  projectRepo: { getById: async () => project, delete: mocks.projectDelete },
+  chatRepo: { listByProject: mocks.chatList, update: mocks.chatUpdate },
+  taskRepo: {},
+}));
+
 vi.mock('@/lib/db', () => ({
   db: {},
   projectRepo: {
@@ -131,7 +141,7 @@ describe('ProjectDetail deletion safety', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue to final confirmation' }));
     await screen.findByRole('heading', { name: 'Type Delete to confirm' });
-    const finalButton = screen.getByRole('button', { name: 'Permanently delete project' });
+    const finalButton = screen.getByRole('button', { name: 'Move project to Recycle Bin' });
     const input = screen.getByLabelText('Type Delete to confirm project deletion');
 
     expect((finalButton as HTMLButtonElement).disabled).toBe(true);
@@ -215,7 +225,7 @@ describe('ProjectDetail deletion safety', () => {
     fireEvent.change(screen.getByLabelText('Type Delete to confirm project deletion'), {
       target: { value: 'Delete' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Permanently delete project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move project to Recycle Bin' }));
 
     await waitFor(() =>
       expect(mocks.toastWarning).toHaveBeenCalledWith(
@@ -238,7 +248,7 @@ describe('ProjectDetail deletion safety', () => {
     fireEvent.change(screen.getByLabelText('Type Delete to confirm project deletion'), {
       target: { value: 'Delete' },
     });
-    const finalButton = screen.getByRole('button', { name: 'Permanently delete project' });
+    const finalButton = screen.getByRole('button', { name: 'Move project to Recycle Bin' });
     fireEvent.click(finalButton);
     fireEvent.click(finalButton);
 
@@ -256,7 +266,7 @@ describe('ProjectDetail deletion safety', () => {
     fireEvent.change(screen.getByLabelText('Type Delete to confirm project deletion'), {
       target: { value: 'Delete' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Permanently delete project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move project to Recycle Bin' }));
 
     await waitFor(() =>
       expect(mocks.toastError).toHaveBeenCalledWith('Delete failed', 'local delete failed'),

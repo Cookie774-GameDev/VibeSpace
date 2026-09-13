@@ -1,3 +1,4 @@
+import { recycleBinStore } from '@/features/recycle-bin/recycleBinStore';
 /** Local text recovery only: never stores microphone audio or provider credentials. */
 const PREFIX = 'vibespace:speech-history:v1:';
 const CHANGED = 'vibespace:speech-history-changed';
@@ -57,6 +58,10 @@ export function subscribeSpeechHistory(listener: () => void) {
 
 export function deleteSpeechHistoryEntry(id: string): boolean {
   try {
+    const raw = localStorage.getItem(PREFIX + id);
+    if (!raw) return true;
+    const entry = JSON.parse(raw) as SpeechHistoryEntry;
+    recycleBinStore.archiveContent('speech', entry.id, entry.text.trim().slice(0, 100), entry);
     localStorage.removeItem(PREFIX + id);
     notify();
     return true;
@@ -98,7 +103,10 @@ export function createSpeechHistorySession(provider: string) {
         const key = localStorage.key(i);
         if (key?.startsWith(PREFIX) && !retained.has(key)) remove.push(key);
       }
-      for (const key of remove) localStorage.removeItem(key);
+      for (const key of remove) {
+        if (!deleteSpeechHistoryEntry(key.slice(PREFIX.length)))
+          throw new Error('Could not archive older speech');
+      }
       storageFailed = false;
     } catch {
       storageFailed = true;
@@ -126,4 +134,17 @@ export function createSpeechHistorySession(provider: string) {
       save();
     },
   };
+}
+
+export function restoreSpeechHistoryEntry(entry: SpeechHistoryEntry): string {
+  // A fresh identity protects a restored take from a still-running original session.
+  const restored = {
+    ...entry,
+    id: crypto.randomUUID(),
+    startedAt: Date.now(),
+    status: entry.status === 'saved' ? 'interrupted' : entry.status,
+  };
+  localStorage.setItem(PREFIX + restored.id, JSON.stringify(restored));
+  notify();
+  return restored.id;
 }

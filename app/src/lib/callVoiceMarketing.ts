@@ -140,7 +140,7 @@ export const SPARK_NO_FREE_CREDIT_LINE =
   'Unlimited local Jarvis High · BYOK for cloud · first 200 get $5 Deepgram launch credit';
 
 export const GLOBAL_DICTATION_LINE =
-  'Global dictation (Ctrl+Space) — VibeSpace STT everywhere; uses Deepgram launch credit when you have it';
+  'Global dictation (Ctrl+Shift+Space) — VibeSpace STT everywhere; uses Deepgram launch credit when you have it';
 
 export const UNLIMITED_LOCAL_KOKORO_LINE = 'Unlimited local Jarvis High voice on every plan';
 

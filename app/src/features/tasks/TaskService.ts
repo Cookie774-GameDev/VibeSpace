@@ -1,3 +1,4 @@
+import { recycleTask } from '@/features/recycle-bin/contentRecycle';
 import { taskRepo, settingsRepo } from '@/lib/db/repositories';
 import { newTaskId, newReminderId } from '@/lib/ids';
 import { useAuthStore } from '@/stores/auth';
@@ -188,7 +189,7 @@ export async function reopenTask(id: TaskId): Promise<Task> {
  * Delete a task.
  */
 export async function deleteTask(id: TaskId): Promise<void> {
-  await taskRepo.delete(id);
+  await recycleTask(id);
 }
 
 /**

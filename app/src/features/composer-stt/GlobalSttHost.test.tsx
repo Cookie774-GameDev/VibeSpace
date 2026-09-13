@@ -1,8 +1,16 @@
+import { __resetHotkeyBindingsForTests, setHotkeyBinding } from '@/lib/hotkeys';
 import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobalSttHost } from './GlobalSttHost';
 import { COMPOSER_STT_TOGGLE_EVENT, requestComposerSttToggle } from './composerSttService';
 import { rememberSttEditableFromFocus, resetSttFocusMemoryForTests } from './insertText';
+
+const nativeInvoke = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }));
+vi.mock('@/lib/utils', async (original) => ({
+  ...(await original<typeof import('@/lib/utils')>()),
+  isTauri: true,
+}));
 
 const selectedSessionMocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -42,7 +50,28 @@ vi.mock('@/components/ui/toast', () => ({
 }));
 
 describe('GlobalSttHost', () => {
+  it('registers the new native default and sends an edited Settings binding to native registration', async () => {
+    render(<GlobalSttHost />);
+    await waitFor(() =>
+      expect(nativeInvoke).toHaveBeenCalledWith('set_global_dictation_enabled', {
+        enabled: true,
+        shortcut: 'Ctrl+Shift+Space',
+      }),
+    );
+    act(() => {
+      setHotkeyBinding('GLOBAL_DICTATION', 'Alt+Shift+D');
+    });
+    await waitFor(() =>
+      expect(nativeInvoke).toHaveBeenLastCalledWith('set_global_dictation_enabled', {
+        enabled: true,
+        shortcut: 'Alt+Shift+D',
+      }),
+    );
+  });
+
   beforeEach(() => {
+    __resetHotkeyBindingsForTests();
+    nativeInvoke.mockClear();
     resetSttFocusMemoryForTests();
     selectedSessionMocks.events.clear();
     selectedSessionMocks.stop.mockClear();
@@ -192,7 +221,9 @@ describe('GlobalSttHost', () => {
 
     try {
       act(() => requestComposerSttToggle('toolbar'));
-      await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith('Dictation error', expect.any(String)));
+      await waitFor(() =>
+        expect(toastMocks.error).toHaveBeenCalledWith('Dictation error', expect.any(String)),
+      );
       expect(toastMocks.error.mock.calls[0]?.[1]).not.toContain(
         'synthetic selected-engine implementation detail',
       );

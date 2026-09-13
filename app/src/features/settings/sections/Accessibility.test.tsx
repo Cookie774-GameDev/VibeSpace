@@ -55,7 +55,7 @@ describe('Accessibility settings', () => {
       within(speech).getByRole('switch', { name: 'Voice-to-text in the composer' }),
     ).toBeTruthy();
     expect(
-      within(speech).getByRole('switch', { name: 'Global dictation with Ctrl+Space' }),
+      within(speech).getByRole('switch', { name: 'Global dictation with Ctrl+Shift+Space' }),
     ).toBeTruthy();
 
     const comfort = screen.getByRole('region', { name: 'Visual comfort and focus' });
@@ -80,11 +80,11 @@ describe('Accessibility settings', () => {
     expect(useUIStore.getState().composerStt).toBe(false);
   });
 
-  it('persists a distinct global Ctrl+Space registration preference', () => {
+  it('persists a distinct global Ctrl+Shift+Space registration preference', () => {
     installMotionPreference(false);
     render(<Accessibility />);
 
-    const control = screen.getByRole('switch', { name: 'Global dictation with Ctrl+Space' });
+    const control = screen.getByRole('switch', { name: 'Global dictation with Ctrl+Shift+Space' });
     expect(control.getAttribute('aria-describedby')).toBe('global-dictation-enabled-description');
     fireEvent.click(control);
     expect(useUIStore.getState().globalDictationEnabled).toBe(false);

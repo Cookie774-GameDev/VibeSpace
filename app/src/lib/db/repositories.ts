@@ -494,6 +494,12 @@ export const projectRepo = {
     await syncUpdate('projects', row, syncOwner);
     return row;
   },
+  async restore(row: Project): Promise<void> {
+    const syncOwner = captureSyncQueueOwner();
+    // add refuses identity conflicts and retains the complete archived record.
+    await db.projects.add(row);
+    await syncInsert('projects', row, syncOwner);
+  },
   async delete(id: ProjectId): Promise<void> {
     const syncOwner = captureSyncQueueOwner();
     await db.projects.delete(id);
@@ -1380,6 +1386,12 @@ export const taskRepo = {
   async update(id: TaskId, patch: Partial<Task>): Promise<Task> {
     const syncOwner = captureSyncQueueOwner();
     return updateTaskWithOwner(id, patch, syncOwner);
+  },
+  async restore(row: Task): Promise<void> {
+    const syncOwner = captureSyncQueueOwner();
+    // add refuses identity conflicts and retains the complete archived record.
+    await db.tasks.add(row);
+    await syncInsert('tasks', row, syncOwner);
   },
   async delete(id: TaskId): Promise<void> {
     const syncOwner = captureSyncQueueOwner();

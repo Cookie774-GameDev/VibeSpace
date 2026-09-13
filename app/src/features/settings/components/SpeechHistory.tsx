@@ -28,8 +28,9 @@ export function SpeechHistory() {
         <span className="text-metadata text-muted-foreground">{entries.length} / 50</span>
       </div>
       <p className="text-metadata text-muted-foreground">
-        Your latest 50 talks, saved on this device as text arrives—even if dictation stops. Audio is
-        not saved. Speech that has not been transcribed yet is not included.
+        Your latest 50 talks, saved on this device as text arrives—even if dictation stops. Deleted
+        transcripts can be restored from Settings → General → Recycle Bin. Audio is not saved.
+        Speech that has not been transcribed yet is not included.
       </p>
       {(error || speechHistoryStorageFailed()) && (
         <p role="alert" className="text-metadata text-destructive">
@@ -84,7 +85,8 @@ export function SpeechHistory() {
                     aria-label="Delete transcript"
                     onClick={() => {
                       if (!deleteSpeechHistoryEntry(entry.id))
-                        setError('Could not delete this transcript. Please retry.');
+                        setError('Could not move this transcript to the Recycle Bin. It was kept.');
+                      else setError('');
                     }}
                   >
                     <Trash2 className="h-3.5 w-3.5" />

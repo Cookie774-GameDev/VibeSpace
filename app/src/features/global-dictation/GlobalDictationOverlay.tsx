@@ -1,3 +1,4 @@
+import { useDictationHotkey } from './dictationHotkey';
 import * as React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -295,13 +296,14 @@ export function GlobalDictationOverlay({
   const listening = state === 'listening' || state === 'starting';
   const busy = state === 'transcribing' || state === 'pasting';
 
-  const hint = state === 'error' ? errorMessage : partial || STATE_HINT[state];
+  const dictationHotkey = useDictationHotkey();
+  const hint = state === 'error' ? errorMessage : partial || (state === 'ready' ? `${dictationHotkey} · VibeSpace STT` : STATE_HINT[state]);
   return (
     <div
       data-tauri-drag-region
       data-monochrome-surface="global-dictation"
       aria-label="VibeSpace Dictation — drag to move"
-      title={`${hint}${engineLabel ? ` · ${engineLabel}` : ''}\nCtrl+Space: finish · Esc: cancel · Drag to move`}
+      title={`${hint}${engineLabel ? ` · ${engineLabel}` : ''}\n${dictationHotkey}: finish · Esc: cancel · Drag to move`}
       className={cn(
         'flex h-[30px] w-[120px] cursor-grab items-center gap-1 overflow-hidden rounded-full border border-accent-copper/45 bg-background/95 px-1 active:cursor-grabbing',
         '[html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background',

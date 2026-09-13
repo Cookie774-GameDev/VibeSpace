@@ -1,3 +1,4 @@
+import { recycleFile } from '@/features/recycle-bin/contentRecycle';
 import * as React from 'react';
 import {
   ChevronDown,
@@ -25,7 +26,6 @@ import { findProtectedJarvisAgent } from '@/lib/jarvis/identity';
 import type { ProjectId } from '@/types';
 import {
   createTextFile,
-  deleteProjectFile,
   describeFsError,
   readTextFile,
   renameProjectFile,
@@ -453,20 +453,22 @@ export function FilesPage() {
   const deleteFile = async () => {
     if (!selectedPath || !rootDir || fileActionBusy) return;
     const warning = dirty
-      ? `Delete ${basename(selectedPath)} permanently and discard its unsaved changes?`
-      : `Delete ${basename(selectedPath)} permanently?`;
+      ? `Move ${basename(selectedPath)} to the Recycle Bin? Its saved file will be recoverable; unsaved editor changes will be discarded. Files up to 100 MiB are supported.`
+      : `Move ${basename(selectedPath)} to the Recycle Bin? Files up to 100 MiB can be restored from Settings.`;
     if (!window.confirm(warning)) return;
     setFileActionBusy(true);
-    const result = await deleteProjectFile(selectedPath, { root: rootDir });
-    setFileActionBusy(false);
-    if (!result.ok) {
-      toast.error('Delete failed', describeFsError(result.error));
+    try {
+      await recycleFile(selectedPath, rootDir);
+    } catch (error) {
+      toast.error('Delete failed', error instanceof Error ? error.message : 'The file was kept.');
       return;
+    } finally {
+      setFileActionBusy(false);
     }
     closeWorkspaceFile(projectId, selectedPath);
     const nextActive = getFileWorkspaceState(projectId).activePath ?? '';
     setStoredOpenFile(projectId, nextActive, false);
-    toast.success('Deleted', basename(selectedPath));
+    toast.success('Moved to Recycle Bin', basename(selectedPath));
     await loadRoot(rootDir);
   };
 

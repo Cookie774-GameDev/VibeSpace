@@ -1,3 +1,5 @@
+import { getActiveAccountIdentity } from '@/lib/accountIdentity';
+import { restoreRecycledContent, permanentlyDeleteRecycledFile } from './contentRecycle';
 import { skillRegistry } from '@/features/skills/registry';
 import { readSkillsStore, type CustomSkillRecord } from '@/features/skills/skillsStore';
 import { agentRepo, type AgentCreateInput } from '@/lib/db/repositories';
@@ -26,6 +28,7 @@ type SkillStore = {
 };
 
 type RecycleBin = {
+  getSnapshot?(): readonly RecycleBinItem[];
   archiveAgent(agent: Agent): RecycledAgentItem;
   archiveSkill(skill: CustomSkillRecord): RecycledSkillItem;
   removeArchive(archiveId: string): void;
@@ -34,7 +37,8 @@ type RecycleBin = {
 
 export type RecycleBinRestoreResult =
   | { kind: 'agent'; entityId: AgentId; renamed: boolean }
-  | { kind: 'skill'; entityId: string; renamed: false };
+  | { kind: 'skill'; entityId: string; renamed: false }
+  | Awaited<ReturnType<typeof restoreRecycledContent>>;
 
 export interface RecycleBinServiceDependencies {
   bin: RecycleBin;
@@ -262,19 +266,40 @@ export function createRecycleBinService(dependencies: RecycleBinServiceDependenc
       return archived;
     },
     async restore(item: RecycleBinItem): Promise<RecycleBinRestoreResult> {
-      if (item.expiresAt <= Date.now()) {
+      if (item.kind !== 'file' && item.expiresAt <= Date.now()) {
         throw new Error('This Recycle Bin item has expired.');
       }
+      if (item.kind !== 'agent' && item.kind !== 'skill') return restoreRecycledContent(item);
       const result = item.kind === 'agent' ? await restoreAgent(item) : await restoreSkill(item);
       if (item.kind === 'agent' && result.kind === 'agent') recordAgentRestore(item, result);
       else if (item.kind === 'skill') recordSkillRestore(item);
       return result;
     },
-    permanentlyDelete(archiveId: string): void {
+    async permanentlyDelete(archiveId: string): Promise<void> {
+      const scope = JSON.stringify(getActiveAccountIdentity());
+      const item = dependencies.bin.getSnapshot?.().find((row) => row.archiveId === archiveId);
+      if (item?.kind === 'file') await permanentlyDeleteRecycledFile(item);
+      if (scope !== JSON.stringify(getActiveAccountIdentity()))
+        throw new Error('Account changed; recovery entries were retained.');
       dependencies.bin.removeArchive(archiveId);
     },
-    empty(): void {
-      dependencies.bin.empty();
+    async empty(): Promise<void> {
+      const scope = JSON.stringify(getActiveAccountIdentity());
+      const items = dependencies.bin.getSnapshot?.();
+      if (!items) {
+        dependencies.bin.empty();
+        return;
+      }
+      // Remove only the entries this confirmation covered. A new recording in
+      // another window must not disappear while file cleanup is in flight.
+      for (const item of items) {
+        if (scope !== JSON.stringify(getActiveAccountIdentity()))
+          throw new Error('Account changed; remaining recovery entries were retained.');
+        if (item.kind === 'file') await permanentlyDeleteRecycledFile(item);
+        if (scope !== JSON.stringify(getActiveAccountIdentity()))
+          throw new Error('Account changed; recovery entries were retained.');
+        dependencies.bin.removeArchive(item.archiveId);
+      }
     },
   };
 }

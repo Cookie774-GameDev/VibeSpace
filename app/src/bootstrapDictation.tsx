@@ -53,7 +53,7 @@ function CompactStatus({ failed, retry }: { failed: boolean; retry: () => void }
       aria-label={failed ? 'Retry dictation startup' : 'Preparing dictation'}
       title={
         failed
-          ? 'Voice could not start. Click or press Ctrl+Space to retry. Escape closes this module.'
+          ? 'Voice could not start. Click or press your dictation shortcut to retry. Escape closes this module.'
           : 'Preparing secure dictation…'
       }
     >

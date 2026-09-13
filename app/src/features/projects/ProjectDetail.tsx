@@ -1,3 +1,4 @@
+import { recycleProject } from '@/features/recycle-bin/contentRecycle';
 /**
  * ProjectDetail — the `'project-detail'` route.
  *
@@ -249,17 +250,14 @@ export function ProjectDetail() {
         return;
       }
 
-      // Unassign chats first so they don't dangle.
-      const chats = await chatRepo.listByProject(project.id);
-      setDeleteImpactCount(chats.length);
-      for (const c of chats) {
-        await chatRepo.update(c.id, { project_id: undefined });
-      }
-      await projectRepo.delete(project.id);
+      await recycleProject(project);
       // Switch to the next project so the workspace doesn't sit on a
       // deleted id.
       setProjectId(fallback.id);
-      toast.success('Project deleted', `Removed "${project.name}".`);
+      toast.success(
+        'Project moved to Recycle Bin',
+        `You can restore "${project.name}" in Settings.`,
+      );
       resetDeleteConfirmation();
       setRoute('chat');
     } catch (err) {
@@ -685,7 +683,8 @@ export function ProjectDetail() {
               <DialogHeader>
                 <DialogTitle>Delete {project.name}?</DialogTitle>
                 <DialogDescription>
-                  You selected this project for deletion. Nothing has been changed yet.
+                  This project can be restored from Settings → General → Recycle Bin for 90 days.
+                  Nothing has been changed yet.
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-secondary text-foreground">
@@ -768,7 +767,7 @@ export function ProjectDetail() {
                   disabled={deleteConfirmation !== 'Delete' || deleting}
                   onClick={() => void handleDelete()}
                 >
-                  {deleting ? 'Deleting project…' : 'Permanently delete project'}
+                  {deleting ? 'Deleting project…' : 'Move project to Recycle Bin'}
                 </Button>
               </DialogFooter>
             </>
