@@ -4,6 +4,38 @@
   margin: 0 8px 5px;
   min-width: 0;
 }
+.queue-visible-messages {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.queue-visible-messages[data-expanded='true'] {
+  max-height: min(320px, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.queue-expand-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 12px;
+  border-radius: 8px;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  text-align: left;
+}
+.queue-expand-toggle:hover,
+.queue-expand-toggle:focus-visible {
+  background: hsl(var(--elevated));
+}
+.queue-expand-toggle[aria-expanded='true'] > svg {
+  transform: rotate(180deg);
+}
+.queue-total-count {
+  margin-left: auto;
+  opacity: 0.55;
+}
 .queued-message-row {
   display: flex;
   align-items: center;

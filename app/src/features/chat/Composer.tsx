@@ -5703,6 +5703,7 @@ export function Composer({
       data-composer-frame={compact ? undefined : 'layered'}
     >
       <QueuedMessagesBar
+        key={String(chatId)}
         messages={queuedMessages}
         onEdit={editQueuedMessage}
         onSendNow={sendQueuedMessageNow}

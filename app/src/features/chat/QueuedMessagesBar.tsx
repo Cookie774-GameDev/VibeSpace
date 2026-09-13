@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import {
   CornerDownRight,
   ListEnd,
@@ -9,6 +9,7 @@ import {
   MessageSquarePlus,
   Paperclip,
   Loader2,
+  ChevronDown,
 } from 'lucide-react';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import {
@@ -135,15 +136,36 @@ function QueueRow({ message, ...props }: Omit<Props, 'messages'> & { message: Qu
   );
 }
 export function QueuedMessagesBar({ messages, ...props }: Props) {
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const overflow = Math.max(0, messages.length - 3);
+  useEffect(() => {
+    if (!overflow) setExpanded(false);
+  }, [overflow]);
   if (!messages.length) return null;
   return (
     <div aria-label="Queued messages" className="queued-message-stack">
       <span className="sr-only">
         {messages.length} queued. Enter after tool · Tab after full reply.
       </span>
-      {messages.map((message) => (
-        <QueueRow key={message.id} message={message} {...props} />
-      ))}
+      <div id={listId} className="queue-visible-messages" data-expanded={expanded}>
+        {(expanded ? messages : messages.slice(0, 3)).map((message) => (
+          <QueueRow key={message.id} message={message} {...props} />
+        ))}
+      </div>
+      {overflow > 0 && (
+        <button
+          type="button"
+          className="queue-expand-toggle"
+          aria-expanded={expanded}
+          aria-controls={listId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <ChevronDown size={14} aria-hidden="true" />
+          {expanded ? 'Show less' : `Show ${overflow} more`}{' '}
+          <span className="queue-total-count">{messages.length} queued</span>
+        </button>
+      )}
     </div>
   );
 }

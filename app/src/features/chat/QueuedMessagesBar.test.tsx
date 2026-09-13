@@ -15,6 +15,48 @@ const queued: QueuedChatMessage[] = [
 
 afterEach(cleanup);
 describe('QueuedMessagesBar', () => {
+  it('shows the first three, expands in order, and keeps hidden row actions connected', () => {
+    const messages = Array.from({ length: 7 }, (_, index) => ({
+      ...queued[0]!,
+      id: `q_${index}`,
+      text: `Request ${index}`,
+    }));
+    const onDelete = vi.fn();
+    const { container, rerender } = render(
+      <QueuedMessagesBar
+        messages={messages}
+        onEdit={vi.fn()}
+        onSendNow={vi.fn()}
+        onDelete={onDelete}
+        onStartMultitask={vi.fn()}
+      />,
+    );
+    const visibleIds = () =>
+      Array.from(container.querySelectorAll('[data-queued-message-id]')).map((row) =>
+        row.getAttribute('data-queued-message-id'),
+      );
+    expect(visibleIds()).toEqual(['q_0', 'q_1', 'q_2']);
+    const toggle = screen.getByRole('button', { name: 'Show 4 more 7 queued' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(visibleIds()).toEqual(messages.map((message) => message.id));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete queued message' })[6]!);
+    expect(onDelete).toHaveBeenCalledWith('q_6');
+    fireEvent.click(screen.getByRole('button', { name: 'Show less 7 queued' }));
+    expect(visibleIds()).toEqual(['q_0', 'q_1', 'q_2']);
+    rerender(
+      <QueuedMessagesBar
+        messages={messages.slice(0, 3)}
+        onEdit={vi.fn()}
+        onSendNow={vi.fn()}
+        onDelete={onDelete}
+        onStartMultitask={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /Show/ })).toBeNull();
+    expect(visibleIds()).toEqual(['q_0', 'q_1', 'q_2']);
+  });
+
   it('steers and deletes directly, with edit and side chat in options', () => {
     const onEdit = vi.fn(),
       onSendNow = vi.fn(),
