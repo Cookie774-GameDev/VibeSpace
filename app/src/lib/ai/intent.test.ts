@@ -67,6 +67,27 @@ describe('classifyJarvisIntent', () => {
 
 describe('shouldAutoRetrieveProjectKnowledge', () => {
   it.each([
+    'Build the CSV tool. Do not use Context Maps.',
+    'Write the two files. No Context Maps, subagents, or other paths.',
+    'Do not inspect sibling output folders, unrelated projects, or Context Maps.',
+    'Run the tests without using RLM.',
+  ])('honors explicit automatic Context retrieval opt-out: %s', text => {
+    expect(shouldAutoRetrieveProjectKnowledge({
+      text, intent: classifyJarvisIntent({ text }), hasExplicitAttachments: true,
+    })).toBe(false);
+  });
+
+  it.each([
+    'Use Context Maps to find the package version.',
+    'Do not edit files. Use Context Maps to find the package version.',
+    'Use RLM to inspect the corpus without editing it.',
+  ])('preserves requested retrieval: %s', text => {
+    expect(shouldAutoRetrieveProjectKnowledge({
+      text, intent: classifyJarvisIntent({ text }), hasExplicitAttachments: true,
+    })).toBe(true);
+  });
+
+  it.each([
     'Review the submitted answers to your earlier audit questions and tell me which color and detail level I chose. One sentence, without tools or subagents.',
     'Answer from our conversation. Do not use tools to search the project files.',
     'Explain this source excerpt without using any tools.',

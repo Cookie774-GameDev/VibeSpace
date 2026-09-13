@@ -1154,6 +1154,69 @@ describe('persistent OpenCode approval recovery', () => {
     await iterator.return?.();
   });
 
+  it('settles an approval from exact native SSE when its HTTP response is delayed', async () => {
+    const approvalId = 'perm_native_ack_delayed';
+    configureManagedQuestionTransport([], {
+      pendingPermissions: [{ ...pendingPermission(), id: approvalId }],
+      sessionStatuses: ['busy'],
+    });
+    let acknowledge!: () => void;
+    const ready = new Promise<void>(resolve => { acknowledge = resolve; });
+    nativeOpenCodeMocks.events.mockImplementation(async function* () {
+      await ready;
+      yield { type: 'permission.replied', properties: {
+        sessionID: 'ses_question_exact', requestID: approvalId, reply: 'once',
+      } };
+    });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.includes('/permissions/')) return new Promise<Response>(() => {});
+      return original(generation, path, init, timeout);
+    });
+    const onApprovalRequested = vi.fn(async () => undefined);
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('request-native-approval-ack'), onApprovalRequested,
+    })[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.next();
+    expect(onApprovalRequested).toHaveBeenCalledOnce();
+    const reply = respondToPersistentOpenCodeApproval({
+      sessionId: 'ses_question_exact', approvalId, response: 'once',
+    });
+    acknowledge();
+    await expect(reply).resolves.toBeUndefined();
+    expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/permissions/'))).toHaveLength(1);
+    await iterator.return?.();
+  });
+
+  it.each(['once', 'always', 'reject'])('finishes when native %s settles another pending request', async (reply) => {
+    const approvalId = `perm_pattern_native_settled_${reply}`;
+    configureManagedQuestionTransport([
+      { type: 'permission.asked', properties: { ...pendingPermission(), id: approvalId } },
+      { type: 'permission.replied', properties: {
+        sessionID: 'ses_question_exact', requestID: approvalId, reply,
+      } },
+      { type: 'session.idle', properties: { sessionID: 'ses_question_exact' } },
+    ], {
+      // An older HTTP permission snapshot must not resurrect the acknowledged request.
+      pendingPermissions: [{ ...pendingPermission(), id: approvalId }],
+      sessionStatuses: ['idle'],
+    });
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 2_000);
+    const received: ProviderEvent[] = [];
+    try {
+      for await (const event of openCodePersistentAdapter.send!({
+        ...questionProviderRequest(`request-pattern-native-settled-${reply}`, controller.signal),
+        onApprovalRequested: vi.fn(async () => undefined),
+      })) received.push(event);
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally { clearTimeout(deadline); }
+    expect(received.some(event => event.type === 'done')).toBe(true);
+    expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/permissions/'))).toHaveLength(0);
+  });
+
   it('rebinds a persisted exact approval route after the originating iterator is gone', async () => {
     const onApprovalRequested = vi.fn(async () => undefined);
     configureManagedQuestionTransport([], {

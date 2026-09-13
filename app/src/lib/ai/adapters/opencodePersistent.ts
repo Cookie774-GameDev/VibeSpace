@@ -40,6 +40,8 @@ import {
   type OpenCodeRequestControls,
 } from '@/lib/harness/OpenCodeRequestControls';
 import { normalizeOpenCodeEvent } from '@/lib/harness/eventNormalizer';
+import { OpenCodeApprovalAcknowledgements } from '@/lib/harness/OpenCodeApprovalAcknowledgement';
+import { recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
 import { nativeShellFailure, projectNativeTaskActivity } from '../openCodeNativeActivity';
 import {
   bindToolGatewayObservedExecutionAuthority,
@@ -394,11 +396,14 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
   };
 
   async *events(signal?: AbortSignal): AsyncGenerator<OpenCodeRawEvent> {
-    yield* nativeOpenCodeEvents(
+    for await (const event of nativeOpenCodeEvents(
       this.handle.generation,
       withDirectory('/event', this.handle.scope),
       signal,
-    );
+    )) {
+      approvalAcknowledgments.observe(this.handle.generation, event);
+      yield event;
+    }
   }
 
   async status(sessionId: string): Promise<unknown> {
@@ -668,6 +673,24 @@ const approvalResponseFlights = new Map<
   Readonly<{ response: HarnessApprovalResponse['response']; promise: Promise<void> }>
 >();
 const settledApprovalResponses = new Set<string>();
+const approvalAcknowledgments = new OpenCodeApprovalAcknowledgements();
+
+function reconcileNativeApprovalReply(generation: string, event: OpenCodeRawEvent): void {
+  if (event.type !== 'permission.replied') return;
+  const sessionId = cleanIdentifier(event.properties?.sessionID);
+  const approvalId = cleanIdentifier(event.properties?.requestID);
+  const reply = event.properties?.reply;
+  if (!sessionId || !approvalId || (reply !== 'once' && reply !== 'always' && reply !== 'reject')) return;
+  const active = activeApprovalSessions.get(sessionId);
+  if (active?.http.handle.generation !== generation ||
+      active.approvals.get(approvalId)?.sessionId !== sessionId) return;
+  // Native pattern approval may also settle other pending requests. Only an
+  // exact acknowledgment on this generation's stream can clear their wait.
+  active.approvals.delete(approvalId);
+  settledApprovalResponses.add(`${sessionId}\u0000${approvalId}`);
+  recordOpenCodeApprovalStatus(sessionId, approvalId,
+    reply === 'reject' ? 'denied' : reply === 'always' ? 'approved_plan' : 'approved');
+}
 
 function approvalScope(route: Readonly<OpenCodeApprovalHarnessRoute>): HarnessScope {
   const accountId = cleanIdentifier(route.accountId, 512);
@@ -744,14 +767,24 @@ async function executePersistentOpenCodeApproval(
     if (!pending) throw new Error('OpenCode approval is no longer pending.');
     http = client.http;
   }
-  const result = await http.session.replyPermission({
-    path: { id: sessionId, permissionId: approvalId },
-    body: { response: input.response },
-  });
-  if (unwrapData(result) === false) {
-    throw new Error('OpenCode rejected the approval response.');
-  }
-  active?.approvals.delete(approvalId);
+  const reconcileAcknowledgment = () => {
+    active?.approvals.delete(approvalId);
+    recordOpenCodeApprovalStatus(sessionId, approvalId,
+      input.response === 'reject' ? 'denied' : input.response === 'always' ? 'approved_plan' : 'approved');
+  };
+  await approvalAcknowledgments.execute(
+    { ...input, generation: http.handle.generation, sessionId, approvalId },
+    async () => {
+      const result = await http.session.replyPermission({
+        path: { id: sessionId, permissionId: approvalId },
+        body: { response: input.response },
+      });
+      if (unwrapData(result) === false) throw new Error('OpenCode rejected the approval response.');
+    },
+    reconcileAcknowledgment,
+  );
+  // A persisted card can reattach after an earlier exact acknowledgment.
+  reconcileAcknowledgment();
 }
 
 export async function respondToPersistentOpenCodeApproval(
@@ -2528,6 +2561,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const event = next.value.value;
       pendingEvent = nextEventOrEof();
       const eventScope = eventSessionId(event);
+      reconcileNativeApprovalReply(client.http.handle.generation, event);
       if (eventScope && eventScope !== dispatch.sessionId) {
         const child = await controlSession(event);
         if (child) {

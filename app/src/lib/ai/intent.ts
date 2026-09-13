@@ -154,6 +154,8 @@ const EXPLICIT_DISK_FILE_READ_RE =
   /\bfiles\.read\b[\s\S]{0,800}[A-Za-z]:[\\/]|[A-Za-z]:[\\/][\s\S]{0,800}\bfiles\.read\b/i;
 const EXPLICIT_NO_TOOLS_RE =
   /\b(?:do\s+not|don't|never)\s+(?:use|call|invoke)\s+(?:any\s+)?tools?\b|\bwithout\s+(?:using\s+)?(?:any\s+)?tools?\b|\bno\s+tools\b/i;
+const EXPLICIT_NO_PROJECT_RETRIEVAL_RE =
+  /\b(?:do\s+not|don't|never)\s+(?:use|inspect|search|read|retrieve|consult)\s+(?:(?!\b(?:but|instead|then)\b)[^.!?;\r\n]){0,160}\b(?:context\s+maps?|rlm)\b|\b(?:no|without\s+(?:using\s+)?)\s*(?:any\s+)?(?:context\s+maps?|rlm)\b/i;
 
 /** Reuses the current-turn restriction for retrieval and prompt admission. */
 export function requestsNoTools(text: string): boolean {
@@ -182,7 +184,7 @@ export function shouldAutoRetrieveProjectKnowledge(input: {
   hasExplicitAttachments?: boolean;
 }): boolean {
   // Explicit attachments are resolved separately; do not silently search beyond them.
-  if (requestsNoTools(input.text)) return false;
+  if (requestsNoTools(input.text) || EXPLICIT_NO_PROJECT_RETRIEVAL_RE.test(input.text)) return false;
   // Exact registered disk reads must not be rewritten into Context-map retrieval,
   // even when a project already has approved maps selected.
   if (EXPLICIT_DISK_FILE_READ_RE.test(input.text.trim())) return false;

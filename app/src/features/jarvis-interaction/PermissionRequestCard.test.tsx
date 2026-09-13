@@ -176,6 +176,21 @@ describe('PermissionRequestCard', () => {
     expect(window.dispatchEvent).not.toHaveBeenCalled();
   });
 
+  it('recovers a native builtin approval without granting unrelated semantic tool authority', async () => {
+    const part = { ...harnessPermissionPart, request: { ...harnessPermissionPart.request,
+      harness: { ...harnessPermissionPart.request.harness!, capability: 'external_directory' },
+    } };
+    persist(part);
+    repo.grantMutation.mockImplementation(() => { throw new Error('tool_gateway_authority_unavailable'); });
+    render(<PermissionRequestCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: /Approve once/i }));
+    await waitFor(() => expect(repo.respondToApproval).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1', approvalId: 'approval-1', response: 'once', route: part.request.harness,
+    })));
+    await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(1));
+    expect(repo.grantMutation).not.toHaveBeenCalled();
+  });
+
   it('rejects the exact OpenCode approval on deny', async () => {
     persist(harnessPermissionPart);
     render(

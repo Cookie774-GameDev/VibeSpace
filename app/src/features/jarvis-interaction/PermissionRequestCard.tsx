@@ -5,6 +5,7 @@ import { messageRepo } from '@/lib/db/repositories';
 import { respondToPersistentOpenCodeApproval } from '@/lib/ai/adapters/opencodePersistent';
 import { recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
 import { grantToolGatewayMutation } from '@/lib/harness/toolGatewayProduction';
+import { MUTATING_TOOL_GATEWAY_TOOLS } from '@/lib/harness/toolGatewayProtocol';
 import type { MessageId, Part } from '@/types';
 import { useJarvisInteractionStore } from './sessionStore';
 import type { JarvisPermissionRequest, JarvisPermissionStatus } from './types';
@@ -112,7 +113,11 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
       await readPendingAuthority();
       if (request.harness) {
         const response = status === 'approved_plan' ? 'always' : 'once';
-        const revoke = request.harness.approvalId.startsWith('codex-approval-') ? undefined : grantToolGatewayMutation(
+        // Builtin OpenCode permissions are authorized by their native session.
+        // Only semantic mutations need a separate live Context Gateway grant.
+        const needsGatewayGrant = !request.harness.approvalId.startsWith('codex-approval-') &&
+          MUTATING_TOOL_GATEWAY_TOOLS.has(request.harness.capability as never);
+        const revoke = !needsGatewayGrant ? undefined : grantToolGatewayMutation(
           request.harness.sessionId,
           request.harness.capability,
           response,
