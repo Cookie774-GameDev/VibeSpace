@@ -344,9 +344,8 @@ fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(window) = app.get_webview_window("dictation").filter(|window| window.is_visible().unwrap_or(false)) {
-            // Capture where the user is typing BEFORE focusing the pill. Page
-            // navigation is independent of the recording in its own WebView.
-            dictation::refresh_target(&window);
+            // The take owns its ORIGINAL field. Finishing never recaptures or
+            // clears it when the user has moved to another page/application.
             let _ = window.emit("jarvis:global-dictation-toggle", ());
             PROBING.store(false, std::sync::atomic::Ordering::SeqCst);
             return;

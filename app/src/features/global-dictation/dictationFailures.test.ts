@@ -105,7 +105,7 @@ describe('global dictation failure narration', () => {
     );
     expect(formatGlobalDictationPasteFailure(new Error('synthetic private paste detail'))).toBe(
       'The action failed, sir. Action: Global dictation paste. ' +
-        'Cause: The transcript could not be pasted into the selected text field. ' +
+        'Cause: The transcript could not be pasted into the original text field. ' +
         'Restore focus and confirm input permission, then retry.',
     );
   });

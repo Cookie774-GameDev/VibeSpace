@@ -138,6 +138,24 @@ describe('Deepgram capture and finalization ownership', () => {
     expect(onFinal).toHaveBeenCalledExactlyOnceWith('A harmless fixed phrase.');
   });
 
+  it('keeps an hour-long streaming take alive and accumulates every confirmed segment', async () => {
+    vi.useFakeTimers();
+    const onFinal = vi.fn();
+    const session = await createDeepgramDictationSession({onFinal}, 'nova-3-mono');
+    const socket = sockets[0]!;
+    socket.open();
+    const segments: string[] = [];
+    for (let minute = 0; minute < 60; minute++) {
+      segments.push(`minute ${minute}`);
+      socket.transcript(segments.at(-1)!);
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+    expect(stopTrack).not.toHaveBeenCalled();
+    expect(session.getFinalText()).toBe(segments.join(' '));
+    expect(onFinal).toHaveBeenCalledTimes(60);
+    session.cancel();
+  });
+
   it('uses microphone samples instead of transcript length and cleans its audio graph', async () => {
     const onLevel = vi.fn();
     const session = await createDeepgramDictationSession({onLevel},'nova-3-mono');

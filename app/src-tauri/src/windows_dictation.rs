@@ -1,5 +1,4 @@
-//! Windows-wide text delivery. Capture the destination at explicit confirmation,
-//! before the overlay can acquire focus. Native clipboard paste preserves Unicode.
+//! Windows-wide text delivery to the original control captured before recording.
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Mutex,
@@ -15,7 +14,7 @@ struct Target {
     process: u32,
 }
 
-static TARGET: Mutex<Option<(Target, Vec<i32>)>> = Mutex::new(None);
+static TARGET: Mutex<Option<(Target, focus::SavedField)>> = Mutex::new(None);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 trait Desktop {
@@ -50,7 +49,7 @@ struct WindowsDesktop {
     owner: usize,
     expected: Option<Target>,
     generation: u64,
-    field: Vec<i32>,
+    field: focus::SavedField,
 }
 
 fn identify(window: HWND) -> Option<Target> {
@@ -84,11 +83,7 @@ impl Desktop for WindowsDesktop {
     }
 
     fn insert(&self, text: &str) -> Result<(), String> {
-        if focus::focused_editable().as_ref() != Some(&self.field) {
-            return Err(
-                "The selected text field is no longer focused. Select a text field and retry.".into(),
-            );
-        }
+        self.field.restore()?;
         let restore = clipboard::prepare(self.owner, text)?;
         let result = if GENERATION.load(Ordering::SeqCst) != self.generation
             || self.foreground() != self.expected
@@ -133,7 +128,23 @@ fn paste_inputs() -> [INPUT; 4] {
 pub fn capture_target() -> bool {
     let generation = GENERATION.load(Ordering::SeqCst);
     let foreground = identify(unsafe { GetForegroundWindow() });
-    let Some(field) = focus::focused_editable() else {
+    // Chromium/UIA focus notifications can trail a click. A short bounded retry
+    // accepts the actual field after that notification instead of silently
+    // ignoring the shortcut. Never follow focus into another window mid-probe.
+    let mut field = None;
+    for attempt in 0..4 {
+        if foreground.is_none() || identify(unsafe { GetForegroundWindow() }) != foreground {
+            return false;
+        }
+        field = focus::capture_editable();
+        if field.is_some() {
+            break;
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+    }
+    let Some(field) = field else {
         return false;
     };
     if foreground.is_none() || identify(unsafe { GetForegroundWindow() }) != foreground {
@@ -156,32 +167,6 @@ pub fn cancel() {
     }
 }
 
-/// Finishing from another page/app chooses that focused field. Confirming from
-/// the pill itself retains the last selected destination. A non-editable surface
-/// explicitly clears the old destination: never silently paste into an old chat.
-pub fn refresh_target(overlay: usize) {
-    let generation = GENERATION.load(Ordering::SeqCst);
-    let foreground = identify(unsafe { GetForegroundWindow() });
-    if foreground.is_some_and(|target| target.window == overlay) {
-        return;
-    }
-    let field = focus::focused_editable();
-    let candidate = confirmed_target(foreground, field, identify(unsafe { GetForegroundWindow() }));
-    if let Ok(mut saved) = TARGET.lock() {
-        if GENERATION.load(Ordering::SeqCst) == generation {
-            *saved = candidate;
-        }
-    }
-}
-
-fn confirmed_target(
-    before: Option<Target>,
-    field: Option<Vec<i32>>,
-    after: Option<Target>,
-) -> Option<(Target, Vec<i32>)> {
-    if before == after { before.zip(field) } else { None }
-}
-
 pub fn paste(text: &str, owner: usize) -> Result<(), String> {
     let (target, field, generation) = {
         let saved = TARGET
@@ -189,10 +174,7 @@ pub fn paste(text: &str, owner: usize) -> Result<(), String> {
             .map_err(|_| "Dictation is busy. Please retry.")?;
         (
             saved.as_ref().map(|(target, _)| *target),
-            saved
-                .as_ref()
-                .map(|(_, field)| field.clone())
-                .unwrap_or_default(),
+            saved.as_ref().map(|(_, field)| field.clone()),
             GENERATION.load(Ordering::SeqCst),
         )
     };
@@ -223,7 +205,7 @@ pub fn paste(text: &str, owner: usize) -> Result<(), String> {
             owner,
             expected: target,
             generation,
-            field,
+            field: field.ok_or("The original text box is unavailable. Your transcript is kept.")?,
         },
         target,
         text,
@@ -264,19 +246,37 @@ mod tests {
     };
 
     #[test]
-    fn confirmation_can_select_another_page_or_application() {
-        let another_app = Target { window: 2, process: 20 };
-        for target in [ORIGINAL, another_app] {
-            assert_eq!(confirmed_target(Some(target), Some(vec![7, 8]), Some(target)), Some((target, vec![7, 8])));
+    fn confirmation_returns_to_the_original_window_after_many_focus_changes() {
+        struct SwitchingDesktop {
+            focused: Cell<Option<Target>>,
+            inserted: Cell<bool>,
         }
-    }
-
-    #[test]
-    fn confirmation_rejects_non_editable_and_changing_focus() {
-        assert_eq!(confirmed_target(Some(ORIGINAL), None, Some(ORIGINAL)), None);
-        assert_eq!(confirmed_target(Some(ORIGINAL), Some(vec![1]), None), None);
-        assert_eq!(confirmed_target(None, Some(vec![1]), None), None);
-        assert_eq!(confirmed_target(Some(ORIGINAL), Some(vec![1]), Some(Target { process: 11, ..ORIGINAL })), None);
+        impl Desktop for SwitchingDesktop {
+            fn foreground(&self) -> Option<Target> {
+                self.focused.get()
+            }
+            fn activate(&self, target: Target) -> bool {
+                self.focused.set(Some(target));
+                true
+            }
+            fn insert(&self, _: &str) -> Result<(), String> {
+                self.inserted.set(true);
+                Ok(())
+            }
+        }
+        let desktop = SwitchingDesktop {
+            focused: Cell::new(Some(ORIGINAL)),
+            inserted: Cell::new(false),
+        };
+        for window in 2..102 {
+            desktop.focused.set(Some(Target {
+                window,
+                process: 20,
+            }));
+        }
+        assert!(deliver(&desktop, Some(ORIGINAL), "saved take").is_ok());
+        assert_eq!(desktop.foreground(), Some(ORIGINAL));
+        assert!(desktop.inserted.get());
     }
 
     #[test]

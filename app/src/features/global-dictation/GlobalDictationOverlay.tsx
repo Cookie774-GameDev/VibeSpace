@@ -79,9 +79,23 @@ export function GlobalDictationOverlay({
 
   const failVisible = React.useCallback(
     (message: string) => {
+      // A provider interruption must not erase words already recognized during
+      // a long take. Snapshot them before cancelling the provider session.
+      let confirmed = sessionRef.current?.getFinalText().trim() ?? '';
+      if (clearedTextRef.current && confirmed.startsWith(clearedTextRef.current))
+        confirmed = confirmed.slice(clearedTextRef.current.length).trim();
+      const interim = latestInterimRef.current.trim();
+      pendingPasteRef.current =
+        confirmed && interim && !confirmed.endsWith(interim)
+          ? `${confirmed} ${interim}`
+          : confirmed || interim || pendingPasteRef.current;
       teardownSession();
       updateState('error');
-      setErrorMessage(message);
+      setErrorMessage(
+        pendingPasteRef.current
+          ? `${message} Recognized words are kept; confirm to insert them into the original text box.`
+          : message,
+      );
       void getCurrentWindow()
         .show()
         .catch(() => undefined);
@@ -195,7 +209,7 @@ export function GlobalDictationOverlay({
     }
     updateState('pasting');
     // Native delivery already waits for released shortcut keys and verifies
-    // the destination selected at confirmation. No renderer timer is needed.
+    // the original destination captured at startup. No renderer timer is needed.
     try {
       await getCurrentWindow().hide();
       if (generationRef.current !== generation) return;
@@ -208,7 +222,7 @@ export function GlobalDictationOverlay({
       if (generationRef.current === generation) {
         updateState('error');
         setErrorMessage(
-          `${formatGlobalDictationPasteFailure(err)} Your transcript is kept. Select a text field and press your dictation shortcut to retry.`,
+          `${formatGlobalDictationPasteFailure(err)} Your transcript is kept. Return to the original text box and press your dictation shortcut to retry.`,
         );
         void getCurrentWindow()
           .show()

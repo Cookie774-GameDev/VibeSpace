@@ -12,18 +12,13 @@ mod windows_dictation;
 
 pub fn capture_target() -> bool {
     #[cfg(target_os = "windows")]
-    { windows_dictation::capture_target() }
-    #[cfg(not(target_os = "windows"))]
-    { true }
-}
-
-pub fn refresh_target(window: &tauri::WebviewWindow) {
-    #[cfg(target_os = "windows")]
-    if let Ok(handle) = window.hwnd() {
-        windows_dictation::refresh_target(handle.0 as usize);
+    {
+        windows_dictation::capture_target()
     }
     #[cfg(not(target_os = "windows"))]
-    let _ = window;
+    {
+        true
+    }
 }
 
 #[tauri::command]

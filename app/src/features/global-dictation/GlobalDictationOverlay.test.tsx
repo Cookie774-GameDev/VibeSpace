@@ -356,6 +356,35 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
   });
 
+  it('keeps recognized words after a provider interruption and confirms without restarting capture', async () => {
+    let callbacks!: SessionCallbacks;
+    let text = 'the original take';
+    const session = {
+      ...fakeSession(''),
+      getFinalText: () => text,
+      cancel: vi.fn(() => {
+        text = '';
+      }),
+    };
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      callbacks = cb;
+      cb.onOpen?.();
+      return session;
+    });
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    act(() => {
+      callbacks.onPartial?.('continues here');
+      callbacks.onError?.('Deepgram dictation connection failed.');
+    });
+    expect(screen.getByText(/Recognized words are kept/)).toBeTruthy();
+    await openOverlay();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_paste_text', {
+      text: 'the original take continues here',
+    });
+    expect(sessionMocks.createSession).toHaveBeenCalledOnce();
+  });
+
   it('suppresses an unknown startup exception behind a precise retry path', async () => {
     sessionMocks.createSession.mockRejectedValue(
       new Error('synthetic dictation startup implementation detail'),

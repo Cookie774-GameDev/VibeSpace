@@ -110,7 +110,7 @@ export function formatGlobalDictationPasteFailure(cause: unknown): string {
   }
   return failure(
     'Global dictation paste',
-    'The transcript could not be pasted into the selected text field. ' +
+    'The transcript could not be pasted into the original text field. ' +
       'Restore focus and confirm input permission, then retry',
   );
 }
