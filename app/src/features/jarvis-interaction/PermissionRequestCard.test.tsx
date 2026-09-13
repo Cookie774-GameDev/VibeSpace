@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Part } from '@/types/chat';
 import { PermissionRequestCard } from './PermissionRequestCard';
+import { clearOpenCodeApprovalStatuses, recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
 import { useJarvisInteractionStore } from './sessionStore';
 
 const repo = vi.hoisted(() => ({
@@ -59,7 +60,30 @@ const harnessPermissionPart: Extract<Part, { kind: 'permission_request' }> = {
 };
 
 describe('PermissionRequestCard', () => {
+  it('reconciles a passive exact native acknowledgment without sending another decision', async () => {
+    persist(harnessPermissionPart);
+    render(<PermissionRequestCard part={harnessPermissionPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    act(() => recordOpenCodeApprovalStatus('other-session', 'approval-1', 'approved'));
+    expect((screen.getByRole('button', { name: 'Approve once' }) as HTMLButtonElement).disabled).toBe(false);
+    act(() => recordOpenCodeApprovalStatus('session-1', 'approval-1', 'approved_plan'));
+    expect((screen.getByRole('button', { name: 'Approve once' }) as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect(repo.update).toHaveBeenCalledWith('msg_1', expect.objectContaining({
+      parts: [expect.objectContaining({ request: expect.objectContaining({ status: 'approved_plan' }) })],
+    })));
+    expect(repo.respondToApproval).not.toHaveBeenCalled();
+  });
+
+  it('retains persisted terminal authority over a cached acknowledgment', () => {
+    act(() => recordOpenCodeApprovalStatus('session-1', 'approval-1', 'approved'));
+    var denied = { ...harnessPermissionPart, request: { ...harnessPermissionPart.request, status: 'denied' as const } };
+    persist(denied);
+    render(<PermissionRequestCard part={denied} messageId={'msg_1' as never} chatId="chat_1" />);
+    expect(screen.getByTestId('permission-request').getAttribute('data-approval-status')).toBe('denied');
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
+    clearOpenCodeApprovalStatuses();
     repo.getById.mockReset();
     repo.update.mockReset();
     repo.respondToApproval.mockReset();

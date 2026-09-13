@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { messageRepo } from '@/lib/db/repositories';
 import { respondToPersistentOpenCodeApproval } from '@/lib/ai/adapters/opencodePersistent';
-import { recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
+import { readOpenCodeApprovalStatus, recordOpenCodeApprovalStatus, subscribeOpenCodeApprovalStatuses } from '@/lib/harness/openCodeApprovalState';
 import { grantToolGatewayMutation } from '@/lib/harness/toolGatewayProduction';
 import { MUTATING_TOOL_GATEWAY_TOOLS } from '@/lib/harness/toolGatewayProtocol';
 import type { MessageId, Part } from '@/types';
@@ -36,11 +36,18 @@ export interface PermissionRequestCardProps {
 
 export function PermissionRequestCard({ part, messageId, chatId }: PermissionRequestCardProps) {
   const { request } = part;
+  const acknowledgedStatus = useSyncExternalStore(
+    subscribeOpenCodeApprovalStatuses,
+    () => request.harness ? readOpenCodeApprovalStatus(request.harness.sessionId, request.harness.approvalId) : undefined,
+    () => undefined,
+  );
+  const effectiveStatus = request.status === 'pending' ? acknowledgedStatus ?? request.status : request.status;
   const [editOpen, setEditOpen] = useState(false);
   const [instruction, setInstruction] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  const persistedStatusRef = useRef<{ request: JarvisPermissionRequest; status: JarvisPermissionStatus } | undefined>(undefined);
 
   const readPendingAuthority = async () => {
     if (!messageId) throw new Error('Permission request is no longer available.');
@@ -78,7 +85,20 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           : messagePart,
       ),
     });
+    persistedStatusRef.current = { request, status };
   };
+
+  useEffect(() => {
+    if (busy || (persistedStatusRef.current?.request === request && persistedStatusRef.current.status === acknowledgedStatus) || request.status !== 'pending' || !acknowledgedStatus || acknowledgedStatus === 'pending') return;
+    // Kernel permissions are standalone messages. Persist their exact native
+    // acknowledgment for reloads; streaming messages remain owned by runtime.
+    let disposed = false;
+    void readPendingAuthority().then(async ({ message }) => {
+      if (disposed || busyRef.current || message.parts.length !== 1) return;
+      await writeStatus(acknowledgedStatus);
+    }).catch(() => { /* Persisted authority may already have settled. */ });
+    return () => { disposed = true; };
+  }, [acknowledgedStatus, busy, request, messageId, chatId]);
 
   const sendPermissionContext = (status: JarvisPermissionStatus, nextInstruction?: string) => {
     if (!chatId) return;
@@ -105,7 +125,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
   };
 
   const approve = async (status: JarvisPermissionStatus) => {
-    if (busyRef.current || request.status !== 'pending') return;
+    if (busyRef.current || effectiveStatus !== 'pending') return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -151,7 +171,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
   };
 
   const reject = async (status: 'denied' | 'cancelled') => {
-    if (busyRef.current || request.status !== 'pending') return;
+    if (busyRef.current || effectiveStatus !== 'pending') return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -178,7 +198,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
   };
 
   const edit = async () => {
-    if (busyRef.current || request.status !== 'pending' || !instruction.trim()) return;
+    if (busyRef.current || effectiveStatus !== 'pending' || !instruction.trim()) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -214,7 +234,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
     <section
       data-testid="permission-request"
       data-approval-id={request.harness?.approvalId ?? request.id}
-      data-approval-status={request.status}
+      data-approval-status={effectiveStatus}
       className="rounded-xl border border-destructive/35 bg-destructive/5 p-3 shadow-[0_0_20px_-16px_hsl(var(--destructive))]"
     >
       <div className="mb-2 flex items-start gap-2">
@@ -242,9 +262,9 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           </span>
         ))}
       </div>
-      {request.status !== 'pending' && (
+      {effectiveStatus !== 'pending' && (
         <p className="mb-2 text-secondary text-muted-foreground">
-          Permission status: {request.status}
+          Permission status: {effectiveStatus}
         </p>
       )}
       {error && (
@@ -276,7 +296,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           type="button"
           size="sm"
           variant="accent"
-          disabled={busy || request.status !== 'pending'}
+          disabled={busy || effectiveStatus !== 'pending'}
           onClick={() => void approve('approved')}
         >
           Approve once
@@ -285,7 +305,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           type="button"
           size="sm"
           variant="secondary"
-          disabled={busy || request.status !== 'pending'}
+          disabled={busy || effectiveStatus !== 'pending'}
           onClick={() => void approve('approved_plan')}
         >
           Approve all safe changes
@@ -294,7 +314,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           type="button"
           size="sm"
           variant="secondary"
-          disabled={busy || request.status !== 'pending'}
+          disabled={busy || effectiveStatus !== 'pending'}
           onClick={() => setEditOpen((open) => !open)}
         >
           Edit request
@@ -303,7 +323,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           type="button"
           size="sm"
           variant="ghost"
-          disabled={busy || request.status !== 'pending'}
+          disabled={busy || effectiveStatus !== 'pending'}
           onClick={() => void reject('denied')}
         >
           Deny
@@ -312,7 +332,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           type="button"
           size="sm"
           variant="ghost"
-          disabled={busy || request.status !== 'pending'}
+          disabled={busy || effectiveStatus !== 'pending'}
           onClick={() => void reject('cancelled')}
         >
           Cancel
