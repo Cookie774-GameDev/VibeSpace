@@ -1,4 +1,5 @@
 import { createCodexControlBridge } from './codexControlBridge';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { codexTurnLease } from './codexTurnLease';
 import { CODEX_CONTEXT_TOOL, createCodexContextTool, type CodexContextToolBridge } from './codexContextTool';
 import { resolveCodexWorkingDirectory } from './codexWorkingDirectory';
@@ -30,6 +31,15 @@ import type { ProviderAdapter, ProviderEvent, ProviderRequest, UsageSnapshot } f
 import { codexRuntimeManager, type CodexRuntimeManager } from '@/lib/harness/codexRuntimeManager';
 
 type NativeFrame = Record<string, unknown>;
+
+async function prepare<T>(request: ProviderRequest, phase: string, action: () => Promise<T>): Promise<T> {
+  // Record phase timing without copying native frames, policies, paths or credentials.
+  let result!: T;
+  await appActivityLog.trace(`model.prepare.codex.${phase}`, {
+    chatId: request.chatId, requestId: request.requestId, modelId: request.modelId,
+  }, async () => { result = await action(); });
+  return result;
+}
 
 export interface CodexPersistentDependencies {
   contextTool?(request: ProviderRequest): Promise<CodexContextToolBridge | null>;
@@ -247,22 +257,22 @@ async function* sendCodexRequest(
   }
   request = {
     ...request,
-    workingDirectory: await (dependencies.workingDirectory ?? resolveCodexWorkingDirectory)(
-      request.workingDirectory,
-    ),
+    workingDirectory: await prepare(request, 'directory', () =>
+      (dependencies.workingDirectory ?? resolveCodexWorkingDirectory)(request.workingDirectory)),
   };
   if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   const mode = executionMode(request);
-  const executable = await dependencies.findExecutable();
+  const executable = await prepare(request, 'executable', () => dependencies.findExecutable());
   if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   if (!executable) throw new Error('Codex CLI is not installed.');
   const ownerId = request.chatId ?? request.requestId;
   if (!request.modelId) throw new Error('Codex requires an exact selected model.');
-  const { generation } = await dependencies.start(
+  const modelId = request.modelId;
+  const { generation } = await prepare(request, 'start', () => dependencies.start(
     executable.executableId,
     ownerId,
-    request.modelId,
-  );
+    modelId,
+  ));
   if (request.signal?.aborted) {
     await dependencies.stop(generation).catch(() => false);
     throw new DOMException('The request was aborted.', 'AbortError');
@@ -292,7 +302,8 @@ async function* sendCodexRequest(
     const subscription = dependencies.frames(generation, request.signal);
     const activeIterator = subscription.stream[Symbol.asyncIterator]();
     iterator = activeIterator;
-    let prefetched: Promise<IteratorResult<NativeFrame>> | undefined = activeIterator.next();
+    const firstFrame = activeIterator.next();
+    let prefetched: Promise<IteratorResult<NativeFrame>> | undefined = firstFrame;
     const reader: AsyncIterator<NativeFrame> = {
       next: () => {
         if (prefetched) {
@@ -306,22 +317,22 @@ async function* sendCodexRequest(
     };
     // Opening the bridge can fail before nativeCodexFrames acknowledges subscription.
     // Observe that failure immediately instead of leaving readiness pending forever.
-    await Promise.race([
+    await prepare(request, 'subscription', () => Promise.race([
       subscription.ready,
-      prefetched.then((first) => {
+      firstFrame.then((first) => {
         if (first.done) throw new Error('Codex app-server ended before subscription.');
         return new Promise<never>(() => {});
       }),
-    ]);
+    ]));
     if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
     const exactIdentity = identity(request);
-    await validateModelCapability(
+    await prepare(request, 'catalog', () => validateModelCapability(
       generation,
       reader,
       exactIdentity,
       dependencies.write,
       request.requestId,
-    );
+    ));
     let threadRequestId = requestId(request.requestId, request.sessionId ? 'resume' : 'thread');
     const threadRequest = request.sessionId
       ? buildCodexThreadResumeRequest({
@@ -339,7 +350,8 @@ async function* sendCodexRequest(
           ...(contextTool ? { dynamicTools: [CODEX_CONTEXT_TOOL] } : {}),
         });
     await dependencies.write(generation, threadRequest);
-    let threadResponse = await responseFrame(reader, threadRequestId);
+    let threadResponse = await prepare(request, request.sessionId ? 'resume' : 'thread',
+      () => responseFrame(reader, threadRequestId));
     let resumed = Boolean(request.sessionId);
     const resumeError = recordOf(threadResponse.error);
     if (resumed && recoverImplicitThread && !request.expectedSessionId &&
@@ -388,7 +400,7 @@ async function* sendCodexRequest(
       await dependencies.write(generation, buildCodexThreadPolicyUpdateRequest({
         requestId: policyRequestId, threadId, developerInstructions: developerInstructions(request),
       }));
-      const policyResponse = await responseFrame(reader, policyRequestId);
+      const policyResponse = await prepare(request, 'policy', () => responseFrame(reader, policyRequestId));
       if (recordOf(policyResponse.error) || !recordOf(policyResponse.result)) {
         throw new Error('Codex current-turn policy update failed.');
       }
@@ -487,11 +499,11 @@ export function createCodexPersistentAdapter(
   return Object.freeze({
     id: 'codex-app-server',
     send: async function* (request: ProviderRequest) {
-      const release = await codexTurnLease.acquire(request.signal);
+      const release = await prepare(request, 'lease', () => codexTurnLease.acquire(request.signal));
       let contextTool: CodexContextToolBridge | null = null;
       try {
-      await codexTurnLease.recover(dependencies.stop);
-      contextTool = await dependencies.contextTool?.(request) ?? null;
+      await prepare(request, 'recover', () => codexTurnLease.recover(dependencies.stop));
+      contextTool = await prepare(request, 'context', async () => await dependencies.contextTool?.(request) ?? null);
       const ownedDependencies = {
         ...dependencies,
         async start(...args: Parameters<CodexPersistentDependencies['start']>) {

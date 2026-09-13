@@ -303,7 +303,9 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
 
   readonly global = {
     health: async (): Promise<unknown> =>
-      requestJson(this.handle.generation, this.handle.scope, '/global/health', {}, 5_000),
+      // This is the once-per-scope setup handshake, before any prompt is sent.
+      // A cold native server can answer correctly after the former five-second cap.
+      requestJson(this.handle.generation, this.handle.scope, '/global/health', {}, 30_000),
   };
 
   readonly config = {

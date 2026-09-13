@@ -1207,6 +1207,16 @@ describe('startRuntimeListener agent routing', () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
+  it('does not start the OpenCode catalog for a chat bound to Codex', async () => {
+    rememberLiveOpenCodeProviders([]);
+    const selected = { providerId: 'opencode', connectionId: 'opencode-cli', modelId: 'opencode-go/gpt-5.6-luna' };
+    const list = vi.fn(async () => { throw new Error('Other backend unavailable'); });
+    await expect(resolveCapturedRuntimeReasoningPolicy(selected,
+      { mode: 'normal', effortOverride: 'low' }, list, 'codex'))
+      .resolves.toMatchObject({ selection: selected, requestedEffort: 'low', resolvedEffort: 'low' });
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it('resolves explicit Normal effort from the captured catalog before saving its receipt', async () => {
     const selected = { providerId: 'opencode', connectionId: 'opencode-cli', modelId: 'openai/gpt-5.6-luna-fast' };
     const list = vi.fn(async () => [{ id: selected.modelId, label: 'Luna Fast', variants: ['none', 'high', 'xhigh', 'max'] }]);
@@ -9671,6 +9681,11 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(mocks.runAgent).not.toHaveBeenCalled();
     expect(getChatActivityEvents(harness.chatId).filter((event) => event.status === 'running')).toEqual([]);
     expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error');
+    expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: harness.chatId,
+      role: 'system',
+      parts: [{ kind: 'text', text: 'The reply could not start. Check the selected model and request settings, then try again.' }],
+    }));
   });
 
   it('releases early cancellation ownership when agent resolution rejects', async () => {

@@ -322,6 +322,32 @@ async function drain(iterator: AsyncIterator<ProviderEvent>): Promise<void> {
 }
 
 describe('persistent OpenCode question transport authority', () => {
+  it('allows a sixteen-second cold health handshake before dispatching exactly once', async () => {
+    vi.useFakeTimers();
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/global/health')) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 16_000);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer); reject(init.signal?.reason);
+          }, { once: true });
+        });
+      }
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('cold-health'))[Symbol.asyncIterator]();
+    const outcome = iterator.next().then(value => ({ value }), error => ({ error }));
+    try {
+      await vi.advanceTimersByTimeAsync(16_001);
+      expect(await outcome).toMatchObject({ value: { done: false, value: { type: 'session' } } });
+      expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(1);
+    } finally {
+      await iterator.return?.();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['/provider', '/config/providers'])('accepts a cold catalog taking longer than 15 seconds at %s without replaying a prompt', async (route) => {
     vi.useFakeTimers();
     const original = nativeOpenCodeMocks.request.getMockImplementation()!;
@@ -343,7 +369,7 @@ describe('persistent OpenCode question transport authority', () => {
       await vi.advanceTimersByTimeAsync(16_001);
       expect(await outcome).toMatchObject({ value: { done: false, value: { type: 'session', sessionId: 'ses_question_exact' } } });
       expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(1);
-      expect(nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.startsWith('/global/health'))?.[3]).toBe(5_000);
+      expect(nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.startsWith('/global/health'))?.[3]).toBe(30_000);
       expect(nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.includes('/prompt_async'))?.[3]).toBe(30_000);
     } finally {
       await iterator.return?.();

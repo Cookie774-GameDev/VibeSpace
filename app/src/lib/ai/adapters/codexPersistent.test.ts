@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderConnection, ProviderEvent } from './types';
 import { createCodexPersistentAdapter, resolveCodexExecutable } from './codexPersistent';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 
 const connection: ProviderConnection = {
   id: 'openai-codex',
@@ -447,6 +448,7 @@ describe('persistent Codex app-server adapter', () => {
   });
 
   it('subscribes before dispatch and projects the exact OpenCodex model incrementally', async () => {
+    const before = appActivityLog.snapshot().sequence;
     const calls: string[] = [];
     const writes: Array<Record<string, unknown>> = [];
     const adapter = createCodexPersistentAdapter({
@@ -524,6 +526,13 @@ describe('persistent Codex app-server adapter', () => {
         sandbox: 'read-only',
       },
     });
+    const timings = appActivityLog.snapshot(before).events.filter(event => event.kind.startsWith('model.prepare.codex.'));
+    expect(timings.filter(event => event.phase === 'completed').map(event => event.kind)).toEqual(
+      expect.arrayContaining(['model.prepare.codex.start', 'model.prepare.codex.catalog', 'model.prepare.codex.thread']),
+    );
+    expect(JSON.stringify(timings)).not.toContain('Please read game.js');
+    expect(JSON.stringify(timings)).not.toContain('thread_native_1');
+    expect(JSON.stringify(timings)).not.toContain('C:\\\\workspace');
   });
 
   it('fails closed instead of substituting another model', async () => {

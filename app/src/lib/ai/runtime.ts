@@ -388,8 +388,12 @@ export async function resolveCapturedRuntimeReasoningPolicy(
     const { openCodePersistentAdapter } = await import('./adapters/opencodePersistent');
     return await openCodePersistentAdapter.listModels?.() ?? [];
   },
+  backend?: 'codex' | 'opencode',
 ): Promise<ReturnType<typeof resolveReasoningPolicy>> {
-  if (selection.connectionId !== 'opencode-cli' ||
+  // The picker describes the upstream provider; chat affinity owns the CLI.
+  // Codex validates the exact model/effort with its own model/list before
+  // turn/start. Do not start an unrelated OpenCode runtime to prepare it.
+  if (backend === 'codex' || selection.connectionId !== 'opencode-cli' ||
       (preference.mode === 'normal' && preference.effortOverride === null)) {
     return resolveRuntimeReasoningPolicy(selection, preference);
   }
@@ -4908,7 +4912,7 @@ export function startRuntimeListener(
     dispatchCurrentRunState('running');
     dispatchKernelSmokeRuntimeStage('accepted');
     let preparationActivity: { id: string; agentSlug: string } | undefined;
-    const failEarlySetup = (stage: 'agent' | 'context' | 'model', error: unknown): void => {
+    const failEarlySetup = async (stage: 'agent' | 'context' | 'model', error: unknown): Promise<void> => {
       if (preparationActivity) {
         useChatActivityStore.getState().update(chatId, preparationActivity.id, {
           status: 'error',
@@ -4927,6 +4931,19 @@ export function startRuntimeListener(
         },
       });
       toast.error('Cannot send', 'The requested AI turn could not be prepared safely.');
+      try {
+        const accountId = resolveAccountIdentity(authState)?.accountId;
+        if (!controller.signal.aborted && accountId &&
+            accountId === resolveAccountIdentity(useAuthStore.getState())?.accountId) {
+          await bindings.appendMessage({
+            chat_id: chatId as ChatId,
+            role: 'system',
+            parts: [{ kind: 'text', text: 'The reply could not start. Check the selected model and request settings, then try again.' }],
+          });
+        }
+      } catch {
+        // A failed notice write must never retain cancellation/run ownership.
+      }
       releaseVoiceTurnWithoutReply(detail, chatId);
       dispatchCurrentRunState('error', `kernel_runtime_setup_${stage}`);
       releaseOperationTracking();
@@ -5048,7 +5065,7 @@ export function startRuntimeListener(
           );
         }
       } catch (error) {
-        failEarlySetup('context', error);
+        await failEarlySetup('context', error);
         return;
       }
     }
@@ -5070,7 +5087,7 @@ export function startRuntimeListener(
       }
       if (!agent) agent = await bindings.getAgentForChat(chatId);
     } catch (error) {
-      failEarlySetup('agent', error);
+      await failEarlySetup('agent', error);
       return;
     }
     if (!agent) {
@@ -5263,7 +5280,7 @@ export function startRuntimeListener(
         title: `@${agent.slug} could not gather context`,
         subtitle: error instanceof Error ? error.message : String(error),
       });
-      failEarlySetup('context', error);
+      await failEarlySetup('context', error);
       return;
     }
     dispatchKernelSmokeRuntimeStage('context');
@@ -5809,7 +5826,7 @@ export function startRuntimeListener(
           detail: 'The current chat history could not be read safely.',
           ts: Date.now(),
         });
-        failEarlySetup('context', error);
+        await failEarlySetup('context', error);
         return;
       }
       if (stopEarlyIfAborted('routing_history')) return;
@@ -5900,6 +5917,8 @@ export function startRuntimeListener(
                   : {}),
               },
               effectiveReasoningPreference,
+              undefined,
+              chatBackendAffinity.backend,
             )
           : null;
       if (
@@ -5911,7 +5930,7 @@ export function startRuntimeListener(
         runtimeSettings.effort = reasoningPolicy.resolvedEffort;
       }
     } catch (error) {
-      failEarlySetup('model', error);
+      await failEarlySetup('model', error);
       return;
     }
     try {
@@ -5924,7 +5943,7 @@ export function startRuntimeListener(
         reasoningEffort: reasoningPolicy?.resolvedEffort,
       });
     } catch (error) {
-      failEarlySetup('model', error);
+      await failEarlySetup('model', error);
       return;
     }
     const bufferExactLiteralStreaming =
