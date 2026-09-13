@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DevConsolePanel } from './DevConsolePanel';
 import { devConsole, useDevConsoleStore } from './store';
+import * as fullDevLog from './fullDevLog';
 
 class ResizeObserverStub {
   observe() {}
@@ -11,6 +12,31 @@ class ResizeObserverStub {
 }
 
 describe('Full Dev Log panel', () => {
+  it('keeps recording while closed without rebuilding evidence lanes, then shows retained entries', () => {
+    useDevConsoleStore.getState().setOpen(false);
+    const build = vi.spyOn(fullDevLog, 'buildEvidenceLanes');
+    render(<DevConsolePanel />);
+    build.mockClear();
+    act(() =>
+      useDevConsoleStore.setState({
+        entries: [
+          {
+            id: 123,
+            ts: 1,
+            channel: 'ai',
+            level: 'info',
+            message: 'Retained tool event',
+            detail: { requestId: 'retained-request' },
+          },
+        ],
+      }),
+    );
+    expect(useDevConsoleStore.getState().entries).toHaveLength(1);
+    expect(build).not.toHaveBeenCalled();
+    act(() => useDevConsoleStore.getState().setOpen(true));
+    expect(screen.getByText(/Request retained-request/)).toBeTruthy();
+    build.mockRestore();
+  });
   beforeEach(() => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub);
     useDevConsoleStore.getState().clear();

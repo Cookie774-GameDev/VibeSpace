@@ -33,6 +33,7 @@ import {
 } from './store';
 
 const ROW_HEIGHT = 62;
+const EMPTY_ENTRIES: DevLogEntry[] = [];
 const OVERSCAN = 8;
 
 const CHANNELS: { id: DevLogChannel; label: string }[] = [
@@ -209,7 +210,9 @@ function DetailInspector({
 export function DevConsolePanel() {
   const open = useDevConsoleStore((state) => state.open);
   const setOpen = useDevConsoleStore((state) => state.setOpen);
-  const entries = useDevConsoleStore((state) => state.entries);
+  // Recording stays live in the store; a closed inspector must not rebuild
+  // its entire evidence index on every streamed event.
+  const entries = useDevConsoleStore((state) => (state.open ? state.entries : EMPTY_ENTRIES));
   const channels = useDevConsoleStore((state) => state.channels);
   const levels = useDevConsoleStore((state) => state.levels);
   const query = useDevConsoleStore((state) => state.query);
