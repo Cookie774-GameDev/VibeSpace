@@ -187,7 +187,8 @@ impl ConnectedProvider {
             provider["modelContextWindows"] = json!({self.upstream_model.clone(): context});
         }
         let model = format!("{}/{}", self.provider, self.model);
-        let config = json!({"hostname":"127.0.0.1", "port":port,
+        // This newly generated profile uses the pinned runtime's current schema.
+        let config = json!({"hostname":"127.0.0.1", "port":port, "openaiProviderTierVersion":2,
             "providers":{"vibespace-connected":provider}, "defaultProvider":"vibespace-connected",
             "defaultModelAliases":false, "modelPickerOrder":[model], "subagentModels":[model],
             "clientIntegrations":{"codex":true,"grok":false,"claude-desktop":false},"claudeCode":{"enabled":false}});
@@ -225,6 +226,7 @@ mod tests {
                 "https://configured.example/v1"
             );
             assert_eq!(json["providers"]["vibespace-connected"]["alias"], "custom");
+            assert_eq!(json["openaiProviderTierVersion"], 2);
             assert_eq!(selected.environment[0].1, "test-secret-only");
             let durable = String::from_utf8(profile.opencodex_config_json).unwrap();
             assert!(!durable.contains("test-secret-only"));

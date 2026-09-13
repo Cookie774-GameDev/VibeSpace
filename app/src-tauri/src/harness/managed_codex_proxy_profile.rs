@@ -56,7 +56,10 @@ pub fn build_managed_codex_proxy_profile(
         return Err(ManagedCodexProxyProfileError::InvalidSession);
     }
 
+    // Fresh profiles already use the schema of the pinned OpenCodex 2.36.0 runtime.
+    // Avoid a redundant startup migration that backs up and rewrites this file.
     let config = json!({
+        "openaiProviderTierVersion": 2,
         "port": port,
         "hostname": host.to_string(),
         "providers": {
@@ -113,6 +116,7 @@ mod tests {
             serde_json::from_slice(&profile.opencodex_config_json).expect("config JSON");
         assert_eq!(config["hostname"], "127.0.0.1");
         assert_eq!(config["port"], 10_100);
+        assert_eq!(config["openaiProviderTierVersion"], 2);
         assert_eq!(config["defaultProvider"], OPENCODE_GO_PROVIDER_ID);
         assert_eq!(
             config["providers"][OPENCODE_GO_PROVIDER_ID]["baseUrl"],

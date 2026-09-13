@@ -841,12 +841,28 @@ fn start_owned_opencodex(
     let mut ready = Command::new(&runtime.bun_executable);
     let ready_module = url::Url::from_file_path(runtime.source_entrypoint.with_file_name("ready.ts"))
         .map_err(|_| "The reviewed OpenCodex readiness module is unavailable.".to_string())?;
+    let liveness_module = ready_module.join("../server/proxy-liveness.ts")
+        .map_err(|_| "The reviewed OpenCodex discovery module is unavailable.".to_string())?;
+    // Discovery needs only the port already assigned to this owned proxy. Avoid
+    // another process loading/hardening its complete configuration on cold start.
+    // The pinned finder still checks real /healthz identity and runtime metadata;
+    // runReady retains its strict /readyz probe and single bounded deadline.
     ready
         .arg("--eval")
         .arg(format!(
-            "import {{ runReady }} from {}; process.exit(await runReady({{json:true,wait:true,timeoutSeconds:{}}}));",
+            "import {{ runReady }} from {}; import {{ findLiveProxy, DEFAULT_PROBE_TIMEOUT_MS }} from {}; \
+             process.exit(await runReady({{json:true,wait:true,timeoutSeconds:{}}},{{ \
+             findLive: async (remainingMs) => {{ \
+             const live = await findLiveProxy({{ \
+             configFn: () => ({{port:{},hostname:'127.0.0.1'}}), \
+             verifyPidFn: () => null, timeoutMs: DEFAULT_PROBE_TIMEOUT_MS, \
+             ...(remainingMs === undefined ? {{}} : {{deadlineAt:Date.now()+remainingMs}}) \
+             }}); return live ? {{pid:live.pid,port:live.port,hostname:live.hostname}} : null; \
+             }} }}));",
             serde_json::to_string(ready_module.as_str()).map_err(|_| "The readiness module URL is invalid.".to_string())?,
+            serde_json::to_string(liveness_module.as_str()).map_err(|_| "The discovery module URL is invalid.".to_string())?,
             OPENCODEX_READY_TIMEOUT.as_secs(),
+            port,
         ));
     configure(&mut ready);
     if !run_bounded_ready_probe(ready, OPENCODEX_READY_TIMEOUT + Duration::from_secs(15)) {
