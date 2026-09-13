@@ -71,6 +71,9 @@ describe('shouldAutoRetrieveProjectKnowledge', () => {
     'Write the two files. No Context Maps, subagents, or other paths.',
     'Do not inspect sibling output folders, unrelated projects, or Context Maps.',
     'Run the tests without using RLM.',
+    'Read the file. Do not edit anything or use Context Maps or RLM.',
+    "Read the file. Don't write files or consult Context Maps.",
+    'Read the file. Never modify files nor use RLM.',
   ])('honors explicit automatic Context retrieval opt-out: %s', text => {
     expect(shouldAutoRetrieveProjectKnowledge({
       text, intent: classifyJarvisIntent({ text }), hasExplicitAttachments: true,
@@ -81,6 +84,9 @@ describe('shouldAutoRetrieveProjectKnowledge', () => {
     'Use Context Maps to find the package version.',
     'Do not edit files. Use Context Maps to find the package version.',
     'Use RLM to inspect the corpus without editing it.',
+    'Do not edit files, but use Context Maps to find the package version.',
+    'Do not edit files; instead use RLM to inspect the corpus.',
+    'Do not forget to use Context Maps to find the package version.',
   ])('preserves requested retrieval: %s', text => {
     expect(shouldAutoRetrieveProjectKnowledge({
       text, intent: classifyJarvisIntent({ text }), hasExplicitAttachments: true,

@@ -155,7 +155,7 @@ const EXPLICIT_DISK_FILE_READ_RE =
 const EXPLICIT_NO_TOOLS_RE =
   /\b(?:do\s+not|don't|never)\s+(?:use|call|invoke)\s+(?:any\s+)?tools?\b|\bwithout\s+(?:using\s+)?(?:any\s+)?tools?\b|\bno\s+tools\b/i;
 const EXPLICIT_NO_PROJECT_RETRIEVAL_RE =
-  /\b(?:do\s+not|don't|never)\s+(?:use|inspect|search|read|retrieve|consult)\s+(?:(?!\b(?:but|instead|then)\b)[^.!?;\r\n]){0,160}\b(?:context\s+maps?|rlm)\b|\b(?:no|without\s+(?:using\s+)?)\s*(?:any\s+)?(?:context\s+maps?|rlm)\b/i;
+  /\b(?:do\s+not|don't|never)\s+(?:(?:(?!\b(?:but|however|instead|then)\b)[^.!?;\r\n]){1,80}\b(?:or|nor)\s+)?(?:use|inspect|search|read|retrieve|consult)\s+(?:(?!\b(?:but|however|instead|then)\b)[^.!?;\r\n]){0,160}\b(?:context\s+maps?|rlm)\b|\b(?:no|without\s+(?:using\s+)?)\s*(?:any\s+)?(?:context\s+maps?|rlm)\b/i;
 
 /** Reuses the current-turn restriction for retrieval and prompt admission. */
 export function requestsNoTools(text: string): boolean {
