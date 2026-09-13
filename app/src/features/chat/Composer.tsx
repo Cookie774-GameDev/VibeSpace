@@ -5649,7 +5649,13 @@ export function Composer({
       window.removeEventListener('jarvis:composer:insert-text', onInsertText as EventListener);
   }, [chatId]);
 
-  // Selected capture is shared; this field owns a transient preview and explicit Accept.
+  // Finish into the draft without requiring a separate dictation confirmation panel.
+  useEffect(() => {
+    if (sttView.phase === 'preview') void sttController.accept();
+    else if (sttView.phase === 'error' && sttView.error) {
+      toast.error('Dictation needs attention', sttView.error);
+    }
+  }, [sttController, sttView.phase, sttView.error]);
   const toggleStt = useCallback(() => {
     const phase = sttController.getSnapshot().phase;
     if (phase === 'starting' || phase === 'transcribing') { sttController.cancel(); return; }
@@ -5717,55 +5723,6 @@ export function Composer({
           projectId: String(projectId ?? ''),
         }}
       />
-      {sttView.phase !== 'idle' ? (
-        <section aria-label="Composer dictation" className="m-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span role="status" aria-live="polite" className="min-w-0 break-words text-muted-foreground">
-              {sttView.phase === 'starting' ? 'Waiting for microphone permission' : sttTranscribing ? 'Transcribing' : sttListening ? 'Listening' : sttView.phase === 'preview' ? 'Review transcript ? not sent' : 'Dictation needs attention'}
-              {sttView.engineLabel ? ' ? ' + sttView.engineLabel : ''}
-            </span>
-            <div className="flex flex-wrap items-center gap-2">
-              {sttView.phase === 'preview' ? (
-                <Button size="sm" type="button" onClick={() => void sttController.accept()}>
-                  Accept dictation
-                </Button>
-              ) : null}
-              {sttView.phase === 'error' ? (
-                <Button size="sm" type="button" onClick={() => void sttController.start()}>
-                  Retry dictation
-                </Button>
-              ) : null}
-              <Button
-                size="sm"
-                variant="ghost"
-                type="button"
-                onClick={() => {
-                  sttController.cancel();
-                  textareaRef.current?.focus();
-                }}
-              >
-                Cancel dictation
-              </Button>
-            </div>
-          </div>
-          {sttView.text ? (
-            <p
-              aria-label="Dictation preview"
-              className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-foreground"
-            >
-              {sttView.text}
-              <span className="ml-2 text-muted-foreground">
-                ({sttView.partial ? 'partial' : 'final'})
-              </span>
-            </p>
-          ) : null}
-          {sttView.error ? (
-            <p role="alert" className="mt-2 break-words text-destructive">
-              {sttView.error}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
       {showFreeKeyNudge && (
         <FreeKeyNudge
           onOpenProviders={() => {
