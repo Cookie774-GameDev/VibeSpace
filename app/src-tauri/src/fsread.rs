@@ -1411,9 +1411,142 @@ pub fn fs_delete_file(path: String, root: Option<String>) -> Result<(), String> 
     })
 }
 
+fn validate_reveal_caller(label: &str, window_label: &str) -> Result<(), String> {
+    crate::native_app_surface::ensure_main_caller(label, window_label)
+}
+
+fn validate_reveal_path(path: &str, root: &str) -> Result<PathBuf, String> {
+    if path.len() > 8192 || root.len() > 8192 || path.chars().chain(root.chars()).any(char::is_control) {
+        return Err("invalid_path".to_string());
+    }
+    let project = StrictProjectRoot::open(Some(root))?;
+    let relative = project.relative(path)?;
+    let file = project.open_file(&relative)?;
+    if !file.metadata().map_err(|error| format!("io: {error}"))?.is_file() {
+        return Err("not_a_file".to_string());
+    }
+    Ok(project.lexical_root.join(relative))
+}
+
+#[cfg(windows)]
+fn reveal_project_file(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{core::PCWSTR, Win32::{System::Com::{CoInitializeEx, CoUninitialize, CoTaskMemFree, COINIT_APARTMENTTHREADED}, UI::Shell::{ILFindLastID, SHParseDisplayName, SHOpenFolderAndSelectItems}}};
+    let parent = path.parent().ok_or_else(|| "invalid_path".to_string())?;
+    let shell_path = std::ffi::OsString::from(path.to_string_lossy().replace('/', "\\"));
+    let shell_parent = std::ffi::OsString::from(parent.to_string_lossy().replace('/', "\\"));
+    let wide: Vec<u16> = shell_path.encode_wide().chain(Some(0)).collect();
+    let parent_wide: Vec<u16> = shell_parent.encode_wide().chain(Some(0)).collect();
+    // Use the shell API, never a command line assembled from provider output.
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().map_err(|error| format!("reveal_failed: {error}"))?;
+        let mut item = std::ptr::null_mut();
+        let mut folder = std::ptr::null_mut();
+        let result = SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut item, 0, None)
+            .and_then(|()| SHParseDisplayName(PCWSTR(parent_wide.as_ptr()), None, &mut folder, 0, None))
+            .and_then(|()| SHOpenFolderAndSelectItems(folder, Some(&[ILFindLastID(item)]), 0));
+        if !folder.is_null() { CoTaskMemFree(Some(folder.cast())); }
+        if !item.is_null() { CoTaskMemFree(Some(item.cast())); }
+        CoUninitialize();
+        result.map_err(|error| format!("reveal_failed: {error}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_project_file(path: &Path) -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open").arg("-R").arg(path).spawn()
+        .map(|_| ()).map_err(|error| format!("reveal_failed: {error}"))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn reveal_project_file(_path: &Path) -> Result<(), String> {
+    Err("reveal_not_supported".to_string())
+}
+
+#[tauri::command]
+pub async fn fs_reveal_project_file(window: tauri::Webview, path: String, root: String) -> Result<(), String> {
+    validate_reveal_caller(window.label(), window.window().label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let checked = validate_reveal_path(&path, &root)?;
+        reveal_project_file(&checked)
+    }).await.map_err(|error| format!("reveal_failed: {error}"))?
+}
+
+#[derive(Serialize)]
+pub struct ToolEditor {
+    id: &'static str,
+    name: &'static str,
+}
+
+fn installed_tool_editors() -> Vec<(ToolEditor, PathBuf)> {
+    let mut result = Vec::new();
+    for (id, name, folder, executable) in [
+        ("vscode", "Visual Studio Code", "Microsoft VS Code", "Code.exe"),
+        ("vscode-insiders", "Visual Studio Code Insiders", "Microsoft VS Code Insiders", "Code - Insiders.exe"),
+    ] {
+        #[cfg(windows)]
+        let candidates: Vec<PathBuf> = [
+            std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("Programs").join(folder).join(executable)),
+            std::env::var_os("ProgramFiles").map(|base| PathBuf::from(base).join(folder).join(executable)),
+        ].into_iter().flatten().collect();
+        #[cfg(target_os = "macos")]
+        let candidates = vec![PathBuf::from("/Applications").join(format!("{name}.app")).join("Contents/Resources/app/bin/code")];
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let candidates: Vec<PathBuf> = Vec::new();
+        #[cfg(not(windows))]
+        let _ = (folder, executable);
+        if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+            result.push((ToolEditor { id, name }, path));
+        }
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn fs_tool_editors(window: tauri::Webview, root: String) -> Result<Vec<ToolEditor>, String> {
+    validate_reveal_caller(window.label(), window.window().label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        StrictProjectRoot::open(Some(&root))?;
+        Ok(installed_tool_editors().into_iter().map(|(editor, _)| editor).collect())
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn fs_open_project_file_in_editor(window: tauri::Webview, path: String, root: String, editor_id: String) -> Result<(), String> {
+    validate_reveal_caller(window.label(), window.window().label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let checked = validate_reveal_path(&path, &root)?;
+        let (_, executable) = installed_tool_editors().into_iter().find(|(editor,_)| editor.id == editor_id)
+            .ok_or_else(|| "editor_unavailable".to_string())?;
+        std::process::Command::new(executable).arg("--reuse-window").arg(checked).spawn()
+            .map(|_| ()).map_err(|error| format!("editor_open_failed: {error}"))
+    }).await.map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_path_requires_a_live_regular_file_inside_the_explicit_root() {
+        let root = test_root("reveal-boundary");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("invoice with spaces.txt");
+        std::fs::write(&file, b"fixture").unwrap();
+        assert_eq!(validate_reveal_path(&file.to_string_lossy(), &root.to_string_lossy()).unwrap(), file);
+        assert!(validate_reveal_path(&file.to_string_lossy(), "").is_err());
+        assert!(validate_reveal_path(&root.to_string_lossy(), &root.to_string_lossy()).is_err());
+        assert!(validate_reveal_path(&root.join("missing.txt").to_string_lossy(), &root.to_string_lossy()).is_err());
+        assert!(validate_reveal_path(&root.join("../escape.txt").to_string_lossy(), &root.to_string_lossy()).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reveal_caller_is_only_the_main_native_webview() {
+        assert!(validate_reveal_caller("main", "main").is_ok());
+        assert!(validate_reveal_caller("dictation", "main").is_err());
+        assert!(validate_reveal_caller("main", "siyuan").is_err());
+    }
 
     #[test]
     fn picker_lists_all_thousand_files_and_hides_dot_entries() {

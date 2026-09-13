@@ -1,5 +1,6 @@
 import type { ProviderEvent, UsageSnapshot, UsageValue } from './types';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { publicToolDetails, publicToolOutput } from '../publicToolDetails';
 
 export type CodexApprovalKind = 'command' | 'file_change' | 'permissions';
 export type CodexSimpleApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel';
@@ -99,6 +100,7 @@ const UNSAFE_CONTROL_GLOBAL = /[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u0
 const SCOPED_METHODS = new Set([
   'error',
   'item/agentMessage/delta',
+  'item/commandExecution/outputDelta',
   'item/completed',
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval',
@@ -286,7 +288,8 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
 
   if (type === 'commandExecution') {
     const result: Record<string, unknown> = {};
-    const exitCode = finiteNumber(item.exitCode);
+    const exitCode = typeof item.exitCode === 'number' && Number.isSafeInteger(item.exitCode)
+      ? item.exitCode : undefined;
     const durationMs = finiteNumber(item.durationMs);
     if (exitCode !== undefined) result.exitCode = exitCode;
     if (durationMs !== undefined) result.durationMs = durationMs;
@@ -304,6 +307,9 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
           ? { fileLabel: firstActionFileLabel(item.commandActions) }
           : {}),
         ...(hasResult ? { result } : {}),
+        details: publicToolDetails({ command: item.command, cwd: item.cwd,
+          arguments: { command: item.command, cwd: item.cwd }, output: item.aggregatedOutput,
+          outputComplete: method === 'item/completed', exitCode, durationMs }),
       },
     ];
   }
@@ -324,6 +330,7 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
           changeCount: changes.length,
           diffAvailable: changes.some((change) => Boolean(recordOf(change)?.diff)),
         },
+        details: publicToolDetails({ changes }),
       },
     ];
   }
@@ -360,6 +367,8 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
         name,
         status: toolStatus(item.status ?? (method === 'item/completed' ? 'completed' : 'started')),
         ...(callId ? { callId } : {}),
+        details: publicToolDetails({ arguments: item.arguments, result: item.result, error: item.error,
+          output: item.output, outputComplete: method === 'item/completed' }),
       },
     ];
   }
@@ -593,6 +602,11 @@ export function normalizeCodexAppServerMessage(
     return projection(
       delta ? [{ type: 'text', delta, ...(streamPartId ? { streamPartId } : {}) }] : [],
     );
+  }
+  if (method === 'item/commandExecution/outputDelta') {
+    const callId = safeIdentifier(params.itemId);
+    return projection(callId && typeof params.delta === 'string'
+      ? [{ type: 'tool_output', callId, output: publicToolOutput(params.delta, 'append', false) }] : []);
   }
   if (method === 'item/reasoning/summaryTextDelta') {
     const delta = safePublicText(params.delta);

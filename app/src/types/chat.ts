@@ -75,7 +75,7 @@ export type Part =
       duration_ms?: number;
       credits_used?: number;
     }
-  | { kind: 'tool_call'; tool: string; args: Record<string, unknown>; call_id: string }
+  | { kind: 'tool_call'; tool: string; args: Record<string, unknown>; call_id: string; details?: Readonly<import('@/lib/ai/adapters/types').PublicToolDetails> }
   | { kind: 'tool_result'; call_id: string; result?: unknown; error?: string }
   | {
       /**

@@ -25,6 +25,7 @@ export type AssistantActivityReceipt = Readonly<{
   fileLabel?: string;
   /** Sanitized public operation detail. Never contains raw tool results or environment data. */
   detail?: string;
+  toolDetails?: Readonly<import('@/lib/ai/adapters/types').PublicToolDetails>;
   agentSlug?: string;
   countsAsAction: boolean;
 }>;
@@ -278,6 +279,7 @@ function messageReceipts(message: Message): AssistantActivityReceipt[] {
         id: `message:${String(message.id)}:tool:${part.call_id}`,
         kind,
         label: receiptLabel(kind, evidence.status),
+        ...(part.details ? { toolDetails: part.details } : {}),
         status: evidence.status,
         ts: message.created_at + index / 1000,
         ...(evidence.durationMs === undefined ? {} : { durationMs: evidence.durationMs }),
@@ -370,6 +372,7 @@ function eventReceipt(event: ChatActivityEvent): AssistantActivityReceipt {
     id: `activity:${event.id}`,
     kind,
     label: eventReceiptLabel(event, kind),
+    ...(event.toolDetails ? { toolDetails: event.toolDetails } : {}),
     status: event.status,
     ts: event.ts,
     ...(durationMs === undefined ? {} : { durationMs }),

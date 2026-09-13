@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@/types/chat';
+import { toast } from '@/components/ui/toast';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { VIBESPACE_CHAT_MIME, CHAT_OPEN_BESIDE_EVENT } from './chatDragPayload';
@@ -32,6 +33,7 @@ const chats = vi.hoisted(() =>
 const testState = vi.hoisted(() => ({
   liveChats: undefined as unknown[] | undefined,
   getChat: vi.fn(),
+  getWorkspace: vi.fn(),
   listMessages: vi.fn(),
   ensureActiveChat: vi.fn(),
   nativeDropHandler: undefined as ((event: { payload: unknown }) => void) | undefined,
@@ -58,6 +60,10 @@ vi.mock('@/lib/db', async (importOriginal) => {
       ...actual.chatRepo,
       list: vi.fn(async () => testState.liveChats),
       getById: (...args: unknown[]) => testState.getChat(...args),
+    },
+    workspaceRepo: {
+      ...actual.workspaceRepo,
+      getById: (...args: unknown[]) => testState.getWorkspace(...args),
     },
     messageRepo: {
       ...actual.messageRepo,
@@ -314,6 +320,10 @@ describe('ChatView handoff workspace integration', () => {
     testState.getChat.mockReset();
     testState.getChat.mockImplementation(async (id: string) =>
       chats.find((chat) => String(chat.id) === String(id)),
+    );
+    testState.getWorkspace.mockReset();
+    testState.getWorkspace.mockImplementation(async (id: string) =>
+      id === 'workspace-a' ? { id, owner_id: 'account-a' } : undefined,
     );
     testState.listMessages.mockReset();
     testState.listMessages.mockResolvedValue([]);
@@ -739,7 +749,34 @@ describe('ChatView handoff workspace integration', () => {
     expect(dropZone).not.toBeNull();
     fireEvent.drop(dropZone!, { dataTransfer: typedTransfer('chat-2') });
 
-    await screen.findByLabelText('Pending handoff from Chat 2');
+    const reference = await screen.findByRole('button', { name: 'Reference Chat 2' });
+    expect(screen.queryByLabelText('Pending handoff from Chat 2')).toBeNull();
+    fireEvent.click(reference);
+    const inspector = await screen.findByLabelText('Pending handoff from Chat 2');
+    expect(inspector.textContent).toContain('Canonical handoff activity');
     expect(screen.queryByTestId('chat-pane-chat-2')).toBeNull();
   });
+  it('rejects a real Composer drop when the workspace belongs to another account', async () => {
+    testState.getWorkspace.mockResolvedValue({ id: 'workspace-a', owner_id: 'account-b' });
+    const warning = vi.spyOn(toast, 'warning');
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send);
+    try {
+      const { container } = render(<ChatView />);
+      const dropZone = container.querySelector('[data-composer-drop-zone="true"]')!;
+      fireEvent.drop(dropZone, { dataTransfer: typedTransfer('chat-2') });
+      await waitFor(() => expect(warning).toHaveBeenCalledWith(
+        'Chat reference unavailable',
+        'Return to the account and workspace that owns this chat.',
+      ));
+      expect(screen.queryByRole('button', { name: 'Reference Chat 2' })).toBeNull();
+      expect(screen.queryByTestId('chat-pane-chat-2')).toBeNull();
+      expect(testState.listMessages).not.toHaveBeenCalledWith('chat-2');
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+      window.removeEventListener('jarvis:send', send);
+    }
+  });
+
 });

@@ -3,6 +3,8 @@ import { ChevronDown, Clock3, FileText, Search, TerminalSquare, Users, Wrench } 
 import type { Message } from '@/types';
 import { cn } from '@/lib/utils';
 import { FileAttachmentPreview } from '../FileAttachmentPreview';
+import { ToolDetailsInspector } from './ToolDetailsInspector';
+import { resolveToolChatRoot } from './toolFileActions';
 import type { ChatActivityEvent } from '../activity/types';
 import {
   PerceptibleAgentMotionIndicator,
@@ -317,9 +319,10 @@ function chronologyReceiptText(receipt: AssistantActivityReceipt): string {
 export function AssistantActivityLedger({
   message,
   correlatedEvents = [],
-  projectRoot,
+  projectRoot: suppliedProjectRoot,
   compact = false,
   active = false,
+  responseStatus,
   authoritativeDurationMs,
   presentation = 'default',
 }: {
@@ -329,14 +332,34 @@ export function AssistantActivityLedger({
   compact?: boolean;
   /** Persisted message evidence is historical unless a caller owns live turn correlation. */
   active?: boolean;
+  /** Terminal status supplied only by the owning current run. */
+  responseStatus?: 'cancelled' | 'error';
   /** Stable duration supplied by the owning canonical run/session projection. */
   authoritativeDurationMs?: number;
   presentation?: AssistantActivityLedgerPresentation;
 }) {
-  const ledger = React.useMemo(
-    () => projectAssistantActivityLedger(message, correlatedEvents),
-    [message, correlatedEvents],
-  );
+  const [storedRoot, setStoredRoot] = React.useState<{ chatId: string; root: string }>();
+  React.useEffect(() => {
+    if (suppliedProjectRoot) return;
+    let disposed = false;
+    void resolveToolChatRoot(String(message.chat_id))
+      .then((root) => {
+        if (!disposed) setStoredRoot(root ? { chatId: String(message.chat_id), root } : undefined);
+      })
+      .catch(() => {
+        if (!disposed) setStoredRoot(undefined);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [message.chat_id, suppliedProjectRoot]);
+  const projectRoot =
+    suppliedProjectRoot ??
+    (storedRoot?.chatId === String(message.chat_id) ? storedRoot.root : undefined);
+  const ledger = React.useMemo(() => {
+    const projected = projectAssistantActivityLedger(message, correlatedEvents);
+    return !active && responseStatus ? { ...projected, status: responseStatus } : projected;
+  }, [message, correlatedEvents, active, responseStatus]);
   const phases = React.useMemo(
     () => (presentation === 'opencode-chronology' ? [] : partitionActivityPhases(ledger.receipts)),
     [ledger.receipts, presentation],
@@ -356,8 +379,8 @@ export function AssistantActivityLedger({
               key={`${phase.kind}:${phase.receipts[0]?.id ?? index}`}
               ledger={projected}
               summary={
-                phaseActive
-                  ? phaseSummary(projected, true)
+                phaseActive || projected.status === 'cancelled' || projected.status === 'error'
+                  ? phaseSummary(projected, phaseActive)
                   : completedPhaseSummary(phase, phases[index + 1])
               }
               title={`${phaseTitle(phase.kind)} · ${actionLabel(projected.actionsTotal)}`}
@@ -553,6 +576,7 @@ function AssistantActivityLedgerBlock({
               <ReceiptRow
                 key={receipt.id}
                 receipt={receipt}
+                projectRoot={projectRoot}
                 canPreview={Boolean(projectRoot && receipt.filePath)}
                 onPreview={() => receipt.filePath && setPreviewPath(receipt.filePath)}
                 presentation={presentation}
@@ -590,11 +614,13 @@ function AssistantActivityLedgerBlock({
 
 function ReceiptRow({
   receipt,
+  projectRoot,
   canPreview,
   onPreview,
   presentation,
 }: {
   receipt: AssistantActivityReceipt;
+  projectRoot?: string;
   canPreview: boolean;
   onPreview: () => void;
   presentation: AssistantActivityLedgerPresentation;
@@ -639,6 +665,13 @@ function ReceiptRow({
       ) : (
         <div className="assistant-activity-ledger__receipt">{content}</div>
       )}
+      {receipt.toolDetails ? (
+        <ToolDetailsInspector
+          details={receipt.toolDetails}
+          status={receipt.status}
+          projectRoot={projectRoot}
+        />
+      ) : null}
     </div>
   );
 }

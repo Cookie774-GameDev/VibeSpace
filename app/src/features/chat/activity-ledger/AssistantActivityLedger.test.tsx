@@ -20,6 +20,23 @@ function assistant(parts: Message['parts'], usage?: Message['usage']): Message {
 }
 
 describe('AssistantActivityLedger', () => {
+  it('uses the owning cancelled response status even when recorded commands already settled', () => {
+    render(
+      <AssistantActivityLedger
+        responseStatus="cancelled"
+        message={assistant([
+          { kind: 'tool_call', call_id: 'finished-before-pause', tool: 'command', args: {} },
+          {
+            kind: 'tool_result',
+            call_id: 'finished-before-pause',
+            result: { status: 'completed' },
+          },
+        ])}
+      />,
+    );
+    expect(screen.getByText(/before this response was cancelled/)).toBeTruthy();
+    expect(screen.queryByText(/I completed 1 recorded action/)).toBeNull();
+  });
   it('points the disclosure chevron right when collapsed and up when expanded', () => {
     const stylesheet = readFileSync(
       resolve(process.cwd(), 'src/features/chat/activity-ledger/activity-ledger.css'),

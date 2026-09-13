@@ -1,3 +1,4 @@
+import { mergePublicToolDetails } from './publicToolDetails';
 /**
  * Runtime listener that bridges the chat composer (subagent A3) to the
  * provider router. The composer dispatches a `jarvis:send` CustomEvent on
@@ -1692,7 +1693,7 @@ export async function installJarvisKernelRuntimeHost(
                   const safe = pushStreamingPreviewChunk(createStreamingPreviewState(), segment.text);
                   return { ...segment, text: decision.allowed && safe.allowed ? safe.visibleText : '' };
                 });
-                setPreview({ ...scope, text: decision.allowed ? decision.visibleText : '', segments, updatedAt: now() });
+                setPreview({ ...scope, text: decision.allowed ? decision.visibleText : '', segments, updatedAt: now(), projectRoot: providerInput.workingDirectory });
               };
               const lastUserText = llmContentToText(
                 [...providerInput.messages].reverse().find((message) => message.role === 'user')
@@ -1713,6 +1714,21 @@ export async function installJarvisKernelRuntimeHost(
               const finishThinking = (status: 'done' | 'error' | 'cancelled') => {
                 if (thinkingRecorded) useChatActivityStore.getState().update(providerChatId, thinkingActivityId, { status, endedAt: now() });
               };
+              const settlePendingToolActivities = (status: 'cancelled' | 'error') => {
+                const state = useChatActivityStore.getState();
+                const ownedIds = new Set(liveToolActivityIds.values());
+                const endedAt = now();
+                for (const event of state.eventsByChat[providerChatId] ?? []) {
+                  if (ownedIds.has(event.id) && (event.status === 'pending' || event.status === 'running')) {
+                    state.update(providerChatId, event.id, { status, endedAt });
+                  }
+                }
+              };
+              const onProviderAbort = () => {
+                finishThinking('cancelled');
+                settlePendingToolActivities('cancelled');
+              };
+              signal.addEventListener('abort', onProviderAbort, { once: true });
               const updateLiveToolActivity = (
                 activity: Readonly<{
                   name: string;
@@ -1720,6 +1736,7 @@ export async function installJarvisKernelRuntimeHost(
                   callId?: string;
                   fileLabel?: string;
                   nativeTask?: import('./openCodeNativeActivity').NativeTaskActivity;
+                  details?: Readonly<import('./adapters/types').PublicToolDetails>;
                 }>,
               ): void => {
                 if (signal.aborted) return;
@@ -1758,9 +1775,16 @@ export async function installJarvisKernelRuntimeHost(
                   return;
                 }
                 const segment = previewSegments.find(part => part.kind === 'tool' && part.id === callId);
-                if (segment?.kind === 'tool') segment.status = activity.status;
-                else previewSegments.push({ kind: 'tool', id: callId, name,
-                  status: activity.status, fileLabel: activity.fileLabel });
+                if (segment?.kind === 'tool') {
+                  // A recovery snapshot cannot resurrect an already terminal call.
+                  if (segment.status !== 'started' && activity.status === 'started') return;
+                  segment.status = activity.status;
+                  if (activity.details) segment.details = mergePublicToolDetails(segment.details, activity.details);
+                } else previewSegments.push({ kind: 'tool', id: callId, name,
+                  status: activity.status, fileLabel: activity.fileLabel,
+                  ...(activity.details ? { details: activity.details } : {}) });
+                const currentSegment = previewSegments.find(part => part.kind === 'tool' && part.id === callId);
+                const toolDetails = currentSegment?.kind === 'tool' ? currentSegment.details : undefined;
                 publishPreview();
                 let activityId = liveToolActivityIds.get(callId);
                 if (!activityId) {
@@ -1773,6 +1797,7 @@ export async function installJarvisKernelRuntimeHost(
                     providerCallId: callId,
                     kind: 'tool',
                     ...projected.event,
+                    ...(toolDetails ? { toolDetails } : {}),
                     ...(activity.nativeTask ? { nativeTask: activity.nativeTask } : {}),
                     ts: now(),
                     startedAt: now(),
@@ -1781,6 +1806,7 @@ export async function installJarvisKernelRuntimeHost(
                 } else {
                   useChatActivityStore.getState().update(scope.chatId, activityId, {
                     ...projected.event,
+                    ...(toolDetails ? { toolDetails } : {}),
                     ...(activity.nativeTask ? { nativeTask: activity.nativeTask } : {}),
                     ...(projected.event.status === 'running' ? {} : { endedAt: now() }),
                     ts: now(),
@@ -1901,6 +1927,7 @@ export async function installJarvisKernelRuntimeHost(
                             ? 'completed'
                             : 'started',
                         callId: part.call_id,
+                        ...(part.details ? { details: part.details } : {}),
                         ...(typeof part.args.path === 'string'
                           ? { fileLabel: part.args.path }
                           : {}),
@@ -2037,8 +2064,12 @@ export async function installJarvisKernelRuntimeHost(
                 finishThinking('done');
                 return raw;
               }).catch((error: unknown) => {
-                finishThinking(signal.aborted ? 'cancelled' : 'error');
+                const status = signal.aborted ? 'cancelled' : 'error';
+                finishThinking(status);
+                settlePendingToolActivities(status);
                 throw error;
+              }).finally(() => {
+                signal.removeEventListener('abort', onProviderAbort);
               });
               return Object.freeze({
                 receipt: Object.freeze({

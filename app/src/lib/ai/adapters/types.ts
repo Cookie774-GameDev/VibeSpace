@@ -80,6 +80,40 @@ export interface ProviderQuestionRequest {
   tool?: Readonly<{ messageId: string; callId: string }>;
 }
 
+export type PublicJson = null | boolean | number | string | readonly PublicJson[] | { readonly [key: string]: PublicJson };
+
+export interface PublicToolOutput {
+  text: string;
+  mode: 'append' | 'replace';
+  complete: boolean;
+  omittedBytes: number;
+  redacted?: boolean;
+}
+
+export interface PublicToolFileChange {
+  /** Display only: opening this path still requires the trusted project resolver. */
+  path: string;
+  kind: 'add' | 'update' | 'delete' | 'move' | 'unknown';
+  destinationPath?: string;
+  diff?: string;
+  complete: boolean;
+}
+
+export interface PublicToolDetails {
+  arguments?: PublicJson;
+  command?: string;
+  cwd?: string;
+  output?: Readonly<PublicToolOutput>;
+  result?: PublicJson;
+  error?: PublicJson;
+  exitCode?: number;
+  durationMs?: number;
+  changes?: readonly Readonly<PublicToolFileChange>[];
+  omittedChanges?: number;
+  redacted?: boolean;
+  truncated?: boolean;
+}
+
 export type ProviderEvent =
   | {
       type: 'text';
@@ -105,11 +139,14 @@ export type ProviderEvent =
       fileLabel?: string;
       nativeTask?: import('../openCodeNativeActivity').NativeTaskActivity;
       result?: unknown;
+      /** Validated, bounded public display data; never executable authority. */
+      details?: Readonly<PublicToolDetails>;
       /** Sanitized request-local scope classification; never carries a path or reusable authority. */
       scope?: 'explicit_root_inventory';
       /** Bounded OpenCode todo evidence. Never carries generic tool input or output. */
       checklist?: import('../openCodeChecklist').OpenCodeChecklistSnapshot;
     }
+  | { type: 'tool_output'; callId: string; output: Readonly<PublicToolOutput> }
   | { type: 'question'; request: ProviderQuestionRequest }
   | { type: 'model'; modelId: string }
   | { type: 'usage'; usage: UsageSnapshot }

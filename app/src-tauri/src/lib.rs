@@ -804,6 +804,9 @@ fn run_ordinary(
             fsread::fs_read_image_base64,
             fsread::fs_read_text,
             fsread::fs_read_text_sample,
+            fsread::fs_reveal_project_file,
+            fsread::fs_tool_editors,
+            fsread::fs_open_project_file_in_editor,
             fsread::fs_write_text,
             terminal::terminal_spawn,
             terminal::terminal_claude_continuity_prepare,
@@ -1137,6 +1140,9 @@ fsread::fs_delete_file
 fsread::fs_read_image_base64
 fsread::fs_read_text
 fsread::fs_read_text_sample
+fsread::fs_reveal_project_file
+fsread::fs_tool_editors
+fsread::fs_open_project_file_in_editor
 fsread::fs_write_text
 terminal::terminal_spawn
 terminal::terminal_claude_continuity_prepare

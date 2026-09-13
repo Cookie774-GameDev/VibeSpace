@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { StreamingChatPreview } from './StreamingChatPreview';
 import { clearAccountPreviews, clearPreview, setPreview } from './streamingPreviewStore';
@@ -64,4 +64,20 @@ it('interleaves live checkpoints with their native tool receipts', () => {
   expect(preview.children[1].textContent).toMatch(/action|read/i);
   expect(preview.children[2].textContent).toContain('Second checkpoint.');
   expect(screen.queryByText('Aggregate fallback')).toBeNull();
+});
+
+
+it('renders actual public tool details during a tool-only live turn', () => {
+  const { container } = render(<StreamingChatPreview chatId="chat-a" />);
+  act(() => setPreview({ accountId: 'preview-user', chatId: 'chat-a', runId: 'detail-run', requestId: 'detail-request',
+    updatedAt: 10, text: '', segments: [{ kind: 'tool', id: 'detail-call', name: 'command', status: 'completed',
+      details: { command: 'node verify.cjs', arguments: { command: 'node verify.cjs' }, exitCode: 0,
+        output: { text: '16 checks passed', mode: 'replace', complete: true, omittedBytes: 0 },
+        changes: [{ path: 'invoice.cjs', kind: 'update', diff: '-return null\n+return rows', complete: true }] } }] }));
+  fireEvent.click(screen.getByRole('button', { name: /Show activity details/ }));
+  expect(container.textContent).toContain('node verify.cjs');
+  expect(container.textContent).toContain('16 checks passed');
+  fireEvent.click(screen.getByRole('button', { name: /Edited files/ }));
+  expect(container.textContent).toContain('-return null');
+  expect(container.textContent).toContain('+return rows');
 });

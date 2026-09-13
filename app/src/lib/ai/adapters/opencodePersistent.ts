@@ -1,3 +1,4 @@
+import { openCodeToolDetails } from '../publicToolDetails';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { resolveOpenCodeChildControl } from './openCodeChildControls';
 import { newOpenCodeMessageId, sendOpenCodePromptOnce } from './openCodePromptAcceptance';
@@ -1308,6 +1309,7 @@ export function normalizeToolEvent(
     ...(scope ? { scope } : {}),
     ...(checklist ? { checklist } : {}),
     ...(nativeTask ? { nativeTask } : {}),
+    details: openCodeToolDetails(name, state),
   };
 }
 
@@ -2251,7 +2253,21 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     const startedAt = Date.now();
     failureStage = 'event_stream';
     const toolStateKey = (tool: Extract<ProviderEvent, { type: 'tool' }>): string =>
-      `${tool.callId ?? tool.name}:${tool.status}`;
+      (tool.callId ?? tool.name) + ':' + tool.status;
+    // Keep only the latest bounded display snapshot, not every output revision.
+    const latestToolDetails = new Map<string, string>();
+    const shouldEmitTool = (tool: Extract<ProviderEvent, { type: 'tool' }>): boolean => {
+      const id = tool.callId ?? tool.name;
+      if (tool.status === 'started' && (emittedToolStates.has(id + ':completed') || emittedToolStates.has(id + ':failed'))) return false;
+      const key = toolStateKey(tool);
+      const details = tool.details ? JSON.stringify(tool.details) : '';
+      if (emittedToolStates.has(key) && (!details || latestToolDetails.get(id) === details)) return false;
+      emittedToolStates.add(key);
+      latestToolDetails.delete(id);
+      latestToolDetails.set(id, details);
+      if (latestToolDetails.size > 64) latestToolDetails.delete(latestToolDetails.keys().next().value!);
+      return true;
+    };
     const requestLocalTool = (
       tool: ProviderEvent | undefined,
     ): Extract<ProviderEvent, { type: 'tool' }> | undefined => {
@@ -2305,11 +2321,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
               recovered.push(started);
             }
           }
-          const key = toolStateKey(tool);
-          if (!emittedToolStates.has(key)) {
-            emittedToolStates.add(key);
-            recovered.push(tool);
-          }
+          if (shouldEmitTool(tool)) recovered.push(tool);
         }
       }
       emittedText = accumulator.fullText('text');
@@ -2658,12 +2670,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       }
       const tool = requestLocalTool(normalizeToolEvent(event, request));
       if (tool) {
-        if (tool.type === 'tool') {
-          const key = toolStateKey(tool);
-          if (emittedToolStates.has(key)) continue;
-          emittedToolStates.add(key);
-        }
-        if (tool.type === 'tool' && tool.status === 'started') {
+        const firstStart = tool.type === 'tool' && tool.status === 'started' && !emittedToolStates.has(toolStateKey(tool));
+        if (tool.type === 'tool' && !shouldEmitTool(tool)) continue;
+        if (firstStart) {
           request.onActionDispatch?.({ observedAt: Date.now() });
         }
         yield tool;

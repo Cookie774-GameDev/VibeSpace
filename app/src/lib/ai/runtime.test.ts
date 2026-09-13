@@ -7440,11 +7440,15 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         status: 'started',
         callId: 'opencode-tool-1',
         fileLabel: 'game.js',
+        details: { arguments: { path: 'game.js' }, output: { text: 'live file content', mode: 'replace', complete: false, omittedBytes: 0 } },
+      });
+      expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)?.segments?.find(part => part.kind === 'tool')).toMatchObject({
+        details: { arguments: { path: 'game.js' }, output: { text: 'live file content' } },
       });
       expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)).toMatchObject({
         text: '',
         segments: expect.arrayContaining([
-          { kind: 'tool', id: 'opencode-tool-1', name: 'read', status: 'started', fileLabel: 'game.js' },
+          expect.objectContaining({ kind: 'tool', id: 'opencode-tool-1', name: 'read', status: 'started', fileLabel: 'game.js' }),
         ]),
       });
       expect(
@@ -10461,6 +10465,74 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(harness.bindings.appendMessage.mock.calls.filter(([message]) => message.role === 'assistant')).toHaveLength(0);
       expect(useAgentStore.getState().runStates[selectedAgent.id]).toBe('error');
     } finally {
+      stop();
+      await stop.whenIdle();
+      disposeHost();
+      database.close();
+      await database.delete();
+    }
+  });
+
+  it.each(['cancelled', 'error'] as const)('settles only this provider’s pending tool receipts on %s', async (status) => {
+    const protectedJarvis = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
+    const harness = kernelRuntimeBindings(protectedJarvis);
+    useChatActivityStore.getState().clearChat(harness.chatId);
+    const database = createJarvisDb(uniqueTestDbName('runtime-tool-settlement'), TEST_INDEXED_DB);
+    await database.open();
+    await database.chats.add({ id: harness.chatId, workspace_id: 'workspace_runtime_tools' as never,
+      title: 'Tool cancellation', mode: 'chat', active_agent_ids: [protectedJarvis.id], created_at: 1, updated_at: 1 });
+    const providerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+    let providerInput!: Parameters<typeof mocks.runAgent>[0];
+    mocks.runAgent.mockImplementationOnce(input => { providerInput = input; return providerGate.promise; });
+    const disposeHost = await installJarvisKernelRuntimeHost({
+      db: database,
+      bindKernelActions: () =>
+        ({
+          create: vi.fn() as never,
+          decide: vi.fn() as never,
+          execute: vi.fn() as never,
+          executeAutoApprovedSafe: vi.fn() as never,
+        }) as never,
+      capabilitySnapshots: {
+        getForAccount: vi.fn(async () => ({
+          capturedAt: 1,
+          tools: [],
+          plugins: [],
+          mcps: [],
+          terminals: [],
+          agents: [],
+          entitlements: { source: 'unavailable' as const, capabilities: [] },
+        })),
+      },
+      randomUUID: () => 'runtime-voice-failed-run-release',
+      now: () => 10,
+    });
+
+    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: 'Inspect the tool cancellation fixture.', cancellationKey: 'msg_kernel_user' as MessageId,
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      await providerInput.onToolActivity?.({ name: 'bash', status: 'started', callId: 'pending-before-abort' });
+      await providerInput.onToolActivity?.({ name: 'read', status: 'completed', callId: 'finished-before-abort' });
+      useChatActivityStore.getState().record({ id: 'other-run-tool', chatId: harness.chatId,
+        kind: 'tool', title: 'Other request', status: 'running', ts: 1 });
+      expect(getChatActivityEvents(harness.chatId).find(event => event.providerCallId === 'pending-before-abort'))
+        .toMatchObject({ status: 'running' });
+      if (status === 'cancelled') {
+        window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { messageId: 'msg_kernel_user' as MessageId } }));
+        await vi.waitFor(() => expect(providerInput.signal.aborted).toBe(true));
+      } else providerGate.reject(new Error('provider failed with an active tool'));
+      // Even an uncooperative, unresolved provider cannot leave a cancelled receipt running.
+      await vi.waitFor(() => expect(getChatActivityEvents(harness.chatId).find(event => event.providerCallId === 'pending-before-abort'))
+        .toMatchObject({ status, endedAt: expect.any(Number) }));
+      expect(getChatActivityEvents(harness.chatId).find(event => event.providerCallId === 'finished-before-abort'))
+        .toMatchObject({ status: 'done' });
+      expect(getChatActivityEvents(harness.chatId).find(event => event.id === 'other-run-tool'))
+        .toMatchObject({ status: 'running' });
+    } finally {
+      providerGate.reject(new DOMException('Cancelled', 'AbortError'));
       stop();
       await stop.whenIdle();
       disposeHost();

@@ -126,6 +126,30 @@ describe('explicit Chat backend routing', () => {
     expect(onHarnessSessionBound).toHaveBeenCalledWith({ sessionId: 'thread_native_1' });
   });
 
+  it('keeps output deltas on their original tool without resetting final state', async () => {
+    codexSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'session', sessionId: 'thread_native_1' } as const;
+      yield { type: 'tool', name: 'read', callId: 'read-output', status: 'started', details: { command: 'cat fixture.txt' } } as const;
+      yield { type: 'tool_output', callId: 'read-output', output: { text: 'line one\n', mode: 'append', complete: false, omittedBytes: 0 } } as const;
+      yield { type: 'tool_output', callId: 'read-output', output: { text: 'line two\n', mode: 'append', complete: false, omittedBytes: 0 } } as const;
+      yield { type: 'tool', name: 'read', callId: 'read-output', status: 'completed', details: {
+        output: { text: 'line one\nline two\n', mode: 'replace', complete: true, omittedBytes: 0 } } } as const;
+      yield { type: 'tool_output', callId: 'read-output', output: { text: 'late', mode: 'append', complete: false, omittedBytes: 0 } } as const;
+      yield { type: 'text', delta: 'done', streamPartId: 'message_native_1' } as const;
+      yield { type: 'done', finishReason: 'completed' } as const;
+    })());
+    const activity = vi.fn();
+    const result = await runAgent({ backend: 'codex', agent, chatId: 'chat_output', requestId: 'request_output',
+      connectionId: 'openai-codex', workingDirectory: 'C:\\workspace', interactionMode: 'agent',
+      messages: [{ role: 'user', content: 'Read the fixture' }], onToolActivity: activity });
+    expect(activity.mock.calls).toHaveLength(4);
+    expect(activity.mock.calls.every(([event]) => event.name === 'read')).toBe(true);
+    expect(activity.mock.calls.at(-1)?.[0]).toMatchObject({ status: 'completed', details: {
+      command: 'cat fixture.txt', output: { text: 'line one\nline two\n', complete: true } } });
+    expect(result.public_timeline?.filter(part => part.kind === 'tool_call')).toHaveLength(1);
+    expect(result.public_timeline?.filter(part => part.kind === 'tool_result')).toHaveLength(1);
+  });
+
   it('keeps an explicitly OpenCode-locked chat on the unchanged OpenCode executor', async () => {
     const result = await runAgent({
       backend: 'opencode',

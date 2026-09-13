@@ -1,4 +1,6 @@
 import { applySecretPolicy } from '../security/secretDetector';
+import { openCodeToolDetails, mergePublicToolDetails } from './publicToolDetails';
+import type { PublicToolDetails } from './adapters/types';
 import { nativeShellFailure, projectNativeTaskActivity, type NativeShellFailure, type NativeTaskActivity } from './openCodeNativeActivity';
 
 export type OpenCodePublicTimelinePart =
@@ -9,6 +11,7 @@ export type OpenCodePublicTimelinePart =
       tool: string;
       call_id: string;
       args: Readonly<Record<string, unknown>>;
+      details?: Readonly<PublicToolDetails>;
     }>
   | Readonly<{
       kind: 'tool_result';
@@ -37,6 +40,7 @@ type PublicTimelineEntry =
       tool: string;
       callId: string;
       fileLabel?: string;
+      details?: Readonly<PublicToolDetails>;
       diff?: string;
       nativeTask?: NativeTaskActivity;
       status: 'started' | 'completed' | 'failed';
@@ -201,8 +205,10 @@ export function projectOpenCodePublicTimeline(
       const diff = status === 'completed' && /^(edit|write|apply_patch)$/.test(tool) &&
         typeof rawDiff === 'string' && rawDiff.length <= MAX_TEXT_CHARS
         ? applySecretPolicy(relativeDiffHeaders(rawDiff, options.workingDirectory), 'redact').text : undefined;
+      const details = openCodeToolDetails(tool, state);
       const existing = toolsByNativeCallId.get(nativeCallId);
       if (existing) {
+        existing.details = mergePublicToolDetails(existing.details, details);
         if (fileLabel) existing.fileLabel = fileLabel;
         if (contextFailure) existing.error = contextFailure;
         if (status !== 'started') existing.status = status;
@@ -213,6 +219,7 @@ export function projectOpenCodePublicTimeline(
           kind: 'tool',
           tool,
           callId: requestLocalCallId(nativeCallId),
+          details,
           ...(fileLabel ? { fileLabel } : {}),
           status,
           ...(diff ? { diff } : {}),
@@ -232,6 +239,7 @@ export function projectOpenCodePublicTimeline(
       kind: 'tool_call',
       tool: entry.tool,
       call_id: entry.callId,
+      ...(entry.details ? { details: entry.details } : {}),
       args: { ...(entry.fileLabel ? { path: entry.fileLabel } : {}), ...(entry.nativeTask ? { nativeTask: entry.nativeTask } : {}) },
     };
     if (entry.status === 'completed') {

@@ -206,7 +206,7 @@ describe('Codex app-server structured event normalization', () => {
     ).toEqual({ recognized: true, events: [], controls: [] });
   });
 
-  it('projects command activity without persisting output, commands, paths, or secrets', () => {
+  it('preserves public command details while keeping credentials redacted', () => {
     const result = normalizeCodexAppServerMessage({
       method: 'item/completed',
       params: {
@@ -231,7 +231,7 @@ describe('Codex app-server structured event normalization', () => {
         },
       },
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       recognized: true,
       events: [
         {
@@ -247,16 +247,13 @@ describe('Codex app-server structured event normalization', () => {
     });
     const persisted = JSON.stringify(result);
     for (const secret of [
-      'C:\\private',
-      'Get-Content',
       'sk-private-value',
-      'restricted file contents',
     ]) {
       expect(persisted).not.toContain(secret);
     }
   });
 
-  it('projects file edits without exposing absolute paths or raw diffs', () => {
+  it('preserves public file changes with redacted diff content', () => {
     expect(
       normalizeCodexAppServerMessage({
         method: 'item/started',
@@ -278,7 +275,7 @@ describe('Codex app-server structured event normalization', () => {
           },
         },
       }),
-    ).toEqual({
+    ).toMatchObject({
       recognized: true,
       events: [
         {
@@ -745,4 +742,67 @@ it('preserves code fences inside native plan reviews', () => {
   const parsed = parseJarvisPlanBlocks(event.delta);
   expect(parsed.parts).toHaveLength(1);
   expect(parsed.parts[0]).toMatchObject({ kind: 'plan_review', plan: { summary: text, status: 'pending' } });
+});
+
+
+describe('Codex public tool details', () => {
+  const event = (type: string, item: Record<string, unknown>) => normalizeCodexAppServerMessage({
+    method: type, params: { threadId: 'thr_123', turnId: 'turn_1', item },
+  }).events[0];
+
+  it('preserves the executed command, signed exit code and safely redacted output', () => {
+    const actual = event('item/completed', { id: 'cmd-details', type: 'commandExecution',
+      status: 'completed', command: 'node verify.cjs', cwd: '/workspace',
+      aggregatedOutput: '16 checks passed\napi_key="do-not-display-this"\n', exitCode: -1, durationMs: 25 });
+    expect(actual).toMatchObject({ type: 'tool', callId: 'cmd-details', details: {
+      command: 'node verify.cjs', cwd: '/workspace', exitCode: -1, durationMs: 25,
+      output: { mode: 'replace', complete: true, omittedBytes: 0 }, redacted: true,
+    } });
+    expect(JSON.stringify(actual)).toContain('16 checks passed');
+    expect(JSON.stringify(actual)).not.toContain('do-not-display-this');
+  });
+
+  it('retains each actual file change instead of a diff-available flag', () => {
+    const actual = event('item/completed', { id: 'edit-details', type: 'fileChange', status: 'completed',
+      changes: [{ path: '/workspace/a.ts', kind: { type: 'update' }, diff: '-oldA\n+newA' },
+        { path: '/workspace/b.ts', kind: { type: 'delete' }, diff: '-oldB' }] });
+    expect(actual).toMatchObject({ type: 'tool', details: { changes: [
+      { path: '/workspace/a.ts', kind: 'update', diff: '-oldA\n+newA', complete: true },
+      { path: '/workspace/b.ts', kind: 'delete', diff: '-oldB', complete: true },
+    ] } });
+  });
+
+  it('retains scoped MCP arguments and results but redacts secret-valued keys', () => {
+    const actual = event('item/completed', { id: 'mcp-details', type: 'mcpToolCall', status: 'completed',
+      server: 'context', tool: 'search', arguments: { query: 'invoice', apiKey: 'hidden' },
+      result: { content: [{ type: 'text', text: 'found invoice.cjs' }] } });
+    expect(actual).toMatchObject({ type: 'tool', details: { arguments: { query: 'invoice' },
+      result: { content: [{ type: 'text', text: 'found invoice.cjs' }] }, redacted: true } });
+    expect(JSON.stringify(actual)).not.toContain('hidden');
+  });
+
+  it('forwards output-only deltas without inventing a running lifecycle', () => {
+    const actual = normalizeCodexAppServerMessage({ method: 'item/commandExecution/outputDelta',
+      params: { threadId: 'thr_123', turnId: 'turn_1', itemId: 'cmd-details', delta: 'check 1 passed\n' } });
+    expect(actual.events).toEqual([expect.objectContaining({ type: 'tool_output', callId: 'cmd-details',
+      output: expect.objectContaining({ text: 'check 1 passed\n', mode: 'append', complete: false }) })]);
+    expect(actual.events[0]).not.toHaveProperty('status');
+  });
+
+  it.each([{ threadId: 'other', turnId: 'turn_1' }, { threadId: 'thr_123', turnId: 'old' }])(
+    'rejects a differently scoped output update %j', (scope) => {
+      const actual = normalizeCodexAppServerMessage({ method: 'item/commandExecution/outputDelta',
+        params: { ...scope, itemId: 'cmd-details', delta: 'not this conversation' } });
+      expect(actual.events).toEqual([]);
+    });
+
+  it('bounds large output without splitting Unicode or claiming completeness', () => {
+    const actual = event('item/completed', { id: 'large-details', type: 'commandExecution', status: 'completed',
+      command: 'node large.cjs', aggregatedOutput: '🙂'.repeat(100000), exitCode: 0 });
+    expect(actual).toMatchObject({ type: 'tool', details: { output: { complete: false } } });
+    if (actual.type !== 'tool' || !actual.details?.output) throw new Error('Missing output');
+    expect(new TextEncoder().encode(actual.details.output.text).byteLength).toBeLessThanOrEqual(32768);
+    expect(actual.details.output.omittedBytes).toBeGreaterThan(0);
+    expect(actual.details.output.text).not.toContain('\ufffd');
+  });
 });

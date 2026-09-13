@@ -11,6 +11,8 @@
  * executors in this router.
  */
 import type { Agent, ProviderId } from '@/types';
+import { mergePublicToolDetails } from './publicToolDetails';
+import type { PublicToolDetails, PublicToolOutput } from './adapters/types';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import type { CompiledJarvisPrompt } from '@/lib/jarvis/contracts';
 import type { VibeSpaceApproval } from '@/lib/harness/types';
@@ -375,6 +377,7 @@ export interface RunAgentRequest {
       callId?: string;
       fileLabel?: string;
       nativeTask?: import('./openCodeNativeActivity').NativeTaskActivity;
+      details?: Readonly<PublicToolDetails>;
     }>,
   ) => void | Promise<void>;
   /** Whole authoritative OpenCode public snapshot; replaces prior snapshot for this request. */
@@ -445,6 +448,47 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
   let terminalObserved = false;
   let anyToolObserved = false;
   let completedReadOnlyFilesystem = false;
+  const liveTools = new Map<string, Extract<ProviderEvent, { type: 'tool' }>>();
+  const pendingToolOutputs = new Map<string, Readonly<PublicToolOutput>>();
+  const publishTool = async (tool: Extract<ProviderEvent, { type: 'tool' }>) => {
+        const callId = tool.callId;
+        if (callId) {
+          const previous = liveTools.get(callId);
+          const details = mergePublicToolDetails(previous?.details, tool.details ?? {});
+          const pending = pendingToolOutputs.get(callId);
+          tool = { ...tool, details: pending && tool.status === 'started'
+            ? mergePublicToolDetails(details, { output: pending }) : details };
+          pendingToolOutputs.delete(callId);
+          liveTools.set(callId, tool);
+          const call = { kind: 'tool_call' as const, tool: tool.name, call_id: callId, details: tool.details,
+            args: { ...(tool.fileLabel ? { path: tool.fileLabel } : {}),
+              ...(tool.nativeTask ? { nativeTask: tool.nativeTask } : {}) } };
+          const index = chronologyToolIds.get(callId);
+          if (index === undefined) { chronologyToolIds.set(callId, chronology.length); chronology.push(call); }
+          else chronology[index] = call;
+          if (tool.status !== 'started') {
+            const result = { kind: 'tool_result' as const, call_id: callId,
+              ...(tool.status === 'failed' ? { error: 'Tool failed' as const } : { result: { status: 'completed' as const } }) };
+            const resultIndex = chronologyResultIds.get(callId);
+            if (resultIndex === undefined) { chronologyResultIds.set(callId, chronology.length); chronology.push(result); }
+            else chronology[resultIndex] = result;
+          }
+        }
+
+        anyToolObserved = true;
+        if (tool.status === 'completed' && READ_ONLY_FILESYSTEM_TOOL_NAMES.has(tool.name)) {
+          completedReadOnlyFilesystem = true;
+        }
+        await req.onToolActivity?.({
+          name: tool.name,
+          status: tool.status,
+          ...(tool.callId ? { callId: tool.callId } : {}),
+          ...(tool.fileLabel ? { fileLabel: tool.fileLabel } : {}),
+          ...(tool.nativeTask ? { nativeTask: tool.nativeTask } : {}),
+          ...(tool.details ? { details: tool.details } : {}),
+        });
+
+  };
   const providerRequest: ProviderRequest = {
     requestId,
     connection,
@@ -536,33 +580,17 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
         }
         await req.onQuestionRequested(projection);
       } else if (event.type === 'tool') {
-        if (event.callId) {
-          const call = { kind: 'tool_call' as const, tool: event.name, call_id: event.callId,
-            args: { ...(event.fileLabel ? { path: event.fileLabel } : {}),
-              ...(event.nativeTask ? { nativeTask: event.nativeTask } : {}) } };
-          const index = chronologyToolIds.get(event.callId);
-          if (index === undefined) { chronologyToolIds.set(event.callId, chronology.length); chronology.push(call); }
-          else chronology[index] = call;
-          if (event.status !== 'started') {
-            const result = { kind: 'tool_result' as const, call_id: event.callId,
-              ...(event.status === 'failed' ? { error: 'Tool failed' as const } : { result: { status: 'completed' as const } }) };
-            const resultIndex = chronologyResultIds.get(event.callId);
-            if (resultIndex === undefined) { chronologyResultIds.set(event.callId, chronology.length); chronology.push(result); }
-            else chronology[resultIndex] = result;
-          }
+        await publishTool(event);
+      } else if (event.type === 'tool_output') {
+        const previous = liveTools.get(event.callId);
+        if (previous?.status === 'started') {
+          await publishTool({ ...previous,
+            details: mergePublicToolDetails(previous.details, { output: event.output }) });
+        } else if (!previous && pendingToolOutputs.size < 64) {
+          const pending = pendingToolOutputs.get(event.callId);
+          const merged = mergePublicToolDetails(pending ? { output: pending } : undefined, { output: event.output });
+          if (merged.output) pendingToolOutputs.set(event.callId, merged.output);
         }
-
-        anyToolObserved = true;
-        if (event.status === 'completed' && READ_ONLY_FILESYSTEM_TOOL_NAMES.has(event.name)) {
-          completedReadOnlyFilesystem = true;
-        }
-        await req.onToolActivity?.({
-          name: event.name,
-          status: event.status,
-          ...(event.callId ? { callId: event.callId } : {}),
-          ...(event.fileLabel ? { fileLabel: event.fileLabel } : {}),
-          ...(event.nativeTask ? { nativeTask: event.nativeTask } : {}),
-        });
       } else if (event.type === 'error') {
         terminalObserved = true;
         throw new Error(event.message);
@@ -954,6 +982,7 @@ async function executePersistentOpenCode(
             ...(event.callId ? { callId: event.callId } : {}),
             ...(event.fileLabel ? { fileLabel: event.fileLabel } : {}),
             ...(event.nativeTask ? { nativeTask: event.nativeTask } : {}),
+            ...(event.details ? { details: event.details } : {}),
           });
         } else if (event.type === 'error') {
           providerReportedFailure = true;

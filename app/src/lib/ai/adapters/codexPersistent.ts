@@ -282,7 +282,12 @@ async function* sendCodexRequest(
   let turnId: string | undefined;
   let terminal = false;
   const controls = createCodexControlBridge(message => dependencies.write(generation, message), mode);
+  let cancelPendingWaits!: () => void;
+  const cancelled = new Promise<void>((resolve) => { cancelPendingWaits = resolve; });
   const abort = () => {
+    // A stalled public projection must not retain this turn or its approval handles.
+    controls.dispose();
+    cancelPendingWaits();
     if (threadId && turnId) {
       void dependencies
         .write(
@@ -406,7 +411,9 @@ async function* sendCodexRequest(
       }
     }
     yield { type: 'session', sessionId: threadId };
-    await request.onSessionBound?.({ sessionId: threadId });
+    if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+    await Promise.race([request.onSessionBound?.({ sessionId: threadId }), cancelled]);
+    if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
 
     await dependencies.write(
       generation,
@@ -461,7 +468,8 @@ async function* sendCodexRequest(
           const approval = controls.approval(control, frame.id as string | number,
             recordOf(recordOf(frame.params)?.permissions ?? recordOf(frame.params)?.additionalPermissions));
           if (!request.onApprovalRequested) throw new Error('Codex approval handler is unavailable.');
-          await request.onApprovalRequested(approval);
+          await Promise.race([request.onApprovalRequested(approval), cancelled]);
+          if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
         } else if (control.type === 'question') {
           const id = controls.question(control, frame.id as string | number);
           for (const event of projection.events) if (event.type === 'question') event.request = { ...event.request, id };

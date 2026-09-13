@@ -41,6 +41,7 @@ export interface ChatActivityEvent {
   /** Exact producer correlation, supplied only when the runtime owns both identities. */
   messageId?: string;
   providerCallId?: string;
+  toolDetails?: Readonly<import('@/lib/ai/adapters/types').PublicToolDetails>;
   nativeTask?: import('@/lib/ai/openCodeNativeActivity').NativeTaskActivity;
 }
 

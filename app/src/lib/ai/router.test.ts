@@ -268,6 +268,19 @@ describe('canonical OpenCode AI routing', () => {
     expect(JSON.stringify(onToolActivity.mock.calls)).not.toContain('must-not-survive');
   });
 
+  it('forwards public tool details before any prose without copying raw provider results', async () => {
+    const details = { command: 'node verify.cjs', output: { text: '16 checks passed', mode: 'replace', complete: true, omittedBytes: 0 } } as const;
+    openCodeSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'tool', name: 'bash', status: 'completed', callId: 'details-call', details,
+        result: { secret: 'never-copy-raw-result' } } as const;
+      yield { type: 'done', finishReason: 'stop' } as const;
+    })());
+    const onToolActivity = vi.fn();
+    await runAgent({ agent: openaiAgent, messages: [{ role: 'user', content: 'Run the verifier' }], onToolActivity });
+    expect(onToolActivity).toHaveBeenCalledWith(expect.objectContaining({ callId: 'details-call', details }));
+    expect(JSON.stringify(onToolActivity.mock.calls)).not.toContain('never-copy-raw-result');
+  });
+
   it('preserves native OpenCode text-part boundaries on streamed chunks', async () => {
     openCodeSend.mockImplementationOnce(() =>
       (async function* () {

@@ -7,6 +7,79 @@ import {
 } from './codexNativeTransport';
 
 describe('native Codex app-server transport', () => {
+  it('retains burst command output in order without overflowing the event queue', async () => {
+    let receive!: (value: unknown) => void;
+    const chunks = Array.from({ length: 257 }, (_, index) => `line ${index}\n`);
+    const bridge = async () => ({
+      invoke: vi.fn(async (command: string) => {
+        if (command !== 'codex_app_server_stream') return;
+        for (const delta of chunks)
+          receive({
+            kind: 'frame',
+            frame: {
+              method: 'item/commandExecution/outputDelta',
+              params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1', delta },
+            },
+          });
+        receive({
+          kind: 'frame',
+          frame: { method: 'item/completed', params: { itemId: 'command-1' } },
+        });
+        receive({ kind: 'done' });
+      }),
+      channel: (handler: (value: unknown) => void) => {
+        receive = handler;
+        return { onmessage: handler };
+      },
+    });
+    const frames = [];
+    for await (const frame of nativeCodexFrames('burst-generation', undefined, bridge))
+      frames.push(frame);
+    expect(frames).toEqual([
+      {
+        method: 'item/commandExecution/outputDelta',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          itemId: 'command-1',
+          delta: chunks.join(''),
+        },
+      },
+      { method: 'item/completed', params: { itemId: 'command-1' } },
+    ]);
+  });
+
+  it('never merges command output across an item, turn, control event, or size boundary', async () => {
+    let receive!: (value: unknown) => void;
+    const output = (delta: string, itemId = 'command-1', turnId = 'turn-1') => ({
+      method: 'item/commandExecution/outputDelta',
+      params: { threadId: 'thread-1', turnId, itemId, delta },
+    });
+    const expected = [
+      output('a'),
+      output('b', 'command-2'),
+      output('c', 'command-2', 'turn-2'),
+      { method: 'turn/completed', params: { turnId: 'turn-2' } },
+      output('x'.repeat(32768)),
+      output('tail'),
+    ];
+    const bridge = async () => ({
+      invoke: vi.fn(async (command: string) => {
+        if (command !== 'codex_app_server_stream') return;
+        for (const frame of expected) receive({ kind: 'frame', frame });
+        receive({ kind: 'done' });
+      }),
+      channel: (handler: (value: unknown) => void) => {
+        receive = handler;
+        return { onmessage: handler };
+      },
+    });
+    const frames = [];
+    for await (const frame of nativeCodexFrames('barrier-generation', undefined, bridge))
+      frames.push(frame);
+    expect(frames).toEqual(expected);
+  });
+
   it('does not subscribe after cancellation while loading the bridge', async () => {
     const controller = new AbortController();
     const invoke = vi.fn(async () => undefined);
@@ -143,5 +216,65 @@ describe('native Codex app-server transport', () => {
     expect(invoke).toHaveBeenCalledWith('codex_app_server_stop', {
       generation: 'codex-generation-1',
     });
+  });
+  it.each(['channel', 'registration'] as const)(
+    'closes when cancellation races %s setup',
+    async (phase) => {
+      const controller = new AbortController();
+      let receive!: (value: unknown) => void;
+      const invoke = vi.fn(async (command: string) => {
+        if (command === 'codex_app_server_stream' && phase === 'registration') controller.abort();
+      });
+      const bridge = async () => ({
+        invoke,
+        channel: (handler: (value: unknown) => void) => {
+          receive = handler;
+          if (phase === 'channel') controller.abort();
+          return { onmessage: handler };
+        },
+      });
+      const stream = nativeCodexFrames('codex-race-generation', controller.signal, bridge);
+      const next = stream.next();
+      const outcome = await Promise.race([
+        next.then((result) => (result.done ? 'closed' : 'frame')),
+        new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 50)),
+      ]);
+      // Settle the unfixed reader as well, so a failed assertion leaks no test work.
+      if (outcome === 'pending') {
+        receive({ kind: 'done' });
+        await next;
+      }
+      expect(outcome).toBe('closed');
+      expect(
+        invoke.mock.calls.filter(([command]) => command === 'codex_app_server_stop'),
+      ).toHaveLength(1);
+    },
+  );
+
+  it('shares one exact-generation stop between cancellation and final cleanup', async () => {
+    const controller = new AbortController();
+    let registered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      registered = resolve;
+    });
+    const invoke = vi.fn(async () => undefined);
+    const bridge = async () => ({
+      invoke,
+      channel: (onmessage: (value: unknown) => void) => ({ onmessage }),
+    });
+    const stream = nativeCodexFrames(
+      'codex-owned-generation',
+      controller.signal,
+      bridge,
+      registered,
+    );
+    const next = stream.next();
+    await ready;
+    controller.abort();
+    expect((await next).done).toBe(true);
+    const stops = invoke.mock.calls as unknown as Array<[string, Record<string, unknown>]>;
+    expect(stops.filter(([command]) => command === 'codex_app_server_stop')).toEqual([
+      ['codex_app_server_stop', { generation: 'codex-owned-generation' }],
+    ]);
   });
 });

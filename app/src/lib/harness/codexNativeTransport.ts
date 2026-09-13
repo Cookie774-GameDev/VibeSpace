@@ -122,18 +122,45 @@ function messageBytes(message: NativeCodexStreamMessage): number {
 
 // Preserve text and ordering during a slow renderer without increasing queue limits.
 // Never combine RPC replies, controls, different items, or differently scoped notifications.
-function adjacentDelta(previous: NativeCodexStreamMessage | undefined, next: NativeCodexStreamMessage): NativeCodexStreamMessage | undefined {
-  if (previous?.kind !== 'frame' || next.kind !== 'frame' || 'id' in previous.frame || 'id' in next.frame) return;
-  const methods = ['item/agentMessage/delta', 'item/reasoning/summaryTextDelta', 'item/reasoning/textDelta'];
-  if (!methods.includes(String(next.frame.method)) || previous.frame.method !== next.frame.method) return;
+function adjacentDelta(
+  previous: NativeCodexStreamMessage | undefined,
+  next: NativeCodexStreamMessage,
+): NativeCodexStreamMessage | undefined {
+  if (
+    previous?.kind !== 'frame' ||
+    next.kind !== 'frame' ||
+    'id' in previous.frame ||
+    'id' in next.frame
+  )
+    return;
+  const methods = [
+    'item/agentMessage/delta',
+    'item/reasoning/summaryTextDelta',
+    'item/reasoning/textDelta',
+    'item/commandExecution/outputDelta',
+  ];
+  if (!methods.includes(String(next.frame.method)) || previous.frame.method !== next.frame.method)
+    return;
   const before = recordOf(previous.frame.params);
   const after = recordOf(next.frame.params);
-  if (typeof before?.delta !== 'string' || typeof after?.delta !== 'string' || before.delta.length + after.delta.length > 32_768) return;
+  if (
+    typeof before?.delta !== 'string' ||
+    typeof after?.delta !== 'string' ||
+    before.delta.length + after.delta.length > 32_768
+  )
+    return;
   if (!before.threadId || !before.turnId || !before.itemId) return;
   const { delta: beforeText, ...beforeScope } = before;
   const { delta: afterText, ...afterScope } = after;
-  if (JSON.stringify({ ...previous.frame, params: beforeScope }) !== JSON.stringify({ ...next.frame, params: afterScope })) return;
-  return { kind: 'frame', frame: { ...previous.frame, params: { ...before, delta: beforeText + afterText } } };
+  if (
+    JSON.stringify({ ...previous.frame, params: beforeScope }) !==
+    JSON.stringify({ ...next.frame, params: afterScope })
+  )
+    return;
+  return {
+    kind: 'frame',
+    frame: { ...previous.frame, params: { ...before, delta: beforeText + afterText } },
+  };
 }
 
 export async function* nativeCodexFrames(
@@ -201,26 +228,37 @@ export async function* nativeCodexFrames(
       push({ kind: 'error', message: 'Codex native stream returned an invalid message.' });
     }
   };
-  const channel = bridge.channel(onmessage);
-  const invocation = bridge
-    .invoke('codex_app_server_stream', {
-      generation: exactGeneration,
-      streamId: id,
-      onEvent: channel,
-    })
-    .then(() => {
-      // Native registration is asynchronous; writes require its acknowledgement.
-      if (!terminal && !overflowed && !signal?.aborted) onSubscribed?.();
-    })
-    .catch((error) =>
-      push({ kind: 'error', message: safeError(error, 'Codex native stream failed.').message }),
-    );
+  // Install cancellation before bridge setup: a channel factory or a synchronous
+  // native registration can abort this consumer before invoke returns.
+  let stopPromise: Promise<boolean> | undefined;
+  const stopOnce = () =>
+    (stopPromise ??= stopNativeCodexAppServer(exactGeneration, bridgeFactory).catch(() => false));
   const abort = () => {
-    void stopNativeCodexAppServer(exactGeneration, bridgeFactory).catch(() => false);
+    void stopOnce();
     push({ kind: 'done' });
   };
+  let invocation: Promise<void> = Promise.resolve();
   signal?.addEventListener('abort', abort, { once: true });
   try {
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    const channel = bridge.channel(onmessage);
+    if (signal?.aborted) return;
+    invocation = bridge
+      .invoke('codex_app_server_stream', {
+        generation: exactGeneration,
+        streamId: id,
+        onEvent: channel,
+      })
+      .then(() => {
+        // Native registration is asynchronous; writes require its acknowledgement.
+        if (!terminal && !overflowed && !signal?.aborted) onSubscribed?.();
+      })
+      .catch((error) =>
+        push({ kind: 'error', message: safeError(error, 'Codex native stream failed.').message }),
+      );
     while (true) {
       if (queued.length === 0) {
         await new Promise<void>((resolve) => {
@@ -238,7 +276,7 @@ export async function* nativeCodexFrames(
     terminal = true;
     signal?.removeEventListener('abort', abort);
     if (overflowed || signal?.aborted) {
-      await stopNativeCodexAppServer(exactGeneration, bridgeFactory).catch(() => false);
+      await stopOnce();
     }
     await invocation;
   }

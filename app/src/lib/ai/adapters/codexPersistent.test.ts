@@ -501,14 +501,14 @@ describe('persistent Codex app-server adapter', () => {
           delta: 'Working on it.',
           streamPartId: 'message_native_1',
         },
-        {
+        expect.objectContaining({
           type: 'tool',
           name: 'read',
           status: 'completed',
           callId: 'command_native_1',
           fileLabel: 'game.js',
           result: { exitCode: 0 },
-        },
+        }),
         { type: 'done', finishReason: 'completed' },
       ]),
     );
@@ -526,9 +526,17 @@ describe('persistent Codex app-server adapter', () => {
         sandbox: 'read-only',
       },
     });
-    const timings = appActivityLog.snapshot(before).events.filter(event => event.kind.startsWith('model.prepare.codex.'));
-    expect(timings.filter(event => event.phase === 'completed').map(event => event.kind)).toEqual(
-      expect.arrayContaining(['model.prepare.codex.start', 'model.prepare.codex.catalog', 'model.prepare.codex.thread']),
+    const timings = appActivityLog
+      .snapshot(before)
+      .events.filter((event) => event.kind.startsWith('model.prepare.codex.'));
+    expect(
+      timings.filter((event) => event.phase === 'completed').map((event) => event.kind),
+    ).toEqual(
+      expect.arrayContaining([
+        'model.prepare.codex.start',
+        'model.prepare.codex.catalog',
+        'model.prepare.codex.thread',
+      ]),
     );
     expect(JSON.stringify(timings)).not.toContain('Please read game.js');
     expect(JSON.stringify(timings)).not.toContain('thread_native_1');
@@ -574,28 +582,202 @@ it('delivers native approval requests to the UI handler and resumes the saved na
   const { replyCodexApproval } = await import('./codexControlBridge');
   const write = vi.fn(async (_generation: string, _message: Record<string, unknown>) => {});
   const requested = vi.fn(async (approval: import('@/lib/harness/types').VibeSpaceApproval) => {
-    await replyCodexApproval({ sessionId: approval.sessionId, approvalId: approval.id, response: 'reject' });
+    await replyCodexApproval({
+      sessionId: approval.sessionId,
+      approvalId: approval.id,
+      response: 'reject',
+    });
   });
   let runs = 0;
-  const adapter = createCodexPersistentAdapter({ findExecutable: async () => ({ executableId: 'trusted' }),
-    start: async () => ({ generation: `native-${++runs}` }), write, stop: async () => true,
-    frames: () => ({ ready: Promise.resolve(), stream: (async function* () {
-      for await (const frame of frames()) {
-        const next = JSON.parse(JSON.stringify(frame)) as Record<string, unknown>;
-        if (runs === 2 && next.id === 'request_1_thread') next.id = 'request_1_resume';
-        yield next;
-        if (next.method === 'turn/started') yield { id: 7, method: 'item/commandExecution/requestApproval',
-          params: { threadId: 'thread_native_1', turnId: 'turn_native_1', itemId: 'command_native_1', command: 'fixture-command' } };
-      }
-    })() }),
+  const adapter = createCodexPersistentAdapter({
+    findExecutable: async () => ({ executableId: 'trusted' }),
+    start: async () => ({ generation: `native-${++runs}` }),
+    write,
+    stop: async () => true,
+    frames: () => ({
+      ready: Promise.resolve(),
+      stream: (async function* () {
+        for await (const frame of frames()) {
+          const next = JSON.parse(JSON.stringify(frame)) as Record<string, unknown>;
+          if (runs === 2 && next.id === 'request_1_thread') next.id = 'request_1_resume';
+          yield next;
+          if (next.method === 'turn/started')
+            yield {
+              id: 7,
+              method: 'item/commandExecution/requestApproval',
+              params: {
+                threadId: 'thread_native_1',
+                turnId: 'turn_native_1',
+                itemId: 'command_native_1',
+                command: 'fixture-command',
+              },
+            };
+        }
+      })(),
+    }),
   });
-  const request = { requestId: 'request_1', chatId: 'persistent-control-fixture', accountId: 'control-fixture',
-    connection, prompt: 'Read marker', modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
-    workingDirectory: 'C:\\workspace', interactionMode: 'ask' as const, onApprovalRequested: requested };
+  const request = {
+    requestId: 'request_1',
+    chatId: 'persistent-control-fixture',
+    accountId: 'control-fixture',
+    connection,
+    prompt: 'Read marker',
+    modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+    workingDirectory: 'C:\\workspace',
+    interactionMode: 'ask' as const,
+    onApprovalRequested: requested,
+  };
   try {
-    for (let turn = 0; turn < 2; turn++) for await (const _event of adapter.send!(request)) { /* collect full turn */ }
+    for (let turn = 0; turn < 2; turn++)
+      for await (const _event of adapter.send!(request)) {
+        /* collect full turn */
+      }
     expect(requested).toHaveBeenCalledTimes(2);
     expect(write).toHaveBeenCalledWith('native-1', { id: 7, result: { decision: 'decline' } });
-    expect(write.mock.calls.some((call: unknown[]) => (call[1] as { method?: string })?.method === 'thread/resume')).toBe(true);
-  } finally { localStorage.clear(); }
+    expect(
+      write.mock.calls.some(
+        (call: unknown[]) => (call[1] as { method?: string })?.method === 'thread/resume',
+      ),
+    ).toBe(true);
+  } finally {
+    localStorage.clear();
+  }
 });
+
+it('never dispatches a turn after cancellation while binding its session', async () => {
+  const controller = new AbortController();
+  const writes: Record<string, unknown>[] = [];
+  const adapter = createCodexPersistentAdapter({
+    findExecutable: async () => ({ executableId: 'trusted-binding-race' }),
+    start: async () => ({ generation: 'binding-race-generation' }),
+    frames: () => ({ ready: Promise.resolve(), stream: frames() }),
+    write: async (_generation, frame) => {
+      writes.push(frame);
+    },
+    stop: async () => true,
+  });
+  const consume = async () => {
+    for await (const _event of adapter.send!({
+      requestId: 'request_1',
+      connection,
+      prompt: 'Read marker',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      workingDirectory: 'C:\\workspace',
+      interactionMode: 'ask',
+      signal: controller.signal,
+      onSessionBound: async () => {
+        controller.abort();
+      },
+    })) {
+      /* consume real adapter events */
+    }
+  };
+  await expect(consume()).rejects.toMatchObject({ name: 'AbortError' });
+  expect(writes.map((frame) => frame.method)).not.toContain('turn/start');
+});
+
+it.each(['binding', 'approval'] as const)(
+  'cancels a pending %s projection and releases the next turn',
+  async (phase) => {
+    const controller = new AbortController();
+    let entered!: () => void;
+    let releaseProjection!: () => void;
+    const projectionEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pendingProjection = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    let approvalId: string | undefined;
+    let runs = 0;
+    const writes: Record<string, unknown>[] = [];
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-projection-race' }),
+      start: async () => ({ generation: 'projection-race-' + ++runs }),
+      frames: () => ({
+        ready: Promise.resolve(),
+        stream: (async function* () {
+          for await (const frame of frames()) {
+            yield frame;
+            if (phase === 'approval' && runs === 1 && frame.method === 'turn/started') {
+              yield {
+                id: 42,
+                method: 'item/commandExecution/requestApproval',
+                params: {
+                  threadId: 'thread_native_1',
+                  turnId: 'turn_native_1',
+                  itemId: 'command_native_1',
+                  command: 'fixture-command',
+                },
+              };
+            }
+          }
+        })(),
+      }),
+      write: async (_generation, frame) => {
+        writes.push(frame);
+      },
+      stop: async () => true,
+    });
+    const request = {
+      requestId: 'request_1',
+      connection,
+      prompt: 'Read marker',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      workingDirectory: 'C:\\workspace',
+      interactionMode: 'ask' as const,
+    };
+    const consume = async () => {
+      for await (const _event of adapter.send!({
+        ...request,
+        signal: controller.signal,
+        onSessionBound:
+          phase === 'binding'
+            ? async () => {
+                entered();
+                await pendingProjection;
+              }
+            : undefined,
+        onApprovalRequested: async (approval) => {
+          approvalId = approval.id;
+          entered();
+          await pendingProjection;
+        },
+      })) {
+        /* do not bypass the adapter or its lease */
+      }
+    };
+    const completion = consume().then(
+      () => 'completed',
+      (error) => error.name as string,
+    );
+    await projectionEntered;
+    controller.abort();
+    const outcome = await Promise.race([
+      completion,
+      new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 50)),
+    ]);
+    let lateReply: string | undefined;
+    if (approvalId) {
+      const { replyCodexApproval } = await import('./codexControlBridge');
+      lateReply = await replyCodexApproval({
+        sessionId: 'thread_native_1',
+        approvalId,
+        response: 'reject',
+      }).then(
+        () => 'accepted',
+        () => 'rejected',
+      );
+    }
+    // Clean up the RED candidate without leaving a pending lease behind.
+    releaseProjection();
+    await completion;
+    expect(outcome).toBe('AbortError');
+    if (phase === 'approval') expect(lateReply).toBe('rejected');
+    else expect(writes.map((frame) => frame.method)).not.toContain('turn/start');
+    const nextEvents: ProviderEvent[] = [];
+    for await (const event of adapter.send!(request)) nextEvents.push(event);
+    expect(runs).toBe(2);
+    expect(nextEvents).toContainEqual({ type: 'done', finishReason: 'completed' });
+  },
+);

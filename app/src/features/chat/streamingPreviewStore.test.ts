@@ -50,6 +50,52 @@ describe('streaming preview store', () => {
     expect(Object.isFrozen(stored)).toBe(true);
   });
 
+  it('detaches segment metadata so caller mutations cannot alter a published snapshot', () => {
+    const segment = {
+      kind: 'tool' as const,
+      id: 'tool-1',
+      name: 'read',
+      status: 'started' as const,
+    };
+    setPreview({ ...preview, segments: [segment] });
+    segment.name = 'changed outside store';
+    expect(getPreview('account-a', 'run-1')?.segments?.[0]).toMatchObject({ name: 'read' });
+  });
+
+  it('publishes a changed trusted root even when display text is unchanged', () => {
+    setPreview({ ...preview, projectRoot: 'C:/first' });
+    setPreview({ ...preview, projectRoot: 'C:/second' });
+    expect(getPreview('account-a', 'run-1')?.projectRoot).toBe('C:/second');
+  });
+
+  it('skips unchanged tool metadata but publishes output and lifecycle changes', () => {
+    const details = Object.freeze({ command: 'node verify.cjs' });
+    const segment = {
+      kind: 'tool' as const,
+      id: 'tool-1',
+      name: 'command',
+      status: 'started' as const,
+      details,
+    };
+    const listener = vi.fn();
+    const stop = subscribeChatPreviews('account-a', 'chat-1', listener);
+    try {
+      setPreview({ ...preview, segments: [segment] });
+      const revision = getPreview('account-a', 'run-1')?.publicationRevision;
+      setPreview({ ...preview, segments: [{ ...segment }], updatedAt: 20 });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(getPreview('account-a', 'run-1')?.publicationRevision).toBe(revision);
+      setPreview({
+        ...preview,
+        segments: [{ ...segment, status: 'completed', details: { ...details, exitCode: 0 } }],
+      });
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(getPreview('account-a', 'run-1')?.publicationRevision).toBeGreaterThan(revision!);
+    } finally {
+      stop();
+    }
+  });
+
   it('never reads or writes browser persistence', () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem');
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
@@ -84,7 +130,9 @@ describe('streaming preview store', () => {
       expect(otherChat).not.toHaveBeenCalled();
       expect(otherAccount).not.toHaveBeenCalled();
       expect(getChatPreview('account-a', 'chat-1')?.updatedAt).toBe(10);
-    } finally { stops.forEach((stop) => stop()); }
+    } finally {
+      stops.forEach((stop) => stop());
+    }
   });
 
   it('invalidates both chats when a run moves and preserves latest-preview ordering', () => {
@@ -105,7 +153,9 @@ describe('streaming preview store', () => {
       clearPreview('account-a', 'run-2');
       expect(newChat).toHaveBeenCalledTimes(2);
       expect(getChatPreview('account-a', 'chat-2')).toBeNull();
-    } finally { stops.forEach((stop) => stop()); }
+    } finally {
+      stops.forEach((stop) => stop());
+    }
   });
 
   it('clears each affected chat once and releases subscriptions', () => {
@@ -121,10 +171,14 @@ describe('streaming preview store', () => {
       expect(other).not.toHaveBeenCalled();
       clearAccountPreviews('account-a');
       expect(changed).toHaveBeenCalledTimes(1);
-      stop(); stop();
+      stop();
+      stop();
       setPreview(preview);
       expect(changed).toHaveBeenCalledTimes(1);
-    } finally { stop(); stopOther(); }
+    } finally {
+      stop();
+      stopOther();
+    }
   });
 
   it('avoids unrelated snapshot checks across 20 mounted chats', () => {
@@ -138,7 +192,11 @@ describe('streaming preview store', () => {
       for (let i = 0; i < 100; i++) setPreview({ ...preview, text: `Delta ${i}`, updatedAt: i });
       expect(listeners[1]).toHaveBeenCalledTimes(100);
       expect(listeners.reduce((sum, listener) => sum + listener.mock.calls.length, 0)).toBe(100);
-      expect(legacyListeners.reduce((sum, listener) => sum + listener.mock.calls.length, 0)).toBe(2_000);
-    } finally { stops.forEach((stop) => stop()); }
+      expect(legacyListeners.reduce((sum, listener) => sum + listener.mock.calls.length, 0)).toBe(
+        2_000,
+      );
+    } finally {
+      stops.forEach((stop) => stop());
+    }
   });
 });
