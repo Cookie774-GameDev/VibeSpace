@@ -31,6 +31,19 @@ function message(
 }
 
 describe('projectAgenticTranscript', () => {
+  it.each(['error', 'cancelled'] as const)('keeps current %s activity terminal after an earlier answer', (status) => {
+    const messages = [message('old', 'assistant', 1, [{ kind: 'text', text: 'Earlier answer' }]), message('new', 'user', 20, [{ kind: 'text', text: 'Next request' }])];
+    expect(summarizeAgenticSession(messages, [{ id: 'current', chatId: 'chat-1', kind: 'agent', status, title: 'Current outcome', startedAt: 21, ts: 22, endedAt: 22 }]).status).toBe(status);
+  });
+
+  it.each(['start', 'finish'])('restores saved %s failure without claiming reconnection', (phase) => {
+    const messages = [message('old', 'assistant', 1, [{ kind: 'text', text: 'Earlier answer' }]), message('new', 'user', 20, [{ kind: 'text', text: 'Next request' }]), message('failed', 'system', 22, [{ kind: 'text', text: `The reply could not ${phase}. Check the selected model and request settings, then try again.` }])];
+    expect(summarizeAgenticSession(messages, []).status).toBe('error');
+    expect(summarizeAgenticSession([...messages, message('retry', 'user', 30, [{ kind: 'text', text: 'Try again' }])], []).status).toBe('recovering');
+    expect(summarizeAgenticSession(messages.map(item => item.id === 'failed' ? { ...item, role: 'assistant' as const } : item), []).status).toBe('done');
+  });
+
+
 
   it('ignores abandoned activity from before the current user turn', () => {
     const messages = [

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 const MIN_TIMEOUT_MS: u64 = 100;
 const MAX_TIMEOUT_MS: u64 = 86_400_000; // App-lifetime persistent OpenCode server (24h); still cancellable.
@@ -1308,17 +1308,33 @@ fn scan_with_state(
     Ok(CliDetectionResult { executables })
 }
 
-#[tauri::command(async)]
-pub fn cli_bridge_scan(
-    state: tauri::State<'_, CliBridgeState>,
-    request: CliScanRequest,
-) -> Result<CliDetectionResult, String> {
-    scan_with_state(&state, request)
+// Blocking discovery and CLI process waits must not occupy Tauri's async workers.
+async fn run_cli_blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|_| "CLI background worker failed".to_string())?
 }
 
-#[tauri::command(async)]
-pub fn cli_bridge_codex_account_snapshot(
-    state: tauri::State<'_, CliBridgeState>,
+#[tauri::command]
+pub async fn cli_bridge_scan(
+    app: tauri::AppHandle,
+    request: CliScanRequest,
+) -> Result<CliDetectionResult, String> {
+    run_cli_blocking(move || scan_with_state(&app.state::<CliBridgeState>(), request)).await
+}
+
+#[tauri::command]
+pub async fn cli_bridge_codex_account_snapshot(
+    app: tauri::AppHandle,
+    request: CodexAccountSnapshotRequest,
+) -> Result<CodexAccountSnapshot, String> {
+    run_cli_blocking(move || codex_account_snapshot_with_state(&app.state::<CliBridgeState>(), request)).await
+}
+
+fn codex_account_snapshot_with_state(
+    state: &CliBridgeState,
     request: CodexAccountSnapshotRequest,
 ) -> Result<CodexAccountSnapshot, String> {
     validate_timeout(request.timeout_ms)?;
@@ -1843,12 +1859,12 @@ fn probe_with_state(
     })
 }
 
-#[tauri::command(async)]
-pub fn cli_bridge_probe(
-    state: tauri::State<'_, CliBridgeState>,
+#[tauri::command]
+pub async fn cli_bridge_probe(
+    app: tauri::AppHandle,
     request: CliProbeRequest,
 ) -> Result<CliProbeResult, String> {
-    probe_with_state(&state, request)
+    run_cli_blocking(move || probe_with_state(&app.state::<CliBridgeState>(), request)).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3108,6 +3124,26 @@ mod tests {
         assert_eq!(value["stream"], "status");
         assert_eq!(value["status"], "timedOut");
         assert_eq!(value["truncated"], false);
+    }
+
+    #[test]
+    fn cli_bridge_blocking_work_yields_before_process_wait_finishes() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Wake, Waker};
+        struct NoopWake;
+        impl Wake for NoopWake { fn wake(self: Arc<Self>) {} }
+        let (release, waiting) = mpsc::channel();
+        let mut future = Box::pin(run_cli_blocking(move || {
+            waiting.recv_timeout(Duration::from_secs(2))
+                .map_err(|_| "worker was not released".to_string())?;
+            Ok(7_u8)
+        }));
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        assert!(matches!(future.as_mut().poll(&mut context), Poll::Pending),
+            "CLI work must yield the async worker before waiting for a process");
+        release.send(()).unwrap();
+        assert_eq!(tauri::async_runtime::block_on(future).unwrap(), 7);
     }
 
     #[test]

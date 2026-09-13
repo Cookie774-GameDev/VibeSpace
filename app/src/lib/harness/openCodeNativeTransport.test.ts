@@ -2,6 +2,82 @@ import { describe, expect, it, vi } from 'vitest';
 import { nativeOpenCodeEvents, nativeOpenCodeRequest } from './openCodeNativeTransport';
 
 describe('native OpenCode transport', () => {
+  it('bounds unresolved distinct native reads without evicting or replaying them', async () => {
+    const completions: ((value: unknown) => void)[] = [];
+    const invoke = vi.fn(() => new Promise(resolve => completions.push(resolve)));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    const reads = Array.from({ length: 64 }, (_, index) => nativeOpenCodeRequest('generation', '/session/s'+index+'/message', {}, 1000, bridge));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(64));
+    await expect(nativeOpenCodeRequest('generation', '/session/overflow/message', {}, 1000, bridge)).rejects.toThrow(/read queue is full/);
+    expect(invoke).toHaveBeenCalledTimes(64);
+    for (const finish of completions) finish({ status: 200, statusText: 'OK', body: '[]' });
+    await Promise.all(reads);
+    invoke.mockImplementation(async () => ({ status: 200, statusText: 'OK', body: '[]' }));
+    expect((await nativeOpenCodeRequest('generation', '/session/overflow/message', {}, 1000, bridge)).status).toBe(200);
+  });
+
+
+  it('shares an unresolved native GET after a caller deadline, then reads fresh after settlement', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (value: unknown) => void;
+      const invoke = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+      const bridge = async () => ({ invoke, channel: vi.fn() as never });
+      const first = nativeOpenCodeRequest('generation', '/session/status', {}, 20, bridge);
+      const expired = expect(first).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(21); await expired;
+      const second = nativeOpenCodeRequest('generation', '/session/status', {}, 100, bridge);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      finish({ status: 200, statusText: 'OK', body: '{}' });
+      expect(await (await second).json()).toEqual({});
+      const fresh = nativeOpenCodeRequest('generation', '/session/status', {}, 100, bridge);
+      await vi.advanceTimersByTimeAsync(0); expect(invoke).toHaveBeenCalledTimes(2);
+      finish({ status: 200, statusText: 'OK', body: '{"fresh":true}' });
+      expect(await (await fresh).json()).toEqual({ fresh: true });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps caller cancellation independent of a shared native read', async () => {
+    let finish!: (value: unknown) => void;
+    const invoke = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    const controller = new AbortController();
+    const first = nativeOpenCodeRequest('generation', '/global/health', { signal: controller.signal }, 1000, bridge);
+    const cancelled = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    const second = nativeOpenCodeRequest('generation', '/global/health', {}, 1000, bridge);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    controller.abort(); await cancelled;
+    expect(invoke).toHaveBeenCalledTimes(1);
+    finish({ status: 200, statusText: 'OK', body: '{}' });
+    expect((await second).status).toBe(200);
+  });
+
+  it('never combines distinct generations, directories, routes, or explicit mutations', async () => {
+    const completions: ((value: unknown) => void)[] = [];
+    const invoke = vi.fn(() => new Promise(resolve => completions.push(resolve)));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    const calls = [
+      nativeOpenCodeRequest('one', '/session/a/message?limit=100', {}, 1000, bridge),
+      nativeOpenCodeRequest('two', '/session/a/message?limit=100', {}, 1000, bridge),
+      nativeOpenCodeRequest('one', '/session/a/message?limit=50', {}, 1000, bridge),
+      nativeOpenCodeRequest('one', '/session/a/message?limit=100&directory=C%3A%5Cexact', {}, 1000, bridge),
+      ...[1, 2].map(() => nativeOpenCodeRequest('one', '/session/a/abort', { method: 'POST' }, 1000, bridge)),
+    ];
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(6));
+    for (const finish of completions) finish({ status: 200, statusText: 'OK', body: '{}' });
+    await Promise.all(calls);
+  });
+
+  it('releases a rejected native read so an explicit later read can recover', async () => {
+    const invoke = vi.fn().mockRejectedValueOnce(new Error('native disconnected')).mockResolvedValue({ status: 200, statusText: 'OK', body: '{}' });
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    await expect(nativeOpenCodeRequest('generation', '/global/health', {}, 1000, bridge)).rejects.toThrow('native disconnected');
+    expect((await nativeOpenCodeRequest('generation', '/global/health', {}, 1000, bridge)).status).toBe(200);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+
   it('recovers pending permissions through a read-only generation-bound native route', async () => {
     const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '[]' }));
     const bridge = async () => ({ invoke, channel: vi.fn() as never });

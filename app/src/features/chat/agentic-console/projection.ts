@@ -694,6 +694,7 @@ export function summarizeAgenticSession(
   let hasAssistantAnswer = false;
   let latestUserAt = -Infinity;
   let latestAnswerAt = -Infinity;
+  let latestFailureNoticeAt = -Infinity;
   let hasTokenUsage = false;
   let hasUnavailableTokenUsage = false;
   let tokenCount = 0;
@@ -701,6 +702,12 @@ export function summarizeAgenticSession(
   let model = '—';
   for (const message of messages) {
     if (message.role === 'user') latestUserAt = Math.max(latestUserAt, message.created_at);
+    // Older saved turns have only this canonical application system notice.
+    // Never interpret provider/user prose as a runtime terminal state.
+    if (message.role === 'system' && message.parts.some(part => part.kind === 'text' &&
+      /^The reply could not (?:start|finish)\. Check the selected model and request settings, then try again\.$/.test(part.text))) {
+      latestFailureNoticeAt = Math.max(latestFailureNoticeAt, message.created_at);
+    }
     const hasResponse = message.role === 'assistant' &&
       (textParts(message).length > 0 || message.parts.some(part => part.kind === 'plan_review'));
     if (hasResponse) {
@@ -792,19 +799,21 @@ export function summarizeAgenticSession(
     latestActivity = currentActivity.sort((left, right) =>
       (right.endedAt ?? right.ts) - (left.endedAt ?? left.ts))[0];
   }
+  const hasCurrentFailureNotice = latestFailureNoticeAt >= latestUserAt &&
+    latestFailureNoticeAt > latestAnswerAt;
   const inferredStatus: AgenticSessionSummary['status'] = running
     ? 'running'
-    : (hasAssistantAnswer || staleTerminalEvidence) && latestUserAt > latestAnswerAt
-      ? 'recovering'
-      : hasError
+    : hasError || hasCurrentFailureNotice
       ? 'error'
-      : hasBlocked
-        ? 'blocked'
-        : latestActivity?.status === 'cancelled'
-          ? 'cancelled'
-          : hasCompletedActivity || hasAssistantAnswer
-            ? 'done'
-            : 'idle';
+      : latestActivity?.status === 'cancelled'
+        ? 'cancelled'
+        : hasBlocked
+          ? 'blocked'
+          : (hasAssistantAnswer || staleTerminalEvidence) && latestUserAt > latestAnswerAt
+            ? 'recovering'
+            : hasCompletedActivity || hasAssistantAnswer
+              ? 'done'
+              : 'idle';
   const status = staleTerminalEvidence ? inferredStatus : (mappedStatus ?? inferredStatus);
   const startedAt = staleTerminalEvidence
     ? latestUserAt

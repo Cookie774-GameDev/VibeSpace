@@ -198,6 +198,36 @@ function nativeRoute(
   return { route, ...(directory === undefined ? {} : { directory }) };
 }
 
+// Caller deadlines do not cancel native IPC. Keep an identical read in flight
+// until the native command settles so recovery polling cannot queue duplicates.
+const pendingNativeReads = new WeakMap<
+  () => Promise<NativeTransportBridge>, Map<string, Promise<unknown>>
+>();
+
+function invokeNativeRead(
+  factory: () => Promise<NativeTransportBridge>,
+  bridge: NativeTransportBridge,
+  request: Record<string, unknown>,
+): Promise<unknown> {
+  let pending = pendingNativeReads.get(factory);
+  if (!pending) {
+    pending = new Map();
+    pendingNativeReads.set(factory, pending);
+  }
+  const { timeoutMs: _callerDeadline, ...identity } = request;
+  const key = JSON.stringify(identity);
+  const existing = pending.get(key);
+  if (existing) return existing;
+  if (pending.size >= 64) {
+    return Promise.reject(new Error('OpenCode native read queue is full. Wait for pending reads to settle.'));
+  }
+  const native = Promise.resolve().then(() => bridge.invoke('opencode_server_request', { request }));
+  pending.set(key, native);
+  const release = () => { if (pending.get(key) === native) pending.delete(key); };
+  void native.then(release, release);
+  return native;
+}
+
 export async function nativeOpenCodeRequest(
   generation: string,
   path: string,
@@ -210,14 +240,15 @@ export async function nativeOpenCodeRequest(
   const method = (init.method ?? 'GET').toUpperCase();
   const mapped = nativeRoute(path, method);
   if (init.signal?.aborted) throw init.signal.reason;
-  const nativeRequest = bridge.invoke('opencode_server_request', {
-    request: {
-      generation,
-      ...mapped,
-      body: typeof init.body === 'string' ? init.body : undefined,
-      timeoutMs,
-    },
-  });
+  const request = {
+    generation,
+    ...mapped,
+    body: typeof init.body === 'string' ? init.body : undefined,
+    timeoutMs,
+  };
+  const nativeRequest = method === 'GET'
+    ? invokeNativeRead(bridgeFactory, bridge, request)
+    : bridge.invoke('opencode_server_request', { request });
   // Native HTTP timeouts cannot bound a stalled IPC response. Stop waiting in
   // the renderer too; turn cancellation separately aborts the native session.
   // Never replay a timed-out mutation: its native outcome may be unknown.
