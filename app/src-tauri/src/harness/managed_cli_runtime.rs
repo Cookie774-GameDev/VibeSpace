@@ -2,6 +2,7 @@ use crate::harness::managed_cli_manifest::{ManagedCliKind, ManagedCliRelease};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const RUNTIME_RECEIPT_SCHEMA_VERSION: u32 = 2;
@@ -284,8 +285,23 @@ pub(crate) fn is_rematerializable_legacy_opencodex_version(
 }
 
 fn file_sha256(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
-    Some(format!("{:x}", Sha256::digest(bytes)))
+    let mut file = fs::File::open(path).ok()?;
+    let mut hash = Sha256::new();
+    // Runtime binaries are large and revalidated throughout a native session.
+    // Keep memory bounded while hashing every byte with the same algorithm.
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = match file.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Some(format!("{:x}", hash.finalize()))
 }
 
 fn collect_opencodex_closure_files(
@@ -532,7 +548,7 @@ pub fn inspect_managed_runtime(
 #[cfg(test)]
 mod tests {
     use super::{
-        confirm_managed_runtime_probe, inspect_managed_runtime, opencodex_closure_sha256,
+        confirm_managed_runtime_probe, file_sha256, inspect_managed_runtime, opencodex_closure_sha256,
         ManagedCliProbe, ManagedCliReadiness, ManagedRuntimeReceipt,
     };
     use crate::harness::managed_cli_manifest::{embedded_managed_release, ManagedCliKind};
@@ -566,6 +582,24 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn file_hash_preserves_exact_digest_across_buffer_boundaries() {
+        let root = TestRoot::new("bounded-hash");
+        let path = root.path().join("binary.dat");
+        fs::write(&path, vec![0x5au8; 65_549]).expect("write fixture");
+        assert_eq!(
+            file_sha256(&path).as_deref(),
+            Some("d1b05572612bce406fabf2977a4587e313cbd0db2251a5c815881b6396ca3721")
+        );
+        fs::write(&path, []).expect("empty fixture");
+        assert_eq!(
+            file_sha256(&path).as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+        assert_eq!(file_sha256(&root.path().join("missing")), None);
+        assert_eq!(file_sha256(root.path()), None);
     }
 
     fn write_file(path: impl AsRef<Path>, bytes: &[u8]) {
