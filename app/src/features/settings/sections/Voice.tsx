@@ -117,6 +117,8 @@ function formatVoicePreviewFailure(engine: VoiceEngine): string {
 const FREE_VOICE_PRESET_IDS: readonly VoicePresetId[] = ['jarvis-prime', 'aurora'];
 const FREE_VOICE_PRESETS = VOICE_PROFILES.filter((p) => FREE_VOICE_PRESET_IDS.includes(p.id));
 
+import { SpeechHistory } from '../components/SpeechHistory';
+
 export function Voice({ active = true }: { active?: boolean } = {}) {
   const persona = useAuthStore((s) => s.personaPreset);
   const setPersona = useAuthStore((s) => s.setPersona);
@@ -411,6 +413,7 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
         </p>
       </header>
 
+      <SpeechHistory />
       <section className="flex flex-col gap-4">
         <div>
           <Label>Jarvis voice</Label>

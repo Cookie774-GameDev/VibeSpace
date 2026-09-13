@@ -89,6 +89,7 @@ import {
 } from './dictationSession';
 import { formatVoiceFailure } from '@/features/voice/VoiceService';
 import { useAuthStore } from '@/stores/auth';
+import { readSpeechHistory } from '@/features/composer-stt/speechHistory';
 
 function stubMic(available: boolean) {
   Object.defineProperty(navigator, 'mediaDevices', {
@@ -99,6 +100,7 @@ function stubMic(available: boolean) {
 
 describe('createGlobalDictationSession engine resolution', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.isTauri.value = true;
     mocks.composer.provider = 'system';
@@ -115,6 +117,28 @@ describe('createGlobalDictationSession engine resolution', () => {
     mocks.deepgramKey.value = '';
     useAuthStore.setState({ apiKeys: {} });
     stubMic(true);
+  });
+
+  it('checkpoints shared system partials before cancellation and ignores late callbacks', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const session = await createSelectedSttSession();
+    const partial = mocks.voiceHandlers.get('voice:partial')!;
+    partial({ text: 'words before interruption' } as never);
+    expect(readSpeechHistory()[0].text).toBe('words before interruption');
+    session.cancel();
+    partial({ text: 'late result' } as never);
+    expect(readSpeechHistory()[0]).toMatchObject({
+      text: 'words before interruption',
+      status: 'interrupted',
+    });
+  });
+
+  it('saves completed local transcription through the shared pipeline', async () => {
+    mocks.composer.provider = 'faster-whisper';
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    const session = await createSelectedSttSession();
+    await session.stop();
+    expect(readSpeechHistory()[0]).toMatchObject({ text: 'local text', status: 'completed' });
   });
 
   it('uses the configured local faster-whisper model first (same as composer STT)', async () => {

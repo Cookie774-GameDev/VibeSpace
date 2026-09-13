@@ -335,11 +335,13 @@ class VoiceServiceImpl extends VoiceEmitter {
         }
       }
       const interimTrimmed = interim.trim();
-      if (interimTrimmed) {
-        this.emit('voice:partial', { text: interimTrimmed });
-      }
       for (const text of finals) {
         this.emit('voice:final', { text });
+      }
+      // A mixed result contains completed phrases followed by the next draft.
+      // Publish in that order so consumers do not clear the newer draft.
+      if (interimTrimmed) {
+        this.emit('voice:partial', { text: interimTrimmed });
       }
     };
 

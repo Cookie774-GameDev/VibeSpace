@@ -20,6 +20,7 @@ import { openSystemSpeechSettings } from '@/lib/tauri';
 import { useAuthStore } from '@/stores/auth';
 import type { ComposerSttProvider, FasterWhisperModelId } from '@/types/common';
 import { DeepgramCredentialCard } from '../components/DeepgramCredentialCard';
+import { SpeechHistory } from '../components/SpeechHistory';
 import { DeepgramBrandMark } from '../components/DeepgramBrandMark';
 import {
   DEEPGRAM_MODEL_SOURCE,
@@ -203,6 +204,7 @@ export function ComposerStt() {
         </p>
       </header>
 
+      <SpeechHistory />
       <section className="flex flex-col gap-3" aria-label="Speech-to-text provider">
         <Label className="text-sm font-medium text-foreground">How should dictation run?</Label>
         <div className="flex flex-col gap-2" role="radiogroup" aria-label="Speech-to-text provider">

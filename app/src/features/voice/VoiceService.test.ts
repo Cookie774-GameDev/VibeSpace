@@ -41,6 +41,33 @@ class MockRecognition {
 }
 
 describe('VoiceService exclusive mic lifecycle', () => {
+  it('publishes completed phrases before the next partial in a mixed recognition result', () => {
+    Object.defineProperty(window, 'SpeechRecognition', {
+      value: MockRecognition,
+      configurable: true,
+    });
+    const order: string[] = [];
+    const offFinal = VoiceService.on('voice:final', ({ text }) => order.push(`final:${text}`));
+    const offPartial = VoiceService.on('voice:partial', ({ text }) =>
+      order.push(`partial:${text}`),
+    );
+    try {
+      VoiceService.startListening();
+      const onresult = lastRecognition!.onresult as unknown as (event: unknown) => void;
+      onresult({
+        resultIndex: 0,
+        results: [
+          { isFinal: true, 0: { transcript: 'first phrase' } },
+          { isFinal: false, 0: { transcript: 'next thought' } },
+        ],
+      });
+      expect(order).toEqual(['final:first phrase', 'partial:next thought']);
+    } finally {
+      offFinal();
+      offPartial();
+    }
+  });
+
   afterEach(() => {
     VoiceService.abort();
     Reflect.deleteProperty(window, 'SpeechRecognition');

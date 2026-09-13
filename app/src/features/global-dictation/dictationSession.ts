@@ -7,10 +7,12 @@
  * substitutes another available provider or invokes Windows Win+H.
  *
  * Privacy: audio goes only to the engine listed above that the user's own
- * settings selected (local engines keep it on device). Nothing is stored.
+ * settings selected (local engines keep it on device). Recognized text is
+ * checkpointed in local recovery history; microphone audio is never retained there.
  */
 
 import { isTauri } from '@/lib/utils';
+import { createSpeechHistorySession } from '@/features/composer-stt/speechHistory';
 import { getDeepgramVoiceKey } from '@/lib/security/voiceKeys';
 import { getDeepgramSttOption, readDeepgramSttOption } from '@/lib/deepgram';
 import { VoiceService } from '@/features/voice/VoiceService';
@@ -281,15 +283,23 @@ export async function createSelectedSttSession(
     released = true;
     if (activeSelectedSttClaim?.token === token) activeSelectedSttClaim = null;
   };
+  const history = createSpeechHistorySession(getComposerSttProvider());
+  let finishing = false;
   const scopedEvents: DictationEvents = {
     onOpen: () => {
       if (isCurrent()) events.onOpen?.();
     },
     onPartial: (text) => {
-      if (isCurrent()) events.onPartial?.(text);
+      if (isCurrent()) {
+        history.partial(text);
+        events.onPartial?.(text);
+      }
     },
     onFinal: (text) => {
-      if (isCurrent()) events.onFinal?.(text);
+      if (isCurrent()) {
+        history.final(text);
+        events.onFinal?.(text);
+      }
     },
     onTurnEnd: () => {
       if (isCurrent()) events.onTurnEnd?.();
@@ -298,11 +308,15 @@ export async function createSelectedSttSession(
       if (isCurrent()) events.onLevel?.(level);
     },
     onError: (message) => {
-      if (isCurrent()) events.onError?.(message);
+      if (isCurrent()) {
+        history.finish('interrupted');
+        events.onError?.(message);
+      }
     },
     onClose: () => {
       if (closed) return;
       closed = true;
+      if (!finishing) history.finish('interrupted');
       release();
       if (!claim.superseded) {
         events.onLevel?.(0);
@@ -314,8 +328,13 @@ export async function createSelectedSttSession(
     const wrapped: GlobalDictationSession = {
       ...session,
       stop: async () => {
+        finishing = true;
         try {
           await session.stop();
+          history.finish('completed');
+        } catch (error) {
+          history.finish('interrupted');
+          throw error;
         } finally {
           release();
         }
@@ -324,6 +343,7 @@ export async function createSelectedSttSession(
         if (cancelled) return;
         // Invalidate publication before an engine's synchronous stop callbacks.
         cancelled = true;
+        history.finish('interrupted');
         try {
           session.cancel();
         } finally {
@@ -393,6 +413,7 @@ export async function createSelectedSttSession(
     }
     return adoptSession(await createWebSpeechSession(scopedEvents, assertCurrent));
   } catch (error) {
+    history.finish('interrupted');
     release();
     throw error;
   }
