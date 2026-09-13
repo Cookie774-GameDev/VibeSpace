@@ -71,9 +71,9 @@ export function SiyuanVaultSurface({
         }
       };
       assertTarget();
-      // Cold WebView navigation can outlast the first graph retries under load.
-      // Poll immediately; leave enough time for the native bounded bootstrap.
-      const deadline = Date.now() + 35_000;
+      // Allow the native navigation budget plus its bounded graph initialization
+      // and a small status-delivery margin. Loading is never treated as ready.
+      const deadline = Date.now() + 65_000;
       while (status.graphState === 'loading' && Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 150));
         if (!isCurrent()) return;

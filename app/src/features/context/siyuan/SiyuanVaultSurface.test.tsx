@@ -56,7 +56,7 @@ describe('SiYuan Context Vault surface', () => {
       };
       const native = bridge({
         open: vi.fn(async () => loading),
-        status: vi.fn(async () => (Date.now() - started >= 15_000 ? ready : loading)),
+        status: vi.fn(async () => (Date.now() - started >= 55_000 ? ready : loading)),
       });
       render(
         <SiyuanVaultSurface
@@ -67,7 +67,7 @@ describe('SiYuan Context Vault surface', () => {
         />,
       );
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(16_000);
+        await vi.advanceTimersByTimeAsync(56_000);
       });
       expect(screen.queryByRole('alert')).toBeNull();
       expect(screen.getByRole('button', { name: 'Reload' }).hasAttribute('disabled')).toBe(false);
@@ -91,6 +91,31 @@ describe('SiYuan Context Vault surface', () => {
       height: 800,
       toJSON: () => ({}),
     });
+  });
+
+  it('still closes a graph that never proves readiness within the combined startup budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const loading = {
+        ...(await bridge().status()),
+        graphState: 'loading' as const,
+        graphPhase: 'bootstrap-dispatched' as const,
+      };
+      const native = bridge({
+        open: vi.fn(async () => loading),
+        status: vi.fn(async () => loading),
+      });
+      render(
+        <SiyuanVaultSurface projectId="project-1" {...targetProps} bridge={native} onClose={vi.fn()} />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(66_000);
+      });
+      expect(screen.getByRole('alert').textContent).toContain('siyuan_graph_target_timeout');
+      expect(native.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('coalesces React StrictMode effect replay before invoking the native open', async () => {

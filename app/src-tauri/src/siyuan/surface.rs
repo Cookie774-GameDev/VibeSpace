@@ -25,6 +25,9 @@ const GRAPH_BOOTSTRAP_RETRY_DELAYS_MS: [u64; 22] = [
     50, 100, 150, 250, 400, 600, 800, 1_000, 1_200, 1_500, 1_750, 2_000,
     2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000,
 ];
+// Navigation may consume the retry budget before the injected graph script
+// begins its own 30-second bounded initialization.
+const GRAPH_BOOTSTRAP_TIMEOUT_MS: u64 = 60_000;
 const NAVIGATION_PENDING: u8 = 0;
 const NAVIGATION_ABOUT_BLANK: u8 = 1;
 const NAVIGATION_MANAGED_ORIGIN: u8 = 2;
@@ -215,7 +218,13 @@ const SIYUAN_GRAPH_FIRST_INITIALIZATION_SCRIPT_TEMPLATE: &str = r#"
       }
 
       if (!documentRequested) {
-        const api = window.require?.("siyuan");
+        let api;
+        try {
+          api = window.require?.("siyuan");
+        } catch (_error) {
+          // The embedded browser may expose a loader without the desktop API.
+          // Continue through the verified browser document/navigation path.
+        }
         const app = window.siyuan?.ws?.app;
         if (!targetDocumentId || !targetNotebookId) {
           fail("siyuan_graph_target_invalid");
@@ -486,6 +495,8 @@ fn schedule_graph_bootstrap_retry(
     authenticated_document_loaded: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
+        let deadline = std::time::Instant::now()
+            + Duration::from_millis(GRAPH_BOOTSTRAP_TIMEOUT_MS);
         for delay_ms in GRAPH_BOOTSTRAP_RETRY_DELAYS_MS {
             thread::sleep(Duration::from_millis(delay_ms));
             let should_retry = SURFACE_STATE.lock().ok().is_some_and(|state| {
@@ -578,6 +589,10 @@ fn schedule_graph_bootstrap_retry(
                 }
             }
         }
+        // The final dispatch can still be queued on the main thread, or its
+        // graph script may just have started. Exhausting navigation retries
+        // alone is not evidence that graph initialization failed.
+        thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
         if let Ok(mut state) = SURFACE_STATE.lock() {
             if let Some(record) = state.as_mut() {
                 if record.operation_id == operation_id
@@ -586,7 +601,7 @@ fn schedule_graph_bootstrap_retry(
                 {
                     record.graph_state = "failed".to_owned();
                     record.graph_phase = "failed".to_owned();
-                    record.graph_error = Some("siyuan_graph_unavailable".to_owned());
+                    record.graph_error = Some("siyuan_graph_target_timeout".to_owned());
                 }
             }
         }
@@ -1613,6 +1628,9 @@ mod tests {
         assert!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS[0] <= 100);
         assert!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.iter().sum::<u64>() < 30_000);
         assert_eq!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.len(), 22);
+        assert!(GRAPH_BOOTSTRAP_TIMEOUT_MS
+            >= GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.iter().sum::<u64>() + 30_000);
+        assert!(GRAPH_BOOTSTRAP_TIMEOUT_MS < 65_000);
     }
 
     #[test]
