@@ -346,14 +346,41 @@ pub(crate) fn opencodex_closure_sha256(version_root: &Path) -> Option<String> {
     let mut files = Vec::new();
     collect_opencodex_closure_files(&canonical_root, &canonical_root, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
+    let hashes = closure_file_hashes(&files)?;
     let mut closure = Sha256::new();
-    for (relative, path) in files {
-        let file_hash = file_sha256(&path)?;
+    for ((relative, _), file_hash) in files.iter().zip(hashes) {
         closure.update((relative.len() as u64).to_le_bytes());
         closure.update(relative.as_bytes());
         closure.update(file_hash.as_bytes());
     }
     Some(format!("{:x}", closure.finalize()))
+}
+
+fn closure_file_hashes(files: &[(String, PathBuf)]) -> Option<Vec<String>> {
+    // Every file is still read and verified on every validation. Bound concurrent
+    // readers for the large reviewed runtime; keep small closures inexpensive.
+    if files.len() < 64 {
+        return files.iter().map(|(_, path)| file_sha256(path)).collect();
+    }
+    std::thread::scope(|scope| {
+        let mut workers = Vec::new();
+        for chunk in files.chunks(files.len().div_ceil(4)) {
+            workers.push(
+                std::thread::Builder::new()
+                    .name("runtime-integrity".to_string())
+                    .spawn_scoped(scope, move || {
+                        chunk.iter().map(|(_, path)| file_sha256(path)).collect::<Option<Vec<_>>>()
+                    })
+                    .ok()?,
+            );
+        }
+        let mut hashes = Vec::with_capacity(files.len());
+        // Join in sorted chunk order, regardless of worker completion order.
+        for worker in workers {
+            hashes.extend(worker.join().ok()??);
+        }
+        Some(hashes)
+    })
 }
 
 fn package_version(version_root: &Path, relative_path: &str) -> Option<String> {
@@ -548,7 +575,8 @@ pub fn inspect_managed_runtime(
 #[cfg(test)]
 mod tests {
     use super::{
-        confirm_managed_runtime_probe, file_sha256, inspect_managed_runtime, opencodex_closure_sha256,
+        closure_file_hashes, confirm_managed_runtime_probe, file_sha256, inspect_managed_runtime,
+        opencodex_closure_sha256,
         ManagedCliProbe, ManagedCliReadiness, ManagedRuntimeReceipt,
     };
     use crate::harness::managed_cli_manifest::{embedded_managed_release, ManagedCliKind};
@@ -600,6 +628,24 @@ mod tests {
         );
         assert_eq!(file_sha256(&root.path().join("missing")), None);
         assert_eq!(file_sha256(root.path()), None);
+    }
+
+    #[test]
+    fn parallel_closure_preserves_order_and_rejects_unreadable_files() {
+        let root = TestRoot::new("parallel-closure");
+        let mut files = Vec::new();
+        for index in (0..70).rev() {
+            let name = format!("file-{index:03}.txt");
+            let path = root.path().join(&name);
+            fs::write(&path, format!("payload-{index}")).expect("write fixture");
+            files.push((name, path));
+        }
+        let expected = "f0fe7803474cd520153b4b3b1f75f27808027d41a238fcda3601f08665fa1a2b";
+        assert_eq!(opencodex_closure_sha256(root.path()).as_deref(), Some(expected));
+        fs::write(root.path().join("file-069.txt"), "changed").expect("mutate last file");
+        assert_ne!(opencodex_closure_sha256(root.path()).as_deref(), Some(expected));
+        files[35].1 = root.path().join("missing.txt");
+        assert_eq!(closure_file_hashes(&files), None);
     }
 
     fn write_file(path: impl AsRef<Path>, bytes: &[u8]) {
