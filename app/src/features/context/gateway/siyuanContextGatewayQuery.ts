@@ -1,4 +1,5 @@
 import { productionRlmContextTool } from '@/features/context/contextRlmProduction';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import {
   CONTEXT_SOURCE_KINDS,
   createContextPointer,
@@ -524,12 +525,16 @@ export function createSiyuanContextGatewayQuery(
       expiresAt: leaseStart + LEASE_DURATION_MS,
     });
 
+    // Surface actual internal calls separately from the outer context tool.
+    // Do not duplicate the question, source paths, or pointer capabilities.
+    const execute = (args: Record<string, unknown>) =>
+      appActivityLog.trace(
+        'context.internal-tool',
+        { tool: 'vibespace_context', sessionId: leaseId, args: { operation: args.operation } },
+        () => dependencies.tool.execute(args, lease, input.signal),
+      );
     const readyStartedAt = safeClock(dependencies);
-    const rawDescription = await dependencies.tool.execute(
-      { operation: 'describe' },
-      lease,
-      input.signal,
-    );
+    const rawDescription = await execute({ operation: 'describe' });
     const siyuanReady = elapsed(dependencies, readyStartedAt);
     throwIfAborted(input.signal);
     parseDescribe(rawDescription, input);
@@ -537,11 +542,7 @@ export function createSiyuanContextGatewayQuery(
     const queries = route === 'deep' ? deepQueries(exactQuestion) : Object.freeze([exactQuestion]);
     const searchStartedAt = safeClock(dependencies);
     const rawPages = await concurrentMap(queries, input.signal, (searchQuery) =>
-      dependencies.tool.execute(
-        { operation: 'search', query: searchQuery, limit: MAX_SEARCH_RESULTS },
-        lease,
-        input.signal,
-      ),
+      execute({ operation: 'search', query: searchQuery, limit: MAX_SEARCH_RESULTS }),
     );
     const search = elapsed(dependencies, searchStartedAt);
     throwIfAborted(input.signal);
@@ -560,7 +561,7 @@ export function createSiyuanContextGatewayQuery(
     const hydrationOperation = route === 'deep' ? 'expand' : 'open';
     const hydrationStartedAt = safeClock(dependencies);
     const rawEvidence = await concurrentMap(selected, input.signal, (candidate) =>
-      dependencies.tool.execute(
+      execute(
         hydrationOperation === 'expand'
           ? {
               operation: 'expand',
@@ -573,8 +574,6 @@ export function createSiyuanContextGatewayQuery(
               pointer: candidate.pointer,
               maxBytes: MAX_OPEN_BYTES,
             },
-        lease,
-        input.signal,
       ),
     );
     const evidenceHydration = elapsed(dependencies, hydrationStartedAt);

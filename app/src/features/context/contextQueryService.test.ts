@@ -526,3 +526,33 @@ describe('context query service', () => {
     );
   });
 });
+
+describe('truthful bounded-result coverage', () => {
+  it('marks a caller-limited source list and timeline as truncated', async () => {
+    const service = createContextQueryService({
+      repository: repository([record('one'), record('two')]),
+    });
+    expect(await service.sources({ scope, limit: 1 })).toMatchObject({ truncated: true });
+    expect(await service.timeline({ scope, limit: 1 })).toMatchObject({ truncated: true });
+    expect(await service.sources({ scope, limit: 2 })).toMatchObject({ truncated: false });
+  });
+  it('does not describe skipped missing evidence as a complete investigation', async () => {
+    const repo = repository([record('one'), record('missing')]);
+    const read = repo.readSource;
+    repo.readSource = async (item, signal) =>
+      item.id === 'missing' ? undefined : read(item, signal);
+    const service = createContextQueryService({ repository: repo });
+    const result = await service.investigate({ scope, query: 'match' });
+    expect(result.evidence.map((item) => item.record.id)).toEqual(['one']);
+    expect(result.truncated).toBe(true);
+  });
+  it('reports byte-capped opened evidence as incomplete', async () => {
+    const service = createContextQueryService({
+      repository: repository([record('one')]),
+      limits: { maxOpenBytes: 4 },
+    });
+    const result = await service.investigate({ scope, query: 'match' });
+    expect(result.evidence[0].truncated).toBe(true);
+    expect(result.truncated).toBe(true);
+  });
+});

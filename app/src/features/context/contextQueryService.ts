@@ -471,12 +471,10 @@ export function createContextQueryService(dependencies: {
 
   const sources = async (input: { scope: ContextScope; limit?: number; signal?: AbortSignal }) => {
     const records = await scopedRecords(input.scope, input.signal);
+    const maximum = boundedInteger(input.limit, limits.maxSearchResults, limits.maxSearchResults);
     return {
-      items: records.slice(
-        0,
-        boundedInteger(input.limit, limits.maxSearchResults, limits.maxSearchResults),
-      ),
-      truncated: records.length > limits.maxSearchResults,
+      items: records.slice(0, maximum),
+      truncated: records.length > maximum,
     };
   };
 
@@ -555,7 +553,16 @@ export function createContextQueryService(dependencies: {
         throw error;
       }
     }
-    return { query: input.query, evidence, truncated: found.truncated };
+    return {
+      query: input.query,
+      evidence,
+      // Successful retrieval does not imply complete evidence coverage. Missing,
+      // stale, forbidden, or byte-capped spans must stay visible to the caller.
+      truncated:
+        found.truncated ||
+        evidence.length < found.items.length ||
+        evidence.some((item) => item.truncated),
+    };
   };
 
   return Object.freeze({

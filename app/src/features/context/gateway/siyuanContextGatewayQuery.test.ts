@@ -500,3 +500,75 @@ describe('SiYuan Context Gateway query', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 });
+
+describe('live internal tool diagnostics', () => {
+  it('records each real internal operation and its completion without copying the query', async () => {
+    const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
+    const before = appActivityLog.snapshot().sequence;
+    const query = createSiyuanContextGatewayQuery({
+      tool: {
+        execute: async (args) =>
+          args.operation === 'describe'
+            ? describeResult()
+            : args.operation === 'search'
+              ? searchResult()
+              : openResult(),
+      },
+      now: () => 100,
+      createLeaseId: () => 'gateway-diagnostics-1',
+    });
+    const result = await query(queryInput('focused'));
+    const events = appActivityLog
+      .snapshot(before)
+      .events.filter((event) => event.kind === 'context.internal-tool');
+    expect(events.map((event) => event.phase)).toEqual([
+      'started',
+      'completed',
+      'started',
+      'completed',
+      'started',
+      'completed',
+    ]);
+    const started = events.filter((event) => event.phase === 'started');
+    expect(started.map((event) => event.data)).toEqual(
+      ['describe', 'search', 'open'].map((operation) => ({
+        tool: 'vibespace_context',
+        sessionId: 'gateway-diagnostics-1',
+        args: { operation },
+      })),
+    );
+    expect(JSON.stringify(started)).not.toContain(queryInput('focused').question);
+    expect(
+      events
+        .filter((event) => event.phase === 'completed')
+        .every((event) => typeof event.durationMs === 'number'),
+    ).toBe(true);
+    expect(result.evidenceCount).toBe(1);
+  });
+  it('records failed internal retrieval without masking the original error', async () => {
+    const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
+    const before = appActivityLog.snapshot().sequence;
+    const failure = new Error('retrieval failure');
+    const query = createSiyuanContextGatewayQuery({
+      tool: {
+        execute: async (args) => {
+          if (args.operation === 'describe') return describeResult();
+          throw failure;
+        },
+      },
+      now: () => 100,
+      createLeaseId: () => 'gateway-diagnostics-2',
+    });
+    await expect(query(queryInput('focused'))).rejects.toBe(failure);
+    const events = appActivityLog
+      .snapshot(before)
+      .events.filter((event) => event.kind === 'context.internal-tool');
+    expect(events.map((event) => event.phase)).toEqual([
+      'started',
+      'completed',
+      'started',
+      'failed',
+    ]);
+    expect(events.at(-1)?.data).toMatchObject({ request: { args: { operation: 'search' } } });
+  });
+});

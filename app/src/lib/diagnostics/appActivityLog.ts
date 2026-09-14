@@ -11,35 +11,125 @@ export interface AppActivityEvent {
   data: unknown;
 }
 
+type ActivityListener = (event: AppActivityEvent) => void | Promise<void>;
+
+function ownData(value: unknown, key: string): unknown {
+  try {
+    if (!value || typeof value !== 'object') return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function failurePhase(error: unknown): 'failed' | 'cancelled' | 'timed_out' {
+  const rawCode = ownData(error, 'code');
+  const code = typeof rawCode === 'string' ? rawCode : '';
+  let name = ownData(error, 'name');
+  try {
+    if (error instanceof Error || error instanceof DOMException) name ??= error.name;
+  } catch {
+    /* observational only */
+  }
+  if (
+    name === 'AbortError' ||
+    ['cancelled', 'canceled', 'aborted', 'ABORT_ERR'].includes(String(code))
+  )
+    return 'cancelled';
+  if (
+    name === 'TimeoutError' ||
+    ['timed_out', 'timeout', 'wall_time_exceeded', 'ETIMEDOUT'].includes(String(code))
+  )
+    return 'timed_out';
+  return 'failed';
+}
+
 /** Local diagnostic evidence only. Never allows a recording failure to fail an operation. */
 export function createActivityRecorder(capacity = 2000) {
   const events: AppActivityEvent[] = [];
   let sequence = 0;
+  let listenerFailures = 0;
+  const listeners = new Set<ActivityListener>();
   const active = new Map<string, AppActivityEvent>();
   const instanceId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   function clean(value: unknown): unknown {
     const seen = new WeakSet<object>();
-    const text =
-      JSON.stringify(value, (key, entry) => {
+    // Bound traversal before serialization: a post-stringify cap still walks an
+    // entire corpus result on the UI thread. Never invoke source getters/toJSON.
+    let nodes = 512;
+    let remainingChars = 32_000;
+    function bounded(entry: unknown, depth = 0): unknown {
+      if (nodes-- <= 0 || depth > 8 || remainingChars <= 0) return '[details omitted: limit]';
+      if (typeof entry === 'string') {
+        const count = Math.min(entry.length, 16_000, remainingChars);
+        remainingChars -= count;
+        return (
+          entry.slice(0, count) +
+          (count < entry.length ? ` [${entry.length - count} characters omitted]` : '')
+        );
+      }
+      if (typeof entry === 'bigint') return bounded(String(entry), depth + 1);
+      if (typeof entry === 'function' || typeof entry === 'symbol') return '[non-data omitted]';
+      if (!entry || typeof entry !== 'object') return entry;
+      if (seen.has(entry)) return '[repeated object omitted]';
+      seen.add(entry);
+      if (entry instanceof Error)
+        return bounded(
+          { name: entry.name, message: entry.message, code: ownData(entry, 'code') },
+          depth + 1,
+        );
+      if (Array.isArray(entry)) {
+        const rows: unknown[] = [];
+        const count = Math.min(entry.length, 64);
+        for (let i = 0; i < count && nodes > 0 && remainingChars > 0; i += 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(entry, String(i));
+          rows.push(
+            descriptor && 'value' in descriptor
+              ? bounded(descriptor.value, depth + 1)
+              : '[accessor omitted]',
+          );
+        }
+        if (rows.length < entry.length)
+          rows.push(`[${entry.length - rows.length} entries omitted]`);
+        return rows;
+      }
+      const result: Record<string, unknown> = Object.create(null);
+      let count = 0;
+      for (const key in entry) {
+        if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+        if (count++ >= 64 || nodes <= 0 || remainingChars <= 0) {
+          result['[diagnostic limit]'] = '[additional fields omitted]';
+          break;
+        }
+        if (key.length > 256) {
+          result['[long field]'] = '[field omitted]';
+          continue;
+        }
+        remainingChars -= key.length;
         if (
           /(?:secret|password|passwd|authorization|cookie|credential|api[_-]?key|private[_-]?key|access[_-]?token|refresh[_-]?token|cancellationKey)/i.test(
             key,
           ) ||
           key === 'token'
-        )
-          return '[redacted]';
-        if (typeof entry === 'string' && entry.length > 16000)
-          return (
-            entry.slice(0, 16000) + `\n[truncated: ${entry.length - 16000} characters omitted]`
-          );
-        if (typeof entry === 'bigint') return String(entry);
-        if (entry instanceof Error) return { name: entry.name, message: entry.message };
-        if (entry && typeof entry === 'object') {
-          if (seen.has(entry)) return '[repeated object omitted]';
-          seen.add(entry);
+        ) {
+          result[key] = '[redacted]';
+          continue;
         }
-        return entry;
-      }) ?? 'null';
+        const descriptor = Object.getOwnPropertyDescriptor(entry, key);
+        result[key] =
+          descriptor && 'value' in descriptor
+            ? bounded(descriptor.value, depth + 1)
+            : '[accessor omitted]';
+      }
+      return result;
+    }
+    let text: string;
+    try {
+      text = JSON.stringify(bounded(value)) ?? 'null';
+    } catch {
+      return '[unreadable diagnostic details omitted]';
+    }
     if (text.length > 64000) {
       const result = applySecretPolicy(text.slice(0, 64000), 'redact');
       return {
@@ -80,9 +170,32 @@ export function createActivityRecorder(capacity = 2000) {
         ['model', 'harness', 'semantic-tool', 'terminal-command', 'cli.prompt-http'].includes(kind)
       )
         active.set(operationId, event);
-      if (['completed', 'failed', 'stream_closed'].includes(phase)) active.delete(operationId);
+      if (
+        [
+          'completed',
+          'failed',
+          'stream_closed',
+          'cancelled',
+          'canceled',
+          'aborted',
+          'timed_out',
+          'wall_time_exceeded',
+        ].includes(phase)
+      )
+        active.delete(operationId);
       if (active.size > 100) active.delete(active.keys().next().value!);
       if (events.length > capacity) events.splice(0, events.length - capacity);
+      for (const listener of listeners) {
+        try {
+          const pending = listener(event);
+          if (pending)
+            void pending.catch(() => {
+              listenerFailures += 1;
+            });
+        } catch {
+          listenerFailures += 1;
+        }
+      }
     } catch {
       /* Diagnostics must never alter model/tool behavior. */
     }
@@ -90,10 +203,17 @@ export function createActivityRecorder(capacity = 2000) {
   }
   return {
     record,
+    subscribe(listener: ActivityListener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     snapshot(after = 0) {
       return {
         instanceId,
         sequence,
+        listenerFailures,
         active: [...active.values()],
         dropped: Math.max(0, (events[0]?.sequence ?? 1) - after - 1),
         events: events.filter((event) => event.sequence > after),
@@ -104,18 +224,17 @@ export function createActivityRecorder(capacity = 2000) {
       const id = record(kind, 'started', data);
       try {
         const result = await action();
-        const failed =
-          result && typeof result === 'object' && 'ok' in result && result.ok === false;
+        const failed = ownData(result, 'ok') === false || ownData(result, 'isError') === true;
         record(
           kind,
-          failed ? 'failed' : 'completed',
+          failed ? failurePhase(result) : 'completed',
           { request: data, result },
           id,
           performance.now() - start,
         );
         return result;
       } catch (error) {
-        record(kind, 'failed', { request: data, error }, id, performance.now() - start);
+        record(kind, failurePhase(error), { request: data, error }, id, performance.now() - start);
         throw error;
       }
     },

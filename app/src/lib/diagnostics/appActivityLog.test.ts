@@ -50,3 +50,114 @@ it('keeps native viewer imports and reloaded instrumentation on one recorder', a
   expect(reloaded.appActivityLog).toBe(first.appActivityLog);
   expect(reloaded.appActivityLog.snapshot().sequence).toBe(sequence);
 });
+
+describe('bounded diagnostic work', () => {
+  it('does not walk every entry of large tool results before truncating', () => {
+    const log = createActivityRecorder();
+    let reads = 0;
+    const rows = Array.from({ length: 20_000 }, (_, id) => ({
+      id,
+      get text() {
+        reads += 1;
+        return 'source evidence';
+      },
+    }));
+    log.record('semantic-tool', 'completed', { rows });
+    expect(reads).toBeLessThan(1_000);
+    expect(JSON.stringify(log.snapshot().events)).toContain('omitted');
+    expect(log.snapshot().events).toHaveLength(1);
+  });
+
+  it('records deeply nested results without overflowing or losing the event', () => {
+    const log = createActivityRecorder();
+    let data: unknown = { answer: 'bottom' };
+    for (let i = 0; i < 12_000; i += 1) data = { next: data };
+    log.record('semantic-tool', 'completed', data);
+    expect(log.snapshot().events).toHaveLength(1);
+    expect(JSON.stringify(log.snapshot().events)).toContain('omitted');
+  });
+});
+
+describe('diagnostic lifecycle and persistence subscribers', () => {
+  it.each(['cancelled', 'canceled', 'aborted', 'timed_out', 'wall_time_exceeded'])(
+    'settles active operations on %s',
+    (phase) => {
+      const log = createActivityRecorder();
+      const id = log.record('semantic-tool', 'started', {});
+      log.record('semantic-tool', phase, {}, id);
+      expect(log.snapshot().active).toHaveLength(0);
+    },
+  );
+  it('publishes sanitized events, isolates broken sinks, and unsubscribes', async () => {
+    const log = createActivityRecorder();
+    const rows: unknown[] = [];
+    log.subscribe(() => {
+      throw new Error('disk unavailable');
+    });
+    log.subscribe(async () => {
+      throw new Error('async sink unavailable');
+    });
+    const stop = log.subscribe((event) => {
+      rows.push(event);
+    });
+    const result = await log.trace('semantic-tool', { password: 'do-not-copy' }, async () => 42);
+    expect(result).toBe(42);
+    expect(rows).toHaveLength(2);
+    expect(JSON.stringify(rows)).not.toContain('do-not-copy');
+    stop();
+    log.record('fixture', 'received', {});
+    expect(rows).toHaveLength(2);
+  });
+});
+
+describe('observational-only result classification', () => {
+  it('does not read result accessors or replace a successful return with a logging error', async () => {
+    const log = createActivityRecorder();
+    const result = {
+      get ok() {
+        throw new Error('not diagnostic data');
+      },
+    };
+    await expect(log.trace('semantic-tool', {}, async () => result)).resolves.toBe(result);
+    expect(log.snapshot().events.at(-1)?.phase).toBe('completed');
+  });
+  it.each([
+    ['cancelled', 'cancelled'],
+    ['wall_time_exceeded', 'timed_out'],
+  ])('keeps structured %s errors distinct from tool failures', async (code, phase) => {
+    const log = createActivityRecorder();
+    const error = Object.assign(new Error('bounded operation ended'), { code });
+    await expect(
+      log.trace('semantic-tool', {}, async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+    const last = log.snapshot().events.at(-1)!;
+    expect(last.phase).toBe(phase);
+    expect(last.data).toMatchObject({ error: { code } });
+    expect(log.snapshot().active).toHaveLength(0);
+  });
+});
+
+describe('returned tool failure envelopes', () => {
+  it('counts an MCP isError result as failure without changing the result', async () => {
+    const log = createActivityRecorder();
+    const result = { isError: true, content: [{ type: 'text', text: 'tool rejected input' }] };
+    await expect(log.trace('semantic-tool', {}, async () => result)).resolves.toBe(result);
+    expect(log.snapshot().events.at(-1)?.phase).toBe('failed');
+    expect(log.snapshot().active).toHaveLength(0);
+  });
+  it.each([
+    ['cancelled', 'cancelled'],
+    ['wall_time_exceeded', 'timed_out'],
+  ])('classifies returned %s separately from generic errors', async (code, phase) => {
+    const log = createActivityRecorder();
+    const result = { ok: false, code };
+    await expect(log.trace('semantic-tool', {}, async () => result)).resolves.toBe(result);
+    expect(log.snapshot().events.at(-1)?.phase).toBe(phase);
+    expect(log.snapshot().active).toHaveLength(0);
+  });
+});
+
+// Pending: diagnostic-copy truncation metadata. The implementation tool call
+// was blocked externally; do not count the separate reproduction as a pass.
