@@ -25,6 +25,27 @@ function ownData(value: unknown, key: string): unknown {
   }
 }
 
+const generatedCorrelationPatterns = [
+  ['requestId', /^jreq_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u],
+  ['runId', /^jrun_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u],
+] as const;
+
+function retainGeneratedCorrelation(source: unknown, sanitized: unknown): void {
+  if (!sanitized || typeof sanitized !== 'object' || Array.isArray(sanitized)) return;
+  // Only app-generated UUID-v4 correlation fields at known envelope positions
+  // may survive a generic entropy false-positive. Never undo credential redaction
+  // or exempt matching strings inside tool results, prompts, or arbitrary text.
+  for (const [key, pattern] of generatedCorrelationPatterns) {
+    const value = ownData(source, key);
+    if (
+      typeof value === 'string' &&
+      pattern.test(value) &&
+      ownData(sanitized, key) === '[redacted:high_entropy_candidate]'
+    )
+      (sanitized as Record<string, unknown>)[key] = value;
+  }
+}
+
 function failurePhase(error: unknown): 'failed' | 'cancelled' | 'timed_out' {
   const rawCode = ownData(error, 'code');
   const code = typeof rawCode === 'string' ? rawCode : '';
@@ -153,7 +174,10 @@ export function createActivityRecorder(capacity = 2000) {
     const result = applySecretPolicy(text, 'redact');
     if (result.findings.length >= 100) return finish(omitted('[redaction limit]'));
     try {
-      return finish(JSON.parse(result.text ?? 'null'));
+      const sanitized: unknown = JSON.parse(result.text ?? 'null');
+      retainGeneratedCorrelation(value, sanitized);
+      retainGeneratedCorrelation(ownData(value, 'request'), ownData(sanitized, 'request'));
+      return finish(sanitized);
     } catch {
       return finish(omitted('[redacted record]'));
     }

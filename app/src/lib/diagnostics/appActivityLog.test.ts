@@ -187,3 +187,32 @@ it('marks diagnostic-copy clipping independently of the source result status', (
   expect(events.map((row) => row.diagnosticTruncated)).toEqual([false, true, true]);
   expect(events[1].data).toMatchObject({ result: { ok: true, data: { complete: true } } });
 });
+
+
+describe('generated diagnostic correlation identifiers', () => {
+  const requestId = 'jreq_01234567-89ab-4cde-8f01-23456789abcd';
+  const runId = 'jrun_01234567-89ab-4cde-8f01-23456789abcd';
+
+  it('preserves exact generated IDs in trusted envelope positions across entropy redaction', async () => {
+    const log = createActivityRecorder();
+    await log.trace('model', { requestId, runId, password: requestId }, async () => ({ ok: true }));
+    const rows = log.snapshot().events;
+    expect(rows[0].data).toMatchObject({ requestId, runId, password: '[redacted]' });
+    expect(rows[1].data).toMatchObject({ request: { requestId, runId, password: '[redacted]' } });
+  });
+
+  it('does not exempt secrets, malformed IDs, or arbitrary result text', () => {
+    const log = createActivityRecorder();
+    log.record('model', 'started', {
+      requestId: 'sk-proj-0123456789abcdefghijklmnopqrstuvwxyz',
+      runId: runId + '-private',
+      result: { requestId, text: requestId },
+      password: runId,
+    });
+    const data = log.snapshot().events[0].data as Record<string, unknown>;
+    expect(data.requestId).not.toContain('sk-proj-');
+    expect(data.runId).not.toBe(runId + '-private');
+    expect(data.result).not.toEqual({ requestId, text: requestId });
+    expect(data.password).toBe('[redacted]');
+  });
+});
