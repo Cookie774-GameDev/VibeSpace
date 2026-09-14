@@ -21,6 +21,8 @@ export interface JarvisStreamingPreview {
   projectRoot?: string;
   /** Assigned by the store for correlation with the corresponding DOM commit. */
   publicationRevision?: number;
+  /** Monotonic renderer time; never a provider timestamp or model latency. */
+  publicationMonotonicMs?: number;
 }
 
 const listeners = new Set<() => void>();
@@ -125,6 +127,7 @@ export function setPreview(preview: JarvisStreamingPreview): void {
   const detached = Object.freeze({
     ...preview,
     publicationRevision: ++publicationRevision,
+    publicationMonotonicMs: performance.now(),
     ...(preview.segments
       ? {
           segments: Object.freeze(preview.segments.map((segment) => Object.freeze({ ...segment }))),

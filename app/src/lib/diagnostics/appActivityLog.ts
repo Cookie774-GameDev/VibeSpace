@@ -9,6 +9,8 @@ export interface AppActivityEvent {
   monotonicMs: number;
   durationMs?: number;
   data: unknown;
+  /** Whether this diagnostic copy omitted data; not source/tool completeness. */
+  diagnosticTruncated?: boolean;
 }
 
 type ActivityListener = (event: AppActivityEvent) => void | Promise<void>;
@@ -53,26 +55,35 @@ export function createActivityRecorder(capacity = 2000) {
   const listeners = new Set<ActivityListener>();
   const active = new Map<string, AppActivityEvent>();
   const instanceId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  function clean(value: unknown): unknown {
+  function clean(value: unknown): { data: unknown; diagnosticTruncated: boolean } {
     const seen = new WeakSet<object>();
+    let diagnosticTruncated = false;
+    const omitted = (value: unknown): unknown => {
+      diagnosticTruncated = true;
+      return value;
+    };
+    const finish = (data: unknown) => ({ data, diagnosticTruncated });
     // Bound traversal before serialization: a post-stringify cap still walks an
     // entire corpus result on the UI thread. Never invoke source getters/toJSON.
     let nodes = 512;
     let remainingChars = 32_000;
     function bounded(entry: unknown, depth = 0): unknown {
-      if (nodes-- <= 0 || depth > 8 || remainingChars <= 0) return '[details omitted: limit]';
+      if (nodes-- <= 0 || depth > 8 || remainingChars <= 0)
+        return omitted('[details omitted: limit]');
       if (typeof entry === 'string') {
         const count = Math.min(entry.length, 16_000, remainingChars);
         remainingChars -= count;
+        if (count < entry.length) diagnosticTruncated = true;
         return (
           entry.slice(0, count) +
           (count < entry.length ? ` [${entry.length - count} characters omitted]` : '')
         );
       }
       if (typeof entry === 'bigint') return bounded(String(entry), depth + 1);
-      if (typeof entry === 'function' || typeof entry === 'symbol') return '[non-data omitted]';
+      if (typeof entry === 'function' || typeof entry === 'symbol')
+        return omitted('[non-data omitted]');
       if (!entry || typeof entry !== 'object') return entry;
-      if (seen.has(entry)) return '[repeated object omitted]';
+      if (seen.has(entry)) return omitted('[repeated object omitted]');
       seen.add(entry);
       if (entry instanceof Error)
         return bounded(
@@ -87,11 +98,11 @@ export function createActivityRecorder(capacity = 2000) {
           rows.push(
             descriptor && 'value' in descriptor
               ? bounded(descriptor.value, depth + 1)
-              : '[accessor omitted]',
+              : omitted('[accessor omitted]'),
           );
         }
         if (rows.length < entry.length)
-          rows.push(`[${entry.length - rows.length} entries omitted]`);
+          rows.push(omitted(`[${entry.length - rows.length} entries omitted]`));
         return rows;
       }
       const result: Record<string, unknown> = Object.create(null);
@@ -99,11 +110,11 @@ export function createActivityRecorder(capacity = 2000) {
       for (const key in entry) {
         if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
         if (count++ >= 64 || nodes <= 0 || remainingChars <= 0) {
-          result['[diagnostic limit]'] = '[additional fields omitted]';
+          result['[diagnostic limit]'] = omitted('[additional fields omitted]');
           break;
         }
         if (key.length > 256) {
-          result['[long field]'] = '[field omitted]';
+          result['[long field]'] = omitted('[field omitted]');
           continue;
         }
         remainingChars -= key.length;
@@ -120,7 +131,7 @@ export function createActivityRecorder(capacity = 2000) {
         result[key] =
           descriptor && 'value' in descriptor
             ? bounded(descriptor.value, depth + 1)
-            : '[accessor omitted]';
+            : omitted('[accessor omitted]');
       }
       return result;
     }
@@ -128,22 +139,23 @@ export function createActivityRecorder(capacity = 2000) {
     try {
       text = JSON.stringify(bounded(value)) ?? 'null';
     } catch {
-      return '[unreadable diagnostic details omitted]';
+      return finish(omitted('[unreadable diagnostic details omitted]'));
     }
     if (text.length > 64000) {
       const result = applySecretPolicy(text.slice(0, 64000), 'redact');
-      return {
+      diagnosticTruncated = true;
+      return finish({
         preview: result.findings.length >= 100 ? '[redaction limit]' : result.text,
         truncated: true,
         originalChars: text.length,
-      };
+      });
     }
     const result = applySecretPolicy(text, 'redact');
-    if (result.findings.length >= 100) return '[redaction limit]';
+    if (result.findings.length >= 100) return finish(omitted('[redaction limit]'));
     try {
-      return JSON.parse(result.text ?? 'null');
+      return finish(JSON.parse(result.text ?? 'null'));
     } catch {
-      return '[redacted record]';
+      return finish(omitted('[redacted record]'));
     }
   }
   function record(
@@ -154,6 +166,7 @@ export function createActivityRecorder(capacity = 2000) {
     durationMs?: number,
   ) {
     try {
+      const diagnostic = clean(data);
       const event = {
         sequence: ++sequence,
         operationId,
@@ -162,7 +175,8 @@ export function createActivityRecorder(capacity = 2000) {
         observedAt: Date.now(),
         monotonicMs: performance.now(),
         durationMs,
-        data: clean(data),
+        data: diagnostic.data,
+        diagnosticTruncated: diagnostic.diagnosticTruncated,
       };
       events.push(event);
       if (

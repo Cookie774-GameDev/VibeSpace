@@ -1,9 +1,78 @@
-import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import { AssistantActivityLedger } from './activity-ledger/AssistantActivityLedger';
 import type { Message } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
-import { getChatPreview, subscribeChatPreviews } from './streamingPreviewStore';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import {
+  getChatPreview,
+  subscribeChatPreviews,
+  type StreamingPreviewSegment,
+} from './streamingPreviewStore';
+
+type ToolSegment = Extract<StreamingPreviewSegment, { kind: 'tool' }>;
+interface ToolPreviewProps {
+  segment: ToolSegment;
+  chatId: string;
+  updatedAt: number;
+  projectRoot?: string;
+}
+// Text deltas must not rebuild every completed tool's ledger, receipt and diff UI.
+// Boundary details are immutable; only a changed tool or trusted root invalidates this row.
+const StreamingToolPreview = memo(
+  function StreamingToolPreview({ segment, chatId, updatedAt, projectRoot }: ToolPreviewProps) {
+    const message: Message = {
+      id: `preview_${segment.id}`,
+      chat_id: chatId,
+      role: 'assistant',
+      created_at: updatedAt,
+      updated_at: updatedAt,
+      parts: [
+        {
+          kind: 'tool_call',
+          tool: segment.name,
+          call_id: segment.id,
+          details: segment.details,
+          args: segment.fileLabel ? { path: segment.fileLabel } : {},
+        },
+        ...(segment.status === 'started'
+          ? []
+          : [
+              {
+                kind: 'tool_result' as const,
+                call_id: segment.id,
+                ...(segment.status === 'failed'
+                  ? { error: 'Tool failed' }
+                  : { result: { status: 'completed' } }),
+              },
+            ]),
+      ],
+    } as Message;
+    return (
+      <AssistantActivityLedger
+        active={segment.status === 'started'}
+        presentation="opencode-chronology"
+        projectRoot={projectRoot}
+        message={message}
+      />
+    );
+  },
+  (before, after) =>
+    before.chatId === after.chatId &&
+    before.projectRoot === after.projectRoot &&
+    before.segment.id === after.segment.id &&
+    before.segment.name === after.segment.name &&
+    before.segment.status === after.segment.status &&
+    before.segment.fileLabel === after.segment.fileLabel &&
+    before.segment.details === after.segment.details,
+);
 
 /** Only already-filtered public prose from this account and chat is displayed. */
 export function StreamingChatPreview({
@@ -23,6 +92,31 @@ export function StreamingChatPreview({
     () => getChatPreview(accountId, chatId),
     () => null,
   );
+  const lastCommitted = useRef<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (
+      !preview ||
+      (!preview.text && !preview.segments?.length) ||
+      preview.publicationMonotonicMs === undefined ||
+      lastCommitted.current === preview.publicationRevision
+    )
+      return;
+    lastCommitted.current = preview.publicationRevision;
+    const uiCommitMs = Math.max(0, performance.now() - preview.publicationMonotonicMs);
+    appActivityLog.record(
+      'ui.preview',
+      'committed',
+      {
+        requestId: preview.requestId,
+        chatId: preview.chatId,
+        runId: preview.runId,
+        publicationRevision: preview.publicationRevision,
+        uiCommitMs,
+      },
+      undefined,
+      uiCommitMs,
+    );
+  }, [preview]);
   if (!preview) return fallback ?? null;
   const traceAttributes = {
     'data-preview-chat-id': preview.chatId,
@@ -42,40 +136,12 @@ export function StreamingChatPreview({
               </div>
             </div>
           ) : (
-            <AssistantActivityLedger
+            <StreamingToolPreview
               key={`tool:${segment.id}`}
-              active={segment.status === 'started'}
-              presentation="opencode-chronology"
+              segment={segment}
+              chatId={chatId}
               projectRoot={preview.projectRoot}
-              message={
-                {
-                  id: `preview_${segment.id}`,
-                  chat_id: chatId,
-                  role: 'assistant',
-                  created_at: preview.updatedAt,
-                  updated_at: preview.updatedAt,
-                  parts: [
-                    {
-                      kind: 'tool_call',
-                      tool: segment.name,
-                      call_id: segment.id,
-                      details: segment.details,
-                      args: segment.fileLabel ? { path: segment.fileLabel } : {},
-                    },
-                    ...(segment.status === 'started'
-                      ? []
-                      : [
-                          {
-                            kind: 'tool_result' as const,
-                            call_id: segment.id,
-                            ...(segment.status === 'failed'
-                              ? { error: 'Tool failed' }
-                              : { result: { status: 'completed' } }),
-                          },
-                        ]),
-                  ],
-                } as Message
-              }
+              updatedAt={preview.updatedAt}
             />
           ),
         )}

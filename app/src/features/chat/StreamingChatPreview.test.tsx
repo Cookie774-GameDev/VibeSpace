@@ -7,8 +7,10 @@ vi.mock('@/stores/auth', () => ({
     select({ localUserId: 'preview-user', cloudSession: null }),
 }));
 afterEach(() => {
-  clearAccountPreviews('preview-user');
-  clearAccountPreviews('other-user');
+  act(() => {
+    clearAccountPreviews('preview-user');
+    clearAccountPreviews('other-user');
+  });
 });
 it('renders each public checkpoint before completion and removes it when committed', () => {
   render(<StreamingChatPreview chatId="chat-a" />);
@@ -80,4 +82,23 @@ it('renders actual public tool details during a tool-only live turn', () => {
   fireEvent.click(screen.getByRole('button', { name: /Edited files/ }));
   expect(container.textContent).toContain('-return null');
   expect(container.textContent).toContain('+return rows');
+});
+
+it('records correlated publication-to-commit duration, not model or paint latency', async () => {
+  const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
+  const before = appActivityLog.snapshot().sequence;
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+  try {
+    setPreview({ accountId: 'preview-user', chatId: 'timing-chat', runId: 'timing-run',
+      requestId: 'timing-request', updatedAt: 5, text: 'Diagnostic timing text' });
+    clock.mockReturnValue(104);
+    const { rerender } = render(<StreamingChatPreview chatId="timing-chat" />);
+    const rows = () => appActivityLog.snapshot(before).events.filter(row => row.kind === 'ui.preview');
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]).toMatchObject({ phase: 'committed', durationMs: 4,
+      data: { requestId: 'timing-request', chatId: 'timing-chat', uiCommitMs: 4 } });
+    expect(JSON.stringify(rows())).not.toContain('Diagnostic timing text');
+    rerender(<StreamingChatPreview chatId="timing-chat" />);
+    expect(rows()).toHaveLength(1);
+  } finally { clock.mockRestore(); }
 });

@@ -200,3 +200,14 @@ describe('streaming preview store', () => {
     }
   });
 });
+
+it('assigns monotonic publication time itself and preserves it for no-op updates', () => {
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+  try {
+    setPreview({ ...preview, publicationMonotonicMs: -999, text: 'new timing fixture' });
+    expect(getPreview('account-a', 'run-1')?.publicationMonotonicMs).toBe(100);
+    clock.mockReturnValue(120);
+    setPreview({ ...preview, text: 'new timing fixture', updatedAt: 50 });
+    expect(getPreview('account-a', 'run-1')?.publicationMonotonicMs).toBe(100);
+  } finally { clock.mockRestore(); clearAccountPreviews('account-a'); }
+});

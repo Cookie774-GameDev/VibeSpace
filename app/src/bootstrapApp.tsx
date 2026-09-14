@@ -34,6 +34,7 @@ import { resolveDevelopmentSurface } from './developmentSurface';
 import { TaskbarUsageWindow } from './features/taskbar-usage/TaskbarUsageWindow';
 import { startTaskbarUsageController } from './features/taskbar-usage/taskbarUsageController';
 import { startRendererHeartbeat } from './rendererHeartbeat';
+import { startActivityLogPersistence } from './lib/diagnostics/activityLogLifecycle';
 import { startResourcePressureMonitor } from './stability/resourcePressure';
 import { preloadFrequentUiSounds } from './lib/sfx';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -81,6 +82,7 @@ export function mountApp(rootEl: HTMLElement): void {
   );
 
   const stopRendererHeartbeat = startRendererHeartbeat();
+  const stopActivityLogPersistence = startActivityLogPersistence();
   const regularWindow = !taskbarUsageView && !openCodeSystemLogView;
   if (regularWindow) {
     const preload = () => preloadFrequentUiSounds();
@@ -101,6 +103,7 @@ export function mountApp(rootEl: HTMLElement): void {
     if (rendererLifecycleStopped) return;
     rendererLifecycleStopped = true;
     stopThemeSync();
+    void stopActivityLogPersistence();
     stopResourcePressureMonitor();
     stopTaskbarUsageController();
   };

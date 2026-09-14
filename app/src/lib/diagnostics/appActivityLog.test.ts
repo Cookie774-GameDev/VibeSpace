@@ -161,3 +161,29 @@ describe('returned tool failure envelopes', () => {
 
 // Pending: diagnostic-copy truncation metadata. The implementation tool call
 // was blocked externally; do not count the separate reproduction as a pass.
+
+it('marks diagnostic-copy clipping independently of the source result status', () => {
+  const recorder = createActivityRecorder();
+  recorder.record('semantic-tool', 'completed', {
+    result: {
+      ok: true,
+      data: {
+        complete: true,
+        text: 'small response',
+      },
+    },
+  });
+  recorder.record('semantic-tool', 'completed', {
+    result: {
+      ok: true,
+      data: {
+        complete: true,
+        text: 'x'.repeat(20_000),
+      },
+    },
+  });
+  recorder.record('semantic-tool', 'completed', { rows: Array.from({ length: 100 }, (_, i) => i) });
+  const events = recorder.snapshot().events;
+  expect(events.map((row) => row.diagnosticTruncated)).toEqual([false, true, true]);
+  expect(events[1].data).toMatchObject({ result: { ok: true, data: { complete: true } } });
+});

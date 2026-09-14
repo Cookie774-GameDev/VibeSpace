@@ -86,6 +86,8 @@ mod terminal_snapshot;
 mod wallpaper_master;
 mod workbench_browser_surface;
 mod native_app_surface;
+mod activity_diagnostics;
+mod activity_diagnostics_store;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -692,6 +694,7 @@ fn run_ordinary(
             jarvis_ambient_overlay::set_jarvis_ambient_snapshot,
             jarvis_ambient_overlay::jarvis_ambient_renderer_ready,
             app_version,
+            activity_diagnostics::activity_diagnostics_append,
             refresh_app_branding,
             browser_chat_surface::browser_chat_surface_open,
             browser_chat_surface::browser_chat_surface_hide,
@@ -1031,6 +1034,7 @@ mod tests {
     const ORDINARY_HANDLER_AUTHORITY: &str = "\
 greet
 app_version
+activity_diagnostics::activity_diagnostics_append
 refresh_app_branding
 browser_chat_surface::browser_chat_surface_open
 browser_chat_surface::browser_chat_surface_hide
@@ -1261,9 +1265,9 @@ wallpaper_master::wallpaper_find_local_master
 wallpaper_master::wallpaper_cache_full_master
 wallpaper_master::wallpaper_full_cache_path";
     const ORDINARY_HANDLER_AUTHORITY_SHA256: &str =
-        "f76eaa0e7db5d634b586a8d05e9fe3779132e9d90f2ae22ce427b581a7ead479";
+        "97e2044b08fc5129e4d62fda0149a23b5eaf56ae37d7bcac8769d9bf2a17b857";
     const ORDINARY_HANDLER_NORMALIZED_SHA256: &str =
-        "193e3214fe133e68d37c70bee1a517f9fffc67e92a1445708a96bc928494ccb5";
+        "525a4523a297edba25ee86ea541fbf1c400cb20d56924292ee6772d4d1bc4e1b";
 
     #[derive(Debug, PartialEq, Eq)]
     struct NativeBuilderManifest<'a> {
