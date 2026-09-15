@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRlmOpenCodeTool } from './rlmOpenCodeTool';
+import {
+  consumeToolGatewayContextCitationItems,
+  clearToolGatewayContextCitationItems,
+} from '@/lib/harness/toolGatewayCitations';
 
 const HASH = 'a'.repeat(64);
 const executionIdentity = Object.freeze({
@@ -59,6 +63,43 @@ function dependencies() {
 }
 
 describe('OpenCode RLM context tool adapter', () => {
+  it('registers fallback search/open/expand citations for final-answer validation', async () => {
+    clearToolGatewayContextCitationItems();
+    const pointer = {
+      id: 'ptr:rlm:reg:0:512',
+      recordId: 'record-reg',
+      sourceVersion: `sha256:${HASH}`,
+      contentHash: HASH,
+      byteStart: 0,
+      byteEnd: 512,
+    };
+    const deps = dependencies();
+    deps.queryService.search = vi.fn(async () => ({
+      items: [
+        {
+          record: { id: 'record-reg', sourceId: 'src-reg' },
+          pointer,
+          preview: 'p',
+          score: 1,
+        },
+      ],
+      truncated: false,
+    }));
+    deps.queryService.open = vi.fn(async () => ({
+      record: { id: 'record-reg' },
+      pointer,
+      text: 'exact',
+      truncated: false,
+    }));
+    const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+    await tool.execute({ operation: 'search', query: 'needle' }, lease);
+    await tool.execute({ operation: 'open', pointer }, lease);
+    const items = consumeToolGatewayContextCitationItems('session-1');
+    expect(items.some((item) => item.source.id === 'ptr:rlm:reg:0:512')).toBe(true);
+    expect(items[0]!.source.uri).toContain('vibespace:context/evidence/');
+    clearToolGatewayContextCitationItems();
+  });
+
   it('derives account/project/worktree scope only from the trusted VibeSpace lease', async () => {
     const deps = dependencies();
     const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
