@@ -1960,7 +1960,7 @@ export function createContextMapRlmRepository(
           group.push(candidate.path);
           byOriginal.set(original, group);
         }
-        const wantsTail = /\b(?:last|tail|end)\b/iu.test(exactQuery);
+        const wantsTail = /\b(?:last|tail|end|final)\b/iu.test(exactQuery);
         const wantsHead = /\b(?:first|head|header|start|beginning|root)\b/iu.test(exactQuery);
         for (const group of byOriginal.values()) {
           const partNumber = (path: string) => {
@@ -2014,7 +2014,7 @@ export function createContextMapRlmRepository(
         const positionOffset =
           !named || !isBoundaryPart
             ? undefined
-            : /\b(?:last|tail|end)\b/iu.test(fileQuestion)
+            : /\b(?:last|tail|end|final)\b/iu.test(fileQuestion)
               ? Math.max(0, source.content.length - 512)
               : /\b(?:first|head|header|start|beginning|root)\b/iu.test(fileQuestion)
                 ? 0

@@ -28,6 +28,7 @@ import {
 import { findCliExecutable } from './cliBridge';
 import type { DetectedExecutable } from './cliBridge';
 import type { ProviderAdapter, ProviderEvent, ProviderRequest, UsageSnapshot } from './types';
+import { publicToolDetails } from '../publicToolDetails';
 import { codexRuntimeManager, type CodexRuntimeManager } from '@/lib/harness/codexRuntimeManager';
 
 type NativeFrame = Record<string, unknown>;
@@ -444,7 +445,13 @@ async function* sendCodexRequest(
             (typeof frame.id !== 'string' && typeof frame.id !== 'number')) {
           throw new Error('Codex Context tool call has an invalid turn or tool binding.');
         }
-        yield { type: 'tool', name: CODEX_CONTEXT_TOOL.name, status: 'started', callId: params.callId };
+        yield {
+          type: 'tool',
+          name: CODEX_CONTEXT_TOOL.name,
+          status: 'started',
+          callId: params.callId,
+          details: publicToolDetails({ arguments: params.arguments }),
+        };
         let result;
         try { result = await contextTool.execute(params.arguments, params.callId); }
         catch {
@@ -452,7 +459,23 @@ async function* sendCodexRequest(
         }
         if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
         await dependencies.write(generation, { id: frame.id, result });
-        yield { type: 'tool', name: CODEX_CONTEXT_TOOL.name, status: result.success ? 'completed' : 'failed', callId: params.callId };
+        // Project the executed result into the public timeline; writing it back
+        // to the app-server alone leaves the visible card with arguments only.
+        const resultText = result.contentItems
+          .map((item: { type: string; text?: string }) => item.text ?? '')
+          .filter((text: string) => text.length > 0)
+          .join('\n');
+        yield {
+          type: 'tool',
+          name: CODEX_CONTEXT_TOOL.name,
+          status: result.success ? 'completed' : 'failed',
+          callId: params.callId,
+          details: publicToolDetails({
+            arguments: params.arguments,
+            output: resultText,
+            outputComplete: true,
+          }),
+        };
         continue;
       }
       const projection = normalizeCodexAppServerMessage(frame, {

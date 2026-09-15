@@ -804,7 +804,14 @@ async function call(name, args, context) {
   let result
   try { result = JSON.parse(body) } catch { throw new Error("VibeSpace Tool Gateway returned an invalid response.") }
   if (!result || typeof result !== "object") throw new Error("VibeSpace Tool Gateway returned an invalid response.")
-  if (result.ok !== true) throw new Error(`VibeSpace tool did not complete (${result.code || "tool_failed"}).`)
+  if (result.ok !== true) {
+    // Surface the gateway's specific failure code and message so callers can
+    // distinguish invalid input from gateway defects; a bare tool_failed
+    // envelope hides continuation_invalid/pointer_invalid and similar causes.
+    const code = result.code || "tool_failed"
+    const detail = typeof result.message === "string" && result.message.length > 0 ? `: ${result.message}` : ""
+    throw new Error(`VibeSpace tool did not complete (${code})${detail}`)
+  }
   return body
 }
 

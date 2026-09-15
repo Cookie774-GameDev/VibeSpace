@@ -217,6 +217,39 @@ describe('production Context Map RLM repository multi-part logical sources', () 
     expect(hits.some((hit) => hit.preview.includes('package99999'))).toBe(true);
   });
 
+  it('never boosts a same-basename part from an unnamed folder as the tail boundary', async () => {
+    // The unnamed folder carries the globally-highest part number; the tail of
+    // the NAMED source must still come from its own final part.
+    const { repository } = multiPartRepository({ partCount: 3, duplicateBasename: true });
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+    const hits = await repository.search(
+      scope,
+      'read the tail of 100k/requirements.txt and quote the last declaration',
+    );
+    expect(hits.length).toBeGreaterThan(0);
+    const tail = hits.find((hit) => hit.preview.includes('package99999'));
+    expect(tail, 'named source final part must be selected').toBeDefined();
+    expect(tail!.preview).toContain('[SOURCE FILE: requirements.txt.part-002.txt]');
+    for (const hit of hits) {
+      expect(hit.preview).not.toContain('==9.9.9');
+    }
+  });
+
+  it('treats FINAL-worded frozen prompts as tail requests and boosts the final part', async () => {
+    const { repository } = multiPartRepository({ partCount: 24 });
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+    // Frozen prompts word the tail as "final", not last/tail/end; the named
+    // source's final part must win the boundary boost.
+    const hits = await repository.search(
+      scope,
+      'for the 100k requirements.txt source, quote the final declaration and the final package numeric suffix',
+    );
+    expect(hits.length).toBeGreaterThan(0);
+    const finalHit = hits.find((hit) => hit.preview.includes('package99999'));
+    expect(finalHit, 'final-worded prompt must select the final part').toBeDefined();
+    expect(finalHit!.preview).toContain('[SOURCE FILE: requirements.txt.part-023.txt]');
+  });
+
 });
 
 function fixedRepository(input: {

@@ -140,6 +140,16 @@ it.each(['valid', 'wrong-thread', 'wrong-turn', 'wrong-tool'])('scopes native dy
     expect(bridge.bind).toHaveBeenCalledWith('thread_native_1', expect.objectContaining({ model: 'opencode-go/deepseek-v4-flash-vision-exp' }), 'generation');
     expect(writes.find(x => x.id === 'dynamic_1')?.result.contentItems[0].text).toBe('verified evidence');
     expect(events.filter(x => x.type === 'tool' && x.name === 'vibespace_context').map(x => x.type === 'tool' && x.status)).toEqual(['started', 'completed']);
+    const completed = events.find(
+      (x): x is Extract<ProviderEvent, { type: 'tool' }> =>
+        x.type === 'tool' && x.name === 'vibespace_context' && x.status === 'completed',
+    );
+    // The visible card must carry arguments AND the executed result, not
+    // arguments alone (the arguments-without-results gap from the N32 audit).
+    expect(completed?.details).toMatchObject({
+      arguments: { operation: 'investigate', query: 'current retention' },
+    });
+    expect(JSON.stringify(completed?.details)).toContain('verified evidence');
   }
   expect(bridge.dispose).toHaveBeenCalledOnce();
 });
