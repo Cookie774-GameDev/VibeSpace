@@ -4,6 +4,7 @@ import type { ExecutionIdentity } from './gateway/contextGatewayContracts';
 import { routeDefaultContextQuery } from './adaptiveContextRouter';
 import { recordRlmRoute, resolveRlmEnabled } from './rlmPreferenceStore';
 import type { RlmBudget } from './rlmRuntime';
+import { registerToolGatewayFallbackCitations } from '@/lib/harness/toolGatewayCitations';
 
 export const RLM_OPENCODE_TOOL_NAME = 'vibespace_context' as const;
 export const RLM_HIGH_LEVEL_QUERY = 'query' as const;
@@ -22,6 +23,70 @@ export const RLM_CONTEXT_OPERATIONS = [
 ] as const;
 
 export type RlmContextOperation = (typeof RLM_CONTEXT_OPERATIONS)[number];
+
+function citationScope(lease: RlmContextLease): { accountId: string; projectId: string } | undefined {
+  return lease.projectId ? { accountId: lease.accountId, projectId: lease.projectId } : undefined;
+}
+
+function registerFallbackCitationsFromSearch(
+  lease: RlmContextLease,
+  result: unknown,
+): void {
+  const scope = citationScope(lease);
+  if (!scope || !result || typeof result !== 'object') return;
+  const items = (result as { items?: unknown }).items;
+  if (!Array.isArray(items)) return;
+  registerToolGatewayFallbackCitations(
+    lease.sessionId,
+    items.flatMap((item) => {
+      const record = (item as { record?: { id?: unknown; sourceId?: unknown } }).record;
+      const pointer = (item as { pointer?: { id?: unknown; sourceVersion?: unknown; contentHash?: unknown } })
+        .pointer;
+      return typeof record?.id === 'string' &&
+        typeof pointer?.id === 'string' &&
+        typeof pointer?.sourceVersion === 'string' &&
+        typeof pointer?.contentHash === 'string'
+        ? [
+            {
+              pointerId: pointer.id,
+              recordId: record.id,
+              sourceRevision: pointer.sourceVersion,
+              contentHash: pointer.contentHash,
+            },
+          ]
+        : [];
+    }),
+    scope,
+  );
+}
+
+function registerFallbackCitationFromOpen(lease: RlmContextLease, result: unknown): void {
+  const scope = citationScope(lease);
+  if (!scope || !result || typeof result !== 'object') return;
+  const record = (result as { record?: { id?: unknown } }).record;
+  const pointer = (result as { pointer?: { id?: unknown; sourceVersion?: unknown; contentHash?: unknown } })
+    .pointer;
+  if (
+    typeof record?.id !== 'string' ||
+    typeof pointer?.id !== 'string' ||
+    typeof pointer?.sourceVersion !== 'string' ||
+    typeof pointer?.contentHash !== 'string'
+  ) {
+    return;
+  }
+  registerToolGatewayFallbackCitations(
+    lease.sessionId,
+    [
+      {
+        pointerId: pointer.id,
+        recordId: record.id,
+        sourceRevision: pointer.sourceVersion,
+        contentHash: pointer.contentHash,
+      },
+    ],
+    scope,
+  );
+}
 
 export interface RlmContextLease {
   sessionId: string;
@@ -259,7 +324,7 @@ export function createRlmOpenCodeTool(dependencies: {
       }
       case 'search': {
         const args = exactKeys(rawInput, ['operation', 'query'], ['limit', 'continuation']);
-        return dependencies.queryService.search({
+        const result = await dependencies.queryService.search({
           scope,
           query: text(args.query),
           ...(optionalPositiveInteger(args.limit, 100) === undefined
@@ -270,10 +335,12 @@ export function createRlmOpenCodeTool(dependencies: {
             : { continuation: text(args.continuation, 512) }),
           signal,
         });
+        registerFallbackCitationsFromSearch(lease, result);
+        return result;
       }
       case 'open': {
         const args = exactKeys(rawInput, ['operation', 'pointer'], ['maxBytes', 'continuation']);
-        return dependencies.queryService.open({
+        const result = await dependencies.queryService.open({
           scope,
           pointer: pointer(args.pointer),
           maxBytes: optionalPositiveInteger(args.maxBytes, maxOpenBytes) ?? maxOpenBytes,
@@ -282,16 +349,20 @@ export function createRlmOpenCodeTool(dependencies: {
             : { continuation: text(args.continuation, 512) }),
           signal,
         });
+        registerFallbackCitationFromOpen(lease, result);
+        return result;
       }
       case 'expand': {
         const args = exactKeys(rawInput, ['operation', 'pointer'], ['beforeBytes', 'afterBytes']);
-        return dependencies.queryService.expand({
+        const result = await dependencies.queryService.expand({
           scope,
           pointer: pointer(args.pointer),
           beforeBytes: optionalPositiveInteger(args.beforeBytes, maxOpenBytes) ?? 0,
           afterBytes: optionalPositiveInteger(args.afterBytes, maxOpenBytes) ?? 0,
           signal,
         });
+        registerFallbackCitationFromOpen(lease, result);
+        return result;
       }
       case 'address': {
         const args = exactKeys(rawInput, ['operation', 'corpusId', 'position']);

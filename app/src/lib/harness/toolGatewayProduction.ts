@@ -23,6 +23,11 @@ import type { ActionResult } from '@/lib/actions/types';
 import type { RlmContextLease } from '@/features/context/rlmOpenCodeTool';
 import type { JarvisContextItem } from '@/lib/jarvis/contracts';
 import { productionContextGateway } from '@/features/context/gateway/productionContextGateway';
+import {
+  contextCitationItem,
+  replaceToolGatewayContextCitationItems,
+  clearToolGatewayContextCitationItems,
+} from './toolGatewayCitations';
 import { ContextRequiredUnavailableError } from '@/features/context/gateway/ContextGateway';
 import {
   ToolGatewaySemanticError,
@@ -56,45 +61,7 @@ type ToolGatewayRlmContextPort = Readonly<{
 
 let rlmContextPort: ToolGatewayRlmContextPort | undefined;
 
-const MAX_CONTEXT_CITATION_RECORDS = 128;
-const contextCitationItems = new Map<string, readonly Readonly<JarvisContextItem>[]>();
 const SAFE_CITATION_TEXT = /^[^\u0000-\u001f\u007f]{1,1024}$/u;
-
-function canonicalContextUri(kind: 'receipt' | 'source' | 'evidence', id: string): string {
-  const segment =
-    kind === 'receipt'
-      ? [...new TextEncoder().encode(id)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-      : encodeURIComponent(id);
-  return `vibespace:context/${kind}/${segment}`;
-}
-
-function contextCitationItem(input: {
-  id: string;
-  kind: 'receipt' | 'source' | 'evidence';
-  label: string;
-  accountId: string;
-  projectId: string;
-  observedAt: number;
-}): Readonly<JarvisContextItem> {
-  return Object.freeze({
-    source: Object.freeze({
-      id: input.id,
-      kind: input.kind === 'receipt' ? ('tool_result' as const) : ('context_node' as const),
-      label: input.label,
-      uri: canonicalContextUri(input.kind, input.id),
-      accountId: input.accountId,
-      projectId: input.projectId,
-      trust: 'app_verified' as const,
-      origin: 'app_observed' as const,
-      sensitivity: 'private' as const,
-      observedAt: input.observedAt,
-    }),
-    purpose: 'citation' as const,
-    excerpt: `${input.label} verified by the VibeSpace Context Gateway.`,
-    freshness: 'current' as const,
-    truncated: false,
-  });
-}
 
 function enrichAndRememberContextTurn(
   value: unknown,
@@ -173,13 +140,7 @@ function enrichAndRememberContextTurn(
       }),
     ),
   ]);
-  contextCitationItems.delete(context.sessionId);
-  while (contextCitationItems.size >= MAX_CONTEXT_CITATION_RECORDS) {
-    const oldest = contextCitationItems.keys().next().value as string | undefined;
-    if (!oldest) break;
-    contextCitationItems.delete(oldest);
-  }
-  contextCitationItems.set(context.sessionId, items);
+  replaceToolGatewayContextCitationItems(context.sessionId, items);
   const provenance = [
     '## Canonical VibeSpace Context provenance URIs',
     `Receipt: ${items[0]!.source.uri}`,
@@ -192,13 +153,7 @@ function enrichAndRememberContextTurn(
   });
 }
 
-export function consumeToolGatewayContextCitationItems(
-  sessionId: string,
-): readonly Readonly<JarvisContextItem>[] {
-  const items = contextCitationItems.get(sessionId) ?? [];
-  contextCitationItems.delete(sessionId);
-  return Object.freeze(items.map((item) => Object.freeze(structuredClone(item))));
-}
+export { consumeToolGatewayContextCitationItems } from './toolGatewayCitations';
 
 export function installToolGatewayRlmContextPort(port: ToolGatewayRlmContextPort): () => void {
   rlmContextPort = port;
@@ -220,7 +175,7 @@ export function grantNextToolGatewayMutation(sessionId: string): void {
 
 export function clearToolGatewayMutationGrants(): void {
   clearToolGatewayAuthorityForTests();
-  contextCitationItems.clear();
+  clearToolGatewayContextCitationItems();
 }
 
 function stringArg(args: Record<string, unknown>, key: string): string {

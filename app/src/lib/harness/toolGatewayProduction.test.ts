@@ -14,6 +14,7 @@ import {
   installToolGatewayRlmContextPort,
   installToolGatewayPluginReadPort,
 } from './toolGatewayProduction';
+import { registerToolGatewayFallbackCitations } from './toolGatewayCitations';
 import {
   bindToolGatewayObservedExecutionAuthority,
   bindToolGatewaySessionAuthority,
@@ -712,6 +713,51 @@ describe('production tool gateway dependencies', () => {
     expect(execute).not.toHaveBeenCalled();
     ask.mockRestore();
     dispose();
+  });
+
+  it('registers fallback search/open citations so final-answer spans validate', () => {
+    registerToolGatewayFallbackCitations(
+      'session-fallback',
+      [
+        {
+          pointerId: 'ptr:rlm:abc123:0:512',
+          recordId: 'record-fallback',
+          sourceRevision: 'sha256:' + 'a'.repeat(64),
+          contentHash: 'a'.repeat(64),
+        },
+      ],
+      { accountId: 'account-1', projectId: 'project-1' },
+    );
+    const items = consumeToolGatewayContextCitationItems('session-fallback');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      purpose: 'citation',
+      source: {
+        id: 'ptr:rlm:abc123:0:512',
+        trust: 'app_verified',
+      },
+    });
+    expect(items[0]!.source.uri).toContain('vibespace:context/evidence/');
+    // Consuming clears; a second consume returns empty.
+    expect(consumeToolGatewayContextCitationItems('session-fallback')).toEqual([]);
+  });
+
+  it('deduplicates fallback citations already registered by the receipt', () => {
+    const citation = {
+      pointerId: 'ptr:rlm:dup:0:256',
+      recordId: 'record-dup',
+      sourceRevision: 'sha256:' + 'b'.repeat(64),
+      contentHash: 'b'.repeat(64),
+    };
+    registerToolGatewayFallbackCitations('session-dup', [citation], {
+      accountId: 'account-1',
+      projectId: 'project-1',
+    });
+    registerToolGatewayFallbackCitations('session-dup', [citation], {
+      accountId: 'account-1',
+      projectId: 'project-1',
+    });
+    expect(consumeToolGatewayContextCitationItems('session-dup')).toHaveLength(1);
   });
 
   it('rejects low-level recursive investigate without observed session identity', async () => {
