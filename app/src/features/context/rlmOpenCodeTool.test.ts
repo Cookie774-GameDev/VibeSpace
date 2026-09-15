@@ -74,7 +74,9 @@ describe('OpenCode RLM context tool adapter', () => {
       byteEnd: 512,
     };
     const deps = dependencies();
-    deps.queryService.search = vi.fn(async () => ({
+    deps.queryService.search = vi.fn(async ({ scope, query }: any): Promise<any> => ({
+      scope,
+      query,
       items: [
         {
           record: { id: 'record-reg', sourceId: 'src-reg' },
@@ -84,13 +86,15 @@ describe('OpenCode RLM context tool adapter', () => {
         },
       ],
       truncated: false,
-    }));
-    deps.queryService.open = vi.fn(async () => ({
+    }) as any);
+    deps.queryService.open = vi.fn(async ({ scope, maxBytes }: any): Promise<any> => ({
+      scope,
+      maxBytes,
       record: { id: 'record-reg' },
       pointer,
       text: 'exact',
       truncated: false,
-    }));
+    }) as any);
     const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
     await tool.execute({ operation: 'search', query: 'needle' }, lease);
     await tool.execute({ operation: 'open', pointer }, lease);

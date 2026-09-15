@@ -5991,7 +5991,22 @@ export function startRuntimeListener(
     if (stackStepsEarly.length === 0) {
       runnable = applyChatModelSelectionToAgent(runnable, chatModelSelection);
     }
-    if (reasoningPolicy?.executionInstructions) {
+    // Determine whether this is a continuation turn (chat already has
+    // messages). Used to avoid re-injecting large per-turn instructions the
+    // model already retains in context.
+    let priorMessageCount = 0;
+    try {
+      priorMessageCount = (await bindings.getMessages(chatId)).length;
+    } catch {
+      priorMessageCount = 0;
+    }
+    // Token-saver/Ponytail instructions are large (~5.3k chars) and re-read
+    // through the provider cache every turn. On continuation turns the model
+    // already retains them in chat context, so re-injecting them only inflates
+    // per-turn prompt cost without changing behavior. Inject on the first turn
+    // of a chat (empty history) and skip on continuations.
+    const isContinuationTurn = priorMessageCount > 0;
+    if (reasoningPolicy?.executionInstructions && !isContinuationTurn) {
       runnable = {
         ...runnable,
         system_prompt: [runnable.system_prompt, reasoningPolicy.executionInstructions]
