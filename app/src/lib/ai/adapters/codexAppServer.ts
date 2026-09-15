@@ -361,11 +361,18 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
     const tool = safeIdentifier(item.tool);
     if (!tool) return [];
     const name = server ? `${server}.${tool}`.slice(0, MAX_IDENTIFIER) : tool;
+    // A completed envelope can still carry a failed operation. Surface that
+    // failure instead of reporting the tool as successfully completed.
+    const operationFailed =
+      recordOf(item.result)?.isError === true ||
+      item.error != null ||
+      item.success === false;
+    const rawStatus = item.status ?? (method === 'item/completed' ? 'completed' : 'started');
     return [
       {
         type: 'tool',
         name,
-        status: toolStatus(item.status ?? (method === 'item/completed' ? 'completed' : 'started')),
+        status: operationFailed && toolStatus(rawStatus) === 'completed' ? 'failed' : toolStatus(rawStatus),
         ...(callId ? { callId } : {}),
         details: publicToolDetails({ arguments: item.arguments, result: item.result, error: item.error,
           output: item.output, outputComplete: method === 'item/completed' }),

@@ -491,13 +491,29 @@ function buildMeaningfulQueryPlan(query: string): {
   return { terms, phrases, properNames };
 }
 
-function mentionsMappedPath(query: string, path: string): boolean {
+export function mentionsMappedPath(query: string, path: string): boolean {
   const normalizedQuery = query.replaceAll('\\', '/').toLocaleLowerCase('en-US');
   const normalizedPath = path.replaceAll('\\', '/').toLocaleLowerCase('en-US');
-  return new RegExp(
-    `(?<![\\p{L}\\p{N}_./-])${escapeRegExp(normalizedPath)}(?=$|[^\\p{L}\\p{N}_./-]|[.!?](?:\\s|$))`,
-    'u',
-  ).test(normalizedQuery);
+  const boundary = (candidate: string) =>
+    new RegExp(
+      `(?<![\\p{L}\\p{N}_./-])${escapeRegExp(candidate)}(?=$|[^\\p{L}\\p{N}_./-]|[.!?](?:\\s|$))`,
+      'u',
+    ).test(normalizedQuery);
+  if (boundary(normalizedPath)) return true;
+  // Physical chunks are named `<original>.part-NNN.txt`; users reference the
+  // original source name, which must still name its physical chunks.
+  const originalName = normalizedPath.replace(/\.part-\d+\.txt$/, '');
+  if (originalName === normalizedPath) return false;
+  if (boundary(originalName)) return true;
+  // Users name a folder suffix of the physical path (e.g. `100k/requirements.txt`
+  // for `corpus-chunks/100k/requirements.txt.part-023.txt`). Match the longest
+  // query-side suffix of the original name so folder-prefixed mentions resolve
+  // while same-basename files in other folders stay isolated.
+  const segments = originalName.split('/');
+  for (let index = 1; index < segments.length - 1; index += 1) {
+    if (boundary(segments.slice(index).join('/'))) return true;
+  }
+  return false;
 }
 
 function lexicalQueriesForPlan(plan: ReturnType<typeof buildMeaningfulQueryPlan>): string[] {
@@ -1890,10 +1906,22 @@ export function createContextMapRlmRepository(
           (candidate) => !namedKeys.has(`${candidate.map.id}\0${candidate.node.id}`),
         ),
       ];
-      const selectedCandidates = (useSmallFallback ? admittedCandidates : indexedCandidates).slice(
-        0,
-        useSmallFallback ? MAX_SMALL_MAP_FALLBACK_FILES : MAX_PHYSICAL_SEARCH_CANDIDATES,
+      // Named candidates (files the query explicitly references) must always
+      // survive the physical cap; otherwise a large multi-part source loses its
+      // final chunks before validation and tail questions go unanswered.
+      const candidatePool = useSmallFallback ? admittedCandidates : indexedCandidates;
+      const capLimit = useSmallFallback
+        ? MAX_SMALL_MAP_FALLBACK_FILES
+        : MAX_PHYSICAL_SEARCH_CANDIDATES;
+      const guaranteedNamed = candidatePool.filter((candidate) =>
+        namedKeys.has(`${candidate.map.id}\0${candidate.node.id}`),
       );
+      const selectedCandidates = [
+        ...guaranteedNamed,
+        ...candidatePool.filter(
+          (candidate) => !namedKeys.has(`${candidate.map.id}\0${candidate.node.id}`),
+        ),
+      ].slice(0, Math.max(capLimit, guaranteedNamed.length));
       if (selectedCandidates.length === 0) return [];
 
       const rawSnapshots = await mapBoundedInOrder(
@@ -1914,6 +1942,41 @@ export function createContextMapRlmRepository(
         (snapshot) => validateSearchCandidate(normalizedScope, snapshot, signal),
       );
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      // A head/tail request names a boundary of the whole logical source, which
+      // lives only in its first/last physical part. Identify the boundary parts
+      // of each named logical source so other parts don't inherit the boost.
+      const namedBoundaryPaths = new Set<string>();
+      {
+        const namedPathSet = new Map<string, string>();
+        for (const candidate of namedCandidates) {
+          const physical = candidate.path.replaceAll('\\', '/').toLocaleLowerCase('en-US');
+          const original = physical.replace(/\.part-\d+\.txt$/, '');
+          namedPathSet.set(candidate.path, original);
+        }
+        const byOriginal = new Map<string, string[]>();
+        for (const candidate of namedCandidates) {
+          const original = namedPathSet.get(candidate.path)!;
+          const group = byOriginal.get(original) ?? [];
+          group.push(candidate.path);
+          byOriginal.set(original, group);
+        }
+        const wantsTail = /\b(?:last|tail|end)\b/iu.test(exactQuery);
+        const wantsHead = /\b(?:first|head|header|start|beginning|root)\b/iu.test(exactQuery);
+        for (const group of byOriginal.values()) {
+          const partNumber = (path: string) => {
+            const match = path.replaceAll('\\', '/').match(/\.part-(\d+)\.txt$/i);
+            return match ? Number(match[1]) : null;
+          };
+          const sortedParts = [...group].sort((left, right) => {
+            const leftPart = partNumber(left);
+            const rightPart = partNumber(right);
+            if (leftPart === null || rightPart === null) return left.localeCompare(right);
+            return leftPart - rightPart;
+          });
+          if (wantsTail) namedBoundaryPaths.add(sortedParts[sortedParts.length - 1]!);
+          if (wantsHead) namedBoundaryPaths.add(sortedParts[0]!);
+        }
+      }
       const hitAuthorities: Array<{
         hit: ContextMapSearchHit;
         authority: RecordAuthority;
@@ -1939,13 +2002,23 @@ export function createContextMapRlmRepository(
               ) ?? exactQuery)
           : exactQuery;
         // Keep explicit head/tail requests local to their named file clause.
-        const positionOffset = !named
-          ? undefined
-          : /\b(?:last|tail|end)\b/iu.test(fileQuestion)
-            ? Math.max(0, source.content.length - 512)
-            : /\b(?:first|head|header|start|beginning|root)\b/iu.test(fileQuestion)
-              ? 0
-              : undefined;
+        const isBoundaryPart =
+          named &&
+          namedBoundaryPaths.has(
+            snapshots.find(
+              (entry) =>
+                entry.candidate.map.id === authority.mapId &&
+                entry.candidate.node.id === authority.nodeId,
+            )!.candidate.path,
+          );
+        const positionOffset =
+          !named || !isBoundaryPart
+            ? undefined
+            : /\b(?:last|tail|end)\b/iu.test(fileQuestion)
+              ? Math.max(0, source.content.length - 512)
+              : /\b(?:first|head|header|start|beginning|root)\b/iu.test(fileQuestion)
+                ? 0
+                : undefined;
         const exactOffset = flexibleWhitespaceOffset(source.content, exactQuery);
         const meaningful =
           exactOffset < 0 ? meaningfulQueryMatches(source.content, meaningfulPlan) : undefined;
@@ -1980,6 +2053,10 @@ export function createContextMapRlmRepository(
             preview: `[SOURCE FILE: ${authority.record.title}]\n${selected}`.slice(0, 320),
             score:
               (named ? 1_000_000_000_000 : 0) +
+              // An explicit head/tail request must rank the part that actually
+              // contains the boundary above every other part of the same
+              // logical source; otherwise the result cap drops the final chunk.
+              (positionOffset !== undefined ? 1_000_000_000_000_000 : 0) +
               mappedSourceIntentScore(authority, meaningfulPlan) +
               (exactOffset >= 0 ? 1_000_000_000 : (meaningful?.score ?? 0) * 1_000),
           },

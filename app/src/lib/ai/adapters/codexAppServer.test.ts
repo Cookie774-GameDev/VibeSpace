@@ -805,4 +805,51 @@ describe('Codex public tool details', () => {
     expect(actual.details.output.omittedBytes).toBeGreaterThan(0);
     expect(actual.details.output.text).not.toContain('\ufffd');
   });
+
+  it.each([
+    { result: { isError: true } },
+    { error: { message: 'Synthetic operation failed' } },
+    { type: 'dynamicToolCall', success: false },
+  ])('reports a completed tool operation that actually failed as failed: %j', (failure) => {
+    const { type, ...rest } = failure as { type?: string } & Record<string, unknown>;
+    const actual = event('item/completed', {
+      id: 'mcp-failed', type: type ?? 'mcpToolCall', status: 'completed',
+      server: 'context', tool: 'search', ...rest,
+    });
+    expect(actual).toMatchObject({ type: 'tool', callId: 'mcp-failed', status: 'failed' });
+  });
+
+  it.each([
+    { result: { isError: false } },
+    { result: { content: [{ type: 'text', text: 'ok' }] }, error: null },
+    { type: 'dynamicToolCall', success: true },
+  ])('keeps a genuinely successful completed tool completed: %j', (success) => {
+    const { type, ...rest } = success as { type?: string } & Record<string, unknown>;
+    const actual = event('item/completed', {
+      id: 'mcp-ok', type: type ?? 'mcpToolCall', status: 'completed',
+      server: 'context', tool: 'search', ...rest,
+    });
+    expect(actual).toMatchObject({ type: 'tool', callId: 'mcp-ok', status: 'completed' });
+  });
+
+  it.each([
+    ['declined', 'failed', { error: { message: 'denied' } }],
+    ['cancelled', 'started', { result: { isError: true } }],
+  ])('does not remap an already-terminal non-completed status %s', (status, expected, extra) => {
+    const actual = event('item/completed', {
+      id: 'mcp-terminal', type: 'mcpToolCall', status,
+      server: 'context', tool: 'search', ...extra,
+    });
+    // The failure override applies only when the raw status maps to completed;
+    // other statuses keep their existing toolStatus mapping.
+    expect(actual).toMatchObject({ type: 'tool', callId: 'mcp-terminal', status: expected });
+  });
+
+  it('keeps a started tool with pending error-free state started', () => {
+    const actual = event('item/started', {
+      id: 'mcp-started', type: 'mcpToolCall', status: 'inProgress',
+      server: 'context', tool: 'search',
+    });
+    expect(actual).toMatchObject({ type: 'tool', callId: 'mcp-started', status: 'started' });
+  });
 });

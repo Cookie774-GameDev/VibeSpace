@@ -215,6 +215,7 @@ it('retains renderer timing and log clipping separately from source completeness
       runId: 'run9',
       chatId: 'c9',
       publicationRevision: 27,
+      coalescedRevisions: 2,
       uiCommitMs: 4.5,
     }),
     kind: 'ui.preview',
@@ -223,6 +224,7 @@ it('retains renderer timing and log clipping separately from source completeness
   };
   expect(toPersistedActivity(observed)).toMatchObject({
     publicationRevision: 27,
+    coalescedRevisions: 2,
     uiCommitMs: 4.5,
     runId: 'run9',
     diagnosticTruncated: true,
@@ -339,4 +341,50 @@ it('does not inflate tool counts with Codex prose, and retains nonzero command e
     },
   });
   expect(command).toMatchObject({ callId: 'cmd1', tool: 'commandExecution', outcome: 'failure' });
+});
+
+
+describe('nested Codex tool result envelopes', () => {
+  const completedTool = (item: Record<string, unknown>): AppActivityEvent => ({
+    ...event(),
+    kind: 'codex.event',
+    phase: 'received',
+    data: {
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-nested',
+        item: { id: 'call-nested', type: 'mcpToolCall', tool: 'vibespace_context', status: 'completed', ...item },
+      },
+    },
+  });
+
+  it.each([
+    { result: { isError: true, content: [{ type: 'text', text: 'PRIVATE FAILURE' }] } },
+    { error: { message: 'PRIVATE ERROR' } },
+  ])('does not mistake protocol completion for tool success: %j', (item) => {
+    const row = toPersistedActivity(completedTool(item));
+    expect(row).toMatchObject({ callId: 'call-nested', outcome: 'failure' });
+    expect(JSON.stringify(row)).not.toContain('PRIVATE');
+  });
+
+  it('retains nested operation and partial-result metadata without copying content', () => {
+    const row = toPersistedActivity(completedTool({
+      arguments: { operation: 'open', query: 'PRIVATE QUERY' },
+      result: { ok: true, data: { partial: true, continuation: 'PRIVATE CURSOR', items: [1, 2], text: 'PRIVATE SOURCE' } },
+    }));
+    expect(row).toMatchObject({ operation: 'open', completeness: 'partial', hasContinuation: true, returnedItems: 2 });
+    expect(JSON.stringify(row)).not.toContain('PRIVATE');
+  });
+
+  it('keeps a successful result with unknown completeness unknown', () => {
+    expect(toPersistedActivity(completedTool({ error: null, result: { isError: false } })))
+      .toMatchObject({ outcome: 'success', completeness: 'unknown' });
+  });
+
+  it('does not consume result or argument fields from assistant prose', () => {
+    const row = toPersistedActivity(completedTool({ type: 'agentMessage', arguments: { operation: 'open' }, result: { isError: true } }));
+    expect(row.operation).toBeUndefined();
+    expect(row.outcome).toBe('success');
+    expect(row.tool).toBeUndefined();
+  });
 });

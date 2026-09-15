@@ -11,6 +11,7 @@ import {
   createOpenCodeRlmChildRunner,
   createProductionFederatedRlmRepository,
   requestsMappedFileAuthority,
+  mentionsMappedPath,
 } from './contextRlmProduction';
 
 const SHA = `sha256:${'a'.repeat(64)}` as const;
@@ -50,6 +51,172 @@ describe('requestsMappedFileAuthority', () => {
   it('keeps ordinary cross-history research federated', () => {
     expect(requestsMappedFileAuthority('Summarize what we decided about the release.')).toBe(false);
   });
+});
+
+describe('mentionsMappedPath original-name chunk matching', () => {
+  it('control: recognizes the exact physical chunk path', () => {
+    expect(
+      mentionsMappedPath(
+        'Read the tail of folder/dependencies.txt.part-003.txt.',
+        'folder/dependencies.txt.part-003.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not match another file with a similar name', () => {
+    expect(mentionsMappedPath('Read folder/not-dependencies.txt.bak.', 'folder/dependencies.txt')).toBe(
+      false,
+    );
+  });
+
+  it('matches an original source name against its physical chunk path', () => {
+    expect(
+      mentionsMappedPath(
+        'Read the tail of folder/dependencies.txt.',
+        'folder/dependencies.txt.part-003.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not match a different original name against a chunk path', () => {
+    expect(
+      mentionsMappedPath(
+        'Read the tail of folder/package-lock.json.',
+        'folder/dependencies.txt.part-003.txt',
+      ),
+    ).toBe(false);
+  });
+
+  it('matches an original name whose query mention carries a folder prefix', () => {
+    expect(
+      mentionsMappedPath(
+        'read the tail of 100k/requirements.txt and quote the last declaration',
+        'repo/100k/requirements.txt.part-023.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('matches the query folder suffix against a longer physical path', () => {
+    expect(
+      mentionsMappedPath(
+        'read the tail of 100k/requirements.txt.',
+        'C:/repo/corpus-chunks/100k/requirements.txt.part-023.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not match a same-basename chunk in a different folder', () => {
+    expect(
+      mentionsMappedPath(
+        'read the tail of 100k/requirements.txt.',
+        'repo/other/requirements.txt.part-001.txt',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('production Context Map RLM repository multi-part logical sources', () => {
+  function multiPartRepository(input: {
+    partCount: number;
+    duplicateBasename?: boolean;
+    fillerFiles?: number;
+  }) {
+    const partOf = (index: number) =>
+      `C:\\repo\\100k\\requirements.txt.part-${String(index).padStart(3, '0')}.txt`;
+    const partContent = (index: number) =>
+      index === input.partCount - 1
+        ? `package99999[security]==1.0.0; python_version >= "3.8" \\\n# final logical record`
+        : `package${index}[security]==1.0.0; python_version >= "3.8" \\`;
+    const contents = new Map<string, string>();
+    for (let index = 0; index < input.partCount; index += 1) {
+      contents.set(partOf(index), partContent(index));
+    }
+    if (input.duplicateBasename) {
+      contents.set(
+        'C:\\repo\\other\\requirements.txt.part-001.txt',
+        'package0[security]==9.9.9; python_version >= "3.7" \\',
+      );
+    }
+    for (let index = 0; index < (input.fillerFiles ?? 0); index += 1) {
+      contents.set(`C:\\repo\\filler\\notes-${index}.txt`, `unrelated filler content ${index}`);
+    }
+    const nodes = [...contents.keys()].map((path, index) => ({
+      id: `node-${index}`,
+      kind: 'file' as const,
+      title: path.split('\\').at(-1)!,
+      summary: '',
+      path,
+      sizeBytes: contents.get(path)!.length,
+      modifiedAt: 20,
+    }));
+    const repository = createContextMapRlmRepository({
+      loadMaps: vi.fn(async () => [
+        {
+          id: 'map-corpus',
+          projectId: 'project-1',
+          rootDir: 'C:\\repo',
+          status: 'active' as const,
+          updatedAt: 20,
+          tree: { nodes },
+        },
+      ]),
+      stat: vi.fn(async (path: string) => ({
+        ok: true as const,
+        path,
+        kind: 'file' as const,
+        size: contents.get(path)!.length,
+        createdMs: 20,
+        modifiedMs: 20,
+        sha256: await contentSha(contents.get(path)!),
+      })),
+      read: vi.fn(async (path: string) => ({
+        ok: true as const,
+        path,
+        content: contents.get(path)!,
+      })),
+      lexicalSearch: vi.fn(async () => []),
+    });
+    return { repository, contents };
+  }
+
+  it('selects the final logical part for an original-name LAST-record question', async () => {
+    const { repository } = multiPartRepository({ partCount: 24 });
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+    // Frozen-prompt wording: original source name, not the physical chunk name.
+    const hits = await repository.search(
+      scope,
+      'for the 100k requirements.txt source, give the count of actual packageN[security] requirement declarations and the final package. Quote the last declaration.',
+    );
+    expect(hits.length).toBeGreaterThan(0);
+    const finalHit = hits.find((hit) => hit.preview.includes('package99999'));
+    expect(finalHit, 'final logical part must be selected').toBeDefined();
+    expect(finalHit!.preview).toContain('[SOURCE FILE: requirements.txt.part-023.txt]');
+    // The tail question windows the end of the final part, not its start.
+    expect(finalHit!.pointer.byteStart).toBe(0);
+    expect(finalHit!.pointer.byteEnd).toBeGreaterThan(finalHit!.pointer.byteStart ?? 0);
+    // Duplicate-folder basenames were absent here; every reported hit must be
+    // one of this source's own physical parts.
+    for (const hit of hits) {
+      expect(hit.preview).toContain('requirements.txt.part-');
+    }
+    // The final part leads because the tail-positioned window names it.
+    expect(hits[0]!.preview).toContain('package99999');
+  });
+
+  it('keeps duplicate basenames in different folders isolated to the named folder', async () => {
+    const { repository } = multiPartRepository({ partCount: 24, duplicateBasename: true });
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+    const hits = await repository.search(
+      scope,
+      'read the tail of 100k/requirements.txt and quote the last declaration',
+    );
+    expect(hits.length).toBeGreaterThan(0);
+    for (const hit of hits) {
+      expect(hit.preview).not.toContain('==9.9.9');
+    }
+    expect(hits.some((hit) => hit.preview.includes('package99999'))).toBe(true);
+  });
+
 });
 
 function fixedRepository(input: {

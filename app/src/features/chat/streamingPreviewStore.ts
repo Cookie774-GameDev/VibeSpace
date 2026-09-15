@@ -21,6 +21,8 @@ export interface JarvisStreamingPreview {
   projectRoot?: string;
   /** Assigned by the store for correlation with the corresponding DOM commit. */
   publicationRevision?: number;
+  /** Per-run publication sequence; coalescing is measured within one run only. */
+  runPublicationSequence?: number;
   /** Monotonic renderer time; never a provider timestamp or model latency. */
   publicationMonotonicMs?: number;
 }
@@ -77,6 +79,9 @@ export function getChatPreview(
 
 const previews = new Map<string, Readonly<JarvisStreamingPreview>>();
 let publicationRevision = 0;
+// Per-run publication sequence so coalescing is measured within one chat/run,
+// never across interleaved chats that share the global revision counter.
+const runPublicationSequences = new Map<string, number>();
 
 function key(accountId: string, runId: string): string {
   return `${accountId.length}:${accountId}${runId}`;
@@ -127,6 +132,8 @@ export function setPreview(preview: JarvisStreamingPreview): void {
   const detached = Object.freeze({
     ...preview,
     publicationRevision: ++publicationRevision,
+    runPublicationSequence:
+      (runPublicationSequences.get(key(preview.accountId, preview.runId)) ?? 0) + 1,
     publicationMonotonicMs: performance.now(),
     ...(preview.segments
       ? {
@@ -134,6 +141,7 @@ export function setPreview(preview: JarvisStreamingPreview): void {
         }
       : {}),
   });
+  runPublicationSequences.set(key(detached.accountId, detached.runId), detached.runPublicationSequence);
   previews.set(key(detached.accountId, detached.runId), detached);
   const changedChats = new Set([key(detached.accountId, detached.chatId)]);
   if (existing) changedChats.add(key(existing.accountId, existing.chatId));

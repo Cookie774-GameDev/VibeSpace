@@ -92,16 +92,22 @@ export function StreamingChatPreview({
     () => getChatPreview(accountId, chatId),
     () => null,
   );
-  const lastCommitted = useRef<number | undefined>(undefined);
+  const lastCommitted = useRef<{ runId: string; sequence: number } | undefined>(undefined);
   useLayoutEffect(() => {
     if (
       !preview ||
       (!preview.text && !preview.segments?.length) ||
       preview.publicationMonotonicMs === undefined ||
-      lastCommitted.current === preview.publicationRevision
+      preview.runPublicationSequence === undefined ||
+      (lastCommitted.current?.runId === preview.runId &&
+        lastCommitted.current?.sequence === preview.runPublicationSequence)
     )
       return;
-    lastCommitted.current = preview.publicationRevision;
+    const coalescedRevisions =
+      lastCommitted.current === undefined || lastCommitted.current.runId !== preview.runId
+        ? 0
+        : Math.max(0, preview.runPublicationSequence - lastCommitted.current.sequence - 1);
+    lastCommitted.current = { runId: preview.runId, sequence: preview.runPublicationSequence };
     const uiCommitMs = Math.max(0, performance.now() - preview.publicationMonotonicMs);
     appActivityLog.record(
       'ui.preview',
@@ -111,6 +117,9 @@ export function StreamingChatPreview({
         chatId: preview.chatId,
         runId: preview.runId,
         publicationRevision: preview.publicationRevision,
+        // Publications skipped by React coalescing are reported, never
+        // silently dropped or assigned zero latency.
+        coalescedRevisions,
         uiCommitMs,
       },
       undefined,

@@ -14,6 +14,7 @@ export interface PersistedActivity {
   callId?: string;
   runId?: string;
   publicationRevision?: number;
+  coalescedRevisions?: number;
   uiCommitMs?: number;
   provider?: string;
   model?: string;
@@ -103,8 +104,10 @@ export function toPersistedActivity(event: AppActivityEvent): PersistedActivity 
     : ['item/started', 'turn/started'].includes(method ?? '')
       ? 'started'
       : undefined;
-  const args = own(request, 'args') ?? own(state, 'input');
-  const result = own(data, 'result');
+  const args =
+    own(request, 'args') ?? own(state, 'input') ?? own(codexTool, 'arguments');
+  const result = own(data, 'result') ?? own(codexTool, 'result');
+  const codexError = own(codexTool, 'error');
   const payload = own(result, 'data') ?? result;
   const details = own(activity, 'details');
   const status =
@@ -115,6 +118,7 @@ export function toPersistedActivity(event: AppActivityEvent): PersistedActivity 
       ? 'timeout'
       : own(result, 'ok') === false ||
           own(result, 'isError') === true ||
+          (codexError !== undefined && codexError !== null) ||
           commandFailed ||
           /^(failed|error|declined)$/.test(status)
         ? 'failure'
@@ -151,6 +155,7 @@ export function toPersistedActivity(event: AppActivityEvent): PersistedActivity 
     chatId: field('chatId', request, data),
     runId: field('runId', request, data),
     publicationRevision: numericField(data, 'publicationRevision'),
+    coalescedRevisions: numericField(data, 'coalescedRevisions'),
     uiCommitMs: numericField(data, 'uiCommitMs'),
     sessionId:
       field('sessionId', request, data) ??
