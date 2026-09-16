@@ -1268,13 +1268,6 @@ export function AgenticConsole({
 
   const turnTopMatter = (
     <>
-      {latestPromptBlockId && sessionIsActive ? (
-        liveTurnActivity ? (
-          <LiveTurnStatus event={liveTurnActivity} compact={compact} />
-        ) : (
-          <PreEventTurnStatus status={summary.status as ActiveSessionStatus} compact={compact} />
-        )
-      ) : null}
       {showTurnCompletionAudit && turnAuditLedger ? (
         <SessionCompletionAudit
           ledger={turnAuditLedger}
@@ -1447,6 +1440,13 @@ export function AgenticConsole({
               active={sessionIsActive}
             />
           ) : null} />
+          {latestPromptBlockId && sessionIsActive ? (
+            liveTurnActivity ? (
+              <LiveTurnStatus event={liveTurnActivity} compact={compact} />
+            ) : (
+              <PreEventTurnStatus status={summary.status as ActiveSessionStatus} compact={compact} />
+            )
+          ) : null}
         </div>
       ) : null}
     </section>
