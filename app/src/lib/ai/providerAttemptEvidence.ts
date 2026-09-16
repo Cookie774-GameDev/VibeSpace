@@ -82,11 +82,13 @@ export interface JarvisProviderAttemptEvidenceAuthority {
 export class JarvisProviderAttemptFailureError extends Error {
   readonly code = 'jarvis_provider_attempt_failure' as const;
   readonly classification: JarvisProviderAttemptFailureClassification;
+  readonly cause?: unknown;
 
-  constructor(classification: JarvisProviderAttemptFailureClassification) {
+  constructor(classification: JarvisProviderAttemptFailureClassification, cause?: unknown) {
     super('The provider attempt ended before canonical completion.');
     this.name = 'JarvisProviderAttemptFailureError';
     this.classification = classification;
+    if (cause !== undefined) this.cause = cause;
   }
 }
 

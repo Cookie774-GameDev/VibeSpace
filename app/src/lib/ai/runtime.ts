@@ -66,6 +66,11 @@ import {
 } from '@/lib/jarvis/response/explicitResponseContract';
 import type { LLMContentPart, LLMMessage, LLMResponse, LLMStreamChunk } from './types';
 import { llmContentToText } from './types';
+import {
+  isProviderRuntimeError,
+  providerErrorDetails,
+  type ProviderErrorDetails,
+} from './providerError';
 import { publishChatRunState } from '@/features/chat/runtime/chatRunState';
 import {
   MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER,
@@ -2649,6 +2654,44 @@ export interface RuntimeBindings {
   updateMessage: (id: MessageId, patch: Partial<Omit<Message, 'id'>>) => Promise<void>;
 }
 
+/**
+ * The authenticated OpenCode catalog exposes OpenAI subscription models as
+ * provider-qualified aliases. Once chat affinity selects Codex, carry the
+ * canonical OpenAI model into both the kernel snapshot and legacy router.
+ */
+function canonicalizeCodexAgentModel(agent: Agent): Agent {
+  const modelId = agent.model.model.trim();
+  if ((agent.model.provider as string) !== 'opencode' || !modelId.startsWith('openai/')) return agent;
+  return {
+    ...agent,
+    model: { ...agent.model, provider: 'openai', model: modelId.slice('openai/'.length) },
+  };
+}
+
+/**
+ * Return whether the persisted chat contains a conversational turn before the
+ * message being dispatched. Composer persists the current user message before
+ * it emits `jarvis:send`, so a non-empty history alone cannot identify a
+ * continuation. System rows are UI policy/status notices rather than model
+ * turns and must not suppress first-turn instructions. The cancellation key is
+ * the durable id of that current user message.
+ */
+export function hasPriorPersistedTurn(
+  messages: readonly (Pick<Message, 'role'> & { id: MessageId | string })[],
+  currentMessageId?: MessageId | string | null,
+): boolean {
+  const currentId = currentMessageId == null ? '' : String(currentMessageId).trim();
+  return messages.some((message) => {
+    if (currentId && String(message.id) === currentId) return false;
+    return (
+      message.role === 'user' ||
+      message.role === 'assistant' ||
+      message.role === 'agent' ||
+      message.role === 'tool'
+    );
+  });
+}
+
 /** The shape of the `jarvis:send` event detail. */
 export interface SendDetail {
   /** Runtime-captured resolved agent; retained only for exact CAO resume checks. */
@@ -3041,6 +3084,10 @@ function getInteractionModeOverlay(mode: JarvisInteractionMode, needsVisiblePlan
   ].join('\n');
 }
 
+function requestsSemanticMcpTool(userText: string, tool: 'list' | 'run'): boolean {
+  return new RegExp(`\\bmcp(?:[._-]|\\s+)${tool}\\b`, 'iu').test(userText);
+}
+
 export function openCodeToolsForInteractionMode(
   mode: JarvisInteractionMode,
   messages: readonly LLMMessage[] = [],
@@ -3050,7 +3097,14 @@ export function openCodeToolsForInteractionMode(
     .reverse()
     .find((message) => message.role === 'user')?.content;
   const userText = latestUserText === undefined ? '' : llmContentToText(latestUserText);
-  const requestsContextMapTool = userText.length > 0 && requestsReadOnlyContextTool(userText);
+  // Explicit semantic MCP requests must survive the Context-only narrowing
+  // used for file/evidence questions. Keep the request exact: merely naming a
+  // provider or MCP connection does not expose a dynamic tool.
+  const requestsMcpList = requestsSemanticMcpTool(userText, 'list');
+  const requestsMcpRun = requestsSemanticMcpTool(userText, 'run');
+  const requestsSemanticMcp = requestsMcpList || requestsMcpRun;
+  const requestsContextMapTool =
+    !requestsSemanticMcp && userText.length > 0 && requestsReadOnlyContextTool(userText);
   const ordinaryDirectAsk =
     mode !== 'agent' &&
     userText.length > 0 &&
@@ -3067,9 +3121,12 @@ export function openCodeToolsForInteractionMode(
           ? false
           : ordinaryDirectAsk
             ? false
-            : requestsContextMapTool
-              ? tool === 'vibespace_context'
-              : mode === 'agent' || !mutating;
+            : requestsSemanticMcp
+              ? (tool === 'mcp.list' && requestsMcpList) ||
+                (tool === 'mcp.run' && requestsMcpRun && mode === 'agent')
+              : requestsContextMapTool
+                ? tool === 'vibespace_context'
+                : mode === 'agent' || !mutating;
         return [tool, modeAllows && accessAllowsTool(access, tool, mutating)];
       }),
     ),
@@ -3122,6 +3179,12 @@ export function prepareOpenCodeMessagesForInteractionMode(
   if (latestUserIndex < 0) return messages;
   const latest = messages[latestUserIndex]!;
   const userText = llmContentToText(latest.content);
+  // Semantic MCP requests have their own dynamic-tool contract. Do not append
+  // the Context convenience wrapper, which can turn a source/result clause in
+  // the MCP request into an unrelated vibespace_context instruction.
+  if (requestsSemanticMcpTool(userText, 'list') || requestsSemanticMcpTool(userText, 'run')) {
+    return messages;
+  }
   if (!requestsReadOnlyContextTool(userText)) return messages;
   // The investigation convenience wrapper must not override a user's narrower
   // retrieval workflow, including a single search or an explicit tool budget.
@@ -5990,22 +6053,29 @@ export function startRuntimeListener(
       Boolean(detail.caoAuthority);
     if (stackStepsEarly.length === 0) {
       runnable = applyChatModelSelectionToAgent(runnable, chatModelSelection);
+      if (chatBackendAffinity.backend === 'codex') {
+        runnable = canonicalizeCodexAgentModel(runnable);
+      }
     }
-    // Determine whether this is a continuation turn (chat already has
-    // messages). Used to avoid re-injecting large per-turn instructions the
-    // model already retains in context.
-    let priorMessageCount = 0;
+    // Composer persists the current user message before dispatching this
+    // event. Exclude that exact message when deciding whether the model has
+    // already received a prior turn; history.length would misclassify every
+    // first interactive send as a continuation.
+    let historyBeforeDispatch: Message[] = [];
     try {
-      priorMessageCount = (await bindings.getMessages(chatId)).length;
+      historyBeforeDispatch = await bindings.getMessages(chatId);
     } catch {
-      priorMessageCount = 0;
+      historyBeforeDispatch = [];
     }
     // Token-saver/Ponytail instructions are large (~5.3k chars) and re-read
     // through the provider cache every turn. On continuation turns the model
     // already retains them in chat context, so re-injecting them only inflates
-    // per-turn prompt cost without changing behavior. Inject on the first turn
-    // of a chat (empty history) and skip on continuations.
-    const isContinuationTurn = priorMessageCount > 0;
+    // per-turn prompt cost without changing behavior. Inject on the first
+    // logical turn and skip only when a prior persisted turn exists.
+    const isContinuationTurn = hasPriorPersistedTurn(
+      historyBeforeDispatch,
+      detail.cancellationKey,
+    );
     if (reasoningPolicy?.executionInstructions && !isContinuationTurn) {
       runnable = {
         ...runnable,
@@ -6256,33 +6326,46 @@ export function startRuntimeListener(
       ...currentOpenCodeQuestionParts(),
       ...currentOpenCodePermissionParts(),
     ];
-    const currentOpenCodeErrorParts = (suffix: string): Part[] => {
-      if (detail.caoAuthority) return [{ kind: 'text', text: suffix }];
+    const currentOpenCodeErrorParts = (
+      suffix: string,
+      providerError?: Readonly<ProviderErrorDetails>,
+    ): Part[] => {
+      const withProviderError = (parts: Part[]): Part[] =>
+        providerError
+          ? [...parts, { kind: 'provider_error', error: providerError }]
+          : parts;
+      if (detail.caoAuthority) return withProviderError(suffix ? [{ kind: 'text', text: suffix }] : []);
       if (!hasNativeOpenCodeTextIdentity) {
         const sep = acc.length > 0 ? '\n\n' : '';
-        return [
-          { kind: 'text', text: acc + sep + suffix },
+        return withProviderError([
+          { kind: 'text', text: suffix ? acc + sep + suffix : acc },
           ...currentOpenCodeToolParts(),
           ...currentOpenCodeQuestionParts(),
           ...currentOpenCodePermissionParts(),
-        ];
+        ]);
       }
       const parts = currentOpenCodeChronologyParts();
-      for (let index = parts.length - 1; index >= 0; index -= 1) {
-        const part = parts[index];
-        if (part?.kind !== 'text') continue;
-        parts[index] = {
-          kind: 'text',
-          text: `${part.text}${part.text.length > 0 ? '\n\n' : ''}${suffix}`,
-        };
-        return [...parts, ...currentOpenCodeQuestionParts(), ...currentOpenCodePermissionParts()];
+      if (suffix) {
+        for (let index = parts.length - 1; index >= 0; index -= 1) {
+          const part = parts[index];
+          if (part?.kind !== 'text') continue;
+          parts[index] = {
+            kind: 'text',
+            text: `${part.text}${part.text.length > 0 ? '\n\n' : ''}${suffix}`,
+          };
+          return withProviderError([
+            ...parts,
+            ...currentOpenCodeQuestionParts(),
+            ...currentOpenCodePermissionParts(),
+          ]);
+        }
       }
-      return [
+      return withProviderError([
         ...parts,
-        { kind: 'text', text: suffix },
+        ...(suffix ? [{ kind: 'text' as const, text: suffix }] : []),
         ...currentOpenCodeQuestionParts(),
         ...currentOpenCodePermissionParts(),
-      ];
+      ]);
     };
 
     const mirrorShadowOutcome = async (
@@ -6375,10 +6458,18 @@ export function startRuntimeListener(
       if (!identity) return;
       const disclosure = {
         accountId: identity.accountId,
-        connectionId: chatModelSelection.connectionId,
-        connectionMode: chatModelSelection.connectionMode,
-        providerId: chatModelSelection.providerId,
-        modelLabel: chatModelSelection.modelId,
+        connectionId:
+          chatBackendAffinity.backend === 'codex'
+            ? 'openai-codex'
+            : chatModelSelection.connectionId,
+        connectionMode:
+          chatBackendAffinity.backend === 'codex'
+            ? 'external-cli' as const
+            : chatModelSelection.connectionMode,
+        providerId:
+          chatBackendAffinity.backend === 'codex' ? 'openai' : chatModelSelection.providerId,
+        modelLabel:
+          chatBackendAffinity.backend === 'codex' ? runnable.model.model : chatModelSelection.modelId,
       };
       if (needsConnectionRouteDisclosure(disclosure)) {
         await bindings.appendMessage({
@@ -7167,6 +7258,12 @@ export function startRuntimeListener(
         detail.approveAllForRun === true || readPermissionAccess(String(chatId)).approveAll;
       const runAccessLevel =
         detail.accessLevel ?? (interactionMode === 'agent' ? 'full' : 'read-only');
+      const providerTools = openCodeToolsForInteractionMode(interactionMode, llmMessages, {
+        chatId: String(chatId),
+        explicitReadRoot: Boolean(explicitReadRoot),
+      });
+      const semanticMcpRequested =
+        providerTools['mcp.list'] === true || providerTools['mcp.run'] === true;
       let caoProviderSessionId: string | null = null;
       let caoCompletionEvidence: Readonly<ProviderCompletionEvidence> | null = null;
       const providerRequest: RunAgentRequest = {
@@ -7177,7 +7274,7 @@ export function startRuntimeListener(
         ...(structuredAgent ? { parentChatId: structuredAgent.parentChatId } : {}),
         messages: [
           ...prepareOpenCodeMessagesForInteractionMode(requestMessages, {
-            contextToolEnabled: !explicitReadRoot,
+            contextToolEnabled: !explicitReadRoot && !semanticMcpRequested,
           }),
         ],
         max_output_tokens: optimizedOutputTokenLimit,
@@ -7255,10 +7352,7 @@ export function startRuntimeListener(
           }
           if (chunk.done && !bufferExactLiteralStreaming) flushNow();
         },
-        tools: openCodeToolsForInteractionMode(interactionMode, llmMessages, {
-          chatId: String(chatId),
-          explicitReadRoot: Boolean(explicitReadRoot),
-        }),
+        tools: providerTools,
         ...(structuredAgent || detail.caoAuthority
           ? {
               onHarnessSessionBound: (binding: { sessionId: string; parentSessionId?: string }) => {
@@ -7825,14 +7919,31 @@ export function startRuntimeListener(
       await settleStreamingWrites();
 
       const aborted = controller.signal.aborted || isAbortError(err);
+      const providerError = !aborted && isProviderRuntimeError(err)
+        ? providerErrorDetails(err, {
+            providerId: runnable.model.provider,
+            modelId: runnable.model.model,
+            connectionId:
+              chatBackendAffinity.backend === 'codex'
+                ? 'openai-codex'
+                : chatModelSelection.mode === 'single'
+                  ? chatModelSelection.connectionId
+                  : undefined,
+            ...(placeholderId ? { requestId: String(placeholderId) } : {}),
+          })
+        : undefined;
 
       await mirrorShadowOutcome(aborted ? 'cancelled' : 'failed', true);
 
       try {
         if (placeholderId) {
-          const suffix = aborted ? '_[cancelled]_' : `_Error: ${safeErrorMessage(err)}_`;
+          const suffix = aborted
+            ? '_[cancelled]_'
+            : providerError
+              ? ''
+              : `_Error: ${safeErrorMessage(err)}_`;
           await bindings.updateMessage(placeholderId, {
-            parts: currentOpenCodeErrorParts(suffix),
+            parts: currentOpenCodeErrorParts(suffix, providerError),
           });
         } else if (!aborted && isProtectedJarvis &&
             resolveAccountIdentity(authState)?.accountId &&
@@ -7840,11 +7951,16 @@ export function startRuntimeListener(
               resolveAccountIdentity(useAuthStore.getState())?.accountId) {
           // Canonical execution owns its answer messages and has no legacy
           // placeholder. Retain the failure in the conversation without
-          // fabricating an assistant answer or exposing provider diagnostics.
+          // fabricating an assistant answer. Provider diagnostics have already
+          // been bounded and redacted at the provider boundary, so keep that
+          // structured detail in the durable transcript as well.
           await bindings.appendMessage({
             chat_id: chatId as ChatId,
             role: 'system',
-            parts: [{ kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' }],
+            parts: [
+              { kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' },
+              ...(providerError ? [{ kind: 'provider_error' as const, error: providerError }] : []),
+            ],
           });
         }
       } catch (writeErr) {
@@ -7867,15 +7983,17 @@ export function startRuntimeListener(
         status: aborted ? 'cancelled' : 'error',
         title: aborted
           ? `@${agent.slug} cancelled`
-          : isOpenCodeProviderAuthFailure(err)
+          : providerError?.code === 'HARNESS_AUTH_FAILED' || isOpenCodeProviderAuthFailure(err)
             ? `@${agent.slug} needs OpenAI sign-in`
             : `@${agent.slug} failed`,
-        subtitle: aborted ? 'Cancelled by user' : safeErrorMessage(err, 'Unknown error'),
+        subtitle: aborted
+          ? 'Cancelled by user'
+          : providerError?.message ?? safeErrorMessage(err, 'Unknown error'),
         ts: Date.now(),
       });
       dispatchCurrentRunState(
         aborted ? 'cancelled' : 'error',
-        aborted ? undefined : safeKernelRuntimeErrorCode(err),
+        aborted ? undefined : providerError?.code ?? safeKernelRuntimeErrorCode(err),
       );
       updateStructuredAgentStatus(
         detail.structuredContext,
@@ -7895,6 +8013,7 @@ export function startRuntimeListener(
           aborted,
           partialChars: acc.length,
           error: safeErrorDetail(err),
+          ...(providerError ? { providerError } : {}),
         },
       });
     } finally {

@@ -1,5 +1,5 @@
 import type { ProviderRequest } from './types';
-import type { CodexBackendIdentity } from './codexAppServerProtocol';
+import type { CodexBackendIdentity, CodexDynamicTool } from './codexAppServerProtocol';
 
 // Codex app-server's native dynamic-tool protocol; execution stays in the same
 // scoped, read-only Context Gateway used by OpenCode.
@@ -27,32 +27,123 @@ export const CODEX_CONTEXT_TOOL = {
   },
 };
 
+export const CODEX_MCP_LIST_TOOL: CodexDynamicTool = Object.freeze({
+  type: 'function',
+  name: 'mcp_list',
+  description: 'List approved, healthy, explicitly exposed custom MCP tools for this VibeSpace project. Call this before mcp_run. Credentials remain managed by VibeSpace.',
+  inputSchema: Object.freeze({
+    type: 'object',
+    properties: Object.freeze({
+      limit: Object.freeze({ type: 'integer', minimum: 0, maximum: 100 }),
+    }),
+    additionalProperties: false,
+  }),
+});
+
+export const CODEX_MCP_RUN_TOOL: CodexDynamicTool = Object.freeze({
+  type: 'function',
+  name: 'mcp_run',
+  description: 'Run one exact custom MCP tool returned by mcp_list. Use its returned connection ID, tool name, classification, and input schema. Never request or pass credentials.',
+  inputSchema: Object.freeze({
+    type: 'object',
+    properties: Object.freeze({
+      connectionId: Object.freeze({ type: 'string', minLength: 1, maxLength: 200, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/@-]*$' }),
+      toolName: Object.freeze({ type: 'string', minLength: 1, maxLength: 200, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/@-]*$' }),
+      classification: Object.freeze({ type: 'string', enum: Object.freeze(['read', 'write', 'mutation']) }),
+      input: Object.freeze({ type: 'object' }),
+    }),
+    required: Object.freeze(['connectionId', 'toolName', 'classification']),
+    additionalProperties: false,
+  }),
+});
+
+type CodexGatewayToolName = 'vibespace_context' | 'mcp_list' | 'mcp_run';
+type CodexGatewayResult = {
+  success: boolean;
+  contentItems: Array<{ type: 'inputText'; text: string }>;
+};
+
+const CODEX_MCP_TO_GATEWAY_TOOL = Object.freeze({
+  mcp_list: 'mcp.list',
+  mcp_run: 'mcp.run',
+} as const);
+
 export interface CodexContextToolBridge {
+  /** Dynamic tools accepted by the same scoped Codex app-server session. */
+  dynamicTools?: readonly CodexDynamicTool[];
+  /** Names accepted by executeTool; absent means the legacy Context-only bridge. */
+  toolNames?: readonly CodexGatewayToolName[];
   bind(threadId: string, identity: CodexBackendIdentity, generation: string): void;
-  execute(args: unknown, callId: string): Promise<{ success: boolean; contentItems: Array<{ type: 'inputText'; text: string }> }>;
+  execute(args: unknown, callId: string): Promise<CodexGatewayResult>;
+  executeTool?(toolName: CodexGatewayToolName, args: unknown, callId: string): Promise<CodexGatewayResult>;
   dispose(): void;
 }
 
-export async function createCodexContextTool(request: ProviderRequest): Promise<CodexContextToolBridge | null> {
-  if (request.tools?.vibespace_context === false || request.explicitReadRoot ||
-      !request.accountId || !request.workspaceId || !request.projectId) return null;
-  const { resolveRlmEnabled } = await import('@/features/context/rlmPreferenceStore');
-  if (!resolveRlmEnabled({ workspaceId: request.workspaceId, chatId: request.chatId }).enabled) return null;
+async function createCodexGatewayTool(
+  request: ProviderRequest,
+  options: Readonly<{ includeContext: boolean; includeMcp: boolean }>,
+): Promise<CodexContextToolBridge | null> {
+  if (request.explicitReadRoot || !request.accountId || !request.workspaceId || !request.projectId) {
+    return null;
+  }
+  const contextRequested = options.includeContext && request.tools?.vibespace_context !== false;
+  const mcpRequested = options.includeMcp &&
+    (request.tools?.['mcp.list'] === true || request.tools?.['mcp.run'] === true);
+  let contextEnabled = contextRequested;
+  if (contextEnabled) {
+    const { resolveRlmEnabled } = await import('@/features/context/rlmPreferenceStore');
+    contextEnabled = resolveRlmEnabled({ workspaceId: request.workspaceId, chatId: request.chatId }).enabled;
+  }
+  if (!contextEnabled && !mcpRequested) {
+    return null;
+  }
   const authority = await import('@/lib/harness/toolGatewayAuthority');
   const claim = authority.captureToolGatewayAuthorityClaim();
-  if (!claim || claim.scope.accountId !== request.accountId ||
-      claim.scope.workspaceId !== request.workspaceId || claim.scope.projectId !== request.projectId) return null;
+  const scopeMatches = Boolean(
+    claim && claim.scope.accountId === request.accountId &&
+    claim.scope.workspaceId === request.workspaceId && claim.scope.projectId === request.projectId,
+  );
+  if (!claim || !scopeMatches) return null;
   const { createProductionToolGatewayDependencies } = await import('@/lib/harness/toolGatewayProduction');
   const { createToolGatewayRuntime } = await import('@/lib/harness/toolGatewayRuntime');
   const { parseToolGatewayRequest } = await import('@/lib/harness/toolGatewayProtocol');
   const runtime = createToolGatewayRuntime(createProductionToolGatewayDependencies());
+  const dynamicTools = [
+    ...(contextEnabled ? [CODEX_CONTEXT_TOOL] : []),
+    ...(mcpRequested && request.tools?.['mcp.list'] === true ? [CODEX_MCP_LIST_TOOL] : []),
+    ...(mcpRequested && request.tools?.['mcp.run'] === true ? [CODEX_MCP_RUN_TOOL] : []),
+  ] as readonly CodexDynamicTool[];
+  const toolNames = dynamicTools.map((tool) => tool.name as CodexGatewayToolName);
   let sessionId: string | undefined;
   let directory: string | undefined;
+  const executeTool = async (
+    toolName: CodexGatewayToolName,
+    args: unknown,
+    callId: string,
+  ): Promise<CodexGatewayResult> => {
+    if (!toolNames.includes(toolName)) throw new Error('Codex dynamic tool is not enabled for this turn.');
+    if (!sessionId || !directory || request.signal?.aborted) throw new Error('Codex Tool Gateway turn is inactive.');
+    const gatewayTool = toolName === 'vibespace_context'
+      ? 'vibespace_context'
+      : CODEX_MCP_TO_GATEWAY_TOOL[toolName];
+    const envelope = parseToolGatewayRequest({
+      protocolVersion: 1, requestId: callId, sessionId, messageId: request.requestId,
+      tool: gatewayTool, args, directory,
+      worktree: request.worktreeId ?? directory,
+    });
+    const result = await runtime.execute(envelope);
+    if (request.signal?.aborted || !authority.authorizeToolGatewayRequest(envelope)) {
+      throw new Error('Codex Tool Gateway authority changed before delivery.');
+    }
+    return { success: result.ok, contentItems: [{ type: 'inputText', text: JSON.stringify(result) }] };
+  };
   return {
+    dynamicTools: Object.freeze([...dynamicTools]),
+    toolNames: Object.freeze([...toolNames]),
     bind(threadId, identity, generation) {
       const qualified = identity.model;
       const separator = qualified.indexOf('/');
-      if (!authority.bindToolGatewaySessionAuthority(threadId, claim)) throw new Error('Codex Context authority changed.');
+      if (!authority.bindToolGatewaySessionAuthority(threadId, claim)) throw new Error('Codex Tool Gateway authority changed.');
       sessionId = threadId;
       directory = identity.cwd;
       if (!authority.bindToolGatewayObservedExecutionAuthority(threadId, claim, {
@@ -69,25 +160,22 @@ export async function createCodexContextTool(request: ProviderRequest): Promise<
           observedProviderIdentity: qualified,
         },
         performance: request.runtimeSettings?.performance ?? 'quality',
-      })) throw new Error('Codex Context execution identity changed.');
+      })) throw new Error('Codex Tool Gateway execution identity changed.');
     },
-    async execute(args, callId) {
-      if (!sessionId || !directory || request.signal?.aborted) throw new Error('Codex Context turn is inactive.');
-      const envelope = parseToolGatewayRequest({
-        protocolVersion: 1, requestId: callId, sessionId, messageId: request.requestId,
-        tool: 'vibespace_context', args, directory,
-        worktree: request.worktreeId ?? directory,
-      });
-      const result = await runtime.execute(envelope);
-      if (request.signal?.aborted || !authority.authorizeToolGatewayRequest(envelope)) {
-        throw new Error('Codex Context authority changed before delivery.');
-      }
-      return { success: result.ok, contentItems: [{ type: 'inputText', text: JSON.stringify(result) }] };
-    },
+    execute: (args, callId) => executeTool('vibespace_context', args, callId),
+    executeTool,
     dispose() {
       if (sessionId) authority.releaseToolGatewaySessionAuthority(sessionId);
       sessionId = undefined;
       directory = undefined;
     },
   };
+}
+
+export async function createCodexToolGateway(request: ProviderRequest): Promise<CodexContextToolBridge | null> {
+  return createCodexGatewayTool(request, { includeContext: true, includeMcp: true });
+}
+
+export async function createCodexContextTool(request: ProviderRequest): Promise<CodexContextToolBridge | null> {
+  return createCodexGatewayTool(request, { includeContext: true, includeMcp: false });
 }

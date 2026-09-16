@@ -51,6 +51,39 @@ function readErrorMessage(properties: UnknownRecord): string {
   return redactHarnessText(message).slice(0, MAX_ERROR_LENGTH);
 }
 
+function readErrorFields(
+  properties: UnknownRecord,
+): Pick<Extract<HarnessEvent, { type: 'error' }>, 'code' | 'providerId' | 'modelId' | 'retryable' | 'retryAfterMs' | 'resetAt'> {
+  const error = asRecord(properties.error);
+  const readValue = (...keys: string[]): unknown => {
+    for (const source of [error, properties]) {
+      for (const key of keys) {
+        if (source?.[key] !== undefined) return source[key];
+      }
+    }
+    return undefined;
+  };
+  const code = asBoundedString(readValue('code', 'errorCode', 'error_code'), 128);
+  const providerId = asBoundedString(
+    readValue('providerId', 'providerID', 'provider'),
+    256,
+  );
+  const modelId = asBoundedString(readValue('modelId', 'modelID', 'model'), 512);
+  const retryAfterMs = asFiniteNumber(
+    readValue('retryAfterMs', 'retry_after_ms', 'retryAfter', 'retry_after'),
+  );
+  const resetAt = asFiniteNumber(readValue('resetAt', 'reset_at', 'resetsAt'));
+  const retryable = readValue('retryable');
+  return {
+    ...(code ? { code } : {}),
+    ...(providerId ? { providerId } : {}),
+    ...(modelId ? { modelId } : {}),
+    ...(typeof retryable === 'boolean' ? { retryable } : {}),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    ...(resetAt === undefined ? {} : { resetAt }),
+  };
+}
+
 function normalizeToolPart(part: UnknownRecord): readonly HarnessEvent[] {
   const name = asBoundedString(part.tool, 256);
   const callId = asBoundedString(part.callID, 512);
@@ -220,6 +253,30 @@ export function normalizeOpenCodeEvent(
   if (eventType === 'session.status') {
     const status = asRecord(properties.status);
     if (status?.type === 'idle') return [{ type: 'done', finishReason: 'idle' }];
+    const statusType =
+      (typeof properties.status === 'string' ? properties.status : undefined) ??
+      (status && asBoundedString(status.status, 64));
+    if (status?.type === 'error' || statusType?.toLocaleLowerCase('en-US') === 'error') {
+      // OpenCode versions have emitted the failure either beside `status` or
+      // nested under the status envelope. Normalize both shapes through the
+      // same bounded message and metadata path used by session.error.
+      const statusError = status?.error ?? properties.error;
+      const errorProperties: UnknownRecord = {
+        ...properties,
+        ...(status ?? {}),
+        ...(statusError === undefined ? {} : { error: statusError }),
+      };
+      const message = readErrorMessage(errorProperties);
+      const authFailure = classifyOpenCodeAuthFailure(message);
+      return [
+        {
+          type: 'error',
+          message: authFailure?.message ?? message,
+          ...readErrorFields(errorProperties),
+          ...(authFailure ? { code: authFailure.code, retryable: true } : {}),
+        },
+      ];
+    }
   }
   if (eventType === 'session.error') {
     const message = readErrorMessage(properties);
@@ -228,7 +285,8 @@ export function normalizeOpenCodeEvent(
       {
         type: 'error',
         message: authFailure?.message ?? message,
-        ...(authFailure ? { code: authFailure.code } : {}),
+        ...readErrorFields(properties),
+        ...(authFailure ? { code: authFailure.code, retryable: true } : {}),
       },
     ];
   }

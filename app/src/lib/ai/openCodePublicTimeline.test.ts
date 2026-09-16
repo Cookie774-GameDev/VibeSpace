@@ -345,6 +345,78 @@ describe('projectOpenCodePublicTimeline', () => {
     expect(JSON.stringify(snapshot)).not.toMatch(/private-request/iu);
   });
 
+  it('classifies a nested object Context failure envelope without exposing provider fields', () => {
+    const snapshot = projectOpenCodePublicTimeline([
+      {
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'vibespace_context',
+            callID: 'nested-context-call',
+            state: {
+              status: 'completed',
+              output: {
+                response: {
+                  result: {
+                    is_error: true,
+                    code: 'context_unavailable',
+                    message: 'The scoped context was unavailable.',
+                    requestId: 'private-nested-request',
+                  },
+                },
+              },
+            },
+          },
+          { type: 'text', text: 'The scoped context was unavailable, so I did not guess.' },
+        ],
+      },
+    ]);
+
+    expect(snapshot.timeline).toContainEqual(
+      expect.objectContaining({
+        kind: 'tool_result',
+        error: 'Context unavailable',
+      }),
+    );
+    expect(JSON.stringify(snapshot)).not.toContain('private-nested-request');
+  });
+
+  it('classifies a nested generic MCP failure envelope as a failed tool result', () => {
+    const snapshot = projectOpenCodePublicTimeline([
+      {
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'search',
+            callID: 'nested-search-call',
+            state: {
+              status: 'completed',
+              output: {
+                data: {
+                  result: {
+                    success: false,
+                    error: { code: 'upstream_failed', message: 'Upstream rejected the request.' },
+                  },
+                },
+              },
+            },
+          },
+          { type: 'text', text: 'The search failed safely.' },
+        ],
+      },
+    ]);
+
+    expect(snapshot.timeline).toContainEqual(
+      expect.objectContaining({
+        kind: 'tool_result',
+        call_id: 'opencode-tool-1',
+        error: 'Tool failed',
+      }),
+    );
+  });
+
   it('produces stable request-local identities when the same persisted snapshot is projected again', () => {
     const messages = [
       {

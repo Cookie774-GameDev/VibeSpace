@@ -1,4 +1,5 @@
 import { applySecretPolicy } from '../security/secretDetector';
+import { isSensitiveMcpKey, redactMcpText } from '../mcp/toolResult';
 import type { PublicJson, PublicToolDetails, PublicToolFileChange, PublicToolOutput } from './adapters/types';
 
 export const MAX_PUBLIC_TOOL_OUTPUT_BYTES = 32 * 1024;
@@ -11,8 +12,38 @@ const CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu;
 const SECRET_KEY = /(?:api[-_]?key|secret|password|passwd|passphrase|private[-_]?key|access[-_]?token|refresh[-_]?token|authorization|cookie|^token$)$/iu;
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown> : undefined;
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const output: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !('value' in descriptor)) return undefined;
+      output[key] = descriptor.value;
+    }
+    return output;
+  } catch {
+    return undefined;
+  }
+}
+
+function arrayValues(value: readonly unknown[]): { values: unknown[]; length: number } | undefined {
+  try {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (!lengthDescriptor || !('value' in lengthDescriptor) ||
+        !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) return undefined;
+    const length = lengthDescriptor.value as number;
+    const values: unknown[] = [];
+    for (let index = 0; index < Math.min(length, 128); index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor && !('value' in descriptor)) return undefined;
+      values.push(descriptor && 'value' in descriptor ? descriptor.value : undefined);
+    }
+    return { values, length };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Counts UTF-8 without allocating an encoded copy of an arbitrarily large result. */
@@ -42,16 +73,20 @@ export function publicToolOutput(
   const bounded = prefix(value, Math.min(Math.max(0, limit), MAX_PUBLIC_TOOL_OUTPUT_BYTES));
   const cleaned = bounded.text.replace(ANSI, '').replace(CONTROLS, '');
   const safe = applySecretPolicy(cleaned, 'redact');
-  const display = prefix(safe.text ?? '', Math.min(Math.max(0, limit), MAX_PUBLIC_TOOL_OUTPUT_BYTES));
+  const policyText = safe.text ?? '';
+  const redactedText = redactMcpText(policyText);
+  const display = prefix(redactedText, Math.min(Math.max(0, limit), MAX_PUBLIC_TOOL_OUTPUT_BYTES));
   const omittedBytes = Math.max(0, byteLength(value) - bounded.bytes);
-  const displayOmitted = byteLength(safe.text ?? '') > display.bytes;
+  const displayOmitted = byteLength(redactedText) > display.bytes;
   return Object.freeze({ text: display.text, mode, complete: complete && omittedBytes === 0 && !displayOmitted,
-    omittedBytes: omittedBytes + Math.max(0, byteLength(safe.text ?? '') - display.bytes),
-    ...(safe.decision === 'redacted' ? { redacted: true } : {}) });
+    omittedBytes: omittedBytes + Math.max(0, byteLength(redactedText) - display.bytes),
+    ...(safe.decision === 'redacted' || redactedText !== policyText ? { redacted: true } : {}) });
 }
 
 /** A single bounded public boundary shared by native tool adapters. */
 export function publicToolDetails(value: Readonly<Record<string, unknown>>): Readonly<PublicToolDetails> {
+  const input = record(value);
+  if (!input) return Object.freeze({ truncated: true });
   let remaining = MAX_DETAIL_BYTES;
   let nodes = 0;
   let redacted = false;
@@ -74,17 +109,21 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
     seen.add(value);
     try {
       if (Array.isArray(value)) {
-        const result = value.slice(0, 128).map(item => json(item, depth + 1));
-        if (value.length > 128) { truncated = true; result.push('[omitted: additional items]'); }
+        const items = arrayValues(value);
+        if (!items) { truncated = true; return '[unavailable]'; }
+        const result = items.values.map(item => json(item, depth + 1));
+        if (items.length > 128) { truncated = true; result.push('[omitted: additional items]'); }
         return Object.freeze(result);
       }
+      const source = record(value);
+      if (!source) { truncated = true; return '[unavailable]'; }
       const result: Record<string, PublicJson> = Object.create(null);
-      const keys = Object.keys(value);
+      const keys = Object.keys(source);
       for (const key of keys.slice(0, 128)) {
         if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
         const name = text(key, 256);
-        if (SECRET_KEY.test(key)) { redacted = true; result[name] = '[redacted: credentials]'; }
-        else result[name] = json((value as Record<string, unknown>)[key], depth + 1);
+        if (SECRET_KEY.test(key) || isSensitiveMcpKey(key)) { redacted = true; result[name] = '[redacted: credentials]'; }
+        else result[name] = json(source[key], depth + 1);
       }
       if (keys.length > 128) { truncated = true; result['[omitted]'] = 'Additional fields'; }
       return Object.freeze(result);
@@ -92,23 +131,25 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
   };
   const result: PublicToolDetails = {};
   for (const key of ['arguments', 'result', 'error'] as const) {
-    if (value[key] !== undefined) result[key] = json(value[key]);
+    if (input[key] !== undefined) result[key] = json(input[key]);
   }
   for (const key of ['command', 'cwd'] as const) {
-    if (typeof value[key] === 'string') result[key] = text(value[key], key === 'cwd' ? 4096 : 8192);
+    if (typeof input[key] === 'string') result[key] = text(input[key] as string, key === 'cwd' ? 4096 : 8192);
   }
-  if (typeof value.output === 'string') {
-    result.output = publicToolOutput(value.output, 'replace', value.outputComplete !== false, remaining);
+  if (typeof input.output === 'string') {
+    result.output = publicToolOutput(input.output, 'replace', input.outputComplete !== false, remaining);
     remaining = Math.max(0, remaining - byteLength(result.output.text));
     redacted ||= result.output.redacted === true;
     truncated ||= result.output.omittedBytes > 0;
   }
-  if (typeof value.exitCode === 'number' && Number.isSafeInteger(value.exitCode)) result.exitCode = value.exitCode;
-  if (typeof value.durationMs === 'number' && Number.isFinite(value.durationMs) && value.durationMs >= 0)
-    result.durationMs = value.durationMs;
-  if (Array.isArray(value.changes)) {
+  if (typeof input.exitCode === 'number' && Number.isSafeInteger(input.exitCode)) result.exitCode = input.exitCode;
+  if (typeof input.durationMs === 'number' && Number.isFinite(input.durationMs) && input.durationMs >= 0)
+    result.durationMs = input.durationMs;
+  if (Array.isArray(input.changes)) {
     const changes: PublicToolFileChange[] = [];
-    for (const raw of value.changes.slice(0, MAX_CHANGES)) {
+    const changeValues = arrayValues(input.changes);
+    if (!changeValues) return Object.freeze({ ...result, truncated: true });
+    for (const raw of changeValues.values.slice(0, MAX_CHANGES)) {
       const change = record(raw);
       if (!change || typeof change.path !== 'string') { truncated = true; continue; }
       const kindRecord = record(change.kind);
@@ -128,8 +169,8 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
       changes.push(Object.freeze(item));
     }
     result.changes = Object.freeze(changes);
-    if (value.changes.length > changes.length) {
-      result.omittedChanges = value.changes.length - changes.length;
+    if (changeValues.length > changes.length) {
+      result.omittedChanges = changeValues.length - changes.length;
       truncated = true;
     }
   }

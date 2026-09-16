@@ -58,4 +58,16 @@ describe('harness errors', () => {
       ),
     ).toBe('Authorization: Basic [REDACTED] OPENAI_API_KEY=[REDACTED] token=[REDACTED]');
   });
+
+  it('redacts JSON and colon-delimited credential forms', () => {
+    const redacted = redactHarnessText(
+      '{"apiKey":"json-secret", "password": plain-secret} api-key: colon-secret token: token-secret',
+    );
+
+    expect(redacted).not.toContain('json-secret');
+    expect(redacted).not.toContain('plain-secret');
+    expect(redacted).not.toContain('colon-secret');
+    expect(redacted).not.toContain('token-secret');
+    expect(redacted).toContain('[REDACTED]');
+  });
 });

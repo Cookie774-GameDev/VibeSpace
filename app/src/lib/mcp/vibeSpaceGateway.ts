@@ -15,6 +15,11 @@ import {
   type RemoteMcpSetupRuntime,
   type RemoteMcpSetupTool,
 } from './remoteSetupRuntime';
+import {
+  isSensitiveMcpKey,
+  redactMcpArgumentsForAuditWithStats,
+  redactMcpText,
+} from './toolResult';
 
 const PROFILE_VERSION = 1;
 const MAX_PROFILES = 16;
@@ -28,9 +33,20 @@ const STORAGE_PREFIX = 'vibespace.mcp-gateway.v1';
 const SAFE_GATEWAY_ERROR = 'Unable to connect through the VibeSpace MCP Gateway.';
 const MAX_RECEIPTS = 128;
 const MAX_RESULT_CHARS = 64 * 1024;
+const MAX_NORMALIZED_RESULT_BYTES = 60 * 1024;
+const MAX_NORMALIZED_OMITTED_COUNT = 1_000_000;
+const MAX_NORMALIZED_TEXT_EXCERPTS = 8;
+const MAX_NORMALIZED_TEXT_CHARS = 4_000;
+const MAX_NORMALIZED_TEXT_EXCERPT_CHARS = 1_000;
+const MAX_NORMALIZED_SOURCE_REFS = 16;
+const MAX_NORMALIZED_ACTIONS = 8;
+const MAX_NORMALIZED_LABEL_CHARS = 200;
+const MAX_NORMALIZED_ACTION_CHARS = 300;
+const MAX_NORMALIZED_URI_CHARS = 2_048;
+const SAFE_NORMALIZED_MIME =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$/u;
 const MAX_IN_FLIGHT = 4;
 const DEFAULT_RESTORE_TIMEOUT_MS = 15_000;
-const SECRET_TEXT = /(bearer\s+[a-z0-9._~+/-]+|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S+)/gi;
 const FORBIDDEN_SECRET_KEY = /^(?:authorization|api[_-]?key|token|password|secret|credential)$/i;
 
 export type VibeSpaceGatewayTrust =
@@ -364,30 +380,425 @@ function loadReceipts(
   }
 }
 
-function assertNoRawSecrets(value: unknown, depth = 0): void {
+function assertNoRawSecrets(
+  value: unknown,
+  secretRefs: ReadonlySet<string>,
+  depth = 0,
+): void {
   if (depth > 8) throw new Error('MCP arguments exceed the safe nesting limit.');
   if (Array.isArray(value)) {
-    for (const item of value) assertNoRawSecrets(item, depth + 1);
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !('value' in descriptor)) {
+        throw new Error('MCP arguments must contain only data properties.');
+      }
+      assertNoRawSecrets(descriptor.value, secretRefs, depth + 1);
+    }
     return;
   }
   if (!value || typeof value !== 'object') return;
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (FORBIDDEN_SECRET_KEY.test(key) && !/ref$/i.test(key)) {
-      throw new Error('Use secret references instead of raw MCP credentials.');
+  const source = plainDataRecord(value);
+  if (!source) throw new Error('MCP arguments must contain only plain data objects.');
+  for (const [key, child] of Object.entries(source)) {
+    const sensitive = isSensitiveMcpKey(key) || FORBIDDEN_SECRET_KEY.test(key);
+    if (sensitive) {
+      const isReference = /ref$/i.test(key);
+      if (
+        !isReference ||
+        typeof child !== 'string' ||
+        !SAFE_ID.test(child) ||
+        !secretRefs.has(child)
+      ) {
+        throw new Error('Use approved secret references instead of raw MCP credentials.');
+      }
     }
-    assertNoRawSecrets(child, depth + 1);
+    assertNoRawSecrets(child, secretRefs, depth + 1);
   }
 }
 
+function jsonBytes(value: unknown): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function shrinkNormalizedValue(value: unknown): { value: unknown; changed: boolean } {
+  if (typeof value === 'string') {
+    if (value.length <= 64) return { value, changed: false };
+    const nextLength = Math.max(32, Math.floor(value.length * 0.75));
+    return { value: `${value.slice(0, nextLength - 1)}…`, changed: true };
+  }
+  if (Array.isArray(value)) {
+    for (let index = value.length - 1; index >= 0; index -= 1) {
+      const child = shrinkNormalizedValue(value[index]);
+      if (child.changed) {
+        const output = [...value];
+        output[index] = child.value;
+        return { value: output, changed: true };
+      }
+    }
+    if (value.length > 1) return { value: value.slice(0, -1), changed: true };
+    return { value, changed: false };
+  }
+  if (!value || typeof value !== 'object') return { value, changed: false };
+  const source = value as Record<string, unknown>;
+  const keys = Object.keys(source);
+  for (let index = keys.length - 1; index >= 0; index -= 1) {
+    const key = keys[index]!;
+    const child = shrinkNormalizedValue(source[key]);
+    if (child.changed) return { value: { ...source, [key]: child.value }, changed: true };
+  }
+  for (let index = keys.length - 1; index >= 0; index -= 1) {
+    const key = keys[index]!;
+    if (key === 'answer' || key === 'nonce') continue;
+    const output = { ...source };
+    delete output[key];
+    return { value: output, changed: true };
+  }
+  return { value, changed: false };
+}
+
+function plainDataRecord(value: unknown): Record<string, unknown> | undefined {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const output: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !('value' in descriptor)) return undefined;
+      output[key] = descriptor.value;
+    }
+    return output;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedSafeText(value: unknown, maxChars: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const bounded = redactMcpText(value.slice(0, maxChars + 256))
+    .replace(/[\u0000-\u001f\u007f\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
+    .trim();
+  return bounded ? bounded.slice(0, maxChars) : undefined;
+}
+
+function normalizedSafeUri(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_NORMALIZED_URI_CHARS) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      return undefined;
+    }
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(parsed.pathname);
+    } catch {
+      return undefined;
+    }
+    if (redactMcpText(decodedPath) !== decodedPath) return undefined;
+    parsed.hash = '';
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (isSensitiveMcpKey(key)) {
+        parsed.searchParams.delete(key);
+        continue;
+      }
+      const values = parsed.searchParams.getAll(key).map(redactMcpText);
+      parsed.searchParams.delete(key);
+      for (const item of values) parsed.searchParams.append(key, item);
+    }
+    const normalized = parsed.toString();
+    return normalized.length <= MAX_NORMALIZED_URI_CHARS ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedSafeMime(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === 'string' && value.length <= 100 && SAFE_NORMALIZED_MIME.test(value)
+    ? value.toLocaleLowerCase('en-US')
+    : undefined;
+}
+
+function boundedNormalizedOmittedCount(value: unknown): number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? Math.min(MAX_NORMALIZED_OMITTED_COUNT, value as number)
+    : 0;
+}
+
+function preserveNormalizedResult(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  const source = plainDataRecord(value);
+  if (!source || typeof source.ok !== 'boolean' || source.contentTrust !== 'external_untrusted') {
+    return undefined;
+  }
+
+  const omittedSource = plainDataRecord(source.omitted);
+  const omitted = {
+    inlineMedia: boundedNormalizedOmittedCount(omittedSource?.inlineMedia),
+    unsafeReferences: boundedNormalizedOmittedCount(omittedSource?.unsafeReferences),
+    truncatedValues: boundedNormalizedOmittedCount(omittedSource?.truncatedValues),
+  };
+  const addTruncated = (amount = 1) => {
+    if (Number.isFinite(amount) && amount > 0) {
+      omitted.truncatedValues = Math.min(
+        MAX_NORMALIZED_OMITTED_COUNT,
+        omitted.truncatedValues + Math.floor(amount),
+      );
+    }
+  };
+  const addUnsafeReference = () => {
+    omitted.unsafeReferences = Math.min(
+      MAX_NORMALIZED_OMITTED_COUNT,
+      omitted.unsafeReferences + 1,
+    );
+  };
+
+  const summary = normalizedSafeText(source.safeSummary, 1_024);
+  if (typeof source.safeSummary === 'string' && source.safeSummary.length > 1_024) {
+    addTruncated();
+  }
+  const result: Record<string, unknown> = {
+    ok: source.ok,
+    contentTrust: 'external_untrusted',
+    safeSummary: summary ?? 'External MCP tool result was omitted.',
+    omitted,
+  };
+
+  const rawTextExcerpts = source.textExcerpts;
+  if (rawTextExcerpts !== undefined) {
+    if (!Array.isArray(rawTextExcerpts)) {
+      addTruncated();
+    } else {
+      const limit = Math.min(rawTextExcerpts.length, MAX_NORMALIZED_TEXT_EXCERPTS);
+      if (rawTextExcerpts.length > limit) addTruncated(rawTextExcerpts.length - limit);
+      const textExcerpts: string[] = [];
+      let aggregateChars = 0;
+      for (let index = 0; index < limit && aggregateChars < MAX_NORMALIZED_TEXT_CHARS; index += 1) {
+        const remaining = Math.min(
+          MAX_NORMALIZED_TEXT_EXCERPT_CHARS,
+          MAX_NORMALIZED_TEXT_CHARS - aggregateChars,
+        );
+        const rawText = rawTextExcerpts[index];
+        if (typeof rawText === 'string' && rawText.length > remaining) addTruncated();
+        const text = normalizedSafeText(rawText, remaining);
+        if (text === undefined) {
+          addTruncated();
+          continue;
+        }
+        textExcerpts.push(text);
+        aggregateChars += text.length;
+      }
+      if (textExcerpts.length < limit && aggregateChars >= MAX_NORMALIZED_TEXT_CHARS) {
+        addTruncated(limit - textExcerpts.length);
+      }
+      result.textExcerpts = Object.freeze(textExcerpts);
+    }
+  }
+
+  const rawSourceRefs = source.sourceRefs;
+  if (rawSourceRefs !== undefined) {
+    if (!Array.isArray(rawSourceRefs)) {
+      addTruncated();
+    } else {
+      const limit = Math.min(rawSourceRefs.length, MAX_NORMALIZED_SOURCE_REFS);
+      if (rawSourceRefs.length > limit) addTruncated(rawSourceRefs.length - limit);
+      const sourceRefs: Record<string, unknown>[] = [];
+      for (let index = 0; index < limit; index += 1) {
+        const item = plainDataRecord(rawSourceRefs[index]);
+        const uri = normalizedSafeUri(item?.uri);
+        const name = normalizedSafeText(item?.name, MAX_NORMALIZED_LABEL_CHARS);
+        if (!uri || !name) {
+          addUnsafeReference();
+          continue;
+        }
+        const title = normalizedSafeText(item?.title, MAX_NORMALIZED_LABEL_CHARS);
+        if (typeof item?.title === 'string' && item.title.length > MAX_NORMALIZED_LABEL_CHARS) {
+          addTruncated();
+        }
+        const mimeType = normalizedSafeMime(item?.mimeType);
+        sourceRefs.push({
+          uri,
+          name,
+          ...(title === undefined ? {} : { title }),
+          ...(mimeType === undefined ? {} : { mimeType }),
+        });
+      }
+      result.sourceRefs = Object.freeze(sourceRefs.map((item) => Object.freeze(item)));
+    }
+  }
+
+  const rawArtifacts = source.artifacts;
+  if (rawArtifacts !== undefined) {
+    if (!Array.isArray(rawArtifacts)) {
+      addTruncated();
+    } else {
+      const limit = Math.min(rawArtifacts.length, MAX_NORMALIZED_SOURCE_REFS);
+      if (rawArtifacts.length > limit) addTruncated(rawArtifacts.length - limit);
+      const artifacts: Record<string, unknown>[] = [];
+      for (let index = 0; index < limit; index += 1) {
+        const item = plainDataRecord(rawArtifacts[index]);
+        const uri = normalizedSafeUri(item?.uri);
+        const title = normalizedSafeText(item?.title, MAX_NORMALIZED_LABEL_CHARS);
+        if (item?.kind !== 'link' || !uri || !title) {
+          addUnsafeReference();
+          continue;
+        }
+        const mimeType = normalizedSafeMime(item?.mimeType);
+        artifacts.push({
+          kind: 'link',
+          uri,
+          title,
+          ...(mimeType === undefined ? {} : { mimeType }),
+        });
+      }
+      result.artifacts = Object.freeze(artifacts.map((item) => Object.freeze(item)));
+    }
+  }
+
+  const rawActions = source.suggestedNextActions;
+  if (rawActions !== undefined) {
+    if (!Array.isArray(rawActions)) {
+      addTruncated();
+    } else {
+      const limit = Math.min(rawActions.length, MAX_NORMALIZED_ACTIONS);
+      if (rawActions.length > limit) addTruncated(rawActions.length - limit);
+      const actions: string[] = [];
+      for (let index = 0; index < limit; index += 1) {
+        const rawAction = rawActions[index];
+        if (typeof rawAction === 'string' && rawAction.length > MAX_NORMALIZED_ACTION_CHARS) {
+          addTruncated();
+        }
+        const action = normalizedSafeText(rawAction, MAX_NORMALIZED_ACTION_CHARS);
+        if (action === undefined) {
+          addTruncated();
+          continue;
+        }
+        actions.push(action);
+      }
+      result.suggestedNextActions = Object.freeze(actions);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'structuredData')) {
+    try {
+      const structured = redactMcpArgumentsForAuditWithStats(source.structuredData);
+      addTruncated(structured.truncatedValues);
+      result.structuredData = structured.value;
+    } catch {
+      addTruncated();
+    }
+  }
+  return Object.freeze(result);
+}
+
+function compactNormalizedResult(result: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const compacted: Record<string, unknown> = { ...result };
+  for (const field of ['textExcerpts', 'sourceRefs', 'artifacts', 'suggestedNextActions']) {
+    if (Array.isArray(compacted[field])) compacted[field] = [...compacted[field] as unknown[]];
+  }
+  const omitted = () => ({
+    ...(compacted.omitted && typeof compacted.omitted === 'object'
+      ? compacted.omitted as Record<string, unknown>
+      : {}),
+  });
+  const candidate = () => ({ ...compacted, omitted: omitted() });
+  let current = candidate();
+  let steps = 0;
+  while (jsonBytes(current) > MAX_NORMALIZED_RESULT_BYTES && steps < 512) {
+    let changed = false;
+    if (compacted.structuredData !== undefined) {
+      const shrunk = shrinkNormalizedValue(compacted.structuredData);
+      if (shrunk.changed) {
+        compacted.structuredData = shrunk.value;
+        const counters = omitted();
+        counters.truncatedValues = (Number(counters.truncatedValues) || 0) + 1;
+        compacted.omitted = counters;
+        changed = true;
+      }
+    }
+    if (!changed) {
+      const fields = ['sourceRefs', 'artifacts', 'textExcerpts', 'suggestedNextActions'];
+      const field = fields
+        .map((name) => ({ name, length: Array.isArray(compacted[name]) ? compacted[name].length : 0 }))
+        .sort((left, right) => right.length - left.length)
+        .find((entry) => entry.length > 1)?.name;
+      if (field) {
+        const values = compacted[field] as unknown[];
+        compacted[field] = values.slice(0, -1);
+        const counters = omitted();
+        counters.truncatedValues = (Number(counters.truncatedValues) || 0) + 1;
+        compacted.omitted = counters;
+        changed = true;
+      }
+    }
+    if (!changed) {
+      const shrunk = shrinkNormalizedValue(compacted.safeSummary);
+      if (shrunk.changed) {
+        compacted.safeSummary = shrunk.value;
+        const counters = omitted();
+        counters.truncatedValues = (Number(counters.truncatedValues) || 0) + 1;
+        compacted.omitted = counters;
+        changed = true;
+      }
+    }
+    if (!changed) {
+      for (const field of ['sourceRefs', 'artifacts', 'textExcerpts', 'suggestedNextActions']) {
+        if (Array.isArray(compacted[field]) && compacted[field].length > 0) {
+          delete compacted[field];
+          const counters = omitted();
+          counters.truncatedValues = (Number(counters.truncatedValues) || 0) + 1;
+          compacted.omitted = counters;
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (!changed && compacted.structuredData !== undefined) {
+      delete compacted.structuredData;
+      const counters = omitted();
+      counters.truncatedValues = (Number(counters.truncatedValues) || 0) + 1;
+      compacted.omitted = counters;
+      changed = true;
+    }
+    if (!changed) break;
+    steps += 1;
+    current = candidate();
+  }
+  return Object.freeze(current);
+}
+
 function safeResult(value: unknown): unknown {
+  const normalized = preserveNormalizedResult(value);
+  if (normalized) return compactNormalizedResult(normalized);
+
   const sanitize = (candidate: unknown, depth: number): unknown => {
     if (depth > 8) return '[truncated]';
-    if (typeof candidate === 'string') return candidate.replace(SECRET_TEXT, '[REDACTED]');
-    if (Array.isArray(candidate)) return candidate.slice(0, 256).map((item) => sanitize(item, depth + 1));
+    if (typeof candidate === 'string') return redactMcpText(candidate);
+    if (Array.isArray(candidate)) {
+      const output: unknown[] = [];
+      const limit = Math.min(candidate.length, 256);
+      for (let index = 0; index < limit; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
+        if (!descriptor || !('value' in descriptor)) return '[omitted]';
+        output.push(sanitize(descriptor.value, depth + 1));
+      }
+      return output;
+    }
     if (!candidate || typeof candidate !== 'object') return candidate;
+    const prototype = Object.getPrototypeOf(candidate);
+    if (prototype !== Object.prototype && prototype !== null) return '[omitted]';
     const output: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(candidate as Record<string, unknown>).slice(0, 256)) {
-      output[key] = FORBIDDEN_SECRET_KEY.test(key) ? '[REDACTED]' : sanitize(child, depth + 1);
+    for (const key of Object.keys(candidate).slice(0, 256)) {
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      if (!descriptor || !('value' in descriptor)) return '[omitted]';
+      output[key] = isSensitiveMcpKey(key) || FORBIDDEN_SECRET_KEY.test(key)
+        ? '[REDACTED]'
+        : sanitize(descriptor.value, depth + 1);
     }
     return output;
   };
@@ -396,6 +807,15 @@ function safeResult(value: unknown): unknown {
   return serialized.length <= MAX_RESULT_CHARS
     ? sanitized
     : Object.freeze({ truncated: true, preview: serialized.slice(0, MAX_RESULT_CHARS) });
+}
+
+function isFailedNormalizedMcpResult(value: unknown): boolean {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      (value as { ok?: unknown }).ok === false,
+  );
 }
 
 export function createVibeSpaceMcpGateway(
@@ -955,10 +1375,14 @@ export function createVibeSpaceMcpGateway(
       if (request.classification !== 'read' && request.approval?.confirmedByUser !== true) {
         throw new Error('Explicit approval is required for MCP writes and mutations.');
       }
+      const secretRefs = new Set<string>();
       for (const secretRef of request.secretRefs ?? []) {
-        if (!SAFE_ID.test(secretRef)) throw new Error('Invalid MCP secret reference.');
+        if (typeof secretRef !== 'string' || !SAFE_ID.test(secretRef)) {
+          throw new Error('Invalid MCP secret reference.');
+        }
+        secretRefs.add(secretRef);
       }
-      assertNoRawSecrets(request.arguments);
+      assertNoRawSecrets(request.arguments, secretRefs);
 
       invocationCounter += 1;
       const startedAt = clock.now();
@@ -990,7 +1414,11 @@ export function createVibeSpaceMcpGateway(
               : undefined,
           },
         );
-        status = 'succeeded';
+        status = handle.signal.aborted
+          ? 'cancelled'
+          : isFailedNormalizedMcpResult(result)
+            ? 'failed'
+            : 'succeeded';
         const receipt = Object.freeze({
           receiptId,
           accountId: dependencies.scope.accountId,

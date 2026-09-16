@@ -151,7 +151,20 @@ export type ProviderEvent =
   | { type: 'model'; modelId: string }
   | { type: 'usage'; usage: UsageSnapshot }
   | { type: 'warning'; message: string }
-  | { type: 'error'; message: string }
+  | {
+      type: 'error';
+      /** Sanitized provider detail; never contains credentials or raw bodies. */
+      message: string;
+      code?: string;
+      providerId?: string;
+      modelId?: string;
+      connectionId?: string;
+      retryable?: boolean;
+      retryAfterMs?: number;
+      resetAt?: number;
+      requestId?: string;
+      runId?: string;
+    }
   | { type: 'done'; finishReason?: string };
 
 export interface DetectionResult {

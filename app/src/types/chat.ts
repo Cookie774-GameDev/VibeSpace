@@ -25,6 +25,7 @@ import type {
   TokenOptimizationReceipt,
 } from '@/features/token-optimizer/optimizationReport';
 import type { ChatBackendAffinityV1 } from '@/lib/ai/backend/chatBackend';
+import type { ProviderErrorDetails } from '@/lib/ai/providerError';
 
 export type Role = 'user' | 'assistant' | 'agent' | 'system' | 'tool';
 
@@ -77,6 +78,11 @@ export type Part =
     }
   | { kind: 'tool_call'; tool: string; args: Record<string, unknown>; call_id: string; details?: Readonly<import('@/lib/ai/adapters/types').PublicToolDetails> }
   | { kind: 'tool_result'; call_id: string; result?: unknown; error?: string }
+  | {
+      /** Safe provider failure metadata retained in the live and persisted transcript. */
+      kind: 'provider_error';
+      error: Readonly<ProviderErrorDetails>;
+    }
   | {
       /**
        * AI-proposed app-level action awaiting human approval. Distinct

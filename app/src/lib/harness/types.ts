@@ -108,7 +108,16 @@ export type HarnessEvent =
   | { type: 'context.compacted'; before?: number; after?: number }
   | { type: 'session.updated'; sessionId: string }
   | { type: 'done'; finishReason?: string }
-  | { type: 'error'; message: string; code?: string };
+  | {
+      type: 'error';
+      message: string;
+      code?: string;
+      providerId?: string;
+      modelId?: string;
+      retryable?: boolean;
+      retryAfterMs?: number;
+      resetAt?: number;
+    };
 
 export interface HarnessReady {
   source: 'system' | 'managed';

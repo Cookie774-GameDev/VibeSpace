@@ -65,7 +65,7 @@ function runtimeHarness(tool: Readonly<RemoteMcpSetupTool> = readTool) {
     snapshot = snapshot.filter((connection) => connection.id !== id);
     publish();
   });
-  const invoke = vi.fn(async () => ({
+  const invoke = vi.fn(async (): Promise<unknown> => ({
     content: [{ type: 'text', text: 'Bearer live-secret-value' }],
     token: 'live-secret-value',
   }));
@@ -143,6 +143,166 @@ describe('VibeSpace MCP Gateway', () => {
     );
   });
 
+  it('records a normalized external MCP failure as a failed receipt', async () => {
+    const harness = createHarness();
+    await approve(harness);
+    harness.gateway.setToolExposure(
+      'reviewed-server',
+      ['repo.read'],
+      { confirmedByUser: true },
+    );
+    harness.runtime.invoke.mockResolvedValueOnce({
+      ok: false,
+      contentTrust: 'external_untrusted',
+      safeSummary: 'External MCP tool reported an execution error with 1 text result.',
+      textExcerpts: ['The upstream tool rejected the request.'],
+      sourceRefs: [],
+      artifacts: [],
+      suggestedNextActions: [],
+      structuredData: { token: '[REDACTED]' },
+      omitted: { inlineMedia: 0, unsafeReferences: 0, truncatedValues: 0 },
+    });
+
+    const response = await harness.gateway.invoke({
+      accountId: 'account_a',
+      projectId: 'project_a',
+      taskId: 'task_1',
+      connectionId: 'reviewed-server',
+      toolName: 'repo.read',
+      arguments: { path: 'README.md' },
+      allowedTools: ['reviewed-server.repo.read'],
+      classification: 'read',
+    });
+
+    expect(response.receipt.status).toBe('failed');
+    expect(harness.gateway.getReceipts()).toEqual([response.receipt]);
+  });
+
+  it('preserves bounded normalized fields when the combined result needs gateway compaction', async () => {
+    const harness = createHarness();
+    await approve(harness);
+    harness.gateway.setToolExposure(
+      'reviewed-server',
+      ['repo.read'],
+      { confirmedByUser: true },
+    );
+    harness.runtime.invoke.mockResolvedValueOnce({
+      ok: true,
+      contentTrust: 'external_untrusted',
+      safeSummary: 'Large but safe MCP result.',
+      textExcerpts: Array.from({ length: 8 }, (_, index) => `excerpt-${index}-${'x'.repeat(1_000)}`),
+      sourceRefs: Array.from({ length: 16 }, (_, index) => ({
+        uri: `https://example.com/report/${index}/${'x'.repeat(1_900)}`,
+        name: `Report ${index}`,
+      })),
+      artifacts: Array.from({ length: 16 }, (_, index) => ({
+        kind: 'link' as const,
+        uri: `https://example.com/artifact/${index}/${'x'.repeat(1_900)}`,
+        title: `Artifact ${index}`,
+      })),
+      suggestedNextActions: Array.from({ length: 8 }, (_, index) => `Open report ${index}-${'x'.repeat(280)}`),
+      structuredData: {
+        answer: 42,
+        nonce: 'AUDIT_GATEWAY_COMPACT',
+        rows: Array.from({ length: 24 }, (_, index) => ({
+          index,
+          value: 'x'.repeat(500),
+        })),
+      },
+      omitted: { inlineMedia: 0, unsafeReferences: 0, truncatedValues: 0 },
+    });
+
+    const response = await harness.gateway.invoke({
+      accountId: 'account_a',
+      projectId: 'project_a',
+      taskId: 'task_gateway_compaction',
+      connectionId: 'reviewed-server',
+      toolName: 'repo.read',
+      arguments: { path: 'README.md' },
+      allowedTools: ['reviewed-server.repo.read'],
+      classification: 'read',
+    });
+
+    const result = response.result as Record<string, unknown>;
+    expect(result).toMatchObject({
+      ok: true,
+      structuredData: {
+        answer: 42,
+        nonce: 'AUDIT_GATEWAY_COMPACT',
+      },
+      sourceRefs: expect.any(Array),
+      artifacts: expect.any(Array),
+    });
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(64 * 1024);
+    expect((result.omitted as { truncatedValues: number }).truncatedValues).toBeGreaterThan(0);
+  });
+
+  it('re-sanitizes normalized fields for direct Gateway consumers', async () => {
+    const harness = createHarness();
+    await approve(harness);
+    harness.gateway.setToolExposure(
+      'reviewed-server',
+      ['repo.read'],
+      { confirmedByUser: true },
+    );
+    harness.runtime.invoke.mockResolvedValueOnce({
+      ok: true,
+      contentTrust: 'external_untrusted',
+      safeSummary: 'See https://user:synthetic-secret@example.com/report.',
+      textExcerpts: ['See https://user:synthetic-secret@example.com/report.'],
+      sourceRefs: [
+        {
+          uri: 'https://user:synthetic-secret@example.com/report?access_token=leak&view=full',
+          name: 'Report',
+        },
+      ],
+      artifacts: [
+        {
+          kind: 'link',
+          uri: 'https://example.com/report',
+          title: 'Report',
+        },
+      ],
+      suggestedNextActions: ['Open https://user:synthetic-secret@example.com/report'],
+      structuredData: {
+        answer: 42,
+        accessToken: 'synthetic-access-token',
+        nested: { clientSecret: 'synthetic-client-secret' },
+      },
+      omitted: {
+        inlineMedia: Number.MAX_SAFE_INTEGER,
+        unsafeReferences: Number.MAX_SAFE_INTEGER,
+        truncatedValues: Number.MAX_SAFE_INTEGER,
+      },
+    });
+
+    const response = await harness.gateway.invoke({
+      accountId: 'account_a',
+      projectId: 'project_a',
+      taskId: 'task_direct_normalized',
+      connectionId: 'reviewed-server',
+      toolName: 'repo.read',
+      arguments: { path: 'README.md' },
+      allowedTools: ['reviewed-server.repo.read'],
+      classification: 'read',
+    });
+
+    const result = response.result as Record<string, unknown>;
+    expect(JSON.stringify(result)).not.toContain('synthetic-secret');
+    expect(JSON.stringify(result)).not.toContain('synthetic-access-token');
+    expect(JSON.stringify(result)).not.toContain('access_token=leak');
+    expect(result).toMatchObject({
+      ok: true,
+      contentTrust: 'external_untrusted',
+      sourceRefs: [],
+      artifacts: [{ kind: 'link', uri: 'https://example.com/report', title: 'Report' }],
+      structuredData: { answer: 42, nested: { clientSecret: '[REDACTED]' } },
+    });
+    expect((result.omitted as { inlineMedia: number }).inlineMedia).toBeLessThanOrEqual(1_000_000);
+    expect((result.omitted as { unsafeReferences: number }).unsafeReferences).toBeLessThanOrEqual(1_000_000);
+    expect((result.omitted as { truncatedValues: number }).truncatedValues).toBeLessThanOrEqual(1_000_000);
+  });
+
   it('fails closed for wrong scope, task allowlist, classification, and raw secrets', async () => {
     const harness = createHarness();
     await approve(harness);
@@ -169,7 +329,56 @@ describe('VibeSpace MCP Gateway', () => {
       ...base,
       arguments: { token: 'raw-secret' },
     })).rejects.toThrow('secret references');
+    for (const key of ['accessToken', 'refresh_token', 'clientSecret', 'credentialBlob', 'sessionToken']) {
+      await expect(harness.gateway.invoke({
+        ...base,
+        arguments: { [key]: 'raw-secret' },
+      })).rejects.toThrow('secret references');
+    }
     expect(harness.runtime.invoke).not.toHaveBeenCalled();
+  });
+
+  it('accepts only approved SAFE_ID values for sensitive secret references', async () => {
+    const harness = createHarness();
+    await approve(harness);
+    harness.gateway.setToolExposure(
+      'reviewed-server',
+      ['repo.read'],
+      { confirmedByUser: true },
+    );
+    const base = {
+      accountId: 'account_a',
+      projectId: 'project_a',
+      taskId: 'task_secret_ref',
+      connectionId: 'reviewed-server',
+      toolName: 'repo.read',
+      allowedTools: ['reviewed-server.repo.read'],
+      classification: 'read' as const,
+    };
+
+    for (const key of ['accessTokenRef', 'refresh_token_ref', 'clientSecretRef', 'privateKeyRef']) {
+      await expect(harness.gateway.invoke({
+        ...base,
+        arguments: { [key]: 'secret_ref_1' },
+      })).rejects.toThrow('secret references');
+      await expect(harness.gateway.invoke({
+        ...base,
+        arguments: { [key]: 'secret_ref_1' },
+        secretRefs: ['other_ref'],
+      })).rejects.toThrow('secret references');
+      await expect(harness.gateway.invoke({
+        ...base,
+        arguments: { [key]: 'not a safe reference' },
+        secretRefs: ['not a safe reference'],
+      })).rejects.toThrow('Invalid MCP secret reference');
+      await harness.gateway.invoke({
+        ...base,
+        arguments: { [key]: 'secret_ref_1' },
+        secretRefs: ['secret_ref_1'],
+      });
+    }
+
+    expect(harness.runtime.invoke).toHaveBeenCalledTimes(4);
   });
 
   it('requires a distinct approval before persisting the first discovered schema', async () => {

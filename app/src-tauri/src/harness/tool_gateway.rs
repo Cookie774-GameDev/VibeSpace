@@ -42,6 +42,8 @@ const TOOL_CATALOG: &[&str] = &[
     "skills.load",
     "plugins.list",
     "plugins.run",
+    "mcp.list",
+    "mcp.run",
     "tasks.create",
     "tasks.update",
     "schedule.create",
@@ -1409,6 +1411,9 @@ mod tests {
                 .tool,
             "vibespace_context"
         );
+        for accepted in ["mcp.list", "mcp.run"] {
+            assert_eq!(parse_tool_request(&request(accepted)).unwrap().tool, accepted);
+        }
 
         for rejected in [
             "tauri.invoke",

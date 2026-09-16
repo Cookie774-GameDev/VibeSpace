@@ -365,6 +365,44 @@ export function MessagePart({
       );
     }
 
+    case 'provider_error': {
+      const error = part.error;
+      const route = [error.providerId, error.modelId].filter(Boolean).join('/');
+      const retry = error.retryable === undefined
+        ? undefined
+        : error.retryable
+          ? 'Retry may be available'
+          : 'Retry is not available';
+      const retryAfter = error.retryAfterMs === undefined
+        ? undefined
+        : `Retry after ${Math.ceil(error.retryAfterMs / 1_000)}s`;
+      return (
+        <div
+          role="alert"
+          data-testid="provider-error"
+          className="rounded-md border border-destructive/45 bg-destructive/10 px-3 py-2"
+        >
+          <div className="text-metadata font-semibold uppercase tracking-wide text-destructive">
+            Provider error
+          </div>
+          <p className="mt-1 text-body whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            {error.message}
+          </p>
+          {error.code || route || retry || retryAfter || error.resetAt !== undefined || error.requestId || error.runId ? (
+            <dl className="mt-2 grid gap-1 text-metadata text-muted-foreground sm:grid-cols-2">
+              {error.code ? <div><dt className="inline font-medium">Code: </dt><dd className="inline">{error.code}</dd></div> : null}
+              {route ? <div><dt className="inline font-medium">Route: </dt><dd className="inline">{route}</dd></div> : null}
+              {retry ? <div><dt className="inline font-medium">Retry: </dt><dd className="inline">{retry}</dd></div> : null}
+              {retryAfter ? <div><dt className="inline font-medium">Timing: </dt><dd className="inline">{retryAfter}</dd></div> : null}
+              {error.resetAt !== undefined ? <div><dt className="inline font-medium">Reset at: </dt><dd className="inline">{error.resetAt}</dd></div> : null}
+              {error.requestId ? <div><dt className="inline font-medium">Request: </dt><dd className="inline break-all">{error.requestId}</dd></div> : null}
+              {error.runId ? <div><dt className="inline font-medium">Run: </dt><dd className="inline break-all">{error.runId}</dd></div> : null}
+            </dl>
+          ) : null}
+        </div>
+      );
+    }
+
     case 'action_proposal': {
       const pluginEvidence = resolvePluginActionEvidence(part, allParts);
       if (pluginEvidence && part.status !== 'pending') {

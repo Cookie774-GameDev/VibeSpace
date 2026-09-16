@@ -33,8 +33,8 @@ const agent: Agent = {
   description: 'Jarvis',
   system_prompt: 'You are Jarvis.',
   model: {
-    provider: 'opencode-go' as Agent['model']['provider'],
-    model: 'deepseek-v4-flash-vision-exp',
+    provider: 'openai',
+    model: 'gpt-5.6-luna',
   },
   tools_allowed: [],
   memory_scope: 'workspace',
@@ -54,7 +54,7 @@ function events(text: string) {
 
 describe('explicit Chat backend routing', () => {
   it('normalizes a subscription model selected from the shared OpenCode catalog', async () => {
-    await runAgent({
+    const result = await runAgent({
       backend: 'codex',
       agent: {
         ...agent,
@@ -67,7 +67,37 @@ describe('explicit Chat backend routing', () => {
       messages: [{ role: 'user', content: 'Hello' }],
     });
     expect(codexSend).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gpt-5.6-luna' }));
+    expect(result).toMatchObject({ provider: 'openai', model: 'gpt-5.6-luna' });
     expect(openCodeSend).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a non-OpenAI model is paired with the Codex connection', async () => {
+    await expect(
+      runAgent({
+        backend: 'codex',
+        agent: {
+          ...agent,
+          model: {
+            provider: 'google' as Agent['model']['provider'],
+            model: 'google/gemini-2.5-flash',
+          },
+        },
+        chatId: 'chat_codex_mismatch',
+        requestId: 'request_codex_mismatch',
+        connectionId: 'openai-codex',
+        interactionMode: 'ask',
+        messages: [{ role: 'user', content: 'Hello' }],
+      }),
+    ).rejects.toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: {
+        providerId: 'openai',
+        modelId: 'google/gemini-2.5-flash',
+        connectionId: 'openai-codex',
+        requestId: 'request_codex_mismatch',
+      },
+    });
+    expect(codexSend).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
@@ -104,8 +134,8 @@ describe('explicit Chat backend routing', () => {
 
     expect(result).toMatchObject({
       text: 'codex complete',
-      provider: 'opencode-go',
-      model: 'deepseek-v4-flash-vision-exp',
+      provider: 'openai',
+      model: 'gpt-5.6-luna',
       finish_reason: 'completed',
     });
     expect(codexSend).toHaveBeenCalledWith(
@@ -114,9 +144,9 @@ describe('explicit Chat backend routing', () => {
         connection: expect.objectContaining({
           id: 'openai-codex',
           adapterId: 'codex-app-server',
-          providerId: 'opencode-go',
+          providerId: 'openai',
         }),
-        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        modelId: 'gpt-5.6-luna',
         prompt: 'Read game.js.',
         workingDirectory: 'C:\\workspace',
         interactionMode: 'ask',
@@ -124,6 +154,40 @@ describe('explicit Chat backend routing', () => {
     );
     expect(openCodeSend).not.toHaveBeenCalled();
     expect(onHarnessSessionBound).toHaveBeenCalledWith({ sessionId: 'thread_native_1' });
+  });
+
+  it('wraps an early Codex request rejection with exact route identity', async () => {
+    const rejection = Object.assign(new Error('Native request rejected; apiKey=private-value'), {
+      code: '-32600',
+      providerId: 'stale-provider',
+      modelId: 'stale-model',
+    });
+    codexSend.mockImplementationOnce(() => {
+      throw rejection;
+    });
+
+    await expect(
+      runAgent({
+        backend: 'codex',
+        agent,
+        chatId: 'chat_codex_error',
+        requestId: 'request_codex_error',
+        connectionId: 'openai-codex',
+        workingDirectory: 'C:\\workspace',
+        interactionMode: 'ask',
+        messages: [{ role: 'user', content: 'Read game.js.' }],
+      }),
+    ).rejects.toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: {
+        code: '-32600',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        connectionId: 'openai-codex',
+        requestId: 'request_codex_error',
+        message: 'Native request rejected; apiKey=[REDACTED]',
+      },
+    });
   });
 
   it('keeps output deltas on their original tool without resetting final state', async () => {
@@ -164,6 +228,36 @@ describe('explicit Chat backend routing', () => {
     expect(result.text).toBe('opencode complete');
     expect(openCodeSend).toHaveBeenCalledOnce();
     expect(codexSend).not.toHaveBeenCalled();
+  });
+
+  it('wraps an OpenCode selection mismatch before transport dispatch', async () => {
+    await expect(
+      runAgent({
+        backend: 'opencode',
+        agent: {
+          ...agent,
+          model: {
+            provider: 'opencode-go' as Agent['model']['provider'],
+            model: 'deepseek-v4-flash-vision-exp',
+          },
+        },
+        chatId: 'chat_opencode_selection_error',
+        requestId: 'request_opencode_selection_error',
+        connectionId: 'openai-codex',
+        workingDirectory: 'C:\\workspace',
+        messages: [{ role: 'user', content: 'Read game.js.' }],
+      }),
+    ).rejects.toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: {
+        providerId: 'opencode-go',
+        modelId: 'deepseek-v4-flash-vision-exp',
+        connectionId: 'openai-codex',
+        requestId: 'request_opencode_selection_error',
+        message: 'Selected model does not match provider connection: openai-codex',
+      },
+    });
+    expect(openCodeSend).not.toHaveBeenCalled();
   });
 
   it('does not treat the legacy Codex subscription connection as Codex backend affinity', async () => {

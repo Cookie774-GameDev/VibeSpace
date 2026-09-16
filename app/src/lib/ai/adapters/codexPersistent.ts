@@ -1,7 +1,7 @@
 import { createCodexControlBridge } from './codexControlBridge';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { codexTurnLease } from './codexTurnLease';
-import { CODEX_CONTEXT_TOOL, createCodexContextTool, type CodexContextToolBridge } from './codexContextTool';
+import { CODEX_CONTEXT_TOOL, createCodexToolGateway, type CodexContextToolBridge } from './codexContextTool';
 import { resolveCodexWorkingDirectory } from './codexWorkingDirectory';
 import {
   nativeCodexFrames,
@@ -30,6 +30,12 @@ import type { DetectedExecutable } from './cliBridge';
 import type { ProviderAdapter, ProviderEvent, ProviderRequest, UsageSnapshot } from './types';
 import { publicToolDetails } from '../publicToolDetails';
 import { codexRuntimeManager, type CodexRuntimeManager } from '@/lib/harness/codexRuntimeManager';
+import { redactHarnessText } from '@/lib/harness/errors';
+import {
+  isProviderRuntimeError,
+  providerErrorDetails,
+  ProviderRuntimeError,
+} from '../providerError';
 
 type NativeFrame = Record<string, unknown>;
 
@@ -94,7 +100,7 @@ export async function resolveCodexExecutable(
 }
 
 const defaultDependencies: CodexPersistentDependencies = {
-  contextTool: createCodexContextTool,
+  contextTool: createCodexToolGateway,
   workingDirectory: resolveCodexWorkingDirectory,
   findExecutable: () => resolveCodexExecutable(),
   start: startNativeCodexAppServer,
@@ -116,6 +122,65 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function parsePublicToolResult(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function codexRequestError(fallbackMessage: string, value: unknown): Error {
+  const envelope = recordOf(value);
+  const nested = recordOf(envelope?.error) ?? envelope;
+  const rawMessage = nested?.message ?? envelope?.message;
+  const reason = typeof rawMessage === 'string' && rawMessage.trim()
+    ? redactHarnessText(rawMessage).slice(0, 2_048)
+    : undefined;
+  const error = new Error(reason ? `${fallbackMessage}: ${reason}` : fallbackMessage) as Error &
+    Record<string, unknown>;
+  const rawCode = nested?.code ?? nested?.errorCode ?? nested?.error_code;
+  const code = typeof rawCode === 'string' && rawCode.trim()
+    ? rawCode.trim().slice(0, 128)
+    : typeof rawCode === 'number' && Number.isFinite(rawCode)
+      ? String(rawCode)
+      : undefined;
+  const providerId = typeof nested?.providerId === 'string'
+    ? nested.providerId
+    : typeof nested?.providerID === 'string'
+      ? nested.providerID
+      : typeof nested?.provider === 'string'
+        ? nested.provider
+        : undefined;
+  const modelId = typeof nested?.modelId === 'string'
+    ? nested.modelId
+    : typeof nested?.modelID === 'string'
+      ? nested.modelID
+      : typeof nested?.model === 'string'
+        ? nested.model
+        : undefined;
+  const retryAfterMs = nested?.retryAfterMs ?? nested?.retry_after_ms ??
+    nested?.retryAfter ?? nested?.retry_after;
+  const resetAt = nested?.resetAt ?? nested?.reset_at ?? nested?.resetsAt;
+  if (code) error.code = code;
+  if (providerId) error.providerId = providerId;
+  if (modelId) error.modelId = modelId;
+  if (typeof nested?.retryable === 'boolean') error.retryable = nested.retryable;
+  if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+    error.retryAfterMs = retryAfterMs;
+  }
+  if (typeof resetAt === 'number' && Number.isFinite(resetAt) && resetAt >= 0) {
+    error.resetAt = resetAt;
+  }
+  return error;
+}
+
+function codexFrameError(frame: NativeFrame, fallbackMessage: string): Error | undefined {
+  if (recordOf(frame.error)) return codexRequestError(fallbackMessage, frame.error);
+  if (frame.method === 'error') return codexRequestError(fallbackMessage, frame);
+  return undefined;
 }
 
 function promptText(request: Readonly<ProviderRequest>, newThread = false): string {
@@ -215,7 +280,9 @@ async function responseFrame(
   for (let count = 0; count < 4_096; count += 1) {
     const frame = await nextFrame(iterator, 'Codex app-server ended before its response.');
     if (frame.id === id) return frame;
-    if (frame.method === 'error') throw new Error('Codex app-server rejected the request.');
+    if (frame.method === 'error') {
+      throw codexRequestError('Codex app-server rejected the request.', frame);
+    }
   }
   throw new Error('Codex app-server response exceeded its safe event bound.');
 }
@@ -231,8 +298,11 @@ async function validateModelCapability(
   for (let page = 0; page < 32; page += 1) {
     const id = requestId(baseRequestId, 'model_' + String(page + 1));
     await write(generation, buildCodexModelListRequest({ requestId: id, cursor }));
+    const response = await responseFrame(iterator, id);
+    const requestError = codexFrameError(response, 'Codex model capability request failed.');
+    if (requestError) throw requestError;
     const validation = validateCodexModelListResponse(
-      await responseFrame(iterator, id),
+      response,
       id,
       exactIdentity,
     );
@@ -352,8 +422,10 @@ async function* sendCodexRequest(
           requestId: threadRequestId,
           identity: exactIdentity,
           mode,
-          developerInstructions: developerInstructions(request),
-          ...(contextTool ? { dynamicTools: [CODEX_CONTEXT_TOOL] } : {}),
+        developerInstructions: developerInstructions(request),
+          ...(contextTool
+            ? { dynamicTools: contextTool.dynamicTools ?? [CODEX_CONTEXT_TOOL] }
+            : {}),
         });
     await dependencies.write(generation, threadRequest);
     let threadResponse = await prepare(request, request.sessionId ? 'resume' : 'thread',
@@ -370,10 +442,15 @@ async function* sendCodexRequest(
       await dependencies.write(generation, buildCodexThreadStartRequest({
         requestId: threadRequestId, identity: exactIdentity, mode,
         developerInstructions: developerInstructions(request),
-        ...(contextTool ? { dynamicTools: [CODEX_CONTEXT_TOOL] } : {}),
+        ...(contextTool
+          ? { dynamicTools: contextTool.dynamicTools ?? [CODEX_CONTEXT_TOOL] }
+          : {}),
       }));
       threadResponse = await responseFrame(reader, threadRequestId);
       resumed = false;
+    }
+    if (recordOf(threadResponse.error)) {
+      throw codexRequestError('Codex thread request failed.', threadResponse.error);
     }
     if (resumed) {
       const projection = normalizeCodexThreadBindingResponse(threadResponse, threadRequestId);
@@ -407,9 +484,9 @@ async function* sendCodexRequest(
         requestId: policyRequestId, threadId, developerInstructions: developerInstructions(request),
       }));
       const policyResponse = await prepare(request, 'policy', () => responseFrame(reader, policyRequestId));
-      if (recordOf(policyResponse.error) || !recordOf(policyResponse.result)) {
-        throw new Error('Codex current-turn policy update failed.');
-      }
+      const policyError = codexFrameError(policyResponse, 'Codex current-turn policy update failed.');
+      if (policyError) throw policyError;
+      if (!recordOf(policyResponse.result)) throw new Error('Codex current-turn policy update failed.');
     }
     yield { type: 'session', sessionId: threadId };
     if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
@@ -429,33 +506,46 @@ async function* sendCodexRequest(
     );
 
     const turnUsage = createTurnUsageAccumulator();
+    const dynamicToolNames = new Set(
+      (contextTool?.dynamicTools ?? (contextTool ? [CODEX_CONTEXT_TOOL] : []))
+        .map((tool) => tool.name),
+    );
     for (let count = 0; count < 65_536; count += 1) {
       if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
       const frame = await nextFrame(reader, 'Codex app-server ended before terminal state.');
       if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
       if (frame.id === requestId(request.requestId, 'turn') && recordOf(frame.error)) {
         const code = recordOf(frame.error)?.code;
-        throw new Error(`Codex rejected turn/start (${Number.isInteger(code) ? code : 'unknown'}).`);
+        const requestError = codexFrameError(
+          frame,
+          `Codex rejected turn/start (${Number.isInteger(code) ? code : 'unknown'}).`,
+        );
+        if (requestError) throw requestError;
       }
       if (frame.method === 'item/tool/call') {
         const params = recordOf(frame.params);
+        const toolName = typeof params?.tool === 'string' ? params.tool : undefined;
         if (!contextTool || !turnId || params?.threadId !== threadId || params.turnId !== turnId ||
-            params.tool !== CODEX_CONTEXT_TOOL.name || params.namespace != null ||
+            !toolName || !dynamicToolNames.has(toolName) || params.namespace != null ||
             typeof params.callId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/.test(params.callId) ||
             (typeof frame.id !== 'string' && typeof frame.id !== 'number')) {
-          throw new Error('Codex Context tool call has an invalid turn or tool binding.');
+          throw new Error('Codex dynamic tool call has an invalid turn or tool binding.');
         }
         yield {
           type: 'tool',
-          name: CODEX_CONTEXT_TOOL.name,
+          name: toolName,
           status: 'started',
           callId: params.callId,
           details: publicToolDetails({ arguments: params.arguments }),
         };
         let result;
-        try { result = await contextTool.execute(params.arguments, params.callId); }
+        try {
+          result = contextTool.executeTool
+            ? await contextTool.executeTool(toolName as Parameters<NonNullable<CodexContextToolBridge['executeTool']>>[0], params.arguments, params.callId)
+            : await contextTool.execute(params.arguments, params.callId);
+        }
         catch {
-          result = { success: false, contentItems: [{ type: 'inputText' as const, text: 'The scoped VibeSpace Context request could not be completed.' }] };
+          result = { success: false, contentItems: [{ type: 'inputText' as const, text: 'The scoped VibeSpace dynamic tool request could not be completed.' }] };
         }
         if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
         await dependencies.write(generation, { id: frame.id, result });
@@ -465,14 +555,15 @@ async function* sendCodexRequest(
           .map((item: { type: string; text?: string }) => item.text ?? '')
           .filter((text: string) => text.length > 0)
           .join('\n');
+        const publicResult = parsePublicToolResult(resultText);
         yield {
           type: 'tool',
-          name: CODEX_CONTEXT_TOOL.name,
+          name: toolName,
           status: result.success ? 'completed' : 'failed',
           callId: params.callId,
           details: publicToolDetails({
             arguments: params.arguments,
-            output: resultText,
+            ...(publicResult === undefined ? { output: resultText } : { result: publicResult }),
             outputComplete: true,
           }),
         };
@@ -567,6 +658,18 @@ export function createCodexPersistentAdapter(
         }
         yield event;
       }
+      } catch (error) {
+        if (request.signal?.aborted ||
+          (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError')) {
+          throw error;
+        }
+        if (isProviderRuntimeError(error)) throw error;
+        throw new ProviderRuntimeError(providerErrorDetails(error, {
+          providerId: request.connection.providerId,
+          modelId: request.modelId,
+          connectionId: request.connection.id,
+          requestId: request.requestId,
+        }));
       } finally { contextTool?.dispose(); release(); }
     },
     cancel: async () => undefined,

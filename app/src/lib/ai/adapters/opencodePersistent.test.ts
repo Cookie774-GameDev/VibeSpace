@@ -69,6 +69,7 @@ import {
   parseOpenCodeLiveModels,
   parseConnectedOpenCodeProviderIds,
   publicTextFromTurnMessages,
+  persistentOpenCodeSessionErrorDetails,
   persistentOpenCodeSessionErrorMessage,
   requireAuthoritativeOpenCodeModel,
   respondToPersistentOpenCodeApproval,
@@ -2127,6 +2128,39 @@ describe('persistent OpenCode live authority', () => {
     expect(JSON.stringify(event)).not.toMatch(/private-request/iu);
   });
 
+  it('fails a generic tool event when a nested MCP envelope reports failure', () => {
+    const event = normalizeToolEvent(
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            type: 'tool',
+            tool: 'search',
+            callID: 'search-call-1',
+            state: {
+              status: 'completed',
+              input: { query: 'bounded query' },
+              output: {
+                result: {
+                  is_error: true,
+                  error: { code: 'upstream_failed', message: 'Upstream rejected the request.' },
+                },
+              },
+            },
+          },
+        },
+      },
+      {},
+    );
+
+    expect(event).toMatchObject({
+      type: 'tool',
+      name: 'search',
+      status: 'failed',
+      callId: 'search-call-1',
+    });
+  });
+
   it('maps native OpenCode text parts to stable bounded opaque stream identities', () => {
     const streamPartId = createOpenCodeTextStreamPartTracker();
     const firstPart = streamPartId('["ses-private","msg-private","part-a","text"]');
@@ -2810,6 +2844,47 @@ describe('persistent OpenCode live authority', () => {
       streamPartId: 'opencode-text-1',
     });
     expect(events.at(-1)).toMatchObject({ type: 'done' });
+  });
+
+  it('emits provider metadata when the live OpenCode session status reports an error', async () => {
+    configureManagedQuestionTransport([
+      {
+        type: 'session.status',
+        properties: {
+          sessionID: 'ses_question_exact',
+          status: {
+            type: 'error',
+            error: {
+              code: 'rate_limited',
+              providerID: 'openai',
+              modelID: 'gpt-question-test',
+              retryable: true,
+              retryAfterMs: 4_000,
+              resetAt: 1_800_000_000_000,
+              message: 'Provider is temporarily busy.',
+            },
+          },
+        },
+      },
+    ], { persistedMessages: [] });
+
+    const events: ProviderEvent[] = [];
+    for await (const event of openCodePersistentAdapter.send!(
+      questionProviderRequest('request-live-status-error'),
+    )) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({
+      type: 'error',
+      message: 'Provider is temporarily busy.',
+      code: 'rate_limited',
+      providerId: 'openai',
+      modelId: 'gpt-question-test',
+      retryable: true,
+      retryAfterMs: 4_000,
+      resetAt: 1_800_000_000_000,
+    });
   });
 
   it('terminates truthfully when polling observes an error after the event iterator rejects', async () => {
@@ -3586,6 +3661,71 @@ describe('persistent OpenCode live authority', () => {
         'session-goal',
       ),
     ).toBe('AI_APICallError: temporarily rate-limited upstream; api_key=[REDACTED]');
+  });
+
+  it('preserves provider metadata from a session error without exposing credentials', () => {
+    expect(
+      persistentOpenCodeSessionErrorDetails(
+        {
+          type: 'session.error',
+          properties: {
+            sessionID: 'session-goal',
+            error: {
+              code: 'quota_exhausted',
+              providerID: 'openai',
+              modelID: 'gpt-5.6-luna',
+              retryable: false,
+              retryAfterMs: 90_000,
+              resetAt: 1_800_000_000_000,
+              message: 'Quota rejected; api_key=private-value',
+            },
+          },
+        },
+        'session-goal',
+      ),
+    ).toEqual({
+      message: 'Quota rejected; api_key=[REDACTED]',
+      code: 'quota_exhausted',
+      providerId: 'openai',
+      modelId: 'gpt-5.6-luna',
+      retryable: false,
+      retryAfterMs: 90_000,
+      resetAt: 1_800_000_000_000,
+    });
+  });
+
+  it('preserves provider metadata from a nested session status error', () => {
+    expect(
+      persistentOpenCodeSessionErrorDetails(
+        {
+          type: 'session.status',
+          properties: {
+            sessionID: 'session-goal',
+            status: {
+              type: 'error',
+              error: {
+                code: 'rate_limited',
+                providerID: 'openai',
+                modelID: 'gpt-5.6-luna',
+                retryable: true,
+                retryAfterMs: 4_000,
+                resetAt: 1_800_000_000_000,
+                message: 'Provider is temporarily busy.',
+              },
+            },
+          },
+        },
+        'session-goal',
+      ),
+    ).toEqual({
+      message: 'Provider is temporarily busy.',
+      code: 'rate_limited',
+      providerId: 'openai',
+      modelId: 'gpt-5.6-luna',
+      retryable: true,
+      retryAfterMs: 4_000,
+      resetAt: 1_800_000_000_000,
+    });
   });
 
   it('classifies only a completed exact-root read as sanitized inventory evidence', () => {

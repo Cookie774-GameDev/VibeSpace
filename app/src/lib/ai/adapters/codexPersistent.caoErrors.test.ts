@@ -51,6 +51,19 @@ it('settles a rejected turn/start and releases its exact native child', async ()
       /* consume observed events */
     }
   };
-  await expect(consume()).rejects.toThrow('Codex rejected turn/start (-32600)');
+  let failure: unknown;
+  try {
+    await consume();
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toMatchObject({
+    name: 'ProviderRuntimeError',
+    details: { code: '-32600' },
+  });
+  expect(failure).toMatchObject({
+    message: expect.stringContaining('Codex rejected turn/start (-32600)'),
+  });
+  expect((failure as Error).message).toContain('Experimental API is unavailable');
   expect(stop).toHaveBeenCalledWith('rejected-turn-generation');
 });

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeExternalMcpToolResult, redactMcpArgumentsForAudit } from './toolResult';
+import {
+  normalizeExternalMcpToolResult,
+  redactMcpArgumentsForAudit,
+  redactMcpArgumentsForAuditWithStats,
+} from './toolResult';
 
 describe('external MCP tool-result normalization', () => {
   it('returns a bounded safe contract and never forwards inline media or unsafe references', () => {
@@ -128,6 +132,30 @@ describe('external MCP tool-result normalization', () => {
     expect(JSON.stringify(result)).not.toContain('sk-proj-');
   });
 
+  it('redacts URL userinfo and credential-shaped query values in text fields', () => {
+    const result = normalizeExternalMcpToolResult({
+      content: [{
+        type: 'text',
+        text: 'Visit https://user:synthetic-password@example.com/report?access_token=synthetic-token&view=full',
+      }],
+      structuredContent: {
+        suggestedNextActions: [
+          'Open https://user:synthetic-password@example.com/report?refresh_token=synthetic-refresh',
+        ],
+      },
+    });
+
+    expect(result.textExcerpts).toEqual([
+      'Visit https://example.com/report?access_token=[REDACTED]&view=full',
+    ]);
+    expect(result.suggestedNextActions).toEqual([
+      'Open https://example.com/report?refresh_token=[REDACTED]',
+    ]);
+    expect(JSON.stringify(result)).not.toContain('synthetic-password');
+    expect(JSON.stringify(result)).not.toContain('synthetic-token');
+    expect(JSON.stringify(result)).not.toContain('synthetic-refresh');
+  });
+
   it('rejects retained links whose path contains credential-shaped material', () => {
     const result = normalizeExternalMcpToolResult({
       content: [
@@ -251,5 +279,18 @@ describe('MCP invocation argument audit redaction', () => {
     expect(JSON.stringify(audit)).not.toContain('sk-proj-');
     expect(JSON.stringify(audit)).not.toContain('synthetic-boundary');
     expect(JSON.stringify(audit).length).toBeLessThan(1_000);
+  });
+
+  it('reports structured-value truncation separately from the redacted value', () => {
+    const result = redactMcpArgumentsForAuditWithStats({
+      rows: Array.from({ length: 40 }, (_, index) => ({
+        index,
+        body: `row-${index}-${'x'.repeat(700)}`,
+      })),
+    });
+
+    expect(result.value.rows).toHaveLength(24);
+    expect(result.truncatedValues).toBeGreaterThan(0);
+    expect(JSON.stringify(result.value)).not.toContain('synthetic');
   });
 });

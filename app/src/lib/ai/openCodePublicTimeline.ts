@@ -108,8 +108,80 @@ function toolStatus(value: unknown): 'started' | 'completed' | 'failed' {
   return 'started';
 }
 
+function parseBoundedToolOutput(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  if (value.length < 1 || value.length > 128 * 1024) return undefined;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasErrorValue(value: unknown): boolean {
+  if (value === undefined || value === null || value === false) return false;
+  return typeof value !== 'string' || value.trim().length > 0;
+}
+
+function genericFailureEnvelope(value: unknown, depth = 0): boolean {
+  if (depth > 6 || value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((item) => genericFailureEnvelope(item, depth + 1));
+  const envelope = recordOf(value);
+  if (!envelope) return false;
+  const status = boundedIdentifier(envelope.status, 64)?.toLocaleLowerCase('en-US');
+  if (
+    envelope.ok === false ||
+    envelope.success === false ||
+    envelope.isError === true ||
+    envelope.is_error === true ||
+    status === 'error' ||
+    status === 'failed' ||
+    hasErrorValue(envelope.error)
+  ) {
+    return true;
+  }
+  return ['result', 'data', 'response', 'payload', 'error', 'output']
+    .some((key) => genericFailureEnvelope(envelope[key], depth + 1));
+}
+
+export function isFailedOpenCodeToolOutput(output: unknown): boolean {
+  return genericFailureEnvelope(parseBoundedToolOutput(output));
+}
+
 export function isFailedVibeSpaceContextOutput(tool: unknown, output: unknown): boolean {
   return vibeSpaceContextFailure(output, tool) !== undefined;
+}
+
+function contextFailureEnvelope(
+  value: unknown,
+  depth = 0,
+): Readonly<{ code: string }> | undefined {
+  if (depth > 6 || value === null || typeof value !== 'object') return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const failure = contextFailureEnvelope(item, depth + 1);
+      if (failure) return failure;
+    }
+    return undefined;
+  }
+  const envelope = recordOf(value);
+  if (!envelope) return undefined;
+  const code = boundedIdentifier(envelope.code ?? envelope.errorCode ?? envelope.error_code, 128);
+  const message = boundedIdentifier(envelope.message, 2_048);
+  const status = boundedIdentifier(envelope.status, 64)?.toLocaleLowerCase('en-US');
+  const failed =
+    envelope.ok === false ||
+    envelope.success === false ||
+    envelope.isError === true ||
+    envelope.is_error === true ||
+    status === 'error' ||
+    status === 'failed';
+  if (failed && code && message) return Object.freeze({ code });
+  for (const key of ['result', 'data', 'response', 'payload', 'error', 'output']) {
+    const failure = contextFailureEnvelope(envelope[key], depth + 1);
+    if (failure) return failure;
+  }
+  return undefined;
 }
 
 function vibeSpaceContextFailure(
@@ -117,21 +189,16 @@ function vibeSpaceContextFailure(
   tool: unknown,
 ): 'Tool failed' | 'Context unavailable' | undefined {
   if (boundedIdentifier(tool, 256) !== 'vibespace_context') return undefined;
-  if (typeof output !== 'string' || output.length < 1 || output.length > 128 * 1024)
-    return undefined;
-  try {
-    const envelope = recordOf(JSON.parse(output) as unknown);
-    const failed = Boolean(
-      envelope?.ok === false &&
-      boundedIdentifier(envelope.requestId, 200) &&
-      boundedIdentifier(envelope.code, 128) &&
-      boundedIdentifier(envelope.message, 2_048),
-    );
-    if (!failed) return undefined;
-    return envelope?.code === 'context_unavailable' ? 'Context unavailable' : 'Tool failed';
-  } catch {
-    return undefined;
-  }
+  const parsed = typeof output === 'string'
+    ? output.length < 1 || output.length > 128 * 1024
+      ? undefined
+      : (() => {
+          try { return JSON.parse(output) as unknown; } catch { return undefined; }
+        })()
+    : output;
+  const failure = contextFailureEnvelope(parsed);
+  if (!failure) return undefined;
+  return failure.code === 'context_unavailable' ? 'Context unavailable' : 'Tool failed';
 }
 
 function freezePart(part: OpenCodePublicTimelinePart): OpenCodePublicTimelinePart {
@@ -198,7 +265,9 @@ export function projectOpenCodePublicTimeline(
       const state = recordOf(part.state);
       const fileLabel = safeFileLabel(state, options.workingDirectory);
       const transportStatus = toolStatus(state?.status ?? part.status);
-      const contextFailure = vibeSpaceContextFailure(state?.output, tool) ?? nativeShellFailure(tool, state);
+      const contextFailure = vibeSpaceContextFailure(state?.output, tool) ??
+        nativeShellFailure(tool, state) ??
+        (isFailedOpenCodeToolOutput(state?.output) ? 'Tool failed' : undefined);
       const nativeTask = projectNativeTaskActivity(tool, state);
       const status = transportStatus === 'completed' && contextFailure ? 'failed' : transportStatus;
       const rawDiff = recordOf(state?.metadata)?.diff;

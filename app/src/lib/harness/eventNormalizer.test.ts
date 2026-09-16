@@ -85,6 +85,40 @@ describe('normalizeOpenCodeEvent', () => {
     expect(
       normalizeOpenCodeEvent(
         {
+          type: 'session.status',
+          properties: {
+            sessionID: 'session-1',
+            status: {
+              type: 'error',
+              error: {
+                code: 'rate_limited',
+                providerID: 'openai',
+                modelID: 'gpt-5.6-luna',
+                retryable: true,
+                retryAfterMs: 4_000,
+                resetAt: 1_800_000_000_000,
+                message: 'Provider is temporarily busy.',
+              },
+            },
+          },
+        },
+        'session-1',
+      ),
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'Provider is temporarily busy.',
+        code: 'rate_limited',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        retryable: true,
+        retryAfterMs: 4_000,
+        resetAt: 1_800_000_000_000,
+      },
+    ]);
+    expect(
+      normalizeOpenCodeEvent(
+        {
           type: 'session.updated',
           properties: { info: { id: 'session-1', title: 'Chat' } },
         },
@@ -120,6 +154,36 @@ describe('normalizeOpenCodeEvent', () => {
         code: 'HARNESS_AUTH_FAILED',
         message:
           'OpenAI ChatGPT sign-in expired. Reconnect OpenAI with ChatGPT in the OpenCode terminal (/connect), or pick a local model. The connector can still show Connected while the saved refresh token is dead.',
+        retryable: true,
+      },
+    ]);
+    expect(
+      normalizeOpenCodeEvent(
+        {
+          type: 'session.error',
+          properties: {
+            sessionID: 'session-1',
+            code: 'provider_busy',
+            providerID: 'openai',
+            modelID: 'gpt-5.6-luna',
+            retryable: true,
+            retryAfterMs: 2_500,
+            resetAt: 1_800_000_000_000,
+            error: { message: 'The selected model is temporarily busy.' },
+          },
+        },
+        'session-1',
+      ),
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'The selected model is temporarily busy.',
+        code: 'provider_busy',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        retryable: true,
+        retryAfterMs: 2_500,
+        resetAt: 1_800_000_000_000,
       },
     ]);
   });

@@ -153,3 +153,82 @@ it.each(['valid', 'wrong-thread', 'wrong-turn', 'wrong-tool'])('scopes native dy
   }
   expect(bridge.dispose).toHaveBeenCalledOnce();
 });
+
+it('advertises and dispatches explicitly enabled semantic MCP tools through the existing gateway', async () => {
+  const writes: Array<Record<string, any>> = [];
+  const bridge = {
+    dynamicTools: [
+      { type: 'function' as const, name: 'mcp_list', description: 'List approved MCP tools.', inputSchema: { type: 'object' } },
+      { type: 'function' as const, name: 'mcp_run', description: 'Run one approved MCP tool.', inputSchema: { type: 'object' } },
+    ],
+    bind: vi.fn(),
+    execute: vi.fn(async () => ({ success: true, contentItems: [{ type: 'inputText' as const, text: 'context' }] })),
+    executeTool: vi.fn(async () => ({ success: true, contentItems: [{ type: 'inputText' as const, text: JSON.stringify({
+      requestId: 'mcp_call_1',
+      ok: true,
+      code: 'ok',
+      data: {
+        result: {
+          ok: true,
+          contentTrust: 'external_untrusted',
+          safeSummary: 'MCP fixture result.',
+          textExcerpts: ['fixture text'],
+          sourceRefs: [{ uri: 'https://example.com/report', name: 'Report' }],
+          artifacts: [{ kind: 'link', uri: 'https://example.com/report', title: 'Report' }],
+          suggestedNextActions: ['Review the report.'],
+          structuredData: { answer: 42, nonce: 'fixture_nonce' },
+          omitted: { inlineMedia: 0, unsafeReferences: 0, truncatedValues: 0 },
+        },
+        receipt: { status: 'succeeded' },
+      },
+    }) }] })),
+    dispose: vi.fn(),
+  };
+  const adapter = createCodexPersistentAdapter({
+    contextTool: async () => bridge,
+    findExecutable: async () => ({ executableId: 'trusted-codex' }),
+    start: async () => ({ generation: 'generation-mcp' }),
+    frames: () => ({ ready: Promise.resolve(), stream: (async function* () {
+      for await (const frame of frames()) {
+        yield frame;
+        if ('method' in frame && frame.method === 'turn/started') yield {
+          id: 'mcp_dynamic_1', method: 'item/tool/call', params: {
+            threadId: 'thread_native_1', turnId: 'turn_native_1', tool: 'mcp_list',
+            namespace: null, callId: 'mcp_call_1', arguments: {},
+          },
+        };
+      }
+    })() }),
+    write: async (_generation, frame) => { writes.push(frame); }, stop: async () => true,
+  });
+  const events: ProviderEvent[] = [];
+  for await (const event of adapter.send!({
+    requestId: 'request_1', connection, chatId: 'chat-mcp', accountId: 'account',
+    workspaceId: 'workspace', projectId: 'project', prompt: 'List approved MCP tools.',
+    modelId: 'opencode-go/deepseek-v4-flash-vision-exp', workingDirectory: 'C:\\workspace',
+    interactionMode: 'ask', tools: { 'mcp.list': true, 'mcp.run': true },
+  })) events.push(event);
+
+  expect(writes.find((x) => x.method === 'thread/start')?.params.dynamicTools.map((tool: { name: string }) => tool.name)).toEqual([
+    'mcp_list', 'mcp_run',
+  ]);
+  expect(bridge.executeTool).toHaveBeenCalledWith('mcp_list', {}, 'mcp_call_1');
+  expect(bridge.execute).not.toHaveBeenCalled();
+  expect(writes.find((x) => x.id === 'mcp_dynamic_1')?.result.contentItems[0].text).toContain('structuredData');
+  expect(events.filter((event) => event.type === 'tool' && event.name === 'mcp_list').map((event) => event.type === 'tool' && event.status)).toEqual(['started', 'completed']);
+  const completed = events.find(
+    (event): event is Extract<ProviderEvent, { type: 'tool' }> =>
+      event.type === 'tool' && event.name === 'mcp_list' && event.status === 'completed',
+  );
+  expect(completed?.details?.result).toMatchObject({
+    data: {
+      result: {
+        sourceRefs: [{ uri: 'https://example.com/report', name: 'Report' }],
+        artifacts: [{ kind: 'link', uri: 'https://example.com/report', title: 'Report' }],
+        suggestedNextActions: ['Review the report.'],
+        structuredData: { answer: 42, nonce: 'fixture_nonce' },
+      },
+    },
+  });
+  expect(bridge.dispose).toHaveBeenCalledOnce();
+});

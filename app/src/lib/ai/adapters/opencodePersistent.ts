@@ -83,6 +83,7 @@ import type {
   OpenCodeQuestionRejectRequest,
 } from '@/lib/ai/openCodeQuestionReply';
 import {
+  isFailedOpenCodeToolOutput,
   isFailedVibeSpaceContextOutput,
   projectOpenCodePublicTimeline,
 } from '@/lib/ai/openCodePublicTimeline';
@@ -1160,10 +1161,42 @@ export function persistentOpenCodeSessionErrorMessage(
   event: OpenCodeRawEvent,
   sessionId: string,
 ): string {
+  return persistentOpenCodeSessionErrorDetails(event, sessionId).message;
+}
+
+export function persistentOpenCodeSessionErrorDetails(
+  event: OpenCodeRawEvent,
+  sessionId: string,
+): Readonly<{
+  message: string;
+  code?: string;
+  providerId?: string;
+  modelId?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  resetAt?: number;
+}> {
   const normalized = normalizeOpenCodeEvent(event, sessionId).find((item) => item.type === 'error');
-  return normalized?.type === 'error'
-    ? normalized.message
-    : 'OpenCode reported a provider session error.';
+  if (normalized?.type === 'error') {
+    const hasProviderDetails = Boolean(
+      normalized.code || normalized.providerId || normalized.modelId ||
+      normalized.retryable !== undefined || normalized.retryAfterMs !== undefined ||
+      normalized.resetAt !== undefined,
+    );
+    return Object.freeze({
+      message: event.type === 'session.status' && normalized.message === 'OpenCode session failed.' &&
+        !hasProviderDetails
+        ? 'OpenCode session entered an error state.'
+        : normalized.message,
+      ...(normalized.code ? { code: normalized.code } : {}),
+      ...(normalized.providerId ? { providerId: normalized.providerId } : {}),
+      ...(normalized.modelId ? { modelId: normalized.modelId } : {}),
+      ...(normalized.retryable === undefined ? {} : { retryable: normalized.retryable }),
+      ...(normalized.retryAfterMs === undefined ? {} : { retryAfterMs: normalized.retryAfterMs }),
+      ...(normalized.resetAt === undefined ? {} : { resetAt: normalized.resetAt }),
+    });
+  }
+  return Object.freeze({ message: 'OpenCode reported a provider session error.' });
 }
 
 export function classifyExplicitRootInventoryScope(
@@ -1286,7 +1319,11 @@ export function normalizeToolEvent(
         ? 'failed'
         : 'started';
   const status =
-    transportStatus === 'completed' && (isFailedVibeSpaceContextOutput(name, state?.output) || nativeShellFailure(name, state))
+    transportStatus === 'completed' && (
+      isFailedVibeSpaceContextOutput(name, state?.output) ||
+      nativeShellFailure(name, state) ||
+      isFailedOpenCodeToolOutput(state?.output)
+    )
       ? 'failed'
       : transportStatus;
   const callId = cleanIdentifier(part.callID ?? part.callId ?? part.id);
@@ -2535,7 +2572,17 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         if (status === 'error') {
           finishReason = 'error';
           reportPersistentTurnFailure('provider_reported');
-          yield { type: 'error', message: 'OpenCode session entered an error state.' };
+          const statusEvent: OpenCodeRawEvent = {
+            type: 'session.status',
+            properties: {
+              sessionID: dispatch.sessionId,
+              status: statusLookup.value,
+            },
+          };
+          yield {
+            type: 'error',
+            ...persistentOpenCodeSessionErrorDetails(statusEvent, dispatch.sessionId),
+          };
           return;
         }
         const hasPendingQuestion =
@@ -2689,9 +2736,10 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       if (usage) yield { type: 'usage', usage };
       if (event.type === 'session.error') {
         reportPersistentTurnFailure('provider_reported');
+        const errorDetails = persistentOpenCodeSessionErrorDetails(event, dispatch.sessionId);
         yield {
           type: 'error',
-          message: persistentOpenCodeSessionErrorMessage(event, dispatch.sessionId),
+          ...errorDetails,
         };
         return;
       }
@@ -2702,7 +2750,10 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         if (status === 'error') {
           finishReason = 'error';
           reportPersistentTurnFailure('provider_reported');
-          yield { type: 'error', message: 'OpenCode session entered an error state.' };
+          yield {
+            type: 'error',
+            ...persistentOpenCodeSessionErrorDetails(event, dispatch.sessionId),
+          };
           return;
         }
       }

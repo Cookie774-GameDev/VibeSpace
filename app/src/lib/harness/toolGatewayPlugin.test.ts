@@ -21,6 +21,7 @@ function fixture(body = '{"ok":true}') {
       },
     },
     URL,
+    TextEncoder,
     crypto: { randomUUID: () => 'request-1' },
     fetch,
     AbortSignal: { timeout, any: (signals: AbortSignal[]) => AbortSignal.any(signals) },
@@ -33,6 +34,7 @@ function fixture(body = '{"ok":true}') {
       sessionID: 'session-1',
       messageID: 'message-1',
       abort: new AbortController().signal,
+      ask: vi.fn().mockResolvedValue(undefined),
     },
   };
 }
@@ -66,5 +68,70 @@ describe('generated native tool gateway transport', () => {
   it('preserves structured timeout failures', async () => {
     const f = fixture('{"ok":false,"code":"request_timeout"}');
     await expect(f.call('context.list', {}, f.context)).rejects.toThrow('request_timeout');
+  });
+
+  it.each(['mcp.list', 'mcp.run'])('returns bounded structured %s failures so OpenCode can persist their payload', async (toolName) => {
+    const body = JSON.stringify({
+      ok: false,
+      code: 'mcp_tool_failed',
+      message: 'The external MCP tool reported an execution error.',
+      data: {
+        result: {
+          ok: false,
+          textExcerpts: ['LUNA_P36_HTTP_MCP_STRUCTURED_ERROR nonce=[redacted:high_entropy_candidate]'],
+          sourceRefs: [],
+          artifacts: ['https://example.com/luna-p36-report'],
+          suggestedNextActions: [],
+          structuredData: { code: 'fixture_structured_error', ok: false },
+        },
+        receipt: { status: 'failed' },
+      },
+    });
+    const f = fixture(body);
+    await expect(f.call(toolName, { connectionId: 'fixture', toolName: 'part1_structured_error' }, f.context))
+      .resolves.toBe(body);
+  });
+
+  it('omits raw MCP inputs from the native approval metadata', async () => {
+    const f = fixture();
+    const raw = 'native-approval-secret-should-not-escape';
+    await f.call('mcp.run', {
+      connectionId: 'fixture',
+      toolName: 'part1_echo_nonce',
+      classification: 'write',
+      input: { accessTokenRef: raw, safeInput: 'kept only for the gateway' },
+    }, f.context);
+    expect(f.context.ask).toHaveBeenCalledWith(expect.objectContaining({
+      permission: 'mcp_run',
+      metadata: { title: 'Allow mcp.run', args: {
+        connectionId: 'fixture', toolName: 'part1_echo_nonce', classification: 'write',
+      } },
+    }));
+    expect(JSON.stringify(f.context.ask.mock.calls)).not.toContain(raw);
+    expect(JSON.stringify(f.context.ask.mock.calls)).not.toContain('safeInput');
+  });
+
+  it('retains the native response size guard before preserving MCP failures', async () => {
+    const f = fixture(`{"ok":false,"code":"mcp_tool_failed","data":"${'x'.repeat(131073)}"}`);
+    await expect(f.call('mcp.run', {}, f.context)).rejects.toThrow('safe size limit');
+  });
+
+  it.each([
+    ['mcp.list', '[]'],
+    ['mcp.list', '{}'],
+    ['mcp.list', '{"ok":null}'],
+    ['mcp.list', '{"ok":"true"}'],
+    ['mcp.run', '[]'],
+    ['mcp.run', '{}'],
+    ['mcp.run', '{"ok":null}'],
+    ['mcp.run', '{"ok":"true"}'],
+  ] as const)('rejects malformed %s response envelopes (%s)', async (toolName, body) => {
+    const f = fixture(body);
+    await expect(f.call(toolName, {}, f.context)).rejects.toThrow('invalid response envelope');
+  });
+
+  it('counts UTF-8 bytes when enforcing the native response size guard', async () => {
+    const f = fixture(JSON.stringify({ ok: false, code: 'mcp_tool_failed', data: 'é'.repeat(70_000) }));
+    await expect(f.call('mcp.run', {}, f.context)).rejects.toThrow('safe size limit');
   });
 });

@@ -67,14 +67,21 @@ interface CopyState {
   seen: WeakSet<object>;
 }
 
+export interface McpArgumentsAuditWithStats {
+  readonly value: Readonly<Record<string, unknown>>;
+  readonly truncatedValues: number;
+}
+
 function invalidResult(): Error {
   return new Error('Invalid MCP tool result.');
 }
 
-function isSensitiveKey(value: string): boolean {
+export function isSensitiveMcpKey(value: string): boolean {
   const compact = value.toLocaleLowerCase('en-US').replace(/[^a-z0-9]/gu, '');
   return SENSITIVE_KEY_PARTS.some((part) => compact.includes(part));
 }
+
+const isSensitiveKey = isSensitiveMcpKey;
 
 function plainRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -118,6 +125,8 @@ export function redactMcpText(value: string): string {
       (match) =>
         `${match.slice(0, Math.max(match.indexOf(':'), match.indexOf('=')) + 1)}[REDACTED]`,
     )
+    .replace(/([?&](?:authorization|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|password|secret|credential|session(?:[_-]?token)?)=)[^&#\s]+/giu, '$1[REDACTED]')
+    .replace(/\b(https?:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/giu, '$1')
     .replace(/\b[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b/gu, '[REDACTED]');
 }
 
@@ -461,12 +470,19 @@ export function normalizeExternalMcpToolResult(value: unknown): NormalizedExtern
   return deepFreeze(result);
 }
 
-export function redactMcpArgumentsForAudit(value: unknown): Readonly<Record<string, unknown>> {
+export function redactMcpArgumentsForAuditWithStats(
+  value: unknown,
+): McpArgumentsAuditWithStats {
   if (!plainRecord(value)) throw new Error('Invalid MCP invocation arguments.');
   const state: CopyState = {
     nodes: 0,
     truncatedValues: 0,
     seen: new WeakSet(),
   };
-  return deepFreeze(copySafeValue(value, state) as Record<string, unknown>);
+  const safeValue = deepFreeze(copySafeValue(value, state) as Record<string, unknown>);
+  return Object.freeze({ value: safeValue, truncatedValues: state.truncatedValues });
+}
+
+export function redactMcpArgumentsForAudit(value: unknown): Readonly<Record<string, unknown>> {
+  return redactMcpArgumentsForAuditWithStats(value).value;
 }

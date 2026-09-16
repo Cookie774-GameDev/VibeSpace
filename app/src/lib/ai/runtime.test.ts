@@ -4,6 +4,7 @@ import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import type { Agent, Message, Part } from '@/types';
 import type { LLMStreamChunk } from './types';
 import type { SendDetail } from './runtime';
+import { ProviderRuntimeError } from './providerError';
 import type { AgentId, ChatId, MessageId, ProviderId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
@@ -230,6 +231,7 @@ import {
   dispatchRuntimeSteerHandoff,
   executeApprovalThenActivateTerminalHandoff,
   executeInstalledJarvisRegisteredAction,
+  hasPriorPersistedTurn,
   handleInstalledJarvisKernelClientRequest,
   installJarvisKernelRuntimeHost,
   assertRuntimeCaoExecutionIdentity,
@@ -304,6 +306,53 @@ describe('tool Gateway response citations', () => {
     expect(result.context.items).toEqual([citation]);
     expect(result.context.budget).toEqual({ maxChars: 100, usedChars: citation.excerpt.length });
     expect(appendToolGatewayContextCitations(result, [citation])).toBe(result);
+  });
+});
+
+describe('first-turn policy history identity', () => {
+  it('excludes the current persisted user message from continuation detection', () => {
+    const current = { id: 'msg-current', role: 'user' } as const;
+    expect(hasPriorPersistedTurn([current], current.id)).toBe(false);
+    expect(
+      hasPriorPersistedTurn(
+        [
+          { id: 'msg-previous-user', role: 'user' },
+          { id: 'msg-previous-assistant', role: 'assistant' },
+          current,
+        ],
+        current.id,
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps legacy dispatches with no current id conservative', () => {
+    expect(hasPriorPersistedTurn([{ id: 'msg-history', role: 'user' }])).toBe(true);
+    expect(hasPriorPersistedTurn([])).toBe(false);
+  });
+
+  it('does not treat persisted system notices as a prior conversational turn', () => {
+    expect(hasPriorPersistedTurn([{ id: 'system-notice', role: 'system' }], 'msg-current')).toBe(
+      false,
+    );
+    expect(
+      hasPriorPersistedTurn(
+        [
+          { id: 'system-notice', role: 'system' },
+          { id: 'msg-current', role: 'user' },
+        ],
+        'msg-current',
+      ),
+    ).toBe(false);
+    expect(
+      hasPriorPersistedTurn(
+        [
+          { id: 'system-notice', role: 'system' },
+          { id: 'msg-history', role: 'assistant' },
+          { id: 'msg-current', role: 'user' },
+        ],
+        'msg-current',
+      ),
+    ).toBe(true);
   });
 });
 
@@ -2022,6 +2071,58 @@ describe('startRuntimeListener agent routing', () => {
     useAllAboutMeStore.setState(useAllAboutMeStore.getInitialState(), true);
   });
 
+  it('injects the selected mode on the first send after Composer persisted its user message', async () => {
+    const jarvis = agent('agent_first_turn_policy', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_first_turn_policy' as ChatId;
+    const userMessage: Message = {
+      id: 'msg_first_turn_policy_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: 'Use the selected mode.' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.runAgent.mockResolvedValueOnce({
+      text: 'Mode applied.',
+      usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+    });
+    const stop = trackListener(
+      startRuntimeListener({
+        getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+        getAgentBySlug: (slug) => (slug === jarvis.slug ? jarvis : null),
+        getAgentForChat: vi.fn(async () => jarvis),
+        getMessages: vi.fn(async () => [userMessage]),
+        appendMessage: vi.fn(async (message) => ({
+          ...message,
+          id: 'msg_first_turn_policy_assistant' as MessageId,
+          created_at: 2,
+          updated_at: 2,
+        })),
+        updateMessage: vi.fn(async () => undefined),
+      }),
+    );
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId,
+          cancellationKey: userMessage.id,
+          text: 'Use the selected mode.',
+          reasoningPreference: { mode: 'token-saver', effortOverride: null },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+    expect(mocks.runAgent.mock.calls[0]![0].agent.system_prompt).toContain(
+      '## Reasoning mode: Token Saver',
+    );
+    stop();
+    await stop.whenIdle();
+  });
+
   it('routes a locked Codex chat through the exact Codex connection without changing its model', async () => {
     mocks.lockChatBackendForDispatch.mockResolvedValueOnce({
       version: 1,
@@ -2123,6 +2224,35 @@ describe('startRuntimeListener agent routing', () => {
         .filter(([tool]) => tool !== 'vibespace_context')
         .every(([, enabled]) => enabled === false),
     ).toBe(true);
+  });
+
+  it('advertises explicitly requested semantic MCP tools instead of narrowing to Context', () => {
+    const tools = openCodeToolsForInteractionMode('agent', [
+      {
+        role: 'user',
+        content:
+          'Use the existing custom MCP connection. Call mcp_list exactly once, then mcp_run exactly once.',
+      },
+    ]);
+    expect(tools['mcp.list']).toBe(true);
+    expect(tools['mcp.run']).toBe(true);
+    expect(tools.vibespace_context).toBe(false);
+    expect(
+      Object.entries(tools)
+        .filter(([tool]) => !['mcp.list', 'mcp.run'].includes(tool))
+        .every(([, enabled]) => enabled === false),
+    ).toBe(true);
+  });
+
+  it('keeps semantic MCP prompts free of the Context convenience wrapper', () => {
+    const message = {
+      role: 'user' as const,
+      content:
+        'Use the existing VibeSpace MCP semantic tools. Call mcp_list exactly once, then mcp_run exactly once. Report the complete safe result including structured data and source link. Do not use vibespace_context.',
+    };
+    const prepared = prepareOpenCodeMessagesForInteractionMode([message]);
+    expect(prepared).toEqual([message]);
+    expect(prepared[0]).toBe(message);
   });
 
   it('routes natural read-and-cite file questions only through the Context Map tool', () => {
@@ -10464,6 +10594,59 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(JSON.stringify(harness.bindings.appendMessage.mock.calls)).not.toContain('private provider diagnostic');
       expect(harness.bindings.appendMessage.mock.calls.filter(([message]) => message.role === 'assistant')).toHaveLength(0);
       expect(useAgentStore.getState().runStates[selectedAgent.id]).toBe('error');
+    } finally {
+      stop();
+      await stop.whenIdle();
+      disposeHost();
+      database.close();
+      await database.delete();
+    }
+  });
+
+  it('persists bounded provider error detail for a canonical failure', async () => {
+    const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
+    const harness = kernelRuntimeBindings(selectedAgent);
+    const database = createJarvisDb(uniqueTestDbName('canonical-provider-error'), TEST_INDEXED_DB);
+    mocks.runAgent.mockImplementationOnce(async () => {
+      throw new ProviderRuntimeError({
+        message: 'Quota rejected; api_key=private-value',
+        code: 'QUOTA_EXCEEDED',
+        providerId: 'groq',
+        modelId: 'llama-3.3-70b-versatile',
+        connectionId: 'groq-api',
+        retryable: true,
+        retryAfterMs: 12_345,
+        requestId: 'req-provider-error',
+        runId: 'run-provider-error',
+      });
+    });
+    const disposeHost = await installKernelTestHost(database, 'canonical-provider-error');
+    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: 'Answer this current request.', cancellationKey: 'msg_provider_error',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error'));
+      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: harness.chatId,
+        role: 'system',
+        parts: expect.arrayContaining([
+          { kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' },
+          { kind: 'provider_error', error: expect.objectContaining({
+            message: 'Quota rejected; api_key=[REDACTED]',
+            code: 'QUOTA_EXCEEDED',
+            providerId: 'groq',
+            modelId: 'llama-3.3-70b-versatile',
+            connectionId: 'groq-api',
+            retryable: true,
+            retryAfterMs: 12_345,
+            requestId: 'req-provider-error',
+            runId: 'run-provider-error',
+          }) },
+        ]),
+      }));
+      expect(JSON.stringify(harness.bindings.appendMessage.mock.calls)).not.toContain('private-value');
     } finally {
       stop();
       await stop.whenIdle();

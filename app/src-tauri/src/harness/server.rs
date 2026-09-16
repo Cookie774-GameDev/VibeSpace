@@ -772,8 +772,16 @@ async function call(name, args, context) {
     "context.attach", "skills.load", "plugins.run", "mcp.run", "tasks.create", "tasks.update",
     "schedule.create", "app.navigate"])
   if (mutations.has(name)) {
+    // MCP inputs can contain credential-looking values. The renderer gateway
+    // remains the transport guard; the native approval surface must not copy
+    // the raw input while it waits for the user's decision.
+    const approvalArgs = name === "mcp.run" ? {
+      connectionId: typeof args.connectionId === "string" ? args.connectionId.slice(0, 256) : undefined,
+      toolName: typeof args.toolName === "string" ? args.toolName.slice(0, 256) : undefined,
+      classification: typeof args.classification === "string" ? args.classification.slice(0, 32) : undefined,
+    } : args
     await context.ask({ permission: name.replaceAll(".", "_"), patterns: [name], always: [],
-      metadata: { title: `Allow ${name}`, args } })
+      metadata: { title: `Allow ${name}`, args: approvalArgs } })
   }
   // Match the native bounded investigation budget; allow delivery of its timeout receipt.
   const timeoutMs = name === "vibespace_context" && ["query", "investigate"].includes(args.operation) ? 125000 : 35000
@@ -800,14 +808,20 @@ async function call(name, args, context) {
   })
   if (!response.ok) throw new Error(`VibeSpace Tool Gateway failed (${response.status}).`)
   const body = await response.text()
-  if (body.length > 131072) throw new Error("VibeSpace tool result exceeded the safe size limit.")
+  if (new TextEncoder().encode(body).byteLength > 131072) throw new Error("VibeSpace tool result exceeded the safe size limit.")
   let result
   try { result = JSON.parse(body) } catch { throw new Error("VibeSpace Tool Gateway returned an invalid response.") }
   if (!result || typeof result !== "object") throw new Error("VibeSpace Tool Gateway returned an invalid response.")
+  const isMcp = name === "mcp.list" || name === "mcp.run"
+  if (isMcp && (Array.isArray(result) || typeof result.ok !== "boolean")) {
+    throw new Error("VibeSpace MCP tool returned an invalid response envelope.")
+  }
   if (result.ok !== true) {
-    // Surface the gateway's specific failure code and message so callers can
-    // distinguish invalid input from gateway defects; a bare tool_failed
-    // envelope hides continuation_invalid/pointer_invalid and similar causes.
+    // The gateway response has already passed the bounded-size and JSON
+    // validation above. Return MCP failure envelopes intact so OpenCode can
+    // persist their safe structured data, links and receipt instead of
+    // replacing them with a generic Error string.
+    if (isMcp) return body
     const code = result.code || "tool_failed"
     const detail = typeof result.message === "string" && result.message.length > 0 ? `: ${result.message}` : ""
     throw new Error(`VibeSpace tool did not complete (${code})${detail}`)

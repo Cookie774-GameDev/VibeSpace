@@ -268,6 +268,41 @@ function finiteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function providerErrorFields(
+  value: unknown,
+): Pick<Extract<ProviderEvent, { type: 'error' }>, 'code' | 'retryable' | 'retryAfterMs' | 'resetAt'> {
+  const error = recordOf(value);
+  const code = safeIdentifier(error?.code ?? error?.errorCode ?? error?.error_code);
+  const retryAfterMs = finiteNumber(
+    error?.retryAfterMs ?? error?.retry_after_ms ?? error?.retryAfter ?? error?.retry_after,
+  );
+  const resetAt = finiteNumber(error?.resetAt ?? error?.reset_at ?? error?.resetsAt);
+  return {
+    ...(code ? { code } : {}),
+    ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    ...(resetAt === undefined ? {} : { resetAt }),
+  };
+}
+
+function failedToolEnvelope(value: unknown, depth = 0): boolean {
+  if (depth > 6 || value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((item) => failedToolEnvelope(item, depth + 1));
+  const source = recordOf(value);
+  if (!source) return false;
+  if (
+    source.isError === true ||
+    source.is_error === true ||
+    source.success === false ||
+    source.ok === false
+  ) return true;
+  if (source.error !== undefined && source.error !== null && source.error !== false) return true;
+  const status = safeIdentifier(source.status)?.toLocaleLowerCase('en-US');
+  if (status === 'error' || status === 'failed') return true;
+  return ['result', 'data', 'response', 'payload', 'properties', 'output']
+    .some((key) => failedToolEnvelope(source[key], depth + 1));
+}
+
 function providerReported(value: unknown): UsageValue<number> | undefined {
   const number = finiteNumber(value);
   return number === undefined ? undefined : { value: number, provenance: 'provider-reported' };
@@ -363,10 +398,7 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
     const name = server ? `${server}.${tool}`.slice(0, MAX_IDENTIFIER) : tool;
     // A completed envelope can still carry a failed operation. Surface that
     // failure instead of reporting the tool as successfully completed.
-    const operationFailed =
-      recordOf(item.result)?.isError === true ||
-      item.error != null ||
-      item.success === false;
+    const operationFailed = failedToolEnvelope(item);
     const rawStatus = item.status ?? (method === 'item/completed' ? 'completed' : 'started');
     return [
       {
@@ -690,8 +722,13 @@ export function normalizeCodexAppServerMessage(
     if (status === 'interrupted')
       return projection([{ type: 'done', finishReason: 'interrupted' }]);
     if (status === 'failed') {
-      const message = safePublicText(recordOf(turn?.error)?.message, 2_048);
-      return projection([{ type: 'error', message: message ?? 'Codex turn failed.' }]);
+      const error = recordOf(turn?.error);
+      const message = safePublicText(error?.message, 2_048);
+      return projection([{
+        type: 'error',
+        message: message ?? 'Codex turn failed.',
+        ...providerErrorFields(error),
+      }]);
     }
     return projection([{ type: 'error', message: 'Codex returned an invalid terminal state.' }]);
   }

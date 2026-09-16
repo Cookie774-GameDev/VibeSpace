@@ -64,6 +64,11 @@ import {
   JarvisProviderAttemptFailureError,
   createJarvisProviderAttemptEvidenceAuthority,
 } from './providerAttemptEvidence';
+import {
+  providerErrorDetails,
+  providerErrorFromEvent,
+  ProviderRuntimeError,
+} from './providerError';
 import { providerActivityTracker } from '@/features/taskbar-usage/activityTracker';
 import { recordConnectionUsage } from './connectionUsageLedger';
 import {
@@ -174,7 +179,7 @@ async function runProtectedProviderAttempt<T>(
       failureCategory: 'provider_transport_failure',
       failedAt: Date.now(),
     });
-    throw new JarvisProviderAttemptFailureError(classification);
+    throw new JarvisProviderAttemptFailureError(classification, error);
   }
 }
 
@@ -399,9 +404,19 @@ export interface RunAgentRequest {
 function codexQualifiedModel(req: Readonly<RunAgentRequest>): string {
   const model = req.agent.model.model.trim();
   if (!model) throw new NoModelSelectedError();
-  if (model.startsWith('openai/')) return model.slice('openai/'.length);
+  if (model.startsWith('openai/')) {
+    const selectedProvider = req.agent.model.provider as string;
+    if (selectedProvider !== 'openai' && selectedProvider !== 'opencode') {
+      throw new Error('Codex requires an OpenAI model selected for the Codex connection.');
+    }
+    return model.slice('openai/'.length);
+  }
   if (req.agent.model.provider === 'openai') return model;
-  return model.includes('/') ? model : req.agent.model.provider + '/' + model;
+  // The model picker can expose OpenAI subscription models through the
+  // shared OpenCode catalog. Accept that one explicit alias, but fail closed
+  // for every other provider-qualified model instead of sending it through
+  // the OpenAI Codex connection with a misleading receipt.
+  throw new Error('Codex requires an OpenAI model selected for the Codex connection.');
 }
 
 function codexGatewayConnection(req: Readonly<RunAgentRequest>): ProviderConnection {
@@ -413,7 +428,12 @@ function codexGatewayConnection(req: Readonly<RunAgentRequest>): ProviderConnect
   return Object.freeze({
     ...descriptor,
     adapterId: codexPersistentAdapter.id,
-    providerId: req.agent.model.provider,
+    // The Codex app-server is the OpenAI subscription route even when the
+    // picker supplied an OpenCode-catalog alias such as
+    // `opencode/openai/gpt-5.6-luna`. Keep the connection identity canonical
+    // at the transport boundary so receipts, usage, and errors cannot inherit
+    // the picker implementation provider.
+    providerId: descriptor.providerId,
     authSource: 'codex-cli-session',
     promptTransport: 'native-system',
   });
@@ -593,7 +613,13 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
         }
       } else if (event.type === 'error') {
         terminalObserved = true;
-        throw new Error(event.message);
+        throw providerErrorFromEvent(event, {
+          providerId: connection.providerId,
+          modelId: modelId,
+          connectionId: connection.id,
+          requestId,
+          ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+        });
       } else if (event.type === 'done') {
         terminalObserved = true;
         finishReason = event.finishReason;
@@ -638,8 +664,8 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
       output_tokens: usageNumber(usage?.outputTokens),
       cost_usd: usageNumber(usage?.costUsd),
     },
-    provider: req.agent.model.provider as ProviderId,
-    model: req.agent.model.model,
+    provider: connection.providerId as ProviderId,
+    model: modelId,
     ...(finishReason ? { finish_reason: finishReason } : {}),
     tool_evidence: Object.freeze({
       completedReadOnlyFilesystem,
@@ -800,9 +826,11 @@ async function executePersistentOpenCode(
 ): Promise<LLMResponse> {
   let diagnosticCode: OpenCodeDispatchDiagnosticCode = 'router_connection';
   let providerReportedFailure = false;
+  const requestId = req.requestId ?? globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}`;
+  let connection: ProviderConnection | undefined;
   try {
     if (req.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
-    const connection = openCodeGatewayConnection(selection);
+    connection = openCodeGatewayConnection(selection);
     if (!openCodePersistentAdapter.send) {
       throw new Error('Persistent OpenCode transport is unavailable.');
     }
@@ -815,7 +843,6 @@ async function executePersistentOpenCode(
     }
 
     diagnosticCode = 'router_request_controls';
-    const requestId = req.requestId ?? globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}`;
     const qualifiedModel = qualifyOpenCodeModel(selection);
     const variant = resolveOpenCodeVariant(req.provider_options);
     const runtimeSettings: ChatRuntimeSettings = req.runtimeSettings
@@ -986,7 +1013,13 @@ async function executePersistentOpenCode(
           });
         } else if (event.type === 'error') {
           providerReportedFailure = true;
-          throw new Error(event.message);
+          throw providerErrorFromEvent(event, {
+            providerId: selection.providerId,
+            modelId: selection.modelId,
+            connectionId: connection.id,
+            requestId,
+            ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+          });
         } else if (event.type === 'done') {
           diagnosticCode = 'router_done_event';
           terminalDoneObserved = true;
@@ -1049,10 +1082,15 @@ async function executePersistentOpenCode(
         : {}),
     };
   } catch (error) {
-    if (!isAbortError(error) && !providerReportedFailure) {
-      reportOpenCodeDispatchFailure(diagnosticCode);
-    }
-    throw error;
+    if (isAbortError(error) || error instanceof ProviderRuntimeError) throw error;
+    if (!providerReportedFailure) reportOpenCodeDispatchFailure(diagnosticCode);
+    throw new ProviderRuntimeError(providerErrorDetails(error, {
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      ...(connection?.id ? { connectionId: connection.id } : {}),
+      requestId,
+      ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+    }));
   }
 }
 
@@ -1068,7 +1106,19 @@ async function dispatchThroughOpenCode(req: RunAgentRequest): Promise<LLMRespons
     }
   }
 
-  const selection = resolveOpenCodeSelection(req);
+  let selection: OpenCodeSelection;
+  try {
+    selection = resolveOpenCodeSelection(req);
+  } catch (error) {
+    if (isAbortError(error) || error instanceof ProviderRuntimeError) throw error;
+    throw new ProviderRuntimeError(providerErrorDetails(error, {
+      providerId: req.agent.model.provider,
+      modelId: req.agent.model.model,
+      ...(req.connectionId ? { connectionId: req.connectionId } : {}),
+      ...(req.requestId ? { requestId: req.requestId } : {}),
+      ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+    }));
+  }
   const dispatch = (hooks?: ProtectedAttemptHooks) =>
     executePersistentOpenCode(req, selection, hooks);
   let response: LLMResponse;
@@ -1110,7 +1160,14 @@ async function dispatchThroughOpenCode(req: RunAgentRequest): Promise<LLMRespons
         }
       }
     }
-    throw error;
+    if (isAbortError(error) || error instanceof ProviderRuntimeError) throw error;
+    throw new ProviderRuntimeError(providerErrorDetails(error, {
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      connectionId: req.connectionId ?? selection.connectionId ?? 'opencode-cli',
+      ...(req.requestId ? { requestId: req.requestId } : {}),
+      ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+    }));
   }
 
   useAgentStore
@@ -1421,7 +1478,25 @@ async function runAgentDispatch(req: RunAgentRequest): Promise<LLMResponse> {
     return runFoundryDispatch(req);
   }
   if (req.backend === 'codex') {
-    return executePersistentCodex(req);
+    try {
+      return await executePersistentCodex(req);
+    } catch (error) {
+      if (isAbortError(error) || error instanceof ProviderRuntimeError) throw error;
+      let modelId = req.agent.model.model;
+      try {
+        modelId = codexQualifiedModel(req);
+      } catch {
+        // Preserve a bounded selected-model label when validation fails before
+        // the qualified native model can be computed.
+      }
+      throw new ProviderRuntimeError(providerErrorDetails(error, {
+        providerId: 'openai',
+        modelId,
+        ...(req.connectionId ? { connectionId: req.connectionId } : {}),
+        ...(req.requestId ? { requestId: req.requestId } : {}),
+        ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+      }));
+    }
   }
   return dispatchThroughOpenCode(req);
 }
@@ -1430,12 +1505,23 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
   const activityId = req.connectionId ?? req.agent.model.provider;
   const completeActivity = providerActivityTracker.begin(activityId);
   try {
+    let activityProvider = req.agent.model.provider;
+    let activityModel = req.agent.model.model;
+    if (req.backend === 'codex') {
+      activityProvider = 'openai' as ProviderId;
+      try {
+        activityModel = codexQualifiedModel(req);
+      } catch {
+        // Keep a bounded selected label when validation fails before the
+        // canonical Codex model can be computed.
+      }
+    }
     const identity = {
       requestId: req.requestId,
       chatId: req.chatId,
       purpose: req.purpose,
-      provider: req.agent.model.provider,
-      model: req.agent.model.model,
+      provider: activityProvider,
+      model: activityModel,
       connectionId: req.connectionId,
     };
     return await appActivityLog.trace('model', { ...identity, messages: req.messages }, () =>

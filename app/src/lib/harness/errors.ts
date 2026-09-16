@@ -51,6 +51,10 @@ export function redactHarnessText(value: string): string {
       /\b([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)|api_key|token)\s*=\s*[^\s]+/gi,
       '$1=[REDACTED]',
     )
+    .replace(
+      /((?:["']?(?:[A-Z0-9_-]*(?:API_KEY|TOKEN|SECRET|PASSWORD)|api[_-]?key|token|secret|password|credential)["']?)\s*[:=]\s*)(?!\[REDACTED\])(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi,
+      '$1[REDACTED]',
+    )
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]');
 }
 

@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { createCodexContextTool } from './codexContextTool';
+import { createCodexContextTool, createCodexToolGateway } from './codexContextTool';
 import type { ProviderRequest } from './types';
 
 const state = vi.hoisted(() => ({
@@ -56,4 +56,29 @@ it('rejects malformed operations, cancellation and revoked authority before deli
   controller.abort();
   await expect(bridge.execute({ operation: 'describe' }, 'call')).rejects.toThrow('inactive');
   bridge.dispose();
+});
+
+it('advertises only the requested semantic MCP tools and routes them through the scoped runtime', async () => {
+  const bridge = (await createCodexToolGateway({
+    ...request,
+    tools: { vibespace_context: false, 'mcp.list': true, 'mcp.run': true },
+  }))!;
+  expect(bridge.dynamicTools?.map((tool) => tool.name)).toEqual(['mcp_list', 'mcp_run']);
+  bridge.bind('mcp-thread', identity, 'mcp-generation');
+  await expect(bridge.executeTool?.('mcp_list', {}, 'mcp-list-call')).resolves.toMatchObject({ success: true });
+  expect(state.execute).toHaveBeenCalledWith(expect.objectContaining({
+    sessionId: 'mcp-thread', tool: 'mcp.list', args: {},
+  }));
+  await expect(bridge.executeTool?.('mcp_run', {
+    connectionId: 'fixture', toolName: 'part1_echo_nonce', classification: 'read', input: { nonce: 'safe' },
+  }, 'mcp-run-call')).resolves.toMatchObject({ success: true });
+  expect(state.execute).toHaveBeenCalledWith(expect.objectContaining({
+    sessionId: 'mcp-thread', tool: 'mcp.run', args: expect.objectContaining({ connectionId: 'fixture' }),
+  }));
+  bridge.dispose();
+});
+
+it('does not expose semantic MCP tools without an explicit request or under the root read policy', async () => {
+  expect(await createCodexToolGateway({ ...request, tools: { vibespace_context: false } })).toBeNull();
+  expect(await createCodexToolGateway({ ...request, tools: { 'mcp.list': true }, explicitReadRoot: true })).toBeNull();
 });
