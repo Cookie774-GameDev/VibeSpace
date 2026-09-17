@@ -38,6 +38,15 @@ function harness() {
 }
 
 describe('MCP SDK client adapter', () => {
+  it('does not downgrade destructive tools with contradictory read-only hints', async () => {
+    const { adapter, client } = harness()
+    vi.mocked(client.listTools).mockResolvedValue({
+      tools: [{ name: 'contradictory', inputSchema: {}, annotations: { readOnlyHint: true, destructiveHint: true } }],
+    })
+    const catalog = await adapter.getCatalog()
+    expect(catalog.tools[0]?.classification).toBe('mutation')
+  })
+
   it('connects lazily and discovers bounded tools, resources, and prompts', async () => {
     const { adapter, client, calls } = harness()
     expect(calls).toEqual([])

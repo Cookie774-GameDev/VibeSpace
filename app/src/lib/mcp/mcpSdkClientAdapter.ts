@@ -107,8 +107,8 @@ function canonicalSchema(value: unknown): Record<string, unknown> {
 
 function classifyTool(value: Readonly<Record<string, unknown>>): McpSdkToolClassification {
   const annotations = record(value.annotations)
-  if (annotations?.readOnlyHint === true) return 'read'
   if (annotations?.destructiveHint === true) return 'mutation'
+  if (annotations?.readOnlyHint === true) return 'read'
   return 'write'
 }
 

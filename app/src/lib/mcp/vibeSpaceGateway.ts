@@ -1085,7 +1085,11 @@ export function createVibeSpaceMcpGateway(
       if (runtime.getSnapshot().some((connection) => connection.id === id)) {
         await runtime.disconnect(id);
       }
-      registry = createUnifiedMcpRegistry();
+      refreshRegistry();
+      // A reconnect owns a provisional registry until its health is verified.
+      // Replacing the live registry here would revoke unrelated healthy routes,
+      // including when this connector stays offline or requires reapproval.
+      const reconnectRegistry = createUnifiedMcpRegistry();
       let policyChanged = false;
       if (profile.exposedTools.length === 0) {
         try {
@@ -1128,7 +1132,7 @@ export function createVibeSpaceMcpGateway(
         }
       }
       supervisor = createMcpConnectionSupervisor({
-        registry,
+        registry: reconnectRegistry,
         clock,
         scheduler: {
           schedule: () => Object.freeze({ cancel() {} }),

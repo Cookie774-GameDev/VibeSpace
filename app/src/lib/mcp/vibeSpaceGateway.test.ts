@@ -37,6 +37,7 @@ function runtimeHarness(tool: Readonly<RemoteMcpSetupTool> = readTool) {
   const publish = () => listeners.forEach((listener) => listener());
   const connect = vi.fn(async (request: RemoteMcpConnectRequest) => {
     snapshot = Object.freeze([
+      ...snapshot.filter((connection) => connection.id !== request.id),
       Object.freeze({
         id: request.id,
         endpoint: request.endpoint,
@@ -112,6 +113,45 @@ async function approve(harness: ReturnType<typeof createHarness>) {
 }
 
 describe('VibeSpace MCP Gateway', () => {
+  it.each([
+    { exposed: false, connected: false },
+    { exposed: true, connected: false },
+    { exposed: true, connected: true },
+  ])('keeps healthy routes available while another reconnect fails ($exposed/$connected)', async ({ exposed, connected }) => {
+    const harness = createHarness();
+    await approve(harness);
+    harness.gateway.setToolExposure('reviewed-server', ['repo.read'], { confirmedByUser: true });
+    await harness.gateway.connect({ id: 'stale-server', endpoint, confirmedByUser: true });
+    harness.gateway.approve('stale-server', { confirmedByUser: true });
+    if (exposed) harness.gateway.setToolExposure('stale-server', ['repo.read'], { confirmedByUser: true });
+    if (!connected) await harness.gateway.disconnect('stale-server');
+    let rejectReconnect!: (error: Error) => void;
+    harness.runtime.connect.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+      rejectReconnect = reject;
+    }));
+    const reconnect = harness.gateway.reconnect('stale-server');
+    const rejected = expect(reconnect).rejects.toThrow(/Unable to connect through/i);
+    await vi.waitFor(() => expect(rejectReconnect).toBeTypeOf('function'));
+    const invoke = (taskId: string) => harness.gateway.invoke({
+      accountId: 'account_a', projectId: 'project_a', taskId,
+      connectionId: 'reviewed-server', toolName: 'repo.read',
+      arguments: { path: 'README.md' }, allowedTools: ['reviewed-server.repo.read'],
+      classification: 'read',
+    });
+    try {
+      expect(harness.gateway.getCapabilitySnapshot().connections.map((connection) => connection.id))
+        .not.toContain('stale-server');
+      await expect(invoke('during-reconnect')).resolves.toMatchObject({ receipt: { status: 'succeeded' } });
+    } finally {
+      rejectReconnect(new Error('fixture offline'));
+      await rejected;
+    }
+    await expect(invoke('after-reconnect')).resolves.toMatchObject({ receipt: { status: 'succeeded' } });
+    expect(harness.runtime.invoke).toHaveBeenCalledTimes(2);
+    expect(harness.gateway.getCapabilitySnapshot().connections.map((connection) => connection.id))
+      .toContain('reviewed-server');
+  });
+
   it('invokes only an approved task-scoped tool and persists a redacted receipt', async () => {
     const harness = createHarness();
     await approve(harness);
