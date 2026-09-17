@@ -112,7 +112,11 @@ function staticReasoningCapabilities(selection: ReasoningSelection): ReasoningCa
     return {
       supportedEfforts: ['minimal', 'low', 'medium', 'high', 'max'],
       providerOptionKey: 'reasoning_effort',
-      wireEffort: (effort) => (effort === 'minimal' ? 'none' : effort),
+      // OpenCode exposes Luna's minimal alias as `none`; Codex app-server
+      // exposes only low and above, so keep the same UI choice on its lowest
+      // supported native effort at the route boundary.
+      wireEffort: (effort) =>
+        effort === 'minimal' ? (connection.includes('codex') ? 'low' : 'none') : effort,
     };
   }
 

@@ -709,6 +709,39 @@ describe('canonical OpenCode AI routing', () => {
     warn.mockRestore();
   });
 
+  it('retains a specific protected transport failure through the attempt wrapper', async () => {
+    openCodeSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'text', delta: 'partial' } as const;
+      throw new Error('OpenCode event stream failed.');
+    })());
+
+    let failure: unknown;
+    try {
+      await runAgent({
+        agent: openaiAgent,
+        connectionId: 'openai-api',
+        accountId: protectedAttempt.accountId,
+        compiledPrompt,
+        requestId: protectedAttempt.requestId,
+        protectedAttempt,
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: {
+        message: 'OpenCode event stream failed.',
+        providerId: 'openai',
+        modelId: 'gpt-protected',
+        connectionId: 'openai-api',
+        requestId: protectedAttempt.requestId,
+      },
+    });
+  });
+
   it('does not duplicate a provider-reported failure diagnostic in the router', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     openCodeSend.mockImplementationOnce(() =>

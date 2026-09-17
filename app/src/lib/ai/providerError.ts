@@ -3,6 +3,7 @@ import { redactHarnessText } from '@/lib/harness/errors';
 const MAX_MESSAGE_LENGTH = 2_048;
 const MAX_CODE_LENGTH = 128;
 const MAX_ID_LENGTH = 512;
+const INTERNAL_ATTEMPT_FAILURE_CODE = 'jarvis_provider_attempt_failure';
 const UNSAFE_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu;
 
 export interface ProviderErrorDetails {
@@ -134,7 +135,12 @@ export function providerErrorDetails(
       details = {
         ...details,
         ...(readMessage(current, source) ? { message: readMessage(current, source) } : {}),
-        ...(sourceCode ? { code: sourceCode } : {}),
+        // This is an internal attempt wrapper marker, not a provider error
+        // code. Keep it on the raw Error for execution classification, while
+        // allowing an upstream code from the cause to survive in the public
+        // provider-error envelope. If no upstream code exists, omission is
+        // the truthful representation of an unknown provider code.
+        ...(sourceCode && sourceCode !== INTERNAL_ATTEMPT_FAILURE_CODE ? { code: sourceCode } : {}),
         // A caller's route binding is authoritative. Provider payloads may
         // contain display labels or stale aliases that must not relabel it.
         ...(details.providerId === undefined && sourceProviderId ? { providerId: sourceProviderId } : {}),

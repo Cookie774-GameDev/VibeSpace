@@ -3,7 +3,7 @@ import { createCodexPersistentAdapter } from './codexPersistent';
 import { CODEX_CLI_CONNECTION } from './catalog';
 
 describe('Codex token-saving effort', () => {
-  it.each([['minimal', 'minimal'], ['ultra', 'xhigh']] as const)('transports %s as the supported %s effort in thread and turn requests', async (selectedEffort, wireEffort) => {
+  it.each([['minimal', 'low'], ['none', 'low'], ['ultra', 'xhigh']] as const)('transports %s as the supported %s effort in thread and turn requests', async (selectedEffort, wireEffort) => {
     const writes: Record<string, any>[] = [];
     async function* frames() {
       yield {

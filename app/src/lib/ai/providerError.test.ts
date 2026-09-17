@@ -5,6 +5,7 @@ import {
   providerErrorFromEvent,
   ProviderRuntimeError,
 } from './providerError';
+import { JarvisProviderAttemptFailureError } from './providerAttemptEvidence';
 
 describe('provider error boundary', () => {
   it('bounds and redacts structured provider metadata', () => {
@@ -64,9 +65,10 @@ describe('provider error boundary', () => {
     });
   });
 
-  it('keeps unknown provider failures specific while applying verified identity fallback', () => {
+  it('keeps an unknown provider code specific while applying verified identity fallback', () => {
     const details = providerErrorDetails(new ProviderRuntimeError({
       message: 'A new provider code was returned.',
+      code: 'provider_code_added_after_catalog_sync',
     }), {
       providerId: 'openai',
       modelId: 'gpt-5.6-luna',
@@ -76,6 +78,7 @@ describe('provider error boundary', () => {
 
     expect(details).toEqual({
       message: 'A new provider code was returned.',
+      code: 'provider_code_added_after_catalog_sync',
       providerId: 'openai',
       modelId: 'gpt-5.6-luna',
       connectionId: 'openai-codex',
@@ -138,6 +141,40 @@ describe('provider error boundary', () => {
       requestId: 'request-verified',
       runId: 'run-verified',
       code: 'transport_failed',
+    });
+  });
+
+  it('preserves a specific native transport reason through the protected attempt error', () => {
+    const classification = {
+      kind: 'response_started_transport_failure' as const,
+      accountId: 'account-1',
+      runId: 'run-1',
+      requestId: 'request-1',
+      attemptNumber: 1,
+      responseStarted: true as const,
+      chunkCount: 1,
+      actionDispatchCount: 0,
+      failureCategory: 'provider_transport_failure',
+      failedAt: 100,
+    };
+    const wrapped = new JarvisProviderAttemptFailureError(
+      classification,
+      new Error('OpenCode event stream failed.'),
+    );
+
+    expect(providerErrorDetails(wrapped, {
+      providerId: 'opencode',
+      modelId: 'openai/gpt-5.6-luna',
+      connectionId: 'opencode-cli',
+      requestId: 'request-1',
+      runId: 'run-1',
+    })).toMatchObject({
+      message: 'OpenCode event stream failed.',
+      providerId: 'opencode',
+      modelId: 'openai/gpt-5.6-luna',
+      connectionId: 'opencode-cli',
+      requestId: 'request-1',
+      runId: 'run-1',
     });
   });
 

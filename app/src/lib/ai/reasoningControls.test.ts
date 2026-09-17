@@ -243,6 +243,28 @@ describe('reasoning controls', () => {
     });
   });
 
+  it('maps Luna minimal to Codex low while retaining OpenCode none', () => {
+    const codex = resolveReasoningPolicy({
+      selection: selection('openai', 'gpt-5.6-luna', 'openai-codex'),
+      preference: { mode: 'normal', effortOverride: 'minimal' },
+    });
+    expect(codex).toMatchObject({
+      resolvedEffort: 'minimal',
+      providerEffort: 'low',
+      providerOptions: { reasoning_effort: 'low' },
+    });
+
+    const openCode = resolveReasoningPolicy({
+      selection: selection('openai', 'gpt-5.6-luna', 'opencode-cli'),
+      preference: { mode: 'normal', effortOverride: 'minimal' },
+    });
+    expect(openCode).toMatchObject({
+      resolvedEffort: 'minimal',
+      providerEffort: 'none',
+      providerOptions: { reasoning_effort: 'none' },
+    });
+  });
+
   it('binds each mode to a real execution contract and gives Final Boss a bounded verification loop', () => {
     const selected = selection('openai', 'gpt-5.6-sol', 'openai-codex');
     const saver = resolveReasoningPolicy({

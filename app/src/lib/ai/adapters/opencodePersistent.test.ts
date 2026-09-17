@@ -143,6 +143,7 @@ function configureManagedQuestionTransport(
     pendingPermissions?: readonly Readonly<Record<string, unknown>>[];
     pendingQuestions?: readonly Readonly<Record<string, unknown>>[];
     sessionStatuses?: readonly (string | null)[];
+    sessionStatusError?: Readonly<Record<string, unknown>>;
     persistedMessages?: readonly Readonly<Record<string, unknown>>[];
     persistedMessagePolls?: readonly (readonly Readonly<Record<string, unknown>>[])[];
     eventStartDelayMs?: number;
@@ -195,7 +196,14 @@ function configureManagedQuestionTransport(
       ];
       const status = statuses[Math.min(statusReadIndex, statuses.length - 1)]!;
       statusReadIndex += 1;
-      return jsonResponse(status === null ? {} : { ses_question_exact: { type: status } });
+      return jsonResponse(status === null ? {} : {
+        ses_question_exact: {
+          type: status,
+          ...(status === 'error' && options.sessionStatusError
+            ? { error: options.sessionStatusError }
+            : {}),
+        },
+      });
     }
     if (/^\/session(?:\?|$)/u.test(path) && init?.method === 'POST') {
       return jsonResponse({ id: 'ses_question_exact' });
@@ -328,6 +336,23 @@ async function drain(iterator: AsyncIterator<ProviderEvent>): Promise<void> {
 }
 
 describe('persistent OpenCode question transport authority', () => {
+  it.each([
+    { error: { code: 'rate_limit_exceeded', message: 'Retry later. api_key=synthetic-secret-value', retryable: true, retryAfterMs: 12000, resetAt: 1789828217000 } },
+    { name: 'APIError', data: { code: 'rate_limit_exceeded', message: 'Retry later. api_key=synthetic-secret-value', isRetryable: true, retryAfterMs: 12000, resetAt: 1789828217000 } },
+  ])('preserves safe structured HTTP provider errors through dispatch: %j', async (payload) => {
+    configureManagedQuestionTransport([], { persistedMessages: [] });
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation((generation, path, init, timeout) =>
+      path.includes('/prompt_async')
+        ? Promise.resolve(jsonResponse(payload, 429))
+        : transport(generation, path, init, timeout));
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('request-http-provider-error'))[Symbol.asyncIterator]();
+    await expect(drain(iterator)).rejects.toMatchObject({
+      message: 'Retry later. api_key=[REDACTED]',
+      details: { code: 'rate_limit_exceeded', retryable: true, retryAfterMs: 12000, resetAt: 1789828217000 },
+    });
+  });
+
   it('allows a sixteen-second cold health handshake before dispatching exactly once', async () => {
     vi.useFakeTimers();
     const original = nativeOpenCodeMocks.request.getMockImplementation()!;
@@ -2929,7 +2954,7 @@ describe('persistent OpenCode live authority', () => {
 
     expect(terminal).toEqual({
       type: 'error',
-      message: 'OpenCode session entered an error state.',
+      message: 'OpenCode native event queue exceeded safe limits.',
     });
     expect(observed).toContainEqual({
       type: 'text',
@@ -2937,6 +2962,48 @@ describe('persistent OpenCode live authority', () => {
       streamPartId: 'opencode-text-1',
     });
     expect(observed).not.toContainEqual(expect.objectContaining({ type: 'done' }));
+  });
+
+  it('preserves a specific polled status message when the event iterator rejects', async () => {
+    configureManagedQuestionTransport([], {
+      sessionStatuses: ['error'],
+      sessionStatusError: {
+        message: 'OpenCode provider closed the generation before completion.',
+      },
+      persistedMessages: [
+        {
+          info: {
+            id: 'message-specific-status-error',
+            role: 'assistant',
+            providerID: 'openai',
+            modelID: 'gpt-question-test',
+            time: { created: 1 },
+          },
+          parts: [{ type: 'text', text: 'The provider started the answer.' }],
+        },
+      ],
+    });
+    nativeOpenCodeMocks.events.mockImplementation(async function* () {
+      throw new Error('OpenCode native event queue exceeded safe limits.');
+    });
+
+    const observed: ProviderEvent[] = [];
+    for await (const event of openCodePersistentAdapter.send!(
+      questionProviderRequest('request-specific-status-error'),
+    )) {
+      observed.push(event);
+      if (event.type === 'error') break;
+    }
+
+    expect(observed.at(-1)).toEqual({
+      type: 'error',
+      message: 'OpenCode provider closed the generation before completion.',
+    });
+    expect(observed).toContainEqual({
+      type: 'text',
+      delta: 'The provider started the answer.',
+      streamPartId: 'opencode-text-1',
+    });
   });
 
   it.each([

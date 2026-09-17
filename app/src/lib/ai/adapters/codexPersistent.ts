@@ -200,6 +200,13 @@ function developerInstructions(request: Readonly<ProviderRequest>): string {
 function effort(request: Readonly<ProviderRequest>): string | null {
   const value = request.reasoningEffort ?? request.runtimeSettings?.effort;
   if (!value || value === 'auto') return null;
+  // Codex app-server currently exposes Luna's lowest native effort as `low`.
+  // Keep direct adapter callers aligned with the shared route policy instead
+  // of allowing a stale `minimal`/`none` alias to reach thread/start or
+  // turn/start and fail after the request has already begun.
+  if (request.modelId === 'gpt-5.6-luna' && (value === 'minimal' || value === 'none')) {
+    return 'low';
+  }
   if (value === 'ultra') return 'xhigh';
   return value;
 }

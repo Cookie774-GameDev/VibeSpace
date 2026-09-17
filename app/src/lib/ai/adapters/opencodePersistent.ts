@@ -44,6 +44,7 @@ import { normalizeOpenCodeEvent } from '@/lib/harness/eventNormalizer';
 import { OpenCodeApprovalAcknowledgements } from '@/lib/harness/OpenCodeApprovalAcknowledgement';
 import { recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
 import { nativeShellFailure, projectNativeTaskActivity } from '../openCodeNativeActivity';
+import { providerErrorDetails, ProviderRuntimeError } from '../providerError';
 import {
   bindToolGatewayObservedExecutionAuthority,
   bindToolGatewaySessionAuthority,
@@ -226,14 +227,25 @@ function withDirectory(path: string, scope: Readonly<HarnessScope>): string {
 
 async function responseError(response: Response): Promise<Error> {
   let detail = '';
+  let payload: Record<string, unknown> | undefined;
   try {
-    detail = (await response.text()).trim().slice(0, 2_048);
+    const text = (await response.text()).trim();
+    detail = text.slice(0, 2_048);
+    if (text.length <= 16_384) {
+      try { payload = recordOf(JSON.parse(text)); } catch { /* Keep bounded non-JSON detail. */ }
+    }
   } catch {
     detail = '';
   }
-  return new Error(
-    `OpenCode server request failed (${response.status}${response.statusText ? ` ${response.statusText}` : ''})${detail ? `: ${detail}` : ''}`,
-  );
+  const envelope = recordOf(payload?.error) ?? payload;
+  // OpenCode also uses named APIError envelopes with provider fields in data.
+  const data = recordOf(envelope?.data);
+  const source = data ? { ...envelope, ...data,
+    retryable: data.retryable ?? data.isRetryable ?? envelope?.retryable,
+  } : envelope;
+  return new ProviderRuntimeError(providerErrorDetails(source, {
+    message: `OpenCode server request failed (${response.status}${response.statusText ? ` ${response.statusText}` : ''})${detail ? `: ${detail}` : ''}`,
+  }));
 }
 
 async function requestJson(
@@ -1162,6 +1174,11 @@ export function persistentOpenCodeSessionErrorMessage(
   sessionId: string,
 ): string {
   return persistentOpenCodeSessionErrorDetails(event, sessionId).message;
+}
+
+function isGenericPersistentOpenCodeSessionError(message: string): boolean {
+  return message === 'OpenCode session entered an error state.' ||
+    message === 'OpenCode reported a provider session error.';
 }
 
 export function persistentOpenCodeSessionErrorDetails(
@@ -2126,8 +2143,18 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       request.accessLevel ??
       (mode === 'ask' ? 'read-only' : mode === 'plan' ? 'read-only' : 'full');
     const eventIterator = client.http.events(abortEvents.signal)[Symbol.asyncIterator]();
+    let eventStreamFailure: Readonly<ReturnType<typeof providerErrorDetails>> | undefined;
     const nextEventOrEof = (): Promise<IteratorResult<OpenCodeRawEvent>> =>
-      eventIterator.next().catch(() => ({ done: true, value: undefined }));
+      eventIterator.next().catch((error: unknown) => {
+        // The native event bridge can reject after a process stop or a
+        // bounded-queue failure. Keep its already-sanitized reason while
+        // still allowing the authoritative HTTP recovery path to reconcile
+        // a completed persisted answer.
+        eventStreamFailure = providerErrorDetails(error, {
+          message: 'OpenCode event stream failed.',
+        });
+        return { done: true, value: undefined };
+      });
     let pendingEvent = nextEventOrEof();
     const settings = defaultRuntimeSettings(request);
     failureStage = 'runtime_controls';
@@ -2579,9 +2606,25 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
               status: statusLookup.value,
             },
           };
+          const statusDetails = persistentOpenCodeSessionErrorDetails(statusEvent, dispatch.sessionId);
+          const statusHasProviderDetails = Boolean(
+            statusDetails.code || statusDetails.providerId || statusDetails.modelId ||
+            statusDetails.retryable !== undefined || statusDetails.retryAfterMs !== undefined ||
+            statusDetails.resetAt !== undefined,
+          );
+          const errorDetails = eventStreamFailure && !statusHasProviderDetails &&
+            isGenericPersistentOpenCodeSessionError(statusDetails.message)
+            ? eventStreamFailure
+            : statusDetails;
           yield {
             type: 'error',
-            ...persistentOpenCodeSessionErrorDetails(statusEvent, dispatch.sessionId),
+            message: errorDetails.message,
+            ...(errorDetails.code ? { code: errorDetails.code } : {}),
+            ...(errorDetails.providerId ? { providerId: errorDetails.providerId } : {}),
+            ...(errorDetails.modelId ? { modelId: errorDetails.modelId } : {}),
+            ...(errorDetails.retryable === undefined ? {} : { retryable: errorDetails.retryable }),
+            ...(errorDetails.retryAfterMs === undefined ? {} : { retryAfterMs: errorDetails.retryAfterMs }),
+            ...(errorDetails.resetAt === undefined ? {} : { resetAt: errorDetails.resetAt }),
           };
           return;
         }
@@ -2605,6 +2648,11 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           })
         ) {
           await client.abort(dispatch.sessionId).catch(() => undefined);
+          if (eventStreamFailure) {
+            const failure = new Error(eventStreamFailure.message);
+            Object.assign(failure, eventStreamFailure);
+            throw failure;
+          }
           throw new Error('OpenCode turn ended before current-turn output became available.');
         }
         if (status === 'idle' || (statusLookup.succeeded && status === undefined)) {
