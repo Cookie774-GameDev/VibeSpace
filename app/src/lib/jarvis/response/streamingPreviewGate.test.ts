@@ -10,6 +10,23 @@ function push(state: Readonly<StreamingPreviewState>, delta: string) {
 }
 
 describe('streaming preview gate', () => {
+  it('retains safe unfinished prose only when explicitly finishing an interrupted stream', () => {
+    expect(pushStreamingPreviewChunk(createStreamingPreviewState(), 'The answer began', { interrupted: true }))
+      .toMatchObject({ allowed: true, visibleText: 'The answer began' });
+    expect(push(createStreamingPreviewState(), 'The answer began')).toMatchObject({ allowed: false });
+  });
+
+  it.each(['api_key=private-value', 'hidden instructions', '{action}\nRun it', 'Before ```action\n{}'])(
+    'keeps interrupted prose filtering for %s', (text) => {
+      expect(pushStreamingPreviewChunk(createStreamingPreviewState(), text, { interrupted: true }))
+        .toMatchObject({ allowed: false });
+    },
+  );
+
+  it('retains unfinished public prose before a fence without retaining structured bytes', () => {
+    expect(pushStreamingPreviewChunk(createStreamingPreviewState(), 'The answer began\n```action\nsecret', { interrupted: true }))
+      .toMatchObject({ allowed: true, visibleText: 'The answer began' });
+  });
   it('shows safe prose immediately when a question fence arrives in the same chunk', () => {
     const first = push(createStreamingPreviewState(), 'Which file should I edit?\n```jarvis_question\n{"questions":[');
     expect(first).toMatchObject({ allowed: true, visibleText: 'Which file should I edit?' });

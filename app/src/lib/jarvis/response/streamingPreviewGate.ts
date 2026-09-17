@@ -87,10 +87,11 @@ export function createStreamingPreviewState(): Readonly<StreamingPreviewState> {
 export function pushStreamingPreviewChunk(
   state: Readonly<StreamingPreviewState>,
   delta: string,
+  options: Readonly<{ interrupted?: boolean }> = {},
 ): StreamingPreviewDecision {
   const buffered = `${state.buffered}${delta}`;
   const parsed = proseOutsideFences(buffered);
-  const nextVisible = completeVisibleProse(parsed.prose);
+  const nextVisible = options.interrupted ? parsed.prose.trim() : completeVisibleProse(parsed.prose);
   const nextState = frozenState(buffered, nextVisible, parsed.insideFence);
   const blockedState = frozenState(buffered, state.visible, parsed.insideFence);
 

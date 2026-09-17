@@ -113,6 +113,8 @@ export type JarvisProviderStartedReceipt = Readonly<{
 export type JarvisStartedProviderDispatch = Readonly<{
   receipt: JarvisProviderStartedReceipt;
   response: Promise<Readonly<RawProviderResponse>>;
+  /** Safe public prose only; never reasoning, actions, or completion evidence. */
+  getPartialText?(): string | undefined;
   abortAfterStart(reason: 'authority_revoked' | 'evidence_commit_failed'): void;
 }>;
 
@@ -590,6 +592,7 @@ async function runJarvisKernelExecution(
   let providerEvidenceRetained = false;
   let providerEvidenceDisposed = false;
   let hasPrimaryFailure = false;
+  let providerResponseReceived = false;
   const disposeProviderEvidence = (): void => {
     if (providerEvidenceDisposed) return;
     providerEvidenceDisposed = true;
@@ -710,6 +713,7 @@ async function runJarvisKernelExecution(
     throwIfCancellationDelivered();
 
     const raw = await waitForProviderStage(() => started!.response);
+    providerResponseReceived = true;
     const processedResponse = await waitForProviderStage(() => deps.processResponse(raw, request));
     let status = terminalStatus(processedResponse);
     const providerResultState = status === 'completed' ? 'completed' : 'degraded';
@@ -1129,6 +1133,46 @@ async function runJarvisKernelExecution(
       return revoked();
     }
     hasPrimaryFailure = true;
+    // Only an interrupted chat provider may retain its already-visible prose.
+    // Processing failures and scheduled/voice settlement keep their own authority.
+    if (input.surface === 'typed_chat' && lifecycleMode === 'initial' && registration &&
+        !providerResponseReceived && !terminalCommitted) {
+      try {
+        const partialText = started?.getPartialText?.()?.slice(0, 32_768).trim();
+        if (partialText && lifecycleIsCurrent(lifecycle)) {
+          const completedAt = deps.now();
+          const status = cancellationDelivered && controller.signal.aborted ? 'cancelled' : 'failed';
+          const commit = await deps.commitKernelTurn({
+            accountId: input.accountId,
+            runId: input.run.id,
+            requestId: input.attempt.requestId,
+            attemptNumber: input.attempt.attemptNumber,
+            expectedStatus: 'running',
+            terminal: { status, event: status === 'cancelled'
+              ? deliveredCancellationEvent(input.attempt.requestId, completedAt)
+              : providerFailureEvent(input.attempt.requestId, completedAt) },
+            assistantMessage: {
+              id: `msg_${input.attempt.requestId}` as MessageId,
+              chat_id: input.chatId as ChatId,
+              role: 'assistant',
+              agent_id: input.agent.id,
+              parts: [{ kind: 'text', text: `${partialText}\n\n[Incomplete response: generation ${status}.]` }],
+              created_at: completedAt,
+              updated_at: completedAt,
+            },
+            artifacts: [],
+          });
+          if (!commit.committed && commit.reason === 'account_authority_revoked') return revoked();
+          if (commit.committed) {
+            terminalCommitted = true;
+            providerFailureTerminalized = status === 'failed';
+          }
+        }
+      } catch {
+        // A failed retention attempt must not replace the original provider error.
+      }
+      if (lifecycle.revocationSignal.aborted) return revoked();
+    }
     if (cancellationDelivered && controller.signal.aborted && !terminalCommitted) {
       const completedAt = deps.now();
       const cancelled = await lifecycle.transition({

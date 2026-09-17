@@ -2085,6 +2085,12 @@ export async function installJarvisKernelRuntimeHost(
                   startedAt,
                 }),
                 response,
+                getPartialText() {
+                  if (suppressProviderPreview) return undefined;
+                  const decision = pushStreamingPreviewChunk(createStreamingPreviewState(),
+                    [...previewTextParts.values()].join(''), { interrupted: true });
+                  return decision.allowed ? decision.visibleText.slice(0, 32_768) : undefined;
+                },
                 abortAfterStart() {
                   if (!signal.aborted) throw new Error('kernel_provider_abort_signal_not_set');
                 },

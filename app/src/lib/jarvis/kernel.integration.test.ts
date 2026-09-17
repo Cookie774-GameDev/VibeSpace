@@ -1357,6 +1357,33 @@ describe('runJarvisKernelTurn explicit kernel integration', () => {
     },
   );
 
+  it('retains public partial text atomically with a failed turn without success evidence', async () => {
+    const input = turnInput();
+    const failure = new Error('interrupted_provider');
+    const harness = createKernelHarness(input, { response: Promise.reject(failure) });
+    Object.assign(harness.started, { getPartialText: () => 'The answer began.' });
+    await expect(runJarvisKernelTurn(input, harness.deps)).rejects.toBe(failure);
+    expect(harness.commitKernelTurn).toHaveBeenCalledOnce();
+    const commit = harness.commitKernelTurn.mock.calls[0]![0];
+    expect(commit).toMatchObject({
+      expectedStatus: 'running', terminal: { status: 'failed' }, artifacts: [],
+      assistantMessage: { role: 'assistant', parts: [{ kind: 'text', text: 'The answer began.\n\n[Incomplete response: generation failed.]' }] },
+    });
+    expect(commit.terminal.event).not.toHaveProperty('canonicalResultEvidence');
+    expect(commit.terminal.event).not.toHaveProperty('producerSourceEvidence');
+    expect(harness.lifecycle.recordProviderResult).not.toHaveBeenCalled();
+    expect(harness.deps.processResponse).not.toHaveBeenCalled();
+  });
+
+  it('does not retain partial text when response processing fails after provider completion', async () => {
+    const input = turnInput();
+    const harness = createKernelHarness(input);
+    Object.assign(harness.started, { getPartialText: () => 'Unprocessed output.' });
+    vi.mocked(harness.deps.processResponse).mockRejectedValueOnce(new Error('invalid_response'));
+    await expect(runJarvisKernelTurn(input, harness.deps)).rejects.toThrow('invalid_response');
+    expect(harness.commitKernelTurn).not.toHaveBeenCalled();
+  });
+
   it('preserves the primary provider failure while every cleanup still runs', async () => {
     const input = turnInput();
     const harness = createKernelHarness(input, {

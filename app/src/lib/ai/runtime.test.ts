@@ -10603,6 +10603,51 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   });
 
+  it.each(['failed', 'cancelled', 'secret', 'account changed'] as const)(
+    'retains only safe public partial prose for an interrupted canonical chat: %s', async (scenario) => {
+      const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
+      const harness = kernelRuntimeBindings(selectedAgent);
+      const database = createJarvisDb(uniqueTestDbName('canonical-partial'), TEST_INDEXED_DB);
+      await database.open();
+      await database.chats.add({ id: harness.chatId, workspace_id: 'workspace_partial' as never,
+        title: 'Partial response', mode: 'chat', active_agent_ids: [selectedAgent.id], created_at: 1, updated_at: 1 });
+      const providerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+      let providerInput!: Parameters<typeof mocks.runAgent>[0];
+      mocks.runAgent.mockImplementationOnce(input => { providerInput = input; return providerGate.promise; });
+      const disposeHost = await installKernelTestHost(database, 'canonical-partial');
+      const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+      try {
+        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+          chatId: harness.chatId, text: 'Answer this current request.', cancellationKey: 'msg_partial_user',
+        } }));
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        providerInput.onChunk?.({ delta: scenario === 'secret' ? 'The api_key=private-value.' : 'The answer began.', first: true });
+        if (scenario === 'account changed') useAuthStore.setState({ localUserId: 'different-account' });
+        if (scenario === 'cancelled') {
+          window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { messageId: 'msg_partial_user' } }));
+          await vi.waitFor(() => expect(providerInput.signal.aborted).toBe(true));
+        }
+        providerGate.reject(new ProviderRuntimeError({ message: 'The provider stopped.', code: 'RATE_LIMIT', retryable: true }));
+        await stop.whenIdle();
+        const assistants = (await database.messages.toArray()).filter(message => message.role === 'assistant');
+        if (scenario === 'failed' || scenario === 'cancelled') {
+          expect(assistants).toHaveLength(1);
+          expect(assistants[0]?.parts).toEqual([{ kind: 'text', text: `The answer began.\n\n[Incomplete response: generation ${scenario}.]` }]);
+          expect((await database.jarvis_runs.toArray()).at(-1)?.status).toBe(scenario);
+          expect(await database.jarvis_artifacts.count()).toBe(0);
+        } else expect(assistants).toHaveLength(0);
+        expect(JSON.stringify(assistants)).not.toContain('private-value');
+      } finally {
+        providerGate.reject(new DOMException('Cancelled', 'AbortError'));
+        stop();
+        await stop.whenIdle();
+        disposeHost();
+        database.close();
+        await database.delete();
+      }
+    },
+  );
+
   it('persists bounded provider error detail for a canonical failure', async () => {
     const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
     const harness = kernelRuntimeBindings(selectedAgent);
