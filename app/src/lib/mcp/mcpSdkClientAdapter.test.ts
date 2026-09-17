@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import {
   createMcpSdkClientAdapter,
+  createMcpCancellationFetch,
   type McpSdkClientPort,
 } from './mcpSdkClientAdapter'
 
@@ -38,6 +39,65 @@ function harness() {
 }
 
 describe('MCP SDK client adapter', () => {
+  it('rejects a POST cancelled before transport headers finish preparing it', async () => {
+    const base = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
+    const send = createMcpCancellationFetch(base)
+    await send('https://mcp.test', { body: JSON.stringify({ method: 'notifications/cancelled', params: { requestId: 7 } }) })
+    await expect(send('https://mcp.test', { body: JSON.stringify({ id: 7, method: 'tools/call' }) }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    expect(base).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed instead of evicting unresolved cancellation markers at capacity', async () => {
+    const base = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
+    const send = createMcpCancellationFetch(base)
+    for (let id = 0; id < 257; id += 1) {
+      await send('https://mcp.test', { body: JSON.stringify({ method: 'notifications/cancelled', params: { requestId: id } }) })
+    }
+    await expect(send('https://mcp.test', { body: JSON.stringify({ id: 0, method: 'tools/call' }) })).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(send('https://mcp.test', { body: JSON.stringify({ id: 257, method: 'tools/call' }) })).rejects.toMatchObject({ name: 'AbortError' })
+    expect(base).toHaveBeenCalledTimes(257)
+  })
+  it('aborts only the cancelled HTTP request while still delivering its protocol notification', async () => {
+    const signals = new Map<number, AbortSignal>()
+    const notifications: unknown[] = []
+    const base = vi.fn<typeof fetch>(async (_input, init) => {
+      const message = JSON.parse(String(init?.body))
+      if (!('id' in message)) { notifications.push(message); return new Response(null, { status: 202 }) }
+      signals.set(message.id, init!.signal!)
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true })
+      })
+    })
+    const send = createMcpCancellationFetch(base)
+    const transport = new AbortController()
+    const first = send('https://mcp.test', { body: JSON.stringify({ id: 1, method: 'tools/call' }), signal: transport.signal })
+    const second = send('https://mcp.test', { body: JSON.stringify({ id: 2, method: 'tools/call' }), signal: transport.signal })
+    const firstResult = expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    const secondResult = expect(second).rejects.toMatchObject({ name: 'AbortError' })
+    await send('https://mcp.test', { body: JSON.stringify({ method: 'notifications/cancelled', params: { requestId: 1 } }) })
+    await firstResult
+    expect(signals.get(1)?.aborted).toBe(true)
+    expect(signals.get(2)?.aborted).toBe(false)
+    expect(notifications).toHaveLength(1)
+    transport.abort()
+    await secondResult
+  })
+
+  it('preserves streamed response data and cancels after HTTP headers arrive', async () => {
+    let signal: AbortSignal | undefined
+    const base = vi.fn<typeof fetch>(async (_input, init) => {
+      if (JSON.parse(String(init?.body)).method === 'notifications/cancelled') return new Response(null, { status: 202 })
+      signal = init?.signal ?? undefined
+      return new Response('streamed result', { headers: { 'content-type': 'application/json' } })
+    })
+    const send = createMcpCancellationFetch(base)
+    const response = await send('https://mcp.test', { body: JSON.stringify({ id: 'request-1', method: 'tools/call' }) })
+    await send('https://mcp.test', { body: JSON.stringify({ method: 'notifications/cancelled', params: { requestId: 'request-1' } }) })
+    expect(signal?.aborted).toBe(true)
+    expect(await response.text()).toBe('streamed result')
+    expect(response.headers.get('content-type')).toBe('application/json')
+  })
   it('does not downgrade destructive tools with contradictory read-only hints', async () => {
     const { adapter, client } = harness()
     vi.mocked(client.listTools).mockResolvedValue({

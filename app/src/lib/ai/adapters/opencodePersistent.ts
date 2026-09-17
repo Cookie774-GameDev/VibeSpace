@@ -1,4 +1,5 @@
 import { openCodeToolDetails } from '../publicToolDetails';
+import { restoredConversationPrompt } from './restoredConversationPrompt';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { resolveOpenCodeChildControl } from './openCodeChildControls';
 import { newOpenCodeMessageId, sendOpenCodePromptOnce } from './openCodePromptAcceptance';
@@ -441,9 +442,14 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
         30_000,
       ),
     );
-    return Array.isArray(value)
-      ? value.map((entry) => recordOf(entry) as OpenCodeMessageRecord).filter(Boolean)
-      : [];
+    if (!Array.isArray(value) || value.some((entry) => !recordOf(entry))) {
+      throw new ProviderRuntimeError({
+        code: 'malformed_response',
+        message: 'OpenCode returned malformed session history; the request was not restored.',
+        retryable: false,
+      });
+    }
+    return value as OpenCodeMessageRecord[];
   }
 
   async pendingQuestions(): Promise<readonly Record<string, unknown>[]> {
@@ -2171,7 +2177,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     failureStage = 'session_authority';
     if (
       gatewayAuthority &&
-      !bindToolGatewaySessionAuthority(session.sessionId, gatewayAuthority)
+      !bindToolGatewaySessionAuthority(session.sessionId, gatewayAuthority, request.signal)
     ) {
       throw new Error('Tool Gateway session authority changed before dispatch.');
     }
@@ -2182,7 +2188,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       chatId,
       // A preflight failure can leave a bound session with no accepted prompt.
       // Restore the bounded local history once; established sessions already own it.
-      text: baselineMessages.length === 0 ? request.historyPrompt?.trim() || request.prompt : request.prompt,
+      text: baselineMessages.length === 0 ? restoredConversationPrompt(request) : request.prompt,
       settings,
       selection: {
         connectionId: request.connection.id,
@@ -2282,7 +2288,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     failureStage = 'session_authority';
     if (
       gatewayAuthority &&
-      !bindToolGatewaySessionAuthority(dispatch.sessionId, gatewayAuthority)
+      !bindToolGatewaySessionAuthority(dispatch.sessionId, gatewayAuthority, request.signal)
     ) {
       await client.abort(dispatch.sessionId).catch(() => undefined);
       throw new Error('Tool Gateway session authority changed before dispatch.');
@@ -2463,7 +2469,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       if (approvals?.requestId !== request.requestId || questions?.requestId !== request.requestId) return;
       const existing = activeApprovalSessions.get(child);
       if (existing && existing.requestId !== request.requestId) return;
-      if (gatewayAuthority && !bindToolGatewaySessionAuthority(child, gatewayAuthority)) return;
+      if (gatewayAuthority && !bindToolGatewaySessionAuthority(child, gatewayAuthority, request.signal)) return;
       activeApprovalSessions.set(child, approvals);
       activeQuestionSessions.set(child, questions);
       boundChildSessions.add(child);

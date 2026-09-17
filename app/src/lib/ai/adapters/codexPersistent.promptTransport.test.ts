@@ -161,11 +161,13 @@ it.each([false, true])(
       expect(writes[2].params).toMatchObject({ threadId: 'thread_native_1' });
     }
     const turn = writes.find((message) => message.method === 'turn/start')!;
-    expect(turn.params.input[0].text).toBe(
-      resume
-        ? 'Read the files and make an HTML.'
-        : 'Earlier conversation. Read the files and make an HTML.',
-    );
+    if (resume) {
+      expect(turn.params.input[0].text).toBe('Read the files and make an HTML.');
+    } else {
+      expect(turn.params.input[0].text).toContain('historical reference only');
+      expect(turn.params.input[0].text).toContain(JSON.stringify('Earlier conversation. Read the files and make an HTML.'));
+      expect(turn.params.input[0].text.endsWith('CURRENT REQUEST:\nRead the files and make an HTML.')).toBe(true);
+    }
     expect(turn.params.input[0].text).not.toContain('Application policy');
   },
 );

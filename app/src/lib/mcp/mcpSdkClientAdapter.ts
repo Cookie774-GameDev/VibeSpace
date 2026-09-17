@@ -211,6 +211,58 @@ async function collectPages<T>(
   return values
 }
 
+/** Cancel the matching HTTP request as well as the SDK protocol request. */
+export function createMcpCancellationFetch(baseFetch: typeof fetch = fetch): typeof fetch {
+  const pending = new Map<string | number, AbortController>()
+  const cancelledBeforeRegistration = new Set<string | number>()
+  let cancellationCapacityExceeded = false
+  return async (input, init) => {
+    let message: Record<string, unknown> | undefined
+    try { message = record(JSON.parse(String(init?.body))) ?? undefined } catch { /* Non-RPC request. */ }
+    if (message?.method === 'notifications/cancelled') {
+      const id = record(message.params)?.requestId
+      if (typeof id === 'string' || typeof id === 'number') {
+        const owner = pending.get(id)
+        if (owner) owner.abort()
+        else if (cancelledBeforeRegistration.size < 256) cancelledBeforeRegistration.add(id)
+        // Never evict an unresolved cancellation and accidentally submit it later.
+        else cancellationCapacityExceeded = true
+      }
+    }
+    const id = message?.id
+    if (typeof id !== 'string' && typeof id !== 'number') return baseFetch(input, init)
+    if (cancelledBeforeRegistration.delete(id) || cancellationCapacityExceeded) {
+      throw new DOMException('MCP request cancelled before transport dispatch; reconnect if cancellation capacity was exceeded.', 'AbortError')
+    }
+    const owner = new AbortController()
+    const transportSignal = init?.signal
+    const abort = () => owner.abort(transportSignal?.reason)
+    if (transportSignal?.aborted) abort()
+    else transportSignal?.addEventListener('abort', abort, { once: true })
+    pending.set(id, owner)
+    const cleanup = () => {
+      if (pending.get(id) === owner) pending.delete(id)
+      transportSignal?.removeEventListener('abort', abort)
+    }
+    try {
+      const response = await baseFetch(input, { ...init, signal: owner.signal })
+      if (!response.body) { cleanup(); return response }
+      const reader = response.body.getReader()
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const chunk = await reader.read()
+            if (chunk.done) { cleanup(); controller.close() }
+            else controller.enqueue(chunk.value)
+          } catch (error) { cleanup(); controller.error(error) }
+        },
+        async cancel(reason) { cleanup(); await reader.cancel(reason) },
+      })
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
+    } catch (error) { cleanup(); throw error }
+  }
+}
+
 export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): McpSdkClientAdapter {
   const endpoint = new URL(options.endpoint)
   const loopback =
@@ -252,7 +304,9 @@ export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): 
         }) as McpSdkClientPort)
       const transport =
         options.transportFactory?.(endpoint) ??
-        (new transportModule!.StreamableHTTPClientTransport(endpoint) as Transport)
+        (new transportModule!.StreamableHTTPClientTransport(endpoint, {
+          fetch: createMcpCancellationFetch(),
+        }) as Transport)
       await nextClient.connect(transport)
       client = nextClient
       const server: McpServerClient = {

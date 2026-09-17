@@ -140,7 +140,7 @@ export async function runSubscriptionCliBridge(
   const authorityClaim = needsAuthority ? captureToolGatewayAuthorityClaim() : null;
   if (
     needsAuthority &&
-    (!authorityClaim || !bindToolGatewaySessionAuthority(request.requestId, authorityClaim))
+    (!authorityClaim || !bindToolGatewaySessionAuthority(request.requestId, authorityClaim, request.signal))
   ) {
     throw new Error('Codex Context Map authority is unavailable.');
   }

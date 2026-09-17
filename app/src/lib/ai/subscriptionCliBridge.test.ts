@@ -191,7 +191,7 @@ describe('Codex subscription Context Map authority', () => {
       }),
     ).rejects.toThrow('not authenticated for this session');
 
-    expect(bind).toHaveBeenCalledWith('request-auth-loss', expect.anything());
+    expect(bind).toHaveBeenCalledWith('request-auth-loss', expect.anything(), undefined);
     expect(send).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledWith('request-auth-loss');
@@ -256,7 +256,7 @@ describe('Codex subscription Context Map authority', () => {
         tools: { vibespace_context: true },
       }),
     ).resolves.toMatchObject({ text: 'answer', model: 'gpt-5.6-luna' });
-    expect(bind).toHaveBeenCalledWith('request-1', expect.anything());
+    expect(bind).toHaveBeenCalledWith('request-1', expect.anything(), undefined);
     expect(send.mock.calls[0]![0]).toMatchObject({
       requestId: 'request-1',
       modelId: 'gpt-5.6-luna',

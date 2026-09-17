@@ -17,6 +17,7 @@ export type ToolGatewayAuthorityClaim = Readonly<{
 }>;
 
 const sessionAuthorities = new Map<string, ToolGatewayAuthorityClaim>();
+const sessionSignals = new Map<string, AbortSignal>();
 export type ToolGatewayObservedExecutionAuthority = Readonly<{
   executionIdentity: Readonly<ExecutionIdentity>;
   performance: PerformanceProfile;
@@ -154,15 +155,21 @@ export function captureToolGatewayAuthorityClaim(): ToolGatewayAuthorityClaim | 
 export function bindToolGatewaySessionAuthority(
   sessionId: string,
   expected: ToolGatewayAuthorityClaim,
+  signal?: AbortSignal,
 ): boolean {
   const current = currentAuthority();
-  if (!current || !sameAuthority(expected, current)) return false;
+  if (!current || !sameAuthority(expected, current) || signal?.aborted) return false;
   const existing = sessionAuthorities.get(sessionId);
   if (existing) {
-    return sameAuthority(existing, expected);
+    return sameAuthority(existing, expected) && sessionSignals.get(sessionId) === signal;
   }
   sessionAuthorities.set(sessionId, expected);
+  if (signal) sessionSignals.set(sessionId, signal);
   return true;
+}
+
+export function readToolGatewayRequestSignal(request: ToolGatewayRequest): AbortSignal | undefined {
+  return authorizeToolGatewayRequest(request) ? sessionSignals.get(request.sessionId) : undefined;
 }
 
 export function bindToolGatewayObservedExecutionAuthority(
@@ -223,6 +230,7 @@ export function readToolGatewayObservedExecutionAuthority(
 
 export function releaseToolGatewaySessionAuthority(sessionId: string): void {
   sessionAuthorities.delete(sessionId);
+  sessionSignals.delete(sessionId);
   observedExecutionAuthorities.delete(sessionId);
   grants.delete(sessionId);
 }
@@ -302,6 +310,7 @@ export function authorizeToolGatewayMutation(request: ToolGatewayRequest): boole
 export function clearToolGatewayAuthorityForTests(): void {
   ensureScopeObserver();
   sessionAuthorities.clear();
+  sessionSignals.clear();
   observedExecutionAuthorities.clear();
   grants.clear();
   generation = 0;

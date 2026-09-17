@@ -17,6 +17,7 @@ export interface ToolGatewayExecutionContext {
   directory?: string;
   worktree?: string;
   mutationApproved: boolean;
+  signal?: AbortSignal;
 }
 
 type SemanticMethod = (
@@ -26,6 +27,7 @@ type SemanticMethod = (
 
 export interface ToolGatewayDependencies {
   authorizeRequest(request: ToolGatewayRequest): boolean | Promise<boolean>;
+  readRequestSignal?(request: ToolGatewayRequest): AbortSignal | undefined;
   authorizeMutation(request: ToolGatewayRequest): boolean | Promise<boolean>;
   terminal: {
     list: SemanticMethod;
@@ -578,6 +580,7 @@ function projectMcpResult(value: unknown): Readonly<{
 function executionContext(
   request: ToolGatewayRequest,
   mutationApproved: boolean,
+  signal?: AbortSignal,
 ): ToolGatewayExecutionContext {
   return {
     requestId: request.requestId,
@@ -586,6 +589,7 @@ function executionContext(
     ...(request.directory ? { directory: request.directory } : {}),
     ...(request.worktree ? { worktree: request.worktree } : {}),
     mutationApproved,
+    ...(signal ? { signal } : {}),
   };
 }
 
@@ -638,6 +642,8 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
     async execute(request) {
       const mutation = requiresMutationApproval(request);
       try {
+        // Capture the owner's reference before async approval can release its session lease.
+        const signal = deps.readRequestSignal?.(request);
         if (!(await deps.authorizeRequest(request))) {
           return {
             requestId: request.requestId,
@@ -654,9 +660,17 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
             message: 'VibeSpace did not approve this semantic mutation.',
           };
         }
+        if (signal?.aborted) {
+          return {
+            requestId: request.requestId,
+            ok: false,
+            code: 'cancelled',
+            message: 'The VibeSpace request was cancelled.',
+          };
+        }
         const data = await handlers[request.tool](
           request.args,
-          executionContext(request, mutation),
+          executionContext(request, mutation, signal),
         );
         const mcpResult = request.tool === 'mcp.run' ? projectMcpResult(data) : undefined;
         if (mcpResult) {

@@ -651,14 +651,31 @@ describe('persistent OpenCode question transport authority', () => {
         path.includes('/prompt_async'),
       );
       const body = JSON.parse(String(sent?.[2]?.body));
-      expect(
-        body.parts
+      const text = body.parts
           .filter((part: { type: string }) => part.type === 'text')
           .map((part: { text: string }) => part.text)
-          .join('\n'),
-      ).toBe(existing ? request.prompt : historyPrompt);
+          .join('\n');
+      if (existing) expect(text).toBe(request.prompt);
+      else {
+        expect(text).toContain('historical reference only');
+        expect(text).toContain(JSON.stringify('user: Build the inventory tool.'));
+        expect(text.endsWith(`CURRENT REQUEST:\n${request.prompt}`)).toBe(true);
+      }
     },
   );
+
+  it.each([null, {}, [null], ['malformed']])('does not restore history from a malformed message baseline: %j', async (value) => {
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.includes('/message?')) return new Response(JSON.stringify(value));
+      return original(generation, path, init, timeout);
+    });
+    await expect(drain(openCodePersistentAdapter.send!({
+      ...questionProviderRequest('malformed-history'),
+      prompt: 'Current task.', historyPrompt: 'user: Old task.\n\nuser: Current task.',
+    })[Symbol.asyncIterator]())).rejects.toThrow(/malformed session history/i);
+    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/prompt_async'))).toBe(false);
+  });
 
   it.each(['baseline', 'dispatch'] as const)(
     'does not leave a prompt active after cancellation during %s',

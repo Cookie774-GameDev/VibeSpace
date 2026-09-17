@@ -1,4 +1,5 @@
 import { createCodexControlBridge } from './codexControlBridge';
+import { restoredConversationPrompt } from './restoredConversationPrompt';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { codexTurnLease } from './codexTurnLease';
 import { CODEX_CONTEXT_TOOL, createCodexToolGateway, type CodexContextToolBridge } from './codexContextTool';
@@ -184,7 +185,7 @@ function codexFrameError(frame: NativeFrame, fallbackMessage: string): Error | u
 }
 
 function promptText(request: Readonly<ProviderRequest>, newThread = false): string {
-  return newThread ? request.historyPrompt?.trim() || request.prompt : request.prompt;
+  return newThread ? restoredConversationPrompt(request) : request.prompt;
 }
 
 function developerInstructions(request: Readonly<ProviderRequest>): string {

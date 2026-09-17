@@ -143,7 +143,7 @@ async function createCodexGatewayTool(
     bind(threadId, identity, generation) {
       const qualified = identity.model;
       const separator = qualified.indexOf('/');
-      if (!authority.bindToolGatewaySessionAuthority(threadId, claim)) throw new Error('Codex Tool Gateway authority changed.');
+      if (!authority.bindToolGatewaySessionAuthority(threadId, claim, request.signal)) throw new Error('Codex Tool Gateway authority changed.');
       sessionId = threadId;
       directory = identity.cwd;
       if (!authority.bindToolGatewayObservedExecutionAuthority(threadId, claim, {

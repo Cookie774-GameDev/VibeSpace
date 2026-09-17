@@ -9,6 +9,7 @@ import {
   captureToolGatewayAuthorityClaim,
   clearToolGatewayAuthorityForTests,
   readToolGatewayObservedExecutionAuthority,
+  readToolGatewayRequestSignal,
   releaseToolGatewaySessionAuthority,
 } from './toolGatewayAuthority';
 
@@ -91,6 +92,23 @@ describe('tool gateway session authority', () => {
     for (const sessionId of sessionIds) {
       expect(authorizeToolGatewayRequest(readRequest(sessionId))).toBe(false);
     }
+  });
+
+  it('does not let another turn replace or remove a bound cancellation owner', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const owner = new AbortController();
+    expect(bindToolGatewaySessionAuthority('owned-session', claim, owner.signal)).toBe(true);
+    expect(bindToolGatewaySessionAuthority('owned-session', claim, owner.signal)).toBe(true);
+    expect(bindToolGatewaySessionAuthority('owned-session', claim, new AbortController().signal)).toBe(false);
+    expect(bindToolGatewaySessionAuthority('owned-session', claim)).toBe(false);
+    const captured = readToolGatewayRequestSignal(readRequest('owned-session'));
+    expect(captured).toBe(owner.signal);
+    releaseToolGatewaySessionAuthority('owned-session');
+    expect(readToolGatewayRequestSignal(readRequest('owned-session'))).toBeUndefined();
+    owner.abort();
+    expect(captured?.aborted).toBe(true);
+    expect(bindToolGatewaySessionAuthority('owned-session', claim, owner.signal)).toBe(false);
+    expect(bindToolGatewaySessionAuthority('owned-session', claim, new AbortController().signal)).toBe(true);
   });
 
   it('keeps execution identity unavailable until the exact session records an observation', () => {

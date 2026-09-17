@@ -40,6 +40,7 @@ import {
   clearToolGatewayAuthorityForTests,
   grantToolGatewayMutation,
   readToolGatewayObservedExecutionAuthority,
+  readToolGatewayRequestSignal,
 } from './toolGatewayAuthority';
 
 export { grantToolGatewayMutation } from './toolGatewayAuthority';
@@ -351,6 +352,7 @@ async function runApprovedAction(
 export function createProductionToolGatewayDependencies(): ToolGatewayDependencies {
   return {
     authorizeRequest: authorizeToolGatewayRequest,
+    readRequestSignal: readToolGatewayRequestSignal,
     authorizeMutation: authorizeToolGatewayMutation,
     terminal: {
       list: (args) => terminalSummary((args.limit as number | undefined) ?? 100),
@@ -662,6 +664,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         }
         return gateway.invoke({
           ...scope,
+          ...(context.signal ? { signal: context.signal } : {}),
           taskId: context.requestId,
           connectionId,
           toolName,

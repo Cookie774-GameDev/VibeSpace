@@ -355,6 +355,7 @@ describe('production tool gateway dependencies', () => {
       sessionId: 'session-1',
       messageId: 'message-1',
       mutationApproved: true,
+      signal: new AbortController().signal,
     };
 
     await expect(
@@ -378,6 +379,7 @@ describe('production tool gateway dependencies', () => {
       accountId: 'account-a',
       projectId: 'project-a',
       taskId: 'request-mcp',
+      signal: context.signal,
       connectionId: 'docs-server',
       toolName: 'search',
       arguments: { query: 'VibeSpace' },

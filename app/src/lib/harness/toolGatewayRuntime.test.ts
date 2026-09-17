@@ -101,6 +101,36 @@ function request(tool: ToolGatewayTool) {
 }
 
 describe('tool gateway semantic runtime', () => {
+  it('retains cancellation when provider cleanup releases the lease during authorization', async () => {
+    const { call, deps } = dependencies();
+    const owner = new AbortController();
+    let bound: AbortSignal | undefined = owner.signal;
+    Object.assign(deps, { readRequestSignal: () => bound });
+    deps.authorizeRequest = async () => { owner.abort(); bound = undefined; return true; };
+    expect(await createToolGatewayRuntime(deps).execute(request('mcp.run')))
+      .toMatchObject({ ok: false, code: 'cancelled' });
+    expect(call).not.toHaveBeenCalled();
+  });
+  it('does not dispatch a tool after its owner cancelled', async () => {
+    const { call, deps } = dependencies();
+    const owner = new AbortController();
+    owner.abort();
+    Object.assign(deps, { readRequestSignal: () => owner.signal });
+    expect(await createToolGatewayRuntime(deps).execute(request('mcp.run')))
+      .toMatchObject({ ok: false, code: 'cancelled' });
+    expect(call).not.toHaveBeenCalled();
+  });
+  it('passes the authorized owner signal to MCP handlers without accepting it from arguments', async () => {
+    const { call, deps } = dependencies();
+    const owner = new AbortController();
+    Object.assign(deps, { readRequestSignal: () => owner.signal });
+    const runtime = createToolGatewayRuntime(deps);
+    await runtime.execute(parseToolGatewayRequest({ protocolVersion: 1, requestId: 'cancel-request',
+      sessionId: 'owned-session', messageId: 'owned-message', tool: 'mcp.run', args: argumentsByTool['mcp.run'] }));
+    expect(call.mock.calls[0]?.[1].signal).toBe(owner.signal);
+    owner.abort();
+    expect(call.mock.calls[0]?.[1].signal.aborted).toBe(true);
+  });
   it.each(Object.keys(argumentsByTool) as ToolGatewayTool[])(
     'dispatches %s through the fixed semantic dependency',
     async (tool) => {
