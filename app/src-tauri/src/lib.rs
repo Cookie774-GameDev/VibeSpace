@@ -491,6 +491,7 @@ fn run_ordinary(
         .manage(harness::server::OpenCodeServerState::default())
         .manage(harness::codex_server::CodexAppServerState::default())
         .manage(harness::managed_codex_install::ManagedCodexInstallState::default())
+        .manage(harness::managed_codex_route::ManagedCodexRouteState::default())
         .manage(harness::tool_gateway::ToolGatewayState::default())
         .manage(cli_bridge::CliBridgeState::default())
         .manage(kernel_host::KernelHostState::default())
@@ -694,6 +695,8 @@ fn run_ordinary(
             jarvis_ambient_overlay::set_jarvis_ambient_snapshot,
             jarvis_ambient_overlay::jarvis_ambient_renderer_ready,
             app_version,
+            activity_diagnostics::activity_diagnostics_clock_sample,
+            activity_diagnostics::activity_diagnostics_capabilities,
             activity_diagnostics::activity_diagnostics_append,
             refresh_app_branding,
             browser_chat_surface::browser_chat_surface_open,
@@ -769,6 +772,7 @@ fn run_ordinary(
             harness::managed_codex_install::managed_codex_runtime_detect,
             harness::managed_codex_install::managed_codex_runtime_install,
             harness::managed_codex_install::managed_codex_runtime_install_cancel,
+            harness::managed_codex_route::managed_codex_route_resolve,
             harness::tool_gateway::tool_gateway_respond,
             command_center_tool::command_center_tool,
             terminal_peer_fabric::terminal_peer_fabric,
@@ -1031,9 +1035,15 @@ mod tests {
         assert!(tray_show_should_reveal_main(false, false));
     }
 
-    const ORDINARY_HANDLER_AUTHORITY: &str = "\
+    const ORDINARY_HANDLER_AUTHORITY: &str = "\\
 greet
+desktop_connector::desktop_connector_status
+desktop_connector::desktop_connector_setup
+jarvis_ambient_overlay::set_jarvis_ambient_snapshot
+jarvis_ambient_overlay::jarvis_ambient_renderer_ready
 app_version
+activity_diagnostics::activity_diagnostics_clock_sample
+activity_diagnostics::activity_diagnostics_capabilities
 activity_diagnostics::activity_diagnostics_append
 refresh_app_branding
 browser_chat_surface::browser_chat_surface_open
@@ -1106,6 +1116,10 @@ harness::codex_server::codex_app_server_start
 harness::codex_server::codex_app_server_stream
 harness::codex_server::codex_app_server_write
 harness::codex_server::codex_app_server_stop
+harness::managed_codex_install::managed_codex_runtime_detect
+harness::managed_codex_install::managed_codex_runtime_install
+harness::managed_codex_install::managed_codex_runtime_install_cancel
+harness::managed_codex_route::managed_codex_route_resolve
 harness::tool_gateway::tool_gateway_respond
 command_center_tool::command_center_tool
 terminal_peer_fabric::terminal_peer_fabric
@@ -1265,9 +1279,9 @@ wallpaper_master::wallpaper_find_local_master
 wallpaper_master::wallpaper_cache_full_master
 wallpaper_master::wallpaper_full_cache_path";
     const ORDINARY_HANDLER_AUTHORITY_SHA256: &str =
-        "97e2044b08fc5129e4d62fda0149a23b5eaf56ae37d7bcac8769d9bf2a17b857";
+        "f763276ceb38e3ca8db9eb62c8c027a4ca5e6dc160b434fa0029d32a1cf4d257";
     const ORDINARY_HANDLER_NORMALIZED_SHA256: &str =
-        "525a4523a297edba25ee86ea541fbf1c400cb20d56924292ee6772d4d1bc4e1b";
+        "30d221097e62ad758506c78b17ad8776ea9313df63b7ebe331e0db417a1b3792";
 
     #[derive(Debug, PartialEq, Eq)]
     struct NativeBuilderManifest<'a> {
@@ -1435,10 +1449,14 @@ wallpaper_master::wallpaper_full_cache_path";
 
         assert!(!visual_test.contains("CodexAppServerState"));
         assert!(!visual_test.contains("ManagedCodexInstallState"));
+        assert!(!visual_test.contains("ManagedCodexRouteState"));
         assert!(!visual_test.contains("codex_app_server_start"));
         assert!(ordinary.contains(".manage(harness::codex_server::CodexAppServerState::default())"));
         assert!(ordinary.contains(
             ".manage(harness::managed_codex_install::ManagedCodexInstallState::default())"
+        ));
+        assert!(ordinary.contains(
+            ".manage(harness::managed_codex_route::ManagedCodexRouteState::default())"
         ));
         assert!(ordinary.contains("harness::codex_server::codex_app_server_start,"));
         assert!(ordinary.contains("harness::codex_server::codex_app_server_stream,"));
@@ -1448,6 +1466,7 @@ wallpaper_master::wallpaper_full_cache_path";
         assert!(ordinary.contains("harness::managed_codex_install::managed_codex_runtime_install,"));
         assert!(ordinary
             .contains("harness::managed_codex_install::managed_codex_runtime_install_cancel,"));
+        assert!(ordinary.contains("harness::managed_codex_route::managed_codex_route_resolve,"));
         assert!(ordinary.contains("harness::codex_server::shutdown_owned_server(app_handle);"));
     }
 

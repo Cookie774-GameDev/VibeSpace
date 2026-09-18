@@ -28,6 +28,47 @@ function adapter(overrides: Partial<CodexRuntimeNativeAdapter> = {}): CodexRunti
 }
 
 describe('Codex runtime manager', () => {
+  it.each(['missing', 'incomplete', 'not-required'] as const)(
+    'keeps verified official Codex ready while the optional translator is %s', async (translationRuntime) => {
+      const native = adapter({ detect: vi.fn().mockResolvedValue({ status: 'ready',
+        codexVersion: '0.151.0', openCodexVersion: '',
+        executableId: 'cli-executable-native-direct', translationRuntime,
+      }) });
+      const manager = createCodexRuntimeManager(native);
+      await manager.refresh();
+      expect(manager.getSnapshot()).toMatchObject({ kind: 'ready', translationRuntime,
+        codexVersion: '0.151.0', executableId: 'cli-executable-native-direct' });
+      expect(native.install).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not make a missing official runtime ready merely because translation is ready', async () => {
+    const manager = createCodexRuntimeManager(adapter({ detect: vi.fn().mockResolvedValue({
+      status: 'ready', codexVersion: '', openCodexVersion: '2.36.0',
+      executableId: 'cli-executable-incomplete', translationRuntime: 'ready',
+    }) }));
+    await manager.refresh();
+    expect(manager.getSnapshot()).toMatchObject({ kind: 'failed' });
+  });
+
+  it('requests translation installation only for an explicit translated route', async () => {
+    const native = adapter();
+    const manager = createCodexRuntimeManager(native);
+    await manager.install();
+    expect(native.install).toHaveBeenLastCalledWith();
+    await manager.install({ includeTranslation: true });
+    expect(native.install).toHaveBeenLastCalledWith({ includeTranslation: true });
+  });
+
+  it('keeps verified Codex usable when optional translation installation fails', async () => {
+    const native = adapter();
+    const manager = createCodexRuntimeManager(native);
+    await manager.install();
+    vi.mocked(native.install).mockRejectedValueOnce(new Error('Optional translator unavailable'));
+    await manager.install({ includeTranslation: true });
+    expect(manager.getSnapshot()).toMatchObject({ kind: 'ready', translationRuntime: 'failed',
+      executableId: 'cli-executable-0000000000000001' });
+  });
   it('shares pending native detection across chat view unmount and remount', async () => {
     const pending = deferred<Awaited<ReturnType<CodexRuntimeNativeAdapter['detect']>>>();
     const native = adapter({ detect: vi.fn(() => pending.promise) });

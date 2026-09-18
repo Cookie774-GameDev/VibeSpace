@@ -75,6 +75,13 @@ const StreamingToolPreview = memo(
 );
 
 /** Only already-filtered public prose from this account and chat is displayed. */
+export function classifyPreviewCommitTiming(publicationMonotonicMs: number, commitMonotonicMs: number) {
+  const delta = commitMonotonicMs - publicationMonotonicMs;
+  return Number.isFinite(delta) && delta >= 0
+    ? Object.freeze({ uiCommitMs: delta })
+    : Object.freeze({ resultCode: 'clock_order_invalid' as const });
+}
+
 export function StreamingChatPreview({
   chatId,
   fallback,
@@ -105,10 +112,13 @@ export function StreamingChatPreview({
       return;
     const coalescedRevisions =
       lastCommitted.current === undefined || lastCommitted.current.runId !== preview.runId
-        ? 0
+        ? Math.max(0, preview.runPublicationSequence - 1)
         : Math.max(0, preview.runPublicationSequence - lastCommitted.current.sequence - 1);
     lastCommitted.current = { runId: preview.runId, sequence: preview.runPublicationSequence };
-    const uiCommitMs = Math.max(0, performance.now() - preview.publicationMonotonicMs);
+    const commitTiming = classifyPreviewCommitTiming(
+      preview.publicationMonotonicMs,
+      performance.now(),
+    );
     appActivityLog.record(
       'ui.preview',
       'committed',
@@ -120,10 +130,10 @@ export function StreamingChatPreview({
         // Publications skipped by React coalescing are reported, never
         // silently dropped or assigned zero latency.
         coalescedRevisions,
-        uiCommitMs,
+        ...commitTiming,
       },
       undefined,
-      uiCommitMs,
+      'uiCommitMs' in commitTiming ? commitTiming.uiCommitMs : undefined,
     );
   }, [preview]);
   if (!preview) return fallback ?? null;
@@ -136,6 +146,14 @@ export function StreamingChatPreview({
   if (preview.segments?.length)
     return (
       <div data-streaming-chat-preview="true" {...traceAttributes}>
+        {preview.text && !preview.segments.some((segment) => segment.kind === 'text' && segment.text) ? (
+          <div className="agentic-native-checkpoint">
+            <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
+            <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
+              {preview.text}
+            </div>
+          </div>
+        ) : null}
         {preview.segments.map((segment) =>
           segment.kind === 'text' ? (
             <div key={`text:${segment.id}`} className="agentic-native-checkpoint">

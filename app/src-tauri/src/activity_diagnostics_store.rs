@@ -2,6 +2,54 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::Instant;
+
+pub const ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION: u8 = 2;
+pub const ACTIVITY_DIAGNOSTIC_MAX_BATCH_EVENTS: usize = 64;
+pub const ACTIVITY_DIAGNOSTIC_FIELDS: &[&str] = &[
+    "sequence", "operationId", "kind", "phase", "observedAt", "monotonicMs",
+    "durationMs", "requestId", "chatId", "sessionId", "callId", "runId",
+    "publicationRevision", "coalescedRevisions", "uiCommitMs", "nativeSequence",
+    "nativeHandoffWallUs", "nativeHandoffMonotonicUs", "rendererReceivedAt",
+    "rendererReceivedMonotonicMs", "provider", "model", "tool", "operation",
+    "eventType", "resultCode", "runtimeGeneration", "nativeProcessId", "rendererSentAt",
+    "rendererSentMonotonicMs", "clockRoundTripMs", "clockUncertaintyMs", "outcome", "completeness",
+    "hasContinuation", "returnedItems", "returnedChars", "diagnosticTruncated",
+];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityDiagnosticCapabilities {
+    schema_versions: [u8; 1],
+    fields: &'static [&'static str],
+    max_batch_events: usize,
+}
+
+static NATIVE_MONOTONIC_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+pub fn native_monotonic_us() -> u64 {
+    NATIVE_MONOTONIC_ORIGIN
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_micros()
+        .min(u64::MAX as u128) as u64
+}
+
+pub fn native_wall_us() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_micros().min(u64::MAX as u128) as u64)
+        .map_err(|_| "diagnostics_clock_unavailable".to_string())
+}
+
+pub fn activity_diagnostic_capabilities() -> ActivityDiagnosticCapabilities {
+    ActivityDiagnosticCapabilities {
+        schema_versions: [ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION],
+        fields: ACTIVITY_DIAGNOSTIC_FIELDS,
+        max_batch_events: ACTIVITY_DIAGNOSTIC_MAX_BATCH_EVENTS,
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -41,10 +89,10 @@ fn valid_identifier(value: &str) -> bool {
         .any(|prefix| lower.starts_with(prefix))
 }
 fn validate_batch(batch: &ActivityDiagnosticBatch) -> Result<(), String> {
-    if batch.schema_version != 1
+    if batch.schema_version != ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION
         || !valid_identifier(&batch.renderer_instance)
         || batch.events.is_empty()
-        || batch.events.len() > 64
+        || batch.events.len() > ACTIVITY_DIAGNOSTIC_MAX_BATCH_EVENTS
     {
         return Err("diagnostics_invalid_batch".into());
     }
@@ -68,17 +116,32 @@ fn validate_batch(batch: &ActivityDiagnosticBatch) -> Result<(), String> {
             let valid = match key.as_str() {
                 "operationId" | "kind" | "phase" | "requestId" | "chatId" | "sessionId"
                 | "runId" | "callId" | "provider" | "model" | "tool" | "operation"
-                | "eventType" | "resultCode" => value.as_str().is_some_and(valid_identifier),
+                | "eventType" | "resultCode" | "runtimeGeneration" => value.as_str().is_some_and(valid_identifier),
                 "sequence"
-                | "observedAt"
-                | "monotonicMs"
-                | "durationMs"
                 | "returnedItems"
                 | "returnedChars"
                 | "publicationRevision"
-                | "uiCommitMs" => value.as_f64().is_some_and(|number| {
-                    number.is_finite() && (0.0..=9_007_199_254_740_991.0).contains(&number)
-                }),
+                | "coalescedRevisions"
+                | "nativeSequence"
+                | "nativeHandoffWallUs"
+                | "nativeHandoffMonotonicUs"
+                | "nativeProcessId" => value
+                    .as_u64()
+                    .is_some_and(|number| number <= 9_007_199_254_740_991),
+                "observedAt"
+                | "monotonicMs"
+                | "durationMs"
+                | "uiCommitMs"
+                | "rendererReceivedAt"
+                | "rendererReceivedMonotonicMs"
+                | "rendererSentAt"
+                | "rendererSentMonotonicMs"
+                | "clockRoundTripMs"
+                | "clockUncertaintyMs" => value
+                    .as_f64()
+                    .is_some_and(|number| {
+                        number.is_finite() && (0.0..=9_007_199_254_740_991.0).contains(&number)
+                    }),
                 "outcome" => value.as_str().is_some_and(|value| {
                     matches!(
                         value,
@@ -201,7 +264,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     fn batch() -> ActivityDiagnosticBatch {
-        serde_json::from_value(json!({"schemaVersion":1,"rendererInstance":"test-renderer",
+        serde_json::from_value(json!({"schemaVersion":2,"rendererInstance":"test-renderer",
             "droppedTotal":0,"failedBatches":0,"events":[{"sequence":1,"operationId":"op:1",
             "kind":"semantic-tool","phase":"completed","observedAt":1700000000000u64,
             "monotonicMs":1.5,"outcome":"success","completeness":"unknown"}]}))
@@ -240,10 +303,38 @@ mod tests {
         assert!(validate_batch(&input).is_err());
     }
     #[test]
+    fn accepts_real_preview_coalescing_metadata_without_weakening_unknown_field_rejection() {
+        let mut input = batch();
+        input.events[0]["kind"] = json!("ui.preview");
+        input.events[0]["phase"] = json!("committed");
+        input.events[0]["coalescedRevisions"] = json!(0);
+        assert_eq!(validate_batch(&input), Ok(()));
+        input.events[0]["coalescedRevisions"] = json!(2);
+        assert_eq!(validate_batch(&input), Ok(()));
+        for invalid in [json!(-1), json!(9_007_199_254_740_992u64), json!("2")] {
+            input.events[0]["coalescedRevisions"] = invalid;
+            assert!(validate_batch(&input).is_err());
+        }
+        input.events[0]["coalescedRevisions"] = json!(0);
+        input.events[0]["rawOutput"] = json!("not permitted");
+        assert!(validate_batch(&input).is_err());
+    }
+    #[test]
+    fn canonical_fixture_is_accepted_by_the_actual_native_validator() {
+        let fixture: ActivityDiagnosticBatch = serde_json::from_str(include_str!(
+            "../../src/lib/diagnostics/activityDiagnosticContract.fixture.json"
+        ))
+        .expect("canonical diagnostic fixture");
+        assert_eq!(validate_batch(&fixture), Ok(()));
+        assert_eq!(fixture.schema_version, ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION);
+        assert_eq!(activity_diagnostic_capabilities().max_batch_events, 64);
+    }
+
+    #[test]
     fn accepts_only_the_versioned_metadata_schema() {
         assert!(validate_batch(&batch()).is_ok());
         let mut input = batch();
-        input.schema_version = 2;
+        input.schema_version = 1;
         assert!(validate_batch(&input).is_err());
         let mut input = batch();
         input.events[0]["completeness"] = json!("probably complete");
@@ -281,7 +372,7 @@ mod tests {
                 let value: Value = serde_json::from_str(line).unwrap();
                 assert!(value["nativeReceivedAt"].is_number());
                 assert!(value["processId"].is_number());
-                assert_eq!(value["batch"]["schemaVersion"], 1);
+                assert_eq!(value["batch"]["schemaVersion"], 2);
             }
         }
         std::fs::remove_dir_all(directory).unwrap();

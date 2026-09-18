@@ -1,12 +1,60 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   nativeCodexFrames,
+  resolveNativeCodexRoute,
   startNativeCodexAppServer,
   stopNativeCodexAppServer,
   writeNativeCodexFrame,
 } from './codexNativeTransport';
 
+let nativeSequence = 0;
+const nativeFrame = (frame: Record<string, unknown>) => ({
+  kind: 'frame' as const,
+  frame,
+  sequence: ++nativeSequence,
+  nativeHandoffWallUs: 1_789_300_000_000_000 + nativeSequence,
+  nativeHandoffMonotonicUs: 1_000 + nativeSequence,
+});
+
 describe('native Codex app-server transport', () => {
+  it('accepts only a complete native-owned route capability', async () => {
+    const invoke = vi.fn(async () => ({
+      authority: 'native-owned',
+      accountId: 'account-1',
+      connectionId: 'opencode-cli',
+      modelId: 'provider/model',
+      providerId: 'provider',
+      upstreamModelId: 'model',
+      routeHandle: 'codex-route-123',
+      configurationGeneration: 'generation-1',
+      expiresAt: Date.now() + 60_000,
+      authenticated: true,
+      route: 'opencodex-translation',
+      wireProtocol: 'chat-completions',
+      contract: 'reviewed-opencodex-v1',
+      adapter: 'openai-chat',
+      translatorVerified: true,
+      supportedEfforts: ['high'],
+      supportedServiceTiers: [],
+      supports: { tools: true, cancellation: true, streaming: true, usage: true, reasoning: true },
+    }));
+    const capability = await resolveNativeCodexRoute(
+      'account-1',
+      'opencode-cli',
+      'provider/model',
+      async () => ({ invoke, channel: vi.fn() as never }),
+    );
+    expect(capability).toMatchObject({
+      authority: 'native-owned',
+      route: 'opencodex-translation',
+      routeHandle: 'codex-route-123',
+      configurationGeneration: 'generation-1',
+    });
+    expect(Object.isFrozen(capability)).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('managed_codex_route_resolve', {
+      request: { accountId: 'account-1', connectionId: 'opencode-cli', modelId: 'provider/model' },
+    });
+  });
   it('retains burst command output in order without overflowing the event queue', async () => {
     let receive!: (value: unknown) => void;
     const chunks = Array.from({ length: 257 }, (_, index) => `line ${index}\n`);
@@ -14,17 +62,11 @@ describe('native Codex app-server transport', () => {
       invoke: vi.fn(async (command: string) => {
         if (command !== 'codex_app_server_stream') return;
         for (const delta of chunks)
-          receive({
-            kind: 'frame',
-            frame: {
-              method: 'item/commandExecution/outputDelta',
-              params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1', delta },
-            },
-          });
-        receive({
-          kind: 'frame',
-          frame: { method: 'item/completed', params: { itemId: 'command-1' } },
-        });
+          receive(nativeFrame({
+            method: 'item/commandExecution/outputDelta',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1', delta },
+          }));
+        receive(nativeFrame({ method: 'item/completed', params: { itemId: 'command-1' } }));
         receive({ kind: 'done' });
       }),
       channel: (handler: (value: unknown) => void) => {
@@ -66,7 +108,7 @@ describe('native Codex app-server transport', () => {
     const bridge = async () => ({
       invoke: vi.fn(async (command: string) => {
         if (command !== 'codex_app_server_stream') return;
-        for (const frame of expected) receive({ kind: 'frame', frame });
+        for (const frame of expected) receive(nativeFrame(frame));
         receive({ kind: 'done' });
       }),
       channel: (handler: (value: unknown) => void) => {
@@ -108,6 +150,7 @@ describe('native Codex app-server transport', () => {
         'trusted-codex-1',
         'chat-1',
         'opencode-go/deepseek-v4-flash-vision-exp',
+        { kind: 'official-codex', connectionId: 'openai-codex' },
         bridge,
       ),
     ).rejects.toEqual(new Error('OpenCodex did not prove readiness. Retry startup.'));
@@ -119,6 +162,7 @@ describe('native Codex app-server transport', () => {
       'trusted-codex-1',
       'chat-1',
       'opencode-go/deepseek-v4-flash-vision-exp',
+      { kind: 'official-codex', connectionId: 'openai-codex' },
       async () => ({
         invoke,
         channel: vi.fn() as never,
@@ -131,6 +175,8 @@ describe('native Codex app-server transport', () => {
         executableId: 'trusted-codex-1',
         ownerId: 'chat-1',
         modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        connectionId: 'openai-codex',
+        routeKind: 'official-codex',
       },
     });
   });
@@ -140,7 +186,7 @@ describe('native Codex app-server transport', () => {
     const invoke = vi.fn(async (command: string) => {
       if (command === 'codex_app_server_stream') {
         queueMicrotask(() => {
-          onmessage?.({ kind: 'frame', frame: { method: 'turn/started', params: {} } });
+          onmessage?.(nativeFrame({ method: 'turn/started', params: {} }));
           onmessage?.({ kind: 'done' });
         });
       }
@@ -194,7 +240,7 @@ describe('native Codex app-server transport', () => {
     const invoke = vi.fn(async (command: string) => {
       if (command === 'codex_app_server_stream') {
         for (let index = 0; index < 257; index += 1) {
-          onmessage?.({ kind: 'frame', frame: { method: 'ping', params: { index } } });
+          onmessage?.(nativeFrame({ method: 'ping', params: { index } }));
         }
       }
     });

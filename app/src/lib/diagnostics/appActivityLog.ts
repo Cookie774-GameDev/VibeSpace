@@ -189,6 +189,10 @@ export function createActivityRecorder(capacity = 2000) {
     operationId = `${instanceId}:${sequence + 1}`,
     durationMs?: number,
   ) {
+    // Capture ingress before bounded diagnostic formatting so this timestamp is
+    // about observation, not the cost of redaction or metadata projection.
+    const observedAt = Date.now();
+    const monotonicMs = performance.now();
     try {
       const diagnostic = clean(data);
       const event = {
@@ -196,8 +200,8 @@ export function createActivityRecorder(capacity = 2000) {
         operationId,
         kind,
         phase,
-        observedAt: Date.now(),
-        monotonicMs: performance.now(),
+        observedAt,
+        monotonicMs,
         durationMs,
         data: diagnostic.data,
         diagnosticTruncated: diagnostic.diagnosticTruncated,

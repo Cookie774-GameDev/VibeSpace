@@ -1522,7 +1522,10 @@ pub enum OpenCodeTransportStreamMessage {
     Event {
         data: String,
         sequence: u64,
-        native_handoff_us: u64,
+        #[serde(rename = "nativeHandoffWallUs")]
+        native_handoff_wall_us: u64,
+        #[serde(rename = "nativeHandoffMonotonicUs")]
+        native_handoff_monotonic_us: u64,
     },
     Done,
     Error { message: &'static str },
@@ -2237,15 +2240,16 @@ async fn run_event_stream(
             buffer.drain(..boundary + delimiter);
             if let Some(data) = event_data(&frame)? {
                 sequence += 1;
-                let native_handoff_us = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros() as u64;
+                let native_handoff_wall_us =
+                    crate::activity_diagnostics_store::native_wall_us().unwrap_or_default();
+                let native_handoff_monotonic_us =
+                    crate::activity_diagnostics_store::native_monotonic_us();
                 if on_event
                     .send(OpenCodeTransportStreamMessage::Event {
                         data,
                         sequence,
-                        native_handoff_us,
+                        native_handoff_wall_us,
+                        native_handoff_monotonic_us,
                     })
                     .is_err()
                 {
@@ -2528,11 +2532,13 @@ mod tests {
         let envelope = super::OpenCodeTransportStreamMessage::Event {
             data: "event-data".to_owned(),
             sequence: 7,
-            native_handoff_us: 1_789_300_000_123_456,
+            native_handoff_wall_us: 1_789_300_000_123_456,
+            native_handoff_monotonic_us: 123_456,
         };
         let value = serde_json::to_value(envelope).unwrap();
         assert_eq!(value["sequence"], 7);
-        assert_eq!(value["native_handoff_us"], 1_789_300_000_123_456_u64);
+        assert_eq!(value["nativeHandoffWallUs"], 1_789_300_000_123_456_u64);
+        assert_eq!(value["nativeHandoffMonotonicUs"], 123_456_u64);
         assert_eq!(value["data"], "event-data");
         assert_eq!(value["kind"], "event");
     }

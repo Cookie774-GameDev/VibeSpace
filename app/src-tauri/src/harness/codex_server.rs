@@ -2,13 +2,14 @@ use crate::cli_bridge::CliBridgeState;
 use crate::harness::managed_codex_app_server::{
     codex_app_server_handshake, CodexAppServerFrameDecoder, CODEX_APP_SERVER_MAX_FRAME_BYTES,
 };
-use crate::harness::managed_codex_proxy_profile::build_managed_codex_proxy_profile;
 use crate::harness::managed_codex_proxy_runtime::{
     materialize_isolated_profile, seal_reviewed_opencodex_runtime, SealedReviewedOpenCodexRuntime,
 };
-use crate::harness::opencode_go_auth::{default_auth_store_path, read_opencode_go_credential};
+use crate::harness::managed_codex_route::{
+    revalidate_translation_route, ManagedCodexRouteState,
+};
 #[path = "managed_codex_connected_provider.rs"]
-mod connected_provider;
+pub(super) mod connected_provider;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -32,12 +33,41 @@ const READER_CHUNK_BYTES: usize = 64 * 1024;
 // while retaining the reviewed CLI's readiness contract and a hard deadline.
 const OPENCODEX_READY_TIMEOUT: Duration = Duration::from_secs(180);
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexNativeRouteKind {
+    OfficialCodex,
+    #[serde(rename = "opencodex-translation")]
+    OpenCodexTranslation,
+    DirectResponses,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodexAppServerStartRequest {
     executable_id: String,
     owner_id: String,
     model_id: String,
+    connection_id: String,
+    route_kind: CodexNativeRouteKind,
+    account_id: Option<String>,
+    route_handle: Option<String>,
+    configuration_generation: Option<String>,
+}
+
+impl CodexAppServerStartRequest {
+    fn route_identity(&self) -> String {
+        match self.route_kind {
+            CodexNativeRouteKind::OfficialCodex => format!("official:{}", self.connection_id),
+            CodexNativeRouteKind::OpenCodexTranslation => format!(
+                "translation:{}:{}:{}",
+                self.connection_id,
+                self.route_handle.as_deref().unwrap_or("missing"),
+                self.configuration_generation.as_deref().unwrap_or("missing")
+            ),
+            CodexNativeRouteKind::DirectResponses => format!("direct:{}", self.connection_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,7 +82,10 @@ pub enum CodexAppServerStreamMessage {
     Frame {
         frame: Value,
         sequence: u64,
-        native_handoff_us: u64,
+        #[serde(rename = "nativeHandoffWallUs")]
+        native_handoff_wall_us: u64,
+        #[serde(rename = "nativeHandoffMonotonicUs")]
+        native_handoff_monotonic_us: u64,
     },
     Done,
     Error { message: &'static str },
@@ -90,9 +123,35 @@ fn validate_start_request(
     if !valid_identifier(&request.owner_id, 256) {
         return Err("Codex owner identity is invalid.".to_string());
     }
-    if !(request.model_id.split_once('/').is_some_and(|(provider, model)| !provider.is_empty() && !model.is_empty()) || request.model_id.starts_with("gpt-"))
-        || !valid_identifier(&request.model_id, 256) {
+    if !valid_identifier(&request.model_id, 256) {
+
         return Err("Codex model identity is invalid.".to_string());
+    }
+    if !valid_identifier(&request.connection_id, 256) {
+        return Err("Codex connection identity is invalid.".to_string());
+    }
+    match request.route_kind {
+        CodexNativeRouteKind::OfficialCodex => {
+            if request.connection_id != "openai-codex"
+                || request.account_id.is_some()
+                || request.route_handle.is_some()
+                || request.configuration_generation.is_some()
+            {
+                return Err("Official Codex route metadata is invalid.".to_string());
+            }
+        }
+        CodexNativeRouteKind::OpenCodexTranslation => {
+            let valid = request.connection_id != "openai-codex"
+                && request.account_id.as_deref().is_some_and(|value| valid_identifier(value, 256))
+                && request.route_handle.as_deref().is_some_and(|value| valid_identifier(value, 256))
+                && request.configuration_generation.as_deref().is_some_and(|value| valid_identifier(value, 256));
+            if !valid {
+                return Err("Codex translation route metadata is invalid.".to_string());
+            }
+        }
+        CodexNativeRouteKind::DirectResponses => {
+            return Err("Codex direct Responses route is not yet semantically verified.".to_string());
+        }
     }
     Ok(())
 }
@@ -349,6 +408,7 @@ pub struct RunningCodexServer {
     model_id: String,
     caller_label: String,
     owner_id: String,
+    route_identity: String,
     generation: String,
     stdin: Option<Arc<Mutex<ChildStdin>>>,
     receiver: Option<mpsc::Receiver<ReaderMessage>>,
@@ -376,6 +436,7 @@ impl RunningCodexServer {
             model_id: "opencode-go/deepseek-v4-flash-vision-exp".to_string(),
             caller_label: caller_label.to_string(),
             owner_id: owner_id.to_string(),
+            route_identity: "official:openai-codex".to_string(),
             generation: generation.to_string(),
             stdin: None,
             receiver: None,
@@ -564,6 +625,7 @@ fn launch_server(
     model_id: String,
     caller_label: String,
     owner_id: String,
+    route_identity: String,
     proxy: Option<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime)>,
 ) -> Result<RunningCodexServer, String> {
     let (proxy, codex_home) = match proxy {
@@ -656,6 +718,7 @@ fn launch_server(
         model_id,
         caller_label,
         owner_id,
+        route_identity,
         generation: format!("codex-generation-{}", nanoid::nanoid!(20)),
         stdin: Some(Arc::new(Mutex::new(stdin))),
         receiver: Some(receiver),
@@ -776,7 +839,7 @@ fn isolated_codex_instance_root(storage_root: &Path, process_id: u32, owner_id: 
 
 fn start_owned_opencodex(
     app: &AppHandle,
-    model_id: &str,
+    provider: &connected_provider::ConnectedProvider,
     owner_id: &str,
     codex_executable: &Path,
 ) -> Result<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime), String> {
@@ -787,18 +850,8 @@ fn start_owned_opencodex(
         .path()
         .app_data_dir()
         .map_err(|_| "VibeSpace app data is unavailable.".to_string())?;
-    let (profile, environment) = if model_id.starts_with("opencode-go/") {
-        let profile = build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, port, model_id, owner_id)
-            .map_err(|_| "The managed Codex proxy profile is invalid.".to_string())?;
-        let credential_path = default_auth_store_path().map_err(|_| "The OpenCode credential store is unavailable.")?;
-        let credential = read_opencode_go_credential(&credential_path)
-            .map_err(|_| "OpenCode Go is not connected; connect it in OpenCode first.")?;
-        let environment = vec![(profile.provider_environment_name.to_string(), credential.expose_to_child_environment().to_string())];
-        (profile, environment)
-    } else {
-        let provider = connected_provider::resolve(app, model_id)?;
-        (provider.profile(port)?, provider.environment)
-    };
+    let profile = provider.profile(port, owner_id)?;
+    let environment = provider.environment.clone();
     let storage_root = crate::harness::managed_codex_storage::storage_root(&app_data)?;
     let instance_root = isolated_codex_instance_root(&storage_root, std::process::id(), owner_id);
     let paths = materialize_isolated_profile(&instance_root, &profile)
@@ -898,6 +951,39 @@ fn start_internal(
     request: CodexAppServerStartRequest,
 ) -> Result<CodexAppServerStartResponse, String> {
     validate_start_request(caller_label, &request)?;
+    let route_identity = request.route_identity();
+    // Revalidate provider authority before taking the runtime lock. This may
+    // query the owned OpenCode catalog; it must not hold the Codex controller.
+    let translation_provider = match request.route_kind {
+        CodexNativeRouteKind::OfficialCodex => None,
+        CodexNativeRouteKind::OpenCodexTranslation => {
+            let account_id = request
+                .account_id
+                .as_deref()
+                .ok_or("Codex translation route account is unavailable.")?;
+            let route_handle = request
+                .route_handle
+                .as_deref()
+                .ok_or("Codex translation route handle is unavailable.")?;
+            let configuration_generation = request
+                .configuration_generation
+                .as_deref()
+                .ok_or("Codex translation route generation is unavailable.")?;
+            Some(revalidate_translation_route(
+                app,
+                &app.state::<ManagedCodexRouteState>(),
+                account_id,
+                &request.connection_id,
+                &request.model_id,
+                route_handle,
+                configuration_generation,
+            )?)
+        }
+        CodexNativeRouteKind::DirectResponses => {
+            return Err("Codex direct Responses route is not yet semantically verified.".to_string());
+        }
+    };
+
     let state = app.state::<CodexAppServerState>();
     let mut inner = state
         .inner
@@ -909,12 +995,13 @@ fn start_internal(
                 && running.model_id == request.model_id
                 && running.caller_label == caller_label
                 && running.owner_id == request.owner_id
+                && running.route_identity == route_identity
             {
                 return Ok(CodexAppServerStartResponse {
                     generation: running.generation.clone(),
                 });
             }
-            return Err("Codex app-server is already active for another owner.".to_string());
+            return Err("Codex app-server is already active for another owner or route.".to_string());
         }
         retire_exited_running(&mut inner.running)?;
     }
@@ -924,10 +1011,22 @@ fn start_internal(
         let launch = resolve_launch_request(&request.executable_id, |executable_id| {
             cli_state.resolve_trusted_executable(executable_id)
         })?;
-        let proxy = if request.model_id.contains('/') {
-            Some(start_owned_opencodex(app, &request.model_id, &request.owner_id, &launch.executable)?)
-        } else {
-            None
+        let proxy = match request.route_kind {
+            CodexNativeRouteKind::OfficialCodex => None,
+            CodexNativeRouteKind::OpenCodexTranslation => {
+                let provider = translation_provider
+                    .as_ref()
+                    .ok_or("Codex translation route was not revalidated.")?;
+                Some(start_owned_opencodex(
+                    app,
+                    provider,
+                    &request.owner_id,
+                    &launch.executable,
+                )?)
+            }
+            CodexNativeRouteKind::DirectResponses => {
+                return Err("Codex direct Responses route is not yet semantically verified.".to_string());
+            }
         };
         launch_server(
             launch,
@@ -935,6 +1034,7 @@ fn start_internal(
             request.model_id.clone(),
             caller_label.to_string(),
             request.owner_id.clone(),
+            route_identity.clone(),
             proxy,
         )
     })?;
@@ -1014,10 +1114,10 @@ fn stream_internal(
             CodexAppServerStreamMessage::Frame {
                 frame,
                 sequence,
-                native_handoff_us: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros() as u64,
+                native_handoff_wall_us: crate::activity_diagnostics_store::native_wall_us()
+                    .unwrap_or_default(),
+                native_handoff_monotonic_us:
+                    crate::activity_diagnostics_store::native_monotonic_us(),
             }
         };
         for frame in buffered_frames {
@@ -1168,11 +1268,13 @@ mod tests {
         let envelope = super::CodexAppServerStreamMessage::Frame {
             frame: serde_json::json!({"method":"turn/started"}),
             sequence: 7,
-            native_handoff_us: 1_789_300_000_123_456,
+            native_handoff_wall_us: 1_789_300_000_123_456,
+            native_handoff_monotonic_us: 123_456,
         };
         let value = serde_json::to_value(envelope).unwrap();
         assert_eq!(value["sequence"], 7);
-        assert_eq!(value["native_handoff_us"], 1_789_300_000_123_456_u64);
+        assert_eq!(value["nativeHandoffWallUs"], 1_789_300_000_123_456_u64);
+        assert_eq!(value["nativeHandoffMonotonicUs"], 123_456_u64);
         assert_eq!(value["frame"]["method"], "turn/started");
         assert_eq!(value["kind"], "frame");
     }
@@ -1332,40 +1434,73 @@ mod tests {
     }
 
     #[test]
-    fn start_request_accepts_only_a_trusted_executable_id_and_valid_owner() {
-        let request: CodexAppServerStartRequest = serde_json::from_value(json!({
+    fn start_request_requires_explicit_native_route_authority() {
+        let official: CodexAppServerStartRequest = serde_json::from_value(json!({
             "executableId": "cli-executable-0000000000000001",
             "ownerId": "chat_session-01",
-            "modelId": "opencode-go/deepseek-v4-flash-vision-exp",
+            "modelId": "gpt-5.4-mini",
+            "connectionId": "openai-codex",
+            "routeKind": "official-codex",
         }))
-        .expect("valid start request");
-        assert_eq!(request.executable_id, "cli-executable-0000000000000001");
-        assert_eq!(request.owner_id, "chat_session-01");
-        assert!(validate_start_request("main", &request).is_ok());
-        let direct = CodexAppServerStartRequest {
-            executable_id: request.executable_id.clone(), owner_id: request.owner_id.clone(),
-            model_id: "gpt-5.4-mini".to_string(),
-        };
-        assert!(validate_start_request("main", &direct).is_ok());
-        for model in ["anthropic/claude-test", "nararouter/vendor/model", "alibaba-token-plan/qwen-test"] {
-            let connected = CodexAppServerStartRequest { model_id: model.into(), ..direct.clone() };
-            assert!(validate_start_request("main", &connected).is_ok());
-        }
+        .expect("valid official start request");
+        assert_eq!(official.executable_id, "cli-executable-0000000000000001");
+        assert_eq!(official.owner_id, "chat_session-01");
+        assert_eq!(official.route_kind, CodexNativeRouteKind::OfficialCodex);
+        assert!(validate_start_request("main", &official).is_ok());
 
+        let translated = CodexAppServerStartRequest {
+            executable_id: official.executable_id.clone(),
+            owner_id: official.owner_id.clone(),
+            model_id: "custom/vendor-model".to_string(),
+            connection_id: "opencode-cli".to_string(),
+            route_kind: CodexNativeRouteKind::OpenCodexTranslation,
+            account_id: Some("account-01".to_string()),
+            route_handle: Some("codex-route-01".to_string()),
+            configuration_generation: Some("generation-01".to_string()),
+        };
+        assert!(validate_start_request("main", &translated).is_ok());
+        let translated_wire: CodexAppServerStartRequest = serde_json::from_value(json!({
+            "executableId": "cli-executable-0000000000000001",
+            "ownerId": "chat_session-01",
+            "modelId": "custom/vendor-model",
+            "connectionId": "opencode-cli",
+            "routeKind": "opencodex-translation",
+            "accountId": "account-01",
+            "routeHandle": "codex-route-01",
+            "configurationGeneration": "generation-01"
+        }))
+        .expect("valid translated wire request");
+        assert_eq!(translated_wire.route_kind, CodexNativeRouteKind::OpenCodexTranslation);
+
+        let slash_without_route = CodexAppServerStartRequest {
+            model_id: "custom/vendor-model".to_string(),
+            ..official.clone()
+        };
+        assert!(validate_start_request("main", &slash_without_route).is_ok());
+        assert_eq!(slash_without_route.route_identity(), "official:openai-codex");
+
+        let direct = CodexAppServerStartRequest {
+            connection_id: "custom-responses".to_string(),
+            route_kind: CodexNativeRouteKind::DirectResponses,
+            account_id: Some("account-01".to_string()),
+            route_handle: Some("codex-route-02".to_string()),
+            configuration_generation: Some("generation-02".to_string()),
+            ..official.clone()
+        };
+        assert!(validate_start_request("main", &direct).is_err());
 
         assert!(serde_json::from_value::<CodexAppServerStartRequest>(json!({
             "executableId": "cli-executable-0000000000000001",
             "ownerId": "chat_session-01",
-            "modelId": "opencode-go/deepseek-v4-flash-vision-exp",
+            "modelId": "gpt-5.4-mini",
+            "connectionId": "openai-codex",
+            "routeKind": "official-codex",
             "executablePath": "C:\\untrusted\\codex.exe",
         }))
         .is_err());
+
         for (caller, executable_id, owner_id) in [
-            (
-                "pet-overlay",
-                "cli-executable-0000000000000001",
-                "chat_session-01",
-            ),
+            ("pet-overlay", "cli-executable-0000000000000001", "chat_session-01"),
             ("main", "../codex.exe", "chat_session-01"),
             ("main", "cli-executable-0000000000000001", "bad owner"),
             ("main", "cli-executable-0000000000000001", ""),
@@ -1375,7 +1510,12 @@ mod tests {
                 &CodexAppServerStartRequest {
                     executable_id: executable_id.to_string(),
                     owner_id: owner_id.to_string(),
-                    model_id: "opencode-go/deepseek-v4-flash-vision-exp".to_string(),
+                    model_id: "gpt-5.4-mini".to_string(),
+                    connection_id: "openai-codex".to_string(),
+                    route_kind: CodexNativeRouteKind::OfficialCodex,
+                    account_id: None,
+                    route_handle: None,
+                    configuration_generation: None,
                 },
             )
             .is_err());

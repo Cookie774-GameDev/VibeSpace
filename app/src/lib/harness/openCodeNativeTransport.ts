@@ -1,4 +1,5 @@
 import type { OpenCodeRawEvent } from './OpenCodeSdkSessionClient';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 
 interface NativeTransportResponse {
   status: number;
@@ -38,7 +39,13 @@ type NativeTransportRoute =
   | { kind: 'instance_dispose' };
 
 type NativeStreamMessage =
-  | { kind: 'event'; data: string }
+  | {
+      kind: 'event';
+      data: string;
+      sequence: number;
+      nativeHandoffWallUs: number;
+      nativeHandoffMonotonicUs: number;
+    }
   | { kind: 'done' }
   | { kind: 'error'; message: string };
 
@@ -281,7 +288,17 @@ export async function nativeOpenCodeRequest(
   });
 }
 
-function parsedEvent(data: string): OpenCodeRawEvent | undefined {
+function parsedEvent(
+  data: string,
+  timing: Readonly<{
+    generation: string;
+    sequence: number;
+    nativeHandoffWallUs: number;
+    nativeHandoffMonotonicUs: number;
+    rendererReceivedAt: number;
+    rendererReceivedMonotonicMs: number;
+  }>,
+): OpenCodeRawEvent | undefined {
   const parsed = JSON.parse(data) as unknown;
   const wrapped =
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
@@ -297,6 +314,7 @@ function parsedEvent(data: string): OpenCodeRawEvent | undefined {
       event.properties && typeof event.properties === 'object' && !Array.isArray(event.properties)
         ? (event.properties as Record<string, unknown>)
         : undefined,
+    nativeTiming: Object.freeze({ ...timing }),
   };
 }
 
@@ -348,7 +366,34 @@ export async function* nativeOpenCodeEvents(
     wake?.();
     wake = undefined;
   };
-  const channel = bridge.channel((message) => push(message as NativeStreamMessage));
+  const channel = bridge.channel((value) => {
+    const message = value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+    if (message?.kind === 'event') {
+      if (
+        typeof message.data !== 'string' ||
+        !Number.isSafeInteger(message.sequence) || Number(message.sequence) < 0 ||
+        !Number.isSafeInteger(message.nativeHandoffWallUs) || Number(message.nativeHandoffWallUs) < 0 ||
+        !Number.isSafeInteger(message.nativeHandoffMonotonicUs) || Number(message.nativeHandoffMonotonicUs) < 0
+      ) {
+        push({ kind: 'error', message: 'OpenCode native event stream returned invalid timing metadata.' });
+        return;
+      }
+      push({
+        kind: 'event',
+        data: message.data,
+        sequence: Number(message.sequence),
+        nativeHandoffWallUs: Number(message.nativeHandoffWallUs),
+        nativeHandoffMonotonicUs: Number(message.nativeHandoffMonotonicUs),
+      });
+      return;
+    }
+    if (message?.kind === 'done') push({ kind: 'done' });
+    else if (message?.kind === 'error' && typeof message.message === 'string')
+      push({ kind: 'error', message: safeError(message.message, 'OpenCode event stream failed.').message });
+    else push({ kind: 'error', message: 'OpenCode native event stream returned an invalid message.' });
+  });
   const invocation = bridge
     .invoke('opencode_server_event_stream', {
       generation,
@@ -382,8 +427,41 @@ export async function* nativeOpenCodeEvents(
       const { message } = item;
       if (message.kind === 'done') return;
       if (message.kind === 'error') throw new Error(message.message);
-      const event = parsedEvent(message.data);
-      if (event) yield event;
+      const rendererReceivedAt = Date.now();
+      const rendererReceivedMonotonicMs = performance.now();
+      const timing = Object.freeze({
+        generation,
+        sequence: message.sequence,
+        nativeHandoffWallUs: message.nativeHandoffWallUs,
+        nativeHandoffMonotonicUs: message.nativeHandoffMonotonicUs,
+        rendererReceivedAt,
+        rendererReceivedMonotonicMs,
+      });
+      const event = parsedEvent(message.data, timing);
+      if (event) {
+        const properties = event.properties;
+        const part = properties?.part && typeof properties.part === 'object' && !Array.isArray(properties.part)
+          ? (properties.part as Record<string, unknown>)
+          : properties?.info && typeof properties.info === 'object' && !Array.isArray(properties.info)
+            ? (properties.info as Record<string, unknown>)
+            : undefined;
+        const id = (value: unknown) =>
+          typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,255}$/u.test(value)
+            ? value
+            : undefined;
+        appActivityLog.record('native.opencode.frame', 'received', {
+          runtimeGeneration: generation,
+          nativeSequence: timing.sequence,
+          nativeHandoffWallUs: timing.nativeHandoffWallUs,
+          nativeHandoffMonotonicUs: timing.nativeHandoffMonotonicUs,
+          rendererReceivedAt: timing.rendererReceivedAt,
+          rendererReceivedMonotonicMs: timing.rendererReceivedMonotonicMs,
+          eventType: event.type,
+          sessionId: id(properties?.sessionID) ?? id(properties?.sessionId) ?? id(part?.sessionID),
+          callId: id(part?.callID) ?? id(part?.callId),
+        });
+        yield event;
+      }
     }
   } finally {
     terminal = true;

@@ -2,13 +2,13 @@ use serde_json::{json, Value};
 use std::io::Read;
 use tauri::{AppHandle, Manager};
 
-use crate::harness::managed_codex_proxy_profile::ManagedCodexProxyProfile;
+use crate::harness::managed_codex_proxy_profile::{ManagedCodexProxyProfile, OPENCODE_GO_PROVIDER_ID};
 use crate::harness::server::{opencode_server_status, OpenCodeServerState};
 
 const KEY_ENV: &str = "VIBESPACE_CONNECTED_API_KEY";
 
 // Native-only: never Debug/Serialize credentials or return catalog bytes to JS.
-pub(super) struct ConnectedProvider {
+pub(in crate::harness) struct ConnectedProvider {
     provider: String,
     model: String,
     upstream_model: String,
@@ -17,7 +17,7 @@ pub(super) struct ConnectedProvider {
     headers: serde_json::Map<String, Value>,
     efforts: Vec<String>,
     context_window: Option<u64>,
-    pub environment: Vec<(String, String)>,
+    pub(in crate::harness) environment: Vec<(String, String)>,
 }
 
 fn clean_value(value: &str) -> bool {
@@ -134,7 +134,7 @@ fn from_catalog(catalog: &Value, qualified: &str) -> Result<ConnectedProvider, S
     })
 }
 
-pub(super) fn resolve(app: &AppHandle, model: &str) -> Result<ConnectedProvider, String> {
+pub(in crate::harness) fn resolve(app: &AppHandle, model: &str) -> Result<ConnectedProvider, String> {
     let connection = opencode_server_status(app.state::<OpenCodeServerState>())?
         .ok_or("OpenCode must be ready before selecting its model through Codex.")?;
     // Endpoint and credentials come exclusively from the owned native server.
@@ -168,14 +168,28 @@ pub(super) fn resolve(app: &AppHandle, model: &str) -> Result<ConnectedProvider,
 }
 
 impl ConnectedProvider {
-    pub(super) fn profile(&self, port: u16) -> Result<ManagedCodexProxyProfile, String> {
+    pub(in crate::harness) fn provider_id(&self) -> &str { &self.provider }
+    pub(in crate::harness) fn upstream_model_id(&self) -> &str { &self.upstream_model }
+    pub(in crate::harness) fn adapter_id(&self) -> &str { self.adapter }
+    pub(in crate::harness) fn supported_efforts(&self) -> &[String] { &self.efforts }
+
+    pub(in crate::harness) fn profile(&self, port: u16, session_id: &str) -> Result<ManagedCodexProxyProfile, String> {
         if port < 1024 || port == 11434 {
             return Err("Invalid managed proxy port.".into());
         }
+        if !super::valid_identifier(session_id, 256) {
+            return Err("Invalid managed proxy session identity.".into());
+        }
         // A private ID prevents upstream built-in presets overriding a custom
         // OpenCode destination. Its alias preserves the selected public identity.
+        let mut headers = self.headers.clone();
+        if self.provider == OPENCODE_GO_PROVIDER_ID {
+            headers.insert("x-opencode-session".into(), Value::String(session_id.into()));
+            headers.entry("user-agent").or_insert_with(||
+                Value::String(concat!("VibeSpace/", env!("CARGO_PKG_VERSION")).into()));
+        }
         let mut provider = json!({"alias": self.provider, "adapter": self.adapter, "baseUrl": self.endpoint,
-            "apiKey": format!("${{{KEY_ENV}}}"), "headers": self.headers, "authMode": "key",
+            "apiKey": format!("${{{KEY_ENV}}}"), "headers": headers, "authMode": "key",
             "models": [self.upstream_model], "defaultAliases": false});
         if self.upstream_model != self.model {
             provider["modelAliases"] = json!({self.upstream_model.clone(): self.model});
@@ -219,7 +233,7 @@ mod tests {
         ] {
             let selected = from_catalog(&fixture(npm), "custom/vendor/model").unwrap();
             assert_eq!(selected.adapter, adapter);
-            let profile = selected.profile(23567).unwrap();
+            let profile = selected.profile(23567, "chat-1").unwrap();
             let json: Value = serde_json::from_slice(&profile.opencodex_config_json).unwrap();
             assert_eq!(
                 json["providers"]["vibespace-connected"]["baseUrl"],
@@ -271,7 +285,7 @@ mod tests {
             "https://generativelanguage.googleapis.com"
         );
         let profile: Value =
-            serde_json::from_slice(&selected.profile(23568).unwrap().opencodex_config_json)
+            serde_json::from_slice(&selected.profile(23568, "chat-1").unwrap().opencodex_config_json)
                 .unwrap();
         assert_eq!(
             profile["providers"]["vibespace-connected"]["modelReasoningEfforts"]["vendor/model"],
@@ -280,5 +294,21 @@ mod tests {
         catalog["all"][0]["options"]["baseURL"] = json!("http://127.0.0.1:8000/v1");
         assert!(from_catalog(&catalog, "custom/vendor/model").is_ok());
         assert!(from_catalog(&catalog, "custom/\"bad").is_err());
+    }
+
+    #[test]
+    fn opencode_go_translation_adds_the_required_session_header_from_native_owner_identity() {
+        let mut catalog = fixture("@ai-sdk/openai-compatible");
+        catalog["connected"] = json!([OPENCODE_GO_PROVIDER_ID]);
+        catalog["all"][0]["id"] = json!(OPENCODE_GO_PROVIDER_ID);
+        catalog["all"][0]["options"]["baseURL"] = json!("https://opencode.ai/zen/go/v1");
+        let selected = from_catalog(&catalog, "opencode-go/vendor/model").unwrap();
+        let profile = selected.profile(23569, "chat-session-123").unwrap();
+        let json: Value = serde_json::from_slice(&profile.opencodex_config_json).unwrap();
+        let headers = &json["providers"]["vibespace-connected"]["headers"];
+        assert_eq!(headers["x-opencode-session"], "chat-session-123");
+        assert_eq!(headers["user-agent"], concat!("VibeSpace/", env!("CARGO_PKG_VERSION")));
+        assert!(!String::from_utf8(profile.opencodex_config_json).unwrap().contains("test-secret-only"));
+        assert!(selected.profile(23569, "bad session").is_err());
     }
 }

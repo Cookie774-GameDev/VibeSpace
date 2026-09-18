@@ -1,4 +1,5 @@
 import type { AppActivityEvent } from './appActivityLog';
+import { ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION } from './activityDiagnosticContract';
 
 export interface PersistedActivity {
   sequence: number;
@@ -16,12 +17,23 @@ export interface PersistedActivity {
   publicationRevision?: number;
   coalescedRevisions?: number;
   uiCommitMs?: number;
+  nativeSequence?: number;
+  nativeHandoffWallUs?: number;
+  nativeHandoffMonotonicUs?: number;
+  rendererReceivedAt?: number;
+  rendererReceivedMonotonicMs?: number;
+  rendererSentAt?: number;
+  rendererSentMonotonicMs?: number;
+  clockRoundTripMs?: number;
+  clockUncertaintyMs?: number;
+  nativeProcessId?: number;
   provider?: string;
   model?: string;
   tool?: string;
   operation?: string;
   eventType?: string;
   resultCode?: string;
+  runtimeGeneration?: string;
   outcome: 'running' | 'success' | 'failure' | 'cancelled' | 'timeout' | 'unknown';
   completeness: 'complete' | 'partial' | 'truncated' | 'unknown';
   hasContinuation?: boolean;
@@ -30,7 +42,7 @@ export interface PersistedActivity {
   diagnosticTruncated?: boolean;
 }
 export interface DiagnosticBatch {
-  schemaVersion: 1;
+  schemaVersion: typeof ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION;
   rendererInstance: string;
   droppedTotal: number;
   failedBatches: number;
@@ -64,7 +76,13 @@ function identifier(value: unknown): string | undefined {
 }
 function numericField(object: unknown, key: string): number | undefined {
   const value = own(object, key);
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER
+    ? value
+    : undefined;
+}
+function nonNegativeSafeIntegerField(object: unknown, key: string): number | undefined {
+  const value = own(object, key);
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 function field(key: string, ...objects: unknown[]): string | undefined {
   for (const object of objects) {
@@ -150,18 +168,33 @@ export function toPersistedActivity(event: AppActivityEvent): PersistedActivity 
     phase: identifier(event.phase) ?? 'unknown',
     observedAt: event.observedAt,
     monotonicMs: event.monotonicMs,
-    durationMs: event.durationMs,
+    durationMs:
+      typeof event.durationMs === 'number' && Number.isFinite(event.durationMs) && event.durationMs >= 0 && event.durationMs <= Number.MAX_SAFE_INTEGER
+        ? event.durationMs
+        : undefined,
     requestId: field('requestId', request, data, result),
     chatId: field('chatId', request, data),
     runId: field('runId', request, data),
-    publicationRevision: numericField(data, 'publicationRevision'),
-    coalescedRevisions: numericField(data, 'coalescedRevisions'),
+    publicationRevision: nonNegativeSafeIntegerField(data, 'publicationRevision'),
+    coalescedRevisions: nonNegativeSafeIntegerField(data, 'coalescedRevisions'),
     uiCommitMs: numericField(data, 'uiCommitMs'),
+    nativeSequence: nonNegativeSafeIntegerField(data, 'nativeSequence'),
+    nativeHandoffWallUs: nonNegativeSafeIntegerField(data, 'nativeHandoffWallUs'),
+    nativeHandoffMonotonicUs: nonNegativeSafeIntegerField(data, 'nativeHandoffMonotonicUs'),
+    rendererReceivedAt: numericField(data, 'rendererReceivedAt'),
+    rendererReceivedMonotonicMs: numericField(data, 'rendererReceivedMonotonicMs'),
+    rendererSentAt: numericField(data, 'rendererSentAt'),
+    rendererSentMonotonicMs: numericField(data, 'rendererSentMonotonicMs'),
+    clockRoundTripMs: numericField(data, 'clockRoundTripMs'),
+    clockUncertaintyMs: numericField(data, 'clockUncertaintyMs'),
+    nativeProcessId: nonNegativeSafeIntegerField(data, 'nativeProcessId'),
     sessionId:
       field('sessionId', request, data) ??
       field('sessionID', part, properties) ??
       field('threadId', params),
     callId:
+      field('callId', data) ??
+      field('callId', activity, request) ??
       field('toolCallId', activity, request) ??
       field('callID', part) ??
       field('id', activity, codexTool) ??
@@ -173,8 +206,9 @@ export function toPersistedActivity(event: AppActivityEvent): PersistedActivity 
       field('name', activity) ??
       field('type', codexTool),
     operation: field('operation', args),
-    eventType: field('type', nativeEvent) ?? field('method', data),
+    eventType: field('eventType', data) ?? field('type', nativeEvent) ?? field('method', data),
     resultCode: field('code', result),
+    runtimeGeneration: field('runtimeGeneration', data),
     outcome,
     completeness,
     hasContinuation,
@@ -208,6 +242,13 @@ export function createActivityLogWriter(
   let lastError = '',
     path = '',
     stopped = false;
+  let lastFailure:
+    | Readonly<{
+        kind: 'schema_rejection' | 'persistence_uncertain';
+        firstSequence: number;
+        lastSequence: number;
+      }>
+    | undefined;
   let closing = false;
   let closePromise: Promise<void> | undefined;
   function schedule(wait = delay) {
@@ -226,7 +267,7 @@ export function createActivityLogWriter(
     }
     const events = queue.splice(0, batchSize);
     const batch: DiagnosticBatch = {
-      schemaVersion: 1,
+      schemaVersion: ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
       rendererInstance,
       droppedTotal: dropped,
       failedBatches,
@@ -241,12 +282,25 @@ export function createActivityLogWriter(
         persisted += events.length;
         path = receipt.path;
         lastError = '';
+        lastFailure = undefined;
       })
-      .catch(() => {
-        // A failed write may have appended bytes: never retry it and create false duplicates.
+      .catch((error: unknown) => {
+        const code = typeof error === 'string'
+          ? error
+          : error instanceof Error
+            ? error.message
+            : '';
+        const schemaRejected = /(?:^|\b)(?:diagnostics_(?:invalid_batch|invalid_event|missing_metadata|invalid_metadata|batch_too_large)|diagnostics_schema_mismatch)(?:\b|$)/u.test(code);
+        // Only a known validation rejection is guaranteed to happen before append.
+        // Every other failure may have appended bytes, so never replay it automatically.
         dropped += events.length;
         failedBatches += 1;
-        lastError = 'native_write_failed';
+        lastError = schemaRejected ? 'diagnostics_schema_rejected' : 'persistence_uncertain';
+        lastFailure = Object.freeze({
+          kind: schemaRejected ? 'schema_rejection' : 'persistence_uncertain',
+          firstSequence: events[0]?.sequence ?? 0,
+          lastSequence: events.at(-1)?.sequence ?? 0,
+        });
       })
       .finally(() => {
         inFlight = 0;
@@ -298,6 +352,7 @@ export function createActivityLogWriter(
       dropped,
       failedBatches,
       lastError,
+      lastFailure,
       path,
       stopped,
     }),

@@ -179,7 +179,8 @@ describe('bounded non-blocking native writer', () => {
       persisted: 0,
       dropped: 1,
       failedBatches: 1,
-      lastError: 'native_write_failed',
+      lastError: 'persistence_uncertain',
+      lastFailure: { kind: 'persistence_uncertain', firstSequence: 1, lastSequence: 1 },
     });
     writer.enqueue(event(2));
     await writer.flush();
@@ -191,6 +192,22 @@ describe('bounded non-blocking native writer', () => {
     expect(JSON.stringify(writer.status())).not.toContain('PRIVATE');
     writer.stop();
   });
+  it('distinguishes a deterministic schema rejection from an uncertain append failure', async () => {
+    vi.useFakeTimers();
+    const sink = vi.fn().mockRejectedValue(new Error('diagnostics_invalid_metadata'));
+    const writer = createActivityLogWriter(sink);
+    writer.enqueue(event(21));
+    await writer.flush();
+    expect(writer.status()).toMatchObject({
+      persisted: 0,
+      dropped: 1,
+      failedBatches: 1,
+      lastError: 'diagnostics_schema_rejected',
+      lastFailure: { kind: 'schema_rejection', firstSequence: 21, lastSequence: 21 },
+    });
+    writer.stop();
+  });
+
   it('flushes quiet traffic on a timer, and stops without pretending pending data was persisted', async () => {
     vi.useFakeTimers();
     const sink = vi.fn().mockResolvedValue(receipt(1));
@@ -386,5 +403,47 @@ describe('nested Codex tool result envelopes', () => {
     expect(row.operation).toBeUndefined();
     expect(row.outcome).toBe('success');
     expect(row.tool).toBeUndefined();
+  });
+});
+
+
+describe('A8F1 public lifecycle projection regressions', () => {
+  it('preserves the actual callId across richer start updates and completion', () => {
+    const rows = ['started', 'started', 'completed'].map((status, index) =>
+      toPersistedActivity({
+        ...event(500 + index), kind: 'model.tool', phase: status,
+        data: { requestId: 'req-a8f1', chatId: 'chat-a8f1', activity: {
+          callId: 'opencode-tool-1', toolCallId: 'legacy-alias', name: 'read', status,
+          ...(index ? { details: { arguments: { filePath: 'PRIVATE PATH' } } } : {}),
+        } },
+      }),
+    );
+    expect(rows.map(row => row.callId)).toEqual(Array(3).fill('opencode-tool-1'));
+    expect(rows.map(row => row.outcome)).toEqual(['running', 'running', 'success']);
+    expect(new Set(rows.map(row => `${row.requestId}:${row.callId}`)).size).toBe(1);
+    expect(JSON.stringify(rows)).not.toContain('PRIVATE');
+  });
+
+  it.each([-1, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    'does not emit an out-of-contract optional numeric value: %s', invalid => {
+      const row = toPersistedActivity({ ...event(510, {
+        publicationRevision: invalid, coalescedRevisions: invalid, uiCommitMs: invalid,
+      }), durationMs: invalid });
+      expect(row.publicationRevision).toBeUndefined();
+      expect(row.coalescedRevisions).toBeUndefined();
+      expect(row.uiCommitMs).toBeUndefined();
+      expect(row.durationMs).toBeUndefined();
+    },
+  );
+
+  it('preserves zero, finite timing and the upper safe bound', () => {
+    expect(toPersistedActivity(event(511, {
+      publicationRevision: Number.MAX_SAFE_INTEGER, coalescedRevisions: 0, uiCommitMs: 0.125,
+    }))).toMatchObject({ publicationRevision: Number.MAX_SAFE_INTEGER, coalescedRevisions: 0, uiCommitMs: 0.125 });
+  });
+
+  it('never fabricates an absent or credential-shaped callId', () => {
+    expect(toPersistedActivity(event(512, { activity: { name: 'read' } })).callId).toBeUndefined();
+    expect(toPersistedActivity(event(513, { activity: { callId: 'github_pat_private' } })).callId).toBeUndefined();
   });
 });

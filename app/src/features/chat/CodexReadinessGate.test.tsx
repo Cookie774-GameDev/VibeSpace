@@ -33,6 +33,33 @@ describe('CodexReadinessGate', () => {
     expect(document.body.textContent).not.toMatch(/api.?key|credential|token/iu);
   });
 
+  it('does not require OpenCodex for the official OpenAI Codex route', () => {
+    const runtime = manager({
+      kind: 'ready',
+      codexVersion: '0.151.0',
+      openCodexVersion: '',
+      translationRuntime: 'missing',
+      executableId: 'cli-executable-1',
+    });
+    const view = render(<CodexReadinessGate manager={runtime} requiresTranslation={false} />);
+    expect(view.container.innerHTML).toBe('');
+  });
+
+  it('requires the translator explicitly for a nonofficial Codex route', () => {
+    const runtime = manager({
+      kind: 'ready',
+      codexVersion: '0.151.0',
+      openCodexVersion: '',
+      translationRuntime: 'missing',
+      executableId: 'cli-executable-1',
+    });
+    render(<CodexReadinessGate manager={runtime} requiresTranslation />);
+    expect(screen.getByText('OpenCodex translation required')).toBeTruthy();
+    expect(screen.getByText(/Official OpenAI Codex does not require it/iu)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Install OpenCodex translation' }));
+    expect(runtime.install).toHaveBeenCalledWith({ includeTranslation: true });
+  });
+
   it('shows truthful component progress and cancellation', () => {
     const runtime = manager({ kind: 'installing', component: 'opencodex', progress: 0.64 });
     render(<CodexReadinessGate manager={runtime} />);

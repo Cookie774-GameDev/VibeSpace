@@ -1,6 +1,6 @@
 import { act, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { StreamingChatPreview } from './StreamingChatPreview';
+import { classifyPreviewCommitTiming, StreamingChatPreview } from './StreamingChatPreview';
 import { clearAccountPreviews, setPreview } from './streamingPreviewStore';
 const { ledger } = vi.hoisted(() => ({ ledger: vi.fn(() => null) }));
 vi.mock('./activity-ledger/AssistantActivityLedger', () => ({ AssistantActivityLedger: ledger }));
@@ -11,6 +11,52 @@ vi.mock('@/stores/auth', () => ({
 afterEach(() => {
   act(() => clearAccountPreviews('perf-user'));
   ledger.mockClear();
+});
+
+it('reports reversed preview clock ordering instead of clamping it to zero', () => {
+  expect(classifyPreviewCommitTiming(10, 15)).toEqual({ uiCommitMs: 5 });
+  expect(classifyPreviewCommitTiming(15, 10)).toEqual({ resultCode: 'clock_order_invalid' });
+});
+
+it('renders public text when a legacy producer also supplies only tool segments', () => {
+  setPreview({ accountId: 'perf-user', chatId: 'text-with-tool', requestId: 'r-public', runId: 'run-public',
+    text: 'START_P4F8', updatedAt: 1,
+    segments: [{ kind: 'tool', id: 'call-public', name: 'read', status: 'started' }],
+  });
+  const view = render(<StreamingChatPreview chatId="text-with-tool" />);
+  expect(view.getByText('START_P4F8')).toBeTruthy();
+  expect(ledger).toHaveBeenCalledTimes(1);
+});
+
+it('does not duplicate public prose already present in ordered segments', () => {
+  setPreview({ accountId: 'perf-user', chatId: 'text-once', requestId: 'r-once', runId: 'run-once',
+    text: 'START_ONCE', updatedAt: 1,
+    segments: [{ kind: 'text', id: 'part-once', text: 'START_ONCE' },
+      { kind: 'tool', id: 'call-once', name: 'read', status: 'started' }],
+  });
+  const view = render(<StreamingChatPreview chatId="text-once" />);
+  expect(view.getAllByText('START_ONCE')).toHaveLength(1);
+});
+
+it('reports skipped initial publications instead of treating the first commit as lossless', async () => {
+  const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
+  const rows: Array<Record<string, unknown>> = [];
+  const stop = appActivityLog.subscribe(event => {
+    const data = event.data;
+    if (event.kind === 'ui.preview' && data && typeof data === 'object' && !Array.isArray(data)) {
+      const row = data as Record<string, unknown>;
+      if (row.chatId === 'initial-coalesce') rows.push(row);
+    }
+  });
+  try {
+    render(<StreamingChatPreview chatId="initial-coalesce" />);
+    act(() => {
+      for (let i = 1; i <= 3; i += 1) setPreview({ accountId: 'perf-user', chatId: 'initial-coalesce',
+        requestId: 'r-initial', runId: 'run-initial', text: `Public ${i}`, updatedAt: i });
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.coalescedRevisions).toBe(2);
+  } finally { stop(); }
 });
 
 it('does not rebuild five unchanged tool cards during 100 prose-only deltas', () => {

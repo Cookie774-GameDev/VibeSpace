@@ -24,6 +24,32 @@ describe('streaming preview store', () => {
     clearAccountPreviews('account-b');
   });
 
+  it('disposes account publication counters even after a temporary preview clear', () => {
+    setPreview(preview);
+    setPreview({ ...preview, text: 'Second publication' });
+    clearPreview('account-a', 'run-1');
+    clearAccountPreviews('account-a');
+    setPreview({ ...preview, requestId: 'new-request' });
+    expect(getPreview('account-a', 'run-1')?.runPublicationSequence).toBe(1);
+  });
+
+  it('retires an explicitly terminal run counter even when its preview is already clear', () => {
+    setPreview(preview);
+    setPreview({ ...preview, text: 'Second publication' });
+    clearPreview('account-a', 'run-1');
+    clearPreview('account-a', 'run-1', { terminal: true });
+    setPreview({ ...preview, requestId: 'next-logical-request' });
+    expect(getPreview('account-a', 'run-1')?.runPublicationSequence).toBe(1);
+  });
+
+  it('preserves sequence continuity across a temporary clear within the same run', () => {
+    setPreview(preview);
+    const initial = getPreview('account-a', 'run-1')!.runPublicationSequence!;
+    clearPreview('account-a', 'run-1');
+    setPreview({ ...preview, text: 'Resumed public stream' });
+    expect(getPreview('account-a', 'run-1')?.runPublicationSequence).toBe(initial + 1);
+  });
+
   it('replaces and clears previews by exact account and run', () => {
     setPreview(preview);
     setPreview({ ...preview, text: 'Replacement.', updatedAt: 11 });

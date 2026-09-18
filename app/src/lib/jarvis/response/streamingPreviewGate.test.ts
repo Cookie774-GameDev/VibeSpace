@@ -9,6 +9,54 @@ function push(state: Readonly<StreamingPreviewState>, delta: string) {
   return pushStreamingPreviewChunk(state, delta);
 }
 
+describe('public progress projection', () => {
+  it('publishes a classified public progress fragment without sentence punctuation', () => {
+    expect(pushStreamingPreviewChunk(createStreamingPreviewState(), 'START_P4F8', { publicProgress: true }))
+      .toMatchObject({ allowed: true, visibleText: 'START_P4F8' });
+    expect(pushStreamingPreviewChunk(createStreamingPreviewState(), 'Checking the repository', { publicProgress: true }))
+      .toMatchObject({ allowed: true, visibleText: 'Checking the repository' });
+  });
+
+  it.each(['password', 'api_key', 'access-token', 'Bearer value', 'system prompt', 'hidden instructions', 'developer message', 'chain of thought'])(
+    'withholds every ambiguous suffix of %s across public chunks', (signal) => {
+      for (let split = 1; split < signal.length; split += 1) {
+        const first = pushStreamingPreviewChunk(createStreamingPreviewState(), `Checking ${signal.slice(0, split)}`, { publicProgress: true });
+        expect(['', 'Checking']).toContain(first.state.visible);
+        const second = pushStreamingPreviewChunk(first.state, `${signal.slice(split)} SENTINEL_SECRET`, { publicProgress: true });
+        expect(second.allowed).toBe(false);
+        expect(second.state.visible).not.toContain('SENTINEL_SECRET');
+        expect(second.state.visible).not.toContain(signal);
+      }
+    },
+  );
+
+  it('releases a harmless ambiguous suffix only at an explicit public-item boundary', () => {
+    const first = pushStreamingPreviewChunk(createStreamingPreviewState(), 'Checking a', { publicProgress: true });
+    expect(first.state.visible).toBe('Checking');
+    const done = pushStreamingPreviewChunk(first.state, '', { publicProgress: true, itemComplete: true });
+    expect(done).toMatchObject({ allowed: true, visibleText: 'Checking a' });
+  });
+
+  it.each(['```action', '~~~jarvis_plan', '```jarvis_question', '```jarvis_permission'])(
+    'keeps partial %s fences and their payload out of public progress', (marker) => {
+      let state = createStreamingPreviewState();
+      for (const delta of ['Checking\n', ...marker, '\n{"secret":"SENTINEL_SECRET"}\n']) {
+        const next = pushStreamingPreviewChunk(state, delta, { publicProgress: true });
+        expect(next.state.visible).not.toMatch(/[`~]|SENTINEL_SECRET|jarvis_|\{"/);
+        state = next.state;
+      }
+      expect(state.visible).toBe('Checking');
+    },
+  );
+
+  it('does not publish half of a Unicode surrogate pair', () => {
+    const first = pushStreamingPreviewChunk(createStreamingPreviewState(), 'Ready \ud83d', { publicProgress: true });
+    expect(first.state.visible).toBe('Ready');
+    const second = pushStreamingPreviewChunk(first.state, '\ude00', { publicProgress: true });
+    expect(second).toMatchObject({ allowed: true, visibleText: 'Ready 😀' });
+  });
+});
+
 describe('streaming preview gate', () => {
   it('retains safe unfinished prose only when explicitly finishing an interrupted stream', () => {
     expect(pushStreamingPreviewChunk(createStreamingPreviewState(), 'The answer began', { interrupted: true }))

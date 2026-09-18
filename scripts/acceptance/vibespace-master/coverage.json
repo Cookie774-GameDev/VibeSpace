@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "authority": "VibeSpace-Master-Implementation-Plan-20260917-M9C2 Parts A-D",
+  "realTurnBudget": 2,
+  "scenarios": [
+    {
+      "id": "A-NATIVE-BINDING",
+      "part": "A",
+      "providerCostClassification": "none",
+      "required": [
+        "branch/head/upstream",
+        "dirty/staged inventory",
+        "app/webview/profile/CDP identity before transaction",
+        "native binary hash"
+      ]
+    },
+    {
+      "id": "B-SCHEMA",
+      "part": "B",
+      "providerCostClassification": "none",
+      "required": [
+        "shared v2 fixture passes TypeScript",
+        "same fixture passes Rust validator",
+        "native capability descriptor matches v2",
+        "genuine native append receipt and appended JSONL record"
+      ]
+    },
+    {
+      "id": "B-TIMING",
+      "part": "B",
+      "providerCostClassification": "none",
+      "required": [
+        "native clock calibration exchange",
+        "native T4 handoff metadata",
+        "renderer T5 arrival metadata",
+        "public T6 revision",
+        "matching DOM T7 commit",
+        "loss/coalescing accounting"
+      ]
+    },
+    {
+      "id": "C-PUBLIC-STREAM",
+      "part": "C",
+      "providerCostClassification": "local-fixture",
+      "required": [
+        "short punctuation-free fragment released",
+        "text/tool/text order preserved",
+        "split secret withheld",
+        "split control fence withheld",
+        "terminal cleanup bounded"
+      ]
+    },
+    {
+      "id": "D-ROUTE-MATRIX",
+      "part": "D",
+      "providerCostClassification": "local-fixture",
+      "required": [
+        "official route never enters translator",
+        "translation requires native capability handle",
+        "direct-responses unverified route fails closed",
+        "model-name slash shape does not select transport"
+      ]
+    },
+    {
+      "id": "D-OPENCODE-REAL",
+      "part": "D",
+      "providerCostClassification": "one-real-turn",
+      "required": [
+        "requested/observed OpenCode Go identity exact",
+        "terminal success",
+        "no duplicate physical dispatch",
+        "reload/restoration"
+      ]
+    },
+    {
+      "id": "D-CODEX-REAL",
+      "part": "D",
+      "providerCostClassification": "one-real-turn",
+      "required": [
+        "Codex runtime selection persisted",
+        "native translation route revalidated",
+        "OpenCode Go upstream identity exact",
+        "terminal success",
+        "no silent model substitution",
+        "reload/restoration"
+      ]
+    }
+  ],
+  "excludedClaims": [
+    "all-provider interoperability",
+    "statistical reliability",
+    "unmeasured savings"
+  ]
+}

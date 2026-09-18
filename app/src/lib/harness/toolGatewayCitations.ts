@@ -113,6 +113,11 @@ export function registerToolGatewayFallbackCitations(
   );
   const existing = contextCitationItems.get(sessionId) ?? [];
   const existingIds = new Set(existing.map((item) => item.source.id));
-  const merged = [...existing, ...additions.filter((item) => !existingIds.has(item.source.id))];
+  const merged = [...existing];
+  for (const item of additions) {
+    if (existingIds.has(item.source.id)) continue;
+    existingIds.add(item.source.id);
+    merged.push(item);
+  }
   contextCitationItems.set(sessionId, Object.freeze(merged));
 }

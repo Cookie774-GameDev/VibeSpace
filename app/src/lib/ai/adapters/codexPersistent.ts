@@ -9,6 +9,7 @@ import {
   startNativeCodexAppServer,
   stopNativeCodexAppServer,
   writeNativeCodexFrame,
+  type CodexNativeStartRoute,
 } from '@/lib/harness/codexNativeTransport';
 import {
   buildCodexModelListRequest,
@@ -57,6 +58,7 @@ export interface CodexPersistentDependencies {
     executableId: string,
     ownerId: string,
     modelId: string,
+    route: CodexNativeStartRoute,
   ): Promise<Readonly<{ generation: string }>>;
   frames(
     generation: string,
@@ -254,6 +256,27 @@ function executionMode(request: Readonly<ProviderRequest>): CodexExecutionMode {
   };
 }
 
+function nativeStartRoute(request: Readonly<ProviderRequest>): CodexNativeStartRoute {
+  const route = request.codexRoute;
+  if (!route) throw new Error('Codex route authority is missing.');
+  if (route.kind === 'official-codex') {
+    if (request.connection.id !== 'openai-codex' || route.connectionId !== 'openai-codex') {
+      throw new Error('Official Codex requires the exact Codex connection.');
+    }
+    return Object.freeze({ kind: 'official-codex', connectionId: 'openai-codex' });
+  }
+  if (!request.accountId || route.accountId !== request.accountId || route.connectionId !== request.connection.id) {
+    throw new Error('Codex route authority does not match this account or connection.');
+  }
+  return Object.freeze({
+    kind: route.kind,
+    accountId: route.accountId,
+    connectionId: route.connectionId,
+    routeHandle: route.routeHandle,
+    configurationGeneration: route.configurationGeneration,
+  });
+}
+
 function identity(request: Readonly<ProviderRequest>): CodexBackendIdentity {
   if (!request.modelId) throw new Error('Codex requires an exact selected model.');
   if (!request.workingDirectory) throw new Error('Codex requires an exact working directory.');
@@ -331,9 +354,7 @@ async function* sendCodexRequest(
   contextTool: CodexContextToolBridge | null = null,
 ): AsyncGenerator<ProviderEvent> {
   if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
-  if (request.connection.id !== 'openai-codex') {
-    throw new Error('Codex backend requires the exact Codex connection.');
-  }
+  const startRoute = nativeStartRoute(request);
   request = {
     ...request,
     workingDirectory: await prepare(request, 'directory', () =>
@@ -351,6 +372,7 @@ async function* sendCodexRequest(
     executable.executableId,
     ownerId,
     modelId,
+    startRoute,
   ));
   if (request.signal?.aborted) {
     await dependencies.stop(generation).catch(() => false);
@@ -410,13 +432,15 @@ async function* sendCodexRequest(
     ]));
     if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
     const exactIdentity = identity(request);
-    await prepare(request, 'catalog', () => validateModelCapability(
-      generation,
-      reader,
-      exactIdentity,
-      dependencies.write,
-      request.requestId,
-    ));
+    if (request.codexRoute?.kind === 'official-codex') {
+      await prepare(request, 'catalog', () => validateModelCapability(
+        generation,
+        reader,
+        exactIdentity,
+        dependencies.write,
+        request.requestId,
+      ));
+    }
     let threadRequestId = requestId(request.requestId, request.sessionId ? 'resume' : 'thread');
     const threadRequest = request.sessionId
       ? buildCodexThreadResumeRequest({

@@ -746,14 +746,22 @@ function partitionOpenCodePickerGroup(group: ModelPickerGroup): ModelPickerGroup
   const unconsumed = new Map(group.options.map((option) => [option.id, option]));
   const subscriptionOptions: ModelPickerOption[] = [];
   const subscriptionKeys = new Set<string>();
+  // Index eligible exact routes once. Rescanning the whole multi-provider
+  // catalog for every OpenAI seed blocks the renderer as the catalog grows.
+  const directRoutesByBase = new Map<string, ModelPickerOption[]>();
+  for (const route of group.options) {
+    if (!isDirectOpenAiRoute(route)) continue;
+    const key = openCodeBaseLeaf(route);
+    const routes = directRoutesByBase.get(key) ?? [];
+    routes.push(route);
+    directRoutesByBase.set(key, routes);
+  }
 
   for (const seed of group.options.filter(isDirectOpenAiBaseRoute)) {
     const key = openCodeBaseLeaf(seed);
     if (subscriptionKeys.has(key)) continue;
     subscriptionKeys.add(key);
-    const routes = group.options.filter(
-      (option) => isDirectOpenAiRoute(option) && openCodeBaseLeaf(option) === key,
-    );
+    const routes = directRoutesByBase.get(key)!;
     for (const route of routes) unconsumed.delete(route.id);
     subscriptionOptions.push(logicalOpenCodeOption(routes));
   }

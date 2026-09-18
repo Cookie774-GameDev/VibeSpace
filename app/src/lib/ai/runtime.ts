@@ -1,4 +1,3 @@
-import { mergePublicToolDetails } from './publicToolDetails';
 /**
  * Runtime listener that bridges the chat composer (subagent A3) to the
  * provider router. The composer dispatches a `jarvis:send` CustomEvent on
@@ -302,10 +301,7 @@ import type {
 import type { JarvisKernelTurnInput } from '@/lib/jarvis/kernel';
 import type { JarvisArtifactDraft } from '@/lib/jarvis/contracts';
 import type { RawProviderResponse } from '@/lib/jarvis/response/pipeline';
-import {
-  createStreamingPreviewState,
-  pushStreamingPreviewChunk,
-} from '@/lib/jarvis/response/streamingPreviewGate';
+import { createPublicStreamProjection } from '@/lib/jarvis/response/publicStreamProjection';
 import { clearPreview, setPreview } from '@/features/chat/streamingPreviewStore';
 import type { VibeSpaceApproval } from '@/lib/harness/types';
 import {
@@ -1666,6 +1662,7 @@ export async function installJarvisKernelRuntimeHost(
         chatCreatedAt: providerChat?.created_at ?? providerRun.createdAt,
       }).backend;
       let preparedDisposed = false;
+      const preparedPreviews = new Set<ReturnType<typeof createPublicStreamProjection>>();
       if (
         providerInput.model.providerId !== String(providerInput.agent.model.provider) ||
         providerInput.model.modelId !== providerInput.agent.model.model
@@ -1679,26 +1676,28 @@ export async function installJarvisKernelRuntimeHost(
             throw new Error('kernel_provider_connection_unavailable');
           }
           let resolvedDisposed = false;
+          const resolvedPreviews = new Set<ReturnType<typeof createPublicStreamProjection>>();
           return Object.freeze({
             start(signal: AbortSignal) {
               if (resolvedDisposed || preparedDisposed) {
                 throw new Error('kernel_provider_configuration_disposed');
               }
-              const previewTextParts = new Map<string, string>();
-              const previewSegments: import('@/features/chat/streamingPreviewStore').StreamingPreviewSegment[] = [];
-              const publishPreview = () => {
+              const preview = createPublicStreamProjection();
+              preparedPreviews.add(preview);
+              resolvedPreviews.add(preview);
+              const currentPreviewScope = () => {
+                if (signal.aborted || resolvedDisposed || preparedDisposed) return undefined;
                 const scope = activeTurnScopes.get(providerInput.runId);
-                if (suppressProviderPreview || !scope || scope.requestId !== providerInput.requestId) return;
-                const decision = pushStreamingPreviewChunk(createStreamingPreviewState(),
-                  [...previewTextParts.values()].join(''));
-                // Tool lifecycle events do not depend on the model first writing prose.
-                if (!decision.allowed && !previewSegments.some(segment => segment.kind === 'tool')) return;
-                const segments = previewSegments.map(segment => {
-                  if (segment.kind !== 'text') return { ...segment };
-                  const safe = pushStreamingPreviewChunk(createStreamingPreviewState(), segment.text);
-                  return { ...segment, text: decision.allowed && safe.allowed ? safe.visibleText : '' };
-                });
-                setPreview({ ...scope, text: decision.allowed ? decision.visibleText : '', segments, updatedAt: now(), projectRoot: providerInput.workingDirectory });
+                return scope?.accountId === providerInput.accountId && scope.requestId === providerInput.requestId
+                  ? scope : undefined;
+              };
+              const publishPreview = () => {
+                const scope = currentPreviewScope();
+                if (suppressProviderPreview || !scope) return;
+                const snapshot = preview.snapshot();
+                // Empty replacements clear stale public text. Tools and text
+                // share this canonical ordered projection and immutable values.
+                setPreview({ ...scope, ...snapshot, updatedAt: now(), projectRoot: providerInput.workingDirectory });
               };
               const lastUserText = llmContentToText(
                 [...providerInput.messages].reverse().find((message) => message.role === 'user')
@@ -1766,6 +1765,7 @@ export async function installJarvisKernelRuntimeHost(
                 ) {
                   return;
                 }
+                if (resolvedDisposed || preparedDisposed) return;
                 const stateKey = JSON.stringify(activity);
                 if (lastLiveToolStates.get(callId) === stateKey) return;
                 lastLiveToolStates.set(callId, stateKey);
@@ -1779,17 +1779,13 @@ export async function installJarvisKernelRuntimeHost(
                 } catch {
                   return;
                 }
-                const segment = previewSegments.find(part => part.kind === 'tool' && part.id === callId);
-                if (segment?.kind === 'tool') {
-                  // A recovery snapshot cannot resurrect an already terminal call.
-                  if (segment.status !== 'started' && activity.status === 'started') return;
-                  segment.status = activity.status;
-                  if (activity.details) segment.details = mergePublicToolDetails(segment.details, activity.details);
-                } else previewSegments.push({ kind: 'tool', id: callId, name,
-                  status: activity.status, fileLabel: activity.fileLabel,
+                const segment = preview.getTool(callId);
+                // Recovery cannot resurrect an already terminal tool call.
+                if (segment && segment.status !== 'started' && activity.status === 'started') return;
+                preview.updateTool({ id: callId, name, status: activity.status,
+                  fileLabel: activity.fileLabel,
                   ...(activity.details ? { details: activity.details } : {}) });
-                const currentSegment = previewSegments.find(part => part.kind === 'tool' && part.id === callId);
-                const toolDetails = currentSegment?.kind === 'tool' ? currentSegment.details : undefined;
+                const toolDetails = preview.getTool(callId)?.details;
                 publishPreview();
                 let activityId = liveToolActivityIds.get(callId);
                 if (!activityId) {
@@ -1982,16 +1978,12 @@ export async function installJarvisKernelRuntimeHost(
                     }
                   },
                   onChunk: (chunk) => {
-                    if (!chunk.delta) return;
-                    const partId = chunk.streamPartId ?? 'default';
-                    previewTextParts.set(partId, chunk.mode === 'replace' ? chunk.delta :
-                      `${previewTextParts.get(partId) ?? ''}${chunk.delta}`);
-                    const segment = previewSegments.find(part => part.kind === 'text' && part.id === partId);
-                    if (segment?.kind === 'text') segment.text = previewTextParts.get(partId) ?? '';
-                    else previewSegments.push({ kind: 'text', id: partId, text: previewTextParts.get(partId) ?? '' });
-                    setLiveAgentActivityRunPhase(providerInput.runId, {
+                    // Revoke effects before reading or retaining late callbacks.
+                    if (!currentPreviewScope() || suppressProviderPreview) return;
+                    if (!preview.pushText(chunk)) return;
+                    if (chunk.delta) setLiveAgentActivityRunPhase(providerInput.runId, {
                       category: 'response', title: 'Jarvis is responding',
-                      subtitle: `${providerInput.agent.model.provider}/${providerInput.agent.model.model}`,
+                      subtitle: providerInput.agent.model.provider + '/' + providerInput.agent.model.model,
                     });
                     publishPreview();
                   },
@@ -2074,6 +2066,7 @@ export async function installJarvisKernelRuntimeHost(
                 settlePendingToolActivities(status);
                 throw error;
               }).finally(() => {
+                preview.seal();
                 signal.removeEventListener('abort', onProviderAbort);
               });
               return Object.freeze({
@@ -2087,9 +2080,7 @@ export async function installJarvisKernelRuntimeHost(
                 response,
                 getPartialText() {
                   if (suppressProviderPreview) return undefined;
-                  const decision = pushStreamingPreviewChunk(createStreamingPreviewState(),
-                    [...previewTextParts.values()].join(''), { interrupted: true });
-                  return decision.allowed ? decision.visibleText.slice(0, 32_768) : undefined;
+                  return preview.getPartialText();
                 },
                 abortAfterStart() {
                   if (!signal.aborted) throw new Error('kernel_provider_abort_signal_not_set');
@@ -2099,11 +2090,18 @@ export async function installJarvisKernelRuntimeHost(
             dispose() {
               if (resolvedDisposed) return;
               resolvedDisposed = true;
+              for (const preview of resolvedPreviews) {
+                preview.dispose();
+                preparedPreviews.delete(preview);
+              }
+              resolvedPreviews.clear();
             },
           });
         },
         dispose() {
           preparedDisposed = true;
+          for (const preview of preparedPreviews) preview.dispose();
+          preparedPreviews.clear();
         },
       });
     },
@@ -2490,8 +2488,8 @@ export async function installJarvisKernelRuntimeHost(
       try {
         return await composition.kernel.runInitialTurn(turnInput);
       } finally {
-        clearPreview(turnInput.accountId, turnInput.run.id);
         activeTurnScopes.delete(turnInput.run.id);
+        clearPreview(turnInput.accountId, turnInput.run.id, { terminal: true });
       }
     },
     async startVoiceTurn(turnInput) {
@@ -2508,8 +2506,8 @@ export async function installJarvisKernelRuntimeHost(
       try {
         return await composition.kernel.startVoiceTurn(turnInput);
       } finally {
-        clearPreview(turnInput.accountId, turnInput.run.id);
         activeTurnScopes.delete(turnInput.run.id);
+        clearPreview(turnInput.accountId, turnInput.run.id, { terminal: true });
       }
     },
     openVoiceRecovery: (recoveryInput) => composition.kernel.openVoiceRecovery(recoveryInput),
@@ -2541,15 +2539,16 @@ export async function installJarvisKernelRuntimeHost(
       try {
         return await composition.kernel.runHiveFinalTurn(turnInput);
       } finally {
-        clearPreview(turnInput.run.accountId, turnInput.run.id);
         activeTurnScopes.delete(turnInput.run.id);
+        clearPreview(turnInput.run.accountId, turnInput.run.id, { terminal: true });
       }
     },
     dispose() {
       if (disposed) return;
       disposed = true;
-      for (const scope of activeTurnScopes.values()) clearPreview(scope.accountId, scope.runId);
+      const retiredScopes = [...activeTurnScopes.values()];
       activeTurnScopes.clear();
+      for (const scope of retiredScopes) clearPreview(scope.accountId, scope.runId, { terminal: true });
       providerEvidence.clear();
       composition.liveEvidenceHost.dispose();
       voiceVerifier.dispose();
@@ -6464,18 +6463,10 @@ export function startRuntimeListener(
       if (!identity) return;
       const disclosure = {
         accountId: identity.accountId,
-        connectionId:
-          chatBackendAffinity.backend === 'codex'
-            ? 'openai-codex'
-            : chatModelSelection.connectionId,
-        connectionMode:
-          chatBackendAffinity.backend === 'codex'
-            ? 'external-cli' as const
-            : chatModelSelection.connectionMode,
-        providerId:
-          chatBackendAffinity.backend === 'codex' ? 'openai' : chatModelSelection.providerId,
-        modelLabel:
-          chatBackendAffinity.backend === 'codex' ? runnable.model.model : chatModelSelection.modelId,
+        connectionId: chatModelSelection.connectionId,
+        connectionMode: chatModelSelection.connectionMode,
+        providerId: chatModelSelection.providerId,
+        modelLabel: chatModelSelection.modelId,
       };
       if (needsConnectionRouteDisclosure(disclosure)) {
         await bindings.appendMessage({
@@ -6684,8 +6675,7 @@ export function startRuntimeListener(
             const selected = chatModelSelection.mode === 'single' ? chatModelSelection : null;
             if (!selected) throw new Error('kernel_single_model_selection_required');
             const capturedAt = Date.now();
-            const selectedConnectionId =
-              chatBackendAffinity.backend === 'codex' ? 'openai-codex' : selected.connectionId;
+            const selectedConnectionId = selected.connectionId;
             const selectedConnection = selectedConnectionId
               ? PROVIDER_CONNECTIONS.find((connection) => connection.id === selectedConnectionId)
               : undefined;
@@ -7286,16 +7276,14 @@ export function startRuntimeListener(
         max_output_tokens: optimizedOutputTokenLimit,
         provider_options: reasoningPolicy?.providerOptions,
         connectionId:
-          chatBackendAffinity.backend === 'codex'
-            ? 'openai-codex'
-            : chatModelSelection.mode === 'single'
-              ? (chatModelSelection.connectionId ??
-                (persistedConnection?.providerId === chatModelSelection.providerId &&
-                (!persistedConnection.modelId ||
-                  persistedConnection.modelId === chatModelSelection.modelId)
-                  ? persistedConnection.id
-                  : undefined))
-              : undefined,
+          chatModelSelection.mode === 'single'
+            ? (chatModelSelection.connectionId ??
+              (persistedConnection?.providerId === chatModelSelection.providerId &&
+              (!persistedConnection.modelId ||
+                persistedConnection.modelId === chatModelSelection.modelId)
+                ? persistedConnection.id
+                : undefined))
+            : undefined,
         connectionRequirements: {
           images: (detail.imageAttachments?.length ?? 0) > 0,
           files: (detail.filePaths?.length ?? 0) > 0,
@@ -7930,11 +7918,9 @@ export function startRuntimeListener(
             providerId: runnable.model.provider,
             modelId: runnable.model.model,
             connectionId:
-              chatBackendAffinity.backend === 'codex'
-                ? 'openai-codex'
-                : chatModelSelection.mode === 'single'
-                  ? chatModelSelection.connectionId
-                  : undefined,
+              chatModelSelection.mode === 'single'
+                ? chatModelSelection.connectionId
+                : undefined,
             ...(placeholderId ? { requestId: String(placeholderId) } : {}),
           })
         : undefined;

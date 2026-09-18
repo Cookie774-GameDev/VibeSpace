@@ -10,6 +10,15 @@ import type { HarnessScope, OpenCodeSessionClient } from './OpenCodeSessionPool'
 export interface OpenCodeRawEvent {
   type: string;
   properties?: Readonly<Record<string, unknown>>;
+  /** Metadata-only native→renderer timing; never provider text or tool payloads. */
+  nativeTiming?: Readonly<{
+    generation: string;
+    sequence: number;
+    nativeHandoffWallUs: number;
+    nativeHandoffMonotonicUs: number;
+    rendererReceivedAt: number;
+    rendererReceivedMonotonicMs: number;
+  }>;
 }
 
 export interface OpenCodeSdkClientLike {

@@ -152,8 +152,14 @@ export function getPreview(accountId: string, runId: string): JarvisStreamingPre
   return previews.get(key(accountId, runId)) ?? null;
 }
 
-export function clearPreview(accountId: string, runId: string): void {
+/** Temporary clears retain continuity; verified terminal owners retire it. */
+export function clearPreview(
+  accountId: string,
+  runId: string,
+  options: Readonly<{ terminal?: boolean }> = {},
+): void {
   const entryKey = key(accountId, runId);
+  if (options.terminal) runPublicationSequences.delete(entryKey);
   const existing = previews.get(entryKey);
   if (existing && previews.delete(entryKey)) {
     notifyPreviews(new Set([key(existing.accountId, existing.chatId)]));
@@ -161,6 +167,12 @@ export function clearPreview(accountId: string, runId: string): void {
 }
 
 export function clearAccountPreviews(accountId: string): void {
+  // A temporary clear deliberately retains sequence continuity. Account
+  // teardown must also retire counters for those already-cleared previews.
+  const accountPrefix = `${accountId.length}:${accountId}`;
+  for (const entryKey of runPublicationSequences.keys()) {
+    if (entryKey.startsWith(accountPrefix)) runPublicationSequences.delete(entryKey);
+  }
   const changedChats = new Set<string>();
   for (const [entryKey, preview] of previews) {
     if (preview.accountId === accountId) {

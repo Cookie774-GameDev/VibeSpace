@@ -36,13 +36,21 @@ afterEach(() => {
   useAuthStore.setState({ workspaceId: originalAuth.workspaceId, projectId: originalAuth.projectId, chatModelSelection: originalAuth.chatModelSelection });
 });
 
-it('keeps the selected Go model when choosing the Codex CLI', async () => {
+it('preserves the exact selected provider route when choosing the Codex CLI', async () => {
   const notice = vi.spyOn(toast, 'info');
-  vi.spyOn(chatRepo, 'update').mockResolvedValue(undefined as never);
+  const update = vi.spyOn(chatRepo, 'update').mockResolvedValue(undefined as never);
   state.locked = false;
   state.backend = 'opencode';
   const connection = getProviderConnectionDescriptor('opencode-cli');
-  const selection = { mode: 'single', connectionId: connection.id, connectionMode: connection.mode, authSource: connection.authSource, capabilities: connection.capabilities, providerId: 'openai', modelId: 'opencode-go/deepseek-v4-flash-vision-exp' } as const;
+  const selection = {
+    mode: 'single',
+    connectionId: connection.id,
+    connectionMode: connection.mode,
+    authSource: connection.authSource,
+    capabilities: connection.capabilities,
+    providerId: connection.providerId as never,
+    modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+  } as const;
   useAuthStore.setState({ chatModelSelection: selection });
   render(<TooltipProvider><Composer chatId={'chat-cli-status' as never} /></TooltipProvider>);
   const input = screen.getByRole('textbox', { name: 'Message' });
@@ -51,6 +59,7 @@ it('keeps the selected Go model when choosing the Codex CLI', async () => {
   await waitFor(() => expect(selectBackend).toHaveBeenCalled());
   await waitFor(() => expect(notice).toHaveBeenCalledWith('Codex selected', expect.any(String)));
   expect(useAuthStore.getState().chatModelSelection).toEqual(selection);
+  expect(update).not.toHaveBeenCalled();
 });
 
 it.each(['codex', 'opencode'] as const)('shows the locked %s backend when opening /cli', async backend => {
@@ -61,7 +70,7 @@ it.each(['codex', 'opencode'] as const)('shows the locked %s backend when openin
   fireEvent.click(await screen.findByRole('option', { name: /\/cli/ }));
   const current = await screen.findByRole('button', { name: /Current CLI.*locked for this chat/i });
   expect(current.textContent).toContain(backend === 'codex' ? 'Codex' : 'OpenCode');
-  expect(screen.queryByRole('button', { name: /Use Codex CLI|Use the authenticated OpenCode backend/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /native route verification|Use the authenticated OpenCode backend/ })).toBeNull();
   fireEvent.click(current);
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
   expect(screen.queryByRole('option')).toBeNull();

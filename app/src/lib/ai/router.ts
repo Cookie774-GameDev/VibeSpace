@@ -46,6 +46,8 @@ import type {
 import { CONNECTION_MODEL_OPTIONS, getProviderConnectionDescriptor } from './adapters/catalog';
 import { isActiveOpenCodeChildQuestion, openCodePersistentAdapter } from './adapters/opencodePersistent';
 import { codexPersistentAdapter } from './adapters/codexPersistent';
+import { resolveCodexRoute } from './adapters/codexRoutePolicy';
+import { resolveNativeCodexRoute } from '@/lib/harness/codexNativeTransport';
 import type { ChatBackend } from './backend/chatBackend';
 import { kernelSmokeCliAdapter } from './adapters/cliBridge';
 import { foundryProvider } from './providers/foundry';
@@ -401,50 +403,70 @@ export interface RunAgentRequest {
   }>;
 }
 
-function codexQualifiedModel(req: Readonly<RunAgentRequest>): string {
-  const model = req.agent.model.model.trim();
-  if (!model) throw new NoModelSelectedError();
-  if (model.startsWith('openai/')) {
-    const selectedProvider = req.agent.model.provider as string;
-    if (selectedProvider !== 'openai' && selectedProvider !== 'opencode') {
-      throw new Error('Codex requires an OpenAI model selected for the Codex connection.');
-    }
-    return model.slice('openai/'.length);
-  }
-  if (req.agent.model.provider === 'openai') return model;
-  // The model picker can expose OpenAI subscription models through the
-  // shared OpenCode catalog. Accept that one explicit alias, but fail closed
-  // for every other provider-qualified model instead of sending it through
-  // the OpenAI Codex connection with a misleading receipt.
-  throw new Error('Codex requires an OpenAI model selected for the Codex connection.');
-}
-
 function codexGatewayConnection(req: Readonly<RunAgentRequest>): ProviderConnection {
-  if (req.connectionId !== 'openai-codex') {
-    throw new Error('Codex-backed Chat requires the exact Codex connection.');
-  }
-  const descriptor = getProviderConnectionDescriptor(req.connectionId);
-  if (!descriptor.enabled) throw new Error('Codex connection is disabled.');
+  const connectionId = req.connectionId?.trim();
+  if (!connectionId) throw new Error('Codex-backed Chat requires an exact connection.');
+  const descriptor = getProviderConnectionDescriptor(connectionId);
+  if (!descriptor.enabled) throw new Error('The selected Codex connection is disabled.');
   return Object.freeze({
     ...descriptor,
     adapterId: codexPersistentAdapter.id,
-    // The Codex app-server is the OpenAI subscription route even when the
-    // picker supplied an OpenCode-catalog alias such as
-    // `opencode/openai/gpt-5.6-luna`. Keep the connection identity canonical
-    // at the transport boundary so receipts, usage, and errors cannot inherit
-    // the picker implementation provider.
-    providerId: descriptor.providerId,
-    authSource: 'codex-cli-session',
     promptTransport: 'native-system',
   });
+}
+
+async function resolveCodexProviderRoute(req: Readonly<RunAgentRequest>) {
+  const connection = codexGatewayConnection(req);
+  const selectedModel = req.agent.model.model.trim();
+  if (!selectedModel) throw new NoModelSelectedError();
+  const reasoningEffort = resolveOpenCodeVariant(req.provider_options);
+  const capability = connection.id === 'openai-codex'
+    ? undefined
+    : await resolveNativeCodexRoute(
+        req.accountId ?? '',
+        connection.id,
+        selectedModel,
+      );
+  const decision = resolveCodexRoute({
+    runtime: 'codex',
+    accountId: req.accountId,
+    connection,
+    providerId: String(req.agent.model.provider),
+    modelId: selectedModel,
+    reasoningEffort,
+    capability,
+    now: Date.now(),
+  });
+  if (decision.kind === 'unavailable') throw new Error(decision.reason);
+  if (decision.kind === 'opencode-native') {
+    throw new Error('An OpenCode-native selection cannot be dispatched through Codex.');
+  }
+  const codexRoute = decision.kind === 'official-codex'
+    ? Object.freeze({
+        kind: 'official-codex' as const,
+        connectionId: 'openai-codex' as const,
+        providerId: 'openai' as const,
+        modelId: decision.modelId,
+      })
+    : Object.freeze({
+        kind: decision.kind,
+        accountId: req.accountId!,
+        connectionId: decision.connectionId,
+        providerId: decision.providerId,
+        modelId: decision.modelId,
+        upstreamModelId: decision.upstreamModelId,
+        routeHandle: decision.routeHandle,
+        configurationGeneration: decision.configurationGeneration,
+        ...(decision.adapter ? { adapter: decision.adapter } : {}),
+      });
+  return Object.freeze({ connection, modelId: decision.modelId, reasoningEffort, codexRoute });
 }
 
 async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<LLMResponse> {
   if (req.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   if (!codexPersistentAdapter.send) throw new Error('Persistent Codex transport is unavailable.');
   const requestId = req.requestId ?? globalThis.crypto?.randomUUID?.() ?? 'req-' + Date.now();
-  const connection = codexGatewayConnection(req);
-  const modelId = codexQualifiedModel(req);
+  const { connection, modelId, reasoningEffort, codexRoute } = await resolveCodexProviderRoute(req);
   let text = '';
   const chronology: import('./openCodePublicTimeline').OpenCodePublicTimelinePart[] = [];
   const chronologyTextIds = new Map<string, number>();
@@ -523,7 +545,8 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
       .map((message) => `${message.role}: ${llmContentToText(message.content)}`)
       .join('\n\n'),
     modelId,
-    reasoningEffort: resolveOpenCodeVariant(req.provider_options),
+    codexRoute,
+    reasoningEffort,
     systemPrompt: req.compiledPrompt?.systemText ?? req.agent.system_prompt,
     workingDirectory: req.workingDirectory,
     sessionId: req.expectedSessionId,
@@ -1482,13 +1505,10 @@ async function runAgentDispatch(req: RunAgentRequest): Promise<LLMResponse> {
       return await executePersistentCodex(req);
     } catch (error) {
       if (isAbortError(error) || error instanceof ProviderRuntimeError) throw error;
-      let modelId = req.agent.model.model;
-      try {
-        modelId = codexQualifiedModel(req);
-      } catch {
-        // Preserve a bounded selected-model label when validation fails before
-        // the qualified native model can be computed.
-      }
+      const selectedModel = req.agent.model.model.trim();
+      const modelId = req.connectionId === 'openai-codex' && selectedModel.startsWith('openai/')
+        ? selectedModel.slice('openai/'.length)
+        : selectedModel;
       throw new ProviderRuntimeError(providerErrorDetails(error, {
         providerId: 'openai',
         modelId,
@@ -1508,12 +1528,12 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
     let activityProvider = req.agent.model.provider;
     let activityModel = req.agent.model.model;
     if (req.backend === 'codex') {
-      activityProvider = 'openai' as ProviderId;
-      try {
-        activityModel = codexQualifiedModel(req);
-      } catch {
-        // Keep a bounded selected label when validation fails before the
-        // canonical Codex model can be computed.
+      const selectedModel = req.agent.model.model.trim();
+      if (req.connectionId === 'openai-codex') {
+        activityProvider = 'openai' as ProviderId;
+        activityModel = selectedModel.startsWith('openai/')
+          ? selectedModel.slice('openai/'.length)
+          : selectedModel;
       }
     }
     const identity = {

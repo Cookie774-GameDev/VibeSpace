@@ -80,6 +80,41 @@ function completeVisibleProse(prose: string): string {
   return prose.slice(0, end).trim();
 }
 
+// A public text channel is not permission to expose an unfinished sensitive
+// marker. Hold only ambiguous suffixes, rather than delaying all prose until
+// punctuation. The complete-value guards below still inspect every candidate.
+const SENSITIVE_PREFIXES = Object.freeze([
+  'password', 'passphrase', 'apikey', 'accesstoken', 'refreshtoken',
+  'credential', 'clientsecret', 'privatekey', 'bearer',
+  'systemprompt', 'hiddenprompt', 'hiddeninstruction', 'hiddeninstructions',
+  'developermessage', 'chainofthought',
+]);
+
+function publicVisibleProse(prose: string, itemComplete: boolean): string {
+  let end = prose.length;
+  // Never send an unpaired high surrogate to the DOM while its low surrogate
+  // may still arrive, or partial fence/action delimiters before classification.
+  if (end > 0 && /[\ud800-\udbff]/u.test(prose.charAt(end - 1))) end -= 1;
+  const partialFence = /[`~]{1,2}[ \t]*$/.exec(prose.slice(0, end));
+  if (partialFence) end = partialFence.index;
+  const brace = prose.lastIndexOf('{', end - 1);
+  if (brace >= 0 && '{action}'.startsWith(prose.slice(brace, end).toLowerCase())) end = brace;
+  if (!itemComplete) {
+    // Every guarded phrase is short; a bounded suffix avoids rescanning the
+    // entire part merely to decide whether its last token remains ambiguous.
+    const tailStart = Math.max(0, end - 64);
+    for (let start = tailStart; start < end; start += 1) {
+      if (start > 0 && /[a-z0-9_]/i.test(prose.charAt(start - 1))) continue;
+      const candidate = prose.slice(start, end).toLowerCase().replace(/[ _-]/g, '');
+      if (candidate && SENSITIVE_PREFIXES.some((marker) => marker.startsWith(candidate))) {
+        end = start;
+        break;
+      }
+    }
+  }
+  return prose.slice(0, end).trim();
+}
+
 export function createStreamingPreviewState(): Readonly<StreamingPreviewState> {
   return frozenState('', '', false);
 }
@@ -87,11 +122,19 @@ export function createStreamingPreviewState(): Readonly<StreamingPreviewState> {
 export function pushStreamingPreviewChunk(
   state: Readonly<StreamingPreviewState>,
   delta: string,
-  options: Readonly<{ interrupted?: boolean }> = {},
+  options: Readonly<{
+    interrupted?: boolean;
+    /** Only for the adapter's classified public text channel, never reasoning. */
+    publicProgress?: boolean;
+    /** A trusted completed-item event, not an arbitrary network chunk boundary. */
+    itemComplete?: boolean;
+  }> = {},
 ): StreamingPreviewDecision {
   const buffered = `${state.buffered}${delta}`;
   const parsed = proseOutsideFences(buffered);
-  const nextVisible = options.interrupted ? parsed.prose.trim() : completeVisibleProse(parsed.prose);
+  const nextVisible = options.publicProgress
+    ? publicVisibleProse(parsed.prose, options.itemComplete === true)
+    : options.interrupted ? parsed.prose.trim() : completeVisibleProse(parsed.prose);
   const nextState = frozenState(buffered, nextVisible, parsed.insideFence);
   const blockedState = frozenState(buffered, state.visible, parsed.insideFence);
 

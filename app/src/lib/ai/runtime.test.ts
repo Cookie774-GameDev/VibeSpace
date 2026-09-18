@@ -2123,7 +2123,7 @@ describe('startRuntimeListener agent routing', () => {
     await stop.whenIdle();
   });
 
-  it('routes a locked Codex chat through the exact Codex connection without changing its model', async () => {
+  it('routes a locked Codex chat through the exact selected provider connection without changing its model', async () => {
     mocks.lockChatBackendForDispatch.mockResolvedValueOnce({
       version: 1,
       backend: 'codex',
@@ -2131,7 +2131,36 @@ describe('startRuntimeListener agent routing', () => {
       selectedAt: 1,
       lockedAt: 2,
     });
-    const selectedAgent = agent('agent_codex_affinity', 'apple', 'You are Apple.');
+    const connection = PROVIDER_CONNECTIONS.find((candidate) => candidate.id === 'opencode-cli')!;
+    rememberLiveOpenCodeProviders([
+      {
+        id: 'opencode-go',
+        name: 'OpenCode Go',
+        connected: true,
+        models: [{
+          id: 'deepseek-v4-flash-vision-exp',
+          name: 'DeepSeek V4 FLASH Vision Exp',
+          variants: ['low', 'medium', 'high', 'max'],
+        }],
+      },
+    ]);
+    const selection = selectionFromOption(
+      connection.providerId as ProviderId,
+      'opencode-go/deepseek-v4-flash-vision-exp',
+      connection,
+    );
+    setDiscoveredConnectionModels(connection.id, [
+      {
+        id: 'opencode-go/deepseek-v4-flash-vision-exp',
+        label: 'DeepSeek V4 Flash Vision Exp',
+        source: 'provider_list',
+        lastVerifiedAt: 1,
+      },
+    ]);
+    writeConnectionPickerStates({
+      'opencode-cli': { available: true, auth: 'authenticated' },
+    });
+    useAuthStore.setState({ chatModelSelection: selection });    const selectedAgent = agent('agent_codex_affinity', 'apple', 'You are Apple.');
     const chatId = 'chat_codex_affinity' as ChatId;
     const userMessage: Message = {
       id: 'msg_codex_affinity_user' as MessageId,
@@ -2163,6 +2192,7 @@ describe('startRuntimeListener agent routing', () => {
           chatId,
           cancellationKey: userMessage.id,
           text: 'Use this exact model.',
+          modelSelectionOverride: selection,
         },
       }),
     );
@@ -2171,12 +2201,10 @@ describe('startRuntimeListener agent routing', () => {
     expect(mocks.runAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         backend: 'codex',
-        connectionId: 'openai-codex',
-        agent: expect.objectContaining({
-          model: selectedAgent.model,
-        }),
+        connectionId: 'opencode-cli',
       }),
     );
+    expect(useAuthStore.getState().chatModelSelection).toEqual(selection);
     stop();
     await stop.whenIdle();
   });
@@ -6645,7 +6673,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         for (const request of requests) {
           expect(request.backend).toBe(backend);
           expect(request.connectionId).toBe(
-            backend === 'codex' || route === 'opencode-native-provider'
+            route === 'opencode-native-provider'
               ? 'openai-codex'
               : GROQ_API_CONNECTION.id,
           );
@@ -7541,6 +7569,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       'ses_installed_kernel_host',
     );
     if (!installedHostQuestion) throw new Error('expected installed-host question projection');
+    const shortPublicPreview: { current: ReturnType<typeof getPreview> } = { current: null };
     mocks.runAgent.mockImplementation(async (providerInput) => {
       expect(providerInput.interactionMode).toBe('agent');
       expect(providerInput.onReasoning).toEqual(expect.any(Function));
@@ -7629,7 +7658,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           .getState()
           .eventsByChat[harness.chatId]?.filter((event) => event.kind === 'tool'),
       ).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'done', subtitle: 'game.js' }), expect.objectContaining({ status: 'done', subtitle: 'src/alpha.txt' })]));
-      providerInput.onChunk?.({delta:'I am checking the file.',streamPartId:'preview-1'});
+      providerInput.onChunk?.({ delta: 'START_P4F8', streamPartId: 'preview-1' });
+      shortPublicPreview.current = getPreview(providerInput.accountId, providerInput.protectedAttempt.runId);
+      providerInput.onChunk?.({delta:'I am checking the file.',streamPartId:'preview-1',mode:'replace'});
       providerInput.onChunk?.({delta:'I checked the file.',streamPartId:'preview-1',mode:'replace'});
       expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)?.text).toBe('I checked the file.');
       providerInput.onChunk?.({
@@ -7713,6 +7744,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         .where('chat_id')
         .equals(harness.chatId)
         .first();
+      expect(shortPublicPreview.current?.text).toBe('START_P4F8');
+      expect(shortPublicPreview.current?.segments).toContainEqual({ kind: 'text', id: 'preview-1', text: 'START_P4F8' });
+      expect(JSON.stringify(shortPublicPreview.current)).not.toContain('Live provider summary');
       expect(persistedAssistant?.usage?.execution).toMatchObject({ mode: 'normal' });
       expect(persistedAssistant?.parts.slice(0, 4)).toEqual([
         { kind: 'text', text: 'I inspected the project first.' },

@@ -19,6 +19,7 @@ import {
 } from './adapters/catalog';
 import { OPENAI_API_CONNECTION, QWEN_API_CONNECTION } from './adapters/nativeCatalog';
 import { LocalAdapterRegistry } from '@/features/model-foundry/adapterRegistry';
+import * as canonicalCatalog from './catalog/canonicalModelCatalog';
 import type { ProviderDiscoveredModel } from './adapters/types';
 import {
   AI_CONNECTION_STATE_EVENT,
@@ -1341,5 +1342,38 @@ describe('useAccessibleChatModels foundry adapter injection', () => {
     await act(async () => undefined);
     const foundry = result.current.groups.find((group) => group.provider === 'foundry');
     expect(foundry).toBeUndefined();
+  });
+});
+
+
+describe('linear OpenCode subscription partitioning', () => {
+  it('does not rescan unrelated provider routes for each OpenAI subscription model', () => {
+    const unrelated = 'other-provider/independent-model';
+    const canonicalize = vi.spyOn(canonicalCatalog, 'canonicalModelId');
+    try {
+      const countUnrelatedVisits = (seeds: number) => {
+        canonicalize.mockClear();
+        const models = [
+          { id: unrelated, label: 'Independent model', source: 'opencode-live' as const },
+          ...Array.from({ length: seeds }, (_, index) => ({
+            id: `openai/model-${index}`, label: `Model ${index}`, source: 'opencode-live' as const,
+          })),
+        ];
+        const groups = buildConnectionPickerGroups({
+          connections: [OPENCODE_CLI_CONNECTION],
+          modelsByProvider: {},
+          modelsByConnection: { [OPENCODE_CLI_CONNECTION.id]: models },
+          stateByConnection: { [OPENCODE_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' } },
+        });
+        expect(groups.flatMap((group) => group.options)).toHaveLength(seeds + 1);
+        return canonicalize.mock.calls.filter(([id]) => id === unrelated).length;
+      };
+      const oneSeed = countUnrelatedVisits(1);
+      const manySeeds = countUnrelatedVisits(64);
+      expect(oneSeed).toBeGreaterThan(0);
+      expect(manySeeds).toBe(oneSeed);
+    } finally {
+      canonicalize.mockRestore();
+    }
   });
 });

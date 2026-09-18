@@ -2010,7 +2010,7 @@ export function Composer({
         {
           id: 'codex',
           label: 'Codex',
-          description: 'Use Codex CLI through the same selected provider and model',
+          description: 'Use the Codex runtime with native route verification for this chat',
           metadata: chatBackendAffinity.backend === 'codex' ? 'active' : undefined,
         },
       ];
@@ -2583,26 +2583,11 @@ export function Composer({
         backend,
         Date.now(),
       );
-      if (backend === 'codex' && chatModelSelection.mode !== 'single') {
-        const option = accessibleChatModels.flatOptions.find(
-          (option) => option.connectionId === 'openai-codex',
-        );
-        const selection = selectionFromOption(
-          'openai',
-          option?.modelId ?? 'gpt-5.4-mini',
-          getProviderConnectionDescriptor('openai-codex'),
-        );
-        if (selection.mode === 'single') {
-          await chatRepo.update(chatId as ChatId, {
-            connection: {
-              ...getProviderConnectionDescriptor('openai-codex'),
-              modelId: selection.modelId,
-            },
-          });
-          setRetainedExactChatSelection(selection);
-          setChatModelSelection(selection);
-        }
-      }
+      // Backend affinity and upstream model authority are independent.
+      // Selecting Codex must preserve the exact account/connection/provider/model
+      // already chosen in the model picker. Native route resolution decides
+      // whether that route is official Codex, direct Responses, translated, or
+      // unavailable; the UI must not silently substitute OpenAI/Codex identity.
       toast.info(
         `${backend === 'codex' ? 'Codex' : 'OpenCode'} selected`,
         next.locked
@@ -5746,7 +5731,12 @@ export function Composer({
       )}
       <div className={cn('composer-frame-body px-3 py-2.5', compact && 'px-3.5 py-3')}>
         {chatBackendAffinity?.backend === 'codex' ? (
-          <CodexReadinessGate />
+          <CodexReadinessGate
+            requiresTranslation={
+              chatModelSelection.mode !== 'single' ||
+              chatModelSelection.connectionId !== 'openai-codex'
+            }
+          />
         ) : (
           <HarnessReadinessGate />
         )}

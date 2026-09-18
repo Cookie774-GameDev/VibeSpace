@@ -1,19 +1,24 @@
 const EVENT_NAME = 'vibespace://managed-codex-install-state';
 const MAX_MESSAGE = 512;
 
+export type CodexTranslationReadiness = 'ready' | 'missing' | 'incomplete' | 'not-required' | 'installing' | 'failed';
+export interface CodexInstallOptions { readonly includeTranslation?: boolean; }
+
 export type CodexRuntimeDetection =
   | { status: 'missing'; reason?: string }
   | { status: 'incomplete'; reason: string }
   | {
       status: 'ready';
       codexVersion: string;
+      /** Empty when the independent optional translator is unavailable. */
       openCodexVersion: string;
+      translationRuntime?: CodexTranslationReadiness;
       executableId: string;
     };
 
 export type ManagedCodexRuntimeEvent =
   | { kind: 'installing'; component: 'codex' | 'opencodex'; progress: number }
-  | { kind: 'ready'; codexVersion: string; openCodexVersion: string; executableId: string }
+  | { kind: 'ready'; codexVersion: string; openCodexVersion: string; executableId: string; translationRuntime?: CodexTranslationReadiness }
   | { kind: 'failed'; recoverable: boolean; message: string };
 
 export type CodexRuntimeState =
@@ -24,7 +29,9 @@ export type CodexRuntimeState =
   | {
       kind: 'ready';
       codexVersion: string;
+      /** Empty when the independent optional translator is unavailable. */
       openCodexVersion: string;
+      translationRuntime?: CodexTranslationReadiness;
       executableId: string;
     }
   | { kind: 'failed'; recoverable: boolean; message: string };
@@ -32,7 +39,7 @@ export type CodexRuntimeState =
 export interface CodexRuntimeNativeAdapter {
   available(): boolean;
   detect(): Promise<CodexRuntimeDetection>;
-  install(): Promise<CodexRuntimeDetection>;
+  install(options?: CodexInstallOptions): Promise<CodexRuntimeDetection>;
   cancel(): Promise<boolean>;
   listen(listener: (event: ManagedCodexRuntimeEvent) => void): Promise<() => void>;
 }
@@ -41,7 +48,7 @@ export interface CodexRuntimeManager {
   subscribe(listener: () => void): () => void;
   getSnapshot(): CodexRuntimeState;
   refresh(): Promise<void>;
-  install(): Promise<void>;
+  install(options?: CodexInstallOptions): Promise<void>;
   cancel(): Promise<void>;
 }
 
@@ -61,7 +68,8 @@ function mapDetection(value: CodexRuntimeDetection): CodexRuntimeState {
   }
   if (
     !value.codexVersion.trim() ||
-    !value.openCodexVersion.trim() ||
+    (!value.openCodexVersion.trim() && !['missing', 'incomplete', 'not-required'].includes(value.translationRuntime ?? '')) ||
+    (value.translationRuntime !== undefined && !['ready', 'missing', 'incomplete', 'not-required'].includes(value.translationRuntime)) ||
     !/^cli-executable-[A-Za-z0-9_-]+$/u.test(value.executableId)
   ) {
     throw new Error('Managed Codex tools returned an invalid trusted identity.');
@@ -70,6 +78,7 @@ function mapDetection(value: CodexRuntimeDetection): CodexRuntimeState {
     kind: 'ready',
     codexVersion: value.codexVersion,
     openCodexVersion: value.openCodexVersion,
+    ...(value.translationRuntime === undefined ? {} : { translationRuntime: value.translationRuntime }),
     executableId: value.executableId,
   };
 }
@@ -80,9 +89,11 @@ const nativeAdapter: CodexRuntimeNativeAdapter = {
     const { invoke } = await import('@tauri-apps/api/core');
     return invoke<CodexRuntimeDetection>('managed_codex_runtime_detect');
   },
-  async install() {
+  async install(options) {
     const { invoke } = await import('@tauri-apps/api/core');
-    return invoke<CodexRuntimeDetection>('managed_codex_runtime_install');
+    return invoke<CodexRuntimeDetection>('managed_codex_runtime_install', {
+      includeTranslation: options?.includeTranslation === true,
+    });
   },
   async cancel() {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -103,14 +114,20 @@ export function createCodexRuntimeManager(
   let operation = 0;
   let unlisten: (() => void) | undefined;
   let installFlight: Promise<void> | undefined;
+  let optionalTranslationBase: Extract<CodexRuntimeState, { kind: 'ready' }> | undefined;
   let refreshFlight: { operation: number; promise: Promise<void> } | undefined;
 
   const publish = (next: CodexRuntimeState) => {
     snapshot = next;
     subscribers.forEach((subscriber) => subscriber());
   };
-  const fail = (error: unknown, fallback: string) =>
+  const fail = (error: unknown, fallback: string) => {
+    if (optionalTranslationBase) {
+      publish({ ...optionalTranslationBase, translationRuntime: 'failed' });
+      return;
+    }
     publish({ kind: 'failed', recoverable: true, message: bounded(error, fallback) });
+  };
   const apply = (detection: CodexRuntimeDetection) => publish(mapDetection(detection));
 
   const refresh = (): Promise<void> => {
@@ -148,6 +165,10 @@ export function createCodexRuntimeManager(
           .listen((event) => {
             if (generation !== lifecycle || subscribers.size === 0) return;
             if (event.kind === 'installing') {
+              if (optionalTranslationBase) {
+                publish({ ...optionalTranslationBase, translationRuntime: 'installing' });
+                return;
+              }
               publish({
                 kind: 'installing',
                 component: event.component,
@@ -181,8 +202,10 @@ export function createCodexRuntimeManager(
     },
     getSnapshot: () => snapshot,
     refresh,
-    install() {
+    install(options) {
       if (installFlight) return installFlight;
+      optionalTranslationBase = options?.includeTranslation === true && snapshot.kind === 'ready'
+        ? snapshot : undefined;
       const ticket = ++operation;
       const promise = (async () => {
         if (!native.available()) {
@@ -193,9 +216,12 @@ export function createCodexRuntimeManager(
           });
           return;
         }
-        publish({ kind: 'installing', component: 'codex', progress: 0 });
+        publish(optionalTranslationBase
+          ? { ...optionalTranslationBase, translationRuntime: 'installing' }
+          : { kind: 'installing', component: 'codex', progress: 0 });
         try {
-          const detection = await native.install();
+          const detection = await (options?.includeTranslation === true
+            ? native.install({ includeTranslation: true }) : native.install());
           if (ticket === operation) apply(detection);
         } catch (error) {
           if (ticket === operation) fail(error, 'Managed Codex installation failed.');
@@ -203,7 +229,10 @@ export function createCodexRuntimeManager(
       })();
       installFlight = promise;
       void promise.finally(() => {
-        if (installFlight === promise) installFlight = undefined;
+        if (installFlight === promise) {
+          installFlight = undefined;
+          optionalTranslationBase = undefined;
+        }
       });
       return promise;
     },

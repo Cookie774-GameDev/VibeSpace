@@ -189,6 +189,25 @@ export interface ProviderDiscoveredModel {
   pricing?: Readonly<import('@/lib/harness/types').HarnessModelPricing>;
 }
 
+export type CodexResolvedProviderRoute =
+  | Readonly<{
+      kind: 'official-codex';
+      connectionId: 'openai-codex';
+      providerId: 'openai';
+      modelId: string;
+    }>
+  | Readonly<{
+      kind: 'direct-responses' | 'opencodex-translation';
+      accountId: string;
+      connectionId: string;
+      providerId: string;
+      modelId: string;
+      upstreamModelId: string;
+      routeHandle: string;
+      configurationGeneration: string;
+      adapter?: 'openai-chat' | 'anthropic' | 'google' | 'azure-openai';
+    }>;
+
 export interface ProviderRequest {
   requestId: string;
   connection: ProviderConnection;
@@ -202,6 +221,8 @@ export interface ProviderRequest {
   /** Supplied conversation context for a newly created persistent thread only. */
   historyPrompt?: string;
   modelId?: string;
+  /** Native-revalidated Codex route authority for Codex-backed turns only. */
+  codexRoute?: CodexResolvedProviderRoute;
   reasoningEffort?: string;
   systemPrompt?: string;
   workingDirectory?: string;

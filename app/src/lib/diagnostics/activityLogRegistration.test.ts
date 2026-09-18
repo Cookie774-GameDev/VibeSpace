@@ -15,6 +15,8 @@ it('registers only the fixed diagnostics command on the ordinary native builder'
   );
   expect(lib).toContain('mod activity_diagnostics;');
   expect(lib).toContain('mod activity_diagnostics_store;');
+  expect(ordinary).toContain('activity_diagnostics::activity_diagnostics_clock_sample,');
+  expect(ordinary).toContain('activity_diagnostics::activity_diagnostics_capabilities,');
   expect(ordinary).toContain('activity_diagnostics::activity_diagnostics_append,');
   expect(visual).not.toContain('activity_diagnostics');
   const command = source('src-tauri/src/activity_diagnostics.rs');

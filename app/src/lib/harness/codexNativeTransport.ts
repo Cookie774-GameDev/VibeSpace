@@ -1,7 +1,10 @@
+import type { CodexRouteCapability } from '@/lib/ai/adapters/codexRoutePolicy';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+
 const MAX_QUEUED_FRAMES = 256;
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_WRITE_BYTES = 4 * 1024 * 1024;
-const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u;
+const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,255}$/u;
 const encoder = new TextEncoder();
 
 type NativeCodexStreamMessage =
@@ -20,6 +23,23 @@ export interface CodexNativeBridge {
 
 export type CodexNativeBridgeFactory = () => Promise<CodexNativeBridge>;
 
+export type CodexNativeStartRoute =
+  | Readonly<{ kind: 'official-codex'; connectionId: 'openai-codex' }>
+  | Readonly<{
+      kind: 'opencodex-translation';
+      accountId: string;
+      connectionId: string;
+      routeHandle: string;
+      configurationGeneration: string;
+    }>
+  | Readonly<{
+      kind: 'direct-responses';
+      accountId: string;
+      connectionId: string;
+      routeHandle: string;
+      configurationGeneration: string;
+    }>;
+
 async function defaultBridge(): Promise<CodexNativeBridge> {
   const core = await import('@tauri-apps/api/core');
   return {
@@ -37,6 +57,87 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function stringList(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length > 16) return undefined;
+  const rows = value.filter((row): row is string => typeof row === 'string' && SAFE_IDENTIFIER.test(row));
+  return rows.length === value.length ? Object.freeze(rows) : undefined;
+}
+
+export async function resolveNativeCodexRoute(
+  accountId: string,
+  connectionId: string,
+  modelId: string,
+  bridgeFactory: CodexNativeBridgeFactory = defaultBridge,
+): Promise<Readonly<CodexRouteCapability>> {
+  const bridge = await bridgeFactory();
+  const raw = recordOf(
+    await bridge.invoke('managed_codex_route_resolve', {
+      request: {
+        accountId: requireIdentifier(accountId, 'account identity'),
+        connectionId: requireIdentifier(connectionId, 'connection identity'),
+        modelId: requireIdentifier(modelId, 'model identity'),
+      },
+    }),
+  );
+  const supports = recordOf(raw?.supports);
+  const route = raw?.route;
+  const wireProtocol = raw?.wireProtocol;
+  const contract = raw?.contract;
+  const adapter = raw?.adapter;
+  const supportedEfforts = stringList(raw?.supportedEfforts);
+  const supportedServiceTiers = stringList(raw?.supportedServiceTiers);
+  if (
+    raw?.authority !== 'native-owned' ||
+    raw.accountId !== accountId ||
+    raw.connectionId !== connectionId ||
+    raw.modelId !== modelId ||
+    typeof raw.providerId !== 'string' || !SAFE_IDENTIFIER.test(raw.providerId) ||
+    typeof raw.upstreamModelId !== 'string' || !SAFE_IDENTIFIER.test(raw.upstreamModelId) ||
+    typeof raw.routeHandle !== 'string' || !SAFE_IDENTIFIER.test(raw.routeHandle) ||
+    typeof raw.configurationGeneration !== 'string' || !SAFE_IDENTIFIER.test(raw.configurationGeneration) ||
+    typeof raw.expiresAt !== 'number' || !Number.isSafeInteger(raw.expiresAt) || raw.expiresAt <= 0 ||
+    raw.authenticated !== true ||
+    (route !== 'direct-responses' && route !== 'opencodex-translation') ||
+    !['responses', 'chat-completions', 'anthropic', 'google', 'azure-openai'].includes(String(wireProtocol)) ||
+    !['codex-responses-v1', 'reviewed-opencodex-v1'].includes(String(contract)) ||
+    !['openai-chat', 'anthropic', 'google', 'azure-openai'].includes(String(adapter)) ||
+    !supportedEfforts || !supportedServiceTiers ||
+    typeof supports?.tools !== 'boolean' ||
+    typeof supports.cancellation !== 'boolean' ||
+    typeof supports.streaming !== 'boolean' ||
+    typeof supports.usage !== 'boolean' ||
+    typeof supports.reasoning !== 'boolean'
+  ) {
+    throw new Error('Codex native route capability is invalid.');
+  }
+  return Object.freeze({
+    authority: 'native-owned',
+    accountId,
+    connectionId,
+    modelId,
+    providerId: raw.providerId,
+    upstreamModelId: raw.upstreamModelId,
+    routeHandle: raw.routeHandle,
+    configurationGeneration: raw.configurationGeneration,
+    expiresAt: raw.expiresAt,
+    authenticated: true,
+    route,
+    wireProtocol: wireProtocol as CodexRouteCapability['wireProtocol'],
+    contract: contract as CodexRouteCapability['contract'],
+    adapter: adapter as CodexRouteCapability['adapter'],
+    translatorVerified: raw.translatorVerified === true,
+    supportedEfforts,
+    supportedServiceTiers,
+    supports: Object.freeze({
+      tools: supports.tools,
+      cancellation: supports.cancellation,
+      streaming: supports.streaming,
+      usage: supports.usage,
+      reasoning: supports.reasoning,
+    }),
+  });
 }
 
 function safeError(value: unknown, fallback: string): Error {
@@ -64,6 +165,7 @@ export async function startNativeCodexAppServer(
   executableId: string,
   ownerId: string,
   modelId: string,
+  route: CodexNativeStartRoute,
   bridgeFactory: CodexNativeBridgeFactory = defaultBridge,
 ): Promise<Readonly<{ generation: string }>> {
   const bridge = await bridgeFactory();
@@ -74,6 +176,18 @@ export async function startNativeCodexAppServer(
           executableId: requireIdentifier(executableId, 'executable identity'),
           ownerId: requireIdentifier(ownerId, 'owner identity'),
           modelId: requireIdentifier(modelId, 'model identity'),
+          connectionId: requireIdentifier(route.connectionId, 'connection identity'),
+          routeKind: route.kind,
+          ...(route.kind === 'official-codex'
+            ? {}
+            : {
+                accountId: requireIdentifier(route.accountId, 'account identity'),
+                routeHandle: requireIdentifier(route.routeHandle, 'route handle'),
+                configurationGeneration: requireIdentifier(
+                  route.configurationGeneration,
+                  'configuration generation',
+                ),
+              }),
         },
       })
       .catch((error: unknown) => {
@@ -215,8 +329,33 @@ export async function* nativeCodexFrames(
   };
   const onmessage = (value: unknown) => {
     const message = recordOf(value);
-    if (message?.kind === 'frame' && recordOf(message.frame)) {
-      push({ kind: 'frame', frame: recordOf(message.frame)! });
+    const frame = recordOf(message?.frame);
+    if (message?.kind === 'frame' && frame) {
+      if (
+        !Number.isSafeInteger(message.sequence) || Number(message.sequence) < 0 ||
+        !Number.isSafeInteger(message.nativeHandoffWallUs) || Number(message.nativeHandoffWallUs) < 0 ||
+        !Number.isSafeInteger(message.nativeHandoffMonotonicUs) || Number(message.nativeHandoffMonotonicUs) < 0
+      ) {
+        push({ kind: 'error', message: 'Codex native stream returned invalid timing metadata.' });
+        return;
+      }
+      const rendererReceivedAt = Date.now();
+      const rendererReceivedMonotonicMs = performance.now();
+      const params = recordOf(frame.params);
+      const safeId = (candidate: unknown) =>
+        typeof candidate === 'string' && SAFE_IDENTIFIER.test(candidate) ? candidate : undefined;
+      appActivityLog.record('native.codex.frame', 'received', {
+        runtimeGeneration: exactGeneration,
+        nativeSequence: Number(message.sequence),
+        nativeHandoffWallUs: Number(message.nativeHandoffWallUs),
+        nativeHandoffMonotonicUs: Number(message.nativeHandoffMonotonicUs),
+        rendererReceivedAt,
+        rendererReceivedMonotonicMs,
+        eventType: safeId(frame.method),
+        sessionId: safeId(params?.threadId),
+        callId: safeId(params?.itemId),
+      });
+      push({ kind: 'frame', frame });
     } else if (message?.kind === 'done') {
       push({ kind: 'done' });
     } else if (message?.kind === 'error') {
