@@ -72,6 +72,11 @@ import {
 } from './providerError';
 import { publishChatRunState } from '@/features/chat/runtime/chatRunState';
 import {
+  beginCanonicalTurn,
+  bindCanonicalTurnProvider,
+  failCanonicalTurn,
+} from '@/features/chat/runtime/turn/turnController';
+import {
   MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER,
   parseDirectContextEvidenceContinuation,
   parseMandatoryContextEvidenceResearch,
@@ -1704,11 +1709,20 @@ export async function installJarvisKernelRuntimeHost(
                   ?.content ?? '',
               );
               const explicitReadRoot = extractExplicitReadRoot(lastUserText);
+              const startedAt = now();
+              bindCanonicalTurnProvider(
+                { accountId: providerInput.accountId, runId: providerInput.runId },
+                {
+                  connectionId: providerInput.model.connectionId,
+                  providerId: providerInput.model.providerId,
+                  modelId: providerInput.model.modelId,
+                },
+                startedAt,
+              );
               const suppressProviderPreview =
                 bufferedCaoKernelRunKeys.has(
                   bufferedCaoKernelRunKey(providerInput.accountId, providerInput.runId),
                 ) || shouldSuppressProviderPreview(lastUserText);
-              const startedAt = now();
               let contextCitationSessionId: string | undefined;
               const liveToolActivityIds = new Map<string, string>();
               const lastLiveToolStates = new Map<string, string>();
@@ -2064,6 +2078,19 @@ export async function installJarvisKernelRuntimeHost(
                 const status = signal.aborted ? 'cancelled' : 'error';
                 finishThinking(status);
                 settlePendingToolActivities(status);
+                if (!signal.aborted) {
+                  failCanonicalTurn(
+                    { accountId: providerInput.accountId, runId: providerInput.runId },
+                    providerErrorDetails(error, {
+                      providerId: providerInput.model.providerId,
+                      modelId: providerInput.model.modelId,
+                      connectionId: providerInput.model.connectionId,
+                      requestId: providerInput.requestId,
+                      runId: providerInput.runId,
+                    }),
+                    now(),
+                  );
+                }
                 throw error;
               }).finally(() => {
                 preview.seal();
@@ -2476,6 +2503,18 @@ export async function installJarvisKernelRuntimeHost(
     },
     async runInitialTurn(turnInput) {
       if (disposed) throw new Error('jarvis_kernel_host_disposed');
+      beginCanonicalTurn(
+        {
+          accountId: turnInput.accountId,
+          ...(turnInput.workspaceId ? { workspaceId: turnInput.workspaceId } : {}),
+          ...(turnInput.projectId ? { projectId: turnInput.projectId } : {}),
+          chatId: turnInput.chatId,
+          runId: turnInput.run.id,
+          requestId: turnInput.attempt.requestId,
+          attempt: turnInput.attempt.attemptNumber,
+        },
+        { cancellationKey: turnInput.userMessageId },
+      );
       activeTurnScopes.set(
         turnInput.run.id,
         Object.freeze({
@@ -2494,6 +2533,18 @@ export async function installJarvisKernelRuntimeHost(
     },
     async startVoiceTurn(turnInput) {
       if (disposed) throw new Error('jarvis_kernel_host_disposed');
+      beginCanonicalTurn(
+        {
+          accountId: turnInput.accountId,
+          ...(turnInput.workspaceId ? { workspaceId: turnInput.workspaceId } : {}),
+          ...(turnInput.projectId ? { projectId: turnInput.projectId } : {}),
+          chatId: turnInput.chatId,
+          runId: turnInput.run.id,
+          requestId: turnInput.attempt.requestId,
+          attempt: turnInput.attempt.attemptNumber,
+        },
+        { cancellationKey: turnInput.userMessageId },
+      );
       activeTurnScopes.set(
         turnInput.run.id,
         Object.freeze({
@@ -2527,6 +2578,16 @@ export async function installJarvisKernelRuntimeHost(
     openHiveWorker: (workerInput) => composition.kernel.openHiveWorker(workerInput),
     async runHiveFinalTurn(turnInput) {
       if (disposed) throw new Error('jarvis_kernel_host_disposed');
+      beginCanonicalTurn(
+        {
+          accountId: turnInput.run.accountId,
+          chatId: turnInput.run.chatId ?? '',
+          runId: turnInput.run.id,
+          requestId: turnInput.attempt.requestId,
+          attempt: turnInput.attempt.attemptNumber,
+        },
+        { cancellationKey: turnInput.userMessageId },
+      );
       activeTurnScopes.set(
         turnInput.run.id,
         Object.freeze({

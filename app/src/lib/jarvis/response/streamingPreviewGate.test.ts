@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createStreamingPreviewState,
   pushStreamingPreviewChunk,
+  streamingPreviewGateStats,
   type StreamingPreviewState,
 } from './streamingPreviewGate';
 
@@ -10,6 +11,17 @@ function push(state: Readonly<StreamingPreviewState>, delta: string) {
 }
 
 describe('public progress projection', () => {
+  it('processes ordinary public deltas without reparsing the accumulated response', () => {
+    let state = createStreamingPreviewState();
+    for (let index = 0; index < 4_000; index += 1) {
+      state = pushStreamingPreviewChunk(state, 'safe-stream ', { publicProgress: true }).state;
+    }
+    const stats = streamingPreviewGateStats(state);
+    expect(stats.fullParseCount).toBe(0);
+    expect(stats.fastChunkCount).toBe(4_000);
+    expect(state.visible.startsWith('safe-stream safe-stream')).toBe(true);
+  });
+
   it('publishes a classified public progress fragment without sentence punctuation', () => {
     expect(pushStreamingPreviewChunk(createStreamingPreviewState(), 'START_P4F8', { publicProgress: true }))
       .toMatchObject({ allowed: true, visibleText: 'START_P4F8' });

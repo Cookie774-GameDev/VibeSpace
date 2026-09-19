@@ -27,12 +27,38 @@ const PROMPT_LEAK_SIGNAL =
   /\b(?:system prompt|hidden (?:prompt|instructions?)|developer message|chain of thought)\b/i;
 const ACTION_MACRO = /^\s*\{action\}/im;
 
+type InternalPreviewState = Readonly<{
+  pendingPublic: string;
+  securityTail: string;
+  blockedReason?: 'secret_signal' | 'prompt_leak_signal' | 'invalid_structure';
+  fullParseCount: number;
+  fastChunkCount: number;
+}>;
+
+const INTERNAL = new WeakMap<Readonly<StreamingPreviewState>, InternalPreviewState>();
+const SECURITY_TAIL_CHARS = 256;
+
+function defaultInternal(state?: Readonly<StreamingPreviewState>): InternalPreviewState {
+  return Object.freeze({
+    pendingPublic: '',
+    securityTail: state?.buffered.slice(-SECURITY_TAIL_CHARS) ?? '',
+    fullParseCount: 0,
+    fastChunkCount: 0,
+  });
+}
+
+function internalOf(state: Readonly<StreamingPreviewState>): InternalPreviewState {
+  return INTERNAL.get(state) ?? defaultInternal(state);
+}
 function frozenState(
   buffered: string,
   visible: string,
   insideFence: boolean,
+  internal: InternalPreviewState = defaultInternal(),
 ): Readonly<StreamingPreviewState> {
-  return Object.freeze({ buffered, visible, insideFence });
+  const state = Object.freeze({ buffered, visible, insideFence });
+  INTERNAL.set(state, internal);
+  return state;
 }
 
 function splitLines(text: string): string[] {
@@ -90,33 +116,148 @@ const SENSITIVE_PREFIXES = Object.freeze([
   'developermessage', 'chainofthought',
 ]);
 
-function publicVisibleProse(prose: string, itemComplete: boolean): string {
+function includeLeadingSeparator(text: string, index: number): number {
+  let start = index;
+  while (start > 0 && /[ \t\r\n]/u.test(text.charAt(start - 1))) start -= 1;
+  return start;
+}
+
+function fastPublicBoundary(prose: string, itemComplete: boolean): number {
   let end = prose.length;
-  // Never send an unpaired high surrogate to the DOM while its low surrogate
-  // may still arrive, or partial fence/action delimiters before classification.
-  if (end > 0 && /[\ud800-\udbff]/u.test(prose.charAt(end - 1))) end -= 1;
+  if (end > 0 && /[\ud800-\udbff]/u.test(prose.charAt(end - 1))) {
+    end = includeLeadingSeparator(prose, end - 1);
+  }
   const partialFence = /[`~]{1,2}[ \t]*$/.exec(prose.slice(0, end));
-  if (partialFence) end = partialFence.index;
+  if (partialFence) end = includeLeadingSeparator(prose, partialFence.index);
   const brace = prose.lastIndexOf('{', end - 1);
-  if (brace >= 0 && '{action}'.startsWith(prose.slice(brace, end).toLowerCase())) end = brace;
+  if (brace >= 0 && '{action}'.startsWith(prose.slice(brace, end).toLowerCase())) {
+    end = includeLeadingSeparator(prose, brace);
+  }
   if (!itemComplete) {
-    // Every guarded phrase is short; a bounded suffix avoids rescanning the
-    // entire part merely to decide whether its last token remains ambiguous.
     const tailStart = Math.max(0, end - 64);
     for (let start = tailStart; start < end; start += 1) {
       if (start > 0 && /[a-z0-9_]/i.test(prose.charAt(start - 1))) continue;
       const candidate = prose.slice(start, end).toLowerCase().replace(/[ _-]/g, '');
       if (candidate && SENSITIVE_PREFIXES.some((marker) => marker.startsWith(candidate))) {
-        end = start;
+        end = includeLeadingSeparator(prose, start);
         break;
       }
     }
   }
-  return prose.slice(0, end).trim();
+  if (!itemComplete && end === prose.length) {
+    while (end > 0 && /[ \t\r\n]/u.test(prose.charAt(end - 1))) end -= 1;
+  }
+  return end;
+}
+
+function deltaRequiresFullParse(delta: string): boolean {
+  return (
+    delta.includes('\n') ||
+    delta.includes('\r') ||
+    delta.includes('`') ||
+    delta.includes('~') ||
+    delta.includes('{') ||
+    delta.includes('}')
+  );
+}
+
+function classifySecurityTail(
+  text: string,
+): InternalPreviewState['blockedReason'] | undefined {
+  if (ACTION_MACRO.test(text)) return 'invalid_structure';
+  if (SECRET_SIGNAL.test(text)) return 'secret_signal';
+  if (PROMPT_LEAK_SIGNAL.test(text)) return 'prompt_leak_signal';
+  return undefined;
+}
+
+function nextSecurityTail(previous: string, delta: string): string {
+  return (previous + delta).slice(-SECURITY_TAIL_CHARS);
+}
+
+function blockedStateWithReason(
+  buffered: string,
+  visible: string,
+  insideFence: boolean,
+  internal: InternalPreviewState,
+  reason: NonNullable<InternalPreviewState['blockedReason']>,
+): Readonly<StreamingPreviewState> {
+  return frozenState(
+    buffered,
+    visible,
+    insideFence,
+    Object.freeze({ ...internal, blockedReason: reason }),
+  );
+}
+
+function pushFastPublicProgress(
+  state: Readonly<StreamingPreviewState>,
+  delta: string,
+  itemComplete: boolean,
+): StreamingPreviewDecision | null {
+  const internal = internalOf(state);
+  if (
+    state.insideFence ||
+    deltaRequiresFullParse(delta) ||
+    /[`~{}]/u.test(internal.pendingPublic)
+  ) {
+    return null;
+  }
+  const buffered = state.buffered + delta;
+  const securityTail = nextSecurityTail(internal.securityTail, delta);
+  const candidate = internal.pendingPublic + delta;
+  const reason = internal.blockedReason ?? classifySecurityTail(securityTail);
+  if (reason) {
+    const blockedInternal = Object.freeze({
+      ...internal,
+      pendingPublic: candidate,
+      securityTail,
+      blockedReason: reason,
+      fastChunkCount: internal.fastChunkCount + 1,
+    });
+    return {
+      allowed: false,
+      state: frozenState(buffered, state.visible, false, blockedInternal),
+      reason,
+    };
+  }
+
+  const boundary = fastPublicBoundary(candidate, itemComplete);
+  const publishable = candidate.slice(0, boundary);
+  const pendingPublic = candidate.slice(boundary);
+  const nextVisible = (state.visible + publishable).trim();
+  const nextState = frozenState(
+    buffered,
+    nextVisible,
+    false,
+    Object.freeze({
+      pendingPublic,
+      securityTail,
+      fullParseCount: internal.fullParseCount,
+      fastChunkCount: internal.fastChunkCount + 1,
+    }),
+  );
+  if (!nextVisible || nextVisible === state.visible) {
+    return { allowed: false, state: nextState, reason: 'incomplete_sentence' };
+  }
+  return { allowed: true, state: nextState, visibleText: nextVisible };
+}
+function publicVisibleProse(prose: string, itemComplete: boolean): string {
+  return prose.slice(0, fastPublicBoundary(prose, itemComplete)).trim();
 }
 
 export function createStreamingPreviewState(): Readonly<StreamingPreviewState> {
   return frozenState('', '', false);
+}
+
+export function streamingPreviewGateStats(
+  state: Readonly<StreamingPreviewState>,
+): Readonly<{ fullParseCount: number; fastChunkCount: number; pendingChars: number }> {
+  const internal = internalOf(state);
+  return Object.freeze({
+    fullParseCount: internal.fullParseCount,
+    fastChunkCount: internal.fastChunkCount,
+    pendingChars: internal.pendingPublic.length,
+  });
 }
 
 export function pushStreamingPreviewChunk(
@@ -130,22 +271,51 @@ export function pushStreamingPreviewChunk(
     itemComplete?: boolean;
   }> = {},
 ): StreamingPreviewDecision {
+  if (options.publicProgress && !options.interrupted) {
+    const fast = pushFastPublicProgress(state, delta, options.itemComplete === true);
+    if (fast) return fast;
+  }
+
+  const previousInternal = internalOf(state);
   const buffered = `${state.buffered}${delta}`;
   const parsed = proseOutsideFences(buffered);
+  const itemComplete = options.itemComplete === true;
   const nextVisible = options.publicProgress
-    ? publicVisibleProse(parsed.prose, options.itemComplete === true)
+    ? publicVisibleProse(parsed.prose, itemComplete)
     : options.interrupted ? parsed.prose.trim() : completeVisibleProse(parsed.prose);
-  const nextState = frozenState(buffered, nextVisible, parsed.insideFence);
-  const blockedState = frozenState(buffered, state.visible, parsed.insideFence);
+  const publicBoundary = options.publicProgress && !parsed.insideFence
+    ? fastPublicBoundary(parsed.prose, itemComplete)
+    : parsed.prose.length;
+  const fallbackInternal: InternalPreviewState = Object.freeze({
+    pendingPublic:
+      options.publicProgress && !parsed.insideFence
+        ? parsed.prose.slice(publicBoundary)
+        : '',
+    securityTail: parsed.prose.slice(-SECURITY_TAIL_CHARS),
+    fullParseCount: previousInternal.fullParseCount + 1,
+    fastChunkCount: previousInternal.fastChunkCount,
+  });
+  const nextState = frozenState(
+    buffered,
+    nextVisible,
+    parsed.insideFence,
+    fallbackInternal,
+  );
+  const blockedState = frozenState(
+    buffered,
+    state.visible,
+    parsed.insideFence,
+    fallbackInternal,
+  );
 
   if (parsed.invalid || ACTION_MACRO.test(parsed.prose)) {
-    return { allowed: false, state: blockedState, reason: 'invalid_structure' };
+    return { allowed: false, state: blockedStateWithReason(buffered, state.visible, parsed.insideFence, fallbackInternal, 'invalid_structure'), reason: 'invalid_structure' };
   }
   if (SECRET_SIGNAL.test(parsed.prose)) {
-    return { allowed: false, state: blockedState, reason: 'secret_signal' };
+    return { allowed: false, state: blockedStateWithReason(buffered, state.visible, parsed.insideFence, fallbackInternal, 'secret_signal'), reason: 'secret_signal' };
   }
   if (PROMPT_LEAK_SIGNAL.test(parsed.prose)) {
-    return { allowed: false, state: blockedState, reason: 'prompt_leak_signal' };
+    return { allowed: false, state: blockedStateWithReason(buffered, state.visible, parsed.insideFence, fallbackInternal, 'prompt_leak_signal'), reason: 'prompt_leak_signal' };
   }
   // Publish already-complete safe prose before the fence while structured bytes
   // remain hidden. Otherwise a same-chunk question marks prose visible without

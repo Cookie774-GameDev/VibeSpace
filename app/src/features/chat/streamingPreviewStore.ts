@@ -1,12 +1,26 @@
+import type { PublicToolDetails } from '@/lib/ai/adapters/types';
+import {
+  clearAccountPublicSnapshots,
+  clearTurn,
+  clearTurnPublic,
+  getLatestTurn,
+  getTurn,
+  publishTurnPublicSnapshot,
+  subscribeTurnChat,
+  subscribeTurns,
+} from './runtime/turn/turnStore';
+import { isTerminalTurnStatus } from './runtime/turn/turnTypes';
+import { selectTurnPreview } from './runtime/turn/turnSelectors';
+
 export type StreamingPreviewSegment =
   | { kind: 'text'; id: string; text: string }
   | {
       kind: 'tool';
       id: string;
       name: string;
-      status: 'started' | 'completed' | 'failed';
+      status: 'started' | 'completed' | 'failed' | 'interrupted';
       fileLabel?: string;
-      details?: Readonly<import('@/lib/ai/adapters/types').PublicToolDetails>;
+      details?: Readonly<PublicToolDetails>;
     };
 
 export interface JarvisStreamingPreview {
@@ -27,68 +41,15 @@ export interface JarvisStreamingPreview {
   publicationMonotonicMs?: number;
 }
 
-const listeners = new Set<() => void>();
-const chatListeners = new Map<string, Set<() => void>>();
-
-export function subscribeChatPreviews(
-  accountId: string,
-  chatId: string,
-  listener: () => void,
-): () => void {
-  const chatKey = key(accountId, chatId);
-  let scoped = chatListeners.get(chatKey);
-  if (!scoped) {
-    scoped = new Set();
-    chatListeners.set(chatKey, scoped);
-  }
-  scoped.add(listener);
-  return () => {
-    scoped.delete(listener);
-    if (scoped.size === 0 && chatListeners.get(chatKey) === scoped) chatListeners.delete(chatKey);
-  };
-}
-
-export function subscribePreviews(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-function notifyPreviews(changedChats: ReadonlySet<string>): void {
-  for (const chatKey of changedChats) {
-    for (const listener of chatListeners.get(chatKey) ?? []) listener();
-  }
-  for (const listener of listeners) listener();
-}
-
-export function getChatPreview(
-  accountId: string,
-  chatId: string,
-): Readonly<JarvisStreamingPreview> | null {
-  let latest: Readonly<JarvisStreamingPreview> | null = null;
-  for (const preview of previews.values()) {
-    if (
-      preview.accountId === accountId &&
-      preview.chatId === chatId &&
-      (!latest || preview.updatedAt > latest.updatedAt)
-    )
-      latest = preview;
-  }
-  return latest;
-}
-
-const previews = new Map<string, Readonly<JarvisStreamingPreview>>();
 let publicationRevision = 0;
-// Per-run publication sequence so coalescing is measured within one chat/run,
-// never across interleaved chats that share the global revision counter.
 const runPublicationSequences = new Map<string, number>();
 
-function key(accountId: string, runId: string): string {
-  return `${accountId.length}:${accountId}${runId}`;
+function key(accountId: string, value: string): string {
+  return accountId.length + ':' + accountId + value;
 }
 
 function requireId(value: string, field: string): void {
-  if (!value.trim()) throw new Error(`invalid_streaming_preview_${field}`);
+  if (!value.trim()) throw new Error('invalid_streaming_preview_' + field);
 }
 
 function sameSegments(
@@ -96,10 +57,12 @@ function sameSegments(
   right: JarvisStreamingPreview['segments'],
 ): boolean {
   if (left === right) return true;
-  if (!left || !right || left.length !== right.length) return false;
-  return left.every((before, index) => {
-    const after = right[index];
-    if (before.kind !== after.kind || before.id !== after.id) return false;
+  const leftSegments = left ?? [];
+  const rightSegments = right ?? [];
+  if (leftSegments.length !== rightSegments.length) return false;
+  return leftSegments.every((before, index) => {
+    const after = rightSegments[index];
+    if (!after || before.kind !== after.kind || before.id !== after.id) return false;
     if (before.kind === 'text' && after.kind === 'text') return before.text === after.text;
     return (
       before.kind === 'tool' &&
@@ -112,73 +75,116 @@ function sameSegments(
   });
 }
 
+function previewFromTurn(
+  accountId: string,
+  runId: string,
+): Readonly<JarvisStreamingPreview> | null {
+  const turn = getTurn(accountId, runId);
+  const projected = selectTurnPreview(turn);
+  if (!projected || (!projected.text && projected.segments.length === 0)) return null;
+  return projected as Readonly<JarvisStreamingPreview>;
+}
+
+export function subscribeChatPreviews(
+  accountId: string,
+  chatId: string,
+  listener: () => void,
+): () => void {
+  return subscribeTurnChat(accountId, chatId, listener);
+}
+
+export function subscribePreviews(listener: () => void): () => void {
+  return subscribeTurns(listener);
+}
+
+export function getChatPreview(
+  accountId: string,
+  chatId: string,
+): Readonly<JarvisStreamingPreview> | null {
+  const turn = getLatestTurn(accountId, chatId);
+  const projected = selectTurnPreview(turn);
+  if (!projected || (!projected.text && projected.segments.length === 0)) return null;
+  return projected as Readonly<JarvisStreamingPreview>;
+}
+
 export function setPreview(preview: JarvisStreamingPreview): void {
   requireId(preview.accountId, 'account_id');
   requireId(preview.runId, 'run_id');
   requireId(preview.requestId, 'request_id');
   requireId(preview.chatId, 'chat_id');
   if (!Number.isFinite(preview.updatedAt)) throw new Error('invalid_streaming_preview_updated_at');
-  const existing = previews.get(key(preview.accountId, preview.runId));
+
+  const existingTurn = getTurn(preview.accountId, preview.runId);
+  const existing = previewFromTurn(preview.accountId, preview.runId);
   if (
     existing?.requestId === preview.requestId &&
     existing.chatId === preview.chatId &&
     existing.text === preview.text &&
     existing.projectRoot === preview.projectRoot &&
     sameSegments(existing.segments, preview.segments)
-  )
+  ) {
     return;
-  // Public tool details are immutable boundary values. Compare their identity
-  // instead of serializing every prior command/output on each text delta.
-  const detached = Object.freeze({
-    ...preview,
-    publicationRevision: ++publicationRevision,
-    runPublicationSequence:
-      (runPublicationSequences.get(key(preview.accountId, preview.runId)) ?? 0) + 1,
-    publicationMonotonicMs: performance.now(),
-    ...(preview.segments
-      ? {
-          segments: Object.freeze(preview.segments.map((segment) => Object.freeze({ ...segment }))),
-        }
-      : {}),
+  }
+
+  // Legacy preview callers may move a request between mounted chat panes or
+  // reuse a completed fixture run id. Rebind the presentation-only identity;
+  // production canonical runs use stable chat/run identities.
+  if (
+    existingTurn &&
+    (existingTurn.identity.chatId !== preview.chatId ||
+      (existingTurn.identity.requestId !== preview.requestId &&
+        (isTerminalTurnStatus(existingTurn.status) ||
+          (!existingTurn.public.text && existingTurn.public.segments.length === 0))))
+  ) {
+    clearTurn(preview.accountId, preview.runId);
+  }
+
+  const sequenceKey = key(preview.accountId, preview.runId);
+  const runPublicationSequence = (runPublicationSequences.get(sequenceKey) ?? 0) + 1;
+  runPublicationSequences.set(sequenceKey, runPublicationSequence);
+
+  publishTurnPublicSnapshot({
+    identity: {
+      accountId: preview.accountId,
+      chatId: preview.chatId,
+      runId: preview.runId,
+      requestId: preview.requestId,
+      attempt: 1,
+    },
+    snapshot: {
+      text: preview.text,
+      segments: preview.segments ?? [],
+      updatedAt: preview.updatedAt,
+      ...(preview.projectRoot ? { projectRoot: preview.projectRoot } : {}),
+      publicationRevision: ++publicationRevision,
+      runPublicationSequence,
+      publicationMonotonicMs: performance.now(),
+    },
   });
-  runPublicationSequences.set(key(detached.accountId, detached.runId), detached.runPublicationSequence);
-  previews.set(key(detached.accountId, detached.runId), detached);
-  const changedChats = new Set([key(detached.accountId, detached.chatId)]);
-  if (existing) changedChats.add(key(existing.accountId, existing.chatId));
-  notifyPreviews(changedChats);
 }
 
-export function getPreview(accountId: string, runId: string): JarvisStreamingPreview | null {
-  return previews.get(key(accountId, runId)) ?? null;
+export function getPreview(
+  accountId: string,
+  runId: string,
+): Readonly<JarvisStreamingPreview> | null {
+  return previewFromTurn(accountId, runId);
 }
 
-/** Temporary clears retain continuity; verified terminal owners retire it. */
+/** Temporary clears retain turn authority and run status; only public projection is cleared. */
 export function clearPreview(
   accountId: string,
   runId: string,
   options: Readonly<{ terminal?: boolean }> = {},
 ): void {
-  const entryKey = key(accountId, runId);
-  if (options.terminal) runPublicationSequences.delete(entryKey);
-  const existing = previews.get(entryKey);
-  if (existing && previews.delete(entryKey)) {
-    notifyPreviews(new Set([key(existing.accountId, existing.chatId)]));
-  }
+  const sequenceKey = key(accountId, runId);
+  if (options.terminal) runPublicationSequences.delete(sequenceKey);
+  clearTurnPublic(accountId, runId);
 }
 
 export function clearAccountPreviews(accountId: string): void {
-  // A temporary clear deliberately retains sequence continuity. Account
-  // teardown must also retire counters for those already-cleared previews.
-  const accountPrefix = `${accountId.length}:${accountId}`;
+  const accountPrefix = accountId.length + ':' + accountId;
   for (const entryKey of runPublicationSequences.keys()) {
     if (entryKey.startsWith(accountPrefix)) runPublicationSequences.delete(entryKey);
   }
-  const changedChats = new Set<string>();
-  for (const [entryKey, preview] of previews) {
-    if (preview.accountId === accountId) {
-      previews.delete(entryKey);
-      changedChats.add(key(preview.accountId, preview.chatId));
-    }
-  }
-  notifyPreviews(changedChats);
+  clearAccountPublicSnapshots(accountId);
 }

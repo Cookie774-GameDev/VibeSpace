@@ -1,3 +1,8 @@
+import {
+  getCompatibilityRunState,
+  publishCompatibilityRunState,
+} from './turn/turnStore';
+
 export interface ChatRunState {
   chatId: string;
   status: 'running' | 'done' | 'error' | 'cancelled';
@@ -5,18 +10,15 @@ export interface ChatRunState {
   errorCode?: string;
 }
 
-// Runtime-owned, in-memory status survives view changes, never an app restart.
-const states = new Map<string, ChatRunState>();
-
+/**
+ * Compatibility surface for Composer and older listeners.
+ * Canonical status is retained in TurnStore; this module is no longer a second state owner.
+ */
 export function getChatRunState(chatId: string): ChatRunState | undefined {
-  return states.get(chatId);
+  return getCompatibilityRunState(chatId);
 }
 
 export function publishChatRunState(state: ChatRunState): void {
-  if (state.status === 'running' || state.status === 'cancelled') {
-    states.set(state.chatId, { ...state });
-  } else {
-    states.delete(state.chatId);
-  }
-  window.dispatchEvent(new CustomEvent('jarvis:run-state', { detail: state }));
+  publishCompatibilityRunState(state);
+  window.dispatchEvent(new CustomEvent('jarvis:run-state', { detail: { ...state } }));
 }

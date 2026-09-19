@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { ArrowDown, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -39,6 +39,12 @@ import {
   windowChatMessages,
 } from './chatMessageWindow';
 import { AgentChecklistBar, readBoundedAgentChecklistEvidence } from './AgentChecklistBar';
+import {
+  getLatestTurn,
+  hydrateLatestTurn,
+  subscribeTurnChat,
+} from './runtime/turn/turnStore';
+import { selectAgenticSessionEvidence } from './runtime/turn/turnSelectors';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
@@ -54,6 +60,26 @@ export function selectedModelPreview(
   if (selection.mode === 'single') return selection.modelId;
   if (selection.mode === 'hive') return 'Hive Balanced';
   return previousRunModel;
+}
+
+/**
+ * Public text/tool deltas render in StreamingChatPreview and must not invalidate
+ * the entire ChatThread/AgenticConsole tree. Only session-header authority and
+ * terminal state belong in the parent presentation key.
+ */
+export function liveTurnPresentationKey(
+  turn: ReturnType<typeof getLatestTurn>,
+): string {
+  if (!turn) return '';
+  return [
+    turn.identity.runId,
+    turn.status,
+    turn.provider?.modelId ?? '',
+    turn.error?.message ?? '',
+    turn.errorCode ?? '',
+    turn.cancellationKey ?? '',
+    turn.terminalAt ?? '',
+  ].join('\u0000');
 }
 
 export interface ChatThreadProps {
@@ -254,6 +280,37 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   const messages = fixtureMessages ?? persistedPage.messages;
   const chatKey = String(chatId);
   const commandCenterBinding = useJarvisCommandCenterBinding();
+  const authenticatedAccountId = useAuthStore(
+    (state) => resolveAccountIdentity(state)?.accountId,
+  );
+  // Live chat presentation must not wait on Command Center initialization.
+  // The authenticated account owns the turn store; the command-center binding
+  // remains a fallback during account bootstrap only.
+  const liveTurnAccountId =
+    authenticatedAccountId ?? commandCenterBinding?.hostPort.accountId;
+  const readLiveTurn = useCallback(
+    () => (liveTurnAccountId ? getLatestTurn(liveTurnAccountId, chatKey) : null),
+    [chatKey, liveTurnAccountId],
+  );
+  const subscribeLiveTurn = useCallback(
+    (listener: () => void) => {
+      if (!liveTurnAccountId) return () => {};
+      let presentationKey = liveTurnPresentationKey(readLiveTurn());
+      return subscribeTurnChat(liveTurnAccountId, chatKey, () => {
+        const nextKey = liveTurnPresentationKey(readLiveTurn());
+        if (nextKey === presentationKey) return;
+        presentationKey = nextKey;
+        listener();
+      });
+    },
+    [chatKey, liveTurnAccountId, readLiveTurn],
+  );
+  const liveTurn = useSyncExternalStore(subscribeLiveTurn, readLiveTurn, () => null);
+  useEffect(() => {
+    if (!liveTurnAccountId || liveTurn) return;
+    hydrateLatestTurn(liveTurnAccountId, chatKey);
+  }, [chatKey, liveTurn, liveTurnAccountId]);
+
   const hasProjectedCanonicalRun = useJarvisTaskRunStore((state) =>
     Object.values(state.runs).some((run) => run.canonical && run.chatId === String(chatId)),
   );
@@ -295,6 +352,28 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   );
   const fallbackAgents = useMemo(() => extractAgentCards(messages), [messages]);
   const creatorDraftKind = useMemo(() => detectCreatorDraftKind(messages), [messages]);
+  const durableProviderFailure = useMemo(() => {
+    const latestUserAt =
+      [...messages].reverse().find((message) => message.role === 'user')?.created_at ??
+      Number.NEGATIVE_INFINITY;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message || message.created_at < latestUserAt) break;
+      const providerError = message.parts.find(
+        (part): part is Extract<Part, { kind: 'provider_error' }> => part.kind === 'provider_error',
+      );
+      if (providerError) {
+        return Object.freeze({ error: providerError.error, at: message.created_at });
+      }
+    }
+    return undefined;
+  }, [messages]);
+  const usableLiveTurn = useMemo(() => {
+    if (!liveTurn) return null;
+    if (!currentCanonicalRun) return liveTurn;
+    if (liveTurn.identity.runId === currentCanonicalRun.id) return liveTurn;
+    return liveTurn.acceptedAt >= currentCanonicalRun.updatedAt ? liveTurn : null;
+  }, [currentCanonicalRun, liveTurn]);
   const commandCenterHandlers = useMemo<JarvisCommandCenterHandlers>(() => {
     const hostPort = commandCenterBinding?.hostPort;
     if (!hostPort) return {};
@@ -319,23 +398,45 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
     };
   }, [commandCenterBinding]);
   const agenticSessionEvidence = useMemo(() => {
+    const liveEvidence = selectAgenticSessionEvidence(usableLiveTurn);
+    if (liveEvidence) return liveEvidence;
+    if (durableProviderFailure) {
+      return {
+        status: 'error',
+        currentOperation: durableProviderFailure.error.message,
+        model: currentCanonicalRun?.model?.modelId,
+        startedAt: currentCanonicalRun?.createdAt ?? durableProviderFailure.at,
+        endedAt: durableProviderFailure.at,
+      };
+    }
     if (!currentCanonicalRun) return undefined;
     const status = String(currentCanonicalRun.status);
     return {
       status: requiresManualRecovery ? 'blocked' : status,
-      currentOperation: requiresManualRecovery ? 'Interrupted · outcome unknown' : status.replaceAll('_', ' '),
+      currentOperation: requiresManualRecovery
+        ? 'Interrupted · outcome unknown'
+        : status.replaceAll('_', ' '),
       model: currentCanonicalRun.model?.modelId,
       startedAt: currentCanonicalRun.createdAt,
       endedAt: /done|complete|success|failed|error|cancelled/i.test(status)
         ? currentCanonicalRun.updatedAt
         : undefined,
     };
-  }, [currentCanonicalRun, requiresManualRecovery]);
+  }, [
+    currentCanonicalRun,
+    durableProviderFailure,
+    requiresManualRecovery,
+    usableLiveTurn,
+  ]);
   const agenticActions = useMemo(() => {
     const run = currentCanonicalRun;
     const binding = commandCenterBinding;
     if (!run || !binding) return undefined;
-    const status = String(run.status);
+    const status = usableLiveTurn
+      ? String(usableLiveTurn.status)
+      : durableProviderFailure
+        ? 'failed'
+        : String(run.status);
     const actions: {
       cancel?: () => Promise<void>;
       retry?: () => Promise<void>;
@@ -392,7 +493,16 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
       };
     }
     return Object.keys(actions).length ? actions : undefined;
-  }, [chatId, commandCenterBinding, commandCenterHandlers, currentCanonicalRun, messages, requiresManualRecovery]);
+  }, [
+    chatId,
+    commandCenterBinding,
+    commandCenterHandlers,
+    currentCanonicalRun,
+    durableProviderFailure,
+    messages,
+    requiresManualRecovery,
+    usableLiveTurn,
+  ]);
 
   useEffect(() => {
     let disposed = false;
