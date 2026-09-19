@@ -11,6 +11,7 @@ import {
   publishTurnPublicSnapshot,
   resetTurnStoreForTests,
   subscribeTurnChat,
+  subscribeTurnChatPriority,
 } from './turnStore';
 
 const identity = {
@@ -59,10 +60,7 @@ describe('canonical turn store', () => {
 
   it('restores a nonterminal checkpoint as interrupted instead of resurrecting a spinner', () => {
     acceptTurn(identity, 1);
-    publishTurnEvent(
-      { accountId: 'account', runId: 'run' },
-      { type: 'turn.running', at: 2 },
-    );
+    publishTurnEvent({ accountId: 'account', runId: 'run' }, { type: 'turn.running', at: 2 });
     const running = getLatestTurn('account', 'chat');
     expect(running?.status).toBe('running');
     writeTurnCheckpoint(running!);
@@ -86,7 +84,12 @@ describe('canonical turn store', () => {
       identity,
       snapshot: { text: 'Answer', segments: [], updatedAt: 2 },
     });
-    publishCompatibilityRunState({ chatId: 'chat', status: 'error', errorCode: 'provider_busy', at: 3 });
+    publishCompatibilityRunState({
+      chatId: 'chat',
+      status: 'error',
+      errorCode: 'provider_busy',
+      at: 3,
+    });
     clearTurnPublic('account', 'run', 4);
 
     expect(getLatestTurn('account', 'chat')).toMatchObject({
@@ -97,6 +100,25 @@ describe('canonical turn store', () => {
     expect(getCompatibilityRunState('chat')?.status).toBe('error');
   });
 
+  it('notifies priority visibility subscribers from committed state before ordinary subscribers', () => {
+    const order: string[] = [];
+    const stopPriority = subscribeTurnChatPriority('account', 'chat', () => {
+      expect(getLatestTurn('account', 'chat')?.public.text).toBe('Immediate answer');
+      order.push('priority');
+    });
+    const stopRegular = subscribeTurnChat('account', 'chat', () => order.push('regular'));
+    try {
+      publishTurnPublicSnapshot({
+        identity,
+        snapshot: { text: 'Immediate answer', segments: [], updatedAt: 2 },
+      });
+      expect(order).toEqual(['priority', 'regular']);
+    } finally {
+      stopPriority();
+      stopRegular();
+    }
+  });
+
   it('notifies only the changed account/chat', () => {
     const changed = vi.fn();
     const other = vi.fn();
@@ -104,10 +126,7 @@ describe('canonical turn store', () => {
     const stopOther = subscribeTurnChat('account', 'other', other);
     try {
       acceptTurn(identity, 1);
-      publishTurnEvent(
-        { accountId: 'account', runId: 'run' },
-        { type: 'turn.running', at: 2 },
-      );
+      publishTurnEvent({ accountId: 'account', runId: 'run' }, { type: 'turn.running', at: 2 });
       expect(changed).toHaveBeenCalledTimes(2);
       expect(other).not.toHaveBeenCalled();
     } finally {

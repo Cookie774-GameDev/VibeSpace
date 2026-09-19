@@ -182,20 +182,18 @@ export function createActivityRecorder(capacity = 2000) {
       return finish(omitted('[redacted record]'));
     }
   }
-  function record(
+  function appendEvent(
     kind: string,
     phase: string,
+    operationId: string,
+    observedAt: number,
+    monotonicMs: number,
     data: unknown,
-    operationId = `${instanceId}:${sequence + 1}`,
+    diagnosticTruncated: boolean,
     durationMs?: number,
-  ) {
-    // Capture ingress before bounded diagnostic formatting so this timestamp is
-    // about observation, not the cost of redaction or metadata projection.
-    const observedAt = Date.now();
-    const monotonicMs = performance.now();
+  ): string {
     try {
-      const diagnostic = clean(data);
-      const event = {
+      const event: AppActivityEvent = {
         sequence: ++sequence,
         operationId,
         kind,
@@ -203,8 +201,8 @@ export function createActivityRecorder(capacity = 2000) {
         observedAt,
         monotonicMs,
         durationMs,
-        data: diagnostic.data,
-        diagnosticTruncated: diagnostic.diagnosticTruncated,
+        data,
+        diagnosticTruncated,
       };
       events.push(event);
       if (
@@ -243,8 +241,115 @@ export function createActivityRecorder(capacity = 2000) {
     }
     return operationId;
   }
+
+  function record(
+    kind: string,
+    phase: string,
+    data: unknown,
+    operationId = `${instanceId}:${sequence + 1}`,
+    durationMs?: number,
+  ) {
+    // Capture ingress before bounded diagnostic formatting so this timestamp is
+    // about observation, not the cost of redaction or metadata projection.
+    const observedAt = Date.now();
+    const monotonicMs = performance.now();
+    try {
+      const diagnostic = clean(data);
+      return appendEvent(
+        kind,
+        phase,
+        operationId,
+        observedAt,
+        monotonicMs,
+        diagnostic.data,
+        diagnostic.diagnosticTruncated,
+        durationMs,
+      );
+    } catch {
+      return operationId;
+    }
+  }
+
+  /**
+   * Fast path for locally constructed, already-bounded primitive metadata.
+   * It deliberately rejects raw provider text, nested objects and sensitive
+   * field names instead of recursively sanitizing them on the streaming path.
+   */
+  function recordMetadata(
+    kind: string,
+    phase: string,
+    data: Readonly<Record<string, string | number | boolean | null | undefined>>,
+    operationId = `${instanceId}:${sequence + 1}`,
+    durationMs?: number,
+  ) {
+    const observedAt = Date.now();
+    const monotonicMs = performance.now();
+    try {
+      const safe: Record<string, string | number | boolean | null> = Object.create(null);
+      let diagnosticTruncated = false;
+      let count = 0;
+      for (const key of Object.keys(data)) {
+        if (count++ >= 32) {
+          diagnosticTruncated = true;
+          break;
+        }
+        if (
+          key.length > 128 ||
+          /(?:secret|password|passwd|authorization|cookie|credential|api[_-]?key|private[_-]?key|access[_-]?token|refresh[_-]?token|cancellationKey)/i.test(
+            key,
+          ) ||
+          key === 'token'
+        ) {
+          diagnosticTruncated = true;
+          continue;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(data, key);
+        if (!descriptor || !('value' in descriptor)) {
+          diagnosticTruncated = true;
+          continue;
+        }
+        const value = descriptor.value;
+        if (value === undefined) continue;
+        if (typeof value === 'string') {
+          if (
+            value.length > 512 ||
+            /[\u0000-\u001f\u007f]/u.test(value) ||
+            !/^[A-Za-z0-9][A-Za-z0-9._:@/+\- ]{0,511}$/u.test(value)
+          ) {
+            safe[key] = '[metadata omitted]';
+            diagnosticTruncated = true;
+            continue;
+          }
+          safe[key] = value;
+          continue;
+        }
+        if (
+          value === null ||
+          typeof value === 'boolean' ||
+          (typeof value === 'number' && Number.isFinite(value))
+        ) {
+          safe[key] = value;
+          continue;
+        }
+        diagnosticTruncated = true;
+      }
+      return appendEvent(
+        kind,
+        phase,
+        operationId,
+        observedAt,
+        monotonicMs,
+        safe,
+        diagnosticTruncated,
+        durationMs,
+      );
+    } catch {
+      return operationId;
+    }
+  }
   return {
     record,
+    recordMetadata,
     subscribe(listener: ActivityListener) {
       listeners.add(listener);
       return () => {

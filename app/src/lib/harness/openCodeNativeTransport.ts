@@ -449,14 +449,14 @@ export async function* nativeOpenCodeEvents(
           typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,255}$/u.test(value)
             ? value
             : undefined;
-        appActivityLog.record('native.opencode.frame', 'received', {
-          runtimeGeneration: generation,
+        appActivityLog.recordMetadata('native.opencode.frame', 'received', {
+          runtimeGeneration: id(generation) ?? 'unknown-generation',
           nativeSequence: timing.sequence,
           nativeHandoffWallUs: timing.nativeHandoffWallUs,
           nativeHandoffMonotonicUs: timing.nativeHandoffMonotonicUs,
           rendererReceivedAt: timing.rendererReceivedAt,
           rendererReceivedMonotonicMs: timing.rendererReceivedMonotonicMs,
-          eventType: event.type,
+          eventType: id(event.type) ?? 'unknown',
           sessionId: id(properties?.sessionID) ?? id(properties?.sessionId) ?? id(part?.sessionID),
           callId: id(part?.callID) ?? id(part?.callId),
         });

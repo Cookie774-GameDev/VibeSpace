@@ -344,14 +344,14 @@ export async function* nativeCodexFrames(
       const params = recordOf(frame.params);
       const safeId = (candidate: unknown) =>
         typeof candidate === 'string' && SAFE_IDENTIFIER.test(candidate) ? candidate : undefined;
-      appActivityLog.record('native.codex.frame', 'received', {
+      appActivityLog.recordMetadata('native.codex.frame', 'received', {
         runtimeGeneration: exactGeneration,
         nativeSequence: Number(message.sequence),
         nativeHandoffWallUs: Number(message.nativeHandoffWallUs),
         nativeHandoffMonotonicUs: Number(message.nativeHandoffMonotonicUs),
         rendererReceivedAt,
         rendererReceivedMonotonicMs,
-        eventType: safeId(frame.method),
+        eventType: safeId(frame.method) ?? 'unknown',
         sessionId: safeId(params?.threadId),
         callId: safeId(params?.itemId),
       });

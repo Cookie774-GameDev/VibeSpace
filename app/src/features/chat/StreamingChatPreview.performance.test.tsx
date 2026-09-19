@@ -1,7 +1,7 @@
 import { act, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { classifyPreviewCommitTiming, StreamingChatPreview } from './StreamingChatPreview';
-import { clearAccountPreviews, setPreview } from './streamingPreviewStore';
+import { clearAccountPreviews, setPreview, subscribeChatPreviews } from './streamingPreviewStore';
 const { ledger } = vi.hoisted(() => ({ ledger: vi.fn(() => null) }));
 vi.mock('./activity-ledger/AssistantActivityLedger', () => ({ AssistantActivityLedger: ledger }));
 vi.mock('@/stores/auth', () => ({
@@ -19,8 +19,13 @@ it('reports reversed preview clock ordering instead of clamping it to zero', () 
 });
 
 it('renders public text when a legacy producer also supplies only tool segments', () => {
-  setPreview({ accountId: 'perf-user', chatId: 'text-with-tool', requestId: 'r-public', runId: 'run-public',
-    text: 'START_P4F8', updatedAt: 1,
+  setPreview({
+    accountId: 'perf-user',
+    chatId: 'text-with-tool',
+    requestId: 'r-public',
+    runId: 'run-public',
+    text: 'START_P4F8',
+    updatedAt: 1,
     segments: [{ kind: 'tool', id: 'call-public', name: 'read', status: 'started' }],
   });
   const view = render(<StreamingChatPreview chatId="text-with-tool" />);
@@ -29,19 +34,97 @@ it('renders public text when a legacy producer also supplies only tool segments'
 });
 
 it('does not duplicate public prose already present in ordered segments', () => {
-  setPreview({ accountId: 'perf-user', chatId: 'text-once', requestId: 'r-once', runId: 'run-once',
-    text: 'START_ONCE', updatedAt: 1,
-    segments: [{ kind: 'text', id: 'part-once', text: 'START_ONCE' },
-      { kind: 'tool', id: 'call-once', name: 'read', status: 'started' }],
+  setPreview({
+    accountId: 'perf-user',
+    chatId: 'text-once',
+    requestId: 'r-once',
+    runId: 'run-once',
+    text: 'START_ONCE',
+    updatedAt: 1,
+    segments: [
+      { kind: 'text', id: 'part-once', text: 'START_ONCE' },
+      { kind: 'tool', id: 'call-once', name: 'read', status: 'started' },
+    ],
   });
   const view = render(<StreamingChatPreview chatId="text-once" />);
   expect(view.getAllByText('START_ONCE')).toHaveLength(1);
 });
 
+it('makes the latest public text visible before ordinary store subscribers run', () => {
+  const view = render(<StreamingChatPreview chatId="fast-visible" fallback={<div>Waiting</div>} />);
+  const observations: string[] = [];
+  const stop = subscribeChatPreviews('perf-user', 'fast-visible', () => {
+    observations.push(
+      view.container.querySelector('[data-streaming-fast-preview-tail="true"]')?.textContent ?? '',
+    );
+  });
+  try {
+    act(() =>
+      setPreview({
+        accountId: 'perf-user',
+        chatId: 'fast-visible',
+        requestId: 'fast-request',
+        runId: 'fast-run',
+        text: 'VISIBLE_BEFORE_REACT',
+        updatedAt: 1,
+        segments: [{ kind: 'text', id: 'fast-text', text: 'VISIBLE_BEFORE_REACT' }],
+      }),
+    );
+    expect(observations).toEqual(['VISIBLE_BEFORE_REACT']);
+    const host = view.container.querySelector('[data-streaming-fast-preview-tail="true"]');
+    expect(host?.textContent).toBe('VISIBLE_BEFORE_REACT');
+    expect(Number(host?.getAttribute('data-preview-fast-commit-ms'))).toBeGreaterThanOrEqual(0);
+  } finally {
+    stop();
+  }
+});
+
+it('records the first fast visible commit once per run after visibility is committed', async () => {
+  const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
+  const rows: Array<Record<string, unknown>> = [];
+  const stop = appActivityLog.subscribe((event) => {
+    if (event.kind !== 'ui.preview.fast') return;
+    const data = event.data as Record<string, unknown>;
+    if (data.chatId === 'fast-diagnostic') rows.push(data);
+  });
+  try {
+    render(<StreamingChatPreview chatId="fast-diagnostic" />);
+    act(() => {
+      setPreview({
+        accountId: 'perf-user',
+        chatId: 'fast-diagnostic',
+        requestId: 'fast-diag-request',
+        runId: 'fast-diag-run',
+        text: 'FIRST',
+        updatedAt: 1,
+        segments: [{ kind: 'text', id: 'fast-diag-text', text: 'FIRST' }],
+      });
+      setPreview({
+        accountId: 'perf-user',
+        chatId: 'fast-diagnostic',
+        requestId: 'fast-diag-request',
+        runId: 'fast-diag-run',
+        text: 'SECOND',
+        updatedAt: 2,
+        segments: [{ kind: 'text', id: 'fast-diag-text', text: 'SECOND' }],
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      requestId: 'fast-diag-request',
+      runId: 'fast-diag-run',
+    });
+    expect(typeof rows[0]?.uiCommitMs).toBe('number');
+  } finally {
+    stop();
+  }
+});
+
 it('reports skipped initial publications instead of treating the first commit as lossless', async () => {
   const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
   const rows: Array<Record<string, unknown>> = [];
-  const stop = appActivityLog.subscribe(event => {
+  const stop = appActivityLog.subscribe((event) => {
     const data = event.data;
     if (event.kind === 'ui.preview' && data && typeof data === 'object' && !Array.isArray(data)) {
       const row = data as Record<string, unknown>;
@@ -51,12 +134,21 @@ it('reports skipped initial publications instead of treating the first commit as
   try {
     render(<StreamingChatPreview chatId="initial-coalesce" />);
     act(() => {
-      for (let i = 1; i <= 3; i += 1) setPreview({ accountId: 'perf-user', chatId: 'initial-coalesce',
-        requestId: 'r-initial', runId: 'run-initial', text: `Public ${i}`, updatedAt: i });
+      for (let i = 1; i <= 3; i += 1)
+        setPreview({
+          accountId: 'perf-user',
+          chatId: 'initial-coalesce',
+          requestId: 'r-initial',
+          runId: 'run-initial',
+          text: `Public ${i}`,
+          updatedAt: i,
+        });
     });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.coalescedRevisions).toBe(2);
-  } finally { stop(); }
+  } finally {
+    stop();
+  }
 });
 
 it('does not rebuild five unchanged tool cards during 100 prose-only deltas', () => {

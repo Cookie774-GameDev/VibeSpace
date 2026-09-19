@@ -51,6 +51,48 @@ it('keeps native viewer imports and reloaded instrumentation on one recorder', a
   expect(reloaded.appActivityLog.snapshot().sequence).toBe(sequence);
 });
 
+describe('flat hot-path diagnostic metadata', () => {
+  it('records bounded primitive frame metadata without recursive payload formatting', () => {
+    const log = createActivityRecorder();
+    const getter = vi.fn(() => 'must-not-run');
+    const data = {
+      runtimeGeneration: 'generation-1',
+      nativeSequence: 42,
+      eventType: 'message.part.updated',
+      sessionId: 'session-1',
+      get nested() {
+        return getter();
+      },
+      password: 'must-not-log',
+    } as unknown as Record<string, string | number | boolean | null | undefined>;
+
+    log.recordMetadata('native.opencode.frame', 'received', data);
+
+    const row = log.snapshot().events[0]!;
+    expect(row.data).toMatchObject({
+      runtimeGeneration: 'generation-1',
+      nativeSequence: 42,
+      eventType: 'message.part.updated',
+      sessionId: 'session-1',
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(JSON.stringify(row.data)).not.toContain('must-not-log');
+    expect(row.diagnosticTruncated).toBe(true);
+  });
+
+  it('keeps renderer receipt timestamps as observation metadata', () => {
+    const log = createActivityRecorder();
+    log.recordMetadata('native.opencode.frame', 'received', {
+      rendererReceivedAt: 1_700_000_000_000,
+      rendererReceivedMonotonicMs: 123.5,
+    });
+    expect(log.snapshot().events[0]?.data).toEqual({
+      rendererReceivedAt: 1_700_000_000_000,
+      rendererReceivedMonotonicMs: 123.5,
+    });
+  });
+});
+
 describe('bounded diagnostic work', () => {
   it('does not walk every entry of large tool results before truncating', () => {
     const log = createActivityRecorder();

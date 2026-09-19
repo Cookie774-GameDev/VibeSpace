@@ -20,6 +20,7 @@ type CompatibilityState = Readonly<{
 const byRun = new Map<string, CanonicalTurnState>();
 const latestByChat = new Map<string, string>();
 const latestByChatId = new Map<string, string>();
+const priorityChatListeners = new Map<string, Set<Listener>>();
 const chatListeners = new Map<string, Set<Listener>>();
 const globalListeners = new Set<Listener>();
 const pendingCompatibility = new Map<string, CompatibilityState>();
@@ -55,7 +56,10 @@ function reindexLatestChat(accountId: string, chatId: string): void {
 }
 
 function emit(state: CanonicalTurnState): void {
-  const scoped = chatListeners.get(chatKey(state.identity.accountId, state.identity.chatId));
+  const key = chatKey(state.identity.accountId, state.identity.chatId);
+  const priority = priorityChatListeners.get(key);
+  if (priority) for (const listener of priority) listener();
+  const scoped = chatListeners.get(key);
   if (scoped) for (const listener of scoped) listener();
   for (const listener of globalListeners) listener();
 }
@@ -87,8 +91,10 @@ function commit(state: CanonicalTurnState): CanonicalTurnState {
   byRun.set(key, state);
   latestByChat.set(chatKey(state.identity.accountId, state.identity.chatId), key);
   latestByChatId.set(state.identity.chatId, key);
-  scheduleCheckpoint(state);
+  // Visibility subscribers run from committed canonical state before
+  // checkpoint scheduling or global diagnostic fan-out can add hot-path work.
   emit(state);
+  scheduleCheckpoint(state);
   return state;
 }
 
@@ -162,10 +168,7 @@ export function publishTurnPublicSnapshot(input: {
       identity: input.identity,
       at: input.snapshot.updatedAt,
     });
-    current = applyCompatibilityState(
-      current,
-      pendingCompatibility.get(input.identity.chatId),
-    );
+    current = applyCompatibilityState(current, pendingCompatibility.get(input.identity.chatId));
     pendingCompatibility.delete(input.identity.chatId);
   }
   const next = reduceTurn(current, {
@@ -201,12 +204,12 @@ export function getLatestTurn(
   chatId: string,
 ): Readonly<CanonicalTurnState> | null {
   const key = latestByChat.get(chatKey(accountId, chatId));
-  return key ? byRun.get(key) ?? null : null;
+  return key ? (byRun.get(key) ?? null) : null;
 }
 
 export function getLatestTurnByChatId(chatId: string): Readonly<CanonicalTurnState> | null {
   const key = latestByChatId.get(chatId);
-  return key ? byRun.get(key) ?? null : null;
+  return key ? (byRun.get(key) ?? null) : null;
 }
 
 export function hydrateLatestTurn(
@@ -233,6 +236,26 @@ export function hydrateLatestTurn(
   if (restored !== checkpoint) writeTurnCheckpoint(restored);
   emit(restored);
   return restored;
+}
+
+export function subscribeTurnChatPriority(
+  accountId: string,
+  chatId: string,
+  listener: Listener,
+): () => void {
+  const key = chatKey(accountId, chatId);
+  let listeners = priorityChatListeners.get(key);
+  if (!listeners) {
+    listeners = new Set();
+    priorityChatListeners.set(key, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    listeners?.delete(listener);
+    if (listeners?.size === 0 && priorityChatListeners.get(key) === listeners) {
+      priorityChatListeners.delete(key);
+    }
+  };
 }
 
 export function subscribeTurnChat(
@@ -349,10 +372,7 @@ export function clearTurn(accountId: string, runId: string): void {
   if (!current) return;
   byRun.delete(key);
   const ckey = chatKey(current.identity.accountId, current.identity.chatId);
-  if (
-    latestByChat.get(ckey) === key ||
-    latestByChatId.get(current.identity.chatId) === key
-  ) {
+  if (latestByChat.get(ckey) === key || latestByChatId.get(current.identity.chatId) === key) {
     reindexLatestChat(current.identity.accountId, current.identity.chatId);
   }
   emit(current);
@@ -395,6 +415,7 @@ export function resetTurnStoreForTests(): void {
   latestByChat.clear();
   latestByChatId.clear();
   pendingCompatibility.clear();
+  priorityChatListeners.clear();
   chatListeners.clear();
   globalListeners.clear();
 }

@@ -14,6 +14,8 @@ import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import {
   getChatPreview,
   subscribeChatPreviews,
+  subscribeFastChatPreviews,
+  type JarvisStreamingPreview,
   type StreamingPreviewSegment,
 } from './streamingPreviewStore';
 
@@ -75,11 +77,24 @@ const StreamingToolPreview = memo(
 );
 
 /** Only already-filtered public prose from this account and chat is displayed. */
-export function classifyPreviewCommitTiming(publicationMonotonicMs: number, commitMonotonicMs: number) {
+export function classifyPreviewCommitTiming(
+  publicationMonotonicMs: number,
+  commitMonotonicMs: number,
+) {
   const delta = commitMonotonicMs - publicationMonotonicMs;
   return Number.isFinite(delta) && delta >= 0
     ? Object.freeze({ uiCommitMs: delta })
     : Object.freeze({ resultCode: 'clock_order_invalid' as const });
+}
+
+export function fastPreviewTailText(
+  preview: Pick<JarvisStreamingPreview, 'text' | 'segments'> | null | undefined,
+): string {
+  if (!preview) return '';
+  const segments = preview.segments ?? [];
+  const last = segments[segments.length - 1];
+  if (last?.kind === 'text') return last.text;
+  return segments.length === 0 ? preview.text : '';
 }
 
 export function StreamingChatPreview({
@@ -99,8 +114,81 @@ export function StreamingChatPreview({
     () => getChatPreview(accountId, chatId),
     () => null,
   );
+  const containerRef = useRef<HTMLDivElement>(null);
+  const fastHostRef = useRef<HTMLDivElement>(null);
+  const fastTextRef = useRef<HTMLDivElement>(null);
+  const lastFastDiagnosticRunId = useRef<string | null>(null);
+  const applyFastPreview = useCallback(
+    (next: Readonly<JarvisStreamingPreview> | null, mode: 'fast' | 'reconcile') => {
+      const container = containerRef.current;
+      const fastHost = fastHostRef.current;
+      const fastText = fastTextRef.current;
+      if (!container || !fastHost || !fastText) return;
+      if (!next) {
+        fastText.textContent = '';
+        fastHost.hidden = true;
+        container.hidden = true;
+        container.removeAttribute('data-streaming-chat-preview');
+        return;
+      }
+      const tail = fastPreviewTailText(next);
+      if (!tail) {
+        // When text has just moved earlier in the chronology (for example a
+        // tool was appended), keep the already-visible tail until React has
+        // committed the new ordered nodes. Reconciliation then hides it.
+        if (
+          mode === 'fast' &&
+          (Boolean(next.text) ||
+            next.segments?.some((segment) => segment.kind === 'text' && segment.text))
+        ) {
+          return;
+        }
+        fastText.textContent = '';
+        fastHost.hidden = true;
+        return;
+      }
+      fastText.textContent = tail;
+      fastHost.hidden = false;
+      container.hidden = false;
+      container.dataset.streamingChatPreview = 'true';
+      container.dataset.previewChatId = next.chatId;
+      container.dataset.previewRequestId = next.requestId;
+      container.dataset.previewRunId = next.runId;
+      if (next.publicationRevision !== undefined) {
+        container.dataset.previewRevision = String(next.publicationRevision);
+      }
+      if (mode === 'fast' && next.publicationMonotonicMs !== undefined) {
+        const elapsed = performance.now() - next.publicationMonotonicMs;
+        if (Number.isFinite(elapsed) && elapsed >= 0) {
+          fastHost.dataset.previewFastCommitMs = elapsed.toFixed(3);
+          // Visibility is already committed above. Persist only the first fast
+          // paint per run, deferred to a later task so diagnostics can never
+          // lengthen the publication -> visible-DOM critical path.
+          if (lastFastDiagnosticRunId.current !== next.runId) {
+            lastFastDiagnosticRunId.current = next.runId;
+            window.setTimeout(() => {
+              appActivityLog.recordMetadata('ui.preview.fast', 'committed', {
+                requestId: next.requestId,
+                chatId: next.chatId,
+                runId: next.runId,
+                publicationRevision: next.publicationRevision,
+                uiCommitMs: elapsed,
+              });
+            }, 0);
+          }
+        }
+      }
+    },
+    [],
+  );
+  useLayoutEffect(() => {
+    applyFastPreview(getChatPreview(accountId, chatId), 'reconcile');
+    return subscribeFastChatPreviews(accountId, chatId, (next) => applyFastPreview(next, 'fast'));
+  }, [accountId, applyFastPreview, chatId]);
+
   const lastCommitted = useRef<{ runId: string; sequence: number } | undefined>(undefined);
   useLayoutEffect(() => {
+    applyFastPreview(preview, 'reconcile');
     if (
       !preview ||
       (!preview.text && !preview.segments?.length) ||
@@ -135,18 +223,33 @@ export function StreamingChatPreview({
       undefined,
       'uiCommitMs' in commitTiming ? commitTiming.uiCommitMs : undefined,
     );
-  }, [preview]);
-  if (!preview) return fallback ?? null;
-  const traceAttributes = {
-    'data-preview-chat-id': preview.chatId,
-    'data-preview-request-id': preview.requestId,
-    'data-preview-run-id': preview.runId,
-    'data-preview-revision': preview.publicationRevision,
-  };
-  if (preview.segments?.length)
-    return (
-      <div data-streaming-chat-preview="true" {...traceAttributes}>
-        {preview.text && !preview.segments.some((segment) => segment.kind === 'text' && segment.text) ? (
+  }, [applyFastPreview, preview]);
+
+  const segments = preview?.segments ?? [];
+  const fastTail = fastPreviewTailText(preview);
+  const fastTailIndex =
+    fastTail && segments[segments.length - 1]?.kind === 'text' ? segments.length - 1 : -1;
+  const traceAttributes = preview
+    ? {
+        'data-preview-chat-id': preview.chatId,
+        'data-preview-request-id': preview.requestId,
+        'data-preview-run-id': preview.runId,
+        'data-preview-revision': preview.publicationRevision,
+      }
+    : {};
+
+  return (
+    <>
+      {!preview ? (fallback ?? null) : null}
+      <div
+        ref={containerRef}
+        data-streaming-chat-preview={preview ? 'true' : undefined}
+        {...traceAttributes}
+        hidden={!preview}
+      >
+        {preview?.text &&
+        segments.length > 0 &&
+        !segments.some((segment) => segment.kind === 'text' && segment.text) ? (
           <div className="agentic-native-checkpoint">
             <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
             <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
@@ -154,37 +257,45 @@ export function StreamingChatPreview({
             </div>
           </div>
         ) : null}
-        {preview.segments.map((segment) =>
-          segment.kind === 'text' ? (
-            <div key={`text:${segment.id}`} className="agentic-native-checkpoint">
-              <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
-              <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
-                {segment.text}
-              </div>
-            </div>
-          ) : (
-            <StreamingToolPreview
-              key={`tool:${segment.id}`}
-              segment={segment}
-              chatId={chatId}
-              projectRoot={preview.projectRoot}
-              updatedAt={preview.updatedAt}
-            />
-          ),
-        )}
+        {preview
+          ? segments.map((segment, index) =>
+              index === fastTailIndex ? null : segment.kind === 'text' ? (
+                <div key={`text:${segment.id}`} className="agentic-native-checkpoint">
+                  <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
+                  <div
+                    className="agentic-native-checkpoint__text"
+                    style={{ whiteSpace: 'pre-wrap' }}
+                  >
+                    {segment.text}
+                  </div>
+                </div>
+              ) : (
+                <StreamingToolPreview
+                  key={`tool:${segment.id}`}
+                  segment={segment}
+                  chatId={chatId}
+                  projectRoot={preview.projectRoot}
+                  updatedAt={preview.updatedAt}
+                />
+              ),
+            )
+          : null}
+        <div
+          ref={fastHostRef}
+          className="agentic-native-checkpoint"
+          data-streaming-fast-preview-tail="true"
+          hidden={!fastTail}
+        >
+          <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
+          <div
+            ref={fastTextRef}
+            className="agentic-native-checkpoint__text"
+            style={{ whiteSpace: 'pre-wrap' }}
+          >
+            {fastTail}
+          </div>
+        </div>
       </div>
-    );
-  if (!preview.text) return fallback ?? null;
-  return (
-    <div
-      className="agentic-native-checkpoint"
-      data-streaming-chat-preview="true"
-      {...traceAttributes}
-    >
-      <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
-      <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
-        {preview.text}
-      </div>
-    </div>
+    </>
   );
 }

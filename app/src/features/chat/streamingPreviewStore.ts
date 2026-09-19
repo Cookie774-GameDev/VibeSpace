@@ -7,6 +7,7 @@ import {
   getTurn,
   publishTurnPublicSnapshot,
   subscribeTurnChat,
+  subscribeTurnChatPriority,
   subscribeTurns,
 } from './runtime/turn/turnStore';
 import { isTerminalTurnStatus } from './runtime/turn/turnTypes';
@@ -91,6 +92,27 @@ export function subscribeChatPreviews(
   listener: () => void,
 ): () => void {
   return subscribeTurnChat(accountId, chatId, listener);
+}
+
+export function subscribeFastChatPreviews(
+  accountId: string,
+  chatId: string,
+  listener: (preview: Readonly<JarvisStreamingPreview> | null) => void,
+): () => void {
+  let previous = getChatPreview(accountId, chatId);
+  return subscribeTurnChatPriority(accountId, chatId, () => {
+    const next = getChatPreview(accountId, chatId);
+    if (
+      next === previous ||
+      (next?.publicationRevision === previous?.publicationRevision &&
+        next?.text === previous?.text &&
+        next?.segments === previous?.segments)
+    ) {
+      return;
+    }
+    previous = next;
+    listener(next);
+  });
 }
 
 export function subscribePreviews(listener: () => void): () => void {
