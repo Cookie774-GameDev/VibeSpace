@@ -1444,6 +1444,7 @@ enum OpenCodeTransportRoute {
     Health,
     Config,
     ConfigProviders,
+    CommandList,
     ProviderAuth,
     ProviderStatus,
     ProviderAuthorize {
@@ -1590,6 +1591,7 @@ fn transport_route_parts(
         OpenCodeTransportRoute::ConfigProviders => {
             (reqwest::Method::GET, "/config/providers".to_string())
         }
+        OpenCodeTransportRoute::CommandList => (reqwest::Method::GET, "/command".to_string()),
         OpenCodeTransportRoute::ProviderAuth => {
             (reqwest::Method::GET, "/provider/auth".to_string())
         }
@@ -1707,6 +1709,7 @@ fn validate_transport_body(
         route,
         OpenCodeTransportRoute::Health
             | OpenCodeTransportRoute::ConfigProviders
+            | OpenCodeTransportRoute::CommandList
             | OpenCodeTransportRoute::ProviderAuth
             | OpenCodeTransportRoute::ProviderStatus
             | OpenCodeTransportRoute::McpStatus
@@ -3429,6 +3432,7 @@ mod tests {
         for route in [
             OpenCodeTransportRoute::Health,
             OpenCodeTransportRoute::ConfigProviders,
+            OpenCodeTransportRoute::CommandList,
             OpenCodeTransportRoute::ProviderStatus,
             OpenCodeTransportRoute::ProviderAuth,
             OpenCodeTransportRoute::McpStatus,
@@ -3491,6 +3495,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(provider_path, "/provider/github%2Fcopilot/oauth/authorize");
+        let (command_method, command_path) =
+            transport_route_parts(&OpenCodeTransportRoute::CommandList).unwrap();
+        assert_eq!(command_method, reqwest::Method::GET);
+        assert_eq!(command_path, "/command");
+        assert!(validate_transport_body(&OpenCodeTransportRoute::CommandList, None).is_ok());
+        assert!(validate_transport_body(&OpenCodeTransportRoute::CommandList, Some("{}")).is_err());
         let (_, mcp_path) = transport_route_parts(&OpenCodeTransportRoute::McpConnect {
             name: "github:copilot".into(),
         })

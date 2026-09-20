@@ -13,6 +13,30 @@ const metadata: LiveModelRuntimeMetadata = {
 };
 
 describe('OpenCodeTurnCoordinator', () => {
+  it('returns command identity while native completion is waiting for approval and observes rejection', async () => {
+    let rejectCommand!: (error: unknown) => void;
+    const pending = new Promise<void>((_resolve, reject) => { rejectCommand = reject; });
+    const signal = new AbortController().signal;
+    const sendCommandAsync = vi.fn(() => pending);
+    const sessions = {
+      sessionForChat: vi.fn(async () => ({
+        sessionId: 'session-goal', runtimeGeneration: 'generation',
+        client: { sendAsync: vi.fn(), sendCommandAsync },
+      })),
+    } as unknown as OpenCodeSessionPool;
+    const result = await new OpenCodeTurnCoordinator(sessions).dispatch({
+      scope: { accountId: 'account' }, chatId: 'chat', text: '/goal Build a game', signal,
+      selection: { connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-sol', metadata },
+      policy: { mode: 'agent', access: 'full', approveAllForRun: false, projectRoot: 'C:/project' },
+    });
+    expect(result).toMatchObject({ kind: 'dispatched', sessionId: 'session-goal' });
+    expect(sendCommandAsync).toHaveBeenCalledWith(expect.objectContaining({ signal }));
+    if (result.kind !== 'dispatched') throw new Error('Expected dispatched command');
+    const error = new Error('Provider rejected command');
+    rejectCommand(error);
+    await expect(result.commandOutcome).resolves.toEqual({ ok: false, error });
+  });
+
   it('consumes VibeSpace runtime commands without sending them to OpenCode', async () => {
     const sendAsync = vi.fn();
     const sessions = {
@@ -146,6 +170,98 @@ describe('OpenCodeTurnCoordinator', () => {
 
     expect(result).toMatchObject({ kind: 'rejected', code: 'HARNESS_INCOMPATIBLE' });
     expect(sessions.sessionForChat).not.toHaveBeenCalled();
+  });
+
+  it.each(['init', 'my_command'])('dispatches live /%s through the command endpoint without arguments', async (command) => {
+    const sendAsync = vi.fn(async () => undefined);
+    const sendCommandAsync = vi.fn(async () => undefined);
+    const listCommandsAsync = vi.fn(async () => [{ name: command }]);
+    const sessions = {
+      sessionForChat: vi.fn(async () => ({
+        sessionId: 'session-init',
+        runtimeGeneration: 'generation',
+        client: { createSession: vi.fn(), abort: vi.fn(), sendAsync, sendCommandAsync, listCommandsAsync },
+      })),
+    } as unknown as OpenCodeSessionPool;
+    const coordinator = new OpenCodeTurnCoordinator(sessions);
+
+    const result = await coordinator.dispatch({
+      scope: { accountId: 'account', projectId: 'project' },
+      chatId: 'chat',
+      text: `/${command}`,
+      selection: {
+        connectionId: 'openai-codex',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-sol',
+        metadata,
+      },
+      policy: { mode: 'agent', access: 'full', approveAllForRun: false, projectRoot: 'C:/project' },
+    });
+
+    expect(result).toMatchObject({ kind: 'dispatched', sessionId: 'session-init' });
+    expect(listCommandsAsync).toHaveBeenCalledOnce();
+    expect(sendCommandAsync).toHaveBeenCalledWith(expect.objectContaining({
+      command,
+      arguments: '',
+    }));
+    expect(sendAsync).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the live command catalog query errors', async () => {
+    const sendAsync = vi.fn(async () => undefined);
+    const listCommandsAsync = vi.fn(async () => { throw new Error('catalog down'); });
+    const sessions = {
+      sessionForChat: vi.fn(async () => ({
+        sessionId: 'session-review',
+        runtimeGeneration: 'generation',
+        client: { createSession: vi.fn(), abort: vi.fn(), sendAsync, listCommandsAsync },
+      })),
+    } as unknown as OpenCodeSessionPool;
+    const coordinator = new OpenCodeTurnCoordinator(sessions);
+
+    const result = await coordinator.dispatch({
+      scope: { accountId: 'account', projectId: 'project' },
+      chatId: 'chat',
+      text: '/review',
+      selection: {
+        connectionId: 'openai-codex',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-sol',
+        metadata,
+      },
+      policy: { mode: 'agent', access: 'full', approveAllForRun: false, projectRoot: 'C:/project' },
+    });
+
+    expect(result).toMatchObject({ kind: 'rejected', code: 'HARNESS_INCOMPATIBLE' });
+    expect(sendAsync).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a stale picker command is gone from the live catalog', async () => {
+    const sendAsync = vi.fn(async () => undefined);
+    const sendCommandAsync = vi.fn(async () => undefined);
+    const sessions = {
+      sessionForChat: vi.fn(async () => ({
+        sessionId: 'session-stale',
+        runtimeGeneration: 'generation',
+        client: {
+          createSession: vi.fn(),
+          abort: vi.fn(),
+          sendAsync,
+          sendCommandAsync,
+          listCommandsAsync: vi.fn(async () => [{ name: 'init' }]),
+        },
+      })),
+    } as unknown as OpenCodeSessionPool;
+    const result = await new OpenCodeTurnCoordinator(sessions).dispatch({
+      scope: { accountId: 'account', projectId: 'project' },
+      chatId: 'chat',
+      text: '/review',
+      selection: { connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-sol', metadata },
+      policy: { mode: 'agent', access: 'full', approveAllForRun: false, projectRoot: 'C:/project' },
+    });
+    expect(result).toMatchObject({ kind: 'rejected', code: 'HARNESS_INCOMPATIBLE' });
+    expect(sendCommandAsync).not.toHaveBeenCalled();
+    expect(sendAsync).not.toHaveBeenCalled();
   });
 
   it('sends Codex Spark even when leftover max effort is unsupported', async () => {

@@ -98,6 +98,8 @@ import { formatComposerSendFailure } from './composerSendFailures';
 import { HarnessReadinessGate, useHarnessRuntimeState } from './HarnessReadinessGate';
 import { CodexReadinessGate, useCodexRuntimeState } from './CodexReadinessGate';
 import { runVibeSpaceDoctor } from '@/features/doctor/vibeSpaceDoctor';
+import { harnessRuntimeManager } from '@/lib/harness/runtimeManager';
+import { useOpenCodeCommandCatalog } from './openCodeCommandCatalog';
 
 export function getThemeCommandHelp(): string {
   return `Chat console themes: ${CONSOLE_PROFILES.map((theme) => theme.label).join(', ')}. Use /theme <name>.`;
@@ -1735,6 +1737,31 @@ export function Composer({
   const [retainedExactChatSelection, setRetainedExactChatSelection] =
     useState<ExactChatSelection | null>(null);
   const chatBackendAffinity = useChatBackendAffinity(String(chatId));
+  const openCodeCommandCatalog = useOpenCodeCommandCatalog(
+    harnessRuntimeManager.getConnection()?.generation,
+    chatBackendAffinity?.backend !== 'codex',
+  );
+  const dynamicOpenCodeCommands = useMemo<SlashCommandDef[]>(
+    () => chatBackendAffinity?.backend === 'codex' ? [] : openCodeCommandCatalog.commands.flatMap((live) => {
+      const staticDef = findSlashCommandDef(live.name);
+      if (staticDef && staticDef.backend !== 'codex') return [];
+      return [{
+        ...(staticDef ?? {
+          cmd: live.name,
+          description: live.description || `Run OpenCode /${live.name}`,
+          icon: Terminal,
+          takesArg: true,
+          argPlaceholder: '[arguments]',
+        }),
+        cmd: live.name,
+        description: live.description || staticDef?.description || `Run OpenCode /${live.name}`,
+        backend: 'opencode' as const,
+        takesArg: true,
+        argPlaceholder: staticDef?.argPlaceholder ?? '[arguments]',
+      }];
+    }),
+    [chatBackendAffinity?.backend, openCodeCommandCatalog.commands],
+  );
   const backendRuntimeBlocked =
     chatBackendAffinity?.backend === 'codex' ? codexRuntimeState.kind !== 'ready' : harnessBlocked;
   const chatModelSelection = useMemo(
@@ -2313,7 +2340,8 @@ export function Composer({
   const filteredSlashCommands = useMemo<SlashCommandDef[]>(() => {
     const q = (slashCtx?.query ?? '').toLowerCase();
     if (!slashCtx) return [];
-    const scored = getVisibleSlashCommands()
+    const effectiveBackend = chatBackendAffinity?.backend ?? 'opencode';
+    const scored = [...getVisibleSlashCommands(effectiveBackend), ...dynamicOpenCodeCommands]
       .map((c) => ({
         cmd: c,
         score: slashCmdMatchScore(q, c),
@@ -2322,7 +2350,7 @@ export function Composer({
       .sort((a, b) => b.score - a.score || a.cmd.cmd.localeCompare(b.cmd.cmd))
       .map((s) => s.cmd);
     return scored;
-  }, [slashCtx]);
+  }, [chatBackendAffinity?.backend, dynamicOpenCodeCommands, slashCtx]);
 
   const filteredSlashCommandsSignature = useMemo(
     () => filteredSlashCommands.map((command) => command.cmd).join('\0'),
@@ -2947,6 +2975,10 @@ export function Composer({
       setText('');
     };
     if (!classification) {
+      const liveOpenCodeCommand =
+        (chatBackendAffinity?.backend ?? 'opencode') === 'opencode' &&
+        openCodeCommandCatalog.commands.some((entry) => entry.name === cmd);
+      if (liveOpenCodeCommand) return trimmed;
       await addSystem(`Unknown slash command: /${cmd}. Try /help.`);
       return true;
     }
@@ -3206,7 +3238,7 @@ export function Composer({
     if (cmd === 'goal') {
       if (!rest) {
         await addSystem(
-          'Use /goal <objective>. VibeSpace runs the actual registered OpenCode goal command.',
+          'Use /goal <objective>. Codex sets the native goal; OpenCode accepts it only when its live command is registered.',
         );
         return true;
       }

@@ -1258,6 +1258,158 @@ describe('persistent OpenCode question transport authority', () => {
 });
 
 describe('persistent OpenCode approval recovery', () => {
+  it('keeps the approval callback live while a native slash command is still pending', async () => {
+    const approval = { ...pendingPermission(), id: 'perm_command_approval' };
+    configureManagedQuestionTransport(
+      [{ type: 'permission.asked', properties: approval }],
+      { sessionStatuses: ['busy', 'idle'] },
+    );
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let settleCommand!: () => void;
+    let commandSettled = false;
+    const command = new Promise<Response>((resolve) => {
+      settleCommand = () => {
+        commandSettled = true;
+        resolve(jsonResponse(true));
+      };
+    });
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/command') && !path.includes('/session/'))
+        return jsonResponse([{ name: 'goal' }]);
+      if (path.includes('/command')) return command;
+      return original(generation, path, init, timeout);
+    });
+
+    const onApprovalRequested = vi.fn<NonNullable<ProviderRequest['onApprovalRequested']>>(
+      async (approval) => {
+        expect(commandSettled).toBe(false);
+        await respondToPersistentOpenCodeApproval({
+          sessionId: approval.sessionId,
+          approvalId: approval.id,
+          response: 'once',
+        });
+        settleCommand();
+      },
+    );
+    const received: ProviderEvent[] = [];
+    for await (const event of openCodePersistentAdapter.send!({
+      ...questionProviderRequest('command-approval-before-settlement'),
+      prompt: '/goal Write the approved file',
+      onApprovalRequested,
+    })) {
+      received.push(event);
+    }
+
+    expect(onApprovalRequested).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'perm_command_approval',
+        sessionId: 'ses_question_exact',
+      }),
+    );
+    expect(commandSettled).toBe(true);
+    expect(received.some((event) => event.type === 'done')).toBe(true);
+    expect(
+      nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/permissions/')),
+    ).toBe(true);
+    expect(
+      nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/abort')),
+    ).toHaveLength(0);
+  });
+
+  it('propagates a deferred native command failure and aborts the exact session', async () => {
+    configureManagedQuestionTransport([], { sessionStatuses: ['busy'] });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let rejectCommand!: (error: unknown) => void;
+    const command = new Promise<Response>((_resolve, reject) => {
+      rejectCommand = reject;
+    });
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/command') && !path.includes('/session/'))
+        return jsonResponse([{ name: 'goal' }]);
+      if (path.includes('/command')) return command;
+      return original(generation, path, init, timeout);
+    });
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('command-rejection-abort'),
+      prompt: '/goal This command must fail',
+    })[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: 'session', sessionId: 'ses_question_exact' },
+    });
+    const failure = new Error('native command rejected');
+    rejectCommand(failure);
+    await expect(iterator.next()).rejects.toBe(failure);
+    expect(nativeOpenCodeMocks.request.mock.calls).toContainEqual([
+      'opencode-server-question-test',
+      '/session/ses_question_exact/abort?directory=C%3A%5Cworkspace',
+      expect.objectContaining({ method: 'POST', body: '{}' }),
+      30_000,
+    ]);
+  });
+
+  it('cancels a pending native command through its request signal and releases the session', async () => {
+    configureManagedQuestionTransport([], { sessionStatuses: ['busy'] });
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let rejectCommand!: (error: unknown) => void;
+    let commandSignal: AbortSignal | undefined;
+    const command = new Promise<Response>((_resolve, reject) => {
+      rejectCommand = reject;
+    });
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (path.startsWith('/command') && !path.includes('/session/'))
+        return jsonResponse([{ name: 'goal' }]);
+      if (path.includes('/command')) {
+        commandSignal = init?.signal as AbortSignal | undefined;
+        if (commandSignal?.aborted) {
+          rejectCommand(commandSignal.reason ?? new DOMException('The command was aborted.', 'AbortError'));
+        } else {
+          commandSignal?.addEventListener(
+            'abort',
+            () => rejectCommand(commandSignal?.reason ?? new DOMException('The command was aborted.', 'AbortError')),
+            { once: true },
+          );
+        }
+        return command;
+      }
+      return original(generation, path, init, timeout);
+    });
+    const controller = new AbortController();
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('command-cancellation-cleanup', controller.signal),
+      prompt: '/goal Cancel this pending command',
+    })[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: 'session', sessionId: 'ses_question_exact' },
+    });
+    controller.abort();
+    await expect(
+      Promise.race([
+        iterator.next(),
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('pending command cancellation timed out')), 750),
+        ),
+      ]),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(commandSignal?.aborted).toBe(true);
+    expect(nativeOpenCodeMocks.request.mock.calls).toContainEqual([
+      'opencode-server-question-test',
+      '/session/ses_question_exact/command?directory=C%3A%5Cworkspace',
+      expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
+      30 * 60_000,
+    ]);
+    expect(nativeOpenCodeMocks.request.mock.calls).toContainEqual([
+      'opencode-server-question-test',
+      '/session/ses_question_exact/abort?directory=C%3A%5Cworkspace',
+      expect.objectContaining({ method: 'POST', body: '{}' }),
+      30_000,
+    ]);
+    expect(
+      nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/abort')),
+    ).toHaveLength(1);
+  });
+
   it('forwards a verified reviewer permission, replies to that child, and revokes it on completion', async () => {
     const onApprovalRequested = vi.fn<NonNullable<ProviderRequest['onApprovalRequested']>>(
       async () => undefined,
@@ -3130,6 +3282,143 @@ describe('persistent OpenCode live authority', () => {
         .join(''),
     ).toContain('The HTML is ready.');
     expect(events.at(-1)).toMatchObject({ type: 'done' });
+  });
+
+  it('emits usage then a retryable error when idle persists after a failed terminal tool step', async () => {
+    vi.useFakeTimers();
+    const failedStep = {
+      info: {
+        id: 'step-failed-terminal-tool',
+        role: 'assistant',
+        providerID: 'openai',
+        modelID: 'gpt-question-test',
+        finish: 'tool-calls',
+        time: { completed: 1 },
+        tokens: { input: 12, output: 5, total: 17 },
+      },
+      parts: [
+        { type: 'text', text: 'The read failed. ' },
+        {
+          type: 'tool',
+          tool: 'read',
+          callID: 'read-failed-terminal',
+          state: {
+            status: 'error',
+            input: { filePath: 'C:/project/notes.md' },
+            error: 'permission denied',
+          },
+        },
+      ],
+    };
+    configureManagedQuestionTransport([], {
+      sessionStatuses: ['idle'],
+      persistedMessagePolls: [[], [failedStep]],
+    });
+    const observed: ProviderEvent[] = [];
+    try {
+      const consume = (async () => {
+        for await (const event of openCodePersistentAdapter.send!(
+          questionProviderRequest('idle-after-failed-terminal-tool'),
+        )) {
+          observed.push(event);
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(6_000);
+      await consume;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const usageIndex = observed.findIndex((event) => event.type === 'usage');
+    const errorIndex = observed.findIndex(
+      (event) => event.type === 'error' && event.code === 'opencode_stopped_after_tool_error',
+    );
+    expect(usageIndex).toBeGreaterThanOrEqual(0);
+    expect(errorIndex).toBeGreaterThan(usageIndex);
+    expect(observed[errorIndex]).toEqual({
+      type: 'error',
+      code: 'opencode_stopped_after_tool_error',
+      message: 'OpenCode stopped after a tool failed. Retry to continue this session.',
+      retryable: true,
+    });
+    expect(observed).not.toContainEqual(expect.objectContaining({ type: 'done' }));
+  });
+
+  it('does not terminate on a transient failed-tool idle before new activity completes', async () => {
+    vi.useFakeTimers();
+    const failedStep = {
+      info: {
+        id: 'step-transient-failed-tool',
+        role: 'assistant',
+        providerID: 'openai',
+        modelID: 'gpt-question-test',
+        finish: 'tool-calls',
+        time: { completed: 1 },
+      },
+      parts: [
+        {
+          type: 'tool',
+          tool: 'read',
+          callID: 'read-transient-failed',
+          state: { status: 'error', input: { filePath: 'C:/project/notes.md' } },
+        },
+      ],
+    };
+    const runningStep = {
+      info: {
+        id: 'step-transient-running',
+        role: 'assistant',
+        providerID: 'openai',
+        modelID: 'gpt-question-test',
+      },
+      parts: [
+        {
+          type: 'tool',
+          tool: 'write',
+          callID: 'write-after-transient-failure',
+          state: { status: 'running', input: { filePath: 'C:/project/game.js' } },
+        },
+      ],
+    };
+    const completedStep = {
+      info: {
+        id: 'step-transient-completed',
+        role: 'assistant',
+        providerID: 'openai',
+        modelID: 'gpt-question-test',
+        finish: 'stop',
+        time: { completed: 2 },
+      },
+      parts: [{ type: 'text', text: 'The follow-up work completed.' }],
+    };
+    configureManagedQuestionTransport([], {
+      sessionStatuses: ['idle'],
+      persistedMessagePolls: [[], [failedStep], [runningStep], [completedStep]],
+    });
+    const observed: ProviderEvent[] = [];
+    try {
+      const consume = (async () => {
+        for await (const event of openCodePersistentAdapter.send!(
+          questionProviderRequest('transient-idle-after-failed-tool'),
+        )) {
+          observed.push(event);
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await consume;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(observed).toContainEqual({
+      type: 'text',
+      delta: 'The follow-up work completed.',
+      streamPartId: 'opencode-text-1',
+    });
+    expect(observed).not.toContainEqual(
+      expect.objectContaining({ code: 'opencode_stopped_after_tool_error' }),
+    );
+    expect(observed.at(-1)).toMatchObject({ type: 'done' });
   });
 
   it('reconciles ordered persisted text and tool parts before completing on an immediate idle event', async () => {

@@ -29,6 +29,32 @@ function event(
 }
 
 describe('projectAssistantActivityLedger', () => {
+  it('attributes native bridge calls whose public arguments are stored in details', () => {
+    const ledger = projectAssistantActivityLedger(assistant([
+      { kind: 'tool_call', call_id: 'plugin-native', tool: 'plugins_run', args: {},
+        details: { arguments: { pluginId: 'github', operation: 'identity', input: {} } } },
+      { kind: 'tool_result', call_id: 'plugin-native', error: 'credential_grant_unavailable' },
+      { kind: 'tool_call', call_id: 'mcp-native', tool: 'mcp_run', args: {},
+        details: { arguments: JSON.stringify({ connectionId: 'n4-qa-fixture', toolName: 'qa_game_brief' }) } },
+      { kind: 'tool_result', call_id: 'mcp-native', result: { ok: true } },
+    ]));
+    expect(ledger.receipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'plugins_run', plugin: 'github', status: 'error' }),
+      expect.objectContaining({ toolName: 'mcp_run', mcpServer: 'n4-qa-fixture', status: 'done' }),
+    ]));
+  });
+
+  it('prefers explicit bridge arguments and ignores malformed public argument text', () => {
+    const ledger = projectAssistantActivityLedger(assistant([
+      { kind: 'tool_call', call_id: 'explicit', tool: 'plugins_run', args: { pluginId: 'github' },
+        details: { arguments: { pluginId: 'other' } } },
+      { kind: 'tool_call', call_id: 'malformed', tool: 'plugins_run', args: {},
+        details: { arguments: 'not JSON' } },
+    ]));
+    expect(ledger.receipts.find(row => row.callId === 'explicit')?.plugin).toBe('github');
+    expect(ledger.receipts.find(row => row.callId === 'malformed')?.plugin).toBeUndefined();
+  });
+
   it('projects a settled protected file action as one truthful receipt without raw content', () => {
     const ledger = projectAssistantActivityLedger(
       assistant([
@@ -60,19 +86,20 @@ describe('projectAssistantActivityLedger', () => {
     expect(JSON.stringify(ledger)).not.toContain('private file contents');
   });
 
-  it('projects a command once and never retains its body, args, output, or secrets', () => {
+  it('projects a command once with bounded public details while redacting secrets', () => {
+    const providerSecret = ['sk', 'proj', '1234567890abcdefghijklmnop'].join('-');
     const ledger = projectAssistantActivityLedger(
       assistant([
         {
           kind: 'tool_call',
           call_id: 'call-1',
           tool: 'terminal.exec',
-          args: { command: 'curl https://private.test --data "opaque-sensitive-payload"' },
+          args: { command: `curl https://private.test --header "apiKey=${providerSecret}"` },
         },
         {
           kind: 'tool_result',
           call_id: 'call-1',
-          result: { stdout: 'super-secret-output', exitCode: 0, durationMs: 42 },
+          result: { stdout: `apiKey=${providerSecret}`, exitCode: 0, durationMs: 42 },
         },
       ]),
     );
@@ -85,9 +112,13 @@ describe('projectAssistantActivityLedger', () => {
       label: 'Ran command',
       status: 'done',
     });
-    expect(JSON.stringify(ledger)).not.toContain('opaque-sensitive-payload');
-    expect(JSON.stringify(ledger)).not.toContain('super-secret-output');
-    expect(JSON.stringify(ledger)).not.toContain('private.test');
+    expect(ledger.receipts[0].toolDetails).toMatchObject({
+      arguments: {
+        command: `curl https://private.test --header "[redacted:credentials]`,
+      },
+      result: { stdout: '[redacted:credentials]' },
+    });
+    expect(JSON.stringify(ledger)).not.toContain(providerSecret);
   });
 
   it('retains exact sanitized command and tool identity for explicit disclosure', () => {
@@ -119,6 +150,75 @@ describe('projectAssistantActivityLedger', () => {
       expect.objectContaining({ kind: 'other', detail: 'mcp.cloudflare.deploy_worker' }),
     ]);
     expect(JSON.stringify(ledger)).not.toContain(providerSecret);
+  });
+
+  it('attributes dot/underscore plugins and generic MCP bridge calls without guessing', () => {
+    const ledger = projectAssistantActivityLedger(
+      assistant([
+        {
+          kind: 'tool_call',
+          call_id: 'plugin-1',
+          tool: 'plugins_run',
+          args: { pluginId: 'github', action: 'inspect' },
+        },
+        { kind: 'tool_result', call_id: 'plugin-1', result: { ok: true } },
+        {
+          kind: 'tool_call',
+          call_id: 'mcp-1',
+          tool: 'mcp_run',
+          args: { connectionId: 'github-mcp', tool: 'list_repositories' },
+        },
+        { kind: 'tool_result', call_id: 'mcp-1', result: { ok: true } },
+      ]),
+    );
+
+    expect(ledger.receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ toolName: 'plugins_run', plugin: 'github' }),
+        expect.objectContaining({ toolName: 'mcp_run', mcpServer: 'github-mcp' }),
+      ]),
+    );
+  });
+
+  it('does not treat generic bridge operation names or unrelated pluginId fields as identities', () => {
+    const ledger = projectAssistantActivityLedger(
+      assistant([
+        {
+          kind: 'tool_call',
+          call_id: 'plugin-list',
+          tool: 'plugins_list',
+          args: {},
+        },
+        {
+          kind: 'tool_call',
+          call_id: 'plugin-run',
+          tool: 'plugins_run',
+          args: {},
+        },
+        {
+          kind: 'tool_call',
+          call_id: 'mcp-dot-run',
+          tool: 'mcp.run',
+          args: {},
+        },
+        {
+          kind: 'tool_call',
+          call_id: 'unrelated',
+          tool: 'search.web',
+          args: { pluginId: 'not-a-plugin' },
+        },
+      ]),
+    );
+
+    const pluginList = ledger.receipts.find((receipt) => receipt.toolName === 'plugins_list');
+    const pluginRun = ledger.receipts.find((receipt) => receipt.toolName === 'plugins_run');
+    const mcpRun = ledger.receipts.find((receipt) => receipt.toolName === 'mcp.run');
+    const unrelated = ledger.receipts.find((receipt) => receipt.toolName === 'search.web');
+    expect(pluginList?.plugin).toBeUndefined();
+    expect(pluginRun?.plugin).toBeUndefined();
+    expect(mcpRun?.mcpServer).toBe('MCP server');
+    expect(unrelated?.plugin).toBeUndefined();
+    expect(mcpRun?.mcpServer).not.toBe('run');
   });
 
   it('projects every canonical tool lifecycle with structured command/read/search/edit/check kinds', () => {
@@ -185,7 +285,7 @@ describe('projectAssistantActivityLedger', () => {
     ]);
   });
 
-  it('deduplicates replayed message tool calls by stable call id and uses the latest result status', () => {
+  it('deduplicates replayed message tool calls and keeps the latest exact call details', () => {
     const ledger = projectAssistantActivityLedger(
       assistant([
         {
@@ -209,7 +309,10 @@ describe('projectAssistantActivityLedger', () => {
     expect(ledger.receipts).toHaveLength(1);
     expect(ledger.receipts[0]).toMatchObject({ status: 'error', label: 'Command failed' });
     expect(JSON.stringify(ledger)).not.toContain('first');
-    expect(JSON.stringify(ledger)).not.toContain('second');
+    expect(ledger.receipts[0].toolDetails).toMatchObject({
+      arguments: { command: 'second' },
+      result: { exitCode: -7 },
+    });
   });
 
   it('deduplicates replayed correlated events and maps only explicit successful evidence', () => {
@@ -335,14 +438,15 @@ describe('projectAssistantActivityLedger', () => {
     expect(ledger.receipts.map((receipt) => receipt.fileLabel).join(' ')).not.toContain('private');
   });
 
-  it('projects only the safe basename from a message-correlated file tool argument', () => {
+  it('keeps the exact file argument for expanded details while showing only its basename in the row', () => {
+    const windowsPath = 'C:\\private\\planning\\AgenticConsole.tsx';
     const ledger = projectAssistantActivityLedger(
       assistant([
         {
           kind: 'tool_call',
           call_id: 'message-read',
           tool: 'read_file',
-          args: { path: 'C:\\private\\planning\\AgenticConsole.tsx' },
+          args: { path: windowsPath },
         },
         { kind: 'tool_result', call_id: 'message-read', result: { exitCode: 0 } },
       ]),
@@ -352,9 +456,10 @@ describe('projectAssistantActivityLedger', () => {
       kind: 'read',
       label: 'Read file',
       fileLabel: 'AgenticConsole.tsx',
+      toolDetails: {
+        arguments: { path: windowsPath },
+      },
     });
-    expect(JSON.stringify(ledger)).not.toContain('private');
-    expect(JSON.stringify(ledger)).not.toContain('planning');
   });
 
   it('counts unique completed files and distinct started subagent executions', () => {
@@ -435,10 +540,14 @@ describe('projectAssistantActivityLedger', () => {
   });
 
   it('preserves unavailable and estimated response provenance', () => {
-    const unavailable = projectAssistantActivityLedger(assistant([], { input_tokens: 0, output_tokens: 0, provenance: 'unavailable' }));
+    const unavailable = projectAssistantActivityLedger(
+      assistant([], { input_tokens: 0, output_tokens: 0, provenance: 'unavailable' }),
+    );
     expect(unavailable.usage.input).toMatchObject({ value: null, provenance: 'unavailable' });
     expect(unavailable.usage.output).toMatchObject({ value: null, provenance: 'unavailable' });
-    const estimated = projectAssistantActivityLedger(assistant([], { input_tokens: 12, output_tokens: 7, provenance: 'estimated' }));
+    const estimated = projectAssistantActivityLedger(
+      assistant([], { input_tokens: 12, output_tokens: 7, provenance: 'estimated' }),
+    );
     expect(estimated.usage.input).toMatchObject({ value: 12, provenance: 'estimated' });
     expect(estimated.usage.output).toMatchObject({ value: 7, provenance: 'estimated' });
   });
@@ -563,6 +672,9 @@ describe('projectAssistantActivityLedger', () => {
       countsAsAction: true,
     });
     expect(JSON.stringify(ledger)).not.toContain('never-render-this');
-    expect(JSON.stringify(ledger)).not.toContain('private-result');
+    expect(ledger.receipts[0].toolDetails).toMatchObject({
+      arguments: { secret: '[redacted: credentials]' },
+      result: { value: 'private-result' },
+    });
   });
 });

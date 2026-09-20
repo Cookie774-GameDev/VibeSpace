@@ -44,11 +44,11 @@ export function SubagentsMiniPanel({
     <div
       className="agentic-subagents-panel"
       role="dialog"
-      aria-label="Runs for this chat"
+      aria-label="Subagents for this chat"
       data-testid="agentic-subagents-panel"
     >
       <div className="agentic-subagents-panel__header">
-        <strong>Runs</strong>
+        <strong>Subagents</strong>
         <Button
           type="button"
           variant="ghost"
@@ -149,13 +149,13 @@ export function SubagentsHeaderButton({
       <button
         type="button"
         className="agentic-session__subagents-btn"
-        aria-label={count === 1 ? '1 Run' : `${count} Runs`}
+        aria-label={count === 1 ? '1 Subagent' : `${count} Subagents`}
         aria-expanded={open}
         data-testid="agentic-subagents-toggle"
         onClick={() => setOpen((value) => !value)}
       >
         <Bot aria-hidden="true" />
-        {count} {count === 1 ? 'Run' : 'Runs'}
+        {count} {count === 1 ? 'Subagent' : 'Subagents'}
       </button>
       <SubagentsMiniPanel chatId={chatId} open={open} nativeRuns={nativeRuns} onClose={() => setOpen(false)} />
     </div>

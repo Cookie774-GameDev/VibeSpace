@@ -743,7 +743,11 @@ export function summarizeAgenticSession(
     }
     const usage = message.usage;
     if (usage?.model) model = usage.model;
-    if (message.role === 'assistant') {
+    // Approval cards are application notices, not additional model turns.
+    // Preserve unavailable usage for every actual answer, including mixed rows.
+    const permissionNotice = usage == null && message.parts.length > 0 &&
+      message.parts.every(part => part.kind === 'permission_request');
+    if (message.role === 'assistant' && !permissionNotice) {
       const input = usage?.input_tokens;
       const output = usage?.output_tokens;
       if (usage?.provenance !== 'unavailable' && typeof input === 'number' && Number.isSafeInteger(input) && input >= 0 &&

@@ -344,7 +344,7 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
         ...(hasResult ? { result } : {}),
         details: publicToolDetails({ command: item.command, cwd: item.cwd,
           arguments: { command: item.command, cwd: item.cwd }, output: item.aggregatedOutput,
-          outputComplete: method === 'item/completed', exitCode, durationMs }),
+          outputComplete: method === 'item/completed', exitCode, durationMs, error: item.error }),
       },
     ];
   }
@@ -365,7 +365,7 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
           changeCount: changes.length,
           diffAvailable: changes.some((change) => Boolean(recordOf(change)?.diff)),
         },
-        details: publicToolDetails({ changes }),
+        details: publicToolDetails({ changes, error: item.error }),
       },
     ];
   }

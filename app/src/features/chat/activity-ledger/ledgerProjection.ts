@@ -1,11 +1,19 @@
 import { applySecretPolicy } from '@/lib/security/secretDetector';
+import { mergePublicToolDetails, publicToolDetails } from '@/lib/ai/publicToolDetails';
+import type { PublicToolDetails } from '@/lib/ai/adapters/types';
 import type { Message } from '@/types';
 import type { ChatActivityEvent, ChatActivityStatus } from '../activity/types';
 
 export const MAX_LEDGER_RECEIPTS = 500;
 
 export type LedgerReceiptKind =
-  'read' | 'search' | 'command' | 'edit' | 'check' | 'subagent' | 'other';
+  | 'read'
+  | 'search'
+  | 'command'
+  | 'edit'
+  | 'check'
+  | 'subagent'
+  | 'other';
 export type UsageProvenance = 'exact' | 'estimated' | 'unavailable';
 
 export type LedgerUsageValue = Readonly<{
@@ -26,6 +34,14 @@ export type AssistantActivityReceipt = Readonly<{
   /** Sanitized public operation detail. Never contains raw tool results or environment data. */
   detail?: string;
   toolDetails?: Readonly<import('@/lib/ai/adapters/types').PublicToolDetails>;
+  /** Sanitized provider tool identity, shown only in the expanded receipt. */
+  toolName?: string;
+  /** Stable, display-only call identity; never an execution authority. */
+  callId?: string;
+  /** MCP/plugin server attribution derived from an explicit tool identity. */
+  plugin?: string;
+  /** MCP server attribution for the generic mcp_run bridge. */
+  mcpServer?: string;
   agentSlug?: string;
   countsAsAction: boolean;
 }>;
@@ -98,6 +114,64 @@ function messageReceiptDetail(
   if (kind === 'command') return safeCommandDetail(args);
   if (kind === 'read' || kind === 'edit') return undefined;
   return safeText(tool, 256) || undefined;
+}
+
+function pluginAttribution(
+  tool: string,
+  args?: Record<string, unknown>,
+): Readonly<{ plugin?: string; mcpServer?: string }> {
+  const normalizedTool = tool.trim();
+  const pluginBridge = /^plugins?(?:__|[.:/_-])(?:list|run)$/iu.test(normalizedTool);
+  const pluginId = args?.pluginId ?? args?.plugin_id;
+  if (pluginBridge && typeof pluginId === 'string' && pluginId.trim()) {
+    return { plugin: safeText(pluginId, 128) || undefined };
+  }
+
+  // Generic bridge names are dispatchers, not plugin/server identities.
+  if (/^mcp(?:__|[.:/_-])run$/iu.test(normalizedTool)) {
+    const connectionId = args?.connectionId ?? args?.connection_id;
+    return {
+      mcpServer:
+        typeof connectionId === 'string' && connectionId.trim()
+          ? safeText(connectionId, 128) || 'MCP server'
+          : 'MCP server',
+    };
+  }
+
+  const pluginMatch = normalizedTool.match(/^plugins?(?:__|[.:/_-])([^.:/_-]+)(?:[.:/_-]|$)/iu);
+  if (pluginMatch?.[1] && !/^(?:list|run)$/iu.test(pluginMatch[1])) {
+    return { plugin: safeText(pluginMatch[1], 128) || undefined };
+  }
+  const mcpMatch = normalizedTool.match(/^mcp(?:__|[.:/])([^.:/_]+)(?:[.:/_]|$)/iu);
+  if (mcpMatch?.[1] && !/^run$/iu.test(mcpMatch[1])) {
+    return { mcpServer: safeText(mcpMatch[1], 128) || undefined };
+  }
+  return {};
+}
+
+function publicAttributionArguments(details: Readonly<PublicToolDetails> | undefined): Record<string, unknown> {
+  let value: unknown = details?.arguments;
+  if (typeof value === 'string' && value.length <= 16_384) {
+    try { value = JSON.parse(value); } catch { return {}; }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function messageToolDetails(
+  args: Record<string, unknown>,
+  result: Extract<Message['parts'][number], { kind: 'tool_result' }> | undefined,
+  existing: Readonly<PublicToolDetails> | undefined,
+): Readonly<PublicToolDetails> {
+  const evidence = result ? resultEvidence(result.result) : undefined;
+  const generated = publicToolDetails({
+    arguments: args,
+    ...(result?.result === undefined ? {} : { result: result.result }),
+    ...(result?.error === undefined ? {} : { error: result.error }),
+    ...(evidence?.durationMs === undefined ? {} : { durationMs: evidence.durationMs }),
+  });
+  return existing ? mergePublicToolDetails(existing, generated) : generated;
 }
 
 function positive(value: unknown): number | undefined {
@@ -216,9 +290,14 @@ function resultEvidence(result: unknown): { status: ChatActivityStatus; duration
 function messageReceipts(message: Message): AssistantActivityReceipt[] {
   const seenCallIds = new Set<string>();
   const toolCallCounts = new Map<string, number>();
+  const latestToolCalls = new Map<
+    string,
+    Extract<Message['parts'][number], { kind: 'tool_call' }>
+  >();
   for (const part of message.parts) {
     if (part.kind === 'tool_call') {
       toolCallCounts.set(part.call_id, (toolCallCounts.get(part.call_id) ?? 0) + 1);
+      latestToolCalls.set(part.call_id, part);
     }
   }
   const canonicalToolCallIds = new Set(
@@ -253,6 +332,10 @@ function messageReceipts(message: Message): AssistantActivityReceipt[] {
           label: receiptLabel(kind, status),
           status,
           ts: message.created_at + index / 1000,
+          toolName: safeText(part.action_id, 256) || undefined,
+          callId: safeText(part.call_id, 256) || undefined,
+          ...pluginAttribution(part.action_id, part.params),
+          toolDetails: publicToolDetails({ arguments: part.params }),
           ...(fileLabel ? { fileLabel } : {}),
           ...(detail ? { detail } : {}),
           countsAsAction: true,
@@ -262,24 +345,31 @@ function messageReceipts(message: Message): AssistantActivityReceipt[] {
     if (part.kind !== 'tool_call') return [];
     if (seenCallIds.has(part.call_id)) return [];
     seenCallIds.add(part.call_id);
-    const kind = toolKind(part.tool);
+    const canonicalPart = latestToolCalls.get(part.call_id) ?? part;
+    const kind = toolKind(canonicalPart.tool);
     const result = results.get(part.call_id);
     const evidence = result
       ? result.error
         ? { status: 'error' as const }
         : resultEvidence(result.result)
       : { status: 'running' as const };
-    const fileLabel = correlatedToolFileLabel(kind, part.args);
+    const fileLabel = correlatedToolFileLabel(kind, canonicalPart.args);
     const detail =
       toolCallCounts.get(part.call_id) === 1
-        ? messageReceiptDetail(kind, part.tool, part.args)
+        ? messageReceiptDetail(kind, canonicalPart.tool, canonicalPart.args)
         : undefined;
     return [
       {
         id: `message:${String(message.id)}:tool:${part.call_id}`,
         kind,
         label: receiptLabel(kind, evidence.status),
-        ...(part.details ? { toolDetails: part.details } : {}),
+        toolName: safeText(canonicalPart.tool, 256) || undefined,
+        callId: safeText(part.call_id, 256) || undefined,
+        ...pluginAttribution(canonicalPart.tool, {
+          ...publicAttributionArguments(canonicalPart.details),
+          ...canonicalPart.args,
+        }),
+        toolDetails: messageToolDetails(canonicalPart.args, result, canonicalPart.details),
         status: evidence.status,
         ts: message.created_at + index / 1000,
         ...(evidence.durationMs === undefined ? {} : { durationMs: evidence.durationMs }),
@@ -364,6 +454,7 @@ function pushRecentEvent(heap: ChatActivityEvent[], event: ChatActivityEvent): v
 
 function eventReceipt(event: ChatActivityEvent): AssistantActivityReceipt {
   const kind = activityKind(event);
+  const toolName = event.subtitle?.trim() ? safeText(event.subtitle, 256) : undefined;
   const durationMs =
     event.endedAt !== undefined
       ? Math.max(0, event.endedAt - (event.startedAt ?? event.ts))
@@ -373,6 +464,9 @@ function eventReceipt(event: ChatActivityEvent): AssistantActivityReceipt {
     kind,
     label: eventReceiptLabel(event, kind),
     ...(event.toolDetails ? { toolDetails: event.toolDetails } : {}),
+    ...(toolName ? { toolName } : {}),
+    ...(event.providerCallId ? { callId: safeText(event.providerCallId, 256) } : {}),
+    ...(toolName ? pluginAttribution(toolName) : {}),
     status: event.status,
     ts: event.ts,
     ...(durationMs === undefined ? {} : { durationMs }),
@@ -389,8 +483,10 @@ function usage(message: Message): AssistantActivityLedgerProjection['usage'] {
   const exact = !message.usage?.provenance;
   const exactInput = exact ? positive(message.usage?.input_tokens) : undefined;
   const exactOutput = exact ? positive(message.usage?.output_tokens) : undefined;
-  const estimatedOutput = message.usage?.provenance === 'estimated' ? positive(message.usage.output_tokens) : undefined;
-  let estimatedInput = message.usage?.provenance === 'estimated' ? positive(message.usage.input_tokens) : undefined;
+  const estimatedOutput =
+    message.usage?.provenance === 'estimated' ? positive(message.usage.output_tokens) : undefined;
+  let estimatedInput =
+    message.usage?.provenance === 'estimated' ? positive(message.usage.input_tokens) : undefined;
   let reportedInput: number | undefined;
   let reportedOutput: number | undefined;
   for (const part of message.parts) {

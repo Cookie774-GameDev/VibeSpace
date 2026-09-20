@@ -73,6 +73,38 @@ describe('Codex completion evidence for CAO learning', () => {
     );
   });
 
+  it('reports merged Codex usage before a provider error with the exact route', async () => {
+    const onProviderUsage = vi.fn();
+    const usage = {
+      capturedAt: 100,
+      inputTokens: { value: 90, provenance: 'provider-reported' as const },
+      outputTokens: { value: 12, provenance: 'provider-reported' as const },
+      totalTokens: { value: 102, provenance: 'provider-reported' as const },
+      costUsd: { value: 0.02, provenance: 'provider-reported' as const },
+    };
+    stream([
+      session,
+      { type: 'usage', usage },
+      { type: 'error', message: 'Codex quota exhausted', code: 'quota_exhausted' },
+    ]);
+
+    await expect(
+      runAgent({ ...request, onProviderUsage }),
+    ).rejects.toThrow('Codex quota exhausted');
+
+    expect(onProviderUsage).toHaveBeenCalledOnce();
+    const evidence = onProviderUsage.mock.calls[0]?.[0];
+    expect(evidence).toMatchObject({
+      requestId: 'review-1',
+      providerId: 'openai',
+      connectionId: 'openai-codex',
+      modelId: 'gpt-5.6-terra',
+      usage: { totalTokens: { value: 102, provenance: 'provider-reported' } },
+    });
+    expect(evidence.usage).not.toBe(usage);
+    expect(evidence.usage.totalTokens).not.toBe(usage.totalTokens);
+  });
+
   it.each([
     [[session], 'provider_completion_terminal_missing'],
     [[done], 'provider_completion_session_missing'],

@@ -1,12 +1,15 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildCodexLoginCommand,
   mergeConnectionInspectionIfUnchanged,
   SubscriptionCliBridge,
 } from './sections/SubscriptionCliBridge';
 import { writeConnectionMetadata } from '@/lib/ai/connectionState';
 import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
 import type { OpenCodeSubscriptionClient } from '@/lib/harness/subscriptionBridge';
+import { CONNECTION_FOCUS_STORAGE_KEY } from '@/features/instant-command/providerConnectionEntrypoint';
 
 const bridgeRefreshMocks = vi.hoisted(() => ({
   ensureExternalConnectionAutoDetection: vi.fn(async () => ({})),
@@ -14,6 +17,12 @@ const bridgeRefreshMocks = vi.hoisted(() => ({
   invalidateOpenCodePersistentCaches: vi.fn(),
   requestOpenCodeModelCatalogRefresh: vi.fn(),
 }));
+
+const terminalQueueMocks = vi.hoisted(() => ({
+  enqueueTerminalCommandBatch: vi.fn(() => ['codex-login-1']),
+}));
+
+vi.mock('@/features/terminals/terminalCommandQueue', () => terminalQueueMocks);
 
 vi.mock('@/lib/ai/adapters/autoDetectConnections', () => ({
   ensureExternalConnectionAutoDetection: bridgeRefreshMocks.ensureExternalConnectionAutoDetection,
@@ -71,6 +80,93 @@ describe('SubscriptionCliBridge', () => {
     render(<SubscriptionCliBridge autoDetect={false} records={{}} />);
     expect(screen.getByRole('heading', { name: 'AI Connectors' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'VibeSpace MCP Gateway' })).toBeTruthy();
+  });
+
+  it('consumes a CLI connection focus and selects the exact route card', async () => {
+    window.sessionStorage.setItem(CONNECTION_FOCUS_STORAGE_KEY, 'openai-codex');
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    render(<SubscriptionCliBridge autoDetect={false} records={{}} />);
+
+    expect(window.sessionStorage.getItem(CONNECTION_FOCUS_STORAGE_KEY)).toBeNull();
+    await waitFor(() =>
+      expect(document.querySelector('[data-connector-id="openai-codex"]')).toBeTruthy(),
+    );
+    expect(document.querySelector('[data-connection-id="openai-codex"]')).toBeTruthy();
+  });
+
+  it('keeps the OpenCode card linked to the matching live provider subscription action', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const subscriptionClient: OpenCodeSubscriptionClient = {
+      providerAuthMethods: async () => ({
+        openai: [{ type: 'oauth', label: 'ChatGPT Plus/Pro' }],
+      }),
+      providerStatus: async () => ({ connected: [] }),
+      authorizeProvider: async () => ({
+        url: 'https://auth.example.test/',
+        method: 'auto',
+        instructions: 'Approve ChatGPT access in your browser.',
+      }),
+      callbackProvider: async () => true,
+      configProviders: async () => ({}),
+    };
+    render(
+      <SubscriptionCliBridge
+        autoDetect={false}
+        records={{}}
+        subscriptionClient={subscriptionClient}
+      />,
+    );
+
+    const providerButton = await screen.findByRole('button', {
+      name: 'Connect OpenAI with ChatGPT Plus/Pro',
+    });
+    const card = screen.getByText('OpenCode Bridge').closest('article');
+    expect(card).not.toBeNull();
+    fireEvent.click(
+      within(card!).getByRole('button', { name: 'Connect provider for OpenCode Bridge' }),
+    );
+    expect(document.activeElement).toBe(providerButton);
+  });
+
+  it('starts native Codex login with the discovered executable path', () => {
+    render(
+      <SubscriptionCliBridge
+        autoDetect={false}
+        records={{
+          'openai-codex': {
+            installation: 'installed',
+            auth: 'unauthenticated',
+            executablePath: String.raw`C:\Managed Runtime\codex.exe`,
+            lastCheckedAt: 1,
+          },
+        }}
+      />,
+    );
+    const card = screen.getByText('Codex').closest('article')!;
+    fireEvent.click(within(card).getByRole('button', { name: 'Sign in to Codex CLI' }));
+    expect(terminalQueueMocks.enqueueTerminalCommandBatch).toHaveBeenCalledWith([
+      {
+        command: String.raw`& 'C:\Managed Runtime\codex.exe' login`,
+        label: 'Codex login',
+        target: 'new',
+      },
+    ]);
+    expect(useUIStore.getState().route).toBe('terminal');
+  });
+
+  it('quotes the fallback Codex login command without accepting control characters', () => {
+    expect(buildCodexLoginCommand()).toBe('codex login');
+    expect(buildCodexLoginCommand("C:\\bad\npath.exe")).toBe('codex login');
   });
 
   it('uses the managed OAuth transport without mislabeling the provider connection', async () => {
@@ -197,9 +293,9 @@ describe('SubscriptionCliBridge', () => {
     const card = screen.getByText('Codex').closest('article');
     expect(card).not.toBeNull();
     expect(within(card!).getByRole('heading', { name: 'OpenAI' })).toBeTruthy();
-    expect(within(card!).getByText('Legacy session detected')).toBeTruthy();
+    expect(within(card!).getByText('Codex session detected')).toBeTruthy();
     expect(
-      within(card!).getByRole('tab', { name: 'Legacy CLI status', selected: true }),
+      within(card!).getByRole('tab', { name: 'Codex subscription', selected: true }),
     ).toBeTruthy();
     expect(within(card!).getByText('C:\\Tools\\codex.exe')).toBeTruthy();
     expect(within(card!).getByRole('button', { name: 'Refresh Codex CLI' })).toBeTruthy();
@@ -334,7 +430,7 @@ describe('SubscriptionCliBridge', () => {
     expect(within(codexCard!).queryByText(/Signed in/i)).toBeNull();
   });
 
-  it('retains read-only legacy CLI status without offering it as a sign-in route', () => {
+  it('offers native Codex login instead of the legacy status-only redirect', () => {
     render(
       <SubscriptionCliBridge
         autoDetect={false}
@@ -350,7 +446,7 @@ describe('SubscriptionCliBridge', () => {
     const card = screen.getByText('Codex').closest('article')!;
     expect(within(card).getByTestId('last-check-openai-codex').textContent).not.toBe('Never');
     expect(within(card).getByRole('button', { name: 'Refresh Codex CLI' })).toBeTruthy();
-    expect(within(card).queryByRole('button', { name: 'Sign in to Codex CLI' })).toBeNull();
+    expect(within(card).getByRole('button', { name: 'Sign in to Codex CLI' })).toBeTruthy();
     expect(within(card).getByRole('button', { name: 'Configure Codex CLI' })).toBeTruthy();
     expect(within(card).getByRole('button', { name: 'Disable Codex CLI' })).toBeTruthy();
   });

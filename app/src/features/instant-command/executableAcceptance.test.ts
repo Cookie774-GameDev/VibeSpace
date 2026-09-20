@@ -149,11 +149,11 @@ describe('executable Instant Command acceptance matrix', () => {
     ]);
   });
 
-  it('connect-providers-securely opens only the existing Providers surface', async () => {
+  it('connect-providers-securely opens the existing Connections chooser', async () => {
     const source = '/connect';
     const match = INSTANT_COMMAND_INDEX.matchWithOffsets(source)[0]!;
     const slots = match.definition.parseSlots(match, source);
-    expect(slots).toEqual({ status: 'parsed', slots: { section: 'providers' } });
+    expect(slots).toEqual({ status: 'parsed', slots: { section: 'connections' } });
     const port = navigationPort();
     const result = await withinReceiptBudget(() =>
       executeNavigationCommand(
@@ -163,7 +163,7 @@ describe('executable Instant Command acceptance matrix', () => {
     );
 
     expect(result).toEqual({ ok: true, code: 'opened', message: 'Opened provider connections.' });
-    expect(port.openSettings).toHaveBeenCalledWith('providers');
+    expect(port.openSettings).toHaveBeenCalledWith('connections');
     expect(JSON.stringify(result)).not.toMatch(/api[_ -]?key|password|bearer/iu);
   });
 

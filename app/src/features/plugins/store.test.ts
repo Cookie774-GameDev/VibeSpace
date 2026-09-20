@@ -65,6 +65,73 @@ describe('plugin connection account scopes', () => {
     );
   });
 
+  it('makes a successfully connected plugin available to terminal agents', () => {
+    usePluginStore.getState().upsertConnection({
+      ...connection('user-a', 'github'),
+      enabledProjectIds: [],
+    });
+    expect(
+      selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a').github
+        .enabledProjectIds,
+    ).toEqual(['*']);
+  });
+
+  it('retains explicit project restrictions across authorization and verification updates', () => {
+    usePluginStore.getState().upsertConnection({
+      ...connection('user-a', 'github'),
+      enabledProjectIds: ['project-a'],
+    });
+    usePluginStore.getState().upsertConnection({
+      ...connection('user-a', 'github', false),
+      state: 'awaiting_approval',
+      enabledProjectIds: [],
+    });
+    usePluginStore.getState().upsertConnection({
+      ...connection('user-a', 'github'),
+      enabledProjectIds: [],
+    });
+    expect(
+      selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a').github
+        .enabledProjectIds,
+    ).toEqual(['project-a']);
+  });
+
+  it('requires explicit enabling to repair an existing connection without terminal scope', () => {
+    const unscoped = { ...connection('user-a', 'github'), enabledProjectIds: [] };
+    applyCloudPluginConnectionForAccount('user-a', 'v2:user-a:github', unscoped);
+    usePluginStore.getState().upsertConnection(unscoped);
+    expect(
+      selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a').github
+        .enabledProjectIds,
+    ).toEqual([]);
+    usePluginStore.getState().setEnabled('user-a', 'github', true);
+    expect(
+      selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a').github
+        .enabledProjectIds,
+    ).toEqual(['*']);
+    usePluginStore.getState().setEnabled('user-a', 'github', false);
+    expect(
+      selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a').github.enabled,
+    ).toBe(false);
+  });
+
+  it('does not grant terminal scope to failed or disabled connections', () => {
+    usePluginStore.getState().upsertConnection({
+      ...connection('user-a', 'github', false),
+      state: 'error',
+      enabledProjectIds: [],
+    });
+    expect(
+      selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a').github
+        .enabledProjectIds,
+    ).toEqual([]);
+    usePluginStore.getState().setEnabled('user-a', 'github', true);
+    expect(
+      selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a').github
+        .enabledProjectIds,
+    ).toEqual([]);
+  });
+
   it('keeps mutations in the explicitly named account and repeats both ids in sync payloads', async () => {
     applyCloudPluginConnectionForAccount(
       'user-a',

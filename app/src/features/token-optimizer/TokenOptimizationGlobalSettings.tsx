@@ -27,7 +27,7 @@ export function TokenOptimizationGlobalSettings() {
           Token Optimize
         </h3>
         <p className="text-metadata text-muted-foreground">
-          Select relevant context and set a right-sized output budget. Your chosen model never
+          Choose reasoning guidance and a right-sized output budget. Your chosen model never
           changes.
         </p>
       </div>
@@ -47,8 +47,7 @@ export function TokenOptimizationGlobalSettings() {
         ))}
       </div>
       <p className="mt-3 text-metadata text-muted-foreground">
-        Final Boss uses broader relevant context and deeper supported reasoning, then stops when
-        the requirement is proven.
+        Final Boss uses its strongest supported reasoning guidance and a larger output allowance.
       </p>
       <div className="mt-4 grid gap-3 border-t border-border pt-4">
         <label className="grid gap-1 text-secondary text-foreground" htmlFor="token-output-limit">
@@ -71,20 +70,6 @@ export function TokenOptimizationGlobalSettings() {
                 browserTokenOptimizationPreferences.setDefaultMaxOutputTokens(value);
               }
             }}
-          />
-        </label>
-        <label className="flex items-center justify-between gap-4 text-secondary text-foreground">
-          <span>
-            Structural code compression
-            <span className="block text-metadata text-muted-foreground">
-              Compress eligible secondary code when repository context is available.
-            </span>
-          </span>
-          <Switch
-            checked={preferences.allowStructuralCodeCompression}
-            onCheckedChange={(checked) =>
-              browserTokenOptimizationPreferences.setAllowStructuralCodeCompression(checked)
-            }
           />
         </label>
         <label className="flex items-center justify-between gap-4 text-secondary text-foreground">

@@ -5,6 +5,7 @@ import { HelpCircle, Terminal, Wrench } from 'lucide-react';
 import {
   SLASH_COMMANDS,
   findSlashCommandDef,
+  getVisibleSlashCommands,
   isChatAttachSlashCmd,
   isImmediateLocalSlashCommand,
   normalizeSlashCmd,
@@ -18,6 +19,15 @@ import {
 import { SECTION_20_COMMANDS, SLASH_COMMAND_ALIASES } from './slashCommandRouting';
 
 describe('orderSlashCommandsForDisplay', () => {
+  it('exposes /goal only for the Codex picker while retaining the live OpenCode dispatch path', () => {
+    expect(findSlashCommandDef('goal')?.description).toBe(
+      'Set a native Codex goal for this chat',
+    );
+    expect(getVisibleSlashCommands('codex').some((command) => command.cmd === 'goal')).toBe(true);
+    expect(getVisibleSlashCommands('opencode').some((command) => command.cmd === 'goal')).toBe(false);
+    expect(getVisibleSlashCommands().some((command) => command.cmd === 'goal')).toBe(false);
+  });
+
   it('shows the canonical /mcp help text without requiring an optional label', () => {
     const mcp = findSlashCommandDef('mcp')!;
 

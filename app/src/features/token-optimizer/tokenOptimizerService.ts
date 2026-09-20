@@ -1,5 +1,4 @@
 import type {
-  ContextBudgetCandidate,
   ContextBudgetKind,
   TokenEstimateSource,
   TokenizerRegistry,
@@ -7,7 +6,6 @@ import type {
 } from './contracts';
 import type { TokenOptimizationReceipt, TokenizerSourceSummary } from './optimizationReport';
 import { isProtectedContext } from './protectedContent';
-import { buildTokenBudgetPlan } from './tokenBudget';
 
 export interface TokenOptimizationSegment {
   id: string;
@@ -46,7 +44,9 @@ export class TokenOptimizationOverflowError extends Error {
   readonly receipt: TokenOptimizationReceipt;
 
   constructor(receipt: TokenOptimizationReceipt) {
-    super('Protected context exceeds the selected model context limit.');
+    super(
+      `Estimated context exceeds the selected model context limit by ${receipt.overflowTokens} tokens.`,
+    );
     this.name = 'TokenOptimizationOverflowError';
     this.receipt = receipt;
   }
@@ -93,24 +93,17 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
         })),
       );
       throwIfAborted(request.signal);
-      const candidates: ContextBudgetCandidate[] = estimated.map(({ segment, estimate }) => ({
-        id: segment.id,
-        kind: segment.kind,
-        estimatedTokens: estimate.tokens,
-        relevance: segment.relevance,
-        protected: segment.protected,
-        reason: segment.reason,
-        ...(segment.duplicateOf ? { duplicateOf: segment.duplicateOf } : {}),
-        ...(segment.supersededBy ? { supersededBy: segment.supersededBy } : {}),
-      }));
-      const plan = buildTokenBudgetPlan({
-        mode: request.mode,
-        modelContextLimit: request.modelContextLimit,
-        requestedOutputTokens: request.requestedOutputTokens,
-        fixedInputTokens: 0,
-        candidates,
-      });
-      const selectedIds = new Set(plan.selected.map(({ id }) => id));
+      const estimatedInputTokens = estimated.reduce(
+        (total, { estimate }) => checkedTokenAdd(total, estimate.tokens),
+        0,
+      );
+      const outputTokenLimit = safeNonNegativeInteger(request.requestedOutputTokens);
+      const modelContextLimit = safeNonNegativeInteger(request.modelContextLimit);
+      const overflowTokens = Math.max(
+        0,
+        checkedTokenAdd(estimatedInputTokens, outputTokenLimit) - modelContextLimit,
+      );
+      const fitsContext = overflowTokens === 0;
       const segmentRefs = new Map(
         request.segments.map((segment, index) => [segment.id, `segment-${index + 1}` as const]),
       );
@@ -120,51 +113,55 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
         modelId: request.modelId,
         modelChanged: false,
         tokenizerSource: combinedSource(estimated.map(({ estimate }) => estimate.source)),
-        outputTokenLimit: plan.outputTokenLimit,
-        estimatedInputTokensBefore: plan.estimatedInputTokensBefore,
-        estimatedInputTokensAfter: plan.estimatedInputTokensAfter,
-        estimatedTokensSaved: plan.estimatedTokensSaved,
-        selectedCount: plan.selected.length,
-        excludedCount: plan.excluded.length,
-        fitsContext: plan.fitsContext,
-        overflowTokens: plan.overflowTokens,
+        outputTokenLimit,
+        estimatedInputTokensBefore: estimatedInputTokens,
+        estimatedInputTokensAfter: estimatedInputTokens,
+        estimatedTokensSaved: 0,
+        selectedCount: request.segments.length,
+        excludedCount: 0,
+        fitsContext,
+        overflowTokens,
         inclusions: Object.freeze(
-          plan.selected.map((candidate) =>
+          estimated.map(({ segment, estimate }) =>
             Object.freeze({
-              segmentRef: segmentRefs.get(candidate.id)!,
-              kind: candidate.kind,
+              segmentRef: segmentRefs.get(segment.id)!,
+              kind: segment.kind,
               reason:
-                candidate.protected || isProtectedContext(candidate.kind)
+                segment.protected || isProtectedContext(segment.kind)
                   ? ('protected' as const)
                   : ('relevant' as const),
-              tokens: candidate.estimatedTokens,
+              tokens: estimate.tokens,
             }),
           ),
         ),
-        exclusions: Object.freeze(
-          plan.excluded.map((candidate) =>
-            Object.freeze({
-              segmentRef: segmentRefs.get(candidate.id)!,
-              kind: candidate.kind,
-              reason: candidate.exclusionReason,
-              tokens: candidate.estimatedTokens,
-            }),
-          ),
-        ),
+        exclusions: Object.freeze([]),
       });
 
-      if (!plan.fitsContext) {
+      if (!fitsContext && request.mode !== 'off') {
         throw new TokenOptimizationOverflowError(receipt);
       }
 
       return {
         providerId: request.providerId,
         modelId: request.modelId,
-        selectedSegments: request.segments.filter(({ id }) => selectedIds.has(id)),
+        selectedSegments: request.segments,
         receipt,
       };
     },
   };
+}
+
+function safeNonNegativeInteger(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('Token optimization limits must be non-negative safe integers.');
+  }
+  return value;
+}
+
+function checkedTokenAdd(left: number, right: number): number {
+  const result = left + right;
+  if (!Number.isSafeInteger(result)) throw new Error('Token count exceeds safe integer range.');
+  return result;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

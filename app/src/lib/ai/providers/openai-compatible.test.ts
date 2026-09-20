@@ -76,6 +76,7 @@ describe('makeOpenAICompatibleProvider', () => {
     expect(requestInit?.signal).toBe(controller.signal);
     expect(order[0]).toBe('observed:bytes');
     expect(response.text).toBe('protected response');
+    expect(response.usage.provenance).toBe('estimated');
   });
 });
 

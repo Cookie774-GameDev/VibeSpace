@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { AssistantActivityLedger } from './activity-ledger/AssistantActivityLedger';
+import { ThinkingDisclosure } from './ThinkingDisclosure';
 import type { Message } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
@@ -20,6 +21,84 @@ import {
 } from './streamingPreviewStore';
 
 type ToolSegment = Extract<StreamingPreviewSegment, { kind: 'tool' }>;
+type ReasoningSegment = Extract<StreamingPreviewSegment, { kind: 'reasoning' }>;
+type PreviewCommit = (preview: Readonly<JarvisStreamingPreview>) => void;
+
+interface StructuralPreviewCache {
+  source: Readonly<JarvisStreamingPreview> | null;
+  snapshot: Readonly<JarvisStreamingPreview> | null;
+}
+
+function fastTailSegmentIndex(
+  preview: Pick<JarvisStreamingPreview, 'segments'> | null | undefined,
+) {
+  const segments = preview?.segments ?? [];
+  return segments[segments.length - 1]?.kind === 'text' ? segments.length - 1 : -1;
+}
+
+function sameStructuralPreview(
+  before: Readonly<JarvisStreamingPreview>,
+  after: Readonly<JarvisStreamingPreview>,
+) {
+  if (
+    before.accountId !== after.accountId ||
+    before.chatId !== after.chatId ||
+    before.requestId !== after.requestId ||
+    before.runId !== after.runId ||
+    before.projectRoot !== after.projectRoot
+  )
+    return false;
+
+  const beforeSegments = before.segments ?? [];
+  const afterSegments = after.segments ?? [];
+  if (beforeSegments.length !== afterSegments.length) return false;
+
+  const beforeTailIndex = fastTailSegmentIndex(before);
+  const afterTailIndex = fastTailSegmentIndex(after);
+  if (beforeTailIndex !== afterTailIndex) return false;
+  if (beforeTailIndex < 0 && beforeSegments.length > 0 && before.text !== after.text)
+    return false;
+
+  for (let index = 0; index < beforeSegments.length; index += 1) {
+    const previous = beforeSegments[index];
+    const next = afterSegments[index];
+    if (previous.kind !== next.kind || previous.id !== next.id) return false;
+    if (index === afterTailIndex || previous.kind === 'reasoning') continue;
+    if (previous.kind === 'text' && next.kind === 'text' && previous.text !== next.text)
+      return false;
+    if (previous.kind === 'tool' && next.kind === 'tool') {
+      if (
+        previous.name !== next.name ||
+        previous.status !== next.status ||
+        previous.fileLabel !== next.fileLabel ||
+        previous.details !== next.details
+      )
+        return false;
+    }
+  }
+  return true;
+}
+
+function selectStructuralPreview(
+  preview: Readonly<JarvisStreamingPreview> | null,
+  cache: StructuralPreviewCache,
+) {
+  if (!preview) {
+    cache.source = null;
+    cache.snapshot = null;
+    return null;
+  }
+  if (cache.source && cache.snapshot && sameStructuralPreview(cache.source, preview))
+    return cache.snapshot;
+  const snapshot = Object.freeze({
+    ...preview,
+    segments: preview.segments ? Object.freeze([...preview.segments]) : preview.segments,
+  });
+  cache.source = preview;
+  cache.snapshot = snapshot;
+  return snapshot;
+}
+
 interface ToolPreviewProps {
   segment: ToolSegment;
   chatId: string;
@@ -76,6 +155,115 @@ const StreamingToolPreview = memo(
     before.segment.details === after.segment.details,
 );
 
+const StreamingReasoningPreview = memo(
+  function StreamingReasoningPreview({
+    accountId,
+    chatId,
+    runId,
+    segmentId,
+    initialText,
+    onCommitted,
+  }: {
+    accountId: string;
+    chatId: string;
+    runId: string;
+    segmentId: string;
+    initialText: string;
+    onCommitted: PreviewCommit;
+  }) {
+    const subscribe = useCallback(
+      (listener: () => void) => subscribeChatPreviews(accountId, chatId, listener),
+      [accountId, chatId],
+    );
+    const readText = useCallback(() => {
+      const preview = getChatPreview(accountId, chatId);
+      if (!preview || preview.runId !== runId) return '';
+      const segment = preview.segments?.find(
+        (candidate): candidate is ReasoningSegment =>
+          candidate.kind === 'reasoning' && candidate.id === segmentId,
+      );
+      return segment?.text ?? '';
+    }, [accountId, chatId, runId, segmentId]);
+    const text = useSyncExternalStore(subscribe, readText, () => initialText);
+    useLayoutEffect(() => {
+      const preview = getChatPreview(accountId, chatId);
+      if (preview?.runId === runId) onCommitted(preview);
+    }, [accountId, chatId, onCommitted, runId, segmentId, text]);
+    return <ThinkingDisclosure text={text} />;
+  },
+  (before, after) =>
+    before.accountId === after.accountId &&
+    before.chatId === after.chatId &&
+    before.runId === after.runId &&
+    before.segmentId === after.segmentId &&
+    before.onCommitted === after.onCommitted,
+);
+
+const StreamingPreviewStructure = memo(
+  function StreamingPreviewStructure({
+    accountId,
+    chatId,
+    preview,
+    onCommitted,
+  }: {
+    accountId: string;
+    chatId: string;
+    preview: Readonly<JarvisStreamingPreview>;
+    onCommitted: PreviewCommit;
+  }) {
+    useLayoutEffect(() => onCommitted(preview), [onCommitted, preview]);
+    const segments = preview.segments ?? [];
+    const fastTailIndex = fastTailSegmentIndex(preview);
+    return (
+      <>
+        {preview.text &&
+        segments.length > 0 &&
+        !segments.some((segment) => segment.kind === 'text' && segment.text) ? (
+          <div className="agentic-native-checkpoint">
+            <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
+            <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
+              {preview.text}
+            </div>
+          </div>
+        ) : null}
+        {segments.map((segment, index) =>
+          index === fastTailIndex ? null : segment.kind === 'text' ? (
+            <div key={`text:${segment.id}`} className="agentic-native-checkpoint">
+              <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
+              <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
+                {segment.text}
+              </div>
+            </div>
+          ) : segment.kind === 'reasoning' ? (
+            <StreamingReasoningPreview
+              key={`reasoning:${segment.id}`}
+              accountId={accountId}
+              chatId={chatId}
+              runId={preview.runId}
+              segmentId={segment.id}
+              initialText={segment.text}
+              onCommitted={onCommitted}
+            />
+          ) : (
+            <StreamingToolPreview
+              key={`tool:${segment.id}`}
+              segment={segment}
+              chatId={chatId}
+              projectRoot={preview.projectRoot}
+              updatedAt={preview.updatedAt}
+            />
+          ),
+        )}
+      </>
+    );
+  },
+  (before, after) =>
+    before.accountId === after.accountId &&
+    before.chatId === after.chatId &&
+    before.preview === after.preview &&
+    before.onCommitted === after.onCommitted,
+);
+
 /** Only already-filtered public prose from this account and chat is displayed. */
 export function classifyPreviewCommitTiming(
   publicationMonotonicMs: number,
@@ -109,15 +297,19 @@ export function StreamingChatPreview({
     (listener: () => void) => subscribeChatPreviews(accountId, chatId, listener),
     [accountId, chatId],
   );
+  const structuralCache = useRef<StructuralPreviewCache>({ source: null, snapshot: null });
+  const readStructuralPreview = useCallback(
+    () => selectStructuralPreview(getChatPreview(accountId, chatId), structuralCache.current),
+    [accountId, chatId],
+  );
   const preview = useSyncExternalStore(
     subscribe,
-    () => getChatPreview(accountId, chatId),
+    readStructuralPreview,
     () => null,
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const fastHostRef = useRef<HTMLDivElement>(null);
   const fastTextRef = useRef<HTMLDivElement>(null);
-  const lastFastDiagnosticRunId = useRef<string | null>(null);
   const applyFastPreview = useCallback(
     (next: Readonly<JarvisStreamingPreview> | null, mode: 'fast' | 'reconcile') => {
       const container = containerRef.current;
@@ -130,6 +322,14 @@ export function StreamingChatPreview({
         container.hidden = true;
         container.removeAttribute('data-streaming-chat-preview');
         return;
+      }
+      container.hidden = false;
+      container.dataset.streamingChatPreview = 'true';
+      container.dataset.previewChatId = next.chatId;
+      container.dataset.previewRequestId = next.requestId;
+      container.dataset.previewRunId = next.runId;
+      if (next.publicationRevision !== undefined) {
+        container.dataset.previewRevision = String(next.publicationRevision);
       }
       const tail = fastPreviewTailText(next);
       if (!tail) {
@@ -149,33 +349,22 @@ export function StreamingChatPreview({
       }
       fastText.textContent = tail;
       fastHost.hidden = false;
-      container.hidden = false;
-      container.dataset.streamingChatPreview = 'true';
-      container.dataset.previewChatId = next.chatId;
-      container.dataset.previewRequestId = next.requestId;
-      container.dataset.previewRunId = next.runId;
-      if (next.publicationRevision !== undefined) {
-        container.dataset.previewRevision = String(next.publicationRevision);
-      }
       if (mode === 'fast' && next.publicationMonotonicMs !== undefined) {
         const elapsed = performance.now() - next.publicationMonotonicMs;
         if (Number.isFinite(elapsed) && elapsed >= 0) {
           fastHost.dataset.previewFastCommitMs = elapsed.toFixed(3);
-          // Visibility is already committed above. Persist only the first fast
-          // paint per run, deferred to a later task so diagnostics can never
-          // lengthen the publication -> visible-DOM critical path.
-          if (lastFastDiagnosticRunId.current !== next.runId) {
-            lastFastDiagnosticRunId.current = next.runId;
-            window.setTimeout(() => {
-              appActivityLog.recordMetadata('ui.preview.fast', 'committed', {
-                requestId: next.requestId,
-                chatId: next.chatId,
-                runId: next.runId,
-                publicationRevision: next.publicationRevision,
-                uiCommitMs: elapsed,
-              });
-            }, 0);
-          }
+          // Visibility is already committed above. Defer each publication's
+          // diagnostic so the logger can never lengthen the critical path.
+          window.setTimeout(() => {
+            appActivityLog.recordMetadata('ui.preview.fast', 'committed', {
+              requestId: next.requestId,
+              chatId: next.chatId,
+              runId: next.runId,
+              publicationRevision: next.publicationRevision,
+              runPublicationSequence: next.runPublicationSequence,
+              uiCommitMs: elapsed,
+            });
+          }, 0);
         }
       }
     },
@@ -187,48 +376,45 @@ export function StreamingChatPreview({
   }, [accountId, applyFastPreview, chatId]);
 
   const lastCommitted = useRef<{ runId: string; sequence: number } | undefined>(undefined);
-  useLayoutEffect(() => {
-    applyFastPreview(preview, 'reconcile');
+  const recordPreviewCommit = useCallback((candidate: Readonly<JarvisStreamingPreview>) => {
     if (
-      !preview ||
-      (!preview.text && !preview.segments?.length) ||
-      preview.publicationMonotonicMs === undefined ||
-      preview.runPublicationSequence === undefined ||
-      (lastCommitted.current?.runId === preview.runId &&
-        lastCommitted.current?.sequence === preview.runPublicationSequence)
+      (!candidate.text && !candidate.segments?.length) ||
+      candidate.publicationMonotonicMs === undefined ||
+      candidate.runPublicationSequence === undefined ||
+      (lastCommitted.current?.runId === candidate.runId &&
+        lastCommitted.current?.sequence === candidate.runPublicationSequence)
     )
       return;
     const coalescedRevisions =
-      lastCommitted.current === undefined || lastCommitted.current.runId !== preview.runId
-        ? Math.max(0, preview.runPublicationSequence - 1)
-        : Math.max(0, preview.runPublicationSequence - lastCommitted.current.sequence - 1);
-    lastCommitted.current = { runId: preview.runId, sequence: preview.runPublicationSequence };
+      lastCommitted.current === undefined || lastCommitted.current.runId !== candidate.runId
+        ? Math.max(0, candidate.runPublicationSequence - 1)
+        : Math.max(0, candidate.runPublicationSequence - lastCommitted.current.sequence - 1);
+    lastCommitted.current = {
+      runId: candidate.runId,
+      sequence: candidate.runPublicationSequence,
+    };
     const commitTiming = classifyPreviewCommitTiming(
-      preview.publicationMonotonicMs,
+      candidate.publicationMonotonicMs,
       performance.now(),
     );
     appActivityLog.record(
       'ui.preview',
       'committed',
       {
-        requestId: preview.requestId,
-        chatId: preview.chatId,
-        runId: preview.runId,
-        publicationRevision: preview.publicationRevision,
-        // Publications skipped by React coalescing are reported, never
-        // silently dropped or assigned zero latency.
+        requestId: candidate.requestId,
+        chatId: candidate.chatId,
+        runId: candidate.runId,
+        publicationRevision: candidate.publicationRevision,
         coalescedRevisions,
         ...commitTiming,
       },
       undefined,
       'uiCommitMs' in commitTiming ? commitTiming.uiCommitMs : undefined,
     );
-  }, [applyFastPreview, preview]);
+  }, []);
+  useLayoutEffect(() => applyFastPreview(preview, 'reconcile'), [applyFastPreview, preview]);
 
-  const segments = preview?.segments ?? [];
   const fastTail = fastPreviewTailText(preview);
-  const fastTailIndex =
-    fastTail && segments[segments.length - 1]?.kind === 'text' ? segments.length - 1 : -1;
   const traceAttributes = preview
     ? {
         'data-preview-chat-id': preview.chatId,
@@ -247,39 +433,14 @@ export function StreamingChatPreview({
         {...traceAttributes}
         hidden={!preview}
       >
-        {preview?.text &&
-        segments.length > 0 &&
-        !segments.some((segment) => segment.kind === 'text' && segment.text) ? (
-          <div className="agentic-native-checkpoint">
-            <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
-            <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
-              {preview.text}
-            </div>
-          </div>
+        {preview ? (
+          <StreamingPreviewStructure
+            accountId={accountId}
+            chatId={chatId}
+            preview={preview}
+            onCommitted={recordPreviewCommit}
+          />
         ) : null}
-        {preview
-          ? segments.map((segment, index) =>
-              index === fastTailIndex ? null : segment.kind === 'text' ? (
-                <div key={`text:${segment.id}`} className="agentic-native-checkpoint">
-                  <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
-                  <div
-                    className="agentic-native-checkpoint__text"
-                    style={{ whiteSpace: 'pre-wrap' }}
-                  >
-                    {segment.text}
-                  </div>
-                </div>
-              ) : (
-                <StreamingToolPreview
-                  key={`tool:${segment.id}`}
-                  segment={segment}
-                  chatId={chatId}
-                  projectRoot={preview.projectRoot}
-                  updatedAt={preview.updatedAt}
-                />
-              ),
-            )
-          : null}
         <div
           ref={fastHostRef}
           className="agentic-native-checkpoint"

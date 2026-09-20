@@ -177,6 +177,7 @@ export const anthropicProvider: LLMProvider = {
     let acc = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let usageWasEstimated = false;
     let finishReason: string | undefined;
     let first = true;
 
@@ -239,8 +240,12 @@ export const anthropicProvider: LLMProvider = {
       const inputText =
         body.system + '\n' + req.messages.map((m) => llmContentToText(m.content)).join('\n');
       inputTokens = estimateInputTokens(inputText);
+      usageWasEstimated = true;
     }
-    if (outputTokens === 0) outputTokens = estimateInputTokens(acc);
+    if (outputTokens === 0) {
+      outputTokens = estimateInputTokens(acc);
+      usageWasEstimated = true;
+    }
 
     req.onChunk?.({ delta: '', done: true });
 
@@ -250,6 +255,7 @@ export const anthropicProvider: LLMProvider = {
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: estimateCost('anthropic', model, inputTokens, outputTokens),
+        ...(usageWasEstimated ? { provenance: 'estimated' as const } : {}),
       },
       provider: 'anthropic',
       model,

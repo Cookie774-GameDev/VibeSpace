@@ -214,16 +214,33 @@ export const usePluginStore = create<PluginStore>()(
         const existing = selectPluginConnectionsForAccount(get(), connection.accountId)[
           connection.pluginId
         ];
+        // Provider verification omits terminal scope. Keep any explicit project
+        // restriction; a newly authorized, enabled connection defaults to all
+        // projects. Persisted/cloud rows are read without granting new access.
+        const updated = {
+          ...connection,
+          enabledProjectIds: connection.enabledProjectIds.length
+            ? connection.enabledProjectIds
+            : existing?.enabledProjectIds.length
+              ? existing.enabledProjectIds
+              : connection.state === 'connected' &&
+                  connection.enabled &&
+                  (!existing ||
+                    existing.state === 'connecting' ||
+                    existing.state === 'awaiting_approval')
+                ? ['*']
+                : [],
+        };
         set((state) => ({
           connectionsByAccount: {
             ...state.connectionsByAccount,
             [connection.accountId]: {
               ...selectPluginConnectionsForAccount(state, connection.accountId),
-              [connection.pluginId]: connection,
+              [connection.pluginId]: updated,
             },
           },
         }));
-        queueConnection(connection, existing ? 'update' : 'insert', captureSyncQueueOwner());
+        queueConnection(updated, existing ? 'update' : 'insert', captureSyncQueueOwner());
       },
       removeConnection: (accountId, pluginId) => {
         exactId(accountId, 'Account ID');
@@ -245,7 +262,15 @@ export const usePluginStore = create<PluginStore>()(
         exactId(pluginId, 'Plugin ID');
         const existing = selectPluginConnectionsForAccount(get(), accountId)[pluginId];
         if (!existing) return;
-        const updated = { ...existing, enabled, updatedAt: Date.now() };
+        const updated = {
+          ...existing,
+          enabled,
+          enabledProjectIds:
+            enabled && existing.state === 'connected' && existing.enabledProjectIds.length === 0
+              ? ['*']
+              : existing.enabledProjectIds,
+          updatedAt: Date.now(),
+        };
         set((state) => ({
           connectionsByAccount: {
             ...state.connectionsByAccount,

@@ -131,6 +131,37 @@ describe('native OpenCode transport', () => {
     expect(JSON.stringify(invoke.mock.calls)).not.toMatch(/authorization|password|basic/i);
   });
 
+  it('maps the command catalog GET used before session commands', async () => {
+    const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '[]' }));
+    await nativeOpenCodeRequest(
+      'opencode-server-generation',
+      '/command?directory=C%3A%5Cworkspace',
+      {},
+      5_000,
+      async () => ({ invoke, channel: vi.fn() as never }),
+    );
+
+    expect(invoke).toHaveBeenCalledWith('opencode_server_request', {
+      request: expect.objectContaining({
+        route: { kind: 'command_list' },
+        directory: 'C:\\workspace',
+        body: undefined,
+      }),
+    });
+  });
+
+  it('keeps the command catalog route read-only and exact', async () => {
+    const invoke = vi.fn();
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    await expect(
+      nativeOpenCodeRequest('opencode-server-generation', '/command?unexpected=true', {}, 5_000, bridge),
+    ).rejects.toThrow(/query is invalid/u);
+    await expect(
+      nativeOpenCodeRequest('opencode-server-generation', '/command', { method: 'POST', body: '{}' }, 5_000, bridge),
+    ).rejects.toThrow(/route is invalid/u);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it.each([204, 205, 304])('constructs bodyless HTTP %s responses', async (status) => {
     const invoke = vi.fn(async () => ({ status, statusText: 'No Content', body: '' }));
 

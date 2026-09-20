@@ -82,3 +82,28 @@ it('does not expose semantic MCP tools without an explicit request or under the 
   expect(await createCodexToolGateway({ ...request, tools: { vibespace_context: false } })).toBeNull();
   expect(await createCodexToolGateway({ ...request, tools: { 'mcp.list': true }, explicitReadRoot: true })).toBeNull();
 });
+
+it('connects enabled plugins to the same native Codex gateway without exposing credentials', async () => {
+  const bridge = (await createCodexToolGateway({ ...request,
+    tools: { vibespace_context: false, 'plugins.list': true, 'plugins.run': true },
+  }))!;
+  expect(bridge).not.toBeNull();
+  expect(bridge.dynamicTools?.map(tool => tool.name)).toEqual(['plugins_list', 'plugins_run']);
+  bridge.bind('plugin-thread', identity, 'plugin-generation');
+  await expect(bridge.executeTool?.('plugins_list', {}, 'plugin-list')).resolves.toMatchObject({ success: true });
+  expect(state.execute).toHaveBeenLastCalledWith(expect.objectContaining({ tool: 'plugins.list', args: {} }));
+  await expect(bridge.executeTool?.('plugins_run', { pluginId: 'github', operation: 'list_repositories', input: {} }, 'plugin-run')).resolves.toMatchObject({ success: true });
+  expect(state.execute).toHaveBeenLastCalledWith(expect.objectContaining({ tool: 'plugins.run', args: { pluginId: 'github', operation: 'list_repositories', input: {} } }));
+  bridge.dispose();
+});
+
+it('does not advertise or dispatch plugin mutation tools when the request disables them', async () => {
+  const bridge = (await createCodexToolGateway({ ...request,
+    tools: { vibespace_context: false, 'plugins.list': true, 'plugins.run': false },
+  }))!;
+  expect(bridge?.dynamicTools?.map(tool => tool.name)).toEqual(['plugins_list']);
+  bridge.bind('plugin-thread', identity, 'plugin-generation');
+  await expect(bridge.executeTool?.('plugins_run', { pluginId: 'github', operation: 'list_repositories' }, 'plugin-run')).rejects.toThrow('not enabled');
+  expect(state.execute).not.toHaveBeenCalled();
+  bridge.dispose();
+});

@@ -54,13 +54,24 @@ it('never renders another account or chat preview', () => {
 });
 
 it('interleaves live checkpoints with their native tool receipts', () => {
-  const { container } = render(<StreamingChatPreview chatId="chat-a" fallback={<div>Aggregate fallback</div>} />);
-  act(() => setPreview({ accountId: 'preview-user', chatId: 'chat-a', runId: 'ordered', requestId: 'request',
-    updatedAt: 1, text: 'First checkpoint. Second checkpoint.', segments: [
-      { kind: 'text', id: 'one', text: 'First checkpoint.' },
-      { kind: 'tool', id: 'read', name: 'read', status: 'completed', fileLabel: 'game.ts' },
-      { kind: 'text', id: 'two', text: 'Second checkpoint.' },
-    ] }));
+  const { container } = render(
+    <StreamingChatPreview chatId="chat-a" fallback={<div>Aggregate fallback</div>} />,
+  );
+  act(() =>
+    setPreview({
+      accountId: 'preview-user',
+      chatId: 'chat-a',
+      runId: 'ordered',
+      requestId: 'request',
+      updatedAt: 1,
+      text: 'First checkpoint. Second checkpoint.',
+      segments: [
+        { kind: 'text', id: 'one', text: 'First checkpoint.' },
+        { kind: 'tool', id: 'read', name: 'read', status: 'completed', fileLabel: 'game.ts' },
+        { kind: 'text', id: 'two', text: 'Second checkpoint.' },
+      ],
+    }),
+  );
   const preview = container.querySelector('[data-streaming-chat-preview]')!;
   expect(preview.children[0].textContent).toContain('First checkpoint.');
   expect(preview.children[1].textContent).toMatch(/action|read/i);
@@ -68,14 +79,40 @@ it('interleaves live checkpoints with their native tool receipts', () => {
   expect(screen.queryByText('Aggregate fallback')).toBeNull();
 });
 
-
 it('renders actual public tool details during a tool-only live turn', () => {
   const { container } = render(<StreamingChatPreview chatId="chat-a" />);
-  act(() => setPreview({ accountId: 'preview-user', chatId: 'chat-a', runId: 'detail-run', requestId: 'detail-request',
-    updatedAt: 10, text: '', segments: [{ kind: 'tool', id: 'detail-call', name: 'command', status: 'completed',
-      details: { command: 'node verify.cjs', arguments: { command: 'node verify.cjs' }, exitCode: 0,
-        output: { text: '16 checks passed', mode: 'replace', complete: true, omittedBytes: 0 },
-        changes: [{ path: 'invoice.cjs', kind: 'update', diff: '-return null\n+return rows', complete: true }] } }] }));
+  act(() =>
+    setPreview({
+      accountId: 'preview-user',
+      chatId: 'chat-a',
+      runId: 'detail-run',
+      requestId: 'detail-request',
+      updatedAt: 10,
+      text: '',
+      segments: [
+        {
+          kind: 'tool',
+          id: 'detail-call',
+          name: 'command',
+          status: 'completed',
+          details: {
+            command: 'node verify.cjs',
+            arguments: { command: 'node verify.cjs' },
+            exitCode: 0,
+            output: { text: '16 checks passed', mode: 'replace', complete: true, omittedBytes: 0 },
+            changes: [
+              {
+                path: 'invoice.cjs',
+                kind: 'update',
+                diff: '-return null\n+return rows',
+                complete: true,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  );
   fireEvent.click(screen.getByRole('button', { name: /Show activity details/ }));
   expect(container.textContent).toContain('node verify.cjs');
   expect(container.textContent).toContain('16 checks passed');
@@ -89,16 +126,84 @@ it('records correlated publication-to-commit duration, not model or paint latenc
   const before = appActivityLog.snapshot().sequence;
   const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
   try {
-    setPreview({ accountId: 'preview-user', chatId: 'timing-chat', runId: 'timing-run',
-      requestId: 'timing-request', updatedAt: 5, text: 'Diagnostic timing text' });
+    setPreview({
+      accountId: 'preview-user',
+      chatId: 'timing-chat',
+      runId: 'timing-run',
+      requestId: 'timing-request',
+      updatedAt: 5,
+      text: 'Diagnostic timing text',
+    });
     clock.mockReturnValue(104);
     const { rerender } = render(<StreamingChatPreview chatId="timing-chat" />);
-    const rows = () => appActivityLog.snapshot(before).events.filter(row => row.kind === 'ui.preview');
+    const rows = () =>
+      appActivityLog.snapshot(before).events.filter((row) => row.kind === 'ui.preview');
     expect(rows()).toHaveLength(1);
-    expect(rows()[0]).toMatchObject({ phase: 'committed', durationMs: 4,
-      data: { requestId: 'timing-request', chatId: 'timing-chat', uiCommitMs: 4 } });
+    expect(rows()[0]).toMatchObject({
+      phase: 'committed',
+      durationMs: 4,
+      data: { requestId: 'timing-request', chatId: 'timing-chat', uiCommitMs: 4 },
+    });
     expect(JSON.stringify(rows())).not.toContain('Diagnostic timing text');
     rerender(<StreamingChatPreview chatId="timing-chat" />);
     expect(rows()).toHaveLength(1);
-  } finally { clock.mockRestore(); }
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it('renders public reasoning in order with tools and text from the fast preview', () => {
+  const { container } = render(<StreamingChatPreview chatId="chat-a" />);
+  act(() =>
+    setPreview({
+      accountId: 'preview-user',
+      chatId: 'chat-a',
+      runId: 'ordered-thinking',
+      requestId: 'request',
+      updatedAt: 1,
+      text: 'Ready.',
+      segments: [
+        { kind: 'reasoning', id: 'reasoning-1', text: 'Checking the workspace.' },
+        { kind: 'tool', id: 'read-thinking', name: 'read', status: 'completed' },
+        { kind: 'text', id: 'answer-thinking', text: 'Ready.' },
+      ],
+    }),
+  );
+  const preview = container.querySelector('[data-streaming-chat-preview]')!;
+  expect(preview.children[0].textContent).toContain('Thinking');
+  expect(preview.children[1].textContent).toMatch(/action|read/i);
+  expect(preview.children[2].textContent).toContain('Ready.');
+  fireEvent.click(screen.getByRole('button', { name: 'Thinking' }));
+  expect(preview.textContent).toContain('Checking the workspace.');
+});
+
+it('expands the latest reasoning delta after a committed public update', () => {
+  render(<StreamingChatPreview chatId="reasoning-delta" />);
+  const base = {
+    accountId: 'preview-user',
+    chatId: 'reasoning-delta',
+    runId: 'reasoning-delta-run',
+    requestId: 'reasoning-delta-request',
+    updatedAt: 1,
+    text: '',
+    segments: [
+      { kind: 'reasoning' as const, id: 'delta-reasoning', text: 'Initial thought.' },
+      { kind: 'tool' as const, id: 'delta-tool', name: 'read', status: 'completed' as const },
+    ],
+  };
+  act(() => setPreview(base));
+  fireEvent.click(screen.getByRole('button', { name: 'Thinking' }));
+  expect(screen.getByText('Initial thought.')).toBeTruthy();
+  act(() =>
+    setPreview({
+      ...base,
+      updatedAt: 2,
+      segments: [
+        { kind: 'reasoning' as const, id: 'delta-reasoning', text: 'Updated thought.' },
+        { kind: 'tool' as const, id: 'delta-tool', name: 'read', status: 'completed' as const },
+      ],
+    }),
+  );
+  expect(screen.queryByText('Initial thought.')).toBeNull();
+  expect(screen.getByText('Updated thought.')).toBeTruthy();
 });

@@ -43,6 +43,7 @@ it('settles a rejected turn/start and releases its exact native child', async ()
     for await (const _event of adapter.send!({
       requestId: 'request',
       connection: { id: 'openai-codex' } as ProviderConnection,
+      codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-terra' },
       modelId: 'gpt-5.6-terra',
       workingDirectory: 'C:\\game',
       interactionMode: 'ask',

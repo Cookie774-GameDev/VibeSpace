@@ -6,19 +6,19 @@ const MODE_COPY: Readonly<
 > = Object.freeze({
   off: Object.freeze({
     label: 'Off',
-    description: 'Keep context and output limits unchanged.',
+    description: 'Keep provider, model, and output behavior unchanged.',
   }),
   saver: Object.freeze({
     label: 'Saver',
-    description: 'Keep only high-value context and cap output tightly.',
+    description: 'Apply Ponytail guidance and cap output tightly.',
   }),
   normal: Object.freeze({
     label: 'Normal',
-    description: 'Balance useful context with a practical output budget.',
+    description: 'Use normal reasoning guidance and a practical output budget.',
   }),
   final_boss: Object.freeze({
     label: 'Final Boss',
-    description: 'Keep broader context and use the highest appropriate reasoning.',
+    description: 'Use the strongest supported reasoning guidance and a larger output allowance.',
   }),
 });
 

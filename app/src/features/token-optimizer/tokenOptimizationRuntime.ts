@@ -90,6 +90,13 @@ export function createTokenOptimizationRuntime(input: {
         assertSelectionUnchanged(request, preflight.providerId, preflight.modelId);
         await emitReceipt(input.telemetry, request.telemetryEnvelope, preflight.receipt);
         throwIfAborted(request.signal);
+        if (!preflight.receipt.fitsContext) {
+          return Object.freeze({
+            state: 'overflow' as const,
+            mode,
+            receipt: preflight.receipt,
+          });
+        }
         return Object.freeze({ state: 'ready' as const, mode, preflight });
       } catch (error) {
         throwIfAborted(request.signal);

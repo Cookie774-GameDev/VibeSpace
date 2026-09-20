@@ -1,8 +1,9 @@
 import skill from '../../../.jarvis/skills/ponytail/SKILL.md?raw';
 
 // Adapted from DietrichGebert/ponytail hooks/ponytail-instructions.js at
-// 356918eba965ee1eac64bd3a7f0dd02108350de5 (MIT). VibeSpace selects full mode;
-// global hook state and filesystem access are intentionally unnecessary here.
+// 1d95ff7d39de12d87014ea40d4e22201bddc501b (v4.10.0, MIT). VibeSpace selects
+// full mode; global hook state and filesystem access are intentionally
+// unnecessary here.
 // License: app/.jarvis/skills/ponytail/LICENSE.txt.
 const body = skill.replace(/^---[\s\S]*?---\s*/, '').split(/\r?\n/)
   .filter(line => {

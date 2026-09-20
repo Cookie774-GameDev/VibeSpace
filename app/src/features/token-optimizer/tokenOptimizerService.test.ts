@@ -23,7 +23,7 @@ describe('Token Optimizer service', () => {
       mode: 'saver',
       providerId: 'openai',
       modelId: 'gpt-test',
-      modelContextLimit: 1_200,
+      modelContextLimit: 2_000,
       requestedOutputTokens: 500,
       segments: [
         {
@@ -63,24 +63,22 @@ describe('Token Optimizer service', () => {
 
     expect(result.providerId).toBe('openai');
     expect(result.modelId).toBe('gpt-test');
-    expect(result.selectedSegments.map(({ id }) => id)).toEqual(['system', 'latest', 'relevant']);
+    expect(result.selectedSegments.map(({ id }) => id)).toEqual([
+      'system',
+      'latest',
+      'relevant',
+      'irrelevant',
+    ]);
     expect(result.receipt).toMatchObject({
       mode: 'saver',
       tokenizerSource: 'exact_local',
       outputTokenLimit: 500,
-      selectedCount: 3,
-      excludedCount: 1,
-      estimatedTokensSaved: 800,
+      selectedCount: 4,
+      excludedCount: 0,
+      estimatedTokensSaved: 0,
       modelChanged: false,
     });
-    expect(result.receipt.exclusions).toEqual([
-      {
-        segmentRef: 'segment-4',
-        kind: 'repository_file',
-        reason: 'irrelevant',
-        tokens: 800,
-      },
-    ]);
+    expect(result.receipt.exclusions).toEqual([]);
     expect(result.receipt.inclusions).toEqual([
       {
         segmentRef: 'segment-1',
@@ -100,11 +98,16 @@ describe('Token Optimizer service', () => {
         reason: 'relevant',
         tokens: 16,
       },
+      {
+        segmentRef: 'segment-4',
+        kind: 'repository_file',
+        reason: 'relevant',
+        tokens: 800,
+      },
     ]);
     expect(JSON.stringify(result.receipt)).not.toContain('"id":"system"');
     expect(JSON.stringify(result.receipt)).not.toContain('system authority');
     expect(JSON.stringify(result.receipt)).not.toContain('latest request');
-    expect(JSON.stringify(result.receipt)).not.toContain('"id":"irrelevant"');
   });
 
   it('reconciles estimates with provider-reported usage without rewriting history', () => {
@@ -215,7 +218,7 @@ describe('Token Optimizer service', () => {
     expect(transported).toEqual(['transport allowed']);
   });
 
-  it('fails closed when protected content cannot fit the selected model context', async () => {
+  it('fails closed on overflow without dropping protected or optional content', async () => {
     const service = createTokenOptimizerService(createTokenizerRegistry([exactTokenizer]));
     await expect(
       service.optimize({
@@ -235,7 +238,14 @@ describe('Token Optimizer service', () => {
           },
         ],
       }),
-    ).rejects.toBeInstanceOf(TokenOptimizationOverflowError);
+    ).rejects.toMatchObject({
+      name: 'TokenOptimizationOverflowError',
+      receipt: expect.objectContaining({
+        fitsContext: false,
+        estimatedTokensSaved: 0,
+        excludedCount: 0,
+      }),
+    });
   });
 
   it('reports no tokenizer provenance for an empty request', async () => {

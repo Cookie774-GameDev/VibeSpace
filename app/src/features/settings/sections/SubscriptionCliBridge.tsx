@@ -34,6 +34,7 @@ import {
 } from '@/lib/ai/connectionState';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
+import { enqueueTerminalCommandBatch } from '@/features/terminals/terminalCommandQueue';
 import { rememberSettingsTab } from '@/features/settings/settingsTabMemory';
 import { openExternal } from '@/lib/tauri';
 import { toast } from '@/components/ui/toast';
@@ -61,6 +62,11 @@ import {
   type OpenCodeSubscriptionSnapshot,
 } from '@/lib/harness/subscriptionBridge';
 import { redactHarnessText } from '@/lib/harness/errors';
+import {
+  CONNECTION_FOCUS_STORAGE_KEY,
+  CONNECT_CONNECTION_FOCUS_IDS,
+  type ConnectConnectionFocusId,
+} from '@/features/instant-command/providerConnectionEntrypoint';
 
 export type { ConnectionMetadata, ConnectionMetadataRecord } from '@/lib/ai/connectionState';
 export type ConnectionAction =
@@ -181,6 +187,36 @@ function promptIsVisible(
   if (!prompt.when) return true;
   const current = inputs[routeInputKey(route, prompt.when.key)] ?? '';
   return prompt.when.op === 'eq' ? current === prompt.when.value : current !== prompt.when.value;
+}
+
+function focusProviderSubscriptions(connection: Readonly<ProviderConnection>): void {
+  const section = document.querySelector<HTMLElement>(
+    '[aria-labelledby="opencode-subscriptions-title"]',
+  );
+  if (!section) return;
+  const providerButton = section.querySelector<HTMLButtonElement>(
+    `[data-subscription-provider="${connection.providerId}"]`,
+  );
+  const firstButton = section.querySelector<HTMLButtonElement>(
+    'button[data-subscription-provider]',
+  );
+  section.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  (providerButton ?? firstButton)?.focus({ preventScroll: true });
+}
+
+/** Build the native Codex login command against the executable discovered for this connection. */
+export function buildCodexLoginCommand(executablePath?: string): string {
+  const executable = executablePath?.trim();
+  if (!executable || /[\u0000-\u001f\u007f]/u.test(executable)) return 'codex login';
+  const windows =
+    /Win/i.test(globalThis.navigator?.platform ?? globalThis.navigator?.userAgent ?? '') ||
+    /^[A-Za-z]:[\\/]/u.test(executable);
+  if (windows) return `& '${executable.replace(/'/g, "''")}' login`;
+  return `'${executable.replace(/'/g, "'\\''")}' login`;
+}
+
+function isNativeCodexConnection(connection: Readonly<ProviderConnection>): boolean {
+  return connection.id === 'openai-codex';
 }
 
 function OpenCodeSubscriptionCenter({
@@ -378,6 +414,7 @@ function OpenCodeSubscriptionCenter({
                   type="button"
                   size="sm"
                   disabled={busyRoute === routeKey}
+                  data-subscription-provider={route.providerId}
                   onClick={() => void start(route)}
                   aria-label={`Connect ${route.displayName} with ${route.label}`}
                 >
@@ -479,6 +516,46 @@ export function SubscriptionCliBridge({
       (ownedConnection ? createOpenCodeHttpClient(ownedConnection) : undefined),
     [ownedConnection, subscriptionClient],
   );
+
+  useEffect(() => {
+    const focusConnection = (raw: unknown) => {
+      if (
+        typeof raw !== 'string' ||
+        !CONNECT_CONNECTION_FOCUS_IDS.includes(raw as ConnectConnectionFocusId)
+      ) {
+        return;
+      }
+      const family = Object.values(PROVIDER_CATALOG).find((candidate) =>
+        candidate.connections.some((connection) => connection.id === raw),
+      );
+      if (!family) return;
+      setPreferredConnectionId(family.id, raw);
+      window.requestAnimationFrame(() => {
+        const target = document.querySelector<HTMLElement>(
+          `[data-connection-id="${raw}"]`,
+        );
+        const card = target?.closest<HTMLElement>('[data-connector-id]');
+        card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        target?.focus({ preventScroll: true });
+      });
+    };
+    try {
+      const pending = window.sessionStorage.getItem(CONNECTION_FOCUS_STORAGE_KEY);
+      if (pending) {
+        window.sessionStorage.removeItem(CONNECTION_FOCUS_STORAGE_KEY);
+        focusConnection(pending);
+      }
+    } catch {
+      // Direct event routing remains available when session storage is unavailable.
+    }
+    const onConnectionFocus = (event: Event) => {
+      focusConnection(
+        (event as CustomEvent<{ connectionId?: string }>).detail?.connectionId,
+      );
+    };
+    window.addEventListener('jarvis:settings:connection', onConnectionFocus);
+    return () => window.removeEventListener('jarvis:settings:connection', onConnectionFocus);
+  }, [setPreferredConnectionId]);
 
   useEffect(() => {
     if (records) return undefined;
@@ -653,6 +730,21 @@ export function SubscriptionCliBridge({
         return;
       }
       if (connection.mode === 'external-cli') {
+        if (isNativeCodexConnection(connection)) {
+          enqueueTerminalCommandBatch([
+            {
+              command: buildCodexLoginCommand(metadata[connection.id]?.executablePath),
+              label: 'Codex login',
+              target: 'new',
+            },
+          ]);
+          useUIStore.getState().setRoute('terminal');
+          toast.info(
+            'Codex sign-in started',
+            'Finish the native Codex OAuth flow in the new terminal, then refresh the connection.',
+          );
+          return;
+        }
         toast.info(
           'Legacy CLI status only',
           'VibeSpace Chat authentication now uses the OpenCode subscription routes above.',
@@ -837,7 +929,9 @@ export function SubscriptionCliBridge({
                         <span className="font-medium text-foreground/80">{routeTitle}</span>
                         <span className="mx-1.5 text-border">·</span>
                         <span>
-                          {connection.mode === 'external-cli'
+                          {connection.mode === 'external-cli' && isNativeCodexConnection(connection)
+                            ? 'Codex subscription'
+                            : connection.mode === 'external-cli'
                             ? 'Legacy CLI status'
                             : connectorModeLabel(connection.mode)}
                         </span>
@@ -854,7 +948,9 @@ export function SubscriptionCliBridge({
                       )}
                     >
                       {connection.mode === 'external-cli' && status === 'signed-in'
-                        ? 'Legacy session detected'
+                        ? isNativeCodexConnection(connection)
+                          ? 'Codex session detected'
+                          : 'Legacy session detected'
                         : connectorStatusLabel(status)}
                     </Badge>
                   </div>
@@ -882,8 +978,11 @@ export function SubscriptionCliBridge({
                           : 'border-border text-muted-foreground hover:text-foreground',
                       )}
                       onClick={() => setPreferredConnectionId(family.id, routeConnection.id)}
+                      data-connection-id={routeConnection.id}
                     >
-                      {routeConnection.mode === 'external-cli'
+                      {routeConnection.mode === 'external-cli' && isNativeCodexConnection(routeConnection)
+                        ? 'Codex subscription'
+                        : routeConnection.mode === 'external-cli'
                         ? 'Legacy CLI status'
                         : connectorModeLabel(routeConnection.mode)}
                     </button>
@@ -906,8 +1005,10 @@ export function SubscriptionCliBridge({
                 <dd className="text-foreground/90">{capabilitySummary(connection)}</dd>
                 <dt className="text-muted-foreground">Auth source</dt>
                 <dd className="text-foreground/90">
-                  {connection.mode === 'external-cli'
-                    ? 'Legacy CLI session (migration status only)'
+                  {connection.mode === 'external-cli' && isNativeCodexConnection(connection)
+                    ? 'Native Codex session'
+                    : connection.mode === 'external-cli'
+                      ? 'Legacy CLI session (migration status only)'
                     : connection.mode === 'local'
                       ? 'Local runtime'
                       : 'API key (Providers)'}
@@ -926,8 +1027,9 @@ export function SubscriptionCliBridge({
 
               {status === 'signed-in' ? (
                 <p className="mt-2 text-xs text-success">
-                  Legacy CLI session detected for migration status only. VibeSpace Chat
-                  authentication uses OpenCode provider routes above.
+                  {isNativeCodexConnection(connection)
+                    ? 'Codex CLI session detected. VibeSpace uses the native Codex runtime for Codex chats.'
+                    : 'Legacy CLI session detected for migration status only. VibeSpace Chat authentication uses OpenCode provider routes above.'}
                 </p>
               ) : null}
 
@@ -942,7 +1044,7 @@ export function SubscriptionCliBridge({
                 >
                   Refresh
                 </Button>
-                {connection.mode === 'external-cli' && onSignIn ? (
+                {connection.mode === 'external-cli' && (onSignIn || isNativeCodexConnection(connection)) ? (
                   <Button
                     type="button"
                     size="sm"
@@ -951,6 +1053,16 @@ export function SubscriptionCliBridge({
                     aria-label={`Sign in to ${connection.displayName}`}
                   >
                     Sign in
+                  </Button>
+                ) : connection.mode === 'external-cli' ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => focusProviderSubscriptions(connection)}
+                    aria-label={`Connect provider for ${connection.displayName}`}
+                  >
+                    Connect provider
                   </Button>
                 ) : connection.mode === 'native-api' ? (
                   <Button

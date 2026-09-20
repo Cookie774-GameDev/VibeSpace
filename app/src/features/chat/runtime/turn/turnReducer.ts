@@ -10,7 +10,11 @@ const EMPTY_SEGMENTS: readonly TurnPreviewSegment[] = Object.freeze([]);
 
 function sameSegment(left: TurnPreviewSegment, right: TurnPreviewSegment): boolean {
   if (left.kind !== right.kind || left.id !== right.id) return false;
-  if (left.kind === 'text' && right.kind === 'text') return left.text === right.text;
+  if (
+    (left.kind === 'text' && right.kind === 'text') ||
+    (left.kind === 'reasoning' && right.kind === 'reasoning')
+  )
+    return left.text === right.text;
   return (
     left.kind === 'tool' &&
     right.kind === 'tool' &&
@@ -26,9 +30,7 @@ function detachSegment(
   previous?: TurnPreviewSegment,
 ): TurnPreviewSegment {
   if (previous && sameSegment(previous, segment)) return previous;
-  return Object.isFrozen(segment)
-    ? segment
-    : (Object.freeze({ ...segment }) as TurnPreviewSegment);
+  return Object.isFrozen(segment) ? segment : (Object.freeze({ ...segment }) as TurnPreviewSegment);
 }
 
 function detachSnapshot(
@@ -173,8 +175,7 @@ export function reduceTurn(
         firstProviderEventAt: state.firstProviderEventAt ?? event.at,
         firstPublicTextAt:
           state.firstPublicTextAt ??
-          (event.snapshot.text ||
-          event.snapshot.segments.some((segment) => segment.kind === 'text')
+          (event.snapshot.text || event.snapshot.segments.some((segment) => segment.kind === 'text')
             ? event.at
             : undefined),
       });

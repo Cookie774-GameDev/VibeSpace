@@ -184,6 +184,24 @@ describe('executeNavigationCommand', () => {
     expect(port.openSettings).not.toHaveBeenCalled();
   });
 
+  it('routes an exact CLI connection target to the Connections surface', async () => {
+    const port = authority();
+    await expect(
+      executeNavigationCommand(
+        {
+          id: 'connections.open',
+          slots: { section: 'connections', connectionId: 'openai-codex' },
+        },
+        port,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      code: 'opened',
+      message: 'Opened openai-codex connections.',
+    });
+    expect(port.openProviderConnections).toHaveBeenCalledWith('openai-codex');
+  });
+
   it.each([undefined, null, 'true', 1])(
     'does not invent fullscreen state from a non-boolean observation: %s',
     async (observed) => {

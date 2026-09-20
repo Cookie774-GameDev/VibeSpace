@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createChatTokenOptimizationRuntime } from './chatRuntimeBridge';
 
 describe('chat token optimization runtime tokenizers', () => {
-  it('removes exact optional context duplicates and returns the retained IDs for kernel admission', async () => {
+  it('keeps every context item because Ponytail changes instructions, not user context', async () => {
     const runtime = createChatTokenOptimizationRuntime();
     const context = {
       kind: 'documentation' as const,
@@ -24,11 +24,9 @@ describe('chat token optimization runtime tokenizers', () => {
       ],
       messages: [{ role: 'user', content: 'Keep this exact request.' }],
     });
-    expect(result.selectedContextIds).toEqual(['first', 'explicit']);
-    expect(result.receipt.exclusions).toContainEqual(
-      expect.objectContaining({ reason: 'duplicate' }),
-    );
-    expect(result.receipt.estimatedTokensSaved).toBeGreaterThan(0);
+    expect(result.selectedContextIds).toEqual(['first', 'duplicate', 'explicit']);
+    expect(result.receipt.exclusions).toEqual([]);
+    expect(result.receipt.estimatedTokensSaved).toBe(0);
     expect(result.messages[0]?.content).toBe('Keep this exact request.');
     expect(result.receipt.modelId).toBe('selected-model');
   });
@@ -135,7 +133,7 @@ describe('chat token optimization runtime tokenizers', () => {
     expect(result.receipt).not.toHaveProperty('actualInputTokens');
   });
 
-  it('preserves the immediately previous exchange when protected context fills the budget', async () => {
+  it('fails closed when the context budget is small without trimming content', async () => {
     const runtime = createChatTokenOptimizationRuntime({
       loadOpenAiO200k: async () => ({
         encode: (text: string) =>
@@ -149,35 +147,38 @@ describe('chat token optimization runtime tokenizers', () => {
     });
     const protectedContext = Array.from({ length: 70 }, (_, index) => `rule-${index}`).join(' ');
 
-    const result = await runtime.optimizeMessages({
-      mode: 'normal',
-      providerId: 'openai',
-      modelId: 'gpt-5',
-      modelContextLimit: 100,
-      requestedOutputTokens: 20,
-      contextSegments: [
-        {
-          id: 'authority',
-          kind: 'system_instruction',
-          text: protectedContext,
-          relevance: 1,
-          protected: true,
-          reason: 'Protected authority',
-        },
-      ],
-      messages: [
-        { role: 'user', content: 'old unrelated question' },
-        { role: 'assistant', content: 'old unrelated answer' },
-        { role: 'user', content: 'remember exact codeword NEBULA COPPER 817 now' },
-        { role: 'assistant', content: 'saved exact codeword NEBULA COPPER 817' },
-        { role: 'user', content: 'what was the immediately previous codeword' },
-      ],
+    await expect(
+      runtime.optimizeMessages({
+        mode: 'normal',
+        providerId: 'openai',
+        modelId: 'gpt-5',
+        modelContextLimit: 100,
+        requestedOutputTokens: 20,
+        contextSegments: [
+          {
+            id: 'authority',
+            kind: 'system_instruction',
+            text: protectedContext,
+            relevance: 1,
+            protected: true,
+            reason: 'Protected authority',
+          },
+        ],
+        messages: [
+          { role: 'user', content: 'old unrelated question' },
+          { role: 'assistant', content: 'old unrelated answer' },
+          { role: 'user', content: 'remember exact codeword NEBULA COPPER 817 now' },
+          { role: 'assistant', content: 'saved exact codeword NEBULA COPPER 817' },
+          { role: 'user', content: 'what was the immediately previous codeword' },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      name: 'TokenOptimizationOverflowError',
+      receipt: expect.objectContaining({
+        fitsContext: false,
+        estimatedTokensSaved: 0,
+        excludedCount: 0,
+      }),
     });
-
-    expect(result.messages).toEqual([
-      { role: 'user', content: 'remember exact codeword NEBULA COPPER 817 now' },
-      { role: 'assistant', content: 'saved exact codeword NEBULA COPPER 817' },
-      { role: 'user', content: 'what was the immediately previous codeword' },
-    ]);
   });
 });

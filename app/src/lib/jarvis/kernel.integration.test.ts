@@ -1375,6 +1375,26 @@ describe('runJarvisKernelTurn explicit kernel integration', () => {
     expect(harness.deps.processResponse).not.toHaveBeenCalled();
   });
 
+  it('retains reported usage and public tool parts on failure without prose or success authority', async () => {
+    const input = turnInput();
+    const failure = new Error('tool_failed');
+    const harness = createKernelHarness(input, { response: Promise.reject(failure) });
+    const usage = { provider: harness.started.receipt.providerId, model: harness.started.receipt.modelId,
+      input_tokens: 17, output_tokens: 3, total_tokens: 23 };
+    const parts = [{ kind: 'tool_call' as const, tool: 'read', args: {}, call_id: 'read-1' },
+      { kind: 'tool_result' as const, call_id: 'read-1', error: 'Permission denied' }];
+    Object.assign(harness.started, { getPartialUsage: () => usage, getPartialParts: () => parts });
+    await expect(runJarvisKernelTurn(input, harness.deps)).rejects.toBe(failure);
+    expect(harness.commitKernelTurn).toHaveBeenCalledOnce();
+    const commit = harness.commitKernelTurn.mock.calls[0]![0];
+    expect(commit.assistantMessage.usage).toEqual(usage);
+    expect(commit.assistantMessage.parts).toEqual([...parts,
+      { kind: 'text', text: '[Incomplete response: generation failed.]' }]);
+    expect(commit.terminal.status).toBe('failed');
+    expect(harness.lifecycle.recordProviderResult).not.toHaveBeenCalled();
+    expect(harness.deps.processResponse).not.toHaveBeenCalled();
+  });
+
   it('does not retain partial text when response processing fails after provider completion', async () => {
     const input = turnInput();
     const harness = createKernelHarness(input);

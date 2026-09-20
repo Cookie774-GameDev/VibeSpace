@@ -61,9 +61,6 @@ export function createTokenOptimizationPreflightCompiler(
       ) {
         throw new Error('Token optimization changed the selected provider or model.');
       }
-      if (!optimized.receipt.fitsContext) {
-        throw new Error('Token optimization produced an invalid overflowing preflight.');
-      }
       return Object.freeze({
         providerId: optimized.providerId,
         modelId: optimized.modelId,

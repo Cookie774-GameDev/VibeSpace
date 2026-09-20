@@ -1,16 +1,52 @@
 import { act, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { classifyPreviewCommitTiming, StreamingChatPreview } from './StreamingChatPreview';
-import { clearAccountPreviews, setPreview, subscribeChatPreviews } from './streamingPreviewStore';
-const { ledger } = vi.hoisted(() => ({ ledger: vi.fn(() => null) }));
+import {
+  clearAccountPreviews,
+  setPreview,
+  subscribeChatPreviews,
+  type StreamingPreviewSegment,
+} from './streamingPreviewStore';
+const { activeAccount, ledger, reasoning } = vi.hoisted(() => ({
+  activeAccount: { value: 'perf-user' },
+  ledger: vi.fn(() => null),
+  reasoning: vi.fn(),
+}));
 vi.mock('./activity-ledger/AssistantActivityLedger', () => ({ AssistantActivityLedger: ledger }));
+vi.mock('./ThinkingDisclosure', () => ({
+  ThinkingDisclosure: ({ text }: { text: string }) => {
+    reasoning(text);
+    return <div data-testid="streaming-reasoning-row">{text}</div>;
+  },
+}));
 vi.mock('@/stores/auth', () => ({
   useAuthStore: (select: (value: unknown) => unknown) =>
-    select({ localUserId: 'perf-user', cloudSession: null }),
+    select({ localUserId: activeAccount.value, cloudSession: null }),
 }));
+const reasoningSegment = (id: string, text: string): StreamingPreviewSegment => ({
+  kind: 'reasoning',
+  id,
+  text,
+});
+const textSegment = (id: string, text: string): StreamingPreviewSegment => ({
+  kind: 'text',
+  id,
+  text,
+});
+const completedToolSegment = (id: string): StreamingPreviewSegment => ({
+  kind: 'tool',
+  id,
+  name: 'read',
+  status: 'completed',
+});
 afterEach(() => {
-  act(() => clearAccountPreviews('perf-user'));
+  act(() => {
+    clearAccountPreviews('perf-user');
+    clearAccountPreviews('other-user');
+  });
+  activeAccount.value = 'perf-user';
   ledger.mockClear();
+  reasoning.mockClear();
 });
 
 it('reports reversed preview clock ordering instead of clamping it to zero', () => {
@@ -50,6 +86,33 @@ it('does not duplicate public prose already present in ordered segments', () => 
   expect(view.getAllByText('START_ONCE')).toHaveLength(1);
 });
 
+it('rerenders historical text replacement while keeping the active tail path narrow', () => {
+  setPreview({
+    accountId: 'perf-user',
+    chatId: 'historical-replacement',
+    requestId: 'historical-request',
+    runId: 'historical-run',
+    text: '',
+    updatedAt: 1,
+    segments: [textSegment('history', 'old historical text'), completedToolSegment('anchor')],
+  });
+  const view = render(<StreamingChatPreview chatId="historical-replacement" />);
+  expect(view.getByText('old historical text')).toBeTruthy();
+  act(() =>
+    setPreview({
+      accountId: 'perf-user',
+      chatId: 'historical-replacement',
+      requestId: 'historical-request',
+      runId: 'historical-run',
+      text: '',
+      updatedAt: 2,
+      segments: [textSegment('history', 'new historical text'), completedToolSegment('anchor')],
+    }),
+  );
+  expect(view.queryByText('old historical text')).toBeNull();
+  expect(view.getByText('new historical text')).toBeTruthy();
+});
+
 it('makes the latest public text visible before ordinary store subscribers run', () => {
   const view = render(<StreamingChatPreview chatId="fast-visible" fallback={<div>Waiting</div>} />);
   const observations: string[] = [];
@@ -79,7 +142,7 @@ it('makes the latest public text visible before ordinary store subscribers run',
   }
 });
 
-it('records the first fast visible commit once per run after visibility is committed', async () => {
+it('records every fast visible publication after visibility is committed', async () => {
   const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
   const rows: Array<Record<string, unknown>> = [];
   const stop = appActivityLog.subscribe((event) => {
@@ -110,7 +173,7 @@ it('records the first fast visible commit once per run after visibility is commi
       });
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       requestId: 'fast-diag-request',
       runId: 'fast-diag-run',
@@ -119,6 +182,96 @@ it('records the first fast visible commit once per run after visibility is commi
   } finally {
     stop();
   }
+});
+
+it('updates only the changed reasoning row and records one committed publication', async () => {
+  const { appActivityLog } = await import('@/lib/diagnostics/appActivityLog');
+  const commits: Array<Record<string, unknown>> = [];
+  const stop = appActivityLog.subscribe((event) => {
+    if (event.kind !== 'ui.preview' || event.phase !== 'committed') return;
+    const data = event.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const row = data as Record<string, unknown>;
+      if (row.chatId === 'reasoning-isolated') commits.push(row);
+    }
+  });
+  const base = {
+    accountId: 'perf-user',
+    chatId: 'reasoning-isolated',
+    requestId: 'reasoning-request',
+    runId: 'reasoning-run',
+    text: '',
+    updatedAt: 1,
+    segments: [
+      reasoningSegment('reasoning-one', 'first thought'),
+      reasoningSegment('reasoning-two', 'second thought'),
+      completedToolSegment('reasoning-tool'),
+    ],
+  };
+  setPreview(base);
+  render(<StreamingChatPreview chatId="reasoning-isolated" />);
+  expect(reasoning).toHaveBeenCalledTimes(2);
+  act(() =>
+    setPreview({
+      ...base,
+      updatedAt: 2,
+      segments: [
+        reasoningSegment('reasoning-one', 'first thought updated'),
+        reasoningSegment('reasoning-two', 'second thought'),
+        completedToolSegment('reasoning-tool'),
+      ],
+    }),
+  );
+  expect(reasoning).toHaveBeenCalledTimes(3);
+  expect(reasoning).toHaveBeenLastCalledWith('first thought updated');
+  expect(commits).toHaveLength(2);
+  expect(commits.every((row) => typeof row.uiCommitMs === 'number')).toBe(true);
+  stop();
+});
+
+it('does not reuse reasoning text across a same-chat run or account switch', () => {
+  const view = render(<StreamingChatPreview chatId="identity-isolated" />);
+  act(() =>
+    setPreview({
+      accountId: 'perf-user',
+      chatId: 'identity-isolated',
+      requestId: 'old-request',
+      runId: 'old-run',
+      text: '',
+      updatedAt: 1,
+      segments: [reasoningSegment('same-segment', 'old run reasoning')],
+    }),
+  );
+  expect(view.getByText('old run reasoning')).toBeTruthy();
+  act(() =>
+    setPreview({
+      accountId: 'perf-user',
+      chatId: 'identity-isolated',
+      requestId: 'new-request',
+      runId: 'new-run',
+      text: '',
+      updatedAt: 2,
+      segments: [reasoningSegment('same-segment', 'new run reasoning')],
+    }),
+  );
+  expect(view.queryByText('old run reasoning')).toBeNull();
+  expect(view.getByText('new run reasoning')).toBeTruthy();
+
+  activeAccount.value = 'other-user';
+  act(() =>
+    setPreview({
+      accountId: 'other-user',
+      chatId: 'identity-isolated',
+      requestId: 'other-request',
+      runId: 'other-run',
+      text: '',
+      updatedAt: 3,
+      segments: [reasoningSegment('same-segment', 'other account reasoning')],
+    }),
+  );
+  view.rerender(<StreamingChatPreview chatId="identity-isolated" />);
+  expect(view.queryByText('new run reasoning')).toBeNull();
+  expect(view.getByText('other account reasoning')).toBeTruthy();
 });
 
 it('reports skipped initial publications instead of treating the first commit as lossless', async () => {
@@ -140,8 +293,12 @@ it('reports skipped initial publications instead of treating the first commit as
           chatId: 'initial-coalesce',
           requestId: 'r-initial',
           runId: 'run-initial',
-          text: `Public ${i}`,
+          text: '',
           updatedAt: i,
+          segments: [
+            textSegment('historical', `Public ${i}`),
+            completedToolSegment('anchor'),
+          ],
         });
     });
     expect(rows).toHaveLength(1);
@@ -205,17 +362,37 @@ it('accounts for every coalesced publication instead of silently dropping it', a
       runId: 'perf-run-coalesce',
       text: '',
       updatedAt: 1,
+      segments: [
+        textSegment('historical', 'delta-0'),
+        completedToolSegment('anchor'),
+      ],
     };
     render(<StreamingChatPreview chatId="perf-chat-coalesce" />);
     act(() => {
-      setPreview({ ...base, updatedAt: 2, text: 'delta-1' });
+      setPreview({
+        ...base,
+        updatedAt: 2,
+        segments: [textSegment('historical', 'delta-1'), completedToolSegment('anchor')],
+      });
     });
     // Multiple synchronous publications coalesce into one React commit; the
     // skipped revisions must still be reported, never assigned zero latency.
     act(() => {
-      setPreview({ ...base, updatedAt: 3, text: 'delta-2' });
-      setPreview({ ...base, updatedAt: 4, text: 'delta-3' });
-      setPreview({ ...base, updatedAt: 5, text: 'delta-4' });
+      setPreview({
+        ...base,
+        updatedAt: 3,
+        segments: [textSegment('historical', 'delta-2'), completedToolSegment('anchor')],
+      });
+      setPreview({
+        ...base,
+        updatedAt: 4,
+        segments: [textSegment('historical', 'delta-3'), completedToolSegment('anchor')],
+      });
+      setPreview({
+        ...base,
+        updatedAt: 5,
+        segments: [textSegment('historical', 'delta-4'), completedToolSegment('anchor')],
+      });
     });
     const committed = events.filter((event) => event.phase === 'committed');
     expect(committed).toHaveLength(2);
@@ -242,6 +419,10 @@ it('does not count another chat’s publications as missed updates for this chat
       runId: 'run-a',
       text: '',
       updatedAt: 1,
+      segments: [
+        textSegment('historical-a', 'a0'),
+        completedToolSegment('anchor-a'),
+      ],
     };
     const b = {
       accountId: 'perf-user',
@@ -250,15 +431,43 @@ it('does not count another chat’s publications as missed updates for this chat
       runId: 'run-b',
       text: '',
       updatedAt: 1,
+      segments: [
+        textSegment('historical-b', 'b0'),
+        completedToolSegment('anchor-b'),
+      ],
     };
     // A revision 1, three B publications, then A again: actual missed A = 0.
-    act(() => setPreview({ ...a, updatedAt: 2, text: 'a1' }));
+    act(() =>
+      setPreview({
+        ...a,
+        updatedAt: 2,
+        segments: [textSegment('historical-a', 'a1'), completedToolSegment('anchor-a')],
+      }),
+    );
     act(() => {
-      setPreview({ ...b, updatedAt: 2, text: 'b1' });
-      setPreview({ ...b, updatedAt: 3, text: 'b2' });
-      setPreview({ ...b, updatedAt: 4, text: 'b3' });
+      setPreview({
+        ...b,
+        updatedAt: 2,
+        segments: [textSegment('historical-b', 'b1'), completedToolSegment('anchor-b')],
+      });
+      setPreview({
+        ...b,
+        updatedAt: 3,
+        segments: [textSegment('historical-b', 'b2'), completedToolSegment('anchor-b')],
+      });
+      setPreview({
+        ...b,
+        updatedAt: 4,
+        segments: [textSegment('historical-b', 'b3'), completedToolSegment('anchor-b')],
+      });
     });
-    act(() => setPreview({ ...a, updatedAt: 3, text: 'a2' }));
+    act(() =>
+      setPreview({
+        ...a,
+        updatedAt: 3,
+        segments: [textSegment('historical-a', 'a2'), completedToolSegment('anchor-a')],
+      }),
+    );
     const aCommits = events.filter(
       (event) =>
         event.phase === 'committed' &&

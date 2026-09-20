@@ -21,6 +21,7 @@ import { OPENAI_API_CONNECTION, QWEN_API_CONNECTION } from './adapters/nativeCat
 import { LocalAdapterRegistry } from '@/features/model-foundry/adapterRegistry';
 import * as canonicalCatalog from './catalog/canonicalModelCatalog';
 import type { ProviderDiscoveredModel } from './adapters/types';
+import { resetDiscoveredConnectionModelsForTests } from './connectionCatalog';
 import {
   AI_CONNECTION_STATE_EVENT,
   markConnectionSessionChecked,
@@ -36,6 +37,10 @@ const { ensureExternalConnectionAutoDetection, isConnectionSessionChecked } = vi
 const { invalidatePersistentModelCache, listPersistentOpenCodeModels } = vi.hoisted(() => ({
   invalidatePersistentModelCache: vi.fn(),
   listPersistentOpenCodeModels: vi.fn(async (): Promise<readonly ProviderDiscoveredModel[]> => []),
+}));
+const { invalidatePersistentCodexModelCache, listPersistentCodexModels } = vi.hoisted(() => ({
+  invalidatePersistentCodexModelCache: vi.fn(),
+  listPersistentCodexModels: vi.fn(async (): Promise<readonly ProviderDiscoveredModel[]> => []),
 }));
 const { refreshConnectedProviderModelsMock } = vi.hoisted(() => ({
   refreshConnectedProviderModelsMock: vi.fn(async () => []),
@@ -97,6 +102,11 @@ vi.mock('./adapters/opencodePersistent', () => ({
   },
 }));
 
+vi.mock('./adapters/codexPersistent', () => ({
+  invalidateCodexPersistentModelCache: invalidatePersistentCodexModelCache,
+  codexPersistentAdapter: { listModels: listPersistentCodexModels },
+}));
+
 vi.mock('./providerModelCatalog', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./providerModelCatalog')>()),
   refreshConnectedProviderModels: refreshConnectedProviderModelsMock,
@@ -116,6 +126,10 @@ describe('useAccessibleChatModels', () => {
     isConnectionSessionChecked.mockReturnValue(false);
     listPersistentOpenCodeModels.mockReset();
     listPersistentOpenCodeModels.mockResolvedValue([]);
+    listPersistentCodexModels.mockReset();
+    listPersistentCodexModels.mockResolvedValue([]);
+    invalidatePersistentCodexModelCache.mockClear();
+    resetDiscoveredConnectionModelsForTests();
     refreshConnectedProviderModelsMock.mockClear();
     refreshConnectedProviderModelsMock.mockResolvedValue([]);
     runtimeManagerHarness.reset();
@@ -970,6 +984,33 @@ describe('useAccessibleChatModels', () => {
     ).toBe(false);
     expect(readOpenCodeCatalogEvidence()).toBeUndefined();
     expect(document.documentElement.getAttribute(OPEN_CODE_CATALOG_EVIDENCE_ATTRIBUTE)).toBeNull();
+  });
+
+  it('discovers exact authenticated Codex models for the openai-codex connection', async () => {
+    isConnectionSessionChecked.mockImplementation((id) => id === 'openai-codex');
+    listPersistentCodexModels.mockResolvedValue([
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', variants: ['low', 'high'] },
+    ]);
+    writeConnectionMetadata({
+      'openai-codex': {
+        installation: 'installed',
+        auth: 'authenticated',
+        lastCheckedAt: 1,
+      },
+    });
+
+    const { result } = renderHook(() => useAccessibleChatModels());
+
+    await waitFor(() => expect(listPersistentCodexModels).toHaveBeenCalledOnce());
+    const routes = result.current.flatOptions.flatMap((option) => option.alternativeRoutes ?? [option]);
+    expect(routes).toEqual([
+      expect.objectContaining({
+        connectionId: 'openai-codex',
+        modelId: 'gpt-5.6-luna',
+        available: true,
+        variants: ['low', 'high'],
+      }),
+    ]);
   });
 
   it('keeps a checked but unknown OpenCode session fail closed and clears stale evidence', async () => {

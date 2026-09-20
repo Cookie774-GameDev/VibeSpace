@@ -28,25 +28,29 @@ describe('kernel token optimization admission', () => {
   });
 
   it.each(['saver', 'normal', 'final_boss'] as const)(
-    'applies %s to kernel inputs while retaining protected content and identity',
+    'keeps all kernel inputs for %s while Ponytail supplies behavior instructions',
     async (mode) => {
       const result = await optimizeKernelRuntimeContext({ ...base, mode });
-      expect(result.blocks).toEqual([base.blocks[0], base.blocks[1], base.blocks[4]]);
+      expect(result.blocks).toEqual(base.blocks);
       expect(result.messages).toEqual(base.messages);
       expect(result.receipt).toMatchObject({
         mode,
         providerId: base.providerId,
         modelId: base.modelId,
         modelChanged: false,
+        estimatedTokensSaved: 0,
       });
-      expect(result.receipt!.estimatedTokensSaved).toBeGreaterThan(0);
+      expect(result.receipt!.exclusions).toEqual([]);
     },
   );
 
-  it('never silently falls back after cancellation or protected context overflow', async () => {
+  it('fails closed when estimated context exceeds the selected window', async () => {
     await expect(
       optimizeKernelRuntimeContext({ ...base, mode: 'saver', modelContextLimit: 1 }),
-    ).rejects.toThrow(/Protected context/);
+    ).rejects.toMatchObject({
+      name: 'TokenOptimizationOverflowError',
+      receipt: expect.objectContaining({ fitsContext: false, estimatedTokensSaved: 0 }),
+    });
     await expect(
       optimizeKernelRuntimeContext({ ...base, mode: 'saver', signal: AbortSignal.abort() }),
     ).rejects.toMatchObject({ name: 'AbortError' });

@@ -5,10 +5,10 @@ import { createCodexPersistentAdapter, resolveCodexExecutable } from './codexPer
 const connection: ProviderConnection = {
   id: 'openai-codex',
   adapterId: 'codex-app-server',
-  providerId: 'opencode-go',
-  displayName: 'Codex via OpenCodex',
+  providerId: 'openai',
+  displayName: 'Codex',
   mode: 'external-cli',
-  authSource: 'opencode-provider-session',
+  authSource: 'codex-cli-session',
   promptTransport: 'native-system',
   enabled: true,
   capabilities: {
@@ -35,7 +35,7 @@ async function* frames(usageUpdates: Array<Record<string, unknown>> = []) {
     result: {
       data: [
         {
-          model: 'opencode-go/deepseek-v4-flash-vision-exp',
+          model: 'gpt-5.6-luna',
           supportedReasoningEfforts: [],
           serviceTiers: [],
         },
@@ -47,7 +47,7 @@ async function* frames(usageUpdates: Array<Record<string, unknown>> = []) {
     id: 'request_1_thread',
     result: {
       thread: { id: 'thread_native_1' },
-      model: 'opencode-go/deepseek-v4-flash-vision-exp',
+      model: 'gpt-5.6-luna',
       modelProvider: 'openai',
       serviceTier: null,
       cwd: 'C:\\workspace',
@@ -135,11 +135,12 @@ it.each([false, true])(
     for await (const _ of adapter.send!({
       requestId: 'request_1',
       connection,
+      codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' },
       chatId: 'chat',
       prompt: 'Read the files and make an HTML.',
       historyPrompt: 'Earlier conversation. Read the files and make an HTML.',
       systemPrompt: 'Application policy and selected Ponytail skill.',
-      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      modelId: 'gpt-5.6-luna',
       workingDirectory: 'C:\\workspace',
       interactionMode: 'ask',
       ...(resume ? { sessionId: 'thread_native_1' } : {}),
@@ -194,9 +195,10 @@ it('reports the entire Codex turn without prior-turn counts or duplicate snapsho
   for await (const event of adapter.send!({
     requestId: 'request_1',
     connection,
+    codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' },
     chatId: 'chat',
     prompt: 'Read the reference.',
-    modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+    modelId: 'gpt-5.6-luna',
     workingDirectory: 'C:\\workspace',
     interactionMode: 'ask',
   })) {

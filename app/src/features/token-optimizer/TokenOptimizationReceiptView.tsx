@@ -66,9 +66,9 @@ export function TokenOptimizationReceiptView({
 
       {receipt.mode === 'saver' ? (
         <p>
-          Ponytail Full guides this turn. These counts measure local context trimming only;
-          they do not measure Ponytail's effect on tool calls or output. Zero means no input
-          was removed, not that Ponytail was disabled. Total savings require a comparable run.
+          Ponytail Full guides this turn. These counts measure local context trimming only; they do
+          not measure Ponytail's effect on tool calls or output. Zero means no input was removed,
+          not that Ponytail was disabled. Total savings require a comparable run.
         </p>
       ) : null}
 
@@ -133,7 +133,12 @@ export function TokenOptimizationReceiptView({
               </div>
             )}
           </>
-        ) : null}
+        ) : (
+          <div>
+            <dt>Provider usage</dt>
+            <dd>Unavailable for this turn</dd>
+          </div>
+        )}
       </dl>
 
       <div className="token-opt-budget-rail">
@@ -155,7 +160,7 @@ export function TokenOptimizationReceiptView({
 
       {!receipt.fitsContext ? (
         <p className="token-opt-overflow" role="alert">
-          Protected context exceeds this model by {formatCount(receipt.overflowTokens)} tokens.
+          Estimated context exceeds this model by {formatCount(receipt.overflowTokens)} tokens.
           Nothing was removed.
         </p>
       ) : null}

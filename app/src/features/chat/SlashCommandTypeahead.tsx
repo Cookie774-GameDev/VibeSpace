@@ -60,6 +60,8 @@ export interface SlashCommandDef {
   takesArg?: boolean;
   argPlaceholder?: string;
   hasOptions?: boolean;
+  /** Runtime that owns this command's picker exposure. Unscoped commands are shared. */
+  backend?: 'codex' | 'opencode';
 }
 
 export const SLASH_CMD_ALIASES: Readonly<Record<string, string>> = SLASH_COMMAND_ALIASES;
@@ -96,10 +98,14 @@ export function findSlashCommandDef(cmd: string): SlashCommandDef | undefined {
   return def;
 }
 
-/** Slash commands visible in product typeahead / search (Hive filtered when gated). */
-export function getVisibleSlashCommands(): SlashCommandDef[] {
-  if (isHiveProductEnabled()) return SLASH_COMMANDS;
-  return SLASH_COMMANDS.filter((entry) => entry.cmd !== 'hive');
+/** Slash commands visible in product typeahead / search (Hive and runtime filtered). */
+export function getVisibleSlashCommands(
+  backend?: SlashCommandDef['backend'],
+): SlashCommandDef[] {
+  return SLASH_COMMANDS.filter((entry) => {
+    if (entry.cmd === 'hive' && !isHiveProductEnabled()) return false;
+    return entry.backend === undefined || entry.backend === backend;
+  });
 }
 
 function fuzzyTokenScore(query: string, target: string): number {
@@ -151,11 +157,12 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   },
   {
     cmd: 'goal',
-    description: 'Run the registered OpenCode long-duration goal command',
+    description: 'Set a native Codex goal for this chat',
     icon: ClipboardList,
     category: 'chat',
     takesArg: true,
     argPlaceholder: '<objective>',
+    backend: 'codex',
   },
   {
     cmd: 'agent',
@@ -464,15 +471,17 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
 
 const CATEGORY_LABELS: Record<string, string> = {
   chat: 'Chat context',
+  codex: 'Custom commands · Codex',
+  opencode: 'Custom commands · OpenCode',
   navigation: 'Navigation',
   utility: 'Utility',
 };
 
-const CATEGORY_ORDER = ['chat', 'navigation', 'utility'];
+const CATEGORY_ORDER = ['chat', 'codex', 'opencode', 'navigation', 'utility'];
 
 export function orderSlashCommandsForDisplay(commands: SlashCommandDef[]): SlashCommandDef[] {
   const grouped = commands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
-    const cat = cmd.category ?? 'utility';
+    const cat = cmd.backend ?? cmd.category ?? 'utility';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(cmd);
     return acc;
@@ -560,7 +569,7 @@ export const SlashCommandTypeahead = forwardRef<
   }, [selectedCmd]);
 
   const groupedCommands = displayCommands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
-    const cat = cmd.category ?? 'utility';
+    const cat = cmd.backend ?? cmd.category ?? 'utility';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(cmd);
     return acc;

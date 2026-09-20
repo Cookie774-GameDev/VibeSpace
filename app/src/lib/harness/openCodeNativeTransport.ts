@@ -11,6 +11,7 @@ type NativeTransportRoute =
   | { kind: 'health' }
   | { kind: 'config' }
   | { kind: 'config_providers' }
+  | { kind: 'command_list' }
   | { kind: 'provider_auth' }
   | { kind: 'provider_status' }
   | { kind: 'provider_authorize'; providerId: string }
@@ -122,6 +123,7 @@ function nativeRoute(
   if (key === 'GET /global/health') route = { kind: 'health' };
   else if (key === 'PATCH /config') route = { kind: 'config' };
   else if (key === 'GET /config/providers') route = { kind: 'config_providers' };
+  else if (key === 'GET /command') route = { kind: 'command_list' };
   else if (key === 'GET /provider/auth') route = { kind: 'provider_auth' };
   else if (key === 'GET /provider') route = { kind: 'provider_status' };
   else if (

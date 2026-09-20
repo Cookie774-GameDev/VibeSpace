@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { createCodexPersistentAdapter } from './codexPersistent';
 import type { ProviderConnection, ProviderRequest } from './types';
 
-const model = 'opencode-go/deepseek-v4-flash-vision-exp';
+const model = 'gpt-5.6-luna';
 const request: ProviderRequest = {
   requestId: 'recovery', connection: { id: 'openai-codex' } as ProviderConnection,
+  codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: model },
   modelId: model, prompt: 'Continue the task.',
   workingDirectory: 'C:\\workspace', interactionMode: 'ask',
   accountId: 'recovery-account', chatId: 'recovery-chat',

@@ -22,7 +22,7 @@ export type NavigationAuthorityPort = Readonly<{
   goBack: () => void;
   goForward: () => void;
   openSettings: (section?: SettingsTab) => void;
-  openProviderConnections?: (providerId?: string) => void;
+  openProviderConnections?: (target?: string) => void;
   closeSettings: () => void;
   openPalette: () => void;
   openLauncher: () => void;
@@ -59,8 +59,8 @@ const defaultPort: NavigationAuthorityPort = {
       window.dispatchEvent(new CustomEvent('jarvis:settings:tab', { detail: { tab: section } }));
     }
   },
-  openProviderConnections: (providerId) => {
-    const result = openProviderConnectionEntrypoint(providerId);
+  openProviderConnections: (target) => {
+    const result = openProviderConnectionEntrypoint(target);
     if (!result.ok) throw new Error('provider_connection_target_invalid');
   },
   closeSettings: () => useUIStore.getState().setSettingsOpen(false),
@@ -94,7 +94,8 @@ function validSlotSchema(request: NavigationCommandRequest): boolean {
     return (
       hasExactKeys(request.slots, []) ||
       hasExactKeys(request.slots, ['section']) ||
-      hasExactKeys(request.slots, ['providerId', 'section'])
+      hasExactKeys(request.slots, ['providerId', 'section']) ||
+      hasExactKeys(request.slots, ['connectionId', 'section'])
     );
   }
   return hasExactKeys(request.slots, []);
@@ -160,22 +161,33 @@ async function executeNavigationCommandUnsafe(
   if (request.id === 'connections.open') {
     const keys = Object.keys(request.slots);
     if (
-      (keys.length > 0 && request.slots.section !== 'providers') ||
-      keys.some((key) => key !== 'section' && key !== 'providerId')
+      (keys.length > 0 &&
+        request.slots.section !== 'providers' &&
+        request.slots.section !== 'connections') ||
+      keys.some((key) => key !== 'section' && key !== 'providerId' && key !== 'connectionId')
     ) {
       return invalid('Provider connections do not accept command arguments.');
     }
-    const target = parseProviderConnectionTarget(request.slots.providerId);
+    const targetValue = request.slots.connectionId ?? request.slots.providerId;
+    const target = parseProviderConnectionTarget(targetValue);
     if (!target.ok) return invalid(target.reason);
+    if (target.connectionId && request.slots.section !== 'connections') {
+      return invalid('CLI connections require the Connections surface.');
+    }
+    if (target.providerId && request.slots.section !== 'providers') {
+      return invalid('Provider keys require the Providers surface.');
+    }
     if (port.openProviderConnections) {
-      port.openProviderConnections(target.providerId);
+      port.openProviderConnections(target.connectionId ?? target.providerId);
     } else if (!target.providerId) {
-      port.openSettings('providers');
+      port.openSettings(request.slots.section === 'providers' ? 'providers' : 'connections');
     } else {
       return invalid('Choose one supported provider in Settings.');
     }
     return success(
-      target.providerId
+      target.connectionId
+        ? `Opened ${target.connectionId} connections.`
+        : target.providerId
         ? `Opened provider connections for ${target.providerId}.`
         : 'Opened provider connections.',
     );

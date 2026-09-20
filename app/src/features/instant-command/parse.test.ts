@@ -129,7 +129,7 @@ describe('parseInstantCommand', () => {
     ['go back', 'page.back', {}],
     ['open command palette', 'palette.open', {}],
     ['enter fullscreen', 'fullscreen.set', { enabled: true }],
-    ['/connect', 'connections.open', { section: 'providers' }],
+    ['/connect', 'connections.open', { section: 'connections' }],
   ])('classifies catalog navigation locally: %s', (input, commandId, slots) => {
     expect(classifyInstantCommandInput(input)).toEqual({
       status: 'matched',

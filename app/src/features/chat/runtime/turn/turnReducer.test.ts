@@ -99,4 +99,33 @@ describe('canonical turn reducer', () => {
       }),
     ).toThrow('turn_identity_rebind_rejected');
   });
+
+  it('retains ordered reasoning segments and reuses unchanged segment objects', () => {
+    let state = reduceTurn(undefined, { type: 'turn.accepted', identity, at: 1 });
+    const reasoning = { kind: 'reasoning' as const, id: 'reasoning-1', text: 'Public thought' };
+    state = reduceTurn(state, {
+      type: 'public.snapshot',
+      at: 2,
+      snapshot: {
+        text: 'Ready',
+        updatedAt: 2,
+        segments: [reasoning, { kind: 'text', id: 'text-1', text: 'Ready' }],
+      },
+    });
+    const first = state.public.segments[0];
+    state = reduceTurn(state, {
+      type: 'public.snapshot',
+      at: 3,
+      snapshot: {
+        text: 'Ready',
+        updatedAt: 3,
+        segments: [reasoning, { kind: 'text', id: 'text-1', text: 'Ready' }],
+      },
+    });
+    expect(state.public.segments[0]).toBe(first);
+    expect(state.public.segments).toEqual([
+      { kind: 'reasoning', id: 'reasoning-1', text: 'Public thought' },
+      { kind: 'text', id: 'text-1', text: 'Ready' },
+    ]);
+  });
 });

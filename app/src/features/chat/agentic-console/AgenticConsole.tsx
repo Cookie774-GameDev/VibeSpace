@@ -58,12 +58,14 @@ import {
 } from './preferences';
 import { PerceptibleAgentMotionIndicator, resolveAgentMotion } from './AgentMotionIndicator';
 import { SubagentsHeaderButton } from './SubagentsMiniPanel';
+import { getChatPreview, subscribeChatPreviews } from '../streamingPreviewStore';
 import { collectNativeTaskRuns, type NativeTaskRun } from './nativeTaskRuns';
 import { buildChatSessionExport, downloadChatSessionExport } from './sessionExport';
 import { loadChatDebugLog } from './chatDebugLogData';
 import { downloadChatDebugLog } from './chatDebugLogHtml';
 import { chatRepo, messageRepo } from '@/lib/db';
-import { getActiveAccountIdentity } from '@/lib/accountIdentity';
+import { getActiveAccountIdentity, resolveAccountIdentity } from '@/lib/accountIdentity';
+import { useAuthStore } from '@/stores/auth';
 import { useJarvisCommandCenterBinding } from '@/features/jarvis-command-center/JarvisCommandCenter';
 import './agentic-console.css';
 
@@ -916,6 +918,32 @@ function nativeTranscriptMessage(message: Message, modelHint?: string): Message 
   };
 }
 
+function useActivePreviewRequestId(chatId: string): string {
+  const accountId = useAuthStore((state) => resolveAccountIdentity(state)?.accountId ?? '');
+  const subscribe = React.useCallback(
+    (listener: () => void) =>
+      accountId ? subscribeChatPreviews(accountId, chatId, listener) : () => undefined,
+    [accountId, chatId],
+  );
+  const read = React.useCallback(
+    () => getChatPreview(accountId, chatId)?.requestId ?? '',
+    [accountId, chatId],
+  );
+  return React.useSyncExternalStore(subscribe, read, () => '');
+}
+
+function previewOwnsTranscriptBlock(
+  block: TranscriptBlock,
+  sourceMessage: Message | undefined,
+  previewRequestId: string,
+): boolean {
+  if (!previewRequestId || !sourceMessage || String(sourceMessage.id) !== previewRequestId) {
+    return false;
+  }
+  return block.kind === 'answer' || block.kind === 'reasoning' || block.kind === 'command' ||
+    block.kind === 'tool' || block.kind === 'diff';
+}
+
 function latestTurnAuditMessage(
   messages: readonly Message[],
   latestUserTurnStartedAt: number,
@@ -958,6 +986,7 @@ export function AgenticConsole({
   const [mountedCount, setMountedCount] = React.useState(MAX_MOUNTED_BLOCKS);
   const [latestTurnDetailsExpanded, setLatestTurnDetailsExpanded] = React.useState(true);
   const rootRef = React.useRef<HTMLElement>(null);
+  const activePreviewRequestId = useActivePreviewRequestId(chatId);
   const summary = React.useMemo(
     () => summarizeAgenticSession(messages, activity, sessionEvidence),
     [messages, activity, sessionEvidence],
@@ -1336,7 +1365,17 @@ export function AgenticConsole({
             const inlineContextReferences = inlineLegacyMessage?.parts.filter(
               (part) => part.kind === 'jarvis_source_ref',
             );
+            const previewOwnsBlock = previewOwnsTranscriptBlock(
+              block,
+              sourceMessage,
+              activePreviewRequestId,
+            );
+            const previewOwnsSource = Boolean(
+              activePreviewRequestId && sourceMessage?.id &&
+                String(sourceMessage.id) === activePreviewRequestId,
+            );
             const showLedger =
+              !previewOwnsSource &&
               sourceMessage?.role === 'assistant' &&
               lastVisibleIndexBySource.get(block.sourceId) === index &&
               assistantLedgerOwnerIds.has(String(sourceMessage.id)) &&
@@ -1345,7 +1384,7 @@ export function AgenticConsole({
               !(turnActivityMessage && sourceMessage.created_at >= latestUserTurnStartedAt);
             return (
               <React.Fragment key={block.id}>
-                {inlineLegacyMessage ? (
+                {previewOwnsBlock ? null : inlineLegacyMessage ? (
                   <div className="agentic-legacy" data-agentic-fallback="structured-message">
                     <MessageBubble
                       message={{
@@ -1372,7 +1411,7 @@ export function AgenticConsole({
                   />
                 )}
                 {block.id === latestPromptBlockId ? turnTopMatter : null}
-                {nativeCheckpointLedger &&
+                {nativeCheckpointLedger && !previewOwnsSource &&
                 !(latestTurnActivityCollapsed && sourceIsLatestAssistantTurn) ? (
                   <>
                     {nativeCheckpointLedger.needsNeutralCheckpoint && sessionIsActive ? (

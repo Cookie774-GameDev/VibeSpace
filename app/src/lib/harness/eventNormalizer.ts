@@ -43,8 +43,11 @@ function readSessionId(properties: UnknownRecord): string | undefined {
 
 function readErrorMessage(properties: UnknownRecord): string {
   const error = asRecord(properties.error);
+  const data = error ? asRecord(error.data) : undefined;
   const message =
     (error && asBoundedString(error.message, MAX_ERROR_LENGTH)) ??
+    (data && asBoundedString(data.message, MAX_ERROR_LENGTH)) ??
+    asBoundedString(properties.error, MAX_ERROR_LENGTH) ??
     asBoundedString(properties.message, MAX_ERROR_LENGTH) ??
     'OpenCode session failed.';
 
@@ -55,8 +58,9 @@ function readErrorFields(
   properties: UnknownRecord,
 ): Pick<Extract<HarnessEvent, { type: 'error' }>, 'code' | 'providerId' | 'modelId' | 'retryable' | 'retryAfterMs' | 'resetAt'> {
   const error = asRecord(properties.error);
+  const data = error ? asRecord(error.data) : undefined;
   const readValue = (...keys: string[]): unknown => {
-    for (const source of [error, properties]) {
+    for (const source of [error, data, properties]) {
       for (const key of keys) {
         if (source?.[key] !== undefined) return source[key];
       }
@@ -73,7 +77,7 @@ function readErrorFields(
     readValue('retryAfterMs', 'retry_after_ms', 'retryAfter', 'retry_after'),
   );
   const resetAt = asFiniteNumber(readValue('resetAt', 'reset_at', 'resetsAt'));
-  const retryable = readValue('retryable');
+  const retryable = readValue('retryable', 'isRetryable');
   return {
     ...(code ? { code } : {}),
     ...(providerId ? { providerId } : {}),

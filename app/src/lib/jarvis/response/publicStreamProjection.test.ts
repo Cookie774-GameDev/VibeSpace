@@ -7,15 +7,17 @@ describe('request-local public stream projection', () => {
   it('publishes short public text, interleaves tools, and replaces exact text identities', () => {
     const stream = createPublicStreamProjection();
     stream.pushText({ delta: 'START_P4F8', streamPartId: 'text-1' });
-    expect(stream.snapshot()).toMatchObject({ text: 'START_P4F8',
-      segments: [{ kind: 'text', id: 'text-1', text: 'START_P4F8' }] });
+    expect(stream.snapshot()).toMatchObject({
+      text: 'START_P4F8',
+      segments: [{ kind: 'text', id: 'text-1', text: 'START_P4F8' }],
+    });
     stream.updateTool(tool);
     stream.pushText({ delta: '\nChecking the repository', streamPartId: 'text-2' });
-    expect(stream.snapshot().segments.map(row => row.id)).toEqual(['text-1', 'read-1', 'text-2']);
+    expect(stream.snapshot().segments.map((row) => row.id)).toEqual(['text-1', 'read-1', 'text-2']);
     stream.pushText({ delta: 'REVISED_P4F8', mode: 'replace', streamPartId: 'text-1' });
     expect(stream.snapshot().text).toBe('REVISED_P4F8\nChecking the repository');
-    expect(stream.snapshot().segments.map(row => row.id)).toEqual(['text-1', 'read-1', 'text-2']);
-    expect(stream.snapshot().segments.filter(row => row.kind === 'text')).toHaveLength(2);
+    expect(stream.snapshot().segments.map((row) => row.id)).toEqual(['text-1', 'read-1', 'text-2']);
+    expect(stream.snapshot().segments.filter((row) => row.kind === 'text')).toHaveLength(2);
   });
 
   it('preserves unchanged snapshot and completed tool identities during prose updates', () => {
@@ -33,6 +35,62 @@ describe('request-local public stream projection', () => {
     expect(stream.getTool('read-1')?.status).toBe('completed');
     expect(Object.isFrozen(stream.snapshot())).toBe(true);
     expect(Object.isFrozen(stream.snapshot().segments)).toBe(true);
+  });
+
+  it('keeps reasoning, tools, and public text in arrival order while merging reasoning deltas', () => {
+    const stream = createPublicStreamProjection();
+    stream.pushReasoning({ delta: 'Inspecting the request. ', mode: 'replace' });
+    stream.pushReasoning({ delta: 'Checking the workspace.' });
+    stream.updateTool(tool);
+    stream.pushReasoning({ delta: 'A second thought.', mode: 'replace' });
+    stream.pushText({ delta: 'The answer is ready.', streamPartId: 'answer' });
+
+    expect(stream.snapshot().segments).toEqual([
+      {
+        kind: 'reasoning',
+        id: 'reasoning-1',
+        text: 'Inspecting the request. Checking the workspace.',
+      },
+      { kind: 'tool', id: 'read-1', name: 'read', status: 'started' },
+      { kind: 'reasoning', id: 'reasoning-2', text: 'A second thought.' },
+      { kind: 'text', id: 'answer', text: 'The answer is ready.' },
+    ]);
+    expect(stream.snapshot().text).toBe('The answer is ready.');
+  });
+
+  it('projects an ordered public failure suffix with safe tool results', () => {
+    const stream = createPublicStreamProjection();
+    const details = Object.freeze({ command: 'git status' });
+    stream.pushText({ delta: 'The answer began.', streamPartId: 'answer' });
+    stream.pushReasoning({ delta: 'Checking the workspace.' });
+    stream.updateTool({ ...tool, status: 'completed', details });
+    stream.updateTool({ id: 'write-1', name: 'write', status: 'failed', details });
+    stream.updateTool({ id: 'grep-1', name: 'grep', status: 'started' });
+
+    expect(stream.getPartialParts()).toEqual([
+      { kind: 'text', text: 'The answer began.' },
+      { kind: 'reasoning', text: 'Checking the workspace.' },
+      { kind: 'tool_call', tool: 'read', args: {}, call_id: 'read-1', details },
+      { kind: 'tool_result', call_id: 'read-1', result: { status: 'completed' } },
+      { kind: 'tool_call', tool: 'write', args: {}, call_id: 'write-1', details },
+      { kind: 'tool_result', call_id: 'write-1', error: 'Tool failed' },
+      { kind: 'tool_call', tool: 'grep', args: {}, call_id: 'grep-1' },
+      { kind: 'tool_result', call_id: 'grep-1', error: 'Tool interrupted' },
+    ]);
+  });
+
+  it('omits unsafe text while retaining already-public reasoning and tools', () => {
+    const stream = createPublicStreamProjection();
+    stream.pushText({ delta: 'safe. password=SENTINEL_SECRET', streamPartId: 'answer' });
+    stream.pushReasoning({ delta: 'Safe reasoning.' });
+    stream.updateTool(tool);
+
+    expect(stream.getPartialParts()).toEqual([
+      { kind: 'reasoning', text: 'Safe reasoning.' },
+      { kind: 'tool_call', tool: 'read', args: {}, call_id: 'read-1' },
+      { kind: 'tool_result', call_id: 'read-1', error: 'Tool interrupted' },
+    ]);
+    expect(JSON.stringify(stream.getPartialParts())).not.toMatch(/SENTINEL_SECRET|password/);
   });
 
   it('does not expose a sensitive marker split across different text part identities', () => {
@@ -83,6 +141,7 @@ describe('request-local public stream projection', () => {
     stream.dispose();
     expect(stream.snapshot()).toEqual({ text: '', segments: [] });
     expect(stream.getPartialText()).toBeUndefined();
+    expect(stream.getPartialParts()).toEqual([]);
     expect(stream.updateTool(tool)).toBe(false);
   });
 });

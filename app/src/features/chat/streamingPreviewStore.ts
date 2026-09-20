@@ -1,4 +1,4 @@
-import type { PublicToolDetails } from '@/lib/ai/adapters/types';
+import type { TurnPreviewSegment } from './runtime/turn/turnTypes';
 import {
   clearAccountPublicSnapshots,
   clearTurn,
@@ -13,16 +13,31 @@ import {
 import { isTerminalTurnStatus } from './runtime/turn/turnTypes';
 import { selectTurnPreview } from './runtime/turn/turnSelectors';
 
-export type StreamingPreviewSegment =
-  | { kind: 'text'; id: string; text: string }
-  | {
-      kind: 'tool';
-      id: string;
-      name: string;
-      status: 'started' | 'completed' | 'failed' | 'interrupted';
-      fileLabel?: string;
-      details?: Readonly<PublicToolDetails>;
-    };
+export type StreamingPreviewSegment = TurnPreviewSegment;
+
+export interface StreamingPreviewIdentity {
+  accountId: string;
+  chatId: string;
+  runId: string;
+  requestId: string;
+}
+
+/**
+ * Main provider requests have a durable placeholder but no canonical kernel
+ * run identity. Keep their fast preview chat-scoped and collision-safe while
+ * the durable assistant message remains the reconciliation authority.
+ */
+export function previewIdentityForPlaceholder(input: {
+  accountId: string;
+  chatId: string;
+  placeholderId: string | number;
+}): StreamingPreviewIdentity {
+  const accountId = input.accountId.trim();
+  const chatId = input.chatId.trim();
+  const requestId = String(input.placeholderId).trim();
+  if (!accountId || !chatId || !requestId) throw new Error('invalid_streaming_preview_identity');
+  return Object.freeze({ accountId, chatId, requestId, runId: `chat-preview:${requestId}` });
+}
 
 export interface JarvisStreamingPreview {
   accountId: string;
@@ -65,9 +80,12 @@ function sameSegments(
     const after = rightSegments[index];
     if (!after || before.kind !== after.kind || before.id !== after.id) return false;
     if (before.kind === 'text' && after.kind === 'text') return before.text === after.text;
+    if (before.kind !== 'tool' || after.kind !== 'tool') {
+      return (
+        before.kind === 'reasoning' && after.kind === 'reasoning' && before.text === after.text
+      );
+    }
     return (
-      before.kind === 'tool' &&
-      after.kind === 'tool' &&
       before.name === after.name &&
       before.status === after.status &&
       before.fileLabel === after.fileLabel &&

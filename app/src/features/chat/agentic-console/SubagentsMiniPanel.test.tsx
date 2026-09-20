@@ -9,7 +9,7 @@ describe('SubagentsMiniPanel', () => {
   it('shows real native task rows in the same Runs panel without creating another execution', () => {
     const runs = [{ id: 'a', name: 'Read alpha', status: 'running' as const, currentStep: 'Reading alpha.txt' }, { id: 'b', name: 'Read beta', status: 'error' as const }];
     const view = render(<SubagentsHeaderButton chatId="native-fixture" nativeRuns={runs} />);
-    const toggle = screen.getByRole('button', { name: '2 Runs' });
+    const toggle = screen.getByRole('button', { name: '2 Subagents' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(toggle);
     expect(screen.getByText('Reading alpha.txt')).toBeTruthy();
@@ -28,7 +28,7 @@ describe('SubagentsMiniPanel', () => {
       });
     }
     const view = render(<SubagentsHeaderButton chatId="chat_parent" />);
-    const toggle = screen.getByRole('button', { name: '2 Runs' });
+    const toggle = screen.getByRole('button', { name: '2 Subagents' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(toggle);
     expect(screen.getByText('editing')).toBeTruthy();

@@ -2694,18 +2694,40 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         mode: 'replace',
         streamPartId: 'opencode-text-1',
       } as LLMStreamChunk & { streamPartId: string });
-      await input.onToolActivity?.({
+      expect(input.onReasoning).toEqual(expect.any(Function));
+      input.onReasoning?.('Checking the scoring. ', 'replace');
+      input.onReasoning?.('Then the restart.');
+      const toolWrite = input.onToolActivity?.({
         name: 'read',
         status: 'started',
         callId: 'read-1',
         fileLabel: 'Composer.tsx',
+        details: { arguments: { path: 'Composer.tsx', offset: 12 } },
       });
+      expect(getPreview(String(input.accountId), `chat-preview:${placeholderId}`)?.segments)
+        .toEqual(expect.arrayContaining([
+          expect.objectContaining({ kind: 'reasoning', text: 'Checking the scoring. Then the restart.' }),
+          expect.objectContaining({ kind: 'tool', id: 'read-1', status: 'started',
+            details: { arguments: { path: 'Composer.tsx', offset: 12 } } }),
+        ]));
+      await toolWrite;
+      expect(durableWrites.at(-1)).toEqual(expect.arrayContaining([
+        { kind: 'reasoning', text: 'Checking the scoring. Then the restart.' },
+        expect.objectContaining({ kind: 'tool_call', call_id: 'read-1',
+          details: { arguments: { path: 'Composer.tsx', offset: 12 } } }),
+      ]));
       await input.onToolActivity?.({
         name: 'read',
         status: 'completed',
         callId: 'read-1',
         fileLabel: 'Composer.tsx',
+        details: { result: { text: 'score += 10' } },
       });
+      expect(durableWrites.at(-1)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'tool_call', call_id: 'read-1', details: {
+          arguments: { path: 'Composer.tsx', offset: 12 }, result: { text: 'score += 10' },
+        } }),
+      ]));
       await input.onToolActivity?.({
         name: 'read',
         status: 'completed',
@@ -2758,9 +2780,11 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       });
       input.onChunk?.({
         delta: 'The full HTML game is ready.',
-        streamPartId: 'opencode-text-5',
-      } as LLMStreamChunk & { streamPartId: string });
+      });
       input.onChunk?.({ delta: '', done: true });
+      expect(durableWrites.at(-1)).toEqual(expect.arrayContaining([
+        { kind: 'text', text: 'The full HTML game is ready.' },
+      ]));
       return {
         text: 'The full HTML game is ready.',
         usage: { input_tokens: 2, output_tokens: 1, cost_usd: 0 },
@@ -3592,6 +3616,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     );
     mocks.runAgent.mockImplementationOnce(async (request) => {
       request.onChunk({ delta: 'TOKEN-', done: false });
+      request.onReasoning?.('Checking the requested literal.', 'append');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(updateMessage).not.toHaveBeenCalled();
       request.onChunk({ delta: 'SAVER-OK', done: false });
       request.onChunk({ delta: '', done: true });
       return {
@@ -6531,7 +6558,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         getAgentById: () => selectedAgent,
         getAgentBySlug: () => selectedAgent,
         getAgentForChat: vi.fn(async () => selectedAgent),
-        getMessages: vi.fn(async () => [
+        getMessages: vi.fn(async (): Promise<Message[]> => [
           {
             id: 'msg_kernel_user' as MessageId,
             chat_id: chatId,
@@ -6971,7 +6998,55 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const database = createJarvisDb(uniqueTestDbName('runtime-kernel-tokens'), TEST_INDEXED_DB);
     await database.open();
     await database.chats.add({ id: harness.chatId, workspace_id: 'workspace_kernel_tokens' as never, title: 'Kernel tokens', mode: 'chat', active_agent_ids: [protectedJarvis.id], created_at: 1, updated_at: 1 });
-    mocks.runAgent.mockResolvedValueOnce({ text: 'SAVER_OK', usage: { input_tokens: 10, output_tokens: 2, cost_usd: 0 }, provider: 'openai', model: 'gpt-5.6-terra' });
+    let providerRequestId: string | undefined;
+    mocks.runAgent.mockImplementationOnce(async (providerInput) => {
+      providerRequestId = providerInput.requestId;
+      return {
+        text: 'SAVER_OK',
+        usage: {
+          input_tokens: 53609,
+          output_tokens: 6230,
+          cache_read_tokens: 1200,
+          cache_write_tokens: 30,
+          total_tokens: 59839,
+          cost_usd: 0.015716574,
+        },
+        provider: 'openai',
+        model: 'gpt-5.6-terra',
+      };
+    });
+    harness.bindings.getMessages.mockImplementation(async (): Promise<Message[]> => [
+      {
+        id: 'msg_kernel_user' as MessageId,
+        chat_id: harness.chatId,
+        role: 'user' as const,
+        parts: [{ kind: 'text' as const, text: 'Give a brief answer.' }],
+        created_at: 1,
+        updated_at: 1,
+      },
+      ...(providerRequestId
+        ? [
+            {
+              id: `msg_${providerRequestId}` as MessageId,
+              chat_id: harness.chatId,
+              role: 'assistant' as const,
+              parts: [{ kind: 'text' as const, text: 'SAVER_OK' }],
+              usage: {
+                input_tokens: 53609,
+                output_tokens: 6230,
+                cache_read_tokens: 1200,
+                cache_write_tokens: 30,
+                total_tokens: 59839,
+                cost_usd: 0.015716574,
+                provider: 'openai' as const,
+                model: 'gpt-5.6-terra',
+              },
+              created_at: 2,
+              updated_at: 2,
+            },
+          ]
+        : []),
+    ]);
     const disposeHost = await installKernelTestHost(database, 'runtime-kernel-tokens');
     const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
     try {
@@ -6981,7 +7056,17 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         reasoningPreference: { mode: 'normal', effortOverride: 'high' }, automaticModelRoutingEligible: false,
       } }));
       await vi.waitFor(() => expect(harness.bindings.appendMessage, JSON.stringify(mocks.devLog.mock.calls.filter(([entry]) => entry.level === 'error'))).toHaveBeenCalledWith(expect.objectContaining({
-        role: 'system', parts: [expect.objectContaining({ kind: 'token_optimization_receipt', receipt: expect.objectContaining({ mode: 'saver', modelChanged: false }) })],
+        role: 'system',
+        parts: [expect.objectContaining({
+          kind: 'token_optimization_receipt',
+          receipt: expect.objectContaining({ mode: 'saver', modelChanged: false }),
+          usage: expect.objectContaining({
+            actualInputTokens: 53609,
+            actualOutputTokens: 6230,
+            actualCachedInputTokens: 1200,
+            actualUsageSource: 'provider_reported',
+          }),
+        })],
       })), { timeout: 5000 });
       expect(mocks.runAgent).toHaveBeenCalledOnce();
       expect(mocks.runAgent.mock.calls[0]![0].compiledPrompt.systemText).not.toContain('LEGACY SYSTEM PROMPT');
@@ -7746,7 +7831,11 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         .first();
       expect(shortPublicPreview.current?.text).toBe('START_P4F8');
       expect(shortPublicPreview.current?.segments).toContainEqual({ kind: 'text', id: 'preview-1', text: 'START_P4F8' });
-      expect(JSON.stringify(shortPublicPreview.current)).not.toContain('Live provider summary');
+      expect(shortPublicPreview.current?.segments).toContainEqual({
+        kind: 'reasoning',
+        id: 'reasoning-1',
+        text: 'Live provider summary. '.repeat(300),
+      });
       expect(persistedAssistant?.usage?.execution).toMatchObject({ mode: 'normal' });
       expect(persistedAssistant?.parts.slice(0, 4)).toEqual([
         { kind: 'text', text: 'I inspected the project first.' },
@@ -9299,6 +9388,31 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     );
   });
 
+  it.each(['exact', 'wrong provider', 'wrong model'] as const)('retains only exact reported usage on an ordinary failed reply: %s', async (identity) => {
+    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
+    const gate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+    let input!: Parameters<typeof mocks.runAgent>[0];
+    mocks.runAgent.mockImplementationOnce(value => { input = value; return gate.promise; });
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: 'Inspect the game.', cancellationKey: 'msg_kernel_user',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      input.onProviderUsage?.({ requestId: input.requestId!, connectionId: input.connectionId!,
+        providerId: identity === 'wrong provider' ? 'foreign-provider' : input.agent.model.provider,
+        modelId: identity === 'wrong model' ? 'foreign-model' : input.agent.model.model,
+        usage: { capturedAt: Date.now(), totalTokens: { value: 23, provenance: 'provider-reported' } },
+      });
+      gate.reject(new ProviderRuntimeError({ message: 'Provider stopped.', code: 'tool_failed' }));
+      await stop.whenIdle();
+      if (identity === 'exact') expect(harness.updateMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        usage: expect.objectContaining({ total_tokens: 23 }),
+      }));
+      else expect(JSON.stringify(harness.updateMessage.mock.calls)).not.toContain('"usage"');
+    } finally { stop(); await stop.whenIdle(); }
+  });
+
   it('publishes a queued text chunk within the interactive UI budget by default', async () => {
     const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
     const gate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
@@ -10637,7 +10751,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   });
 
-  it.each(['failed', 'cancelled', 'secret', 'account changed'] as const)(
+  it.each(['failed', 'cancelled', 'secret', 'account changed', 'usage and tools', 'usage only', 'wrong usage identity'] as const)(
     'retains only safe public partial prose for an interrupted canonical chat: %s', async (scenario) => {
       const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
       const harness = kernelRuntimeBindings(selectedAgent);
@@ -10655,7 +10769,20 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           chatId: harness.chatId, text: 'Answer this current request.', cancellationKey: 'msg_partial_user',
         } }));
         await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-        providerInput.onChunk?.({ delta: scenario === 'secret' ? 'The api_key=private-value.' : 'The answer began.', first: true });
+        if (scenario !== 'usage only') providerInput.onChunk?.({ delta: scenario === 'secret' ? 'The api_key=private-value.' : 'The answer began.', first: true });
+        if (['usage and tools', 'usage only', 'wrong usage identity', 'account changed'].includes(scenario)) {
+          providerInput.onProviderUsage?.({
+            requestId: scenario === 'wrong usage identity' ? 'other-request' : providerInput.requestId!,
+            connectionId: providerInput.connectionId!, providerId: providerInput.agent.model.provider, modelId: providerInput.agent.model.model,
+            usage: { capturedAt: Date.now(), inputTokens: { value: 17, provenance: 'provider-reported' },
+              outputTokens: { value: 3, provenance: 'provider-reported' }, totalTokens: { value: 23, provenance: 'provider-reported' } },
+          });
+        }
+        if (scenario === 'usage and tools') {
+          providerInput.onReasoning?.('Public reasoning summary.', 'append');
+          await providerInput.onToolActivity?.({ name: 'read', callId: 'failed-read', status: 'failed',
+            details: { output: { text: 'Permission denied', mode: 'replace', complete: true, omittedBytes: 0 } } });
+        }
         if (scenario === 'account changed') useAuthStore.setState({ localUserId: 'different-account' });
         if (scenario === 'cancelled') {
           window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { messageId: 'msg_partial_user' } }));
@@ -10664,10 +10791,22 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         providerGate.reject(new ProviderRuntimeError({ message: 'The provider stopped.', code: 'RATE_LIMIT', retryable: true }));
         await stop.whenIdle();
         const assistants = (await database.messages.toArray()).filter(message => message.role === 'assistant');
-        if (scenario === 'failed' || scenario === 'cancelled') {
+        if (scenario !== 'secret' && scenario !== 'account changed') {
           expect(assistants).toHaveLength(1);
-          expect(assistants[0]?.parts).toEqual([{ kind: 'text', text: `The answer began.\n\n[Incomplete response: generation ${scenario}.]` }]);
-          expect((await database.jarvis_runs.toArray()).at(-1)?.status).toBe(scenario);
+          const status = scenario === 'cancelled' ? 'cancelled' : 'failed';
+          expect(JSON.stringify(assistants[0]?.parts)).toContain(`[Incomplete response: generation ${status}.]`);
+          if (scenario !== 'usage only') expect(JSON.stringify(assistants[0]?.parts)).toContain('The answer began.');
+          if (scenario === 'usage and tools' || scenario === 'usage only') {
+            expect(assistants[0]?.usage).toMatchObject({ input_tokens: 17, output_tokens: 3, total_tokens: 23 });
+          } else expect(assistants[0]?.usage).toBeUndefined();
+          if (scenario === 'usage and tools') {
+            expect(assistants[0]?.parts).toEqual(expect.arrayContaining([
+              { kind: 'reasoning', text: 'Public reasoning summary.' },
+              expect.objectContaining({ kind: 'tool_call', call_id: 'failed-read' }),
+              expect.objectContaining({ kind: 'tool_result', call_id: 'failed-read', error: expect.any(String) }),
+            ]));
+          }
+          expect((await database.jarvis_runs.toArray()).at(-1)?.status).toBe(status);
           expect(await database.jarvis_artifacts.count()).toBe(0);
         } else expect(assistants).toHaveLength(0);
         expect(JSON.stringify(assistants)).not.toContain('private-value');

@@ -38,6 +38,7 @@ export interface TurnContextPlan {
 
 export type TurnPreviewSegment =
   | Readonly<{ kind: 'text'; id: string; text: string }>
+  | Readonly<{ kind: 'reasoning'; id: string; text: string }>
   | Readonly<{
       kind: 'tool';
       id: string;
@@ -75,7 +76,12 @@ export interface CanonicalTurnState {
 }
 
 export type TurnEvent =
-  | Readonly<{ type: 'turn.accepted'; identity: TurnIdentity; at: number; cancellationKey?: string }>
+  | Readonly<{
+      type: 'turn.accepted';
+      identity: TurnIdentity;
+      at: number;
+      cancellationKey?: string;
+    }>
   | Readonly<{ type: 'turn.running'; at: number; cancellationKey?: string }>
   | Readonly<{ type: 'turn.failed'; at: number; errorCode?: string }>
   | Readonly<{ type: 'provider.bound'; at: number; provider: TurnProviderBinding }>

@@ -196,6 +196,26 @@ describe('projectAgenticTranscript', () => {
       input_tokens: 10, output_tokens: 5, provenance: 'estimated',
     })], [])).toMatchObject({tokenCount: 15, tokenProvenance: 'estimated'});
   });
+  it('excludes only permission notices without model usage from token accounting', () => {
+    const notice = message('permission', 'assistant', 1, [{
+      kind: 'permission_request',
+      request: {
+        id: 'approval', title: 'Run checks', description: 'Verify the game',
+        risk: 'low', action: 'run_command', status: 'pending',
+      },
+    }]);
+    const answer = message('model', 'assistant', 2, [{ kind: 'text', text: 'Checks passed.' }], {
+      input_tokens: 243926, output_tokens: 4511, total_tokens: 248437,
+    });
+    expect(summarizeAgenticSession([notice, answer], []).tokenCount).toBe(248437);
+    expect(summarizeAgenticSession([notice], []).tokenCount).toBe('—');
+    expect(summarizeAgenticSession([
+      { ...notice, usage: { provenance: 'unavailable' } }, answer,
+    ], []).tokenCount).toBe('—');
+    expect(summarizeAgenticSession([
+      { ...notice, parts: [...notice.parts, { kind: 'text', text: 'An actual answer without usage' }] }, answer,
+    ], []).tokenCount).toBe('—');
+  });
   it('projects persisted confirmed tool diffs with exact additions and removals after reload', () => {
     const blocks = projectAgenticTranscript([message('edit', 'assistant', 1, [
       { kind: 'tool_call', tool: 'edit', call_id: 'edit-one', args: { path: 'alpha.txt' } },

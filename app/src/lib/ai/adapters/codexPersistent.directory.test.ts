@@ -6,6 +6,10 @@ describe('projectless Codex requests', () => {
   it.each(['gpt-5.4-mini', 'opencode-go/deepseek-v4-flash-vision-exp'])(
     'uses the resolved workspace throughout a %s turn',
     async (model) => {
+      const translated = model.startsWith('opencode-go/');
+      const connection = translated
+        ? { ...CODEX_CLI_CONNECTION, id: 'opencode-go', providerId: 'opencode-go', authSource: 'opencode-auth' as const }
+        : CODEX_CLI_CONNECTION;
       const cwd = 'C:\\app-data\\harness\\codex-server\\workspace';
       const writes: Record<string, any>[] = [];
       async function* frames() {
@@ -52,7 +56,13 @@ describe('projectless Codex requests', () => {
       for await (const event of adapter.send!({
         requestId: 'request',
         chatId: 'chat',
-        connection: CODEX_CLI_CONNECTION,
+        connection,
+        accountId: 'account-test',
+        codexRoute: translated
+          ? { kind: 'opencodex-translation', accountId: 'account-test', connectionId: connection.id,
+              providerId: 'opencode-go', modelId: model, upstreamModelId: 'deepseek-v4-flash-vision-exp',
+              routeHandle: 'test-route', configurationGeneration: 'test-generation', adapter: 'openai-chat' }
+          : { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: model },
         modelId: model,
         prompt: 'Hello\nthere',
         systemPrompt: 'System instructions.',

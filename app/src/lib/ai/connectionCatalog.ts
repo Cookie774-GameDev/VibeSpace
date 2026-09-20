@@ -21,6 +21,8 @@ export interface ConnectionCatalogIdentity {
 export interface DiscoveredConnectionModel {
   id: string;
   label: string;
+  /** Exact live upstream reasoning variant ids, when exposed by this connection. */
+  variants?: readonly string[];
   source: ConnectionCatalogSource;
   lastVerifiedAt: number;
   unverified?: boolean;

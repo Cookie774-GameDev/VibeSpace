@@ -6,6 +6,10 @@ import {
   type OpenCodeTextEmission,
 } from './OpenCodeTextAccumulator';
 import type { HarnessScope, OpenCodeSessionClient } from './OpenCodeSessionPool';
+import {
+  openCodePromptModel,
+  qualifiedOpenCodeModelRoute,
+} from './OpenCodeRequestControls';
 
 export interface OpenCodeRawEvent {
   type: string;
@@ -40,6 +44,7 @@ export interface OpenCodeSdkClientLike {
       body: Readonly<Record<string, unknown>>;
     }) => Promise<unknown>;
     command?: (input: {
+      signal?: AbortSignal;
       path: { id: string };
       body: {
         command: string;
@@ -81,6 +86,13 @@ export interface OpenCodeVariantTransportDescriptor {
   fastVariant?: string;
   /** Exact combined variants keyed as `<effort>+fast`. */
   combinedVariants?: Readonly<Record<string, string>>;
+}
+
+export interface OpenCodeCommandDescriptor {
+  readonly name: string;
+  readonly description?: string;
+  readonly source?: string;
+  readonly template?: string;
 }
 
 /**
@@ -219,6 +231,19 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
     await this.client.session.abort({ path: { id } });
   }
 
+  async listCommandsAsync(): Promise<readonly OpenCodeCommandDescriptor[]> {
+    const listed = unwrapData<unknown>(await this.client.command.list());
+    if (!Array.isArray(listed)) throw new Error('OpenCode command catalog response is malformed.');
+    return Object.freeze(listed.flatMap((entry): OpenCodeCommandDescriptor[] => {
+      if (!entry || typeof entry !== 'object') return [];
+      const name = typeof (entry as { name?: unknown }).name === 'string'
+        ? (entry as { name: string }).name.trim().toLowerCase()
+        : '';
+      if (!/^[a-z][a-z0-9_-]*$/u.test(name)) return [];
+      return [{ name }];
+    }));
+  }
+
   async sendAsync(input: {
     sessionId: string;
     controls: OpenCodeRequestControls;
@@ -242,10 +267,7 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
     await this.client.session.promptAsync({
       path: { id: sessionId },
       body: {
-        model: {
-          providerID: input.controls.providerId,
-          modelID: input.controls.modelId,
-        },
+        model: openCodePromptModel(input.controls),
         ...controlFields,
         agent,
         ...(input.system?.trim() ? { system: input.system } : {}),
@@ -256,6 +278,7 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
   }
 
   async sendCommandAsync(input: {
+    signal?: AbortSignal;
     sessionId: string;
     controls: OpenCodeRequestControls;
     command: string;
@@ -269,31 +292,30 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
     const command = input.command.trim().toLowerCase();
     const args = input.arguments.trim();
     const agent = input.agent;
-    if (!sessionId || !command || !args || !agent?.trim()) {
+    if (!sessionId || !command || !agent?.trim()) {
       throw new Error(
-        'A session id, execution agent, registered command, and non-empty arguments are required.',
+        'A session id, execution agent, and registered command are required.',
       );
     }
-    const listed = unwrapData<unknown>(await this.client.command.list());
-    const commands = Array.isArray(listed) ? listed : [];
-    const registered = commands.some(
-      (entry) =>
-        entry && typeof entry === 'object' && (entry as { name?: unknown }).name === command,
-    );
+    const registered = (await this.listCommandsAsync()).some((entry) => entry.name === command);
     if (!registered) {
       throw new Error(
         `OpenCode command /${command} is not registered in the live command catalog.`,
       );
     }
+    if (!args && command === 'goal') {
+      throw new Error('OpenCode command /goal requires non-empty arguments.');
+    }
     const controlFields = this.modelControls.toPromptFields(input.controls);
     const variant = typeof controlFields.variant === 'string' ? controlFields.variant : undefined;
     await this.client.session.command({
+      signal: input.signal,
       path: { id: sessionId },
       body: {
         command,
         arguments: args,
         agent,
-        model: `${input.controls.providerId}/${input.controls.modelId}`,
+        model: qualifiedOpenCodeModelRoute(input.controls),
         ...(variant ? { variant } : {}),
       },
     });

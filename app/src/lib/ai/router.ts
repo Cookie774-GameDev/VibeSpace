@@ -272,6 +272,21 @@ function mergeUsageSnapshots(
   };
 }
 
+function copyUsageSnapshot(usage: UsageSnapshot): UsageSnapshot {
+  return {
+    ...usage,
+    ...(usage.inputTokens ? { inputTokens: { ...usage.inputTokens } } : {}),
+    ...(usage.outputTokens ? { outputTokens: { ...usage.outputTokens } } : {}),
+    ...(usage.totalTokens ? { totalTokens: { ...usage.totalTokens } } : {}),
+    ...(usage.cacheReadTokens ? { cacheReadTokens: { ...usage.cacheReadTokens } } : {}),
+    ...(usage.cacheWriteTokens ? { cacheWriteTokens: { ...usage.cacheWriteTokens } } : {}),
+    ...(usage.reasoningTokens ? { reasoningTokens: { ...usage.reasoningTokens } } : {}),
+    ...(usage.costUsd ? { costUsd: { ...usage.costUsd } } : {}),
+    ...(usage.quota ? { quota: { ...usage.quota } } : {}),
+    ...(usage.resetsAt ? { resetsAt: { ...usage.resetsAt } } : {}),
+  };
+}
+
 export interface ProviderCompletionEvidence {
   observedAt: number;
   requestId: string;
@@ -395,6 +410,13 @@ export interface RunAgentRequest {
   onProviderCompletionEvidence?: (
     evidence: Readonly<ProviderCompletionEvidence>,
   ) => void | Promise<void>;
+  onProviderUsage?: (evidence: Readonly<{
+    requestId: string;
+    providerId: string;
+    connectionId: string;
+    modelId: string;
+    usage: Readonly<UsageSnapshot>;
+  }>) => void;
   protectedAttempt?: Readonly<{
     accountId: string;
     runId: string;
@@ -603,6 +625,13 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
         req.onReasoning?.(event.delta, event.mode);
       } else if (event.type === 'usage') {
         usage = mergeUsageSnapshots(usage, event.usage);
+        req.onProviderUsage?.({
+          requestId,
+          providerId: connection.providerId,
+          connectionId: connection.id,
+          modelId,
+          usage: copyUsageSnapshot(usage),
+        });
       } else if (event.type === 'session') {
         if (
           (req.expectedSessionId && req.expectedSessionId !== event.sessionId) ||
@@ -982,6 +1011,13 @@ async function executePersistentOpenCode(
         } else if (event.type === 'usage') {
           diagnosticCode = 'router_usage_event';
           usage = mergeUsageSnapshots(usage, event.usage);
+          req.onProviderUsage?.({
+            requestId,
+            providerId: selection.providerId,
+            connectionId: connection.id,
+            modelId: selection.modelId,
+            usage: copyUsageSnapshot(usage),
+          });
         } else if (event.type === 'session') {
           if (
             (req.expectedSessionId && req.expectedSessionId !== event.sessionId) ||

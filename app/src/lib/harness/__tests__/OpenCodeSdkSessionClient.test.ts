@@ -179,6 +179,109 @@ describe('OpenCodeSdkSessionClient', () => {
     expect(client.session.promptAsync).not.toHaveBeenCalled();
   });
 
+  it.each(['init', 'my_command'])('dispatches registered /%s with an empty argument string', async (command) => {
+    const client = fakeClient();
+    client.command.list.mockResolvedValueOnce({ data: [{ name: command, source: 'command' }] });
+    const sdk = new OpenCodeSdkSessionClient(client);
+
+    await sdk.sendCommandAsync({
+      sessionId: 'session-1',
+      agent: 'vibespace-full',
+      controls: {
+        connectionId: 'openai-chatgpt-pro',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-sol',
+        performance: 'quality',
+        rlmEnabled: true,
+      },
+      command,
+      arguments: '',
+    });
+
+    expect(client.session.command).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({ command, arguments: '' }),
+    }));
+  });
+
+  it('does not double-qualify a federated route on the command endpoint', async () => {
+    const client = fakeClient();
+    const sdk = new OpenCodeSdkSessionClient(client);
+
+    await sdk.sendCommandAsync({
+      sessionId: 'session-1',
+      agent: 'vibespace-full',
+      controls: {
+        connectionId: 'opencode-cli',
+        providerId: 'opencode',
+        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        performance: 'quality',
+        rlmEnabled: true,
+      },
+      command: 'goal',
+      arguments: 'Finish the route check',
+    });
+
+    expect(client.session.command).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        model: 'opencode-go/deepseek-v4-flash-vision-exp',
+      }),
+    }));
+  });
+
+  it('retains an explicit provider for nested upstream model IDs', async () => {
+    const client = fakeClient();
+    const sdk = new OpenCodeSdkSessionClient(client);
+
+    await sdk.sendAsync({
+      sessionId: 'session-1',
+      agent: 'vibespace-full',
+      controls: {
+        connectionId: 'opencode-cli',
+        providerId: 'openrouter',
+        modelId: 'openai/gpt-5.6-luna',
+        performance: 'quality',
+        rlmEnabled: true,
+      },
+      text: 'hello',
+    });
+
+    expect(client.session.promptAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        model: {
+          providerID: 'openrouter',
+          modelID: 'openai/gpt-5.6-luna',
+        },
+      }),
+    }));
+  });
+
+  it('splits qualified federated routes once for prompt_async', async () => {
+    const client = fakeClient();
+    const sdk = new OpenCodeSdkSessionClient(client);
+
+    await sdk.sendAsync({
+      sessionId: 'session-1',
+      agent: 'vibespace-full',
+      controls: {
+        connectionId: 'opencode-cli',
+        providerId: 'opencode',
+        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        performance: 'quality',
+        rlmEnabled: true,
+      },
+      text: 'hello',
+    });
+
+    expect(client.session.promptAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        model: {
+          providerID: 'opencode-go',
+          modelID: 'deepseek-v4-flash-vision-exp',
+        },
+      }),
+    }));
+  });
+
   it('fails closed when goal is not in the live OpenCode command catalog', async () => {
     const client = fakeClient();
     client.command.list.mockResolvedValueOnce({ data: [{ name: 'review', source: 'command' }] });

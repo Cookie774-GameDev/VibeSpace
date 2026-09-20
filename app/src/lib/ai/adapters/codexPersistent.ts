@@ -1,4 +1,5 @@
 import { createCodexControlBridge } from './codexControlBridge';
+import { buildCodexGoalSetRequest, parseCodexGoalObjective, validateCodexGoalSetResult } from './codexGoalCommand';
 import { restoredConversationPrompt } from './restoredConversationPrompt';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { codexTurnLease } from './codexTurnLease';
@@ -29,7 +30,13 @@ import {
 } from './codexAppServer';
 import { findCliExecutable } from './cliBridge';
 import type { DetectedExecutable } from './cliBridge';
-import type { ProviderAdapter, ProviderEvent, ProviderRequest, UsageSnapshot } from './types';
+import type {
+  ProviderAdapter,
+  ProviderDiscoveredModel,
+  ProviderEvent,
+  ProviderRequest,
+  UsageSnapshot,
+} from './types';
 import { publicToolDetails } from '../publicToolDetails';
 import { codexRuntimeManager, type CodexRuntimeManager } from '@/lib/harness/codexRuntimeManager';
 import { redactHarnessText } from '@/lib/harness/errors';
@@ -125,6 +132,64 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+const CODEX_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$/u;
+const CODEX_MODEL_CATALOG_OWNER = 'vibespace-codex-model-catalog';
+const CODEX_MODEL_CATALOG_BOOTSTRAP = 'gpt-5.6-luna';
+const CODEX_MODEL_PAGE_LIMIT = 100;
+const CODEX_MODEL_MAX_PAGES = 32;
+const codexModelCatalogInvalidators = new Set<() => void>();
+
+export function invalidateCodexPersistentModelCache(): void {
+  codexModelCatalogInvalidators.forEach((invalidate) => invalidate());
+}
+
+function safeCodexModelText(value: unknown, fallback: string): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 512 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    return fallback;
+  }
+  return value.trim();
+}
+
+function parseCodexModelListPage(
+  value: unknown,
+  expectedRequestId: string,
+): { models: readonly ProviderDiscoveredModel[]; nextCursor?: string } {
+  const envelope = recordOf(value);
+  if (!envelope || envelope.id !== expectedRequestId) {
+    throw new Error('Codex model catalog response identity is invalid.');
+  }
+  const result = recordOf(envelope.result);
+  if (!result || !Array.isArray(result.data) || result.data.length > CODEX_MODEL_PAGE_LIMIT) {
+    throw new Error('Codex model catalog response data is invalid.');
+  }
+  const nextCursor = result.nextCursor;
+  if (nextCursor !== null && nextCursor !== undefined &&
+      (typeof nextCursor !== 'string' || nextCursor.length === 0 || nextCursor.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(nextCursor))) {
+    throw new Error('Codex model catalog cursor is invalid.');
+  }
+  const models: ProviderDiscoveredModel[] = [];
+  for (const row of result.data) {
+    const model = recordOf(row);
+    const id = typeof model?.model === 'string' ? model.model : '';
+    if (!CODEX_MODEL_ID.test(id)) throw new Error('Codex model catalog model identity is invalid.');
+    const rawEfforts = model?.supportedReasoningEfforts;
+    const variants = Array.isArray(rawEfforts)
+      ? rawEfforts
+          .map((entry) => recordOf(entry)?.reasoningEffort)
+          .filter((entry): entry is string => typeof entry === 'string' && CODEX_MODEL_ID.test(entry))
+      : [];
+    models.push({
+      id,
+      label: safeCodexModelText(model?.displayName ?? model?.name, id),
+      ...(variants.length > 0 ? { variants: [...new Set(variants)] } : {}),
+    });
+  }
+  return {
+    models,
+    ...(typeof nextCursor === 'string' ? { nextCursor } : {}),
+  };
 }
 
 function parsePublicToolResult(value: string): unknown {
@@ -318,6 +383,62 @@ async function responseFrame(
   throw new Error('Codex app-server response exceeded its safe event bound.');
 }
 
+async function listCodexModels(
+  dependencies: CodexPersistentDependencies,
+): Promise<readonly ProviderDiscoveredModel[]> {
+  const release = await codexTurnLease.acquire();
+  let generation: string | undefined;
+  let iterator: AsyncIterator<NativeFrame> | undefined;
+  try {
+    // Discovery is serialized by the lease, but it must never recover by
+    // stopping a generation that may belong to an active provider turn in a
+    // previous renderer lifetime or another WebView. The native controller
+    // retires exited generations itself; an active owner makes this bounded
+    // discovery fail closed and the next refresh can retry after it releases.
+    const executable = await dependencies.findExecutable();
+    if (!executable) return [];
+    ({ generation } = await dependencies.start(
+      executable.executableId,
+      CODEX_MODEL_CATALOG_OWNER,
+      CODEX_MODEL_CATALOG_BOOTSTRAP,
+      { kind: 'official-codex', connectionId: 'openai-codex' },
+    ));
+    codexTurnLease.remember(generation);
+    const subscription = dependencies.frames(generation);
+    iterator = subscription.stream[Symbol.asyncIterator]();
+    const firstFrame = iterator.next();
+    await Promise.race([
+      subscription.ready,
+      firstFrame.then((first) => {
+        if (first.done) throw new Error('Codex app-server ended before model catalog subscription.');
+        return new Promise<never>(() => {});
+      }),
+    ]);
+
+    const models: ProviderDiscoveredModel[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < CODEX_MODEL_MAX_PAGES; page += 1) {
+      const id = requestId(CODEX_MODEL_CATALOG_OWNER, `model_${page + 1}`);
+      await dependencies.write(generation, buildCodexModelListRequest({ requestId: id, cursor }));
+      const response = await responseFrame(iterator, id);
+      const error = codexFrameError(response, 'Codex model catalog request failed.');
+      if (error) throw error;
+      const parsed = parseCodexModelListPage(response, id);
+      models.push(...parsed.models);
+      if (parsed.nextCursor === undefined) return models;
+      cursor = parsed.nextCursor;
+    }
+    throw new Error('Codex model catalog pagination exceeded its safe bound.');
+  } finally {
+    await iterator?.return?.();
+    if (generation) {
+      await dependencies.stop(generation).catch(() => false);
+      codexTurnLease.forget(generation);
+    }
+    release();
+  }
+}
+
 async function validateModelCapability(
   generation: string,
   iterator: AsyncIterator<NativeFrame>,
@@ -354,6 +475,8 @@ async function* sendCodexRequest(
   contextTool: CodexContextToolBridge | null = null,
 ): AsyncGenerator<ProviderEvent> {
   if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+  const goalObjective = parseCodexGoalObjective(request.prompt);
+  if (goalObjective !== undefined) request = { ...request, prompt: goalObjective };
   const startRoute = nativeStartRoute(request);
   request = {
     ...request,
@@ -525,6 +648,16 @@ async function* sendCodexRequest(
     await Promise.race([request.onSessionBound?.({ sessionId: threadId }), cancelled]);
     if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
 
+    if (goalObjective !== undefined) {
+      const goalRequestId = requestId(request.requestId, 'goal');
+      await dependencies.write(generation, buildCodexGoalSetRequest(goalRequestId, threadId, goalObjective));
+      const goalResponse = await prepare(request, 'goal', () => responseFrame(reader, goalRequestId));
+      const goalError = codexFrameError(goalResponse, 'Codex native goal could not be set.');
+      if (goalError) throw goalError;
+      validateCodexGoalSetResult(goalResponse.result, threadId, goalObjective);
+      if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+    }
+
     await dependencies.write(
       generation,
       buildCodexTurnStartRequest({
@@ -650,8 +783,52 @@ async function* sendCodexRequest(
 export function createCodexPersistentAdapter(
   dependencies: CodexPersistentDependencies = defaultDependencies,
 ): ProviderAdapter {
+  let modelCatalogCache:
+    | { readonly loadedAt: number; readonly models: readonly ProviderDiscoveredModel[] }
+    | undefined;
+  let modelCatalogLoad: Promise<readonly ProviderDiscoveredModel[]> | undefined;
+  let modelCatalogGeneration = 0;
+  const invalidateModelCatalog = () => {
+    modelCatalogGeneration += 1;
+    modelCatalogCache = undefined;
+    modelCatalogLoad = undefined;
+  };
+  codexModelCatalogInvalidators.add(invalidateModelCatalog);
+  const listModels = async (): Promise<readonly ProviderDiscoveredModel[]> => {
+    const now = Date.now();
+    if (modelCatalogCache && now - modelCatalogCache.loadedAt < 60_000) {
+      return modelCatalogCache.models;
+    }
+    if (modelCatalogLoad) return modelCatalogLoad;
+    const generation = modelCatalogGeneration;
+    const pending = appActivityLog.trace(
+      'model.prepare.codex.catalog',
+      { ownerId: CODEX_MODEL_CATALOG_OWNER, connectionId: 'openai-codex' },
+      () => listCodexModels(dependencies),
+    )
+      .then((models) => {
+        const frozen = Object.freeze([...models]);
+        if (generation === modelCatalogGeneration) {
+          modelCatalogCache = { loadedAt: Date.now(), models: frozen };
+        }
+        return frozen;
+      })
+      .catch(() => {
+        // A rejected discovery is commonly transient while another WebView
+        // owns the singleton native server. Do not turn that failure into a
+        // 60-second authoritative empty catalog; the hook schedules a retry.
+        if (generation === modelCatalogGeneration) modelCatalogCache = undefined;
+        return Object.freeze([]) as readonly ProviderDiscoveredModel[];
+      })
+      .finally(() => {
+        if (modelCatalogLoad === pending) modelCatalogLoad = undefined;
+      });
+    modelCatalogLoad = pending;
+    return pending;
+  };
   return Object.freeze({
     id: 'codex-app-server',
+    listModels,
     send: async function* (request: ProviderRequest) {
       const release = await prepare(request, 'lease', () => codexTurnLease.acquire(request.signal));
       let contextTool: CodexContextToolBridge | null = null;

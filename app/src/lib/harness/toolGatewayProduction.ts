@@ -56,6 +56,50 @@ type ToolGatewayPluginReadPort = Readonly<{
 
 let pluginReadPort: ToolGatewayPluginReadPort | undefined;
 
+const PUBLIC_PLUGIN_FAILURE_REASONS = new Set([
+  'account_mismatch',
+  'credential_account_unbound',
+  'credential_account_mismatch',
+  'credential_grant_stale',
+  'credential_grant_unavailable',
+  'credential_grant_storage_failed',
+  'plugin_operation_unavailable',
+  'plugin_unavailable',
+  'plugin_tool_unavailable',
+  'plugin_registration_unavailable',
+  'plugin_input_invalid',
+  'identity_parameters_invalid',
+  'provider_response_invalid',
+  'provider_rejected',
+  'plugin_result_invalid',
+  'required_field_unavailable',
+]);
+
+function publicPluginFailure(
+  plugin: Readonly<{ id: string; name: string }>,
+  operation: string,
+  failure: unknown,
+): ToolGatewaySemanticError {
+  const message =
+    failure instanceof Error ? failure.message : typeof failure === 'string' ? failure : '';
+  const candidate =
+    /^Plugin credential authority denied the operation: ([a-z_0-9]+)\.$/.exec(message)?.[1] ?? message;
+  // Only fixed public codes cross this boundary, never provider bodies or credential errors.
+  const reason =
+    PUBLIC_PLUGIN_FAILURE_REASONS.has(candidate) || /^connection_rejected_[45]\d{2}$/.test(candidate)
+      ? candidate
+      : 'internal_plugin_failure';
+  const reconnect =
+    reason.startsWith('credential_') || reason === 'connection_rejected_401'
+      ? ` Reconnect ${plugin.name} in Plugins.`
+      : '';
+  return new ToolGatewaySemanticError({
+    code: 'plugin_operation_failed',
+    message: `${plugin.name} ${operation} failed (${reason}).${reconnect}`,
+    data: { pluginId: plugin.id, operation, reason },
+  });
+}
+
 type ToolGatewayRlmContextPort = Readonly<{
   execute(args: Record<string, unknown>, lease: RlmContextLease): Promise<unknown>;
 }>;
@@ -582,6 +626,10 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
       },
     },
     plugins: {
+      isReadOnly: (args) =>
+        PLUGIN_CATALOG.find((plugin) => plugin.id === args.pluginId)?.tools.some(
+          (tool) => tool.name === args.operation && tool.readOnly === true,
+        ) === true,
       list: (args) => {
         const { accountId, projectId } = activeToolGatewayScope();
         return PLUGIN_CATALOG.filter((plugin) => isPluginActive(accountId, plugin.id, projectId))
@@ -611,7 +659,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           throw new Error('plugin_operation_unavailable');
         }
         const port = pluginReadPort;
-        if (!port) throw new Error('plugin_operation_unavailable');
+        if (!port) throw publicPluginFailure(manifest, operation, 'plugin_operation_unavailable');
         const parsed = args.input ?? {};
         if (
           typeof parsed !== 'object' ||
@@ -619,15 +667,20 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           Array.isArray(parsed) ||
           Object.getPrototypeOf(parsed) !== Object.prototype
         ) {
-          throw new Error('plugin_input_invalid');
+          throw publicPluginFailure(manifest, operation, 'plugin_input_invalid');
         }
-        const result = await port.run({
-          pluginId,
-          operation,
-          params: parsed as Record<string, unknown>,
-          context,
-        });
-        if (!result.ok) throw new Error('plugin_operation_failed');
+        let result: ActionResult;
+        try {
+          result = await port.run({
+            pluginId,
+            operation,
+            params: parsed as Record<string, unknown>,
+            context,
+          });
+        } catch (error) {
+          throw publicPluginFailure(manifest, operation, error);
+        }
+        if (!result.ok) throw publicPluginFailure(manifest, operation, result.error);
         return { summary: result.summary, data: result.data };
       },
     },

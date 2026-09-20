@@ -13,6 +13,9 @@ import {
   shouldRenderInlineLegacyLedger,
 } from './AgenticConsole';
 import { DEFAULT_CONSOLE_PREFERENCES, saveConsolePreferences } from './preferences';
+import { getActiveAccountIdentity } from '@/lib/accountIdentity';
+import { useAuthStore } from '@/stores/auth';
+import { clearPreview, setPreview } from '../streamingPreviewStore';
 
 function message(
   id: string,
@@ -689,6 +692,46 @@ describe('AgenticConsole', () => {
     expect(status?.textContent).toContain('Jarvis is thinking');
     expect(status?.textContent).not.toContain('Internal deliberation');
     expect(status?.textContent).not.toContain('Private reasoning detail');
+  });
+
+  it('suppresses a persisted partial answer only while its matching fast preview is active', () => {
+    const previousAuth = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'preview-console-user', cloudSession: null });
+    const accountId = getActiveAccountIdentity()!.accountId;
+    try {
+      const rendered = renderConsole({
+        chatId: 'chat-console',
+        messages: [
+          message('user-live', 'user', 1, [{ kind: 'text', text: 'Inspect the app.' }]),
+          message('other-live', 'assistant', 1.5, [{ kind: 'text', text: 'Unrelated durable note.' }]),
+          message('msg-live', 'assistant', 2, [{ kind: 'text', text: 'Partial response.' }]),
+        ],
+        activity: [],
+        sessionEvidence: { status: 'running' },
+      });
+
+      expect(rendered.container.querySelectorAll('.agentic-answer__text')).toHaveLength(2);
+      act(() => setPreview({
+        accountId,
+        chatId: 'chat-console',
+        runId: 'chat-preview:msg-live',
+        requestId: 'msg-live',
+        text: 'Partial response.',
+        updatedAt: 3,
+        segments: [{ kind: 'text', id: 'part-0', text: 'Partial response.' }],
+      }));
+      expect(rendered.container.querySelectorAll('.agentic-answer__text')).toHaveLength(1);
+      expect(rendered.container.textContent).toContain('Unrelated durable note.');
+      expect(rendered.container.querySelector('[data-streaming-chat-preview]')?.textContent)
+        .toContain('Partial response.');
+
+      act(() => clearPreview(accountId, 'chat-preview:msg-live'));
+      expect(rendered.container.querySelectorAll('.agentic-answer__text')).toHaveLength(2);
+      expect(rendered.container.querySelector('[data-streaming-chat-preview]')).toBeNull();
+    } finally {
+      act(() => clearPreview(accountId, 'chat-preview:msg-live'));
+      act(() => useAuthStore.setState(previousAuth, true));
+    }
   });
 
   it('shows pre-event thinking, hands off to canonical live work, and removes it at terminal state', () => {

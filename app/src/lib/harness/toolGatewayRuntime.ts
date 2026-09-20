@@ -48,7 +48,12 @@ export interface ToolGatewayDependencies {
     rlm: SemanticMethod;
   };
   skills: { list: SemanticMethod; load: SemanticMethod };
-  plugins: { list: SemanticMethod; run: SemanticMethod };
+  plugins: {
+    list: SemanticMethod;
+    run: SemanticMethod;
+    /** Trusted registration metadata, never a caller-supplied classification. */
+    isReadOnly?: (args: Record<string, unknown>) => boolean;
+  };
   mcp: { list: SemanticMethod; run: SemanticMethod };
   tasks: { create: SemanticMethod; update: SemanticMethod };
   schedule: { create: SemanticMethod };
@@ -593,8 +598,9 @@ function executionContext(
   };
 }
 
-function requiresMutationApproval(request: ToolGatewayRequest): boolean {
+function requiresMutationApproval(request: ToolGatewayRequest, deps: ToolGatewayDependencies): boolean {
   if (!MUTATING_TOOL_GATEWAY_TOOLS.has(request.tool)) return false;
+  if (request.tool === 'plugins.run' && deps.plugins.isReadOnly?.(request.args) === true) return false;
   if (request.tool !== 'mcp.run') return true;
 
   // `mcp.run` can address either a read-only or a mutating external tool.
@@ -640,7 +646,6 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
 
   return {
     async execute(request) {
-      const mutation = requiresMutationApproval(request);
       try {
         // Capture the owner's reference before async approval can release its session lease.
         const signal = deps.readRequestSignal?.(request);
@@ -652,6 +657,7 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
             message: 'The VibeSpace account or workspace authority changed.',
           };
         }
+        const mutation = requiresMutationApproval(request, deps);
         if (mutation && !(await deps.authorizeMutation(request))) {
           return {
             requestId: request.requestId,

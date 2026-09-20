@@ -5,7 +5,8 @@ async function consume(frames: Record<string, unknown>[]) {
   let deliver: (value: unknown) => void;
   const invoke = vi.fn(async (command: string) => {
     if (command === 'codex_app_server_stream') {
-      frames.forEach(frame => deliver({ kind: 'frame', frame }));
+      frames.forEach((frame, sequence) => deliver({ kind: 'frame', frame, sequence,
+        nativeHandoffWallUs: 1_000_000 + sequence, nativeHandoffMonotonicUs: sequence }));
       deliver({ kind: 'done' });
     }
   });

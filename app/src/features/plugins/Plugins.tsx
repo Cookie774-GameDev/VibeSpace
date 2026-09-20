@@ -439,7 +439,7 @@ export function Plugins() {
                   {connection?.state === 'connected' ? (
                     <label className="flex items-center gap-2 text-secondary text-muted-foreground">
                       <Switch
-                        checked={connection.enabled}
+                        checked={connection.enabled && connection.enabledProjectIds.length > 0}
                         onCheckedChange={(enabled) => {
                           if (accountId) setEnabled(accountId, plugin.id, enabled);
                         }}
@@ -874,13 +874,22 @@ function PluginSetupDialog({
   const [error, setError] = React.useState('');
   const [setupUrl, setSetupUrl] = React.useState('');
   const [useProjectKey, setUseProjectKey] = React.useState(false);
+  const [authorizationUserCode, setAuthorizationUserCode] = React.useState('');
 
   React.useEffect(() => {
     setDraft({});
     setError('');
     setSetupUrl('');
     setUseProjectKey(false);
-  }, [plugin?.id]);
+    setAuthorizationUserCode('');
+  }, [accountId, plugin?.id]);
+
+  React.useEffect(() => {
+    if (connection?.state === 'connected' || connection?.state === 'error' ||
+        connection?.state === 'expired' || connection?.state === 'reauthorize') {
+      setAuthorizationUserCode('');
+    }
+  }, [connection?.state, connection?.updatedAt]);
 
   if (!plugin) return null;
 
@@ -915,6 +924,7 @@ function PluginSetupDialog({
   async function authorize() {
     setError('');
     setSetupUrl('');
+    setAuthorizationUserCode('');
     if (!accountId || !management) {
       setError('Plugin management is unavailable until account setup finishes.');
       return;
@@ -930,6 +940,7 @@ function PluginSetupDialog({
         setSetupUrl(result.setupUrl ?? '');
         return;
       }
+      setAuthorizationUserCode(result.state === 'connected' ? '' : result.userCode ?? '');
       if (result.authorizationUrl) {
         await openExternal(result.authorizationUrl);
       }
@@ -1125,6 +1136,15 @@ function PluginSetupDialog({
                   {providerConnectLabel}
                 </Button>
               </div>
+              {authorizationUserCode && (
+                <div role="status" className="relative mt-3 rounded-md border border-border bg-panel p-3 text-secondary">
+                  <p>Enter this code on the {activePlugin.provider} authorization page:</p>
+                  <p className="mt-1">
+                    Provider code: <strong className="select-all font-mono text-foreground">{authorizationUserCode}</strong>
+                  </p>
+                  <p className="mt-1 text-metadata text-muted-foreground">Keep this dialog open until authorization completes.</p>
+                </div>
+              )}
             </div>
           )}
 

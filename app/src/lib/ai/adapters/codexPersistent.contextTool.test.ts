@@ -5,10 +5,10 @@ import { createCodexPersistentAdapter, resolveCodexExecutable } from './codexPer
 const connection: ProviderConnection = {
   id: 'openai-codex',
   adapterId: 'codex-app-server',
-  providerId: 'opencode-go',
-  displayName: 'Codex via OpenCodex',
+  providerId: 'openai',
+  displayName: 'Codex',
   mode: 'external-cli',
-  authSource: 'opencode-provider-session',
+  authSource: 'codex-cli-session',
   promptTransport: 'native-system',
   enabled: true,
   capabilities: {
@@ -29,13 +29,20 @@ const connection: ProviderConnection = {
   },
 };
 
-async function* frames(usageUpdates: Array<Record<string, unknown>> = []) {
+async function* frames(
+  usageUpdates: Array<Record<string, unknown>> = [],
+  threadOptions: Readonly<{
+    approvalPolicy?: string;
+    sandbox?: Record<string, unknown>;
+    reasoningEffort?: string | null;
+  }> = {},
+) {
   yield {
     id: 'request_1_model_1',
     result: {
       data: [
         {
-          model: 'opencode-go/deepseek-v4-flash-vision-exp',
+          model: 'gpt-5.6-luna',
           supportedReasoningEfforts: [],
           serviceTiers: [],
         },
@@ -47,14 +54,14 @@ async function* frames(usageUpdates: Array<Record<string, unknown>> = []) {
     id: 'request_1_thread',
     result: {
       thread: { id: 'thread_native_1' },
-      model: 'opencode-go/deepseek-v4-flash-vision-exp',
+      model: 'gpt-5.6-luna',
       modelProvider: 'openai',
       serviceTier: null,
       cwd: 'C:\\workspace',
-      approvalPolicy: 'never',
+      approvalPolicy: threadOptions.approvalPolicy ?? 'never',
       approvalsReviewer: 'user',
-      sandbox: { type: 'readOnly', networkAccess: false },
-      reasoningEffort: null,
+      sandbox: threadOptions.sandbox ?? { type: 'readOnly', networkAccess: false },
+      reasoningEffort: threadOptions.reasoningEffort ?? null,
     },
   };
   yield {
@@ -128,8 +135,8 @@ it.each(['valid', 'wrong-thread', 'wrong-turn', 'wrong-tool'])('scopes native dy
   });
   const events: ProviderEvent[] = [];
   const run = async () => { for await (const event of adapter.send!({
-    requestId: 'request_1', connection, chatId: 'chat', prompt: 'Audit the Context Map',
-    modelId: 'opencode-go/deepseek-v4-flash-vision-exp', workingDirectory: 'C:\\workspace', interactionMode: 'ask',
+    requestId: 'request_1', connection, codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' }, chatId: 'chat', prompt: 'Audit the Context Map',
+    modelId: 'gpt-5.6-luna', workingDirectory: 'C:\\workspace', interactionMode: 'ask',
   })) events.push(event); };
   if (kind !== 'valid') {
     await expect(run()).rejects.toThrow('invalid turn or tool binding');
@@ -137,7 +144,7 @@ it.each(['valid', 'wrong-thread', 'wrong-turn', 'wrong-tool'])('scopes native dy
   } else {
     await run();
     expect(writes.find(x => x.method === 'thread/start')?.params.dynamicTools[0].name).toBe('vibespace_context');
-    expect(bridge.bind).toHaveBeenCalledWith('thread_native_1', expect.objectContaining({ model: 'opencode-go/deepseek-v4-flash-vision-exp' }), 'generation');
+    expect(bridge.bind).toHaveBeenCalledWith('thread_native_1', expect.objectContaining({ model: 'gpt-5.6-luna' }), 'generation');
     expect(writes.find(x => x.id === 'dynamic_1')?.result.contentItems[0].text).toBe('verified evidence');
     expect(events.filter(x => x.type === 'tool' && x.name === 'vibespace_context').map(x => x.type === 'tool' && x.status)).toEqual(['started', 'completed']);
     const completed = events.find(
@@ -203,9 +210,9 @@ it('advertises and dispatches explicitly enabled semantic MCP tools through the 
   });
   const events: ProviderEvent[] = [];
   for await (const event of adapter.send!({
-    requestId: 'request_1', connection, chatId: 'chat-mcp', accountId: 'account',
+    requestId: 'request_1', connection, codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' }, chatId: 'chat-mcp', accountId: 'account',
     workspaceId: 'workspace', projectId: 'project', prompt: 'List approved MCP tools.',
-    modelId: 'opencode-go/deepseek-v4-flash-vision-exp', workingDirectory: 'C:\\workspace',
+    modelId: 'gpt-5.6-luna', workingDirectory: 'C:\\workspace',
     interactionMode: 'ask', tools: { 'mcp.list': true, 'mcp.run': true },
   })) events.push(event);
 
@@ -230,5 +237,114 @@ it('advertises and dispatches explicitly enabled semantic MCP tools through the 
       },
     },
   });
+  expect(bridge.dispose).toHaveBeenCalledOnce();
+});
+
+it('forwards plugin tool flags to the native thread and projects a plugin result', async () => {
+  const writes: Array<Record<string, any>> = [];
+  const bridge = {
+    dynamicTools: [
+      { type: 'function' as const, name: 'plugins_list', description: 'List connected plugins.', inputSchema: { type: 'object' } },
+      { type: 'function' as const, name: 'plugins_run', description: 'Run a connected plugin operation.', inputSchema: { type: 'object' } },
+    ],
+    bind: vi.fn(),
+    execute: vi.fn(async () => ({ success: true, contentItems: [{ type: 'inputText' as const, text: 'context' }] })),
+    executeTool: vi.fn(async (toolName: string, args: unknown) => ({
+      success: true,
+      contentItems: [{
+        type: 'inputText' as const,
+        text: JSON.stringify({ toolName, args, ok: true, plugin: 'github', operation: 'list_repositories' }),
+      }],
+    })),
+    dispose: vi.fn(),
+  };
+  const contextTool = vi.fn(async (request: { tools?: Readonly<Record<string, boolean>> }) => {
+    expect(request.tools?.['plugins.list']).toBe(true);
+    expect(request.tools?.['plugins.run']).toBe(true);
+    return bridge;
+  });
+  const adapter = createCodexPersistentAdapter({
+    contextTool,
+    findExecutable: async () => ({ executableId: 'trusted-codex' }),
+    start: async () => ({ generation: 'generation-plugin' }),
+    frames: () => ({ ready: Promise.resolve(), stream: (async function* () {
+      for await (const frame of frames([], {
+        approvalPolicy: 'on-request',
+        sandbox: {
+          type: 'workspaceWrite',
+          writableRoots: ['C:\\workspace'],
+          networkAccess: false,
+          excludeTmpdirEnvVar: true,
+          excludeSlashTmp: true,
+        },
+        reasoningEffort: 'low',
+      })) {
+        yield frame;
+        if ('method' in frame && frame.method === 'turn/started') yield {
+          id: 'plugin_dynamic_1', method: 'item/tool/call', params: {
+            threadId: 'thread_native_1', turnId: 'turn_native_1', tool: 'plugins_run',
+            namespace: null, callId: 'plugin_call_1',
+            arguments: { pluginId: 'github', operation: 'list_repositories', input: {} },
+          },
+        };
+      }
+    })() }),
+    write: async (_generation, frame) => { writes.push(frame); }, stop: async () => true,
+  });
+  const events: ProviderEvent[] = [];
+  for await (const event of adapter.send!({
+    requestId: 'request_1', connection, codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' }, chatId: 'chat-plugin', accountId: 'account',
+    workspaceId: 'workspace', projectId: 'project', prompt: 'Use the connected GitHub plugin.',
+    modelId: 'gpt-5.6-luna', workingDirectory: 'C:\\workspace', interactionMode: 'agent',
+    tools: { 'plugins.list': true, 'plugins.run': true },
+  })) events.push(event);
+
+  expect(contextTool).toHaveBeenCalledWith(expect.objectContaining({
+    tools: { 'plugins.list': true, 'plugins.run': true },
+  }));
+  expect(writes.find((x) => x.method === 'thread/start')?.params.dynamicTools.map((tool: { name: string }) => tool.name)).toEqual([
+    'plugins_list', 'plugins_run',
+  ]);
+  expect(bridge.executeTool).toHaveBeenCalledWith(
+    'plugins_run',
+    { pluginId: 'github', operation: 'list_repositories', input: {} },
+    'plugin_call_1',
+  );
+  expect(writes.find((x) => x.id === 'plugin_dynamic_1')?.result.contentItems[0].text).toContain('list_repositories');
+  expect(events.filter((event) => event.type === 'tool' && event.name === 'plugins_run').map((event) => event.type === 'tool' && event.status)).toEqual(['started', 'completed']);
+  expect(bridge.dispose).toHaveBeenCalledOnce();
+});
+
+it('does not advertise a disabled plugin mutation tool to native Codex', async () => {
+  const writes: Array<Record<string, any>> = [];
+  const bridge = {
+    dynamicTools: [
+      { type: 'function' as const, name: 'plugins_list', description: 'List connected plugins.', inputSchema: { type: 'object' } },
+    ],
+    bind: vi.fn(),
+    execute: vi.fn(async () => ({ success: true, contentItems: [{ type: 'inputText' as const, text: 'context' }] })),
+    executeTool: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const contextTool = vi.fn(async (request: { tools?: Readonly<Record<string, boolean>> }) => {
+    expect(request.tools?.['plugins.list']).toBe(true);
+    expect(request.tools?.['plugins.run']).toBe(false);
+    return bridge;
+  });
+  const adapter = createCodexPersistentAdapter({
+    contextTool,
+    findExecutable: async () => ({ executableId: 'trusted-codex' }),
+    start: async () => ({ generation: 'generation-plugin-disabled' }),
+    frames: () => ({ ready: Promise.resolve(), stream: frames() }),
+    write: async (_generation, frame) => { writes.push(frame); }, stop: async () => true,
+  });
+  for await (const _event of adapter.send!({
+    requestId: 'request_1', connection, codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' }, chatId: 'chat-plugin-disabled', accountId: 'account',
+    workspaceId: 'workspace', projectId: 'project', prompt: 'List connected plugins.',
+    modelId: 'gpt-5.6-luna', workingDirectory: 'C:\\workspace', interactionMode: 'ask',
+    tools: { 'plugins.list': true, 'plugins.run': false },
+  })) { /* consume */ }
+  expect(writes.find((x) => x.method === 'thread/start')?.params.dynamicTools.map((tool: { name: string }) => tool.name)).toEqual(['plugins_list']);
+  expect(bridge.executeTool).not.toHaveBeenCalled();
   expect(bridge.dispose).toHaveBeenCalledOnce();
 });

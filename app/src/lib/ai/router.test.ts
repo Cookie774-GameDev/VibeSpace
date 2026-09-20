@@ -1152,6 +1152,52 @@ describe('canonical OpenCode AI routing', () => {
     );
   });
 
+  it('reports merged OpenCode usage before a provider error with the exact route', async () => {
+    const onProviderUsage = vi.fn();
+    const usage = {
+      capturedAt: 20,
+      inputTokens: { value: 100, provenance: 'provider-reported' as const },
+      outputTokens: { value: 20, provenance: 'provider-reported' as const },
+      totalTokens: { value: 120, provenance: 'provider-reported' as const },
+      costUsd: { value: 0.01, provenance: 'provider-reported' as const },
+    };
+    const partialUsage = {
+      capturedAt: 10,
+      inputTokens: usage.inputTokens,
+    };
+    openCodeSend.mockImplementationOnce((request) =>
+      (async function* () {
+        await request.onSessionBound?.({ sessionId: 'session-usage-error' });
+        yield { type: 'session', sessionId: 'session-usage-error' } as const;
+        yield { type: 'usage', usage: partialUsage } as const;
+        yield { type: 'usage', usage } as const;
+        yield { type: 'error', message: 'provider quota exhausted', code: 'quota_exhausted' } as const;
+      })(),
+    );
+
+    await expect(
+      runAgent({
+        agent: openaiAgent,
+        connectionId: 'opencode-cli',
+        requestId: 'request-usage-error',
+        messages: [{ role: 'user', content: 'summarize' }],
+        onProviderUsage,
+      }),
+    ).rejects.toThrow('provider quota exhausted');
+
+    expect(onProviderUsage).toHaveBeenCalledTimes(2);
+    const evidence = onProviderUsage.mock.calls.at(-1)?.[0];
+    expect(evidence).toMatchObject({
+      requestId: 'request-usage-error',
+      providerId: 'openai',
+      connectionId: 'opencode-cli',
+      modelId: 'gpt-protected',
+      usage: { totalTokens: { value: 120, provenance: 'provider-reported' } },
+    });
+    expect(evidence.usage).not.toBe(usage);
+    expect(evidence.usage.totalTokens).not.toBe(usage.totalTokens);
+  });
+
   it('retains unavailable token provenance when the provider reports no usage', async () => {
     openCodeSend.mockImplementationOnce(() => (async function* () {
       yield { type: 'text', delta: 'Done' } as const;

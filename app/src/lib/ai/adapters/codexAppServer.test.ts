@@ -772,6 +772,23 @@ describe('Codex public tool details', () => {
     ] } });
   });
 
+  it('retains a provider item error for failed command execution', () => {
+    const actual = event('item/completed', { id: 'cmd-error', type: 'commandExecution', status: 'failed',
+      command: 'npm test', cwd: '/workspace', error: { code: 'process_exit', message: 'The command exited before producing output.' } });
+    expect(actual).toMatchObject({ type: 'tool', status: 'failed', details: {
+      error: { code: 'process_exit', message: 'The command exited before producing output.' },
+    } });
+  });
+
+  it('retains a provider item error for failed file changes', () => {
+    const actual = event('item/completed', { id: 'edit-error', type: 'fileChange', status: 'failed',
+      changes: [{ path: '/workspace/a.ts', kind: { type: 'update' } }],
+      error: { code: 'write_denied', message: 'The file could not be updated.' } });
+    expect(actual).toMatchObject({ type: 'tool', status: 'failed', details: {
+      error: { code: 'write_denied', message: 'The file could not be updated.' },
+    } });
+  });
+
   it('retains scoped MCP arguments and results but redacts secret-valued keys', () => {
     const actual = event('item/completed', { id: 'mcp-details', type: 'mcpToolCall', status: 'completed',
       server: 'context', tool: 'search', arguments: { query: 'invoice', apiKey: 'hidden' },

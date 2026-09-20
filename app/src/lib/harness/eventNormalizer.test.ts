@@ -2,6 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { normalizeOpenCodeEvent } from './eventNormalizer';
 
 describe('normalizeOpenCodeEvent', () => {
+  it.each(['session.error', 'session.status'])('preserves SDK named errors from %s', (type) => {
+    const error = {
+      name: 'APIError',
+      data: {
+        message: 'OpenCode Go usage limit reached. Keep going in a bit. Bearer private-value',
+        code: 'new_provider_limit',
+        providerID: 'opencode-go',
+        modelID: 'deepseek-v4-flash-vision-exp',
+        isRetryable: true,
+        retryAfterMs: 30_000,
+        responseBody: 'private upstream payload',
+        responseHeaders: { authorization: 'private credential' },
+      },
+    };
+    expect(normalizeOpenCodeEvent({ type, properties: {
+      sessionID: 'session-1',
+      ...(type === 'session.status' ? { status: { type: 'error', error } } : { error }),
+    } }, 'session-1')).toEqual([{
+      type: 'error',
+      message: 'OpenCode Go usage limit reached. Keep going in a bit. Bearer [REDACTED]',
+      code: 'new_provider_limit', providerId: 'opencode-go',
+      modelId: 'deepseek-v4-flash-vision-exp', retryable: true, retryAfterMs: 30_000,
+    }]);
+  });
+
   it('normalizes an assistant text delta for the expected session', () => {
     expect(
       normalizeOpenCodeEvent(

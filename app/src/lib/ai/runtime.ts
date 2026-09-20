@@ -16,11 +16,14 @@
  * and lets the consumer wire up the real repo at app boot time.
  */
 import type { Agent, AgentId, Chat, EventId, Message, MessageId, Part } from '@/types';
+import { flushSync } from 'react-dom';
+import { providerPartialUsage } from './providerPartialUsage';
 import type { ChatId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { useUIStore } from '@/stores/ui';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
+import { mergePublicToolDetails } from './publicToolDetails';
 import {
   DEFAULT_CHAT_RUNTIME_SETTINGS,
   type ChatRuntimeSettings,
@@ -307,7 +310,7 @@ import type { JarvisKernelTurnInput } from '@/lib/jarvis/kernel';
 import type { JarvisArtifactDraft } from '@/lib/jarvis/contracts';
 import type { RawProviderResponse } from '@/lib/jarvis/response/pipeline';
 import { createPublicStreamProjection } from '@/lib/jarvis/response/publicStreamProjection';
-import { clearPreview, setPreview } from '@/features/chat/streamingPreviewStore';
+import { clearPreview, setPreview, previewIdentityForPlaceholder, type StreamingPreviewSegment } from '@/features/chat/streamingPreviewStore';
 import type { VibeSpaceApproval } from '@/lib/harness/types';
 import {
   MUTATING_TOOL_GATEWAY_TOOLS,
@@ -1702,7 +1705,9 @@ export async function installJarvisKernelRuntimeHost(
                 const snapshot = preview.snapshot();
                 // Empty replacements clear stale public text. Tools and text
                 // share this canonical ordered projection and immutable values.
-                setPreview({ ...scope, ...snapshot, updatedAt: now(), projectRoot: providerInput.workingDirectory });
+                // Provider callbacks run outside React lifecycle work. Commit
+                // public activity before subsequent activity-store updates.
+                flushSync(() => setPreview({ ...scope, ...snapshot, updatedAt: now(), projectRoot: providerInput.workingDirectory }));
               };
               const lastUserText = llmContentToText(
                 [...providerInput.messages].reverse().find((message) => message.role === 'user')
@@ -1726,6 +1731,7 @@ export async function installJarvisKernelRuntimeHost(
               let contextCitationSessionId: string | undefined;
               const liveToolActivityIds = new Map<string, string>();
               const lastLiveToolStates = new Map<string, string>();
+              let partialProviderUsage: Message['usage'];
               const thinkingActivityId = createChatActivityId('thinking');
               let thinkingRecorded = false;
               let liveReasoning = '';
@@ -1865,6 +1871,16 @@ export async function installJarvisKernelRuntimeHost(
                     attemptNumber: providerInput.attemptNumber,
                   },
                   signal,
+                  onProviderUsage: (evidence) => {
+                    if (resolvedDisposed || preparedDisposed ||
+                        evidence.requestId !== providerInput.requestId ||
+                        evidence.connectionId !== providerInput.model.connectionId ||
+                        evidence.providerId !== providerInput.model.providerId ||
+                        evidence.modelId !== providerInput.model.modelId) return;
+                    partialProviderUsage = providerPartialUsage(evidence.usage,
+                      providerInput.model.providerId as NonNullable<Message['usage']>['provider'] & string,
+                      evidence.modelId);
+                  },
                   onHarnessSessionBound: (binding) => {
                     if (
                       contextCitationSessionId &&
@@ -1912,6 +1928,7 @@ export async function installJarvisKernelRuntimeHost(
                   onReasoning: (delta, mode) => {
                     const scope = activeTurnScopes.get(providerInput.runId);
                     if (signal.aborted || suppressProviderPreview || !scope || scope.requestId !== providerInput.requestId) return;
+                    if (preview.pushReasoning({ delta, mode })) publishPreview();
                     liveReasoning = mode === 'replace' ? delta : liveReasoning + delta;
                     if (thinkingRecorded) useChatActivityStore.getState().update(scope.chatId, thinkingActivityId, { detail: liveReasoning });
                     else {
@@ -2108,6 +2125,12 @@ export async function installJarvisKernelRuntimeHost(
                 getPartialText() {
                   if (suppressProviderPreview) return undefined;
                   return preview.getPartialText();
+                },
+                getPartialParts() {
+                  return suppressProviderPreview ? [] : preview.getPartialParts();
+                },
+                getPartialUsage() {
+                  return partialProviderUsage;
                 },
                 abortAfterStart() {
                   if (!signal.aborted) throw new Error('kernel_provider_abort_signal_not_set');
@@ -2939,6 +2962,65 @@ async function recordTokenOptimizationTelemetry(input: {
       detail: { errorCategory: 'local_intelligence_telemetry_unavailable' },
     });
   }
+}
+
+function reconcileKernelAssistantUsage(input: {
+  receipt: TokenOptimizationReceipt;
+  chatId: string;
+  requestId: string;
+  attemptNumber: number;
+  messages: readonly Message[];
+}): ReconciledTokenUsage | null {
+  const assistant = input.messages.find(
+    (message) =>
+      message.role === 'assistant' &&
+      String(message.chat_id) === input.chatId &&
+      String(message.id) === `msg_${input.requestId}`,
+  );
+  const usage = assistant?.usage;
+  const inputTokens = usage?.input_tokens;
+  const outputTokens = usage?.output_tokens;
+  if (
+    !usage ||
+    usage.provenance !== undefined ||
+    usage.provider !== input.receipt.providerId ||
+    usage.model !== input.receipt.modelId ||
+    typeof inputTokens !== 'number' ||
+    !Number.isSafeInteger(inputTokens) ||
+    inputTokens < 0 ||
+    typeof outputTokens !== 'number' ||
+    !Number.isSafeInteger(outputTokens) ||
+    outputTokens < 0
+  ) {
+    return null;
+  }
+  const cachedInputTokens = usage.cache_read_tokens;
+  if (
+    cachedInputTokens !== undefined &&
+    (!Number.isSafeInteger(cachedInputTokens) || cachedInputTokens < 0)
+  ) {
+    return null;
+  }
+  return reconcileTokenUsage(
+    {
+      providerId: input.receipt.providerId,
+      modelId: input.receipt.modelId,
+      requestId: input.requestId,
+      attemptNumber: input.attemptNumber,
+      estimatedInputTokens: input.receipt.estimatedInputTokensAfter,
+      estimatedOutputTokens: input.receipt.outputTokenLimit,
+      tokenizerSource: input.receipt.tokenizerSource,
+    },
+    {
+      providerId: input.receipt.providerId,
+      modelId: input.receipt.modelId,
+      requestId: input.requestId,
+      attemptNumber: input.attemptNumber,
+      inputTokens,
+      outputTokens,
+      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    },
+  );
 }
 
 /** The shape of the `jarvis:cancel` event detail. */
@@ -4857,7 +4939,7 @@ export function startRuntimeListener(
   const cancelEventName = options.cancelEventName ?? 'jarvis:cancel';
   const resumeEventName = options.resumeEventName ?? 'jarvis:resume';
   const steerEventName = options.steerEventName ?? 'jarvis:steer';
-  const flushIntervalMs = options.flushIntervalMs ?? 32;
+  const flushIntervalMs = options.flushIntervalMs ?? 16;
   const stopPromptForgeContextBridge = installPromptForgeContextRetrievalBridge(window);
 
   const inFlight = new Map<MessageId, AbortController>();
@@ -6272,6 +6354,31 @@ export function startRuntimeListener(
         result ? [call, result] : [call],
       );
     const liveOpenCodeChronology: Part[] = [];
+    let partialOrdinaryUsage: Message['usage'];
+    const ordinaryPreview = { scope: null as ReturnType<typeof previewIdentityForPlaceholder> | null };
+    let ordinaryPreviewReconciled = false;
+    const publishOrdinaryPreview = () => {
+      if (!placeholderId || controller.signal.aborted || detail.caoAuthority || bufferExactLiteralStreaming) return;
+      const accountId = resolveAccountIdentity(authState)?.accountId;
+      if (!accountId || accountId !== resolveAccountIdentity(useAuthStore.getState())?.accountId) return;
+      ordinaryPreview.scope ??= previewIdentityForPlaceholder({ accountId, chatId: String(chatId), placeholderId: String(placeholderId) });
+      const previewScope = ordinaryPreview.scope;
+      const segments: StreamingPreviewSegment[] = [];
+      liveOpenCodeChronology.forEach((part, index) => {
+        if (part.kind === 'text' || part.kind === 'reasoning') {
+          segments.push({ kind: part.kind, id: `part-${index}`, text: part.text });
+        } else if (part.kind === 'tool_call') {
+          const result = liveOpenCodeTools.get(part.call_id)?.result;
+          segments.push({ kind: 'tool', id: part.call_id, name: part.tool,
+            status: result?.error ? 'failed' : result ? 'completed' : 'started',
+            ...(typeof part.args.path === 'string' ? { fileLabel: part.args.path } : {}),
+            ...(part.details ? { details: part.details } : {}),
+          });
+        }
+      });
+      flushSync(() => setPreview({ ...previewScope, text: acc, segments, updatedAt: Date.now(),
+        projectRoot: explicitReadRoot ?? (projectId ? getStoredProjectRoot(projectId)?.trim() || undefined : undefined) }));
+    };
     const liveOpenCodeTextIndexes = new Map<string, number>();
     const liveOpenCodeToolIndexes = new Map<string, { call: number; result?: number }>();
     let hasNativeOpenCodeTextIdentity = false;
@@ -6401,7 +6508,7 @@ export function startRuntimeListener(
           ? [...parts, { kind: 'provider_error', error: providerError }]
           : parts;
       if (detail.caoAuthority) return withProviderError(suffix ? [{ kind: 'text', text: suffix }] : []);
-      if (!hasNativeOpenCodeTextIdentity) {
+      if (!hasNativeOpenCodeTextIdentity && liveOpenCodeChronology.length === 0) {
         const sep = acc.length > 0 ? '\n\n' : '';
         return withProviderError([
           { kind: 'text', text: suffix ? acc + sep + suffix : acc },
@@ -6619,6 +6726,9 @@ export function startRuntimeListener(
           let canonicalModelId: string;
           let canonicalConnectionId: string | undefined;
           let canonicalResponseParts: readonly Part[] = [];
+          let kernelAssistantMessages: readonly Message[] = [];
+          let kernelRequestId: string | undefined;
+          let kernelAttemptNumber = 1;
           let canonicalVoiceCancelled = false;
           let canonicalResponseContractFailed = false;
           let canonicalReadScopeUnverified = false;
@@ -6791,6 +6901,8 @@ export function startRuntimeListener(
               execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.providerEffort ?? reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
               tokenOptimization: { mode: tokenOptimizationMode, outputTokens: detail.tokenOptimizationOutputLimit, signal: controller.signal, onReceipt: receipt => { kernelTokenReceipt = receipt; } },
             });
+            kernelRequestId = turn.attempt.requestId;
+            kernelAttemptNumber = turn.attempt.attemptNumber;
             if (continuationOutcome) {
               approvalContinuationOutcomesByRun.set(turn.run.id, continuationOutcome);
               while (approvalContinuationOutcomesByRun.size > 2_000) {
@@ -6877,6 +6989,11 @@ export function startRuntimeListener(
                   throw new Error('kernel_account_authority_revoked');
                 }
                 response = outcome.value.response;
+                // The kernel commits the assistant row, including provider
+                // usage, before returning its public envelope. Read that
+                // exact row back so the separate optimization receipt can
+                // display provider-reported counts instead of an estimate.
+                kernelAssistantMessages = await bindings.getMessages(chatId);
               }
             } finally {
               if (detail.caoAuthority) bufferedCaoKernelRunKeys.delete(bufferedCaoKernelRun);
@@ -6971,10 +7088,27 @@ export function startRuntimeListener(
           controller.signal.throwIfAborted();
           if (kernelTokenReceipt) {
             const receipt = kernelTokenReceipt as TokenOptimizationReceipt;
+            const reconciledKernelUsage = reconcileKernelAssistantUsage({
+              receipt,
+              chatId: String(chatId),
+              requestId: kernelRequestId ?? '',
+              attemptNumber: kernelAttemptNumber,
+              messages: kernelAssistantMessages,
+            });
             devConsole.log({ channel: 'ai', level: 'info', message: 'Kernel token optimization applied', detail: { mode: receipt.mode, provider: receipt.providerId, model: receipt.modelId, estimatedTokensSaved: receipt.estimatedTokensSaved } });
             if (detail.showTokenOptimizationReport !== false) {
               try {
-                await bindings.appendMessage({ chat_id: chatId as ChatId, role: 'system', parts: [{ kind: 'token_optimization_receipt', receipt }] });
+                await bindings.appendMessage({
+                  chat_id: chatId as ChatId,
+                  role: 'system',
+                  parts: [
+                    {
+                      kind: 'token_optimization_receipt',
+                      receipt,
+                      ...(reconciledKernelUsage ? { usage: reconciledKernelUsage } : {}),
+                    },
+                  ],
+                });
               } catch {
                 devConsole.log({ channel: 'ai', level: 'warn', message: 'Kernel token optimization receipt could not be saved' });
               }
@@ -7327,7 +7461,7 @@ export function startRuntimeListener(
         backend: chatBackendAffinity.backend,
         agent: runnable,
         chatId: String(chatId),
-        ...(explicitReadRoot || detail.caoAuthority ? { requestId: String(placeholder.id) } : {}),
+        requestId: String(placeholder.id),
         ...(structuredAgent ? { parentChatId: structuredAgent.parentChatId } : {}),
         messages: [
           ...prepareOpenCodeMessagesForInteractionMode(requestMessages, {
@@ -7394,12 +7528,18 @@ export function startRuntimeListener(
                   text: chunk.mode === 'replace' ? chunk.delta : existingPart.text + chunk.delta,
                 };
               }
+            } else {
+              const previous = liveOpenCodeChronology.at(-1);
+              if (previous?.kind === 'text') {
+                liveOpenCodeChronology[liveOpenCodeChronology.length - 1] = {
+                  kind: 'text', text: chunk.mode === 'replace' ? chunk.delta : previous.text + chunk.delta,
+                };
+              } else liveOpenCodeChronology.push({ kind: 'text', text: chunk.delta });
             }
-            acc = chunk.streamPartId
-              ? liveOpenCodeChronology
-                  .flatMap((part) => (part.kind === 'text' ? [part.text] : []))
-                  .join('')
-              : acc + chunk.delta;
+            acc = liveOpenCodeChronology
+              .flatMap((part) => (part.kind === 'text' ? [part.text] : []))
+              .join('');
+            publishOrdinaryPreview();
             if (!bufferExactLiteralStreaming) {
               scheduleFlush();
               scheduleSpeechDelta();
@@ -7408,6 +7548,31 @@ export function startRuntimeListener(
           if (chunk.done && !bufferExactLiteralStreaming) flushNow();
         },
         tools: providerTools,
+        onProviderUsage: (evidence) => {
+          if (detail.caoAuthority || evidence.requestId !== String(placeholder.id) ||
+              evidence.connectionId !== providerRequest.connectionId ||
+              evidence.providerId !== runnable.model.provider ||
+              evidence.modelId !== runnable.model.model) return;
+          partialOrdinaryUsage = providerPartialUsage(evidence.usage,
+            evidence.providerId as NonNullable<Message['usage']>['provider'] & string, evidence.modelId);
+        },
+        onReasoning: (delta, mode) => {
+          if (controller.signal.aborted || detail.caoAuthority || !delta) return;
+          const previous = liveOpenCodeChronology.at(-1);
+          const reasoningText = mode === 'replace' || previous?.kind !== 'reasoning'
+            ? delta
+            : previous.text + delta;
+          const part: Part = { kind: 'reasoning', text: reasoningText };
+          if (previous?.kind === 'reasoning') liveOpenCodeChronology[liveOpenCodeChronology.length - 1] = part;
+          else liveOpenCodeChronology.push(part);
+          publishOrdinaryPreview();
+          responseCompositionVisible = false;
+          useChatActivityStore.getState().update(chatId, agentActivityId, {
+            category: 'thinking', status: 'running', title: 'Thinking', detail: reasoningText,
+            ts: Date.now(),
+          });
+          if (!bufferExactLiteralStreaming) scheduleFlush();
+        },
         ...(structuredAgent || detail.caoAuthority
           ? {
               onHarnessSessionBound: (binding: { sessionId: string; parentSessionId?: string }) => {
@@ -7521,6 +7686,11 @@ export function startRuntimeListener(
             tool: toolActivity.name,
             call_id: callId,
             args: { ...existing?.call.args, ...(toolActivity.fileLabel ? { path: toolActivity.fileLabel } : {}), ...(toolActivity.nativeTask ? { nativeTask: toolActivity.nativeTask } : {}) },
+            ...(toolActivity.details || existing?.call.details
+              ? { details: toolActivity.details
+                  ? mergePublicToolDetails(existing?.call.details, toolActivity.details)
+                  : existing!.call.details }
+              : {}),
           };
           const result: Extract<Part, { kind: 'tool_result' }> | undefined =
             toolActivity.status === 'completed'
@@ -7549,6 +7719,7 @@ export function startRuntimeListener(
             }
           }
           if (detail.caoAuthority) return;
+          publishOrdinaryPreview();
           cancelPendingFlush();
           await settleStreamingWrites();
           controller.signal.throwIfAborted();
@@ -7559,6 +7730,7 @@ export function startRuntimeListener(
         onPublicTimelineSnapshot: async (snapshot) => {
           controller.signal.throwIfAborted();
           if (detail.caoAuthority || !reconcileOpenCodePublicSnapshot(snapshot)) return;
+          publishOrdinaryPreview();
           if (snapshot.finalText) {
             if (!responseCompositionVisible) {
               responseCompositionVisible = true;
@@ -7803,6 +7975,7 @@ export function startRuntimeListener(
           model: response.model,
         },
       });
+      ordinaryPreviewReconciled = true;
       controller.signal.throwIfAborted();
 
       const legacyResponseFailedClosed = Boolean(
@@ -7997,7 +8170,9 @@ export function startRuntimeListener(
               : `_Error: ${safeErrorMessage(err)}_`;
           await bindings.updateMessage(placeholderId, {
             parts: currentOpenCodeErrorParts(suffix, providerError),
+            ...(partialOrdinaryUsage ? { usage: partialOrdinaryUsage } : {}),
           });
+          ordinaryPreviewReconciled = true;
         } else if (!aborted && isProtectedJarvis &&
             resolveAccountIdentity(authState)?.accountId &&
             resolveAccountIdentity(authState)?.accountId ===
@@ -8071,6 +8246,9 @@ export function startRuntimeListener(
       });
     } finally {
       controller.signal.removeEventListener('abort', cancelScheduledStreamingEffects);
+      if (ordinaryPreview.scope && ordinaryPreviewReconciled) {
+        clearPreview(ordinaryPreview.scope.accountId, ordinaryPreview.scope.runId, { terminal: true });
+      }
       removeOpenCodeQuestionResolutionListener?.();
       if (placeholderId && inFlight.get(placeholderId) === controller) {
         inFlight.delete(placeholderId);

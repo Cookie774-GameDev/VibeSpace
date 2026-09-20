@@ -7,7 +7,7 @@ function fixture(rejectPolicy = false) {
   const write = vi.fn(async (_generation: string, _message: Record<string, unknown>) => undefined);
   const stop = vi.fn(async () => true);
   async function* frames() {
-    yield { id: 'policy_1_model_1', result: { data: [{ model: 'opencode-go/deepseek-v4-flash-vision-exp', supportedReasoningEfforts: [], serviceTiers: [] }], nextCursor: null } };
+    yield { id: 'policy_1_model_1', result: { data: [{ model: 'gpt-5.6-luna', supportedReasoningEfforts: [], serviceTiers: [] }], nextCursor: null } };
     yield { id: 'policy_1_resume', result: { thread: { id: 'saved_thread' } } };
     yield { id: 'policy_1_policy', ...(rejectPolicy ? { error: { code: -32601, message: 'unsupported' } } : { result: {} }) };
     yield { method: 'turn/started', params: { threadId: 'saved_thread', turn: { id: 'turn_1' } } };
@@ -26,7 +26,8 @@ async function run(currentPolicy: string, rejectPolicy = false) {
   const consume = async () => {
     for await (const _ of f.adapter.send!({
       requestId: 'policy_1', connection: CODEX_CLI_CONNECTION,
-      sessionId: 'saved_thread', modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' },
+      sessionId: 'saved_thread', modelId: 'gpt-5.6-luna',
       workingDirectory: 'C:\\workspace', interactionMode: 'ask',
       prompt: 'Read the requested file.', systemPrompt: currentPolicy,
     })) { /* Exercise the real adapter protocol ordering. */ }

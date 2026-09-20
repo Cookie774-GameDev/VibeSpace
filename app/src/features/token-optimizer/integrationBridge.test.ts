@@ -188,7 +188,7 @@ describe('Token Optimize integration bridge', () => {
     expect(result.receipt.tokenizerSource).toBe('mixed');
   });
 
-  it('fails the preflight closed when protected content cannot fit', async () => {
+  it('fails closed on overflow without dropping content', async () => {
     const compiler = createTokenOptimizationPreflightCompiler(
       createTokenOptimizerService(createTokenizerRegistry([])),
     );
@@ -201,7 +201,7 @@ describe('Token Optimize integration bridge', () => {
         requestedOutputTokens: 2,
         context: { latestUserContent: 'protected content is too large' },
       }),
-    ).rejects.toThrow(/protected context exceeds/i);
+    ).rejects.toThrow(/estimated context exceeds.*tokens/i);
   });
 
   it('maps safe optimization and bound usage metrics into intelligence telemetry', () => {

@@ -4,10 +4,12 @@ import {
   clearPreview,
   getPreview,
   getChatPreview,
+  previewIdentityForPlaceholder,
   setPreview,
   subscribeChatPreviews,
   subscribePreviews,
 } from './streamingPreviewStore';
+import { resetTurnStoreForTests } from './runtime/turn/turnStore';
 
 const preview = {
   accountId: 'account-a',
@@ -20,6 +22,7 @@ const preview = {
 
 describe('streaming preview store', () => {
   beforeEach(() => {
+    resetTurnStoreForTests();
     clearAccountPreviews('account-a');
     clearAccountPreviews('account-b');
   });
@@ -86,6 +89,47 @@ describe('streaming preview store', () => {
     setPreview({ ...preview, segments: [segment] });
     segment.name = 'changed outside store';
     expect(getPreview('account-a', 'run-1')?.segments?.[0]).toMatchObject({ name: 'read' });
+  });
+
+  it('publishes ordered public reasoning segments through the existing preview contract', () => {
+    const identity = previewIdentityForPlaceholder({
+      accountId: 'account-a',
+      chatId: 'chat-1',
+      placeholderId: 'msg_42',
+    });
+    setPreview({
+      ...identity,
+      text: 'Answer',
+      updatedAt: 11,
+      segments: [
+        { kind: 'reasoning', id: 'reasoning-1', text: 'Thinking publicly.' },
+        { kind: 'tool', id: 'tool-1', name: 'read', status: 'completed' },
+        { kind: 'text', id: 'text-1', text: 'Answer' },
+      ],
+    });
+    expect(getPreview('account-a', 'chat-preview:msg_42')?.segments).toEqual([
+      { kind: 'reasoning', id: 'reasoning-1', text: 'Thinking publicly.' },
+      { kind: 'tool', id: 'tool-1', name: 'read', status: 'completed' },
+      { kind: 'text', id: 'text-1', text: 'Answer' },
+    ]);
+  });
+
+  it('derives a stable preview identity without manufacturing a message id', () => {
+    expect(
+      previewIdentityForPlaceholder({
+        accountId: ' account-a ',
+        chatId: ' chat-1 ',
+        placeholderId: 'msg_42',
+      }),
+    ).toEqual({
+      accountId: 'account-a',
+      chatId: 'chat-1',
+      requestId: 'msg_42',
+      runId: 'chat-preview:msg_42',
+    });
+    expect(() =>
+      previewIdentityForPlaceholder({ accountId: '', chatId: 'chat-1', placeholderId: 'x' }),
+    ).toThrow('invalid_streaming_preview_identity');
   });
 
   it('publishes a changed trusted root even when display text is unchanged', () => {
@@ -235,5 +279,8 @@ it('assigns monotonic publication time itself and preserves it for no-op updates
     clock.mockReturnValue(120);
     setPreview({ ...preview, text: 'new timing fixture', updatedAt: 50 });
     expect(getPreview('account-a', 'run-1')?.publicationMonotonicMs).toBe(100);
-  } finally { clock.mockRestore(); clearAccountPreviews('account-a'); }
+  } finally {
+    clock.mockRestore();
+    clearAccountPreviews('account-a');
+  }
 });

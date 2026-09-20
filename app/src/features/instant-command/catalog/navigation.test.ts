@@ -90,7 +90,7 @@ describe('navigation command catalog', () => {
     );
   });
 
-  it('exposes /connect only as a route to the existing secure Providers surface', () => {
+  it('exposes /connect through the existing secure Connections surface', () => {
     const connect = NAVIGATION_COMMAND_INPUTS.find((command) => command.id === 'connections.open');
     expect(connect).toMatchObject({
       aliases: expect.arrayContaining(['/connect', 'connect provider', '/connect openai']),
@@ -111,7 +111,7 @@ describe('navigation command catalog', () => {
       ),
     ).toEqual({
       status: 'parsed',
-      slots: { section: 'providers' },
+      slots: { section: 'connections' },
     });
     expect(
       connect?.parseSlots?.(
@@ -125,6 +125,21 @@ describe('navigation command catalog', () => {
         '/connect openai',
       ),
     ).toEqual({ status: 'parsed', slots: { section: 'providers', providerId: 'openai' } });
+    expect(
+      connect?.parseSlots?.(
+        {
+          definition: undefined as never,
+          alias: '/connect codex',
+          sourceStart: 0,
+          sourceEnd: '/connect codex'.length,
+          remainder: '',
+        },
+        '/connect codex',
+      ),
+    ).toEqual({
+      status: 'parsed',
+      slots: { section: 'connections', connectionId: 'openai-codex' },
+    });
     for (const remainder of ['ollama', 'unknown', 'openai extra', 'sk-private']) {
       expect(
         connect?.parseSlots?.(

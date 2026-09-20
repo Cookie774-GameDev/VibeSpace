@@ -94,6 +94,32 @@ describe('Plugins settings page', () => {
     expect(screen.queryByText('GitHub')).toBeNull();
   }, 15_000);
 
+  it('shows missing terminal scope as off and enables it through the actual switch', () => {
+    usePluginStore.setState({
+      connectionsByAccount: {
+        'account-a': {
+          github: {
+            accountId: 'account-a',
+            pluginId: 'github',
+            state: 'connected',
+            enabled: true,
+            enabledProjectIds: [],
+            configuredFields: [],
+            updatedAt: 1,
+          },
+        },
+      },
+    });
+    renderPlugins();
+    const toggle = screen.getByRole('switch', { name: 'Enable GitHub for terminal agents' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(
+      usePluginStore.getState().connectionsByAccount['account-a'].github.enabledProjectIds,
+    ).toEqual(['*']);
+  });
+
   it('exposes the active catalog filter as a pressed button', () => {
     renderPlugins();
     const all = screen.getByRole('button', { name: 'All' });
@@ -235,6 +261,28 @@ describe('Plugins settings page', () => {
     });
   }, 15_000);
 
+  it('keeps the GitHub device code in Manage until authorization is verified', async () => {
+    const connected = {
+      accountId: 'account-a', pluginId: 'github', state: 'connected' as const,
+      enabled: true, enabledProjectIds: ['*'], configuredFields: ['token'], updatedAt: 1,
+    };
+    usePluginStore.getState().upsertConnection(connected);
+    vi.mocked(management.beginAuthorization).mockResolvedValueOnce({
+      ok: true, state: 'awaiting_approval', userCode: 'TEST-CODE',
+      authorizationUrl: 'https://github.com/login/device',
+    });
+    renderPlugins();
+    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'GitHub' } });
+    fireEvent.click(within(screen.getByTestId('plugin-card-github')).getByRole('button', { name: /^manage$/i }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /continue with github/i }));
+    expect(await within(dialog).findByText('TEST-CODE')).toBeTruthy();
+    expect(within(dialog).getByRole('status').textContent).toContain('Provider code:');
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/login/device');
+    act(() => usePluginStore.getState().upsertConnection({ ...connected, updatedAt: 2 }));
+    await waitFor(() => expect(within(dialog).queryByText('TEST-CODE')).toBeNull());
+  }, 15_000);
+
   it.each([
     ['Stripe', 'stripe', 'https://dashboard.stripe.com/apikeys'],
     ['Cloudflare', 'cloudflare', 'https://dash.cloudflare.com/profile/api-tokens'],
@@ -363,6 +411,9 @@ describe('Plugins settings page', () => {
     expect(
       await screen.findAllByText(/provider authorization completed and verified/i),
     ).toHaveLength(2);
+    expect(
+      usePluginStore.getState().connectionsByAccount['account-a'].github.enabledProjectIds,
+    ).toEqual(['*']);
 
     fireEvent.click(
       screen

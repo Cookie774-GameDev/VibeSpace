@@ -101,6 +101,22 @@ function request(tool: ToolGatewayTool) {
 }
 
 describe('tool gateway semantic runtime', () => {
+  it('runs a trusted read-only plugin operation without granting mutations', async () => {
+    const { call, deps } = dependencies(false);
+    deps.plugins.isReadOnly = () => true;
+    expect(await createToolGatewayRuntime(deps).execute(request('plugins.run')))
+      .toMatchObject({ ok: true });
+    expect(deps.authorizeMutation).not.toHaveBeenCalled();
+    expect(call).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mutationApproved: false }));
+  });
+
+  it('requires mutation approval when the trusted plugin operation is not read-only', async () => {
+    const { call, deps } = dependencies(false);
+    deps.plugins.isReadOnly = () => false;
+    expect(await createToolGatewayRuntime(deps).execute(request('plugins.run')))
+      .toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(call).not.toHaveBeenCalled();
+  });
   it('retains cancellation when provider cleanup releases the lease during authorization', async () => {
     const { call, deps } = dependencies();
     const owner = new AbortController();

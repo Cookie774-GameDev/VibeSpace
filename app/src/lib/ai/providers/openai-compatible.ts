@@ -117,6 +117,7 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
       let acc = '';
       let inputTokens = 0;
       let outputTokens = 0;
+      let usageWasEstimated = false;
       let finishReason: string | undefined;
       let first = true;
 
@@ -164,8 +165,12 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
         inputTokens = estimateInputTokens(
           [systemPrompt, ...req.messages.map((m) => llmContentToText(m.content))].join('\n'),
         );
+        usageWasEstimated = true;
       }
-      if (outputTokens === 0) outputTokens = estimateInputTokens(acc);
+      if (outputTokens === 0) {
+        outputTokens = estimateInputTokens(acc);
+        usageWasEstimated = true;
+      }
 
       req.onChunk?.({ delta: '', done: true });
 
@@ -175,6 +180,7 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
           input_tokens: inputTokens,
           output_tokens: outputTokens,
           cost_usd: estimateCost(cfg.id, model, inputTokens, outputTokens),
+          ...(usageWasEstimated ? { provenance: 'estimated' as const } : {}),
         },
         provider: cfg.id,
         model,

@@ -1,6 +1,7 @@
 import { llmContentToText, type LLMMessage } from '@/lib/ai/types';
 import type { ContextBudgetKind, TokenOptimizationMode } from './contracts';
 import type { TokenOptimizationReceipt } from './optimizationReport';
+import { optimizationModePolicy } from './optimizationPolicy';
 import {
   createProductionTokenizers,
   type ProductionTokenizerOptions,
@@ -158,20 +159,25 @@ async function optimizeWith(
     });
   }
 
-  const optimized = await optimizer.optimize({
+  // Ponytail is an instruction skill, not a lossy context compressor. The
+  // accounting service measures every selected context segment for a
+  // transparent estimate while preserving every segment in the transport
+  // path. Provider-reported usage remains authoritative for the serialized
+  // request sent to the model.
+  const measured = await optimizer.optimize({
     mode: request.mode,
     providerId: request.providerId,
     modelId: request.modelId,
     modelContextLimit: safeLimit(request.modelContextLimit, FALLBACK_CONTEXT_WINDOW_TOKENS),
-    requestedOutputTokens: safeLimit(
-      request.requestedOutputTokens,
-      DEFAULT_REQUESTED_OUTPUT_TOKENS,
+    requestedOutputTokens: Math.min(
+      safeLimit(request.requestedOutputTokens, DEFAULT_REQUESTED_OUTPUT_TOKENS),
+      optimizationModePolicy(request.mode).outputTokenCeiling ?? Number.MAX_SAFE_INTEGER,
     ),
     segments,
     allowProviderTokenCountTransport: request.allowProviderTokenCountTransport === true,
     ...(request.signal ? { signal: request.signal } : {}),
   });
-  const selected = new Set(optimized.selectedSegments.map(({ id }) => id));
+  const selected = new Set(measured.selectedSegments.map(({ id }) => id));
   const selectedRuntimeContext = (request.contextSegments ?? [])
     .filter(({ id }) => selected.has(`runtime-${id}`))
     .map(({ text }) => text);
@@ -185,8 +191,8 @@ async function optimizeWith(
     systemPrompt: [...selectedRuntimeContext, request.systemPrompt ?? '']
       .filter((text) => text.trim().length > 0)
       .join('\n\n'),
-    outputTokenLimit: optimized.receipt.outputTokenLimit,
-    receipt: optimized.receipt,
+    outputTokenLimit: measured.receipt.outputTokenLimit,
+    receipt: measured.receipt,
   });
 }
 

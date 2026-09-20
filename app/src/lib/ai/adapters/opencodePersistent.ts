@@ -100,6 +100,7 @@ const AUTH_CACHE_TTL_MS = 60_000;
 const MODEL_CACHE_TTL_MS = 60_000;
 const TURN_IDLE_POLL_MS = 500;
 const TURN_NO_EVIDENCE_GRACE_MS = 2_000;
+const TURN_IDLE_FAILED_TOOL_GRACE_MS = 5_000;
 const TURN_MAX_WALL_MS = 30 * 60_000;
 
 type PersistentTurnFailureStage =
@@ -375,6 +376,7 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
       });
     },
     command: async (input: {
+      signal?: AbortSignal;
       path: { id: string };
       body: {
         command: string;
@@ -388,8 +390,8 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
         this.handle.generation,
         this.handle.scope,
         `/session/${encodeURIComponent(input.path.id)}/command`,
-        { method: 'POST', body: JSON.stringify(input.body) },
-        30_000,
+        { method: 'POST', body: JSON.stringify(input.body), signal: input.signal },
+        TURN_MAX_WALL_MS,
       ),
     replyPermission: async (input: {
       path: { id: string; permissionId: string };
@@ -1671,6 +1673,16 @@ function persistedAssistantTurnSettled(messages: readonly OpenCodeMessageRecord[
   return false;
 }
 
+function persistedAssistantStoppedAfterToolError(messages: readonly OpenCodeMessageRecord[]): boolean {
+  const latest = [...messages].reverse().find((message) => message.info?.role === 'assistant');
+  if (latest?.info?.finish !== 'tool-calls' || !recordOf(latest.info.time)?.completed) return false;
+  const statuses = (latest.parts ?? [])
+    .filter((part) => part.type === 'tool')
+    .map((part) => recordOf(part.state)?.status);
+  return statuses.some((status) => status === 'error' || status === 'failed') &&
+    statuses.every((status) => status === 'completed' || status === 'error' || status === 'failed');
+}
+
 export function publicTextFromTurnMessages(messages: readonly OpenCodeMessageRecord[]): string {
   return messages
     .filter((record) => {
@@ -2095,6 +2107,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   activeRequests.set(request.requestId, { scope, chatId });
   const abortEvents = new AbortController();
   let boundSessionId: string | undefined;
+  let retireCommand: (() => Promise<unknown>) | undefined;
   const boundChildSessions = new Set<string>();
   const abort = () => {
     turnGate.cancel(chatId);
@@ -2213,10 +2226,14 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       }),
       expectedSessionId: request.expectedSessionId ?? session.sessionId,
       requireExactRuntimeControls: request.explicitReadRoot === true,
+      signal: abortEvents.signal,
     });
     if (dispatch.kind === 'command')
       throw new Error('VibeSpace slash commands must be consumed before provider dispatch.');
     if (dispatch.kind === 'rejected') throw new Error(dispatch.message);
+    if (dispatch.commandOutcome) {
+      retireCommand = () => client.abort(dispatch.sessionId).catch(() => undefined);
+    }
     if (request.signal?.aborted) {
       // The first abort may have reached the server before this prompt was accepted.
       // Retire the late acceptance before releasing the conversation for its next turn.
@@ -2536,7 +2553,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       return { kind: 'poll' as const, statusLookup, recoveredQuestions, recoveredApprovals, messages, revision };
     })().catch((error: unknown) => ({ kind: 'poll' as const, error }));
     let pendingPoll = schedulePoll();
+    let pendingCommand = dispatch.commandOutcome?.then((outcome) => ({ kind: 'command' as const, outcome }));
     let lastPublicTimeline = '';
+    let idleFailedTool: { signature: string; since: number } | undefined;
 
     while (!done) {
       if (!turnGate.isCurrent(turn))
@@ -2551,7 +2570,19 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const next = await Promise.race([
         pendingPoll,
         pendingEvent.then((value) => ({ kind: 'event' as const, value })),
+        ...(pendingCommand ? [pendingCommand] : []),
       ]);
+      if (next.kind === 'command') {
+        pendingCommand = undefined;
+        if (!next.outcome.ok) {
+          failureStage = 'prompt_dispatch';
+          throw next.outcome.error;
+        }
+        // The HTTP response alone is not completion evidence. Reconcile the
+        // authoritative messages/status through the existing poll/event path.
+        pendingPoll = schedulePoll(0);
+        continue;
+      }
       if (next.kind === 'poll') {
         pendingPoll = schedulePoll();
         if ('error' in next) throw next.error;
@@ -2638,6 +2669,29 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           (activeQuestionSessions.get(dispatch.sessionId)?.pending.size ?? 0) > 0;
         const hasPendingApproval =
           (activeApprovalSessions.get(dispatch.sessionId)?.approvals.size ?? 0) > 0;
+        // Some native versions stop after a rejected tool without emitting a
+        // final assistant turn. Require repeated, unchanged authoritative idle
+        // evidence so a transient idle between agent steps can still recover.
+        if (statusLookup.succeeded && (status === 'idle' || status === undefined) &&
+            !hasPendingQuestion && !hasPendingApproval &&
+            persistedAssistantStoppedAfterToolError(currentTurnMessages)) {
+          const signature = `${streamRevision}:${timelineIdentity}`;
+          if (idleFailedTool?.signature !== signature) {
+            idleFailedTool = { signature, since: Date.now() };
+          } else if (Date.now() - idleFailedTool.since >= TURN_IDLE_FAILED_TOOL_GRACE_MS) {
+            const usage = completedOpenCodeTurnUsage(currentTurnMessages);
+            if (usage) yield { type: 'usage', usage };
+            yield {
+              type: 'error',
+              code: 'opencode_stopped_after_tool_error',
+              message: 'OpenCode stopped after a tool failed. Retry to continue this session.',
+              retryable: true,
+            };
+            return;
+          }
+        } else {
+          idleFailedTool = undefined;
+        }
         const hasTurnEvidence = Boolean(
           currentTurnMessages.length > 0 ||
           emittedText.trim() ||
@@ -2863,6 +2917,11 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const delta = canonicalOpenCodeTextSuffix(emittedText, canonical);
       if (delta) yield { type: 'text', delta, streamPartId: latestTextStreamPartId };
     }
+    if (dispatch.commandOutcome) {
+      const outcome = await dispatch.commandOutcome;
+      if (!outcome.ok) throw outcome.error;
+      retireCommand = undefined;
+    }
     const completedUsage = completedOpenCodeTurnUsage(currentTurnMessages);
     const unavailableMetric = { provenance: 'unavailable' as const };
     yield { type: 'usage', usage: {
@@ -2889,6 +2948,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   } finally {
     request.signal?.removeEventListener('abort', abort);
     abortEvents.abort();
+    if (retireCommand && !request.signal?.aborted) await retireCommand();
     for (const child of boundChildSessions) {
       if (activeApprovalSessions.get(child)?.requestId === request.requestId) activeApprovalSessions.delete(child);
       if (activeQuestionSessions.get(child)?.requestId === request.requestId) activeQuestionSessions.delete(child);

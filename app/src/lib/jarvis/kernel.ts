@@ -115,6 +115,9 @@ export type JarvisStartedProviderDispatch = Readonly<{
   response: Promise<Readonly<RawProviderResponse>>;
   /** Safe public prose only; never reasoning, actions, or completion evidence. */
   getPartialText?(): string | undefined;
+  /** Already-public transcript and reported usage; never successful completion evidence. */
+  getPartialParts?(): readonly Part[];
+  getPartialUsage?(): Message['usage'];
   abortAfterStart(reason: 'authority_revoked' | 'evidence_commit_failed'): void;
 }>;
 
@@ -1133,13 +1136,17 @@ async function runJarvisKernelExecution(
       return revoked();
     }
     hasPrimaryFailure = true;
-    // Only an interrupted chat provider may retain its already-visible prose.
+    // Only an interrupted chat provider may retain its public transcript and reported usage.
     // Processing failures and scheduled/voice settlement keep their own authority.
     if (input.surface === 'typed_chat' && lifecycleMode === 'initial' && registration &&
         !providerResponseReceived && !terminalCommitted) {
       try {
         const partialText = started?.getPartialText?.()?.slice(0, 32_768).trim();
-        if (partialText && lifecycleIsCurrent(lifecycle)) {
+        const partialParts = started?.getPartialParts?.() ?? [];
+        const reportedUsage = started?.getPartialUsage?.();
+        const partialUsage = reportedUsage?.provider === started?.receipt.providerId &&
+          reportedUsage?.model === started?.receipt.modelId ? reportedUsage : undefined;
+        if ((partialText || partialParts.length > 0 || partialUsage) && lifecycleIsCurrent(lifecycle)) {
           const completedAt = deps.now();
           const status = cancellationDelivered && controller.signal.aborted ? 'cancelled' : 'failed';
           const commit = await deps.commitKernelTurn({
@@ -1156,7 +1163,10 @@ async function runJarvisKernelExecution(
               chat_id: input.chatId as ChatId,
               role: 'assistant',
               agent_id: input.agent.id,
-              parts: [{ kind: 'text', text: `${partialText}\n\n[Incomplete response: generation ${status}.]` }],
+              parts: partialParts.length > 0
+                ? [...partialParts, { kind: 'text', text: `[Incomplete response: generation ${status}.]` }]
+                : [{ kind: 'text', text: `${partialText ? `${partialText}\n\n` : ''}[Incomplete response: generation ${status}.]` }],
+              ...(partialUsage ? { usage: partialUsage } : {}),
               created_at: completedAt,
               updated_at: completedAt,
             },

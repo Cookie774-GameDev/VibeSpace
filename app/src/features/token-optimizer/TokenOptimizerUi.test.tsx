@@ -23,6 +23,9 @@ describe('Token Optimize standalone UI', () => {
     expect(screen.getAllByRole('radio', { name: /^saver/i })).toHaveLength(2);
     expect(screen.getAllByRole('radio', { name: /^normal/i })).toHaveLength(2);
     expect(screen.getAllByRole('radio', { name: /^final boss/i })).toHaveLength(2);
+    expect(screen.getAllByText(/Apply Ponytail guidance and cap output tightly/i)).toHaveLength(2);
+    expect(screen.queryByText(/Keep only high-value context/i)).toBeNull();
+    expect(screen.queryByText(/Keep broader context/i)).toBeNull();
     expect(
       within(screen.getByRole('group', { name: 'This chat' }))
         .getAllByRole('radio')
@@ -77,12 +80,24 @@ describe('Token Optimize standalone UI', () => {
       ],
     };
 
-    render(<TokenOptimizationReceiptView receipt={receipt} />);
+    const { rerender } = render(<TokenOptimizationReceiptView receipt={receipt} />);
     expect(screen.getByText('Why included')).toBeTruthy();
     expect(screen.getByText(/protected content/i)).toBeTruthy();
     expect(screen.getByText(/400 input tokens trimmed/i)).toBeTruthy();
+    expect(screen.getByText('Unavailable for this turn')).toBeTruthy();
     expect(screen.getByText(/Ponytail Full guides this turn/)).toBeTruthy();
-    expect(screen.getByText(/Zero means no input was removed, not that Ponytail was disabled/)).toBeTruthy();
+    expect(
+      screen.getByText(/Zero means no input was removed, not that Ponytail was disabled/),
+    ).toBeTruthy();
     expect(document.body.textContent).not.toContain('raw private text');
+
+    rerender(
+      <TokenOptimizationReceiptView
+        receipt={{ ...receipt, fitsContext: false, overflowTokens: 12 }}
+      />,
+    );
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Estimated context exceeds this model by 12 tokens. Nothing was removed.',
+    );
   });
 });

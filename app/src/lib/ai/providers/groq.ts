@@ -108,6 +108,7 @@ export const groqProvider: LLMProvider = {
     let acc = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let usageWasEstimated = false;
     let finishReason: string | undefined;
     let first = true;
 
@@ -156,8 +157,12 @@ export const groqProvider: LLMProvider = {
     if (inputTokens === 0) {
       const inputText = body.messages.map((message) => message.content).join('\n');
       inputTokens = estimateInputTokens(inputText);
+      usageWasEstimated = true;
     }
-    if (outputTokens === 0) outputTokens = estimateInputTokens(acc);
+    if (outputTokens === 0) {
+      outputTokens = estimateInputTokens(acc);
+      usageWasEstimated = true;
+    }
 
     req.onChunk?.({ delta: '', done: true });
 
@@ -169,6 +174,7 @@ export const groqProvider: LLMProvider = {
         // Free tier today; cost rate table maps groq:* to 0/0 so this
         // always evaluates to 0. Kept for parity with other providers.
         cost_usd: estimateCost('groq', model, inputTokens, outputTokens),
+        ...(usageWasEstimated ? { provenance: 'estimated' as const } : {}),
       },
       provider: 'groq',
       model,

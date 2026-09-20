@@ -48,7 +48,9 @@ export interface PersistentOpenCodeTurnClient extends OpenCodeSessionClient {
     command: string;
     arguments: string;
     agent: OpenCodeExecutionAgentId;
+    signal?: AbortSignal;
   }): Promise<void>;
+  listCommandsAsync?(): Promise<readonly { name: string }[]>;
 }
 
 export interface TurnPolicyInput {
@@ -71,6 +73,7 @@ export interface OpenCodeTurnInput {
   tools?: Readonly<Record<string, boolean>>;
   expectedSessionId?: string;
   requireExactRuntimeControls?: boolean;
+  signal?: AbortSignal;
 }
 
 export type OpenCodeTurnResult =
@@ -87,6 +90,8 @@ export type OpenCodeTurnResult =
     }
   | {
       kind: 'dispatched';
+      /** Native commands finish only after tools/approvals; consume events meanwhile. */
+      commandOutcome?: Promise<{ ok: true } | { ok: false; error: unknown }>;
       sessionId: string;
       runtimeGeneration: string;
       controls: OpenCodeRequestControls;
@@ -100,10 +105,10 @@ function isPersistentTurnClient(
   return typeof (client as Partial<PersistentOpenCodeTurnClient>).sendAsync === 'function';
 }
 
-function registeredOpenCodeCommand(text: string): { command: 'goal'; arguments: string } | null {
-  const match = text.match(/^\/goal(?:\s+([\s\S]+))?$/iu);
+function slashCommandCandidate(text: string): { command: string; arguments: string } | null {
+  const match = text.match(/^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]+))?$/iu);
   if (!match) return null;
-  return { command: 'goal', arguments: (match[1] ?? '').trim() };
+  return { command: match[1]!.toLowerCase(), arguments: (match[2] ?? '').trim() };
 }
 
 /**
@@ -139,8 +144,9 @@ export class OpenCodeTurnCoordinator {
       };
     }
 
-    const officialCommand = registeredOpenCodeCommand(text);
-    if (officialCommand && !officialCommand.arguments) {
+    const commandCandidate = slashCommandCandidate(text);
+    const officialCommand = commandCandidate?.command === 'goal' ? commandCandidate : null;
+    if (officialCommand?.command === 'goal' && !officialCommand.arguments) {
       return {
         kind: 'rejected',
         code: 'HARNESS_INCOMPATIBLE',
@@ -199,7 +205,41 @@ export class OpenCodeTurnCoordinator {
       rlmEnabled: settings.rlmEnabled,
     });
 
-    if (officialCommand) {
+    let liveCommand = officialCommand;
+    if (!liveCommand && commandCandidate) {
+      if (!session.client.listCommandsAsync) {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: 'The active OpenCode client cannot inspect registered slash commands.',
+          settings,
+        };
+      }
+      let commands: readonly { name: string }[];
+      try {
+        commands = await session.client.listCommandsAsync();
+      } catch {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: 'The live OpenCode command catalog could not be read; command was not sent.',
+          settings,
+        };
+      }
+      if (commands.some((command) => command.name === commandCandidate.command)) {
+        liveCommand = commandCandidate;
+      } else {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: `OpenCode command /${commandCandidate.command} is not registered in the live command catalog.`,
+          settings,
+        };
+      }
+    }
+
+    let commandOutcome: Extract<OpenCodeTurnResult, { kind: 'dispatched' }>['commandOutcome'];
+    if (liveCommand) {
       if (!session.client.sendCommandAsync) {
         return {
           kind: 'rejected',
@@ -208,12 +248,13 @@ export class OpenCodeTurnCoordinator {
           settings,
         };
       }
-      await session.client.sendCommandAsync({
+      commandOutcome = session.client.sendCommandAsync({
         sessionId: session.sessionId,
         controls,
-        ...officialCommand,
+        ...liveCommand,
         agent: permissions.openCodeAgent,
-      });
+        signal: input.signal,
+      }).then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }));
     } else {
       await session.client.sendAsync({
         sessionId: session.sessionId,
@@ -227,6 +268,7 @@ export class OpenCodeTurnCoordinator {
 
     return {
       kind: 'dispatched',
+      ...(commandOutcome ? { commandOutcome } : {}),
       sessionId: session.sessionId,
       runtimeGeneration: session.runtimeGeneration,
       controls,

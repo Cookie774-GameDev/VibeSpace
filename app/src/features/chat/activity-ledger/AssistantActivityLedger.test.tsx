@@ -133,7 +133,38 @@ describe('AssistantActivityLedger', () => {
     expect(screen.getByText('npm run typecheck')).toBeTruthy();
     expect(screen.getByText('PublicActivity.tsx')).toBeTruthy();
     expect(screen.getByText('mcp.cloudflare.deploy_worker')).toBeTruthy();
+    expect(screen.getByText('Used MCP server: cloudflare')).toBeTruthy();
+    expect(document.querySelector('[data-receipt-mcp-server="cloudflare"]')).not.toBeNull();
     expect(document.body.textContent).not.toContain('C:\\private');
+    expect(document.body.textContent).not.toContain(providerSecret);
+  });
+
+  it('shows exact public tool arguments, result, and error only after expanding the receipt', () => {
+    const providerSecret = ['sk', 'proj', 'abcdef1234567890abcdef1234567890'].join('-');
+    render(
+      <AssistantActivityLedger
+        message={assistant([
+          {
+            kind: 'tool_call',
+            call_id: 'plugin-error',
+            tool: 'mcp.github.inspect',
+            args: { repository: 'public/repo', token: providerSecret },
+          },
+          {
+            kind: 'tool_result',
+            call_id: 'plugin-error',
+            error: `apiKey=${providerSecret}`,
+          },
+        ])}
+      />,
+    );
+
+    expect(document.body.textContent).not.toContain('mcp.github.inspect');
+    fireEvent.click(screen.getByRole('button', { name: /show activity details/i }));
+    expect(screen.getByText('Tool: mcp.github.inspect')).toBeTruthy();
+    expect(screen.getByText('Used MCP server: github')).toBeTruthy();
+    expect(screen.getByText('Arguments')).toBeTruthy();
+    expect(screen.getByText('Error')).toBeTruthy();
     expect(document.body.textContent).not.toContain(providerSecret);
   });
 

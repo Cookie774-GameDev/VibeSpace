@@ -23,6 +23,10 @@ import {
   invalidateOpenCodePersistentModelCache,
   openCodePersistentAdapter,
 } from './adapters/opencodePersistent';
+import {
+  codexPersistentAdapter,
+  invalidateCodexPersistentModelCache,
+} from './adapters/codexPersistent';
 import { classifyHarnessModelPricing } from '@/lib/harness/freeModelSelection';
 import type { HarnessModelPricing } from '@/lib/harness/types';
 import {
@@ -53,6 +57,7 @@ import {
 import { subscribeDiscoveredOpenAiSubscriptionModels } from './openCodeOpenAiCatalog';
 import {
   getDiscoveredConnectionModels,
+  setDiscoveredConnectionModels,
   subscribeDiscoveredConnectionModels,
 } from './connectionCatalog';
 import { harnessRuntimeManager } from '@/lib/harness/runtimeManager';
@@ -210,6 +215,7 @@ export interface OpenCodeCatalogEvidence {
 
 const OPEN_CODE_MODEL_CACHE_TTL_MS = MODEL_CATALOG_REFRESH_INTERVAL_MS;
 const OPEN_CODE_MODEL_FAILURE_RETRY_MS = 15_000;
+const CODEX_MODEL_FAILURE_RETRY_MS = 15_000;
 let openCodeCatalogGeneration = 0;
 let openCodeAccountGeneration = 0;
 let openCodeCatalogRefreshReason: OpenCodeCatalogRefreshReason = 'initial';
@@ -1004,6 +1010,7 @@ export function useAccessibleChatModels() {
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [foundryRevision, setFoundryRevision] = useState(0);
   const [catalogRevision, setCatalogRevision] = useState(0);
+  const [codexCatalogRevision, setCodexCatalogRevision] = useState(0);
   const openCodeRuntimeAuthority = useSyncExternalStore(
     subscribeOpenCodeRuntimeCatalogAuthority,
     currentOpenCodeRuntimeCatalogAuthority,
@@ -1023,6 +1030,12 @@ export function useAccessibleChatModels() {
     openCodeSessionChecked &&
     openCodeSessionState?.available === true &&
     openCodeSessionState.auth === 'authenticated';
+  const codexSessionState = readConnectionSessionPickerStates()['openai-codex'];
+  const codexReady =
+    !offlineMode &&
+    isConnectionSessionChecked('openai-codex') &&
+    codexSessionState?.available === true &&
+    codexSessionState.auth === 'authenticated';
   const openCodeStateSignature = [
     openCodeSessionChecked,
     openCodeSessionState?.available === true,
@@ -1105,6 +1118,50 @@ export function useAccessibleChatModels() {
       if (refreshTimer) clearTimeout(refreshTimer);
     };
   }, [apiKeys, offlineMode, plan, defaultLocalModel]);
+
+  useEffect(() => {
+    const refreshCodexCatalog = () => {
+      invalidateCodexPersistentModelCache();
+      setCodexCatalogRevision((value) => value + 1);
+    };
+    window.addEventListener(AI_CONNECTION_STATE_EVENT, refreshCodexCatalog);
+    return () => window.removeEventListener(AI_CONNECTION_STATE_EVENT, refreshCodexCatalog);
+  }, []);
+
+  useEffect(() => {
+    if (!codexReady) {
+      setDiscoveredConnectionModels('openai-codex', []);
+      return;
+    }
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const loadCodexModels = codexPersistentAdapter.listModels;
+    if (!loadCodexModels) return undefined;
+    void loadCodexModels().then((models) => {
+      if (cancelled) return;
+      if (models.length === 0) {
+        retryTimer = setTimeout(() => {
+          if (!cancelled) setCodexCatalogRevision((value) => value + 1);
+        }, CODEX_MODEL_FAILURE_RETRY_MS);
+        return;
+      }
+      const verifiedAt = Date.now();
+      setDiscoveredConnectionModels(
+        'openai-codex',
+        models.map((model) => ({
+          id: model.id,
+          label: model.label,
+          ...(model.variants ? { variants: model.variants } : {}),
+          source: 'cli_model' as const,
+          lastVerifiedAt: verifiedAt,
+        })),
+      );
+    });
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [codexCatalogRevision, codexReady]);
 
   useEffect(() => {
     if (offlineMode) return;
@@ -1304,6 +1361,7 @@ export function useAccessibleChatModels() {
       const discoveredModels = discovered.map((model) => ({
         id: model.id,
         label: model.label,
+        ...(model.variants ? { variants: model.variants } : {}),
         source:
           model.source === 'opencode_refresh'
             ? ('opencode-live' as const)

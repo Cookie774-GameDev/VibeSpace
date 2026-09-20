@@ -122,6 +122,7 @@ export const googleProvider: LLMProvider = {
     let acc = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let usageWasEstimated = false;
     let finishReason: string | undefined;
     let first = true;
 
@@ -170,8 +171,12 @@ export const googleProvider: LLMProvider = {
         '\n' +
         req.messages.map((m) => llmContentToText(m.content)).join('\n');
       inputTokens = estimateInputTokens(inputText);
+      usageWasEstimated = true;
     }
-    if (outputTokens === 0) outputTokens = estimateInputTokens(acc);
+    if (outputTokens === 0) {
+      outputTokens = estimateInputTokens(acc);
+      usageWasEstimated = true;
+    }
 
     req.onChunk?.({ delta: '', done: true });
 
@@ -181,6 +186,7 @@ export const googleProvider: LLMProvider = {
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: estimateCost('google', model, inputTokens, outputTokens),
+        ...(usageWasEstimated ? { provenance: 'estimated' as const } : {}),
       },
       provider: 'google',
       model,

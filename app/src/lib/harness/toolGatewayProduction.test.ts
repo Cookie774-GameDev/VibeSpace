@@ -204,6 +204,48 @@ describe('production tool gateway dependencies', () => {
     ).rejects.toThrow('plugin_operation_unavailable');
   });
 
+  it('classifies only declared read-only plugin operations from trusted metadata', () => {
+    const plugins = createProductionToolGatewayDependencies().plugins;
+    expect(plugins.isReadOnly?.({ pluginId: 'github', operation: 'identity' })).toBe(true);
+    expect(plugins.isReadOnly?.({ pluginId: 'github', operation: 'delete_repository', readOnly: true })).toBe(false);
+    expect(plugins.isReadOnly?.({ pluginId: 'unknown', operation: 'identity', classification: 'read' })).toBe(false);
+  });
+
+  it.each([
+    ['Plugin credential authority denied the operation: credential_grant_unavailable.', 'credential_grant_unavailable'],
+    ['Plugin credential authority denied the operation: connection_rejected_401.', 'connection_rejected_401'],
+    ['provider_response_invalid', 'provider_response_invalid'],
+    ['request https://private.example/?token=secret failed: Bearer private-value', 'internal_plugin_failure'],
+    ['Plugin credential authority denied the operation: credential_grant_unavailable. token=secret', 'internal_plugin_failure'],
+  ])('reports only safe plugin failure codes: %s', async (error, reason) => {
+    const dispose = installToolGatewayPluginReadPort({ run: vi.fn().mockRejectedValue(new Error(error)) });
+    try {
+      await expect(createProductionToolGatewayDependencies().plugins.run(
+        { pluginId: 'github', operation: 'identity', input: {} },
+        { requestId: 'request-1', sessionId: 'session-1', messageId: 'message-1', mutationApproved: false },
+      )).rejects.toMatchObject({
+        name: 'ToolGatewaySemanticError',
+        code: 'plugin_operation_failed',
+        message: `GitHub identity failed (${reason}).${reason.startsWith('credential_') || reason === 'connection_rejected_401' ? ' Reconnect GitHub in Plugins.' : ''}`,
+        data: { pluginId: 'github', operation: 'identity', reason },
+      });
+    } finally { dispose(); }
+  });
+
+  it('does not expose raw provider failures returned by a plugin', async () => {
+    const dispose = installToolGatewayPluginReadPort({ run: vi.fn().mockResolvedValue({ ok: false, error: 'token=secret raw provider body' }) });
+    try {
+      await expect(createProductionToolGatewayDependencies().plugins.run(
+        { pluginId: 'github', operation: 'identity', input: {} },
+        { requestId: 'request-1', sessionId: 'session-1', messageId: 'message-1', mutationApproved: false },
+      )).rejects.toMatchObject({
+        code: 'plugin_operation_failed',
+        message: 'GitHub identity failed (internal_plugin_failure).',
+        data: { pluginId: 'github', operation: 'identity', reason: 'internal_plugin_failure' },
+      });
+    } finally { dispose(); }
+  });
+
   it('lists only plugins connected and enabled for the exact local account and project', async () => {
     usePluginStore.setState({
       connectionsByAccount: {

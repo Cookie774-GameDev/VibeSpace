@@ -100,7 +100,7 @@ describe('Instant Command catalog help', () => {
       status: 'ready',
       id: 'connections.open',
       action: 'connections.open',
-      target: 'settings providers',
+      target: 'settings connections',
       confirmationRequired: false,
       approvalRequired: false,
       availability: 'available',

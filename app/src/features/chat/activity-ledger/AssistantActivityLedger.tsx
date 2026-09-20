@@ -1,5 +1,14 @@
 import * as React from 'react';
-import { ChevronDown, Clock3, FileText, Search, TerminalSquare, Users, Wrench } from 'lucide-react';
+import {
+  ChevronDown,
+  Clock3,
+  FileText,
+  PlugZap,
+  Search,
+  TerminalSquare,
+  Users,
+  Wrench,
+} from 'lucide-react';
 import type { Message } from '@/types';
 import { cn } from '@/lib/utils';
 import { FileAttachmentPreview } from '../FileAttachmentPreview';
@@ -265,7 +274,9 @@ function phaseTitle(kind: ActivityPhaseKind): string {
   return 'Tools';
 }
 
-function receiptIcon(kind: LedgerReceiptKind) {
+function receiptIcon(receipt: AssistantActivityReceipt) {
+  const { kind } = receipt;
+  if (receipt.plugin || receipt.mcpServer) return <PlugZap aria-hidden="true" />;
   if (kind === 'read' || kind === 'edit') return <FileText aria-hidden="true" />;
   if (kind === 'search') return <Search aria-hidden="true" />;
   if (kind === 'command') return <TerminalSquare aria-hidden="true" />;
@@ -628,12 +639,44 @@ function ReceiptRow({
   const chronology = presentation === 'opencode-chronology';
   const content = (
     <>
-      <span className="assistant-activity-ledger__receipt-icon">{receiptIcon(receipt.kind)}</span>
+      <span className="assistant-activity-ledger__receipt-icon">{receiptIcon(receipt)}</span>
       <span className="assistant-activity-ledger__receipt-label">
         {chronology ? chronologyReceiptText(receipt) : receipt.label}
       </span>
       {receipt.detail ? (
         <span className="assistant-activity-ledger__receipt-detail">{receipt.detail}</span>
+      ) : null}
+      {receipt.toolName ? (
+        <span
+          className="assistant-activity-ledger__receipt-detail"
+          data-receipt-tool={receipt.toolName}
+        >
+          Tool: {receipt.toolName}
+        </span>
+      ) : null}
+      {receipt.plugin ? (
+        <span
+          className="assistant-activity-ledger__receipt-detail"
+          data-receipt-plugin={receipt.plugin}
+        >
+          Used plugin: {receipt.plugin}
+        </span>
+      ) : null}
+      {receipt.mcpServer ? (
+        <span
+          className="assistant-activity-ledger__receipt-detail"
+          data-receipt-mcp-server={receipt.mcpServer}
+        >
+          Used MCP server: {receipt.mcpServer}
+        </span>
+      ) : null}
+      {receipt.callId ? (
+        <span
+          className="assistant-activity-ledger__receipt-detail"
+          data-receipt-call-id={receipt.callId}
+        >
+          Call: {receipt.callId}
+        </span>
       ) : null}
       {!chronology && receipt.fileLabel ? (
         <span className="assistant-activity-ledger__path">{receipt.fileLabel}</span>

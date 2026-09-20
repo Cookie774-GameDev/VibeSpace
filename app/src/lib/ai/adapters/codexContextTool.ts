@@ -57,15 +57,35 @@ export const CODEX_MCP_RUN_TOOL: CodexDynamicTool = Object.freeze({
   }),
 });
 
-type CodexGatewayToolName = 'vibespace_context' | 'mcp_list' | 'mcp_run';
+export const CODEX_PLUGIN_LIST_TOOL: CodexDynamicTool = Object.freeze({
+  type: 'function', name: 'plugins_list',
+  description: 'List the connected VibeSpace plugins and their available operations for this project. Call before plugins_run. Credentials stay in VibeSpace.',
+  inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 0, maximum: 100 } }, additionalProperties: false },
+});
+
+export const CODEX_PLUGIN_RUN_TOOL: CodexDynamicTool = Object.freeze({
+  type: 'function', name: 'plugins_run',
+  description: 'Use an operation returned by plugins_list with its exact pluginId and operation name. VibeSpace enforces connection scope and approval. Never pass credentials.',
+  inputSchema: {
+    type: 'object', properties: {
+      pluginId: { type: 'string', minLength: 1, maxLength: 200 },
+      operation: { type: 'string', minLength: 1, maxLength: 200 },
+      input: { type: 'object' },
+    }, required: ['pluginId', 'operation'], additionalProperties: false,
+  },
+});
+
+type CodexGatewayToolName = 'vibespace_context' | 'mcp_list' | 'mcp_run' | 'plugins_list' | 'plugins_run';
 type CodexGatewayResult = {
   success: boolean;
   contentItems: Array<{ type: 'inputText'; text: string }>;
 };
 
-const CODEX_MCP_TO_GATEWAY_TOOL = Object.freeze({
+const CODEX_EXTERNAL_TO_GATEWAY_TOOL = Object.freeze({
   mcp_list: 'mcp.list',
   mcp_run: 'mcp.run',
+  plugins_list: 'plugins.list',
+  plugins_run: 'plugins.run',
 } as const);
 
 export interface CodexContextToolBridge {
@@ -81,7 +101,7 @@ export interface CodexContextToolBridge {
 
 async function createCodexGatewayTool(
   request: ProviderRequest,
-  options: Readonly<{ includeContext: boolean; includeMcp: boolean }>,
+  options: Readonly<{ includeContext: boolean; includeMcp: boolean; includePlugins?: boolean }>,
 ): Promise<CodexContextToolBridge | null> {
   if (request.explicitReadRoot || !request.accountId || !request.workspaceId || !request.projectId) {
     return null;
@@ -89,12 +109,14 @@ async function createCodexGatewayTool(
   const contextRequested = options.includeContext && request.tools?.vibespace_context !== false;
   const mcpRequested = options.includeMcp &&
     (request.tools?.['mcp.list'] === true || request.tools?.['mcp.run'] === true);
+  const pluginsRequested = options.includePlugins &&
+    (request.tools?.['plugins.list'] === true || request.tools?.['plugins.run'] === true);
   let contextEnabled = contextRequested;
   if (contextEnabled) {
     const { resolveRlmEnabled } = await import('@/features/context/rlmPreferenceStore');
     contextEnabled = resolveRlmEnabled({ workspaceId: request.workspaceId, chatId: request.chatId }).enabled;
   }
-  if (!contextEnabled && !mcpRequested) {
+  if (!contextEnabled && !mcpRequested && !pluginsRequested) {
     return null;
   }
   const authority = await import('@/lib/harness/toolGatewayAuthority');
@@ -112,6 +134,8 @@ async function createCodexGatewayTool(
     ...(contextEnabled ? [CODEX_CONTEXT_TOOL] : []),
     ...(mcpRequested && request.tools?.['mcp.list'] === true ? [CODEX_MCP_LIST_TOOL] : []),
     ...(mcpRequested && request.tools?.['mcp.run'] === true ? [CODEX_MCP_RUN_TOOL] : []),
+    ...(pluginsRequested && request.tools?.['plugins.list'] === true ? [CODEX_PLUGIN_LIST_TOOL] : []),
+    ...(pluginsRequested && request.tools?.['plugins.run'] === true ? [CODEX_PLUGIN_RUN_TOOL] : []),
   ] as readonly CodexDynamicTool[];
   const toolNames = dynamicTools.map((tool) => tool.name as CodexGatewayToolName);
   let sessionId: string | undefined;
@@ -125,7 +149,7 @@ async function createCodexGatewayTool(
     if (!sessionId || !directory || request.signal?.aborted) throw new Error('Codex Tool Gateway turn is inactive.');
     const gatewayTool = toolName === 'vibespace_context'
       ? 'vibespace_context'
-      : CODEX_MCP_TO_GATEWAY_TOOL[toolName];
+      : CODEX_EXTERNAL_TO_GATEWAY_TOOL[toolName];
     const envelope = parseToolGatewayRequest({
       protocolVersion: 1, requestId: callId, sessionId, messageId: request.requestId,
       tool: gatewayTool, args, directory,
@@ -173,7 +197,7 @@ async function createCodexGatewayTool(
 }
 
 export async function createCodexToolGateway(request: ProviderRequest): Promise<CodexContextToolBridge | null> {
-  return createCodexGatewayTool(request, { includeContext: true, includeMcp: true });
+  return createCodexGatewayTool(request, { includeContext: true, includeMcp: true, includePlugins: true });
 }
 
 export async function createCodexContextTool(request: ProviderRequest): Promise<CodexContextToolBridge | null> {
