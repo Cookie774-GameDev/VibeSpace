@@ -107,6 +107,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Prepare verified Desktop Connector resource
+        run: npm run prepare:desktop-connector
+
       - name: Prepare verified SiYuan Windows runtime
         if: matrix.platform == 'windows-latest'
         run: npm run prepare:siyuan-runtime

@@ -16,11 +16,77 @@ export const runtimes = [
     sha256: 'edaca9bd58ec8e92037dac4e877d52f6b8f430b81c18b57e264b4e2fb111cd56',
   },
   {
+    name: 'python',
+    url: 'https://www.python.org/ftp/python/3.14.7/python-3.14.7-embeddable-amd64.zip',
+    sha256: '76c3c0384ab3f822486f32450f3a4d20f5d65ad0ec32ee34290971aa0eb817e6',
+  },
+  {
     name: 'tunnel',
     url: 'https://github.com/openai/tunnel-client/releases/download/v0.0.14/tunnel-client-v0.0.14-windows-amd64.zip',
     sha256: '784ab8da7b5a88f0109f1fd8aaf0a1c86067430b896dddf307ef7e3cc49fa1a5',
   },
 ];
+export const plugin3SourceFiles = [
+  'src/broker-client.mjs',
+  'src/broker-path.mjs',
+  'src/broker.mjs',
+  'src/contracts.mjs',
+  'src/service.mjs',
+  'src/shared-file.mjs',
+  'src/storage-worker.mjs',
+  'src/store.mjs',
+  'extensions/codex-kit/broker_repo.py',
+  'extensions/codex-kit/repo_ops.py',
+  '3/skills/plugin3-native-work/SKILL.md',
+  'runtime/desktop-commander-v3/package.json',
+  'runtime/desktop-commander-v3/dist',
+];
+const plugin3SourceDirectories = new Set(['runtime/desktop-commander-v3/dist']);
+export const requiredPlugin3Files = [
+  'src/broker-client.mjs',
+  'src/broker-path.mjs',
+  'src/broker.mjs',
+  'src/contracts.mjs',
+  'src/service.mjs',
+  'src/shared-file.mjs',
+  'src/storage-worker.mjs',
+  'src/store.mjs',
+  'extensions/codex-kit/broker_repo.py',
+  'extensions/codex-kit/repo_ops.py',
+  '3/skills/plugin3-native-work/SKILL.md',
+  'runtime/desktop-commander-v3/package.json',
+  'runtime/desktop-commander-v3/dist/index.js',
+  'runtime/desktop-commander-v3/dist/server.js',
+  'runtime/desktop-commander-v3/dist/tools/agent-guide.js',
+  'runtime/desktop-commander-v3/dist/tools/browser-session.js',
+];
+const forbiddenPlugin3Text = [
+  /C:\\Users\\/i,
+  /C:\/Users\//i,
+  /Documents[\\/]Codex/i,
+  /Plugin-3/i,
+  /\.candidate-state/i,
+  /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/i,
+  /\b(?:sk|gh[pousr]|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}/i,
+  /\bBearer\s+[A-Za-z0-9._-]{24,}/i,
+  /\btunnel[_-][a-z0-9-]{12,}\b/i,
+];
+const forbiddenPlugin3PathSegments = new Set([
+  '.git',
+  'node_modules',
+  'state',
+  'work',
+  'evidence',
+  'logs',
+  'profiles',
+  'sessions',
+  '__pycache__',
+  'credentials',
+  'secrets',
+]);
+const forbiddenPlugin3FileNames = new Set(['tunnel.yaml', 'watchdog.json']);
+const allowedPlugin3DistExtensions = new Set(['.js', '.d.ts', '.css', '.html']);
+const plugin3DistRoot = path.normalize('runtime/desktop-commander-v3/dist');
 export const sourceFiles = [
   'package.json',
   'package-lock.json',
@@ -43,8 +109,90 @@ export const sourceFiles = [
   'browser/package.json',
   'browser/package-lock.json',
   'browser/UPSTREAM-README.md',
+  ...plugin3SourceFiles.map((file) => path.join('plugin3', file)),
 ];
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+export async function validatePlugin3Tree(pluginRoot) {
+  const required = new Set(requiredPlugin3Files.map((entry) => path.normalize(entry)));
+  const allowedFiles = new Set(
+    plugin3SourceFiles
+      .filter((entry) => !plugin3SourceDirectories.has(entry))
+      .map((entry) => path.normalize(entry)),
+  );
+  const allowedDirectories = [...plugin3SourceDirectories].map((entry) => path.normalize(entry));
+  const seen = new Set();
+  async function visit(relative) {
+    const normalized = path.normalize(relative);
+    const segments = normalized.split(/[\\/]/);
+    const basename = path.basename(normalized).toLowerCase();
+    if (
+      segments.some((segment) => forbiddenPlugin3PathSegments.has(segment.toLowerCase())) ||
+      forbiddenPlugin3FileNames.has(basename) ||
+      /\.(?:log|pid)$/i.test(basename)
+    )
+      throw Error('Plugin3 production tree contains a forbidden path segment: ' + relative);
+    const insideAllowedDirectory = allowedDirectories.some(
+      (directory) => normalized === directory || normalized.startsWith(directory + path.sep),
+    );
+    const hasAllowedDescendant = plugin3SourceFiles.some((entry) => {
+      const candidate = path.normalize(entry);
+      return candidate.startsWith(normalized + path.sep);
+    });
+    if (
+      normalized !== '.' &&
+      !insideAllowedDirectory &&
+      !allowedFiles.has(normalized) &&
+      !hasAllowedDescendant
+    )
+      throw Error('Plugin3 production tree contains a non-allowlisted path: ' + relative);
+    const absolute = path.join(pluginRoot, relative);
+    const entries = await readdir(absolute, { withFileTypes: true }).catch(() => null);
+    if (entries) {
+      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        if (entry.isSymbolicLink())
+          throw Error(
+            'Plugin3 production tree contains a symlink: ' + path.join(relative, entry.name),
+          );
+        await visit(path.join(relative, entry.name));
+      }
+      return;
+    }
+    const bytes = await readFile(absolute).catch(() => {
+      throw Error('Plugin3 production file is unreadable: ' + relative);
+    });
+    if (!insideAllowedDirectory && !allowedFiles.has(normalized))
+      throw Error('Plugin3 production tree contains a non-allowlisted file: ' + relative);
+    if (insideAllowedDirectory) {
+      const relativeToDist = path.relative(plugin3DistRoot, normalized);
+      const lowerRelativeToDist = relativeToDist.toLowerCase();
+      const extension = lowerRelativeToDist.endsWith('.d.ts')
+        ? '.d.ts'
+        : path.extname(lowerRelativeToDist);
+      const exactJson =
+        path.normalize(lowerRelativeToDist) === path.normalize('data/onboarding-prompts.json');
+      if (!exactJson && !allowedPlugin3DistExtensions.has(extension))
+        throw Error('Plugin3 production dist contains an unexpected extension: ' + relative);
+    }
+    if (bytes.includes(0))
+      throw Error('Plugin3 production file contains unexpected binary data: ' + relative);
+    seen.add(normalized);
+    const text = bytes.toString('utf8');
+    const match = forbiddenPlugin3Text.find((pattern) => pattern.test(text));
+    if (match) throw Error('Plugin3 production file contains forbidden material: ' + relative);
+  }
+  await visit('.');
+  for (const relative of required) {
+    if (!seen.has(relative)) throw Error('Plugin3 production file is missing: ' + relative);
+  }
+  return { files: seen.size };
+}
+async function copySourceFiles(bundle) {
+  for (const file of sourceFiles) {
+    await mkdir(path.dirname(path.join(bundle, file)), { recursive: true });
+    await cp(path.join(source, file), path.join(bundle, file), { recursive: true });
+  }
+  await validatePlugin3Tree(path.join(bundle, 'plugin3'));
+}
 export async function fingerprint() {
   const digest = createHash('sha256').update(JSON.stringify(runtimes));
   async function visit(relative) {
@@ -99,10 +247,7 @@ async function prepare() {
   const work = await mkdtemp(path.join(stageRoot, 'vibespace-connector-'));
   const bundle = path.join(work, 'bundle');
   await mkdir(bundle);
-  for (const file of sourceFiles) {
-    await mkdir(path.dirname(path.join(bundle, file)), { recursive: true });
-    await cp(path.join(source, file), path.join(bundle, file), { recursive: true });
-  }
+  await copySourceFiles(bundle);
   for (const runtime of runtimes) {
     const archive = path.join(work, runtime.name + '.zip');
     console.log('Downloading verified ' + runtime.name + ' runtime…');
@@ -111,14 +256,20 @@ async function prepare() {
     const bytes = Buffer.from(await response.arrayBuffer());
     if (hash(bytes) !== runtime.sha256) throw Error('Runtime integrity check failed');
     await writeFile(archive, bytes);
-    powershell('Expand-Archive -LiteralPath $env:VS_ARCHIVE -DestinationPath $env:VS_EXTRACT', {
-      VS_ARCHIVE: archive,
-      VS_EXTRACT: path.join(work, runtime.name),
-    });
+    powershell(
+      "$null=[Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem'); " +
+        '[IO.Directory]::CreateDirectory($env:VS_EXTRACT) | Out-Null; ' +
+        '[IO.Compression.ZipFile]::ExtractToDirectory($env:VS_ARCHIVE,$env:VS_EXTRACT)',
+      {
+        VS_ARCHIVE: archive,
+        VS_EXTRACT: path.join(work, runtime.name),
+      },
+    );
   }
   const nodeRoot = path.join(work, 'node/node-v24.16.0-win-x64');
   const runtimeDir = path.join(bundle, 'runtime');
   await cp(path.join(work, 'tunnel'), runtimeDir, { recursive: true });
+  await cp(path.join(work, 'python'), path.join(runtimeDir, 'python'), { recursive: true });
   await cp(path.join(nodeRoot, 'node.exe'), path.join(runtimeDir, 'node.exe'));
   await cp(path.join(nodeRoot, 'LICENSE'), path.join(runtimeDir, 'NODE-LICENSE'));
   for (const cwd of [bundle, path.join(bundle, 'browser')]) {
@@ -144,6 +295,11 @@ async function prepare() {
     ],
     { cwd: bundle, windowsHide: true, stdio: 'inherit' },
   );
+  execFileSync(
+    path.join(runtimeDir, 'python', 'python.exe'),
+    ['-c', 'import ast,json,pathlib,sys'],
+    { cwd: bundle, windowsHide: true, stdio: 'inherit' },
+  );
   await packageBundle(bundle);
   console.log('Desktop connector resource prepared. Staging retained at ' + work);
 }
@@ -164,10 +320,7 @@ export async function packageBundle(bundle) {
     )
       throw Error('Staged runtime integrity check failed.');
   }
-  for (const file of sourceFiles) {
-    await mkdir(path.dirname(path.join(bundle, file)), { recursive: true });
-    await cp(path.join(source, file), path.join(bundle, file), { recursive: true });
-  }
+  await copySourceFiles(bundle);
   const sourceHash = await fingerprint();
   const archive = path.join(path.dirname(bundle), 'runtime-' + Date.now() + '.zip');
   powershell(

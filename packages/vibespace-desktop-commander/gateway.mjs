@@ -18,6 +18,31 @@ import { createSetupRuntime } from './setup-runtime.mjs';
 import { computerStartup } from './startup.mjs';
 
 const base = path.dirname(fileURLToPath(import.meta.url));
+export function plugin3TransportOptions(baseDir = base, stateDir = path.join(baseDir, 'state')) {
+  const plugin3StateDir = path.resolve(stateDir, 'plugin3');
+  return {
+    command: process.execPath,
+    args: [
+      path.join(baseDir, 'plugin3', 'runtime', 'desktop-commander-v3', 'dist', 'index.js'),
+      '--no-onboarding',
+      '--shared-service',
+    ],
+    cwd: baseDir,
+    // The SDK's minimal environment omits Windows runtime variables required by this package.
+    // Preserve these OS settings without forwarding unrelated provider credentials.
+    env: {
+      ...Object.fromEntries(
+        ['ComSpec', 'PATHEXT', 'TMP', 'windir']
+          .filter((key) => process.env[key])
+          .map((key) => [key, process.env[key]]),
+      ),
+      PLUGIN3_DATA_DIR: plugin3StateDir,
+      PLUGIN3_PYTHON: path.join(baseDir, 'runtime', 'python', 'python.exe'),
+      PLUGIN3_SHARED_SERVICE: '1',
+    },
+    stderr: 'pipe',
+  };
+}
 // Tauri appends the window origin to native HTTP requests. No browser CORS
 // permission is granted; every request still needs the private bearer token.
 const nativeConfigOrigins = new Set([
@@ -61,19 +86,7 @@ export async function startGateway({
   const client =
     suppliedClient ?? new Client({ name: 'vibespace-desktop-commander', version: '0.1.0' });
   if (!suppliedClient) {
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [path.join(base, 'upstream/dist/index.js'), '--no-onboarding'],
-      cwd: base,
-      // The SDK's minimal environment omits Windows runtime variables required by this package.
-      // Preserve these OS settings without forwarding unrelated provider credentials.
-      env: Object.fromEntries(
-        ['ComSpec', 'PATHEXT', 'TMP', 'windir']
-          .filter((key) => process.env[key])
-          .map((key) => [key, process.env[key]]),
-      ),
-      stderr: 'pipe',
-    });
+    const transport = new StdioClientTransport(plugin3TransportOptions(base, stateDir));
     try {
       transport.stderr?.resume(); // Drain privately; a real pipe also supports Windows startup diagnostics.
       await client.connect(transport, { timeout: 60000 });

@@ -17,6 +17,7 @@
     "typecheck": "npm --prefix app run typecheck",
     "test:release-manifest": "node --test scripts/build-updater-manifest.test.mjs",
     "test:full:sharded": "node scripts/run-vitest-shards.mjs",
+    "prepare:desktop-connector": "node scripts/prepare-desktop-connector.mjs",
     "verify:pr31-oss": "node scripts/pr31-oss-bundle.mjs",
     "verify:pr31-opencode-rlm": "node scripts/verify-pr31-opencode-rlm-integration.mjs",
     "verify:context-gateway-acceptance": "vite-node scripts/context-gateway-acceptance.ts",

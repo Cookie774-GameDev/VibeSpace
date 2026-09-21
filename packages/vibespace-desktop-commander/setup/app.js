@@ -1,7 +1,12 @@
 const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 history.replaceState(null, '', location.pathname);
-let state = { step: 1, status: 'disconnected', hasKey: false },
+let state = {
+    step: 1,
+    status: 'disconnected',
+    hasKey: false,
+    displayName: 'VibeSpace Desktop',
+  },
   step = 1,
   timer,
   saving = Promise.resolve(),
@@ -61,6 +66,7 @@ function show() {
   $('key').placeholder = state.hasKey
     ? 'Runtime key saved securely · paste to replace'
     : 'Paste your runtime key';
+  $('chatgpt-app-name').textContent = state.displayName || 'VibeSpace Desktop';
   $('ready-title').textContent =
     state.status === 'ready' ? 'Your tunnel is ready.' : 'Waiting for tunnel readiness';
   $('ready-detail').textContent =
@@ -69,11 +75,14 @@ function show() {
       : 'Return to step 2 to reconnect.';
 }
 async function saveDraft() {
-  const tunnelId = $('tunnel').value.trim(),
+  const displayName = $('display-name').value.trim(),
+    tunnelId = $('tunnel').value.trim(),
     apiKey = $('key').value.trim();
+  if (!displayName || displayName.length > 64 || /[\u0000-\u001f\u007f]/.test(displayName))
+    throw Error('Use an app name between 1 and 64 characters.');
   if (tunnelId && !/^tunnel_[a-zA-Z0-9_-]{8,128}$/.test(tunnelId))
     throw Error('Enter the full tunnel ID from OpenAI.');
-  const input = { tunnelId, step, ...(apiKey ? { apiKey } : {}) };
+  const input = { displayName, tunnelId, step, ...(apiKey ? { apiKey } : {}) };
   const operation = saving.then(async () => {
     $('saved').textContent = 'Saving securely…';
     state = await api('draft', input);
@@ -84,12 +93,15 @@ async function saveDraft() {
   saving = operation.catch(() => {});
   return operation;
 }
-for (const id of ['tunnel', 'key'])
+for (const id of ['display-name', 'tunnel', 'key'])
   $(id).addEventListener('input', () => {
     clearTimeout(timer);
     error('');
     timer = setTimeout(() => {
-      if (!/^tunnel_[a-zA-Z0-9_-]{8,128}$/.test($('tunnel').value.trim())) return;
+      const displayName = $('display-name').value.trim();
+      const tunnelId = $('tunnel').value.trim();
+      if (!displayName || displayName.length > 64) return;
+      if (tunnelId && !/^tunnel_[a-zA-Z0-9_-]{8,128}$/.test(tunnelId)) return;
       if ($('key').value && $('key').value.length < 20) return;
       void saveDraft().catch((reason) => error(reason.message));
     }, 450);
@@ -133,14 +145,25 @@ $('disconnect').onclick = async () => {
 };
 window.addEventListener('pagehide', () => {
   clearTimeout(timer);
-  const tunnelId = $('tunnel').value.trim(),
+  const displayName = $('display-name').value.trim(),
+    tunnelId = $('tunnel').value.trim(),
     apiKey = $('key').value.trim();
-  if (token && (!tunnelId || /^tunnel_[a-zA-Z0-9_-]{8,128}$/.test(tunnelId))) {
+  if (
+    token &&
+    displayName &&
+    displayName.length <= 64 &&
+    (!tunnelId || /^tunnel_[a-zA-Z0-9_-]{8,128}$/.test(tunnelId))
+  ) {
     void fetch('/setup/draft', {
       method: 'POST',
       headers,
       keepalive: true,
-      body: JSON.stringify({ step, tunnelId, ...(apiKey.length >= 20 ? { apiKey } : {}) }),
+      body: JSON.stringify({
+        step,
+        displayName,
+        tunnelId,
+        ...(apiKey.length >= 20 ? { apiKey } : {}),
+      }),
     }).catch(() => {});
   }
 });
@@ -151,6 +174,7 @@ async function refresh(initial = false) {
     state = next;
     if (initial) {
       step = state.step;
+      $('display-name').value = state.displayName || 'VibeSpace Desktop';
       $('tunnel').value = state.tunnelId;
     }
     if (becameReady) step = 3;

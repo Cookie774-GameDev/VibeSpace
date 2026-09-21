@@ -37,7 +37,17 @@
           <p>Files, terminals and browser tools<br />stay on your computer.</p>
           <small>Setup video coming here next</small>
         </div>
-        <h2>First, create your tunnel.</h2>
+        <h2>Name your connection.</h2>
+        <p>This is the app name you will use when you add VibeSpace to ChatGPT.</p>
+        <label
+          >App name<input
+            id="display-name"
+            value="VibeSpace Desktop"
+            maxlength="64"
+            autocomplete="off"
+            spellcheck="false"
+        /></label>
+        <h2>Then, create your tunnel.</h2>
         <p>
           Open OpenAI, create a tunnel for your workspace, then create a restricted runtime key with
           Tunnels Read and Use.
@@ -98,8 +108,9 @@
         </div>
         <h2>One last step in ChatGPT.</h2>
         <p>
-          Open Apps settings, create an app, choose your tunnel, and review its tools. Keep
-          VibeSpace’s connector running while you use it.
+          Open Apps settings, create an app named
+          <strong id="chatgpt-app-name">VibeSpace Desktop</strong>, choose your tunnel, and review
+          its tools. Keep VibeSpace’s connector running while you use it.
         </p>
         <a
           class="primary"

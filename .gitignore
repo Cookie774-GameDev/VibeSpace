@@ -146,3 +146,8 @@ tools/pets/tmp_video_cache/
 # Generated, verified desktop connector runtime (rebuilt before packaging).
 /app/src-tauri/resources/desktop-connector/runtime.zip
 /app/src-tauri/resources/desktop-connector/manifest.json
+
+# Plugin 3 ships a verified text-only production tree. Keep it in source so a
+# clean checkout can rebuild the connector without a machine-local dist copy.
+!packages/vibespace-desktop-commander/plugin3/runtime/desktop-commander-v3/dist/
+!packages/vibespace-desktop-commander/plugin3/runtime/desktop-commander-v3/dist/**

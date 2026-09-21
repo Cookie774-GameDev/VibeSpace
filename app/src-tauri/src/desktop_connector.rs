@@ -79,11 +79,29 @@ fn read_status(app: &AppHandle) -> Result<Value, String> {
         json!({ "packaged": true, "connectionDetected": true, "connectionFile": state_dir(app)?.join("connection.json").to_string_lossy(), "status": data["status"], "step": data["step"], "toolCount": data["toolCount"], "hasKey": data["hasKey"], "tunnelId": data["tunnelId"], "setupComplete": data["setupComplete"], "enabled": data["enabled"], "watchdog": data["watchdog"], "startOnComputer": data["startOnComputer"] }),
     )
 }
+fn select_resources(packaged: PathBuf, debug_source: Option<PathBuf>) -> PathBuf {
+    if packaged.join("runtime.zip").is_file() {
+        return packaged;
+    }
+    if let Some(source) = debug_source {
+        if source.join("runtime.zip").is_file() {
+            return source;
+        }
+    }
+    packaged
+}
 fn resources(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
+    let packaged = app
+        .path()
         .resource_dir()
         .map(|p| p.join("resources/desktop-connector"))
-        .map_err(|_| "Connector resources unavailable.".into())
+        .map_err(|_| "Connector resources unavailable.".to_owned())?;
+    #[cfg(debug_assertions)]
+    let debug_source =
+        Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/desktop-connector"));
+    #[cfg(not(debug_assertions))]
+    let debug_source = None;
+    Ok(select_resources(packaged, debug_source))
 }
 fn packaged(app: &AppHandle) -> bool {
     cfg!(windows)
@@ -345,6 +363,32 @@ pub async fn desktop_connector_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resource_selection_prefers_packaged_then_debug_source() {
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-desktop-connector-resources-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let packaged = root.join("packaged");
+        let debug_source = root.join("debug");
+        fs::create_dir_all(&packaged).unwrap();
+        fs::create_dir_all(&debug_source).unwrap();
+        fs::write(debug_source.join("runtime.zip"), b"debug").unwrap();
+        assert_eq!(
+            select_resources(packaged.clone(), Some(debug_source.clone())),
+            debug_source
+        );
+        fs::write(packaged.join("runtime.zip"), b"packaged").unwrap();
+        assert_eq!(
+            select_resources(packaged.clone(), Some(root.join("unused"))),
+            packaged
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn offline_status_preserves_completed_setup_and_off_without_credentials() {
         let status = disconnected_status(
