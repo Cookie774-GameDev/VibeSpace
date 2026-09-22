@@ -76,9 +76,79 @@ fn read_status(app: &AppHandle) -> Result<Value, String> {
     let data: Value = response.json().map_err(|_| "Invalid connector status.")?;
     // Return only public status fields. Never forward arbitrary gateway data or credentials.
     Ok(
-        json!({ "packaged": true, "connectionDetected": true, "connectionFile": state_dir(app)?.join("connection.json").to_string_lossy(), "status": data["status"], "step": data["step"], "toolCount": data["toolCount"], "hasKey": data["hasKey"], "tunnelId": data["tunnelId"], "setupComplete": data["setupComplete"], "enabled": data["enabled"], "watchdog": data["watchdog"], "startOnComputer": data["startOnComputer"] }),
+        json!({ "packaged": true, "connectionDetected": true, "connectionFile": state_dir(app)?.join("connection.json").to_string_lossy(), "status": data["status"], "step": data["step"], "displayName": data["displayName"], "guideTab": data["guideTab"], "toolCount": data["toolCount"], "hasKey": data["hasKey"], "tunnelId": data["tunnelId"], "setupComplete": data["setupComplete"], "enabled": data["enabled"], "watchdog": data["watchdog"], "startOnComputer": data["startOnComputer"] }),
     )
 }
+// Never forward arbitrary renderer payloads or echo credentials in error messages.
+fn setup_draft_body(draft: Option<Value>) -> Result<Value, String> {
+    let draft = draft.ok_or("Setup draft is missing.")?;
+    let object = draft.as_object().ok_or("Invalid setup draft.")?;
+    if object.keys().any(|key| {
+        !["displayName", "tunnelId", "apiKey", "step", "guideTab"].contains(&key.as_str())
+    }) {
+        return Err("Unexpected setup field.".into());
+    }
+    for name in ["displayName", "tunnelId", "apiKey", "guideTab"] {
+        if object.get(name).is_some_and(|value| !value.is_string()) {
+            return Err("Invalid setup field type.".into());
+        }
+    }
+    if let Some(name) = object.get("displayName").and_then(Value::as_str) {
+        if name.trim().is_empty()
+            || name.len() > 256
+            || name.chars().count() > 64
+            || name.chars().any(char::is_control)
+        {
+            return Err("Use an app name between 1 and 64 characters.".into());
+        }
+    }
+    if let Some(id) = object.get("tunnelId").and_then(Value::as_str) {
+        let id = id.trim();
+        if !id.is_empty()
+            && (!id.starts_with("tunnel_")
+                || id.len() < 15
+                || id.len() > 135
+                || !id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'))
+        {
+            return Err("Enter a valid tunnel ID.".into());
+        }
+    }
+    if let Some(key) = object.get("apiKey").and_then(Value::as_str) {
+        let key = key.trim();
+        if !key.is_empty()
+            && (key.len() < 20
+                || key.len() > 4096
+                || key.chars().any(char::is_whitespace)
+                || key.starts_with("sk-admin-"))
+        {
+            return Err("Use a restricted runtime API key, not an admin key.".into());
+        }
+    }
+    if object
+        .get("step")
+        .is_some_and(|v| !matches!(v.as_u64(), Some(1..=3)))
+    {
+        return Err("Invalid setup step.".into());
+    }
+    if object
+        .get("guideTab")
+        .is_some_and(|v| !matches!(v.as_str(), Some("tunnel" | "api")))
+    {
+        return Err("Choose a valid tutorial tab.".into());
+    }
+    Ok(draft)
+}
+fn setup_link(action: &str) -> Option<&'static str> {
+    match action {
+        "open-tunnels" => Some("https://platform.openai.com/settings/organization/tunnels"),
+        "open-api-keys" => Some("https://platform.openai.com/settings/organization/api-keys"),
+        "open-chatgpt" => Some("https://chatgpt.com/#settings/Connectors"),
+        _ => None,
+    }
+}
+
 fn select_resources(packaged: PathBuf, debug_source: Option<PathBuf>) -> PathBuf {
     if packaged.join("runtime.zip").is_file() {
         return packaged;
@@ -259,6 +329,7 @@ fn saved_setup(app: &AppHandle) -> Option<Value> {
 fn disconnected_status(is_packaged: bool, saved: Value) -> Value {
     json!({ "packaged": is_packaged, "connectionDetected": false,
         "status": if saved["enabled"] == false { "off" } else { "disconnected" },
+        "displayName": saved["displayName"], "tunnelId": saved["tunnelId"], "guideTab": saved["guideTab"], "step": saved["step"],
         "toolCount": 0, "hasKey": saved["protectedKey"].as_str().is_some_and(|key| !key.is_empty()),
         "setupComplete": saved["setupComplete"] == true,
         "enabled": saved["enabled"] != false, "watchdog": false, "startOnComputer": null })
@@ -313,6 +384,7 @@ pub async fn desktop_connector_setup(
     app: AppHandle,
     window: tauri::WebviewWindow,
     action: Option<String>,
+    draft: Option<Value>,
 ) -> Result<(), String> {
     guard(&window)?;
     if !cfg!(windows) {
@@ -320,8 +392,17 @@ pub async fn desktop_connector_setup(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let action = action.as_deref().unwrap_or("setup");
+        if let Some(url) = setup_link(action) {
+            #[allow(deprecated)]
+            return app
+                .shell()
+                .open(url, None)
+                .map_err(|_| "Could not open the setup link.".to_owned());
+        }
         if ![
             "setup",
+            "prepare",
+            "save",
             "connect",
             "disconnect",
             "startup-on",
@@ -331,8 +412,13 @@ pub async fn desktop_connector_setup(
         {
             return Err("Unknown connector action.".into());
         }
+        let body = if action == "save" {
+            setup_draft_body(draft)?
+        } else {
+            json!({"enabled": action == "startup-on"})
+        };
         start_connector(&app, action == "setup")?;
-        if action == "setup" {
+        if action == "setup" || action == "prepare" {
             return Ok(());
         }
         let (endpoint, token) = connection(&app)?;
@@ -341,7 +427,9 @@ pub async fn desktop_connector_setup(
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| "Connector client unavailable.")?;
-        let route = if action.starts_with("startup-") {
+        let route = if action == "save" {
+            "draft"
+        } else if action.starts_with("startup-") {
             "startup"
         } else {
             action
@@ -349,7 +437,7 @@ pub async fn desktop_connector_setup(
         let response = client
             .post(format!("{endpoint}/setup/{route}"))
             .bearer_auth(token)
-            .json(&json!({"enabled": action == "startup-on"}))
+            .json(&body)
             .send()
             .map_err(|_| "Connector action could not be confirmed.")?;
         if !response.status().is_success() {
@@ -363,6 +451,45 @@ pub async fn desktop_connector_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn in_app_draft_accepts_only_bounded_setup_fields() {
+        let valid = json!({"displayName":"My WebMCP","tunnelId":"tunnel_test_12345678","guideTab":"api","step":1});
+        assert_eq!(setup_draft_body(Some(valid.clone())).unwrap(), valid);
+        for invalid in [
+            json!({"displayName":42}),
+            json!({"displayName":" "}),
+            json!({"tunnelId":"https://untrusted.invalid"}),
+            json!({"guideTab":"other"}),
+            json!({"step":99}),
+            json!({"protectedKey":"untrusted"}),
+            json!({"apiKey":"sk-admin-synthetic-key-not-accepted"}),
+            json!({"apiKey":"key with whitespace not accepted"}),
+            json!([]),
+        ] {
+            assert!(setup_draft_body(Some(invalid)).is_err());
+        }
+        assert!(setup_draft_body(None).is_err());
+    }
+    #[test]
+    fn in_app_links_are_fixed_and_offline_status_never_echoes_key_material() {
+        assert_eq!(
+            setup_link("open-tunnels"),
+            Some("https://platform.openai.com/settings/organization/tunnels")
+        );
+        assert_eq!(
+            setup_link("open-api-keys"),
+            Some("https://platform.openai.com/settings/organization/api-keys")
+        );
+        assert_eq!(setup_link("https://untrusted.invalid"), None);
+        let status = disconnected_status(
+            true,
+            json!({"displayName":"Mine","tunnelId":"tunnel_test_12345678","guideTab":"api","step":1,"protectedKey":"private-protected-fixture","apiKey":"private-plain-fixture"}),
+        );
+        assert_eq!(status["displayName"], "Mine");
+        assert_eq!(status["guideTab"], "api");
+        assert_eq!(status["hasKey"], true);
+        assert!(!status.to_string().contains("private-"));
+    }
     #[test]
     fn resource_selection_prefers_packaged_then_debug_source() {
         let root = std::env::temp_dir().join(format!(

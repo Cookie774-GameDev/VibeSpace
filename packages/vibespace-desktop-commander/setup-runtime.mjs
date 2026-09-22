@@ -67,6 +67,7 @@ export async function createSetupRuntime({
     version: 1,
     step: 1,
     displayName: DEFAULT_DISPLAY_NAME,
+    guideTab: 'tunnel',
     tunnelId: '',
     protectedKey: '',
     enabled: true,
@@ -75,7 +76,7 @@ export async function createSetupRuntime({
   try {
     const prior = JSON.parse(await readFile(file, 'utf8'));
     if (prior.version === 1) {
-      saved = { ...saved, ...prior };
+      saved = { ...saved, ...prior, guideTab: prior.guideTab === 'api' ? 'api' : 'tunnel' };
       // A cosmetic migration must never discard credentials or the user's Off setting.
       try {
         saved.displayName = normalizeDisplayName(prior.displayName ?? DEFAULT_DISPLAY_NAME);
@@ -168,6 +169,7 @@ export async function createSetupRuntime({
       version: 1,
       step: status === 'ready' ? 3 : saved.step,
       displayName: saved.displayName,
+      guideTab: saved.guideTab,
       tunnelId: saved.tunnelId,
       hasKey: Boolean(saved.protectedKey),
       status: saved.enabled === false ? 'off' : status,
@@ -182,6 +184,8 @@ export async function createSetupRuntime({
         input.displayName === undefined
           ? saved.displayName
           : normalizeDisplayName(input.displayName);
+      const guideTab = input.guideTab ?? saved.guideTab;
+      if (!['tunnel', 'api'].includes(guideTab)) throw Error('Choose a valid tutorial tab.');
       const tunnelId = String(input.tunnelId ?? saved.tunnelId).trim();
       if (tunnelId && !/^tunnel_[a-zA-Z0-9_-]{8,128}$/.test(tunnelId))
         throw Error('Enter a valid tunnel ID.');
@@ -196,6 +200,7 @@ export async function createSetupRuntime({
       const next = {
         ...saved,
         displayName,
+        guideTab,
         tunnelId,
         setupComplete: key || tunnelId !== saved.tunnelId ? false : saved.setupComplete,
         step: [1, 2, 3].includes(input.step) ? input.step : saved.step,

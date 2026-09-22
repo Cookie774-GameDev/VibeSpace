@@ -162,3 +162,33 @@ test('setup watchdog checks each second and restarts only its exited tunnel chil
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('guide selection is durable without being treated as a connection or a credential', async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), 'vs-guide-progress-'));
+  const options = {
+    stateDir,
+    base: stateDir,
+    endpoint: 'http://127.0.0.1:53421',
+    token: 'fixture',
+    getTools: async () => ({ tools: [] }),
+    schedule: () => 1,
+    unschedule: () => {},
+  };
+  let runtime;
+  try {
+    runtime = await createSetupRuntime(options);
+    assert.equal((await runtime.snapshot()).guideTab, 'tunnel');
+    await runtime.save({ displayName: 'My WebMCP', guideTab: 'api', step: 2 });
+    await runtime.close();
+    runtime = await createSetupRuntime(options);
+    const saved = await runtime.snapshot();
+    assert.equal(saved.guideTab, 'api');
+    assert.equal(saved.displayName, 'My WebMCP');
+    assert.equal(saved.hasKey, false);
+    assert.equal(saved.status, 'disconnected');
+    await assert.rejects(runtime.save({ guideTab: 'arbitrary' }), /tutorial/i);
+  } finally {
+    await runtime?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

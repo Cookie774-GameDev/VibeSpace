@@ -7,7 +7,7 @@ afterEach(() => {
   cleanup();
   invoke.mockReset();
 });
-it('opens external setup only on explicit action and displays verified tool status', async () => {
+it('opens in-app setup only on explicit action and displays verified tool status', async () => {
   invoke.mockImplementation(async (command) =>
     command === 'desktop_connector_status'
       ? { packaged: true, connectionDetected: true, status: 'ready', toolCount: 45, hasKey: true }
@@ -17,7 +17,10 @@ it('opens external setup only on explicit action and displays verified tool stat
   await screen.findByText('Tunnel ready · 45 tools detected');
   expect(invoke).not.toHaveBeenCalledWith('desktop_connector_setup');
   fireEvent.click(screen.getByRole('button', { name: 'Connection settings' }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('desktop_connector_setup'));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', { action: 'prepare' }),
+  );
+  expect(await screen.findByRole('dialog', { name: 'WebMCP setup' })).toBeTruthy();
   expect(screen.getByText(/Setup complete/)).toBeTruthy();
 });
 it('does not claim missing resources are preloaded', async () => {

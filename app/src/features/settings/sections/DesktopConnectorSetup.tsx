@@ -2,25 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { WebMcpSetupPanel } from './WebMcpSetupPanel';
+import type { WebMcpStatus } from './webMcpSetupClient';
 
-type Status = {
-  packaged: boolean;
-  connectionDetected: boolean;
-  connectionFile?: string;
-  status: string;
-  toolCount: number;
-  hasKey: boolean;
-  setupComplete?: boolean;
-  enabled?: boolean;
-  watchdog?: boolean;
-  startOnComputer?: boolean | null;
-};
+type Status = WebMcpStatus;
 export function DesktopConnectorSetup({
   onConnectionReady,
 }: {
   onConnectionReady?: (file: string) => void;
 }) {
   const [status, setStatus] = useState<Status>();
+  const [setupOpen, setSetupOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const changing = useRef(false);
@@ -95,10 +87,10 @@ export function DesktopConnectorSetup({
           <p className="mt-1 text-sm text-muted-foreground">
             {complete
               ? 'Setup complete. Manage your MCP connection below.'
-              : 'Connect your OpenAI tunnel in a guided setup page. Your progress is saved on this computer.'}
+              : 'Connect your OpenAI tunnel in a guided panel. Your progress is saved on this computer.'}
           </p>
         </div>
-        <Button onClick={() => void act()} disabled={busy || !status?.packaged}>
+        <Button onClick={() => setSetupOpen(true)} disabled={busy || !status?.packaged}>
           {busy
             ? 'Applying…'
             : complete
@@ -155,6 +147,13 @@ export function DesktopConnectorSetup({
             />
           </label>
         </div>
+      )}
+      {setupOpen && (
+        <WebMcpSetupPanel
+          initialStatus={status}
+          onStatus={setStatus}
+          onClose={() => setSetupOpen(false)}
+        />
       )}
       {error && (
         <p role="alert" className="mt-2 text-sm text-destructive">
